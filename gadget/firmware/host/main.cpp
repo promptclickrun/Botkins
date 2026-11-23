@@ -10,11 +10,18 @@
 //   hear <file.wav>         a recording: 16-bit mono WAV at the microphone's rate (16 kHz)
 //   answer <action> [text]  answers the request on show
 //   new | next | stop       a new chat, the next bot, stop the turn
+//   away | home             away from the computer's network (none of its own addresses answers), or back
 //   quit
 // Each change of what a board would draw is printed as one line: "view {json}". What the speaker
 // plays is written to <folder>/spoken-<n>.wav when the reply has been read.
+//
+// The relay is reached over ws:// (host/websocket.cpp), so only a relay on this computer. In the
+// environment, BOTKINS_SIM_AWAY=1 starts away, and BOTKINS_SIM_PROBE_MS sets how soon a gadget on the
+// relay looks for its computer's own addresses again.
+#include <atomic>
 #include <chrono>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <fstream>
 #include <iostream>
@@ -24,8 +31,18 @@
 
 #include "botkins/gadget.hpp"
 #include "botkins/sockets.hpp"
+#include "websocket.hpp"
 
 using namespace botkins;
+
+/** The computer's own network, which the gadget can leave: away, no address of the computer's answers. */
+struct HostTransport : SocketTransport {
+  std::atomic<bool> away{false};
+  HttpResponse request(const std::string& host, const char* method, const std::string& path, const std::vector<std::pair<std::string, std::string>>& headers, const std::string& body, int timeout_ms) override {
+    if (away) return HttpResponse();
+    return SocketTransport::request(host, method, path, headers, body, timeout_ms);
+  }
+};
 
 static void fill_random(uint8_t* out, size_t size) {
   FILE* file = fopen("/dev/urandom", "rb");
@@ -119,7 +136,9 @@ int main(int argc, char** argv) {
     fprintf(stderr, "crypto self test failed\n");
     return 1;
   }
-  SocketTransport transport;
+  HostTransport transport;
+  const char* away = getenv("BOTKINS_SIM_AWAY");
+  transport.away = away && strcmp(away, "1") == 0;
   FileStorage storage;
   storage.folder = argv[1];
   HostNetwork network;
@@ -141,6 +160,8 @@ int main(int argc, char** argv) {
     puts("restart");
     fflush(stdout);
   };
+  board.socket = [] { return std::unique_ptr<Socket>(new HostSocket()); };
+  if (const char* probe = getenv("BOTKINS_SIM_PROBE_MS")) board.relay_probe_ms = atoi(probe) > 0 ? atoi(probe) : board.relay_probe_ms;
 
   Gadget gadget(board);
   std::mutex printing;
@@ -172,6 +193,7 @@ int main(int argc, char** argv) {
     else if (verb == "next") gadget.next_bot();
     else if (verb == "stop") gadget.stop_turn();
     else if (verb == "quiet") gadget.stop_speaking();
+    else if (verb == "away" || verb == "home") transport.away = verb == "away";
     else if (verb == "answer") {
       size_t space = rest.find(' ');
       gadget.answer(rest.substr(0, space), space == std::string::npos ? "" : rest.substr(space + 1));
