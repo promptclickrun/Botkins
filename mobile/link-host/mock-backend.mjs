@@ -42,11 +42,60 @@ const MODELS = [
   { id: "gemini-3-pro", name: "Gemini 3 Pro", provider: "opencode", providerName: "OpenCode", group: "Google", efforts: ["low", "high"], available: false },
 ];
 
+// The providers that answer on a key ("keyed-providers-v1"): what each takes, as the computer says it.
+const KEYED = {
+  openrouter: { fields: [], keyOptional: false, keyUrl: "https://openrouter.ai/keys" },
+  foundry: { fields: ["endpoint", "apiVersion", "models"], keyOptional: false, keyUrl: "https://ai.azure.com" },
+  "openai-api": { fields: ["baseUrl", "api", "models"], keyOptional: true },
+};
+/** True for a server on this computer or the private network, which needs no key. */
+const localAddress = (address) => {
+  try {
+    const host = new URL(address).hostname.replace(/^\[|\]$/g, "");
+    return host === "localhost" || host === "::1" || host.endsWith(".local") || /^(127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(host);
+  } catch {
+    return false;
+  }
+};
+/** What a key provider is still missing, as one sentence, or null. */
+function keyedNeeds(backend, id) {
+  const { key, config } = backend.keyed[id];
+  if (id === "openrouter") return key ? null : "Paste your OpenRouter key (it starts with sk-or-).";
+  if (id === "foundry") {
+    if (!key) return "Paste your Azure resource's key.";
+    if (!config.endpoint) return "Add your Azure resource's endpoint, like https://NAME.services.ai.azure.com.";
+    return config.models?.length ? null : "Add at least one deployment: the name you gave a model in your Azure resource.";
+  }
+  if (!config.baseUrl) return "Add the server's address, like https://api.openai.com/v1 or http://localhost:11434/v1.";
+  return key || localAddress(config.baseUrl) ? null : "Paste an API key. Only a server on this computer or your own network works without one.";
+}
+function keyedModels(backend, id) {
+  const { name } = PROVIDERS.find((p) => p.id === id);
+  const entry = (model, api) => ({ id: model.id, name: model.name ?? model.id, provider: id, providerName: name, efforts: [], available: true, ...(model.contextWindow && { contextWindow: model.contextWindow }), ...(model.maxOutput && { maxOutput: model.maxOutput }), tools: true, api: model.api ?? api });
+  if (id === "openrouter") return [{ id: "deepseek/deepseek-v4-pro", name: "DeepSeek V4 Pro", efforts: ["low", "medium", "high"] }, { id: "openai/gpt-5.5", name: "GPT-5.5", efforts: ["low", "medium", "high"] }, { id: "mistralai/mistral-large", name: "Mistral Large", efforts: [] }].map((m) => ({ ...entry(m, "completions"), efforts: m.efforts }));
+  const { config } = backend.keyed[id];
+  const own = (config.models ?? []).map((m) => entry(m, id === "foundry" ? "completions" : config.api));
+  // A local server lists its own models.
+  return id === "openai-api" && !own.some((m) => m.id === "llama3.3") ? [...own, entry({ id: "llama3.3" }, config.api)] : own;
+}
+/** A key provider's status as the computer says it: what it takes, whether it has a key, and what is missing. */
+function keyedStatus(backend, p, status) {
+  const spec = KEYED[p.id];
+  if (!spec) return status;
+  const { key, config } = backend.keyed[p.id];
+  const needs = keyedNeeds(backend, p.id);
+  const { message: _message, ...rest } = status;
+  return { ...rest, connected: needs === null, signOut: key, ...(key && { plan: "API key" }), ...(needs && { message: needs }), keyed: { fields: spec.fields, hasKey: key, keyOptional: spec.keyOptional, config: structuredClone(config), needs, ...(spec.keyUrl && { keyUrl: spec.keyUrl }) } };
+}
+const KEYED_MODEL_ID = /^[\w.:/@+-]{1,128}$/;
 const PROVIDERS = [
   { id: "copilot", name: "GitHub Copilot", description: "Your GitHub Copilot plan, or Copilot Free.", default: true, installed: true, connected: true, account: "octocat", plan: "Copilot Pro", signIn: "browser", signOut: true },
   { id: "codex", name: "ChatGPT", description: "Your ChatGPT plan, through the Codex CLI.", default: false, installed: true, version: "0.98.0", connected: true, account: "you@example.com", plan: "Plus", signIn: "browser", signOut: true },
   { id: "claude", name: "Claude", description: "Your Claude plan, through Claude Code.", default: false, installed: true, version: "2.1.280", connected: true, account: "you@example.com", plan: "Max", signIn: "browser", signOut: true },
   { id: "opencode", name: "OpenCode", description: "Free models, and the model services you connect.", default: false, installed: true, version: "2.3.1", connected: true, signIn: "services", signOut: false },
+  { id: "openrouter", name: "OpenRouter", description: "Hundreds of models through one OpenRouter key.", default: false, installed: true, connected: false, signIn: "key", signOut: false },
+  { id: "foundry", name: "Azure Foundry", description: "The models you deployed in your Azure AI Foundry resource.", default: false, installed: true, connected: false, signIn: "key", signOut: false },
+  { id: "openai-api", name: "OpenAI endpoint", description: "OpenAI's API, or any server that speaks it (Ollama, vLLM, LM Studio).", default: false, installed: true, connected: false, signIn: "key", signOut: false },
   { id: "grok", name: "Grok", description: "Grok, through the Grok CLI.", default: false, installed: false, connected: false, signIn: null, signOut: false, install: { url: "https://x.ai/cli", command: "curl -fsSL https://example.com/demo/grok-install.sh | bash" }, message: "Install the Grok CLI on your computer." },
 ];
 
@@ -273,7 +322,7 @@ export function seed() {
       autoSummarize: 10,
       proactive: { enabled: false },
       harness: "copilot",
-      providers: { copilot: { enabled: true }, codex: { enabled: true }, claude: { enabled: true }, opencode: { enabled: false }, grok: { enabled: false } },
+      providers: { copilot: { enabled: true }, codex: { enabled: true }, claude: { enabled: true }, opencode: { enabled: false }, openrouter: { enabled: false }, foundry: { enabled: false }, "openai-api": { enabled: false }, grok: { enabled: false } },
     },
   };
 }
@@ -1214,6 +1263,9 @@ export class MockBackend {
     // "provider-signin-v1": signing a model provider in, and installing one, from a phone (mock-signin.mjs).
     this.signIns = new DemoSignIns(this);
     if (process.env.BOTKINS_DEV_SIGNIN !== "off") this.capabilities.push("provider-signin-v1");
+    // "keyed-providers-v1": OpenRouter, Azure Foundry and an OpenAI endpoint, on a key and settings.
+    if (process.env.BOTKINS_DEV_KEYED !== "off") this.capabilities.push("keyed-providers-v1");
+    this.keyed = { openrouter: { key: false, config: {} }, foundry: { key: false, config: { models: [] } }, "openai-api": { key: false, config: { api: "responses", models: [] } } };
     // "spaces-v1" (docs/spaces.md): pages of panels. The owner's four built-in spaces hold what was on
     // Today; "Launch" has an app panel people tick together, with notes; "Money" is private.
     this.spacesOn = process.env.BOTKINS_DEV_SPACES !== "off";
@@ -2426,7 +2478,44 @@ export class MockBackend {
         "codex/gpt-5.5-codex": { fastModes: { fast: "priority", ultrafast: "ultrafast" }, contextWindow: 400_000, maxOutput: 128_000, vision: true, tools: true, vendor: "OpenAI" },
         "opencode/big-pickle": { contextWindow: 128_000, tools: true, tier: "Free" },
       };
-      return MODELS.filter((m) => on[m.provider]?.enabled).map((m) => ({ ...m, ...details[m.provider + "/" + m.id] }));
+      const keyed = Object.keys(KEYED)
+        .filter((id) => on[id]?.enabled && keyedNeeds(this, id) === null)
+        .flatMap((id) => keyedModels(this, id));
+      return [...MODELS.filter((m) => on[m.provider]?.enabled), ...keyed].map((m) => ({ ...m, ...details[m.provider + "/" + m.id] }));
+    },
+    providerConfigure(id, config) {
+      const spec = KEYED[id];
+      if (!spec) throw new Error("There is no such provider.");
+      const given = config && typeof config === "object" && !Array.isArray(config) ? config : {};
+      for (const name of Object.keys(given)) if (!spec.fields.includes(name) && given[name] !== undefined && given[name] !== "") throw new Error("This provider doesn't take \"" + name + "\".");
+      const next = {};
+      for (const name of ["endpoint", "baseUrl"]) {
+        if (!spec.fields.includes(name) || !given[name]) continue;
+        let url;
+        try {
+          url = new URL(String(given[name]).trim());
+        } catch {
+          throw new Error("That isn't a web address.");
+        }
+        if (url.protocol !== "https:" && !(name === "baseUrl" && url.protocol === "http:" && localAddress(url.href))) throw new Error("The address has to start with https://.");
+        next[name] = name === "endpoint" ? url.origin + "/openai/v1" : url.origin + url.pathname.replace(/\/+$/, "");
+      }
+      if (spec.fields.includes("api")) next.api = given.api === "completions" ? "completions" : "responses";
+      if (spec.fields.includes("apiVersion") && given.apiVersion) next.apiVersion = String(given.apiVersion).trim();
+      if (spec.fields.includes("models")) {
+        const models = Array.isArray(given.models) ? given.models : [];
+        if (models.length > 50) throw new Error("Botkins takes at most 50 models here.");
+        next.models = models.map((m) => {
+          if (!m || !KEYED_MODEL_ID.test(String(m.id ?? "").trim())) throw new Error("A model's id is its name at the endpoint: letters, digits and . _ : / @ + - (at most 128).");
+          return { id: String(m.id).trim(), ...(m.name && { name: String(m.name).trim().slice(0, 80) }), ...(m.api && { api: m.api }), ...(m.contextWindow && { contextWindow: m.contextWindow }), ...(m.maxOutput && { maxOutput: m.maxOutput }) };
+        });
+      }
+      this.keyed[id].config = next;
+      // Complete settings and a key switch the provider on.
+      if (keyedNeeds(this, id) === null) this.state.settings.providers = { ...this.state.settings.providers, [id]: { enabled: true } };
+      this.state.providers.revision++;
+      this.changed();
+      return this.handlers.providers.call(this).find((p) => p.id === id);
     },
     harnesses() {
       return HARNESS_TOOLS.map((p) => {
@@ -2436,7 +2525,8 @@ export class MockBackend {
     },
     providers() {
       const capable = this.capabilities.includes("provider-signin-v1");
-      return PROVIDERS.map((p) => ({ ...this.signIns.status(p, capable), enabled: !!this.state.settings.providers[p.id]?.enabled }));
+      const keyed = this.capabilities.includes("keyed-providers-v1");
+      return PROVIDERS.filter((p) => keyed || !KEYED[p.id]).map((p) => keyedStatus(this, p, { ...this.signIns.status(p, capable), enabled: !!this.state.settings.providers[p.id]?.enabled, ...(capable && KEYED[p.id] && { signInWays: { guided: false, token: true } }) }));
     },
     setModel(scope, id, value, fastMode) {
       if (fastMode !== undefined && scope !== "routines") {
@@ -2477,6 +2567,12 @@ export class MockBackend {
     signIn() {},
     cancelSignIn() {},
     signOut(id) {
+      if (this.keyed[id]) {
+        this.keyed[id].key = false;
+        this.state.providers.revision++;
+        this.changed();
+        return;
+      }
       this.signIns.signOut(PROVIDERS.find((p) => p.id === id));
     },
     // Signing in and installing from a phone ("provider-signin-v1"), acted out by mock-signin.mjs.
@@ -2493,6 +2589,15 @@ export class MockBackend {
       return this.signIns.cancel(session);
     },
     providerUseToken(id, token, options) {
+      if (this.keyed[id]) {
+        if (typeof token !== "string" || !token.trim() || token.trim() === "bad-token" || (id === "openrouter" && !token.trim().startsWith("sk-or-"))) throw new Error(id === "openrouter" ? "That isn't an OpenRouter key: they start with sk-or-." : "That key didn't work.");
+        this.keyed[id].key = true;
+        const needs = keyedNeeds(this, id);
+        if (needs === null) this.state.settings.providers = { ...this.state.settings.providers, [id]: { enabled: true } };
+        this.state.providers.revision++;
+        this.changed();
+        return { connected: needs === null, account: null, plan: "API key", ...(needs && { needs }) };
+      }
       return this.signIns.useToken(PROVIDERS.find((p) => p.id === id), token, options ?? {});
     },
     installProvider(id) {
