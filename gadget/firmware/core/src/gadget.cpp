@@ -17,6 +17,8 @@ const double kPieceSeconds = 0.5;
 const int kAheadSeconds = 12;
 const int kWaits[] = {400, 1000, 2000, 4000, 8000, 15000};
 const int kRemovedWaitMs = 30000;
+// Tries that found nobody before the screen says why it waits: a blip stays quiet, a computer that is gone doesn't.
+const int kTriesBeforeTelling = 2;
 
 std::string reply_line(const Json& json) { return std::string(kMark) + json.dump(); }
 Json args(Json one) { return Json::array().push(std::move(one)); }
@@ -230,10 +232,29 @@ void Gadget::sync_loop() {
       greeted_ = greeted_ && result.error != Link::Error::Remote;
       int ms = kWaits[failures < 5 ? failures : 5];
       failures++;
+      // "Connecting" alone doesn't say what to do. Nobody answering at the computer's addresses almost always
+      // means its Botkins is closed, or it is on another network.
+      if (result.error == Link::Error::Offline && failures == kTriesBeforeTelling) {
+        std::string computer;
+        {
+          std::lock_guard<std::mutex> lock(mutex_);
+          computer = intro_.name.empty() ? "your computer" : intro_.name;
+        }
+        unreachable_ = "Can't reach " + computer + ". Check that Botkins is open there, on the same Wi-Fi.";
+        notice(unreachable_);
+      }
       if (!wait(ms)) break;
       continue;
     }
     failures = 0;
+    if (!unreachable_.empty()) {
+      // Reached again: the sentence about not reaching it goes, and only that one.
+      const std::string told = unreachable_;
+      unreachable_.clear();
+      change([&told](View& view) {
+        if (view.notice == told) view.notice.clear();
+      });
+    }
     stage(View::Stage::Online);
     if (!greeted_ || !result.value.is_object()) continue;
     const std::string epoch = result.value["epoch"].str();

@@ -150,6 +150,7 @@ class Gadget {
   std::string epoch_, chat_id_, text_id_, stream_, last_reply_;
   size_t stream_units_ = 0, thinking_units_ = 0;
   bool greeted_ = false, first_part_ = true;
+  std::string unreachable_;  // the sentence on show about not reaching the computer, while it is
   std::vector<std::pair<std::string, std::string>> bots_;
   std::string bot_id_;
 

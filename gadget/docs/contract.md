@@ -138,6 +138,7 @@ toPhone = HKDF(master, salt, "botkins/s2c/v1")
 
 - `403 { "error": "unknown_device" }`: the gadget was removed. Say so ("This gadget was removed. Set it up again to use it."), keep the introduction, and ask again every half minute. Do not erase anything: this answer is not sealed, so any device on the network could give it, and it must not be able to make a gadget forget its computer. Setup replaces the introduction.
 - `403 { "error": "bad_session" }`, `429`: wait and try again; do not forget anything.
+- Nobody answering at any address: wait and try again, 0.4 s growing to 15 s. After the second try, tell the person what to check ("Can't reach Demo Mac. Check that Botkins is open there, on the same Wi-Fi."), and take that sentence away once the computer answers.
 - `hosts` are the computer's addresses now, best first, with a `relay!<room>@<host>` entry when the relay is on. Keep them in flash: this is how a gadget finds a computer whose address changed.
 - A new `epoch` means the computer's app restarted: forget the versions held (`have`) and every text cursor.
 
