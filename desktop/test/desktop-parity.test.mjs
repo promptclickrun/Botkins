@@ -7,8 +7,13 @@ import { commitInterim, finishReply } from "../desktop/transcript.mjs";
 
 test("old profiles migrate to Folded once and keep later explicit choices", () => {
   assert.equal(settleChatDisplay({steps:"every"}, false).steps, "folded");
+  assert.equal(settleChatDisplay({steps:"every"}, false).foldFinishedSteps, true);
+  assert.equal(settleChatDisplay({steps:"hidden"}, true).steps, "folded");
   assert.equal(settleChatDisplay({}, false).thinking, "hidden");
-  assert.equal(settleChatDisplay({steps:"every", stepsPicked:true}, true).steps, "every");
+  assert.equal(settleChatDisplay({steps:"every", stepsPicked:true}, true).steps, "open");
+  assert.equal(settleChatDisplay({steps:"every", stepsPicked:true}, true).foldFinishedSteps, false);
+  assert.equal(settleChatDisplay({steps:"open", stepsPicked:true}, true).steps, "open");
+  assert.equal(settleChatDisplay({steps:"open"}, true).foldFinishedSteps, false);
 });
 
 test("a drop keeps the primary and hidden bots, supports both edges and empty sections", () => {

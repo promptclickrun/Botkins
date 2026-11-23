@@ -233,10 +233,18 @@ after the person's message.
 { "streams": { "c1": "" }, "requests": [{ "id": "q1", "chatId": "c1", "botId": "b1", "kind": "question", "title": "Restart the staging server?", "choices": ["Yes", "No"], "freeform": true }], "steerable": { "c1": true } }
 ```
 
-With Settings › Chat › Steps on Every step, the phone reads it as: the person's message · "I'll look at the last deploy first." · Ran a
-command, started a helper · "Only staging, please" · "Staging only, then. One question first." ·
-Asked you a question · "Yes" (under "Restart the staging server?") · Ran a command · the reply. The
-helper's own step `s2` is in its sheet, not in the chat. On Folded (the default), it reads: the person's message · "Only staging, please" · "Yes" (under "Restart the staging server?") · the reply · one line, "Worked for 15s · 4 steps", that opens to the interim texts, thinking and steps in order.
+With Steps and Thinking and updates both Open, the phone shows the work in order as it arrives.
+For this example the conversation reads as follows.
+
+> The person's message · “Read the deploy log before anything.” · “I'll look at the last deploy first.” · Ran a command, started a helper, read a web page ·
+> “Only staging, please” · “Staging only, then. One question first.” · Asked you a question ·
+> “Yes” (under “Restart the staging server?”) · Ran a command · the reply
+
+The helper's own step `s2` also appears in its activity sheet. Folded keeps the selected kind of
+work in the rail. Failed only shows failed tool calls in the conversation. Fold finished steps
+controls what happens when the reply lands. With it on, the person's messages and the reply
+stay in order and the work moves under “Worked for 15s · 5 steps”. With it off, the work stays
+where it appeared.
 
 An older computer sends the same turn as: the person's message, the steer, and one reply with no
 time (Copilot: "Restarted. Staging is healthy again."; Claude: all three texts joined), steps without

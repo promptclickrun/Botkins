@@ -7,7 +7,6 @@ import { useEffect, useState } from "react";
 import { AppState, View } from "react-native";
 import Animated, { FadeIn } from "react-native-reanimated";
 import type { Bot, Run } from "@/link/types";
-import { useChatPrefs } from "@/state/chatPrefs";
 import { activityLabel, useChatActivity } from "@/state/hooks";
 import { useApp } from "@/state/store";
 import { BotAvatar, Glass, T, Tap, useTheme } from "@/ui";
@@ -46,12 +45,11 @@ export function StatusCapsule({ chatId, bot, group, bots, run }: { chatId: strin
   const { colors } = useTheme();
   const state = useChatActivity(chatId);
   const speakerId = useApp((s) => s.parts.live?.speakers[chatId]);
-  const mode = useChatPrefs((prefs) => prefs.steps);
   const now = useNow(useIsFocused() && !!run);
   const face = (group && speakerId ? bots.get(speakerId) : undefined) ?? bot;
   const doing = (activityLabel(state) || "Working").replace(/…$/, "");
-  const own = (run?.steps ?? []).filter((step) => !step.agentId);
-  const count = stepCount(mode, own.length, own.filter((step) => step.status === "Failed").length);
+  const own = run?.steps ?? [];
+  const count = stepCount(own.length);
   const facts = [run ? clock(now - run.time) : "", count].filter(Boolean).join(" · ");
   const name = face?.name && !group ? face.name + " is " + doing.toLowerCase() : doing;
   return (

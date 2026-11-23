@@ -3,11 +3,11 @@
 import * as Clipboard from "expo-clipboard";
 import { router } from "expo-router";
 import { BookOpen, ChevronRight, CircleAlert, CirclePause, CornerDownRight, FileText, FolderKanban, LayoutGrid, Square, TimerOff, Volume2 } from "lucide-react-native";
-import { memo, type ReactNode } from "react";
+import { memo, type ComponentRef, type ReactNode, type RefObject } from "react";
 import { ScrollView, Share, StyleSheet, Text, View } from "react-native";
 import { GestureDetector, useTapGesture } from "react-native-gesture-handler";
 import type { Artifact, Bot, Message, Run, Step } from "@/link/types";
-import { type ChatPrefs, useChatPrefs } from "@/state/chatPrefs";
+import { useChatPrefs } from "@/state/chatPrefs";
 import { useChat, usePart } from "@/state/hooks";
 import { api, attempt } from "@/state/link";
 import { showToast } from "@/state/store";
@@ -22,7 +22,7 @@ import { ConnectCard } from "./ConnectCard";
 import { McpAppCard } from "./McpAppCard";
 import { myself, speakerLabel } from "./people";
 import { DOUBLE_TAP_MS, select, selectionTouch, useSelecting } from "./selecting";
-import { answerText, type Ending, type Item, workSummary } from "./turn";
+import { answerText, type Ending, type Item } from "./turn";
 import { FACE_INDENT, mostIcon } from "./WorkRows";
 import { Blocks, BotAvatar, Button, Chip, IconButton, Markdown, type PathLinks, radius, SelectableText, space, T, Tap, TextHoldMenu, useTheme } from "@/ui";
 
@@ -42,17 +42,6 @@ function extraActions(actions: MessageActions | undefined) {
 function runExtra(event: string, message: Message, index: number, actions: MessageActions | undefined) {
   if (event === "reply") actions?.onReply(message.text);
   else if (event === "fork") actions?.onFork?.(index);
-}
-
-const failedSteps = (run: Run) => (run.steps ?? []).filter((step) => step.status === "Failed").length;
-
-/** A group chat's work line, under its turn's last reply. */
-function GroupWorkLine({ chatId, run, mode }: { chatId: string; run: Run; mode: ChatPrefs["steps"] }) {
-  const steps = run.steps?.length ?? 0;
-  const failed = failedSteps(run);
-  if (mode === "hide" || (mode === "failed" && failed === 0)) return null;
-  const label = mode === "failed" ? (failed === 1 ? "1 step failed" : failed + " steps failed") : run.summary || workSummary(run.steps ?? []) || (steps === 1 ? "1 step" : steps + " steps");
-  return <WorkLine chatId={chatId} runId={run.id} label={label} steps={run.steps} failed={mode === "failed"} />;
 }
 
 /**
@@ -337,8 +326,7 @@ function Reply({ message, index, id, botId, markdown, actions, paths, parts }: {
   );
 }
 
-export const MessageRow = memo(function MessageRow({ item, chatId, group, bots, onSend, onDraft, actions }: { item: Extract<Item, { kind: "message" }>; chatId: string; group: boolean; bots: Map<string, Bot>; onSend: (text: string) => void; /** Text a custom view hands over, for the message box. */ onDraft?: (text: string) => void; actions?: MessageActions }) {
-  const steps = useChatPrefs((prefs) => prefs.steps);
+export const MessageRow = memo(function MessageRow({ item, chatId, group, bots, onSend, onDraft, actions, replyRef }: { replyRef?: RefObject<ComponentRef<typeof View> | null>; item: Extract<Item, { kind: "message" }>; chatId: string; group: boolean; bots: Map<string, Bot>; onSend: (text: string) => void; /** Text a custom view hands over, for the message box. */ onDraft?: (text: string) => void; actions?: MessageActions }) {
   const rich = useChatPrefs((prefs) => prefs.richCards);
   const markdown = useChatPrefs((prefs) => prefs.markdown);
   const timestamps = useChatPrefs((prefs) => prefs.timestamps);
@@ -357,9 +345,8 @@ export const MessageRow = memo(function MessageRow({ item, chatId, group, bots, 
   if (message.role === "user") return <UserBubble message={message} index={item.index} timestamps={timestamps} id={chatId + ":" + item.key} actions={actions} paths={links.paths} media={links.media} speaker={speakerLabel(message, run, chat, people, me)} />;
   if (message.role === "command") return <CommandBlock message={message} />;
   // A group chat's turn keeps its work line under its last reply; any other turn draws its work in place (turn.ts).
-  const worked = item.workUnder && run && run.status !== "Working";
   return (
-    <View style={{ gap: space.sm }}>
+    <View ref={replyRef} collapsable={replyRef ? false : undefined} style={{ gap: space.sm }}>
       {group && <Speaker bot={message.botId ? bots.get(message.botId) : undefined} />}
       {message.voiceCaption ? (
         <Markdown text={message.voiceCaption} plain={!markdown} />
@@ -373,7 +360,6 @@ export const MessageRow = memo(function MessageRow({ item, chatId, group, bots, 
         </View>
       )}
       {!message.text.trim() && timestamps && <Stamp time={message.time} align="flex-start" />}
-      {worked && <GroupWorkLine chatId={chatId} run={run} mode={steps} />}
       {end && run && <Cards run={run} latest={latest} rich={rich} onSend={onSend} onDraft={onDraft} />}
     </View>
   );

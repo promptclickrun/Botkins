@@ -1678,8 +1678,10 @@ export type Preferences = {
   completionPosition?: import("./chatDisplay").ChatDisplay["completionPosition"];
   /** What selecting a bot does on this device: open its latest chat (the usual), or start a new one. */
   botTap?: import("./chatDisplay").ChatDisplay["botTap"];
-  steps?: "folded" | "every" | "failed" | "hidden";
+  steps?: "folded" | "open" | "failed";
   thinking?: "open" | "folded" | "hidden";
+  /** Collapse finished work to one expandable elapsed-time/count line on this computer. */
+  foldFinishedSteps?: boolean;
   foldTools: boolean;
   showThinking: boolean;
   /** Show a card for the first web link in a reply. Private and local hosts are never fetched. */

@@ -34,16 +34,13 @@ import {
   RunLead,
   InterimUpdate,
   LiveLead,
-  Reasoning,
   ReasoningUpdate,
   RunCards,
   TaskChip,
   TaskDrawer,
-  ToolTrail,
   TimelineFold,
   WorkSteps,
   duration,
-  latestThought,
 } from "./ChatActivity";
 import { QuoteContext } from "./Composer";
 import { MentionChips } from "./MentionMenu";
@@ -210,10 +207,11 @@ export default function ChatView({
   const thinking = state.thinking?.[chat.id];
   const queued = state.queued?.[chat.id] ?? [];
   const showThinking = state.settings.showThinking !== false;
-  // Newer preference records use the same words as the phone. Keep the older boolean working for
-  // profiles created before the setting was split into Thinking and updates.
+  // Newer preference records use the same three choices as the phone. Keep the older booleans
+  // working for profiles and remote hosts created before the setting was split up.
   const thinkingMode = state.settings.thinking ?? (showThinking ? "open" : "hidden");
-  const stepsMode = state.settings.steps ?? (state.settings.foldTools ? "folded" : "every");
+  const stepsMode = state.settings.steps ?? (state.settings.foldTools ? "folded" : "open");
+  const foldFinishedSteps = state.settings.foldFinishedSteps ?? state.settings.foldTools !== false;
   const chatRuns = state.runs.filter((r) => r.chatId === chat.id);
   const runs = new Map(chatRuns.map((r) => [r.id, r]));
   const latest = chatRuns[0];
@@ -325,6 +323,10 @@ export default function ChatView({
   useLayoutEffect(() => {
     if (pending.length || !readingBeginning.current || busy) toBottom();
   }, [sentCount]);
+  const workingRunId = latest?.status === "Working" ? latest.id : undefined;
+  useLayoutEffect(() => {
+    if (workingRunId && readingBeginning.current) toBottom();
+  }, [workingRunId]);
   // New output follows only while the person is at the bottom.
   const liveSteps = latest?.status === "Working" ? (latest.steps?.length ?? 0) + (latest.reasoning?.length ?? 0) : 0;
   useLayoutEffect(() => {
@@ -545,18 +547,8 @@ export default function ChatView({
     );
   }
 
-  /* A turn-timeline-v1 run is rendered as one ordered block. Older runs continue through the
-     legacy message map below, which keeps old profiles and remote hosts readable. */
-  const timelineRunIds = new Set<string>();
   const timelineRendered = new Set<string>();
-  // A turn uses one renderer from its first message. This keeps a growing reply anchored while
-  // it runs instead of switching from the old trail when a tool first arrives. Group turns use
-  // the same block so each member's reply can stay between that turn's activity markers.
-  for (const m of chat.messages) {
-    const owner = m.runId ?? m.steeredRunId ?? m.answer?.runId;
-    if (owner && runs.has(owner)) timelineRunIds.add(owner);
-  }
-  const timelineBusy = !!latest && latest.status === "Working" && timelineRunIds.has(latest.id);
+  const timelineBusy = latest?.status === "Working";
   const timelineMessage = (m: Message, index: number) => (
     <article
       id={`message-${chat.id}-${loadedFrom + index}`}
@@ -570,8 +562,8 @@ export default function ChatView({
     >
       {m.role === "assistant" ? (
         <b className="speaker">
-          <BotAvatar bot={group ? state.bots.find((b) => b.id === m.botId) ?? bot : bot} size={22} />
-          <span className="speaker-name">{group ? nameOf(m) : bot.name}</span>
+          <BotAvatar bot={state.bots.find((b) => b.id === m.botId) ?? bot} size={22} />
+          <span className="speaker-name">{m.botId ? nameOf(m) : bot.name}</span>
         </b>
       ) : m.role === "user" ? (
         <b className={m.author ? "member-speaker" : "visually-hidden"}>{m.author ? authorName(state, m.author) : "You"}</b>
@@ -594,70 +586,62 @@ export default function ChatView({
   );
 
   const renderTimeline = (run: NonNullable<typeof latest>) => {
+    const live = run.status === "Working";
     const related = chat.messages
       .map((message, index) => ({ message, index }))
       .filter(({ message }) => message.runId === run.id || message.steeredRunId === run.id || message.answer?.runId === run.id);
     const initial = related.find(({ message }) => message.role === "user" && message.runId === run.id && !message.steeredRunId && !message.answer);
-    if (!initial) return null;
     const reply = related.filter(({ message }) => message.role === "assistant" && !message.interim);
-    const ownSteps = (run.steps ?? []).filter((step) => !step.agentId);
-    const showStep = (step: NonNullable<typeof run.steps>[number]) => stepsMode !== "hidden" && (stepsMode !== "failed" || step.status === "Failed");
+    const allSteps = run.steps ?? [];
+    const showStep = (step: NonNullable<typeof run.steps>[number]) => stepsMode === "open" || (stepsMode === "failed" && step.status === "Failed");
     type Event = { kind: RunTimelineEvent["kind"]; at: number; order: number; key: string; body: ReactNode; fold: ReactNode; details: ReactNode };
     const events: Event[] = [];
-    for (const event of orderedRunEvents(run, chat.messages, { includeReplies: group })) {
-      if (event.kind === "interim") {
-        if (event.value.text.trim()) {
-          events.push({
-            kind: event.kind,
-            at: event.at,
-            order: event.order,
-            key: event.key,
-            body: <InterimUpdate text={event.value.text} display={thinkingMode} />,
-            fold: <InterimUpdate text={event.value.text} display={thinkingMode} />,
-            details: <InterimUpdate text={event.value.text} display="open" />,
-          });
-        }
+    // Older hosts send the currently streaming thought before they publish timed reasoning.
+    const orderedRun = live && !run.reasoning?.length && thinking?.trim()
+      ? { ...run, reasoning: [{ id: "live", text: thinking, started: run.time }] } : run;
+    for (const event of orderedRunEvents(orderedRun, chat.messages, { includeReplies: group, includeHelperSteps: true })) {
+      if (event.kind === "interim" || event.kind === "reasoning") {
+        if (!event.value.text.trim()) continue;
+        const update = event.kind === "reasoning"
+          ? <ReasoningUpdate text={event.value.text} />
+          : <InterimUpdate text={event.value.text} />;
+        events.push({
+          kind: event.kind, at: event.at, order: event.order, key: event.key,
+          body: thinkingMode === "open" ? update : null,
+          fold: thinkingMode === "hidden" ? null : update,
+          details: update,
+        });
       } else if (event.kind === "reply") {
         const body = timelineMessage(event.value, event.index);
         events.push({ kind: event.kind, at: event.at, order: event.order, key: event.key, body, fold: null, details: body });
       } else if (event.kind === "person" || event.kind === "command") {
         const marker = <div className="timeline-person">↳ {event.value.answer?.title ? event.value.answer.title + ": " : ""}{event.value.text}</div>;
         events.push({ kind: event.kind, at: event.at, order: event.order, key: event.key, body: timelineMessage(event.value, event.index), fold: marker, details: marker });
-      } else if (event.kind === "reasoning") {
-        if (event.value.text.trim()) {
-          events.push({
-            kind: event.kind,
-            at: event.at,
-            order: event.order,
-            key: event.key,
-            // A live turn shows its newest thought in the lead row instead.
-            body: run.status === "Working" ? null : <ReasoningUpdate text={event.value.text} display={thinkingMode} />,
-            fold: <ReasoningUpdate text={event.value.text} display={thinkingMode} />,
-            details: <ReasoningUpdate text={event.value.text} display="open" />,
-          });
-        }
       } else {
         const body = <WorkSteps steps={[event.value]} />;
-        events.push({ kind: event.kind, at: event.at, order: event.order, key: event.key, body: showStep(event.value) ? body : null, fold: showStep(event.value) ? body : null, details: body });
+        events.push({ kind: event.kind, at: event.at, order: event.order, key: event.key, body: showStep(event.value) ? body : null, fold: body, details: body });
       }
     }
     const activityEvents = events.filter((event) => event.kind !== "reply");
     // A turn's work list starts with its helpers, then its to-do list; the steps and the rest follow.
     const lead = <RunLead agents={run.agents} todos={run.todos} />;
-    const eventBody = <>{lead}{activityEvents.map((event) => <Fragment key={event.key}>{event.fold}</Fragment>)}</>;
-    const detailsBody = <>{lead}{activityEvents.map((event) => <Fragment key={event.key}>{event.details}</Fragment>)}</>;
+    // Older records can have a summary and distinct tool names without individual call records.
+    const olderWork = !allSteps.length && (run.summary || run.usedTools?.length)
+      ? <div className="timeline-legacy-work">{run.summary && <p>{run.summary}</p>}{!!run.usedTools?.length && <ul>{run.usedTools.map((name) => <li key={name}>{name}</li>)}</ul>}</div>
+      : null;
+    const eventBody = <>{lead}{olderWork}{activityEvents.map((event) => <Fragment key={event.key}>{event.fold}</Fragment>)}</>;
+    const detailsBody = <>{lead}{olderWork}{activityEvents.map((event) => <Fragment key={event.key}>{event.details}</Fragment>)}</>;
     // Person messages remain in the transcript even when the bot's work is folded. They are
     // part of the conversation, not activity hidden behind the work summary.
     const personBody = events
       .filter((event) => event.kind === "person" || event.kind === "command")
       .map((event) => <Fragment key={event.key}>{event.body}</Fragment>);
-    const live = run.status === "Working";
-    const elapsed = (run.finished ?? Date.now()) - run.time;
-    const failedSteps = ownSteps.filter((step) => step.status === "Failed").length;
-    const count = stepsMode === "failed" ? failedSteps : stepsMode === "hidden" ? 0 : ownSteps.length;
+    const elapsed = run.finished === undefined ? run.usage?.durationMs : run.finished - run.time;
+    const count = allSteps.length;
     const endingLabel = run.ending === "timed-out" ? "Timed out" : run.ending === "interrupted" ? "Interrupted" : run.ending === "stopped" ? "Stopped" : run.ending === "failed" ? "Needs you" : "";
     const countLabel = count ? count + (count === 1 ? " step" : " steps") : undefined;
-    const folded = stepsMode !== "every";
+    const folded = foldFinishedSteps;
+    const hasActivity = !!olderWork || activityEvents.length > 0 || !!run.agents?.length || !!run.todos?.length;
     const groupTranscript = group
       ? events.map((event) => {
           const visible = event.kind === "reply" || live || !folded || event.kind === "person" || event.kind === "command";
@@ -671,8 +655,8 @@ export default function ChatView({
     const who = currentBot?.name ?? bot.name;
     const line = live
       ? doingNow === "Needs you" ? who + " needs you" : who + " is " + doingNow[0].toLowerCase() + doingNow.slice(1)
-      : !reply.length && endingLabel ? endingLabel : `Worked for ${duration(elapsed)}`;
-    const thought = thinkingMode !== "hidden" ? latestThought(thinking || run.reasoning?.at(-1)?.text) : "";
+      : elapsed === undefined ? endingLabel || "Turn activity" : `Worked for ${duration(elapsed)}`;
+
     // Faces in the work log are still (the owner's battery rule): no state loop, no blinking.
     const stillFace = (size: number) => <BotAvatar bot={currentBot ?? bot} state={live ? (group && currentBot ? botActivity(state, currentBot.id) : activity) : "idle"} size={size} animated={false} />;
     const groupFailure = group && run.failures?.length
@@ -680,6 +664,7 @@ export default function ChatView({
       : "";
     const fold = (
       <TimelineFold
+        key={live || !folded ? "activity" : "completed-fold"}
         line={line}
         live={live}
         since={run.time}
@@ -692,11 +677,12 @@ export default function ChatView({
     );
     return (
       <Fragment key={`timeline-${run.id}`}>
-        {timelineMessage(initial.message, initial.index)}
-        {live && <LiveLead avatar={stillFace(28)} label={doingNow} thought={thought || state.intents[chat.id]?.trim()} />}
+        {initial && timelineMessage(initial.message, initial.index)}
+        {live && <LiveLead avatar={stillFace(28)} label={doingNow} thought={thinkingMode === "open" ? state.intents[chat.id]?.trim() : undefined} />}
+        {(live || !folded) && stepsMode === "open" && olderWork}
         {group ? groupTranscript : (live || !folded) ? events.map((event) => <Fragment key={event.key}>{event.body}</Fragment>) : personBody}
         {/* A finished one-bot turn folds above its answer: the work, then the reply. */}
-        {!group && !live && folded && fold}
+        {!group && !live && (folded || hasActivity) && fold}
         {!group && reply.map(({ message, index }) => timelineMessage(message, index))}
         {live && stream && (
           <article className="assistant live">
@@ -709,7 +695,7 @@ export default function ChatView({
             <RichText text={stream} files={files} />
           </article>
         )}
-        {(live || group) && (live || folded) && fold}
+        {(live || group) && (live || folded || hasActivity) && fold}
         <TeamRail run={run} bots={state.bots} />
         <RunCards run={run} prefill={prefill} pickModel={canManageAgents ? pickModel : undefined} />
         {!live && (failed.includes(run.status) || !!groupFailure) && (
@@ -879,7 +865,7 @@ export default function ChatView({
           onKeyDown={stopGlide}
         >
           <div className="chat-column">
-          {chat.messages.length === 0 && !pending.length && group && (
+          {chat.messages.length === 0 && !timelineBusy && !pending.length && group && (
             <div className="emptychat group-empty">
               <span className="group-avatars large" aria-hidden="true">
                 {members.map((m) => (
@@ -892,7 +878,7 @@ export default function ChatView({
               </p>
             </div>
           )}
-          {chat.messages.length === 0 && !pending.length && !group && (
+          {chat.messages.length === 0 && !timelineBusy && !pending.length && !group && (
             <div className="emptychat">
               <BotAvatar bot={bot} state={face} size={136} animated={face !== "idle"} />
               <h2>What can {bot.name} help with?</h2>
@@ -932,7 +918,8 @@ export default function ChatView({
               <GitFork size={13} /> Forked from an earlier chat
             </p>
           )}
-          {historic && historic.messages.map((message, i) => historic.from + i < loadedFrom && (
+          {historic && historic.messages.map((message, i) => historic.from + i < loadedFrom &&
+            (!message.interim || (thinkingMode === "open" && (!foldFinishedSteps || !message.runId || !runs.has(message.runId) || runs.get(message.runId)?.status === "Working"))) && (
             <article key={historic.from + i} id={`message-${chat.id}-${historic.from + i}`} className={messageClass(message)}>
               {message.author && <b className="member-speaker">{authorName(state, message.author)}</b>}
               <RichText text={message.text} files={files} />
@@ -940,21 +927,14 @@ export default function ChatView({
             </article>
           ))}
           {chat.messages.map((m, i) => {
-            const run = m.runId ? runs.get(m.runId) : undefined;
             const timelineOwner = m.runId ?? m.steeredRunId ?? m.answer?.runId;
-            if (timelineOwner && timelineRunIds.has(timelineOwner)) {
-              if (m.role === "user" && m.runId === timelineOwner && !m.steeredRunId && !m.answer && run) {
-                // A paginated/remote chat can contain a reply without the opening user message.
-                // Only claim the run after the timeline renderer found its anchor; otherwise let
-                // the legacy map render the partial page instead of dropping it.
-                const rendered = renderTimeline(run);
-                if (rendered) {
-                  timelineRendered.add(timelineOwner);
-                  return rendered;
-                }
-              }
-              if (timelineRendered.has(timelineOwner)) return null;
+            const run = timelineOwner ? runs.get(timelineOwner) : undefined;
+            if (run) {
+              if (timelineRendered.has(run.id)) return null;
+              timelineRendered.add(run.id);
+              return renderTimeline(run);
             }
+            if (m.interim && thinkingMode !== "open") return null;
             return (
               <Fragment key={i}>
                 {(m.text || m.role !== "assistant") && (
@@ -1016,52 +996,14 @@ export default function ChatView({
                     </>}
                   </article>
                 )}
-                {m.role === "user" && run && (
-                  <>
-                    {thinkingMode !== "hidden" && (
-                      <Reasoning
-                        run={run}
-                        live={run.status === "Working" ? thinking : undefined}
-                        display={thinkingMode}
-                        onToggle={disclosed}
-                      />
-                    )}
-                    <ToolTrail
-                      run={run}
-                      fold={stepsMode === "folded"}
-                      mode={stepsMode}
-                      intent={state.intents[chat.id]}
-                      bot={group ? (run.status === "Working" && speaker ? speaker.name : "The group") : bot.name}
-                      avatar={
-                        run.status === "Working" && (group ? speaker : bot) ? (
-                          <BotAvatar bot={group ? speaker : bot} state={group ? botActivity(state, speaker!.id) : activity} size={22} animated={false} />
-                        ) : undefined
-                      }
-                      onToggle={disclosed}
-                    />
-                    <TeamRail run={run} bots={state.bots} />
-                    <RunCards run={run} prefill={prefill} pickModel={canManageAgents ? pickModel : undefined} />
-                    {failed.includes(run.status) && (
-                      <div className="error run-error">
-                        <span>
-                          {run.status} · {run.detail || "Reply stopped."}
-                        </span>
-                        {run.id === lastUserRun && !busy && (
-                          <button
-                            className="secondary"
-                            onClick={() => void window.botkins.retry(run.id).catch((e) => setNotice(e.message))}
-                          >
-                            <RotateCcw size={13} />
-                            Try again
-                          </button>
-                        )}
-                      </div>
-                    )}
-                  </>
-                )}
               </Fragment>
             );
           })}
+          {timelineBusy && !timelineRendered.has(latest.id) && (
+            <Fragment key={`unanchored-timeline-${latest.id}`}>
+              {renderTimeline(latest)}
+            </Fragment>
+          )}
           {busy && !timelineBusy && group && (
             <article className="assistant live">
               {speaker && (
