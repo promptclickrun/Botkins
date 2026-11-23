@@ -31,6 +31,9 @@
       "dist/**",
       "desktop/**",
       "cli/**",
+      "design/botkins-kit/customize.js",
+      "design/botkins-kit/motion/**",
+      "design/botkins-kit/avatars/**",
       "package.json",
       "!node_modules/@anthropic-ai/claude-agent-sdk-*/**"
     ],

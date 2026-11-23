@@ -309,7 +309,10 @@ export const LINK = {
   // Gadgets (desktop/link/gadget.mjs). A person names one from a cable; the rest are a gadget's own calls,
   // which only a paired gadget makes, as a phone makes its own.
   "link.gadgets.add": cmd("gadgets add"),
-  ...each("link.gadget.hello link.gadget.set link.gadget.say link.gadget.hear link.gadget.speak", no("phone's own")),
+  "link.gadgets.configure": cmd("gadgets set"),
+  "link.gadgets.wifi": cmd("gadgets wifi"),
+  "link.gadgets.restart": cmd("gadgets restart"),
+  ...each("link.gadget.hello link.gadget.set link.gadget.say link.gadget.hear link.gadget.speak link.gadget.face", no("phone's own")),
   // The team, as the link names the same calls (control-team.mjs).
   "link.team.get": cmd("team show"),
   "link.team.rename": cmd("team rename"),
@@ -367,6 +370,10 @@ export const CHANGES = {
   "devices.remove": 0,
   // A gadget set up over a cable: its name as the computer keeps it. Never the Wi-Fi network or its password.
   "gadgets.add": (args, value) => value?.name,
+  // A gadget's settings, a network for it, a restart: the gadget's name, never a network's name or a password.
+  "gadgets.set": (args, value) => value?.name,
+  "gadgets.wifi": (args, value) => value?.name,
+  "gadgets.restart": (args, value) => value?.name,
   // An answer to a request that waits in a chat: the chat's id, the kind of the request (one of four fixed words) and yes or no. Never the request's text or the answer's, never a value.
   "chat.respond": (args, value) => (value?.chatId && ["permission", "secure", "question", "form"].includes(value.kind) && ["yes", "no"].includes(value.answered) ? value.chatId + " " + value.kind + " " + value.answered : (value?.chatId ?? null)),
   "bots.add": (args) => args?.[0]?.name,
@@ -587,7 +594,7 @@ export const CHANGES = {
   "apps.remove": (args, value) => value?.slug ?? args?.[0],
 };
 /** The service's own calls that only read, wait or talk in a chat: no line. Every call is in this list, in CHANGES or in LOGS_ITSELF. */
-export const READS = ["skillsCatalog.search", "skillsCatalog.preview", "piPackages.browse", "piPackages.preview", "piPackages.list", "status", "logs.read", "doctor", "events.wait", "pair.status", "devices.list", "bots.list", "bots.get", "providers.list", "providers.services", "providers.login.read", "providers.login.input", "providers.login.cancel", "models", "chat.open", "chat.list", "chat.send", "chat.read", "chat.stop", "runs.list", "routines.list", "plugins.list", "plugins.marketplaces", "plugins.refresh", "plugins.browse", "plugins.preview", "config.get", "config.describe", "relay.status", "update.status", "update.check", "methods", "plugins.get", "tools.list", "tools.get", "tools.import.preview", "tools.signIn.read", "tools.signIn.input", "tools.signIn.cancel", "skills.list", "skills.get", "bots.tools", "bots.access", "bots.menu", "folders.list"];
+export const READS = ["skillsCatalog.search", "skillsCatalog.preview", "piPackages.browse", "piPackages.preview", "piPackages.list", "status", "logs.read", "doctor", "events.wait", "pair.status", "devices.list", "bots.list", "bots.get", "providers.list", "providers.services", "providers.login.read", "providers.login.input", "providers.login.cancel", "models", "chat.open", "chat.list", "chat.send", "chat.read", "chat.stop", "runs.list", "routines.list", "plugins.list", "plugins.marketplaces", "plugins.refresh", "plugins.browse", "plugins.preview", "config.get", "config.describe", "relay.status", "update.status", "update.check", "methods", "plugins.get", "tools.list", "tools.get", "tools.import.preview", "tools.signIn.read", "tools.signIn.input", "tools.signIn.cancel", "skills.list", "skills.get", "bots.tools", "bots.access", "bots.menu", "folders.list", "gadgets.get"];
 // The reads of the rest of the workspace, one line for each area (each area's builder writes only its own line).
 export const MORE_READS = {
   bots: ["bots.flags", "bots.proactive", "bots.memory", "bots.sections", "bots.sections.get", "bots.importable", "bots.import.preview", "templates.list", "templates.get", "templates.import.preview", "templates.browse", "templates.market"],
