@@ -419,7 +419,7 @@ const HANDOVER_MS = 15_000;
  * the system prompt, the tool server, the extra request fields and the model. Throws when the run
  * refuses one or doesn't answer in time.
  */
-async function handOver(run, { system, endpoint, extra, effort, maxTokens, model, within = HANDOVER_MS }) {
+async function handOver(run, { system, endpoint, extra, effort, maxTokens, model, fastMode, within = HANDOVER_MS }) {
   const until = Date.now() + within;
   let sent = 0;
   const control = async (request) => {
@@ -437,7 +437,7 @@ async function handOver(run, { system, endpoint, extra, effort, maxTokens, model
   if (endpoint) await control({ subtype: "mcp_set_servers", servers: { [TOOL_SERVER]: { type: "http", url: endpoint.url, headers: endpoint.headers } } });
   await control({
     subtype: "apply_flag_settings",
-    settings: { env: { CLAUDE_CODE_EXTRA_BODY: JSON.stringify(extra), ...thinkingLevel(effort), ...(maxTokens && { CLAUDE_CODE_MAX_OUTPUT_TOKENS: String(maxTokens) }) } },
+    settings: { ...(fastMode && { fastMode: true }), env: { CLAUDE_CODE_EXTRA_BODY: JSON.stringify(extra), ...thinkingLevel(effort), ...(maxTokens && { CLAUDE_CODE_MAX_OUTPUT_TOKENS: String(maxTokens) }) } },
   });
   if (run.model !== model) await control({ subtype: "set_model", model });
 }
@@ -476,7 +476,7 @@ function failure(code, detail) {
  *                         is started for the request.
  * Throws PlanError. A failure after the reply began is thrown too; the caller decides how to tell the runtime.
  */
-export async function claudeTurn(body, { file, env, cwd, bridge, emit, signal, launch = spawn, ended, report, reportMs = 4000, pool, handoverMs = HANDOVER_MS }) {
+export async function claudeTurn(body, { file, fastMode, env, cwd, bridge, emit, signal, launch = spawn, ended, report, reportMs = 4000, pool, handoverMs = HANDOVER_MS }) {
   if (!file) throw new PlanError(503, "api_error", "Claude Code isn't installed. Install it from https://code.claude.com/docs/en/setup, then sign in under Settings › Model providers.");
   if (typeof body?.model !== "string" || !body.model) throw new PlanError(400, "invalid_request_error", "No model was named.");
   const names = toolNames(body.tools);
@@ -508,7 +508,7 @@ export async function claudeTurn(body, { file, env, cwd, bridge, emit, signal, l
       stopOn = stop;
       if (signal?.aborted) stop();
       try {
-        await handOver(waiting, { system, endpoint, extra, effort: body.output_config?.effort, maxTokens, model: body.model, within: handoverMs });
+        await handOver(waiting, { system, endpoint, extra, fastMode, effort: body.output_config?.effort, maxTokens, model: body.model, within: handoverMs });
         read = waiting.read;
         stderr = () => waiting.stderr;
       } catch (error) {
@@ -526,7 +526,7 @@ export async function claudeTurn(body, { file, env, cwd, bridge, emit, signal, l
       writeFileSync(join(dir, "system.md"), system, { mode: 0o600 });
       // The tool server's address and its one-time secret travel in a file, not on the command line.
       writeFileSync(join(dir, "mcp.json"), JSON.stringify({ mcpServers: endpoint ? { [TOOL_SERVER]: { type: "http", url: endpoint.url, headers: endpoint.headers } } : {} }), { mode: 0o600 });
-      writeFileSync(join(dir, "settings.json"), JSON.stringify({ env: { CLAUDE_CODE_EXTRA_BODY: JSON.stringify(extra) } }), { mode: 0o600 });
+      writeFileSync(join(dir, "settings.json"), JSON.stringify({ ...(fastMode && { fastMode: true }), env: { CLAUDE_CODE_EXTRA_BODY: JSON.stringify(extra) } }), { mode: 0o600 });
       const args = cliArgs({ model: body.model, systemFile: join(dir, "system.md"), mcpFile: join(dir, "mcp.json"), settingsFile: join(dir, "settings.json"), sessionId: sessionIdFor(system, turns[0]) });
       const environment = runEnvironment(env);
       Object.assign(environment, thinkingLevel(body.output_config?.effort));

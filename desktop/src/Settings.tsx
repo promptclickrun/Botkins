@@ -329,7 +329,7 @@ export default function Settings({
                 footer="Bots and chats use this unless they choose their own."
               >
                 <div className="set-row stacked set-picker">
-                  <ModelPicker scope="global" id={null} value={settings.model} openProviders={() => setSection("account")} />
+                  <ModelPicker scope="global" id={null} value={settings.model} speedSettings={!state.remote?.using || state.remote.using.capabilities.includes("fast-mode-v1") ? { value: settings.fastMode } : undefined} openProviders={() => setSection("account")} />
                 </div>
               </Group>
               {routineModels && (
@@ -412,6 +412,7 @@ export default function Settings({
                       scope="bot"
                       id={id}
                       value={bot.model}
+                      speedSettings={!state.remote?.using || state.remote.using.capabilities.includes("fast-mode-v1") ? { value: bot.fastMode, inherited: settings.fastMode } : undefined}
                       inherited={settings.model}
                       openProviders={() => setSection("account")}
                     />

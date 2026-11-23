@@ -1112,6 +1112,7 @@ export function filterParts(parts, principal, team, extra = {}) {
   out.mcp = can("mcp") ? scrub(parts.mcp ?? []) : [];
   out.plugins = can("plugins") ? scrub(parts.plugins ?? []) : [];
   out.settings = can("settings") ? Object.fromEntries(Object.entries(parts.settings ?? {}).filter(([name]) => MEMBER_PREFERENCE_FIELDS.includes(name))) : {};
+  if (mayManage && parts.settings?.fastMode) out.settings.fastMode = parts.settings.fastMode;
   out.revs = {};
   // The owner's name as a person comes with the owner's own team part; else the computer's name stands in.
   out.team = teamPart(team, false, principal, parts.team?.people?.find((person) => person.id === OWNER)?.name ?? parts.meta?.name);

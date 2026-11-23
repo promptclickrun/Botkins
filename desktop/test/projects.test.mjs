@@ -246,12 +246,13 @@ test("artifacts on a project: attach, move to the front, take off, and one that 
   assert.equal(PROJECT_ARTIFACTS, "project-artifacts-v1");
   assert.ok(CAPABILITIES.includes(PROJECT_ARTIFACTS));
   // A paired device hears of it only when the link carries all three calls.
-  // (Live speech in the history is named only when the link carries recordVoiceLine.)
-  const others = CAPABILITIES.filter((name) => name !== PROJECT_ARTIFACTS && name !== "spaces-v1" && !["voice-history-v1", "voice-turns-v1"].includes(name) && name !== "market-refresh-v1" && name !== "mcp-apps-v1" && name !== "pi-packages-v1");
-  assert.deepEqual(linkCapabilities(new Set()), others);
-  assert.deepEqual(linkCapabilities(new Set(["addProjectArtifact", "removeProjectArtifact"])), others);
-  // (Spaces are named the same way, only when the link carries their calls: test/spaces-host.test.mjs.)
-  assert.deepEqual(linkCapabilities(new Set(["addProjectArtifact", "removeProjectArtifact", "projectArtifacts"])), CAPABILITIES.filter((name) => name !== "spaces-v1" && !["voice-history-v1", "voice-turns-v1"].includes(name) && name !== "market-refresh-v1" && name !== "mcp-apps-v1" && name !== "pi-packages-v1"));
+  const gated = new Set(["spaces-v1", "voice-history-v1", "voice-turns-v1", "market-refresh-v1", "mcp-apps-v1", "pi-packages-v1", "chat-title-regeneration-v1"]);
+  const withArtifacts = CAPABILITIES.filter((name) => !gated.has(name));
+  const withoutArtifacts = withArtifacts.filter((name) => name !== PROJECT_ARTIFACTS);
+  assert.deepEqual(linkCapabilities(new Set()), withoutArtifacts);
+  assert.deepEqual(linkCapabilities(new Set(["addProjectArtifact", "removeProjectArtifact"])), withoutArtifacts);
+  assert.deepEqual(linkCapabilities(new Set(["addProjectArtifact", "removeProjectArtifact", "projectArtifacts"])), withArtifacts);
+  assert.ok(linkCapabilities(new Set(["regenerateChatTitle"])).includes("chat-title-regeneration-v1"));
   // Pi packages are named only when the link carries all five marketplace calls.
   assert.equal(linkCapabilities(new Set(PI_PACKAGE_METHODS.slice(1))).includes("pi-packages-v1"), false);
   assert.equal(linkCapabilities(new Set(PI_PACKAGE_METHODS)).includes("pi-packages-v1"), true);

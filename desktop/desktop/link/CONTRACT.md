@@ -321,6 +321,10 @@ type AppUpdate = {
 - **When `canInstall` is false**, `message` says what to do instead (pull a new image, `git pull`); a client shows it as it comes.
 - **A notification.** When a computer learns of a newer release it calls `link.push.updateAvailable(version)` (`link-host/push.mjs`). Each owner device whose notifications are on and whose `updates` choice is on (the default) gets one sealed alert for that version, titled with the computer's name: "Botkins 0.16.5 is available." A member device never gets it. A device counts as told only once the relay took its alert, so one that missed it is told at a later check. The alert's kind is `"update"`, and its unsealed line is "An update is available"; a tap opens the computer's page.
 
+## Fast mode (`fast-mode-v1`)
+
+`setModel(scope, id, model, fastMode?)` saves the model and speed together for a chat, bot, or the global default. Omit the fourth argument to preserve the saved speed. Pass `null` to inherit, or `"off"`, `"fast"`, or `"ultrafast"` for an explicit choice. Settings, bots and chat summaries carry the optional `fastMode` independently of their model. A catalog model’s optional `fastModes` maps supported choices to provider tier ids. Clients offer the speed control when the host advertises this capability.
+
 ## A bot's Proactive agent (`proactive-agent-v2`)
 
 Experimental. A bot that is proactive watches, with no model, for what its person should hear of (a failed routine or task run, a task waiting in Review or Blocked, an unanswered approval or question), wakes only when something is new or a look around is due, and says it once. Each such bot has its own settings, its own managed routine (`proactive: true` on its schedule entry, "Proactive agent" in the routines) and its own gate state (what it raised, today's alerts, its log). Any number of bots may be proactive at once.

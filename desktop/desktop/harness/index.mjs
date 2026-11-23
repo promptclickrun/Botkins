@@ -120,6 +120,10 @@ export class Harness {
       gateway ??
       new Gateway({
         version,
+        speedTier: async (provider, model, speed) => {
+          const catalog = await this.providers.models();
+          return catalog.find((m) => m.provider === provider && m.id === model)?.fastModes?.[speed];
+        },
         chatgpt: codex && { signIn: () => chatgptSignIn(), renew: () => codex.renewSignIn?.() },
         claude: claude && (async () => ({ file: await claude.locate(), env: await claude.env(), cwd: join(dir, "harness", "claude"), bridge, report: (modelUsage) => claude.noteLimits?.(modelUsage) })),
         log: (line) => console.error(line),
@@ -174,6 +178,10 @@ export class Harness {
     // starting when the first message comes (harness/claude.mjs).
     if (owner.id === "claude") void this.gateway.warm?.(selection.model);
     const catalog = await this.providers.models().catch(() => []);
+    // The URL is part of each session's inference configuration. Concurrent chats can
+    // have different speeds, and a speed change invalidates a warm harness connection.
+    const speed = selection.fastMode;
+    const speedPath = speed === "fast" || speed === "ultrafast" ? "/" + speed : "";
     const listed = (id) => {
       const list = catalog.filter((model) => model.provider === id && model.available !== false);
       // The chosen model is offered even when its provider's list couldn't be read just now.
@@ -187,7 +195,7 @@ export class Harness {
         .filter(({ models }) => models.length)
         .map(({ each, models }) => ({
           name: each.name,
-          config: { name: each.title, baseUrl: base + each.path, api: each.api, apiKey: this.gateway.secret, ...(each.api === "openai-responses" && { authHeader: true }), models: models.map((model) => piModel(model, each.compat)) },
+          config: { name: each.title, baseUrl: base + each.path + speedPath, api: each.api, apiKey: this.gateway.secret, ...(each.api === "openai-responses" && { authHeader: true }), models: models.map((model) => piModel(model, each.compat)) },
         }));
       return {
         model: { model: selection.model, source: PI_PLANS[owner.id].name, ...(selection.reasoningEffort && { reasoningEffort: selection.reasoningEffort }) },
@@ -202,7 +210,7 @@ export class Harness {
       inference: {
         providers: Object.values(PLANS)
           .filter((each) => named.has(each.name))
-          .map((each) => ({ name: each.name, type: each.type, ...(each.wireApi && { wireApi: each.wireApi }), baseUrl: base + each.path, bearerToken: this.gateway.secret })),
+          .map((each) => ({ name: each.name, type: each.type, ...(each.wireApi && { wireApi: each.wireApi }), baseUrl: base + each.path + speedPath, bearerToken: this.gateway.secret })),
         models,
       },
     };

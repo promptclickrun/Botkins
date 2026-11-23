@@ -367,6 +367,7 @@ export const CHANGES = {
   "providers.login": 0,
   "providers.logout": 0,
   "models.default": null,
+  "models.speed": ([scope, id]) => id ?? scope,
   "models.routines": null,
   "routines.run": 0,
   "routines.pause": 0,

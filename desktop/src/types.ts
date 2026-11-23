@@ -1,6 +1,7 @@
 import type { CallToolResult, ReadResourceResult } from "@modelcontextprotocol/client";
 import type { SpaceContent, SpaceNotify, SpaceShareInput, SpaceStart, SpaceSummary } from "./spaces";
 export type Bot = {
+  fastMode?: FastMode;
   id: string;
   name: string;
   role: string;
@@ -117,6 +118,7 @@ export type Message = {
   author?: { memberId: string; name: string };
 };
 export type Chat = {
+  fastMode?: FastMode;
   /** Latest message count advertised by a paired computer, even before its chat page arrives. */
   count?: number;
   loaded?: { from: number; total: number } | null;
@@ -538,6 +540,7 @@ declare global {
         scope: "global" | "routines" | "bot" | "chat",
         id: string | null,
         value: ModelChoice | null,
+        fastMode?: FastMode | null,
       ): Promise<void>;
       setPreferences(
         patch: Partial<Omit<Preferences, "model" | "appearance" | "proactive">> & {
@@ -1478,7 +1481,9 @@ export type ModelChoice = {
   source?: string;
   reasoningEffort?: string;
 };
+export type FastMode = "off" | "fast" | "ultrafast";
 export type ModelInfo = {
+  fastModes?: Partial<Record<Exclude<FastMode, "off">, string>>;
   id: string;
   name: string;
   /** The provider's id ("copilot", "codex", "claude", "opencode") and its name for people ("ChatGPT"). */
@@ -1672,6 +1677,7 @@ export type MacToolsStatus = {
 };
 
 export type Preferences = {
+  fastMode?: FastMode;
   model: ModelChoice;
   /** The Default routines model: routines without their own use it before their bot's (desktop/workspace.mjs, effectiveModel). */
   routineModel?: ModelChoice;
