@@ -348,3 +348,23 @@ test("follow parts use the active seat, respect backpressure and never enter the
   assert.equal(link.cacheBytes, 3);
   link.stop();
 });
+
+test("a new active seat sends unacknowledged answers again without a replay", async () => {
+  const { link, clock } = newLink();
+  link.start();
+  const active = Socket.all[0];
+  active.open();
+  await clock.advance(0);
+  const standby = Socket.all[1];
+  standby.open();
+  active.feed(frame("01".repeat(8), 7));
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(answerId(active.sent.at(-1)), 7);
+  // The answer may have been lost with the socket, and the room may have forgotten the request.
+  active.close(1006);
+  const again = standby.sent.find(bytes => bytes[8] === 2);
+  assert.equal(answerId(again), 7);
+  standby.feed(ackFrame("01".repeat(8), 7));
+  assert.equal(link.cacheBytes, 0);
+  link.stop();
+});

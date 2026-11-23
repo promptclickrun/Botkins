@@ -581,6 +581,7 @@ export class RelayHost {
       meta.slot = "active";
       this.standby = null;
       this.up = true;
+      this.resendDone(socket);
     } else {
       this.standby = socket;
       this.clear(this.standbyRetry);
@@ -676,6 +677,7 @@ export class RelayHost {
         if (promoted) {
           promoted.slot = "active";
           this.armStable(this.socket, promoted);
+          this.resendDone(this.socket);
         }
         this.standby = null;
       }
@@ -806,6 +808,20 @@ export class RelayHost {
     this.retire(state, id);
   }
 
+  /**
+   * A seat that just became active sends again every answer the room has not acknowledged. The room
+   * keeps requests in memory only, so after a gap it may not ask for them again. It drops a repeat
+   * of an answer it already took, and a phone ignores an answer it no longer waits for.
+   */
+  resendDone(socket) {
+    if (this.sockets.get(socket)?.mode !== "v3") return;
+    for (const [conn, state] of this.conns) {
+      for (const [id, entry] of state.entries) {
+        if (entry.kind === "done") this.answer(socket, Buffer.from(conn, "hex"), id, entry.status, entry.body);
+      }
+    }
+  }
+
   stateFor(conn) {
     let state = this.conns.get(conn);
     if (state) return state;
@@ -857,6 +873,7 @@ export class RelayHost {
       const active = this.sockets.get(socket);
       active.slot = "active";
       this.armStable(socket, active);
+      this.resendDone(socket);
     }
     if (isV3) this.pruneAll();
     const state = this.stateFor(conn);
