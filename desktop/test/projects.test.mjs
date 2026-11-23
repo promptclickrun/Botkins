@@ -246,7 +246,7 @@ test("artifacts on a project: attach, move to the front, take off, and one that 
   assert.equal(PROJECT_ARTIFACTS, "project-artifacts-v1");
   assert.ok(CAPABILITIES.includes(PROJECT_ARTIFACTS));
   // A paired device hears of it only when the link carries all three calls.
-  const gated = new Set(["spaces-v1", "voice-history-v1", "voice-turns-v1", "market-refresh-v1", "mcp-apps-v1", "pi-packages-v1", "chat-title-regeneration-v1"]);
+  const gated = new Set(["spaces-v1", "voice-history-v1", "voice-turns-v1", "market-refresh-v1", "mcp-apps-v1", "pi-packages-v1", "skill-upload-v1", "skills-catalog-v1", "chat-title-regeneration-v1"]);
   const withArtifacts = CAPABILITIES.filter((name) => !gated.has(name));
   const withoutArtifacts = withArtifacts.filter((name) => name !== PROJECT_ARTIFACTS);
   assert.deepEqual(linkCapabilities(new Set()), withoutArtifacts);

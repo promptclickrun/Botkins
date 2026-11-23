@@ -143,6 +143,10 @@ const POLICY = {
   "link.chats.setSection": ["agents", "view"],
   skills: ["skills", "read"],
   readSkill: ["skills", "read"],
+  "skills.upload": ["skills", "create"],
+  "skillsCatalog.search": ["skills", "read"],
+  "skillsCatalog.preview": ["skills", "read"],
+  "skillsCatalog.install": ["skills", "create"],
   saveSkill: ["skills", "create"],
   removeSkill: ["skills", "delete"],
   setSkillEnabled: ["skills", "manage"],
@@ -906,6 +910,7 @@ export function authorize(principal, team, method, args = [], lookups = {}) {
   if (!hasAction(role.perms, scope, action)) return "Your team role can't do that.";
   // A routine's script runs on the owner's computer, so only the owner writes or changes one ("routine-scripts-v1").
   if ((method === "createRoutine" && args[0]?.script != null) || (method === "updateRoutine" && args[1]?.script !== undefined)) return "Only the owner can add or change a routine's script.";
+  if (((method === "skills.upload" && args[0]?.replace?.length) || (method === "skillsCatalog.install" && args[1]?.length)) && !hasAction(role.perms, "skills", "manage")) return "Your team role cannot replace skills.";
   if (method === "setPreferences") {
     const patch = args[0];
     if (!patch || typeof patch !== "object" || Array.isArray(patch) || Object.keys(patch).some((field) => !MEMBER_PREFERENCE_FIELDS.includes(field))) return "Your team role can change display preferences only.";

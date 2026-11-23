@@ -9,6 +9,7 @@
 //  - A tool that is a command starts a program on this computer. Adding one, turning one on,
 //    changing what it starts and importing a file of them show the exact line that will run and
 //    need the person's yes (`--yes` when there is no terminal to ask at).
+import { pickedSkill } from "../../desktop/link/skill-import.mjs";
 import { readFileSync } from "node:fs";
 import { dirname, isAbsolute, resolve } from "node:path";
 import { CliError, EXIT, table, usage } from "../output.mjs";
@@ -43,6 +44,21 @@ const one = (context, what) => {
   if (context.args.length !== 1) throw usage(what);
   return context.args[0];
 };
+const SKILL_CONFIRM = {
+  ...YES,
+  replace: { type: "string", multiple: true, value: "name", about: "Confirm replacement of this existing skill with --yes. Repeat for each name." },
+};
+async function finishImport(context, send) {
+  let result = await send([]);
+  if (result.conflicts.length) {
+    const names = result.conflicts.map(safe).join(", ");
+    if (context.options.yes && !result.conflicts.every(name => context.options.replace?.includes(name)))
+      throw usage("Existing skills: " + names + ". Confirm each with --replace <name>.");
+    if (await confirm(context, "Replace " + names + "?")) result = await send(result.conflicts);
+  }
+  context.print(result, r => r.conflicts.length ? "Skills were not replaced." : "Added " + r.added.map(safe).join(", "));
+}
+
 /** An updated CLI can still be talking to an earlier running service. Normalize its skill
  * metadata before either the table or the JSON formatter sees it. */
 async function skillResult(context, method, ...args) {
@@ -495,6 +511,34 @@ export const tools = {
     summary: "Add, change and remove skills: instructions a bot reads when a task needs them",
     details: "A skill is a folder with a SKILL.md: a name, one line that says when to use it, and instructions. Botkins keeps the ones you add here. A linked folder of skills stays where it is and is read from there.",
     commands: {
+      search: {
+        summary: "Search skills.sh", usage: "botkins skills search <query>",
+        async run(context) {
+          const rows = await context.client.call("skillsCatalog.search", one(context, "Enter a search in quotes."));
+          context.print(rows, () => table(["ID", "INSTALLS"], rows.map(r => [safe(r.id), r.installs])));
+        },
+      },
+      preview: {
+        summary: "Read a skill before installation", usage: "botkins skills preview <id>",
+        async run(context) {
+          const result = await context.client.call("skillsCatalog.preview", one(context, "Choose a catalog id."));
+          context.print(result, r => r.text.split("\n").map(safe).join("\n") + "\nPreview token: " + r.token);
+        },
+      },
+      install: {
+        summary: "Install the previously previewed files", usage: "botkins skills install <preview-token> [--yes] [--replace <name>]…", options: SKILL_CONFIRM,
+        async run(context) {
+          const token = one(context, "Give the token from skills preview.");
+          if (await confirm(context, "Install and enable the reviewed skill?")) await finishImport(context, replace => context.client.call("skillsCatalog.install", token, replace));
+        },
+      },
+      upload: {
+        summary: "Upload Markdown or a skill archive", usage: "botkins skills upload <file> [--yes] [--replace <name>]…", options: SKILL_CONFIRM,
+        async run(context) {
+          const file = pickedSkill(one(context, "Choose a .md or .zip file."));
+          await finishImport(context, replace => context.client.call("skills.upload", {...file, replace}));
+        },
+      },
       list: {
         summary: "List the skills",
         usage: "botkins skills list",

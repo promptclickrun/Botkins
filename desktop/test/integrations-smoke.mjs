@@ -87,7 +87,9 @@ try {
   await tab("Skills").click();
   await settings.getByRole("heading", { name: "Skills", level: 2 }).waitFor();
   await expect(settings.getByText("Loading skills…")).toHaveCount(0);
-  await settings.getByRole("button", { name: "New skill" }).first().click();
+  await settings.getByRole("button", { name: "Add skill" }).first().click();
+  await expect(page.getByRole("menuitem", { name: "Upload skill" })).toBeVisible();
+  await page.getByRole("menuitem", { name: "Create skill" }).click();
   let sheet = page.getByRole("dialog", { name: "New skill" });
   await sheet.getByRole("textbox", { name: /^Name/ }).fill("release-notes");
   await sheet.getByRole("textbox", { name: "When to use it" }).fill("Use when writing release notes.");
@@ -109,7 +111,9 @@ try {
   skill = (await skills()).skills.find((s) => s.name === "release-notes");
   assert.equal(skill.description, "Use when turning a change list into release notes.");
   // Escape closes only the sheet, not Settings.
-  await settings.getByRole("button", { name: "New skill" }).first().click();
+  await settings.getByRole("button", { name: "Add skill" }).first().click();
+  await expect(page.getByRole("menuitem", { name: "Upload skill" })).toBeVisible();
+  await page.getByRole("menuitem", { name: "Create skill" }).click();
   await page.getByRole("dialog", { name: "New skill" }).waitFor();
   await page.keyboard.press("Escape");
   await expect(page.getByRole("dialog", { name: "New skill" })).toHaveCount(0);
