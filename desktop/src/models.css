@@ -775,3 +775,15 @@ small.error-text {
 .keyed-model .keyed-model-problem {
   grid-column: 1 / -1;
 }
+.keyed-field .segmented {
+  justify-self: start;
+}
+.keyed-key .service-key {
+  align-items: center;
+}
+.keyed-key .service-key input {
+  height: 32px;
+  padding: 4px 10px;
+  font-size: calc(13px * var(--text-scale));
+  border-radius: var(--radius-sm);
+}
