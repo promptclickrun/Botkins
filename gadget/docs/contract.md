@@ -192,7 +192,7 @@ answer     { "epoch": epoch, "v": versions | null, "parts": { name: value, … }
 ```
 
 - `have` is the `v` of the answer before (`{}` at first). `v: null` means nothing changed: ask again with the same `have`.
-- `wait` is how long the computer may hold the call for news, in milliseconds (30,000 at most). Give the request itself 15 seconds more.
+- `wait` is how long the computer may hold the call for news, in milliseconds (30,000 at most). Give the request itself 15 seconds more. After a call that failed, ask once with `wait: 0`, so the gadget shows it is online again as soon as the computer answers.
 - `appends` is `{ [chatId]: { id, stream, thinking } }`: the text id held and how many UTF-16 units of each body. `{}` asks from the start. A part `text:<chatId>` is `{ id, stream: { from, add }, thinking: { from, add } }`, or `null` when there is no text. Append `add` at `from`; an `id` or `from` that does not fit what is held means start over from `{}`.
 - One `link.sync` waits at a time. Other calls go beside it on the same session, on a second connection.
 

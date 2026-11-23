@@ -227,7 +227,9 @@ void Gadget::sync_loop() {
       // Through the relay, now and then: is the computer's own address back? This thread waits for news
       // anyway, so a look that finds nobody costs no one.
       link->probe();
-      Json request = Json::object().set("epoch", epoch_).set("have", have_).set("wait", 25000);
+      // After a look that failed, the next one doesn't wait for news: the screen says the computer is back
+      // as soon as it answers, not up to 25 s later.
+      Json request = Json::object().set("epoch", epoch_).set("have", have_).set("wait", failures > 0 ? 0 : 25000);
       if (!chat_id_.empty()) {
         request.set("watch", Json::array().push(chat_id_));
         Json cursors = Json::object();

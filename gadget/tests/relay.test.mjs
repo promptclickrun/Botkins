@@ -108,7 +108,8 @@ test("a gadget away from home reaches its computer through the relay, and comes 
   await until(() => sim.view.stage === "connecting" && /^Can't reach .+\. Check that Botkins is open there\.$/.test(sim.view.notice ?? ""), "the gadget saying it can't reach the computer", 40000);
   let mark = vias.length;
   await link.setEnabled(true);
-  await until(() => sim.view.stage === "online" && !sim.view.notice, "online again, the sentence gone", 40000);
+  // Within a few seconds: after a failed look the gadget asks once without waiting, so it is online as soon as it is answered.
+  await until(() => sim.view.stage === "online" && !sim.view.notice, "online again, the sentence gone", 8000);
   sim.send("say One more thing");
   await until(() => sim.view.phase === "idle" && sim.spoken.length === 2 && !sim.view.speaking, "a second turn after the computer came back", 30000);
   assert.ok(vias.slice(mark).length > 0 && vias.slice(mark).every((via) => via === "relay"));
