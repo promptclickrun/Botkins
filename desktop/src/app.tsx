@@ -590,6 +590,7 @@ function App() {
         key={key}
         botId={target.id}
         chatId={key === "home" ? undefined : key}
+        listPulls={key !== "home" && !!chat?.projectId && !memberHost && (!state?.remote?.using || state.remote.using.capabilities.includes("prs-v1"))}
         sourceKey={JSON.stringify([state!.mcpServers, state!.skills, target.skillsOff, target.mcpOff])}
         draft={drafts[key] || ""}
         placeholder={placeholder}

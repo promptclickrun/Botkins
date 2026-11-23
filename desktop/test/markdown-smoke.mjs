@@ -76,6 +76,8 @@ left as it is
 
 A picture: ![Architecture diagram](https://example.com/diagram.png) and a claim.[^1]
 
+Changes: [Review PR](https://github.com/example/botkins/pull/42/files).
+
 A badge: [![build passing](https://example.com/badge.svg)](https://example.com/builds)
 
 ---
@@ -165,8 +167,13 @@ try {
   await expect(boxes.nth(1)).not.toBeChecked();
   await expect(boxes.nth(1)).toBeDisabled();
   await expect(reply.locator("ol > li")).toHaveCount(3, { timeout: 5000 }); // two steps and the footnote
-  // Links: written and bare addresses open in the browser, not in the app.
+  // Ordinary Markdown links still use the browser. A GitHub PR opens the local pane.
   await app.evaluate(({ ipcMain }) => {
+    ipcMain.removeHandler("link.pullRequest");
+    ipcMain.handle("link.pullRequest", (_event, { url }) => ({ available: true, pull: {
+      url, number: 42, title: "Review the rollout", state: "open", author: "mira", head: "release", base: "main",
+      createdAt: "2026-11-21T00:00:00Z", body: "Ready for **review**.", checks: [], summary: "No checks", review: "approved", files: [],
+    } }));
     globalThis.__opened = [];
     ipcMain.removeHandler("openLink");
     ipcMain.handle("openLink", (_event, url) => void globalThis.__opened.push(url));
@@ -186,6 +193,9 @@ try {
   await badge.click();
   await expect.poll(() => app.evaluate(() => globalThis.__opened.slice(3))).toEqual(["https://example.com/builds"]);
   assert.equal(await reply.locator("a a").count(), 0, "no link inside a link");
+  await reply.getByRole("link", { name: "Review PR" }).click();
+  await expect(page.getByRole("region", { name: "Pull request" })).toContainText("Review the rollout");
+  await expect(page.getByRole("button", { name: "Open on GitHub" })).toBeVisible();
   // The second table keeps its column alignment.
   const numbers = reply.getByRole("table");
   await expect(numbers.getByRole("columnheader")).toHaveText(["Metric", "Before", "After"]);

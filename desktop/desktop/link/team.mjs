@@ -268,6 +268,8 @@ const POLICY = {
   "link.frame.chat": ["today", "view"],
   "link.upload": ["agents", "chat"],
   "link.pullRequests": "owner",
+  "link.pullRequest": "owner",
+  "link.pullRequestDiff": "owner",
   "link.credentials.save": "owner",
   "link.credentials.remove": "owner",
   "link.credentials.check": "owner",

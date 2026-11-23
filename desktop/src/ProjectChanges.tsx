@@ -100,7 +100,7 @@ export function ProjectPicker({
   );
 }
 
-function DiffView({ text }: { text: string }) {
+export function DiffView({ text }: { text: string }) {
   return (
     <pre className="diff-view" aria-label="Diff">
       {text.split("\n").map((line, i) => (

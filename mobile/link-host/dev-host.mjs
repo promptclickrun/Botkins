@@ -22,9 +22,9 @@
 //                                         In this console: gadget <serial port> [network name] [password]
 // The pairing link is also written to <dir>/pairing-url.txt for scripts and simulators.
 import { execFile } from "node:child_process";
-import { chmodSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { delimiter, join } from "node:path";
+import { join } from "node:path";
 import { createInterface } from "node:readline";
 import { introduce, serialLines } from "./gadget-setup.mjs";
 import { LinkHost, qrText } from "./index.mjs";
@@ -82,27 +82,12 @@ if (process.env.BOTKINS_DEV_PICTURE) {
   screenInput = async ({ events }) => console.log("Screen input  " + JSON.stringify(events));
 }
 
-// Stand-in pull requests: a tiny gh that prints made-up ones, found before the real gh.
-let searchPath;
-if (process.env.BOTKINS_DEV_PRS === "1" && process.platform !== "win32") {
-  const bin = join(dir, "demo-bin");
-  mkdirSync(bin, { recursive: true });
-  const pr = (number, title, state, extra = {}) => ({ number, title, url: "https://github.com/example/botkins/pull/" + number, state, isDraft: false, author: { login: "mira-bot" }, headRefName: "branch-" + number, baseRefName: "main", updatedAt: new Date(Date.now() - number * 3_600_000).toISOString(), ...extra });
-  const list = [pr(42, "Share one in-flight token renewal per server", "OPEN"), pr(41, "Pricing page: final copy pass", "OPEN", { isDraft: true, author: { login: "quill-bot" } }), pr(39, "Compress hero images", "MERGED"), pr(37, "Try a darker footer", "CLOSED")];
-  writeFileSync(join(bin, "gh"), "#!/bin/sh\nif [ \"$2\" = view ]; then cat \"$(dirname \"$0\")/pr-one.json\"; else cat \"$(dirname \"$0\")/pr-list.json\"; fi\n");
-  chmodSync(join(bin, "gh"), 0o755);
-  writeFileSync(join(bin, "pr-list.json"), JSON.stringify(list));
-  writeFileSync(join(bin, "pr-one.json"), JSON.stringify(list[0]));
-  searchPath = [bin, ...(process.env.PATH ?? "").split(delimiter).filter(Boolean)];
-}
-
 const host = new LinkHost({
   dir,
   backend,
   port: process.env.PORT ? Number(process.env.PORT) : 47620,
   // A simulator reaches this computer on loopback.
   extraHosts: ["127.0.0.1"],
-  searchPath,
   screenInput,
   // The demo computer uses no relay unless one is named, so it never opens an outside connection by itself.
   relay: process.env.BOTKINS_DEV_RELAY ? { url: process.env.BOTKINS_DEV_RELAY } : false,

@@ -1,3 +1,4 @@
+import { pullReference } from "@/link/pr-reference";
 // The composer's pickers, as on the desktop: "/" for commands and skills, "#" for records
 // (projects, wiki pages, files and artifacts) and then the chat's pull requests, "@" for bots (a
 // group chat's members and "everyone", or a one-bot chat's teammates) and then the records too, so
@@ -173,29 +174,20 @@ type PullState = { available: boolean; reason?: string; items: PullRequest[] };
 
 /** Pull requests of the chat's repository, asked for 200 ms after typing stops. */
 export function usePullRequests(active: boolean, supported: boolean, chatId: string, query: string) {
-  const [result, setResult] = useState<{ query: string; value: PullState }>();
-  const [error, setError] = useState("");
+  const [result, setResult] = useState<{ chatId: string; query: string; value: PullState }>();
   useEffect(() => {
     if (!active || !supported) return;
     let live = true;
-    const timer = setTimeout(() => {
-      api["link.pullRequests"]({ chatId }, query || undefined)
-        .then((value) => {
-          if (!live) return;
-          setError("");
-          setResult({ query, value });
-        })
-        .catch((reason: unknown) => live && setError(reason instanceof Error ? reason.message : "Couldn't load pull requests."));
+    const timer = setTimeout(async () => {
+      const value = await api["link.pullRequests"]({ chatId }, query || undefined)
+        .catch(() => ({ available: false, reason: "Couldn't load pull requests.", items: [] }));
+      if (live) setResult({ chatId, query, value });
     }, 200);
-    return () => {
-      live = false;
-      clearTimeout(timer);
-    };
+    return () => { live = false; clearTimeout(timer); };
   }, [active, supported, chatId, query]);
-  return { value: result?.value, error, loading: active && supported && !error && result?.query !== query };
+  const value = result?.chatId === chatId && result.query === query ? result.value : undefined;
+  return { value, loading: active && supported && !value };
 }
-
-const escapeLabel = (text: string) => text.replace(/[[\]\\]/g, (char) => "\\" + char);
 
 export function pullOptions(items: PullRequest[], colors: { success: string; faint: string; info: string; danger: string }): Option[] {
   return items.slice(0, LIMIT).map((pull) => {
@@ -208,7 +200,7 @@ export function pullOptions(items: PullRequest[], colors: { success: string; fai
       title: "#" + pull.number + " " + pull.title,
       subtitle: [state, pull.author].filter(Boolean).join(" · "),
       leading: <Icon size={18} color={tint} strokeWidth={2.2} accessibilityLabel={state} />,
-      insert: "[" + escapeLabel("#" + pull.number + " " + pull.title) + "](" + pull.url + ")",
+      insert: pullReference(pull),
     };
   });
 }

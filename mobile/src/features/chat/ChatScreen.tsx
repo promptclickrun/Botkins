@@ -50,6 +50,8 @@ import { chatTimeline, createTimelineRunSelector, indexMessageOwnership, liveRow
 import { ProjectPill, projectActions, runProjectChoice, type Side, SideAnswer } from "./ChatProject";
 import { quoteOf, sideQuestionOf } from "./side";
 import { endSelecting, selectionEnds } from "./selecting";
+import { MessageLink, openLink } from "@/ui/LinkHold";
+import { pullRequestUrl } from "../../../link-host/pr-url.mjs";
 import { usePane } from "../pane/usePane";
 import { ScreenCard } from "../pane/ScreenCard";
 import { RequestPanel } from "./RequestPanel";
@@ -789,6 +791,12 @@ function ChatScreenScreen({ pane: paneId, onLeave: leavePane, onList }: { pane?:
   const draftText = useCallback((value: string) => setText((current) => (current.trim() ? current.replace(/\s+$/, "") + "\n" + value : value)), []);
   // The side pane a bot opened beside this chat: its sheet opens when a bot asks, and text a view in it hands over lands in the message box.
   const pane = usePane(chatId, draftText);
+  const showPulls = meta?.you?.kind !== "member" && meta?.capabilities.includes("pr-panel-v1");
+  const openMessageLink = useCallback((url: string) => {
+    const target = showPulls && pullRequestUrl(url);
+    if (target) router.push({ pathname: "/chat/pane", params: { chatId, pull: target.url } });
+    else openLink(url);
+  }, [chatId, showPulls]);
   // Reply and Fork from here, in each message's menu. A group chat can't be forked.
   const messageActions = useMemo<MessageActions>(
     () => ({
@@ -909,6 +917,7 @@ function ChatScreenScreen({ pane: paneId, onLeave: leavePane, onList }: { pane?:
   const idleTodoRoom = canChat && hasTodos && !working ? CAPSULE + space.sm : 0;
   const room = { top: topBar + banners, dock: dock + idleTodoRoom, bottom: dock + idleTodoRoom + (working ? CAPSULE + space.sm : 0) };
   const column = (
+    <MessageLink.Provider value={showPulls ? openMessageLink : openLink}>
     <View style={{ flex: 1, backgroundColor: colors.canvas }}>
       {!paneId && header}
       {/* The chat fills this; the bar, the banners and the message box float over it. */}
@@ -996,6 +1005,7 @@ function ChatScreenScreen({ pane: paneId, onLeave: leavePane, onList }: { pane?:
       </View>
       <Animated.View style={spacer} />
     </View>
+    </MessageLink.Provider>
   );
   if (!book || !project) return column;
   return (

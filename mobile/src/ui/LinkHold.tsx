@@ -19,7 +19,7 @@
 import type { MenuComponentProps } from "@react-native-menu/menu";
 import * as Clipboard from "expo-clipboard";
 import * as WebBrowser from "expo-web-browser";
-import { createContext, useEffect, useMemo, useRef, useState } from "react";
+import { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { Platform, Share } from "react-native";
 import { showToast } from "@/state/store";
 import { HoldMenu } from "./HoldMenu";
@@ -46,8 +46,10 @@ export function linkPress(hold: LinkHoldApi | null, url: string, open: () => voi
   return { onPress: () => hold.isTap() && open(), onPressIn: () => hold.begin(url), onPressOut: hold.end, onLongPress: nothing };
 }
 
-function runChoice(choice: LinkChoice, url: string) {
-  if (choice === "open") openLink(url);
+export const MessageLink = createContext(openLink);
+
+function runChoice(choice: LinkChoice, url: string, open: (url: string) => void) {
+  if (choice === "open") open(url);
   else if (choice === "copy") void Clipboard.setStringAsync(linkText(url)).then(() => showToast("Copied", "success"));
   else void Share.share({ message: linkText(url) }).catch(() => {});
 }
@@ -61,6 +63,7 @@ type TextHoldMenuProps = Omit<MenuComponentProps, "shouldOpenOnLongPress" | "onP
  * menu; a hold anywhere else opens `actions`, as a HoldMenu does.
  */
 export function TextHoldMenu({ actions, onPressAction, onOpenMenu, onCloseMenu, title, children, ...props }: TextHoldMenuProps) {
+  const open = useContext(MessageLink);
   const [url, setUrl] = useState<string>();
   const startedAt = useRef(0);
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
@@ -99,7 +102,7 @@ export function TextHoldMenu({ actions, onPressAction, onOpenMenu, onCloseMenu, 
       }}
       onPressAction={(event) => {
         const link = parseLinkAction(event.nativeEvent.event);
-        if (link) runChoice(link.choice, link.url);
+        if (link) runChoice(link.choice, link.url, open);
         else onPressAction(event);
       }}
     >

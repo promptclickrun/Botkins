@@ -85,6 +85,10 @@ try {
 
   // Send goes to a stand-in, so no model turn runs.
   await app.evaluate(({ ipcMain }) => {
+    ipcMain.removeHandler("link.pullRequests");
+    ipcMain.handle("link.pullRequests", (_event, where, query) => ({
+      available: true, items: where.chatId && query === "42" ? [{ number: 42, title: "Fix [login]", url: "https://github.com/example/botkins/pull/42", state: "open" }] : [],
+    }));
     globalThis.__sent = [];
     ipcMain.removeHandler("send");
     ipcMain.handle("send", (_e, id, text, options) => {
@@ -114,6 +118,11 @@ try {
   await noMenu();
   await entry().fill("");
   console.log("@ opens no menu in a chat with one bot.");
+
+  await typeAtEnd("#42");
+  await page.getByRole("option", { name: /#42 Fix/ }).click();
+  await expect(entry()).toHaveValue(String.raw`[#42 Fix \[login\]](https://github.com/example/botkins/pull/42) `);
+  await entry().fill("");
 
   // "#" lists projects (the chat's own marked) and files, newest first.
   await typeAtEnd("about #");
