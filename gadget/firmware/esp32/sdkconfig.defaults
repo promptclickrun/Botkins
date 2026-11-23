@@ -22,3 +22,12 @@ CONFIG_FREERTOS_HZ=1000
 # is not written (esp_wifi_set_storage(WIFI_STORAGE_RAM) too).
 CONFIG_ESP_WIFI_NVS_ENABLED=n
 CONFIG_LWIP_MAX_SOCKETS=12
+
+# The WebSocket (main/websocket.cpp). The upgrade request is built in the transport's buffer, and live
+# voice's URL carries a token in its query: 4 KB, freed once the socket is open. Sends take a lock of
+# their own, so a message being read (the core may hold the socket's task for a while) never holds
+# up one being sent.
+CONFIG_WS_BUFFER_SIZE=4096
+CONFIG_WS_DYNAMIC_BUFFER=y
+CONFIG_ESP_WS_CLIENT_SEPARATE_TX_LOCK=y
+CONFIG_ESP_WS_CLIENT_TX_LOCK_TIMEOUT_MS=2000

@@ -51,7 +51,14 @@ class WifiNetwork : public botkins::Network {
 /** Reads lines from the USB-Serial-JTAG port, hands each to `gadget.console()` and prints the answer. */
 void start_console(botkins::Gadget& gadget);
 
-/** Free internal heap and PSRAM, now and the least since boot, as one log line. */
+/** Free internal heap and PSRAM, now, the least since `heap reset` and the least since boot, as one log line. */
 void log_heap(const char* when);
+/** The console's `heap reset`: the least free memory counts again from now (the least since boot is kept). */
+void heap_reset();
+/** The least free memory with `caps` (MALLOC_CAP_INTERNAL or MALLOC_CAP_SPIRAM) since boot. */
+size_t least_since_boot(uint32_t caps);
+
+/** The console's `socket <url> [subprotocol|-] [first message]`: opens a WebSocket there on a thread of its own and logs how each step went (websocket.cpp). */
+void probe_socket(const std::string& args);
 
 }  // namespace port

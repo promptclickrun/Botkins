@@ -1,5 +1,5 @@
 // The Botkins gadget on an ESP32 board: the shared core (gadget/firmware/core) with the chip's
-// random numbers, NVS, Wi-Fi and the USB console, and one board from boards/<name>.
+// random numbers, NVS, Wi-Fi, the USB console and a WebSocket, and one board from boards/<name>.
 // gadget/docs/contract.md has every rule; gadget/firmware/host/main.cpp is the same port for a computer.
 #include <cstdio>
 
@@ -17,6 +17,7 @@
 #include "gadget_port/board.hpp"
 #include "nvs_flash.h"
 #include "port.hpp"
+#include "websocket.hpp"
 
 namespace {
 const char* TAG = "botkins";
@@ -83,6 +84,8 @@ extern "C" void app_main(void) {
   config.network = &g_wifi;
   config.firmware = version;
   config.slice_bytes = 32000;
+  // The relay's socket and live voice's (websocket.cpp): wss:// checked against the certificate bundle.
+  config.socket = [] { return std::unique_ptr<botkins::Socket>(new port::EspSocket()); };
   // The owner's restart (the part's `restart`): the core says it is restarting, then calls this.
   config.restart = [] { esp_restart(); };
   uint8_t mac[6] = {0};

@@ -10,8 +10,9 @@
 // The port runs ESP-IDF's USB-Serial-JTAG driver, and stdout goes through it: a log write that no
 // program on the computer reads gives up after 50 ms (usb_serial_jtag_vfs.c), so logging never
 // holds a task. Answers are written to the driver directly and wait longer (answer_line).
-#include <atomic>
+#include <algorithm>
 #include <cstdio>
+#include <mutex>
 #include <string>
 
 #include "driver/usb_serial_jtag.h"
@@ -30,8 +31,11 @@ const char* TAG = "botkins.console";
 const size_t kMaxLine = 8192;
 botkins::Gadget* g_gadget = nullptr;
 
-// The least free memory since `heap reset`, sampled by the heap task.
-std::atomic<size_t> g_low_internal{SIZE_MAX}, g_low_psram{SIZE_MAX};
+// The least free memory since boot, as it stood at the last `heap reset`; since then the heap's own
+// local minimum counts (heap_caps_monitor_local_minimum_free_size_start), which no dip escapes.
+std::mutex g_heap_m;
+bool g_monitoring = false;
+size_t g_boot_internal = SIZE_MAX, g_boot_psram = SIZE_MAX;
 
 /**
  * One answer line, whole. The log's lines go through stdout, where a byte that can't be queued
@@ -59,11 +63,11 @@ void handle(const std::string& line) {
     answer_line(answer);
     return;
   }
-  // Two lines of the port's own, for measuring: "heap" and "heap reset".
+  // Lines of the port's own, for measuring: "heap", "heap reset" and "socket <url> [subprotocol|-] [first message]".
   if (line == "heap") log_heap("asked");
+  else if (line.compare(0, 7, "socket ") == 0) probe_socket(line.substr(7));
   else if (line == "heap reset") {
-    g_low_internal = SIZE_MAX;
-    g_low_psram = SIZE_MAX;
+    heap_reset();
     log_heap("reset");
   }
 }
@@ -111,27 +115,34 @@ bool install() {
   return true;
 }
 
-void heap_task(void*) {
-  for (;;) {
-    const size_t internal = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
-    const size_t psram = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
-    if (internal < g_low_internal) g_low_internal = internal;
-    if (psram < g_low_psram) g_low_psram = psram;
-    vTaskDelay(pdMS_TO_TICKS(50));
-  }
-}
 }  // namespace
+
+void heap_reset() {
+  std::lock_guard<std::mutex> lock(g_heap_m);
+  // What the least since boot is now, then a fresh minimum from here.
+  g_boot_internal = std::min(g_boot_internal, heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL));
+  g_boot_psram = std::min(g_boot_psram, heap_caps_get_minimum_free_size(MALLOC_CAP_SPIRAM));
+  if (g_monitoring) heap_caps_monitor_local_minimum_free_size_stop();
+  g_monitoring = heap_caps_monitor_local_minimum_free_size_start() == ESP_OK;
+}
+
+size_t least_since_boot(uint32_t caps) {
+  std::lock_guard<std::mutex> lock(g_heap_m);
+  const size_t least = heap_caps_get_minimum_free_size(caps);
+  if (!g_monitoring) return least;
+  return std::min(least, caps == MALLOC_CAP_INTERNAL ? g_boot_internal : g_boot_psram);
+}
 
 void log_heap(const char* when) {
   ESP_LOGI(TAG, "heap (%s): internal free %u (least %u since reset, %u since boot, largest block %u); psram free %u (least %u since reset, %u since boot)", when,
-           (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL), (unsigned)g_low_internal.load(), (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL),
-           (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL), (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM), (unsigned)g_low_psram.load(),
-           (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_SPIRAM));
+           (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL), (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL),
+           (unsigned)least_since_boot(MALLOC_CAP_INTERNAL), (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL),
+           (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM), (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_SPIRAM),
+           (unsigned)least_since_boot(MALLOC_CAP_SPIRAM));
 }
 
 void start_console(botkins::Gadget& gadget) {
   g_gadget = &gadget;
-  xTaskCreate(heap_task, "heap", 2048, nullptr, 1, nullptr);
   if (!install()) return;
   // The setup line holds the introduction and the network as JSON: the line is parsed on this stack.
   xTaskCreate(console_task, "console", 12288, nullptr, 4, nullptr);

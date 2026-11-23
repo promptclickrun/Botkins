@@ -21,3 +21,8 @@ CONFIG_LWIP_TCP_WND_DEFAULT=32768
 CONFIG_LWIP_TCP_SND_BUF_DEFAULT=32768
 CONFIG_LWIP_TCP_RECVMBOX_SIZE=32
 CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y
+
+# mbedTLS allocates in PSRAM: each TLS connection's buffers (about 16 KB in, 4 KB out) and its
+# handshake. Two may be open at once (the relay and Gemini during a live turn), and internal RAM
+# is short.
+CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC=y
