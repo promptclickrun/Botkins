@@ -400,8 +400,10 @@ export function SpacePage({
   const [hidden, showHidden] = useState(false);
   const [text, setText] = useState("");
   const [asking, setAsking] = useState(false);
-  /** The app panel that is opened large, or "". */
-  const [openedId, setOpenedId] = useState("");
+  /** The app panel that is opened large, or null. */
+  const [openedState, setOpenedState] = useState<{ id: string; fullscreen?: boolean } | null>(null);
+  const openPanel = (id: string, fullscreen?: boolean) => setOpenedState({ id, fullscreen });
+  const closePanel = () => setOpenedState(null);
   /** The panel the ask is about ("Ask Pip to change it"), or "" for the whole space. */
   const [aboutPanel, setAboutPanel] = useState("");
   useEffect(() => {
@@ -425,8 +427,21 @@ export function SpacePage({
     const panel = panels.find((p) => p.id === shown.id);
     if (!panel) return null;
     const targets = arrange ? moveTargets(state.spaces ?? [], space, panel, me) : [];
+    const isApp = panel.blocks.some((b) => b.type === "html");
     return (
       <>
+        {isApp && (
+          <button
+            onClick={() => {
+              close();
+              openedPanel(panel);
+              openPanel(panel.id, true);
+            }}
+          >
+            <Maximize2 size={16} />
+            Open full screen
+          </button>
+        )}
         {targets.length > 0 && (
           <label>
             Space
@@ -579,7 +594,7 @@ export function SpacePage({
     }
   }
 
-  const opened = panels.find((p) => p.id === openedId);
+  const opened = openedState ? panels.find((p) => p.id === openedState.id) : undefined;
   let body: ReactNode = null;
   if (content && !shown.length && !board && !hidden)
     body = addAllowed ? (
@@ -619,7 +634,7 @@ export function SpacePage({
               }
               tools={
                 p.blocks.some((b) => b.type === "html") && (
-                  <button aria-label={"Open " + p.title} title="Open" onClick={() => setOpenedId(p.id)}>
+                  <button aria-label={"Open " + p.title} title="Open" onClick={() => openPanel(p.id)}>
                     <Maximize2 size={16} />
                   </button>
                 )
@@ -744,14 +759,16 @@ export function SpacePage({
       )}
       {opened && (
         <OpenedPanel
+          key={opened.id}
           title={opened.title}
           bot={askAllowed ? state.bots.find((b) => b.id === opened.botId) : undefined}
           asks={asksOf(opened)}
-          close={() => setOpenedId("")}
+          initialFullscreen={openedState?.fullscreen}
+          close={closePanel}
           ask={async (said) => {
             try {
               const { chatId } = await api["spaces.ask"]({ spaceId: space.id, botId: opened.botId, text: said, panelId: opened.id });
-              setOpenedId("");
+              closePanel();
               openNew(chatId);
             } catch (e) {
               fail(e);
