@@ -63,4 +63,12 @@ test("the native SDK can disconnect one Botkins host while its saved Copilot acc
   } finally {
     await other.stop();
   }
+
+  const approved = { host: "https://github.com", login: "fixture" };
+  await assert.rejects(restarted.resumeApprovedAccount({ ...approved, login: "different-user" }), /approved account/);
+  assert.equal((await restarted.status()).connected, false);
+  await restarted.resumeApprovedAccount(approved);
+  assert.equal((await restarted.status()).account, "fixture");
+  await restarted.stop();
+  assert.equal((await host().status()).account, "fixture");
 });

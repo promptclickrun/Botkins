@@ -571,7 +571,7 @@ export class CopilotProvider extends ModelProvider {
     if (asked === "inprocess") return true;
     return this.platform !== "darwin";
   }
-  async start() {
+  async start({ loadSavedAccount = false } = {}) {
     const { CopilotClient: Client, RuntimeConnection: Runtime } = this.sdk;
     const base = this.baseDirectory ? { baseDirectory: this.baseDirectory } : {};
     const spawned = () => Runtime.forSpawnedStdio({ ...base, ...(this.workingDirectory && { workingDirectory: this.workingDirectory }) });
@@ -580,7 +580,7 @@ export class CopilotProvider extends ModelProvider {
     // tools, skills and MCP servers (see sessionOptions).
     // BOTKINS_COPILOT_LOG=debug writes the runtime's detailed log under <baseDirectory>/logs.
     const logLevel = env("COPILOT_LOG");
-    const github = this.github?.() ?? (this.signedOutFile && existsSync(this.signedOutFile) ? { useLoggedInUser: false } : undefined);
+    const github = this.github?.() ?? (!loadSavedAccount && this.signedOutFile && existsSync(this.signedOutFile) ? { useLoggedInUser: false } : undefined);
     const make = (runtime) =>
       new Client({ mode: "coding-agent", runtime, ...(logLevel && { observability: { logLevel } }), ...(github && { github }) });
     const inProcess = this.inProcess();
@@ -672,7 +672,7 @@ export class CopilotProvider extends ModelProvider {
    * device sign-in, where the person types a one-time code on a page they open on any device.
    */
   async signIn({ open, device }) {
-    await this.withAccounts(async (accounts, client) => {
+    const approved = await this.withAccounts(async (accounts, client) => {
       const { flowId, step } = await accounts.login.begin({ kind: "githubDotCom", method: device ? "device-code" : "web" });
       const flow = (this.signInFlow = { cancel: () => accounts.login.cancel({ flowId }).catch(() => {}) });
       const cancelled = () => this.signInFlow !== flow;
@@ -714,14 +714,47 @@ export class CopilotProvider extends ModelProvider {
         // Any other answer that isn't "completed" left the sign-in unkept. Another sign-in on the
         // computer (the GitHub CLI's) would still make the check below pass, so it is not asked.
         if (status !== undefined && status !== "completed") throw new Error("Sign-in incomplete: GitHub Copilot didn't keep it (" + status + "). Sign in with a GitHub token instead.");
-        if (next.kind !== "completed" || !(await client.getAuthStatus()).isAuthenticated)
-          throw new Error(next.message || "Sign-in incomplete. Open Copilot CLI and run /login.");
-        if (this.signedOutFile) rmSync(this.signedOutFile, { force: true });
+        if (next.kind !== "completed") throw new Error(next.message || "GitHub did not finish approving this sign-in. Try again.");
+        if (this.signedOutFile && existsSync(this.signedOutFile)) {
+          if (status !== "completed" || !next.result.login) throw new Error("GitHub did not confirm which account it approved. Try again.");
+          return next.result;
+        }
+        if (!(await client.getAuthStatus()).isAuthenticated) throw new Error("Copilot could not load the GitHub sign-in on this host. Try again.");
       } finally {
         if (!cancelled()) this.signInFlow = null;
         await flow.cancel();
       }
     });
+    if (approved) await this.resumeApprovedAccount(approved);
+  }
+  // A runtime started with useLoggedInUser:false can save an approved device login but stays
+  // anonymous. Status and chat must both wait for the replacement to verify the saved identity.
+  async resumeApprovedAccount(approved) {
+    const stopped = this.stop();
+    const ready = stopped.then(async () => {
+      this.stopping = false;
+      const client = await this.start({ loadSavedAccount: true });
+      try {
+        const auth = await client.getAuthStatus();
+        if (!auth.isAuthenticated || auth.authType !== "user" || auth.login?.toLowerCase() !== approved.login.toLowerCase() ||
+            (approved.host && auth.host !== approved.host)) {
+          throw new Error("Copilot could not load the approved account on this host. Try signing in again.");
+        }
+        if (this.connection !== ready) throw new Error("Sign-in cancelled.");
+        rmSync(this.signedOutFile, { force: true });
+        return client;
+      } catch (error) {
+        await client.stop();
+        throw error;
+      }
+    });
+    this.connection = ready;
+    try {
+      await ready;
+    } catch (error) {
+      if (this.connection === ready) this.connection = null;
+      throw error;
+    }
   }
   async cancelSignIn() {
     const flow = this.signInFlow;
@@ -749,11 +782,11 @@ export class CopilotProvider extends ModelProvider {
       if (!result?.ok) throw new Error("GitHub Copilot didn't sign out. Try again.");
     } catch (error) {
       if (!this.signedOutFile || !/Failed to remove token: Keychain error: Couldn't access platform storage/i.test(error.message)) throw error;
+    }
+    if (this.signedOutFile) {
       await this.disconnectAccount();
       if ((await this.auth()).connected) throw new Error("Copilot still has an active account on this host.");
-      return;
-    }
-    await this.releaseSessions();
+    } else await this.releaseSessions();
   }
 
   async models() {

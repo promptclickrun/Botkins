@@ -747,6 +747,7 @@ test("sign-out removes a Copilot sign-in and explains the ones Botkins can't rem
 test("phone sign-in while Copilot is off and sign-out when the host keychain refuses removal", async (t) => {
   const baseDirectory = tempDir(t);
   let saved = false;
+  let loadedAccount = "octo";
   let enabled = false;
   let rejectLogout = true;
   let approve = true;
@@ -756,12 +757,13 @@ test("phone sign-in while Copilot is off and sign-out when the host keychain ref
     RuntimeConnection: runtimeSdk().sdk.RuntimeConnection,
     CopilotClient: class {
       constructor({ github }) {
+        this.loadSaved = github?.useLoggedInUser !== false;
         this.connected = github?.token ? github.token === "good-token" : saved && github?.useLoggedInUser !== false;
       }
       async start() {}
       async stop() { this.connected = false; }
       async getAuthStatus() {
-        return { isAuthenticated: this.connected, authType: "user", login: this.connected ? "octo" : undefined };
+        return { isAuthenticated: this.connected, authType: "user", host: "https://github.com", login: this.connected ? loadedAccount : undefined };
       }
       async createSession() {
         const accounts = {
@@ -769,8 +771,9 @@ test("phone sign-in while Copilot is off and sign-out when the host keychain ref
             begin: async () => ({ flowId: "login", step: { kind: "device-code", userCode: "TEST", verificationUri: "https://github.com/login/device" } }),
             advance: async () => {
               if (!approve) return { kind: "error", message: "Approval declined" };
-              saved = this.connected = true;
-              return { kind: "completed", result: { status: "completed" } };
+              saved = true;
+              this.connected = this.loadSaved;
+              return { kind: "completed", result: { status: "completed", login: "octo", host: "https://github.com" } };
             },
             cancel: async () => {},
           },
@@ -802,7 +805,7 @@ test("phone sign-in while Copilot is off and sign-out when the host keychain ref
     });
     return { signIns, provider };
   };
-  async function login(signIns, refused = false) {
+  async function login(signIns, expectedError) {
     const { session } = await signIns.start("copilot");
     let view;
     let after = 0;
@@ -810,7 +813,7 @@ test("phone sign-in while Copilot is off and sign-out when the host keychain ref
       view = await signIns.read(session, { after });
       after = view.next;
     } while (!view.done);
-    if (refused) assert.match(view.error, /Approval declined/);
+    if (expectedError) assert.match(view.error, expectedError);
     else {
       assert.equal(view.error, undefined);
       assert.equal(view.result.account, "octo");
@@ -828,9 +831,13 @@ test("phone sign-in while Copilot is off and sign-out when the host keychain ref
   const third = make();
   assert.equal((await third.provider.auth()).connected, false);
   approve = false;
-  await login(third.signIns, true);
+  await login(third.signIns, /Approval declined/);
   assert.equal((await third.provider.auth()).connected, false);
   approve = true;
+  loadedAccount = "someone-else";
+  await login(third.signIns, /approved account/);
+  assert.equal((await third.provider.auth()).connected, false);
+  loadedAccount = "octo";
   await login(third.signIns);
   await third.provider.stop();
   const fourth = make();
