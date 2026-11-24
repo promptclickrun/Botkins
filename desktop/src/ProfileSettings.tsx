@@ -28,6 +28,18 @@ import {
 import type { ProfileState, State } from "./types";
 import { Group, errorText } from "./SettingsRows";
 import { WelcomeFrame, WelcomeLogo } from "./Welcome";
+import {
+  canContinueWithoutProfile,
+  nextAutoExpandState,
+  nextMigrationPromptHeld,
+  reconcileWizardHostState,
+  resolveDeviceLabel,
+  verificationCodeAriaLabel,
+  verificationCodeDisplay,
+  type CompletedProfile,
+  type WizardLocalState,
+  type WizardStep,
+} from "./profileWizard";
 import "./profile.css";
 
 const PROFILE_AVATARS = ["", "🌱", "🌊", "🌙", "☀️", "🦊", "🐈", "🌻", "🪐"] as const;
@@ -44,8 +56,6 @@ const AVATAR_NAMES: Record<string, string> = {
   "🪐": "Ringed planet",
 };
 
-type WizardStep = "intro" | "device" | "verify" | "done";
-
 const WIZARD_STEPS: ReadonlyArray<{ id: WizardStep; label: string }> = [
   { id: "intro", label: "Overview" },
   { id: "device", label: "Device" },
@@ -53,11 +63,9 @@ const WIZARD_STEPS: ReadonlyArray<{ id: WizardStep; label: string }> = [
   { id: "done", label: "Done" },
 ];
 
-type CompletedProfile = {
-  name: string;
-  email?: string;
-  avatar?: string;
-};
+type WizardRetry =
+  | { kind: "start"; isRestart: boolean; step: WizardStep }
+  | { kind: "open" | "finish" | "optOut" | "copy"; step: WizardStep };
 
 function defaultDeviceName(pendingLabel?: string): string {
   if (pendingLabel?.trim()) return pendingLabel.trim();
@@ -67,9 +75,29 @@ function defaultDeviceName(pendingLabel?: string): string {
   return "This computer";
 }
 
-function formatShortCode(code: string): string {
-  const clean = code.trim();
-  return clean.length === 6 ? `${clean.slice(0, 3)} ${clean.slice(3)}` : clean;
+function ProfileAlert({
+  message,
+  onRetry,
+  retryDisabled = false,
+}: {
+  message: string;
+  onRetry?: () => void;
+  retryDisabled?: boolean;
+}) {
+  if (!message) return null;
+  return (
+    <div className="profile-alert" role="alert">
+      <span className="profile-alert-body">
+        <CircleAlert size={16} aria-hidden="true" />
+        <span>{message}</span>
+      </span>
+      {onRetry && (
+        <button type="button" className="set-button" disabled={retryDisabled} onClick={onRetry}>
+          Retry
+        </button>
+      )}
+    </div>
+  );
 }
 
 function StepIndicator({ current }: { current: WizardStep }) {
@@ -105,7 +133,6 @@ function ProfileWizard({
   inline = false,
   autoFocusInitial = false,
   onCollapse,
-  onSignedIn,
   onComplete,
 }: {
   state: State;
@@ -113,7 +140,6 @@ function ProfileWizard({
   inline?: boolean;
   autoFocusInitial?: boolean;
   onCollapse?: () => void;
-  onSignedIn?: (completed: CompletedProfile) => void;
   onComplete?: () => void;
 }) {
   const profile = state.profile;
@@ -130,39 +156,56 @@ function ProfileWizard({
   );
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const [retryAction, setRetryAction] = useState<(() => void) | null>(null);
+  const [retry, setRetry] = useState<WizardRetry | null>(null);
   const [statusMessage, setStatusMessage] = useState("");
   const [notFinishedYet, setNotFinishedYet] = useState(false);
   const [copied, setCopied] = useState(false);
 
   const headingRef = useRef<HTMLHeadingElement>(null);
   const didMountRef = useRef(false);
+  const didSyncHostRef = useRef(false);
+  const prevHostRef = useRef<ProfileState | null>(profile ?? null);
+  const localRef = useRef<WizardLocalState>({ step, label, attempt, completed });
+  localRef.current = { step, label, attempt, completed };
+  const labelRef = useRef(label);
+  labelRef.current = label;
   const copyTimerRef = useRef<number | null>(null);
 
-  // Sync pending attempt if the host updates it while we are on the verify step.
+  // Reconcile both arrival and removal of host profile state (pending attempts, sign-in/sign-out,
+  // opt-out) without breaking ordinary Back navigation when the pending attempt has not changed.
   useEffect(() => {
-    if (profile?.pending && (!attempt || profile.pending.id !== attempt.id)) {
-      setAttempt(profile.pending);
+    const nextHost = profile ?? null;
+    const prevHost = prevHostRef.current;
+    prevHostRef.current = nextHost;
+    if (!didSyncHostRef.current) {
+      didSyncHostRef.current = true;
+      return;
     }
-  }, [profile?.pending?.id, profile?.pending?.code, profile?.pending?.url, profile?.pending?.label]);
-
-  // Auto-advance to Done if state.profile becomes signed-in while the wizard is open.
-  useEffect(() => {
-    if (step !== "done" && profile?.signedIn && profile.profile) {
-      const next: CompletedProfile = {
-        name: profile.profile.name,
-        email: profile.profile.email,
-        avatar: profile.profile.avatar,
-      };
-      setCompleted(next);
-      setNotFinishedYet(false);
+    const reconciled = reconcileWizardHostState(localRef.current, prevHost, nextHost, defaultDeviceName());
+    setStep(reconciled.step);
+    setLabel(reconciled.label);
+    setAttempt(reconciled.attempt);
+    setCompleted(reconciled.completed);
+    if (reconciled.clearNotFinished) setNotFinishedYet(false);
+    if (reconciled.clearFeedback) {
       setError("");
-      setRetryAction(null);
-      setStatusMessage("Profile connected.");
-      onSignedIn?.(next);
-      setStep("done");
+      setRetry(null);
+    } else if (reconciled.clearRetry) {
+      setRetry(null);
     }
-  }, [step, profile?.signedIn, profile?.profile?.profileId, profile?.profile?.name, profile?.profile?.email, profile?.profile?.avatar, onSignedIn]);
+    if (reconciled.statusMessage) setStatusMessage(reconciled.statusMessage);
+  }, [
+    profile?.signedIn,
+    profile?.optedOut,
+    profile?.pending?.id,
+    profile?.pending?.code,
+    profile?.pending?.url,
+    profile?.pending?.label,
+    profile?.profile?.profileId,
+    profile?.profile?.name,
+    profile?.profile?.email,
+    profile?.profile?.avatar,
+  ]);
 
   // Move focus to each step's heading on step change (and optionally on initial mount).
   useEffect(() => {
@@ -179,27 +222,28 @@ function ProfileWizard({
 
   const clearFeedback = useCallback(() => {
     setError("");
-    setRetryAction(null);
+    setRetry(null);
     setStatusMessage("");
     setNotFinishedYet(false);
   }, []);
 
-  const runAction = useCallback(async (action: () => Promise<void>, retry: () => void) => {
+  const runAction = useCallback(async (action: () => Promise<void>, nextRetry: WizardRetry) => {
     setBusy(true);
     setError("");
-    setRetryAction(null);
+    setRetry(null);
     try {
       await action();
     } catch (e) {
       setError(errorText(e));
-      setRetryAction(() => retry);
+      setRetry(nextRetry);
     } finally {
       setBusy(false);
     }
   }, []);
 
   const startAttempt = useCallback((isRestart = false) => {
-    const deviceLabel = label.trim() || "This device";
+    const deviceLabel = resolveDeviceLabel(labelRef.current);
+    const originStep: WizardStep = isRestart ? "verify" : "device";
     void runAction(
       async () => {
         const next = await window.botkins.profileStart(deviceLabel);
@@ -213,9 +257,9 @@ function ProfileWizard({
         );
         setStep("verify");
       },
-      () => startAttempt(isRestart),
+      { kind: "start", isRestart, step: originStep },
     );
-  }, [label, runAction]);
+  }, [runAction]);
 
   const openBrowser = useCallback(() => {
     void runAction(
@@ -223,7 +267,7 @@ function ProfileWizard({
         await window.botkins.profileOpen();
         setStatusMessage("Opened profile.botkins.app in your browser.");
       },
-      () => openBrowser(),
+      { kind: "open", step: "verify" },
     );
   }, [runAction]);
 
@@ -240,24 +284,30 @@ function ProfileWizard({
           setCompleted(next);
           setNotFinishedYet(false);
           setStatusMessage("Profile connected.");
-          onSignedIn?.(next);
           setStep("done");
         } else {
           setNotFinishedYet(true);
           setStatusMessage("Not finished yet. Complete the browser steps, then choose Finish again.");
         }
       },
-      () => finishSetup(),
+      { kind: "finish", step: "verify" },
     );
-  }, [onSignedIn, runAction]);
+  }, [runAction]);
 
   const optOut = useCallback(() => {
+    const originStep = localRef.current.step;
     void runAction(
       async () => {
         await window.botkins.profileOptOut();
+        setAttempt(null);
+        setCompleted(null);
+        setNotFinishedYet(false);
+        setCopied(false);
+        setLabel(defaultDeviceName());
+        setStep("intro");
         setStatusMessage("Continuing without a profile.");
       },
-      () => optOut(),
+      { kind: "optOut", step: originStep },
     );
   }, [runAction]);
 
@@ -272,9 +322,28 @@ function ProfileWizard({
       copyTimerRef.current = window.setTimeout(() => setCopied(false), 2000);
     } catch {
       setError("Could not copy the verification code.");
-      setRetryAction(() => () => void copyCode());
+      setRetry({ kind: "copy", step: "verify" });
     }
   }, [attempt?.code]);
+
+  const handleRetry = useCallback(() => {
+    if (!retry) return;
+    if (retry.kind === "start") startAttempt(retry.isRestart);
+    else if (retry.kind === "open") openBrowser();
+    else if (retry.kind === "finish") finishSetup();
+    else if (retry.kind === "optOut") optOut();
+    else if (retry.kind === "copy") void copyCode();
+  }, [copyCode, finishSetup, openBrowser, optOut, retry, startAttempt]);
+
+  const activeRetry = retry && retry.step === step ? handleRetry : undefined;
+  const retryDisabled = busy || (retry?.kind === "start" && step === "device" && !label.trim());
+  const showOptOut = canContinueWithoutProfile({
+    optedOut: profile?.optedOut,
+    migration,
+    inline,
+    hasPendingAttempt: Boolean(attempt || profile?.pending),
+  });
+  const displayCode = verificationCodeDisplay(attempt?.code);
 
   const handleDeviceSubmit = (e: FormEvent) => {
     e.preventDefault();
@@ -383,23 +452,11 @@ function ProfileWizard({
               </div>
             )}
 
-            {error && (
-              <div className="profile-alert" role="alert">
-                <span className="profile-alert-body">
-                  <CircleAlert size={16} aria-hidden="true" />
-                  <span>{error}</span>
-                </span>
-                {retryAction && (
-                  <button type="button" className="set-button" disabled={busy} onClick={retryAction}>
-                    Retry
-                  </button>
-                )}
-              </div>
-            )}
+            <ProfileAlert message={error} onRetry={activeRetry} retryDisabled={retryDisabled} />
 
             <div className="profile-footer">
               <div>
-                {(!profile?.optedOut || migration || inline) && (
+                {showOptOut && (
                   <button type="button" className="profile-btn-quiet" disabled={busy} onClick={optOut}>
                     Continue without a profile
                   </button>
@@ -447,19 +504,7 @@ function ProfileWizard({
               <span className="profile-field-hint">For example: Work MacBook, Studio Mac, or Home PC.</span>
             </div>
 
-            {error && (
-              <div className="profile-alert" role="alert">
-                <span className="profile-alert-body">
-                  <CircleAlert size={16} aria-hidden="true" />
-                  <span>{error}</span>
-                </span>
-                {retryAction && (
-                  <button type="button" className="set-button" disabled={busy} onClick={retryAction}>
-                    Retry
-                  </button>
-                )}
-              </div>
-            )}
+            <ProfileAlert message={error} onRetry={activeRetry} retryDisabled={retryDisabled} />
 
             <div className="profile-footer">
               <button
@@ -498,15 +543,15 @@ function ProfileWizard({
                 <span className="profile-code-eyebrow">Verification code</span>
                 <span
                   className="profile-code-value"
-                  aria-label={attempt?.code ? `Verification code ${attempt.code.split("").join(" ")}` : "Verification code pending"}
+                  aria-label={verificationCodeAriaLabel(attempt?.code)}
                 >
-                  {attempt?.code ? formatShortCode(attempt.code) : "— — —"}
+                  {displayCode || "— — —"}
                 </span>
               </div>
               <button
                 type="button"
                 className="profile-btn-secondary"
-                disabled={!attempt?.code}
+                disabled={!displayCode}
                 onClick={() => void copyCode()}
               >
                 {copied ? <Check size={15} aria-hidden="true" /> : <Copy size={15} aria-hidden="true" />}
@@ -543,7 +588,7 @@ function ProfileWizard({
             </div>
 
             {notFinishedYet && (
-              <div className="profile-notice is-warning" role="status" aria-live="polite">
+              <div className="profile-notice is-warning">
                 <Clock size={16} aria-hidden="true" />
                 <span>
                   <strong>Not finished yet.</strong> Complete the passkey and approval steps in your browser, then
@@ -552,19 +597,7 @@ function ProfileWizard({
               </div>
             )}
 
-            {error && (
-              <div className="profile-alert" role="alert">
-                <span className="profile-alert-body">
-                  <CircleAlert size={16} aria-hidden="true" />
-                  <span>{error}</span>
-                </span>
-                {retryAction && (
-                  <button type="button" className="set-button" disabled={busy} onClick={retryAction}>
-                    Retry
-                  </button>
-                )}
-              </div>
-            )}
+            <ProfileAlert message={error} onRetry={activeRetry} retryDisabled={retryDisabled} />
 
             <div className="profile-footer">
               <button
@@ -579,6 +612,11 @@ function ProfileWizard({
                 <ArrowLeft size={15} aria-hidden="true" />
                 <span>Back</span>
               </button>
+              {showOptOut && (
+                <button type="button" className="profile-btn-quiet" disabled={busy} onClick={optOut}>
+                  Continue without a profile
+                </button>
+              )}
               <button
                 type="button"
                 className="profile-btn-quiet"
@@ -615,7 +653,7 @@ function ProfileWizard({
             {onComplete && (
               <div className="profile-footer end">
                 <button type="button" className="profile-btn-primary" onClick={onComplete}>
-                  <span>{inline ? "Continue" : "Manage profile"}</span>
+                  <span>{inline || migration ? "Continue" : "Manage profile"}</span>
                   <ArrowRight size={15} aria-hidden="true" />
                 </button>
               </div>
@@ -677,14 +715,7 @@ function SignedInProfile({ state }: { state: State }) {
     <div className="profile-root profile-page">
       {(error || note) && (
         <div className="profile-feedback-stack">
-          {error && (
-            <div className="profile-alert" role="alert">
-              <span className="profile-alert-body">
-                <CircleAlert size={16} aria-hidden="true" />
-                <span>{error}</span>
-              </span>
-            </div>
-          )}
+          <ProfileAlert message={error} />
           {note && (
             <div className="profile-notice is-success" role="status" aria-live="polite">
               <CheckCircle2 size={16} aria-hidden="true" />
@@ -698,16 +729,16 @@ function SignedInProfile({ state }: { state: State }) {
         title="Your profile"
         footer="Your profile account is separate from each computer's local bots and chats."
       >
-        <div className="profile-hero">
+        <div className="profile-account-header">
           <span className="profile-avatar-badge" aria-hidden="true">
             {identity.avatar || <UserRound size={24} />}
           </span>
-          <div className="profile-hero-info">
-            <div className="profile-hero-name-row">
-              <h3 className="profile-hero-name">{identity.name}</h3>
+          <div className="profile-account-info">
+            <div className="profile-account-name-row">
+              <h3 className="profile-account-name">{identity.name}</h3>
               <span className="set-pill ok">Signed in</span>
             </div>
-            <span className="profile-hero-email">{identity.email || "Signed in with passkey"}</span>
+            <span className="profile-account-email">{identity.email || "Signed in with passkey"}</span>
           </div>
           <div className="set-control">
             <button
@@ -1064,14 +1095,57 @@ export default function ProfileSettings({ state }: { state: State }) {
   );
 }
 
-export function ProfileSetupInline({ state, migration = false }: { state: State; migration?: boolean }) {
-  const isSignedIn = Boolean(state.profile?.signedIn);
-  const [expanded, setExpanded] = useState(() => !isSignedIn && (migration || Boolean(state.profile?.pending)));
+export function useMigrationPrompt(profile?: ProfileState): { open: boolean; dismiss: () => void } {
+  const [held, setHeld] = useState(() => Boolean(profile?.migration.needed));
 
-  // If a pending attempt appears while collapsed, expand so the user can see their code.
   useEffect(() => {
-    if (state.profile?.pending && !expanded) setExpanded(true);
-  }, [state.profile?.pending?.id, expanded]);
+    setHeld((current) => nextMigrationPromptHeld(current, profile));
+  }, [profile?.migration.needed, profile?.signedIn, profile?.profile?.profileId]);
+
+  const dismiss = useCallback(() => setHeld(false), []);
+  return { open: nextMigrationPromptHeld(held, profile), dismiss };
+}
+
+export function ProfileSetupInline({
+  state,
+  migration = false,
+  onComplete,
+}: {
+  state: State;
+  migration?: boolean;
+  onComplete?: () => void;
+}) {
+  const isSignedIn = Boolean(state.profile?.signedIn);
+  const pendingId = state.profile?.pending?.id ?? null;
+  const [expanded, setExpanded] = useState(() => !isSignedIn && (migration || Boolean(pendingId)));
+  const seenPendingIdRef = useRef<string | null>(pendingId);
+  const setupButtonRef = useRef<HTMLButtonElement>(null);
+  const restoreFocusRef = useRef(false);
+
+  // Auto-expand only when a newly seen pending attempt id arrives, not after an explicit collapse.
+  useEffect(() => {
+    const { nextSeenAttemptId, shouldExpand } = nextAutoExpandState(seenPendingIdRef.current, pendingId);
+    seenPendingIdRef.current = nextSeenAttemptId;
+    if (shouldExpand) setExpanded(true);
+  }, [pendingId]);
+
+  useEffect(() => {
+    if (!expanded && restoreFocusRef.current) {
+      restoreFocusRef.current = false;
+      setupButtonRef.current?.focus();
+    }
+  }, [expanded]);
+
+  if (migration) {
+    return (
+      <ProfileWizard
+        state={state}
+        migration
+        autoFocusInitial
+        onComplete={onComplete}
+      />
+    );
+  }
 
   // Keep the wizard open through its Done step if sign-in completes while expanded.
   if (isSignedIn && !expanded) {
@@ -1081,7 +1155,7 @@ export function ProfileSetupInline({ state, migration = false }: { state: State;
     return null;
   }
 
-  if (!expanded && !migration) {
+  if (!expanded) {
     return (
       <div className="profile-root">
         <div className="profile-teaser">
@@ -1097,6 +1171,7 @@ export function ProfileSetupInline({ state, migration = false }: { state: State;
           </div>
           <div className="profile-teaser-actions">
             <button
+              ref={setupButtonRef}
               type="button"
               className="profile-btn-secondary"
               onClick={() => setExpanded(true)}
@@ -1113,10 +1188,12 @@ export function ProfileSetupInline({ state, migration = false }: { state: State;
   return (
     <ProfileWizard
       state={state}
-      migration={migration}
-      inline={!migration}
+      inline
       autoFocusInitial={expanded}
-      onCollapse={migration ? undefined : () => setExpanded(false)}
+      onCollapse={() => {
+        restoreFocusRef.current = true;
+        setExpanded(false);
+      }}
       onComplete={() => setExpanded(false)}
     />
   );
@@ -1194,12 +1271,7 @@ function ProfileComputersInline({ state }: { state: State }) {
 
         {error && (
           <div style={{ padding: "0 14px 12px" }}>
-            <div className="profile-alert" role="alert">
-              <span className="profile-alert-body">
-                <CircleAlert size={16} aria-hidden="true" />
-                <span>{error}</span>
-              </span>
-            </div>
+            <ProfileAlert message={error} />
           </div>
         )}
 
@@ -1211,12 +1283,12 @@ function ProfileComputersInline({ state }: { state: State }) {
   );
 }
 
-export function ProfileMigrationPrompt({ state }: { state: State }) {
+export function ProfileMigrationPrompt({ state, onDismiss }: { state: State; onDismiss?: () => void }) {
   return (
     <WelcomeFrame label="profile-wizard-heading">
       <div className="welcome-card profile-migration-card">
         <WelcomeLogo />
-        <ProfileSetupInline state={state} migration />
+        <ProfileSetupInline state={state} migration onComplete={onDismiss} />
       </div>
     </WelcomeFrame>
   );

@@ -47,7 +47,7 @@ import { hasSpaces } from "./spaces";
 import Welcome from "./Welcome";
 import FirstBot from "./FirstBot";
 import SetupChoice, { SetupConnect, SetupTeam, type SetupPath } from "./SetupChoice";
-import { ProfileMigrationPrompt } from "./ProfileSettings";
+import { ProfileMigrationPrompt, useMigrationPrompt } from "./ProfileSettings";
 import type { Attachment, BoardItem, Bot, Chat, MarketAgentTemplate, MentionInput, Message, State } from "./types";
 import { tokenOf, type DraftMention } from "./MentionMenu";
 import { composeSlashPrompt, type DraftCommand } from "./slashCommand";
@@ -729,8 +729,9 @@ function App() {
       else nav("Home");
     }
   }, [spaces, page, spaceId, !!openedSpace]);
+  const migrationPrompt = useMigrationPrompt(state?.profile);
   if (!state) return <main>{error || "Opening Botkins…"}</main>;
-  if (state.profile?.migration.needed) return <ProfileMigrationPrompt state={state} />;
+  if (migrationPrompt.open) return <ProfileMigrationPrompt state={state} onDismiss={migrationPrompt.dismiss} />;
   if (firstRun && setupPath === "") return <SetupChoice choose={setSetupPath} state={state} />;
   if (firstRun && setupPath === "computer") return <SetupConnect back={() => setSetupPath("")} />;
   if (firstRun && setupPath === "team") return <SetupTeam back={() => setSetupPath("")} initialJoin={teamJoinUrl || undefined} />;

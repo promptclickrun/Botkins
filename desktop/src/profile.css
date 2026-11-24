@@ -7,15 +7,12 @@
 }
 
 /* System sans for every heading in the profile experience (never serif). */
-.profile-root h1,
 .profile-root h2,
-.profile-root h3,
-.profile-root h4 {
+.profile-root h3 {
   font-family: var(--font-body);
   margin: 0;
 }
 
-.profile-root h1:focus,
 .profile-root h2:focus,
 .profile-root h3:focus {
   outline: none;
@@ -235,8 +232,7 @@
   gap: 5px;
 }
 
-.profile-stage-head h2,
-.profile-stage-head h3 {
+.profile-stage-head h2 {
   font-size: calc(20px * var(--text-scale));
   font-weight: 700;
   letter-spacing: -0.25px;
@@ -379,9 +375,7 @@
   color: var(--muted);
 }
 
-.profile-field-hint strong,
-.profile-subtitle strong,
-.profile-note strong {
+.profile-field-hint strong {
   display: inline;
   font-weight: 600;
   color: var(--ink);
@@ -417,7 +411,7 @@
   font-family: var(--font-mono);
   font-size: calc(28px * var(--text-scale));
   font-weight: 700;
-  letter-spacing: 0.14em;
+  letter-spacing: 0.22em;
   line-height: 1.2;
   color: var(--ink);
   font-variant-numeric: tabular-nums;
@@ -497,13 +491,6 @@
 
 .profile-footer.end {
   justify-content: flex-end;
-}
-
-.profile-footer-group {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
 }
 
 .profile-btn-primary {
@@ -655,8 +642,7 @@
   max-width: 36ch;
 }
 
-.profile-done-copy h2,
-.profile-done-copy h3 {
+.profile-done-copy h2 {
   font-size: calc(20px * var(--text-scale));
   font-weight: 700;
   color: var(--ink);
@@ -766,7 +752,7 @@
   margin-bottom: 18px;
 }
 
-.profile-hero {
+.profile-account-header {
   display: flex;
   align-items: center;
   gap: 16px;
@@ -787,28 +773,28 @@
   border: 1px solid color-mix(in srgb, var(--accent) 16%, var(--line));
 }
 
-.profile-hero-info {
+.profile-account-info {
   flex: 1;
   min-width: 0;
   display: grid;
   gap: 3px;
 }
 
-.profile-hero-name-row {
+.profile-account-name-row {
   display: flex;
   align-items: center;
   gap: 8px;
   flex-wrap: wrap;
 }
 
-.profile-hero-name {
+.profile-account-name {
   font-size: calc(18px * var(--text-scale));
   font-weight: 700;
   letter-spacing: -0.2px;
   color: var(--ink);
 }
 
-.profile-hero-email {
+.profile-account-email {
   font-size: calc(13px * var(--text-scale));
   color: var(--muted);
   overflow-wrap: anywhere;
@@ -892,11 +878,6 @@
 .profile-row-icon.is-warning {
   background: var(--warning-soft);
   color: var(--warning);
-}
-
-.profile-row-icon.is-danger {
-  background: var(--danger-soft);
-  color: var(--danger);
 }
 
 .profile-pending-row {
@@ -1087,7 +1068,7 @@
     flex-direction: column;
     align-items: flex-start;
   }
-  .profile-hero {
+  .profile-account-header {
     flex-wrap: wrap;
   }
 }
