@@ -675,7 +675,7 @@ export class CopilotProvider extends ModelProvider {
     const previous = this.signInFlow;
     if (previous && !previous.cancelled) throw new Error("A Copilot sign-in is already in progress on this host.");
     const finished = Promise.withResolvers();
-    const flow = { done: finished.promise, cancelled: false };
+    const flow = { owner: options.owner, done: finished.promise, cancelled: false };
     this.signInFlow = flow;
     try {
       // A retry can arrive while the cancelled SDK is closing. It must acquire its own client.
@@ -774,9 +774,9 @@ export class CopilotProvider extends ModelProvider {
       throw error;
     }
   }
-  async cancelSignIn() {
+  async cancelSignIn(owner) {
     const flow = this.signInFlow;
-    if (!flow) return;
+    if (!flow || flow.owner !== owner || flow.cancelled) return;
     flow.cancelled = true;
     await flow.cancel?.();
   }

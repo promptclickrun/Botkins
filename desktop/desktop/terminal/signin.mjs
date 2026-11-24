@@ -542,8 +542,12 @@ export class SignIns {
   async flow(provider, session, { service, method }) {
     const open = async (url) => session.emit({ type: "open", url: String(url) });
     if (provider.id === "copilot") {
-      session.cancel = () => provider.cancelSignIn();
-      await provider.signIn({ device: async ({ userCode, verificationUri }) => session.emit({ type: "code", url: verificationUri, code: userCode }) });
+      session.cancel = () => {
+        // The cancelled session remains readable by id. A retry can now own the provider key.
+        session.key = null;
+        return provider.cancelSignIn(session.id);
+      };
+      await provider.signIn({ owner: session.id, device: async ({ userCode, verificationUri }) => session.emit({ type: "code", url: verificationUri, code: userCode }) });
       // Off providers have a synthetic signed-out status in the catalog. GitHub has now approved this one.
       await this.enable(provider.id);
       return;

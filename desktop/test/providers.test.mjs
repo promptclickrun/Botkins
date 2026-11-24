@@ -749,6 +749,7 @@ test("phone sign-in while Copilot is off and sign-out when the host keychain ref
   let saved = false;
   let loadedAccount = "octo";
   let verification;
+  let retryApproval;
   let vaultReadOnly = false;
   let enabled = false;
   let rejectLogout = true;
@@ -776,6 +777,7 @@ test("phone sign-in while Copilot is off and sign-out when the host keychain ref
           login: {
             begin: async () => ({ flowId: "login", step: { kind: "device-code", userCode: "TEST", verificationUri: "https://github.com/login/device" } }),
             advance: async () => {
+              if (retryApproval) await retryApproval.promise;
               if (!approve) return { kind: "error", message: "Approval declined" };
               saved = true;
               this.connected = this.loadSaved;
@@ -854,18 +856,21 @@ test("phone sign-in while Copilot is off and sign-out when the host keychain ref
   const overlap = third.provider.signIn({ device: async () => {} });
   const refused = assert.rejects(overlap, /already in progress/);
   await third.signIns.cancel(session);
-  const retryCode = Promise.withResolvers();
-  const allowRetry = Promise.withResolvers();
-  const retry = third.provider.signIn({ device: async () => { retryCode.resolve(); await allowRetry.promise; } });
+  retryApproval = Promise.withResolvers();
+  const { session: retry } = await third.signIns.start("copilot");
+  await third.signIns.cancel(session); // A delayed repeat from the first phone session.
+  await third.provider.cancelSignIn(); // The overlapping desktop never owned this login.
   verification.continue.resolve();
   verification = null;
   await refused;
   await third.signIns.sessions.get(session).over;
   assert.match(third.signIns.sessions.get(session).error ?? "", /cancelled/i);
-  await retryCode.promise;
+  const view = await third.signIns.read(retry, { after: 0 });
+  assert.ok(view.events.some(event => event.type === "code"));
   assert.equal((await third.provider.auth()).connected, false);
-  allowRetry.resolve();
-  await retry;
+  retryApproval.resolve();
+  await third.signIns.sessions.get(retry).over;
+  assert.equal(third.signIns.sessions.get(retry).error, null);
   assert.equal((await third.provider.auth()).connected, true);
   await third.provider.stop();
   const fourth = make();
