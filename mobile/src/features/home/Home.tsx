@@ -267,6 +267,7 @@ export default function Home() {
   const online = link === "online";
   const computer = useApp((state) => state.pairing?.name) ?? "Computer";
   const adminOn = useApp((state) => state.parts.meta?.you?.kind === "owner" && state.parts.meta.you.admin === true);
+  const computerOrder = usePrefs(prefs => prefs.computerOrder);
   const computers = useApp((state) => state.pairings);
   const directoryHosts = useProfileHosts();
   const inUse = useApp((state) => state.pairing?.serverId);
@@ -327,7 +328,7 @@ export default function Home() {
       <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: space.md }}>
         <View style={{ flex: 1, minWidth: 0, flexDirection: "row", alignItems: "center", gap: space.sm }}>
           {/* A tap opens the computer's page; a hold opens the switcher. */}
-          <HoldMenu title="Computers" actions={computerActions(computers, inUse, directoryHosts)} onPressAction={({ nativeEvent }) => runComputerChoice(nativeEvent.event)} style={{ flexShrink: 1 }}>
+          <HoldMenu title="Computers" actions={computerActions(computers, inUse, directoryHosts, computerOrder)} onPressAction={({ nativeEvent }) => runComputerChoice(nativeEvent.event)} style={{ flexShrink: 1 }}>
             <Tap
               onPress={() => router.push("/settings/desktop")}
               feel="select"

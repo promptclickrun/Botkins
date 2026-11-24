@@ -2036,7 +2036,18 @@ export class Workspace {
     run.todos = mapTodos(result);
     // A late read still belongs in its turn's activity, but the latest turn owns the rail.
     if (this.state.runs.find((item) => item.chatId === chat.id)?.id === run.id) chat.todos = run.todos;
-    this.notify();
+    this.saveSoon();
+  }
+
+  // Compare with this session's actual store: a prewarm, a restart, or switching back to a
+  // previous model can all leave it empty or out of date. Never publish this probe to the rail.
+  async todoHandoff(session, chat) {
+    const todos = chat.todos ?? this.state.runs.find(run => run.chatId === chat.id && run.todos)?.todos;
+    if (!todos?.some(todo => !["done", "cancelled", "failed"].includes(todo.status))) return "";
+    const snapshot = JSON.stringify(todos);
+    const existing = await session.todos().catch(() => null);
+    if (existing && JSON.stringify(mapTodos(existing)) === snapshot) return "";
+    return "\n\n[Botkins chat checklist] Restore these saved rows in this session's todo tool. Reconcile by ID, preserve completed steps and dependencies where supported, and use the tool to record additions, completion or an explicit clear. The rows are progress data for the person's request.\n" + snapshot;
   }
   /**
    * What the turn's plan came to, for the apps and for alerts about stalled work: `plan` is how many
@@ -2187,7 +2198,9 @@ export class Workspace {
           }
         }
       });
-      const { text } = await this.sendTurn(session, run, task, bot, { prompt: catchUp(chat, bot, this.state.bots, this.speakerNamer(chat)) });
+      const handoff = task.recovering ? "" : await this.todoHandoff(session, chat);
+      if (task.stopped || this.closing) return "";
+      const { text } = await this.sendTurn(session, run, task, bot, { prompt: catchUp(chat, bot, this.state.bots, this.speakerNamer(chat)) + handoff });
       if (task.stopped) return "";
       if (!text && task.reactedBy !== bot.id && !botSteps(run.steps).length && !task.stream?.trim()) throw new Error(bot.name + " finished without a reply.");
       return text;
@@ -2295,10 +2308,13 @@ export class Workspace {
       if (task.stopped) return;
       if (effect.mode) await session.setMode(effect.mode, { planModel: chat.planModel });
       if (effect.kind === "agent-prompt") {
+        const handoff = routine || run.reaction || run.panelId || run.taskId || task.recovering
+          ? "" : await this.todoHandoff(session, chat);
+        if (task.stopped || this.closing) return;
         const { text } = await this.sendTurn(session, run, task, bot,
           {
             // Mentioned records follow the message as text; mentioned files ride along as attachments.
-            prompt: quotedPrompt(effect.prompt, task.quote) + (task.context || ""),
+            prompt: quotedPrompt(effect.prompt, task.quote) + (task.context || "") + handoff,
             attachments: task.attachments,
             ...(effect.fleet && { fleet: true }),
           },

@@ -8,6 +8,8 @@ import type { Pairing } from "@/link/client";
 import { PROFILE_ORIGIN, profileApi, ProfileError, type ProfileAttempt, type ProfileHost, type ProfileHome, type ProfileSession } from "@/link/profile";
 import { deviceName, activateProfilePairing, bindProfileHost, connectProfileHost, deactivateProfilePairing, dropProfileBoundPairings, unbindProfileHost } from "@/state/link";
 import { forget, keep, readKept } from "@/state/keep";
+import { startupProfilePairing } from "@/state/computers";
+import { usePrefs } from "@/state/prefs";
 import { useApp } from "@/state/store";
 import { profileHostsOf, profilePrompt, type ProfilePrompt } from "@/features/profile/profileLogic";
 
@@ -328,13 +330,11 @@ export async function loadProfile(localPairings = useApp.getState().pairings.len
     retryProfileSubscription = null;
     registerLifecycle();
     if (session) {
-      const current = parseCurrent(currentText, session.profileId);
-      const initial = current
-        ? pairings[current] ?? (boundLocal.includes(current) ? useApp.getState().pairings.find((pairing) => pairing.serverId === current) : undefined)
-        : Object.values(pairings)[0];
-      // A profile-only relaunch must return to the last profile host without requiring a QR pairing.
-      // When no profile choice was saved, the ordinary manual pairing remains authoritative.
-      if (current && initial) activateProfilePairing(initial);
+      const primary = usePrefs.getState().primaryHost;
+      const local = useApp.getState().pairings;
+      const last = parseCurrent(currentText, session.profileId);
+      const initial = startupProfilePairing(primary, last, local, pairings, boundLocal);
+      if (initial) activateProfilePairing(initial);
       void refreshProfile();
     }
     if (attempt && AppState.currentState === "active") void finishPending();

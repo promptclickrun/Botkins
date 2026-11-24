@@ -354,10 +354,11 @@ function TodoItems({ todos }: { todos: Todo[] }) {
   );
 }
 
-export function TaskDrawer({ todos }: { todos: Todo[] }) {
+export function TaskDrawer({ todos, transfer }: { todos: Todo[]; transfer?: () => void }) {
   return (
     <section className="canvas-drawer" id="task-drawer" aria-label="Tasks">
       <TodoItems todos={todos} />
+      {transfer && <button className="secondary" onClick={transfer}>Transfer and continue todos</button>}
     </section>
   );
 }
