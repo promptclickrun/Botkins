@@ -26,6 +26,7 @@ const VIEWER_MS = 5000;
 const DISPLAYS_TTL = 5000;
 const LOOKUP_TTL = 5000; // how long info() reuses what it learned about permissions
 const MAX_PENDING = 8; // input calls waiting their turn
+const MAX_SIZES = 8; // remember cursors only, never cached pictures
 const MAX_JPEG = 3 * 1024 * 1024;
 
 const clamp = (value, low, high, fallback) => (typeof value === "number" && Number.isFinite(value) ? Math.min(high, Math.max(low, Math.round(value))) : fallback);
@@ -93,11 +94,13 @@ export class Screen {
   constructor({ adapter = () => undefined, mode, inject, emit = () => {}, paired = () => true, log = () => {}, dirs, platform = process.platform, idleMs = VIEWER_MS }) {
     Object.assign(this, { adapter, mode, emit, paired, log, dirs, platform, idleMs });
     this.held = null; // { deviceId, display, x, y } while a phone holds the mouse button down
-    this.pending = 0;
+    this.inputs = new Set(); // includes the batch currently being injected
     this.lookups = null;
     this.override = inject;
     this.fallback = platform === "darwin" ? macAdapter(dirs) : null;
-    this.shots = new Map(); // display → { seq, hash, inflight }
+    this.readers = new Set(); // frame requests, including those still looking up the display
+    this.connections = new WeakMap(); // relay requests share one disconnect promise per connection
+    this.shots = new Map(); // display → one capture lane, a cursor per recent size and quality
     this.viewing = new Map(); // deviceId → { since, timer }
     this.displayCache = null;
     this.queue = Promise.resolve();
@@ -173,21 +176,22 @@ export class Screen {
   // ── Pictures ───────────────────────────────────────────────────────────────────────────────
 
   /** One capture at a time per display: a caller with the same wishes shares it, another waits its turn. */
-  async grab(display, size) {
+  async grab(display, size, check) {
     const key = size.maxWidth + "x" + size.quality;
     let entry = this.shots.get(display);
-    if (!entry) this.shots.set(display, (entry = { seq: Math.floor(Math.random() * 1e6), hash: null, inflight: null }));
+    if (!entry) this.shots.set(display, (entry = { seq: Math.floor(Math.random() * 1e6), sizes: new Map(), inflight: null }));
     while (entry.inflight) {
       if (entry.inflight.key === key) return entry.inflight.promise;
       await entry.inflight.promise.catch(() => {});
     }
-    const promise = this.capture(display, size, entry).finally(() => {
+    check();
+    const promise = this.capture(display, size, entry, key).finally(() => {
       entry.inflight = null;
     });
     entry.inflight = { key, promise };
     return promise;
   }
-  async capture(display, size, entry) {
+  async capture(display, size, entry, key) {
     let shot;
     try {
       shot = await this.source().capture({ display, ...size });
@@ -199,39 +203,55 @@ export class Screen {
     // Only a picture that is a JPEG, and not huge, goes to a phone.
     if (jpeg[0] !== 0xff || jpeg[1] !== 0xd8 || jpeg.length > MAX_JPEG) throw new Failure("The screen's picture couldn't be used.");
     const hash = createHash("sha1").update(jpeg).digest("hex");
-    if (hash !== entry.hash) {
-      entry.hash = hash;
-      entry.seq++;
-    }
-    return { seq: entry.seq, jpeg, width: Number(shot.width) || 0, height: Number(shot.height) || 0 };
+    const before = entry.sizes.get(key);
+    const cursor = before?.hash === hash ? before : { hash, seq: ++entry.seq };
+    entry.sizes.delete(key);
+    entry.sizes.set(key, cursor);
+    if (entry.sizes.size > MAX_SIZES) entry.sizes.delete(entry.sizes.keys().next().value);
+    return { seq: cursor.seq, jpeg, width: Number(shot.width) || 0, height: Number(shot.height) || 0 };
   }
-  /**
-   * The newest picture. With `after` equal to the newest number it looks again every 300 ms for up to
-   * 1.5 s and answers without `jpeg` when nothing changed. `gone` ends the wait early (the phone left).
-   */
+  /** A relay connection can carry thousands of frames before it disconnects. Observe it once. */
+  connection(gone) {
+    if (!gone) return;
+    let connection = this.connections.get(gone);
+    if (!connection) {
+      connection = { closed: false };
+      this.connections.set(gone, connection);
+      gone.then(() => { connection.closed = true; });
+    }
+    return connection;
+  }
+  /** An interactive viewer waits for a change. A paced preview (wait: false) samples once. */
   async frame(deviceId, options, gone) {
-    this.need("view");
+    this.stillAllowed(deviceId);
     const o = options && typeof options === "object" ? options : {};
     const size = { maxWidth: clamp(o.maxWidth, 480, 1920, 1280), quality: clamp(o.quality, 30, 85, 60) };
     const after = typeof o.after === "number" && Number.isFinite(o.after) ? o.after : null;
-    const display = await this.pick(o.display);
-    this.watch(deviceId);
-    let left = false;
-    gone?.then(() => (left = true));
-    let shot = await this.grab(display.id, size);
-    if (after === shot.seq) {
+    const connection = this.connection(gone);
+    const reader = { deviceId };
+    this.readers.add(reader);
+    const check = () => {
+      this.stillAllowed(deviceId);
+      if (!this.readers.has(reader) || connection?.closed) throw new Failure("Screen viewing stopped.");
+    };
+    try {
+      const display = await this.pick(o.display);
+      check();
+      this.watch(deviceId);
+      let shot = await this.grab(display.id, size, check);
       const until = Date.now() + WAIT_MS;
-      while (shot.seq === after && !left && Date.now() < until && this.mode() !== "off") {
+      while (o.wait !== false && shot.seq === after && Date.now() < until) {
+        check();
         await sleep(Math.min(POLL_MS, Math.max(0, until - Date.now())));
-        shot = await this.grab(display.id, size);
+        check();
+        shot = await this.grab(display.id, size, check);
       }
-      if (shot.seq === after) {
-        this.stillAllowed(deviceId);
-        return { seq: shot.seq, display: display.id, width: shot.width, height: shot.height };
-      }
+      check();
+      return { seq: shot.seq, display: display.id, width: shot.width, height: shot.height,
+        ...(shot.seq !== after && { jpeg: shot.jpeg.toString("base64") }) };
+    } finally {
+      this.readers.delete(reader);
     }
-    this.stillAllowed(deviceId);
-    return { seq: shot.seq, display: display.id, width: shot.width, height: shot.height, jpeg: shot.jpeg.toString("base64") };
   }
 
   /** The mode may have been turned off, or the phone removed, while the picture was being taken: then it isn't sent. */
@@ -253,7 +273,8 @@ export class Screen {
     }
     viewer.timer = setTimeout(() => {
       try {
-        this.stop(deviceId);
+        // Expire the viewer and any held input. A slow first capture may still finish.
+        this.endViewer(deviceId);
       } catch (error) {
         this.log("screen: " + (error?.message ?? error));
       }
@@ -261,8 +282,12 @@ export class Screen {
     viewer.timer.unref?.();
   }
   stop(deviceId) {
+    for (const reader of this.readers) if (reader.deviceId === deviceId) this.readers.delete(reader);
+    this.endViewer(deviceId);
+  }
+  endViewer(deviceId) {
     // A phone that lets go of the screen lets go of the mouse button too.
-    if (this.held?.deviceId === deviceId) this.release();
+    this.cancelInput(deviceId);
     const viewer = this.viewing.get(deviceId);
     if (!viewer) return;
     clearTimeout(viewer.timer);
@@ -270,7 +295,9 @@ export class Screen {
     this.emit(deviceId, false);
   }
   stopAll() {
+    this.readers.clear();
     for (const id of [...this.viewing.keys()]) this.stop(id);
+    this.cancelInput();
   }
   viewers() {
     return [...this.viewing].map(([deviceId, viewer]) => ({ deviceId, since: viewer.since }));
@@ -279,19 +306,26 @@ export class Screen {
   modeChanged() {
     this.displayCache = null;
     this.lookups = null;
-    this.release();
     if (this.mode() === "off") this.stopAll();
+    else this.cancelInput();
   }
-  /** Lets go of a mouse button a phone is holding, so it isn't left down. */
-  release() {
+  /** Stop queued actions. A down can already be in the injector: put its up after that
+   * batch and before input from any subsequently opened viewer. */
+  cancelInput(deviceId) {
+    let release = !!this.held && (!deviceId || this.held.deviceId === deviceId);
+    for (const job of this.inputs) {
+      if (deviceId && job.deviceId !== deviceId) continue;
+      job.stopped = true;
+      release = true;
+    }
+    if (release) this.queue = this.queue.then(() => this.release(deviceId)).catch(error => this.log("screen: " + (error?.message ?? error)));
+  }
+  async release(deviceId) {
     const held = this.held;
-    if (!held) return;
+    if (!held || (deviceId && held.deviceId !== deviceId)) return;
     this.held = null;
     const inject = this.override ?? injectorFor(this.platform, this.dirs).inject;
-    if (!inject) return;
-    this.queue = this.queue
-      .then(() => inject({ display: held.display, displays: [held.display], events: [{ type: "up", x: held.x, y: held.y }] }))
-      .catch((error) => this.log("screen: " + (error?.message ?? error)));
+    if (inject) await inject({ display: held.display, displays: [held.display], events: [{ type: "up", x: held.x, y: held.y }] });
   }
 
   // ── Input ──────────────────────────────────────────────────────────────────────────────────
@@ -301,15 +335,21 @@ export class Screen {
    * at most 8 wait. A call whose phone is gone, or whose mode is no longer "control", is skipped.
    */
   input(deviceId, displayId, events) {
-    if (this.pending >= MAX_PENDING) return Promise.reject(new Failure("Too many actions are waiting. Try again in a moment."));
-    this.pending++;
-    const run = this.queue.then(() => this.post(deviceId, displayId, events));
-    this.queue = run.catch(() => {}).finally(() => this.pending--);
+    if (this.inputs.size >= MAX_PENDING) return Promise.reject(new Failure("Too many actions are waiting. Try again in a moment."));
+    const job = { deviceId, stopped: false };
+    this.inputs.add(job);
+    const run = this.queue.then(() => this.post(job, displayId, events)).finally(() => this.inputs.delete(job));
+    this.queue = run.catch(() => {});
     return run;
   }
-  async post(deviceId, displayId, events) {
-    if (!this.paired(deviceId)) throw new Failure("This phone isn't paired.");
-    this.need("control");
+  async post(job, displayId, events) {
+    const { deviceId } = job;
+    const check = () => {
+      if (!this.paired(deviceId)) throw new Failure("This phone isn't paired.");
+      this.need("control");
+      if (job.stopped) throw new Failure("Screen control stopped.");
+    };
+    check();
     // Checked before anything is posted, so a call with one bad action does nothing at all.
     const clean = cleanEvents(events, !!this.held);
     if (clean.events.length > MAX_EXPANDED) throw new Failure("Too much to type at once.");
@@ -319,11 +359,13 @@ export class Screen {
     if (!(await this.accessibility(this.source()))) throw new Failure(NEED_ACCESSIBILITY);
     if (!clean.events.length) return;
     const inject = this.override ?? injectorFor(this.platform, this.dirs).inject;
-    await inject({ display, displays: await this.displays(), events: clean.events });
+    const displays = await this.displays();
+    check();
+    await inject({ display, displays, events: clean.events });
     const last = clean.events.findLast((e) => e.x !== undefined);
     this.held = clean.pressed && last ? { deviceId, display, x: last.x, y: last.y } : null;
     // The phone left, or control was turned off, while this was being posted: let go at once.
-    if (this.held && (this.mode() !== "control" || !this.paired(deviceId))) this.release();
+    if (this.held && (this.mode() !== "control" || !this.paired(deviceId))) await this.release(deviceId);
   }
   dispose() {
     this.stopAll();

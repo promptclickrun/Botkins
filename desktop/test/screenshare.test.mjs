@@ -1,6 +1,7 @@
 // The screen adapter the phone link is given (desktop/screenshare.mjs), with a stand-in for Electron.
 import test from "node:test";
 import assert from "node:assert/strict";
+import { Screen } from "../desktop/link/screen.mjs";
 import { screenAdapter, screenStatus } from "../desktop/screenshare.mjs";
 
 /** Two displays: an external one listed first by the system, and the built-in main one. */
@@ -130,4 +131,71 @@ test("on Windows the other displays are numbered left to right, as the link's ow
   for (const [id, label] of [["1", "Main"], ["2", "Left"], ["3", "Right"]]) assert.equal((await unnamed.capture({ display: id, maxWidth: 1280, quality: 60 })).jpeg.toString(), "jpeg:" + label);
   // macOS keeps the system's order after the main display.
   assert.deepEqual((await screenAdapter({ ...electron(true), systemPreferences: { getMediaAccessStatus: () => "granted", isTrustedAccessibilityClient: () => true }, platform: "darwin" }).displays()).map((d) => d.label), ["Main", "Right", "Left"]);
+});
+
+test("stopping during a capture cancels that viewer's wait even when the same phone opens it again", async (t) => {
+  let captures = 0;
+  const started = Promise.withResolvers();
+  const release = Promise.withResolvers();
+  const adapter = {
+    displays: async () => [{ id: "1", width: 100, height: 100 }],
+    async capture() {
+      if (++captures === 2) {
+        started.resolve();
+        await release.promise;
+      }
+      return { jpeg: Buffer.from([0xff, 0xd8, 0xff, 0xd9]), width: 100, height: 100 };
+    },
+  };
+  const screen = new Screen({ adapter: () => adapter, mode: () => "view" });
+  t.after(() => screen.dispose());
+  const first = await screen.frame("phone", {});
+  const old = screen.frame("phone", { after: first.seq });
+  await started.promise;
+  screen.stop("phone");
+  const reopened = screen.frame("phone", {});
+  release.resolve();
+  await assert.rejects(old, /stopped/);
+  assert.ok((await reopened).jpeg);
+  assert.ok(captures <= 3, "the old long poll never captured again");
+});
+
+test("leaving while a drag is being posted releases its button and discards queued input", async () => {
+  const started = Promise.withResolvers();
+  const finish = Promise.withResolvers();
+  const events = [];
+  const adapter = { displays: async () => [{ id: "1" }] };
+  const screen = new Screen({ adapter: () => adapter, mode: () => "control", inject: async job => {
+    events.push(...job.events);
+    if (job.events[0].type === "down") {
+      started.resolve();
+      await finish.promise;
+    }
+  } });
+  const down = screen.input("phone", "1", [{ type: "down", x: 0.3, y: 0.4 }]);
+  await started.promise;
+  const queued = screen.input("phone", "1", [{ type: "text", text: "late" }]);
+  screen.stop("phone");
+  finish.resolve();
+  await down;
+  await assert.rejects(queued, /stopped/);
+  await screen.queue;
+  assert.deepEqual(events.map(e => e.type), ["down", "up"]);
+  assert.equal(screen.held, null);
+});
+
+test("a pane and a full viewer on the same display keep independent unchanged-frame cursors", async t => {
+  const adapter = {
+    displays: async () => [{ id: "1" }],
+    capture: async ({ maxWidth }) => ({
+      jpeg: Buffer.from([0xff, 0xd8, maxWidth >> 8, maxWidth & 255, 0xff, 0xd9]), width: maxWidth, height: 400,
+    }),
+  };
+  const screen = new Screen({ adapter: () => adapter, mode: () => "view" });
+  t.after(() => screen.dispose());
+  const pane = await screen.frame("one", { maxWidth: 640 });
+  const full = await screen.frame("two", { maxWidth: 1280 });
+  assert.notEqual(pane.seq, full.seq);
+  assert.equal((await screen.frame("one", { maxWidth: 640, after: pane.seq, wait: false })).jpeg, undefined);
+  assert.equal((await screen.frame("two", { maxWidth: 1280, after: full.seq, wait: false })).jpeg, undefined);
 });

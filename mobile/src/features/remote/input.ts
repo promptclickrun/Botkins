@@ -1,66 +1,71 @@
-// Sends pointer and key events to the computer: at most one call per animation frame and never
-// more than one call in flight. Consecutive moves collapse into the last one and consecutive
-// scrolls add up, so a fast finger doesn't flood the link.
+// One ordered lane per viewer. Motion coalesces within a frame. On exit or a display
+// switch only a button already sent down needs a final event, on its original display.
 import type { ScreenInput } from "@/link/types";
-import { api } from "@/state/link";
 
 export class InputSender {
+  private display = "";
   private queue: ScreenInput[] = [];
-  private busy = false;
+  private inFlight: Promise<void> | null = null;
+  private pressed: { x: number; y: number } | null = null;
   private frame: number | null = null;
   private closed = false;
 
   constructor(
-    private display: string,
+    private send: (display: string, events: ScreenInput[]) => Promise<unknown>,
     private failed: (error: unknown) => void,
   ) {}
 
-  /** Events for another display start fresh. */
   setDisplay(display: string) {
     if (display === this.display) return;
+    this.discard();
     this.display = display;
-    this.queue = [];
   }
 
   push(event: ScreenInput) {
-    if (this.closed) return;
-    const last = this.queue[this.queue.length - 1];
+    if (this.closed || !this.display) return;
+    const last = this.queue.at(-1);
     if (last?.type === "move" && event.type === "move") this.queue[this.queue.length - 1] = event;
     else if (last?.type === "scroll" && event.type === "scroll") this.queue[this.queue.length - 1] = { ...event, dx: last.dx + event.dx, dy: last.dy + event.dy };
     else this.queue.push(event);
     this.schedule();
   }
 
-  /** Sends what is still waiting (a mouse button let go, say) and stops. */
   close() {
-    if (this.closed) return;
     this.closed = true;
-    const left = this.queue;
-    this.queue = [];
-    if (left.length > 0 && this.display) void api["link.screen.input"](this.display, left).catch(() => {});
+    this.discard();
+  }
+
+  private discard() {
     if (this.frame !== null) cancelAnimationFrame(this.frame);
     this.frame = null;
+    this.queue = [];
+    if (this.pressed) this.dispatch(this.display, [{ type: "up", ...this.pressed }]);
   }
 
   private schedule() {
-    if (this.frame !== null || this.busy || this.closed) return;
-    this.frame = requestAnimationFrame(this.flush);
+    if (this.frame !== null || this.inFlight || this.closed) return;
+    this.frame = requestAnimationFrame(() => {
+      this.frame = null;
+      const events = this.queue.filter(event => event.type !== "scroll" || event.dx !== 0 || event.dy !== 0);
+      this.queue = [];
+      if (events.length) this.dispatch(this.display, events);
+    });
   }
 
-  private flush = () => {
-    this.frame = null;
-    if (this.busy || this.closed || this.queue.length === 0 || !this.display) return;
-    const events = this.queue.filter((event) => event.type !== "scroll" || event.dx !== 0 || event.dy !== 0);
-    this.queue = [];
-    if (events.length === 0) return;
-    this.busy = true;
-    api["link.screen.input"](this.display, events)
-      .catch((error: unknown) => {
-        if (!this.closed) this.failed(error);
-      })
-      .finally(() => {
-        this.busy = false;
-        if (this.queue.length > 0) this.schedule();
-      });
-  };
+  private dispatch(display: string, events: ScreenInput[]) {
+    for (const event of events) {
+      if (event.type === "down" || (event.type === "move" && this.pressed)) this.pressed = { x: event.x, y: event.y };
+      else if (event.type === "up" || event.type === "click" || event.type === "doubleClick" || event.type === "rightClick") this.pressed = null;
+    }
+    const post = () => this.send(display, events);
+    const batch = (this.inFlight ? this.inFlight.then(post) : post()).then(() => {}, error => {
+      if (!this.closed) this.failed(error);
+    });
+    this.inFlight = batch;
+    void batch.then(() => {
+      if (this.inFlight !== batch) return;
+      this.inFlight = null;
+      if (this.queue.length) this.schedule();
+    });
+  }
 }

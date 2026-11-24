@@ -7,7 +7,7 @@
 // gadget changes its own settings and takes Wi-Fi changes by itself). Every change goes through
 // `attempt`, and the list the call answers is what shows; a slider sends once, when it is let go.
 // A Wi-Fi password lives only in its field and leaves it the moment it is sent.
-import { router, useLocalSearchParams } from "expo-router";
+import { router, useIsFocused, useLocalSearchParams } from "expo-router";
 import { Check, Speaker } from "lucide-react-native";
 import { type ReactNode, useEffect, useState } from "react";
 import { Alert, Modal, View } from "react-native";
@@ -16,6 +16,7 @@ import { Choice } from "@/features/voice/settings/shared";
 import type { Bot, GadgetSettings, PairedDevice } from "@/link/types";
 import { useBots, useCapability, useOnline } from "@/state/hooks";
 import { api, attempt } from "@/state/link";
+import { useAppActive } from "@/state/useAppActive";
 import { ago } from "@/state/time";
 import { BotAvatar, EmptyState, Field, Group, Label, Loading, Page, Row, Segmented, Sheet, Slider, space, T, useTextPrompt, useTheme } from "@/ui";
 import { BRIGHTNESS, DIM_CHOICES, firmwareLabel, GADGET_SETTINGS, headerLine, lookAgainMs, MIC_CHOICES, networkProblem, OFF_CHOICES, passwordProblem, shownSettings, talksWith, timerOptions, VOLUME, wifiRows } from "./gadget";
@@ -61,9 +62,10 @@ export default function GadgetPage() {
   const device = devices?.find((item) => item.id === id && item.kind === "gadget");
   const gadget = device?.gadget;
   const wait = lookAgainMs(gadget);
+  const active = useAppActive(useIsFocused());
 
   useEffect(() => {
-    if (!supported || !online) return;
+    if (!active || !supported || !online) return;
     let live = true;
     const look = () =>
       void api["link.devices.list"]().then(
@@ -76,7 +78,7 @@ export default function GadgetPage() {
       live = false;
       clearInterval(timer);
     };
-  }, [supported, online, wait, id]);
+  }, [active, supported, online, wait, id]);
 
   if (!supported) return <Page title="Gadget"><EmptyState icon={Speaker} title="Update the app on your computer" /></Page>;
   if (!devices) return <Page title="Gadget"><Loading /></Page>;

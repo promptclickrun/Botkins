@@ -2,9 +2,9 @@
 // working thread: the bot's face (held still, for battery), what it is doing, how long it has been
 // at it and how many steps ("Coding | 0:42 · 3 steps"). A tap opens the turn's activity. The clock
 // ticks once a second only while the chat is on screen and the app is in front.
-import { router, useIsFocused } from "expo-router";
-import { useEffect, useState } from "react";
-import { AppState, View } from "react-native";
+import { router } from "expo-router";
+import { useElapsedClock } from "./useElapsedClock";
+import { View } from "react-native";
 import Animated, { FadeIn } from "react-native-reanimated";
 import type { Bot, Run } from "@/link/types";
 import { activityLabel, useChatActivity } from "@/state/hooks";
@@ -24,28 +24,11 @@ export function clock(ms: number): string {
   return hours ? hours + ":" + String(minutes).padStart(2, "0") + ":" + seconds : minutes + ":" + seconds;
 }
 
-/** Now, once a second while `on`. */
-function useNow(on: boolean): number {
-  const [now, setNow] = useState(Date.now);
-  const [front, setFront] = useState(AppState.currentState === "active");
-  useEffect(() => {
-    const subscription = AppState.addEventListener("change", (next) => setFront(next === "active"));
-    return () => subscription.remove();
-  }, []);
-  useEffect(() => {
-    if (!on || !front) return;
-    setNow(Date.now());
-    const timer = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(timer);
-  }, [on, front]);
-  return now;
-}
-
 export function StatusCapsule({ chatId, bot, group, bots, run }: { chatId: string; bot?: Bot; group: boolean; bots: Map<string, Bot>; /** The turn under way, once the computer has started it. */ run?: Run }) {
   const { colors } = useTheme();
   const state = useChatActivity(chatId);
   const speakerId = useApp((s) => s.parts.live?.speakers[chatId]);
-  const now = useNow(useIsFocused() && !!run);
+  const now = useElapsedClock(!!run);
   const face = (group && speakerId ? bots.get(speakerId) : undefined) ?? bot;
   const doing = (activityLabel(state) || "Working").replace(/…$/, "");
   const own = run?.steps ?? [];

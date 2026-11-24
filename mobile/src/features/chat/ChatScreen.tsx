@@ -5,7 +5,7 @@ import { HeaderHeightContext } from "expo-router/react-navigation";
 import { LinearGradient } from "expo-linear-gradient";
 import { ChevronRight, Ellipsis, PanelLeft, Repeat, X } from "lucide-react-native";
 import { type ComponentRef, type ReactNode, type RefObject, memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
-import { ActivityIndicator, Alert, AppState, FlatList, Platform, ScrollView, type TextInput, useWindowDimensions, View } from "react-native";
+import { ActivityIndicator, Alert, FlatList, Platform, ScrollView, type TextInput, useWindowDimensions, View } from "react-native";
 import { useKeyboardState, useReanimatedKeyboardAnimation } from "react-native-keyboard-controller";
 import Animated, { FadeIn, useAnimatedStyle, useReducedMotion } from "react-native-reanimated";
 import { useStore } from "zustand";
@@ -49,6 +49,7 @@ import { Aside } from "./Aside";
 import { chatTimeline, createTimelineRunSelector, indexMessageOwnership, liveRowVisible, resolveLiveBody, type Item, reuseItems, TIMELINE_V1, underWay } from "./turn";
 import { ProjectPill, projectActions, runProjectChoice, type Side, SideAnswer } from "./ChatProject";
 import { quoteOf, sideQuestionOf } from "./side";
+import { useAppActive } from "@/state/useAppActive";
 import { endSelecting, selectionEnds } from "./selecting";
 import { MessageLink, openLink } from "@/ui/LinkHold";
 import { pullRequestUrl } from "../../../link-host/pr-url.mjs";
@@ -410,11 +411,7 @@ function ChatTimelineList({ chatId, view, pending, runPart, streaming, group, bo
   // the rules). Each change waits a moment again, so a refresh right after the reply lands first.
   const completionPosition = useChatPrefs((prefs) => prefs.completionPosition);
   const onShow = useOnShow();
-  const [inFront, setInFront] = useState(AppState.currentState === "active");
-  useEffect(() => {
-    const subscription = AppState.addEventListener("change", (next) => setInFront(next === "active"));
-    return () => subscription.remove();
-  }, []);
+  const inFront = useAppActive(onShow);
   const still = useReducedMotion();
   const turnLive = streaming || !!underWay(runPart);
   const streamsReplies = useChatPrefs((prefs) => prefs.textStreaming);

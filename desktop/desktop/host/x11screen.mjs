@@ -8,23 +8,22 @@
 //   import   (ImageMagick)                 otherwise
 //
 // The display's size comes from `xdotool getdisplaygeometry`, else from `xdpyinfo`. One display, "1".
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { jpegSize } from "../link/screen.mjs";
 import { Failure, findTool, runTool, searchDirs, toolEnv } from "../link/tools.mjs";
 
 export const NEED_CAPTURE_TOOL = "Install ffmpeg or ImageMagick on this computer to show its screen.";
 
-/** The tool argument lists for one JPEG of `display` at `width` pixels wide, written to `file`. */
-export function captureCommand(tool, { display, screen, width, quality, file }) {
+/** The tool argument lists for one JPEG of `display` at `width` pixels wide, on standard output. */
+export function captureCommand(tool, { display, width, quality }) {
   const q = Math.min(100, Math.max(1, Math.round(quality) || 60));
   if (tool === "ffmpeg") {
     // ffmpeg's JPEG scale runs from 2 (best) to 31.
     const qscale = String(Math.round(31 - (q / 100) * 29));
-    return ["-loglevel", "error", "-nostdin", "-y", "-f", "x11grab", "-draw_mouse", "1", "-video_size", screen.width + "x" + screen.height, "-i", display, "-frames:v", "1", "-vf", "scale=" + width + ":-2", "-q:v", qscale, "-f", "image2", "-c:v", "mjpeg", file];
+    // x11grab takes the whole display at its current size. Raw video needs no stream probing.
+    const scale = "scale='max(2,trunc(min(iw," + width + ")/2)*2)':-2";
+    return ["-loglevel", "error", "-nostdin", "-f", "x11grab", "-probesize", "32", "-draw_mouse", "1", "-i", display, "-frames:v", "1", "-vf", scale, "-q:v", qscale, "-f", "image2pipe", "-c:v", "mjpeg", "pipe:1"];
   }
-  return ["-silent", "-display", display, "-window", "root", "-resize", width + "x", "-quality", String(q), "jpg:" + file];
+  return ["-silent", "-display", display, "-window", "root", "-resize", width + "x>", "-quality", String(q), "jpg:-"];
 }
 
 /**
@@ -63,20 +62,11 @@ export function x11Screen({ display, xauthority, dirs = searchDirs() }) {
       if (String(id) !== "1") throw new Failure("That display isn't available.");
       const found = capturer();
       if (!found) throw new Failure(NEED_CAPTURE_TOOL);
-      const screen = await geometry();
-      // Even widths keep ffmpeg's encoder happy.
-      const width = Math.max(2, Math.min(Math.round(maxWidth) || screen.width, screen.width)) & ~1;
-      const folder = mkdtempSync(join(tmpdir(), "botkins-screen-"));
-      const file = join(folder, "screen.jpg");
-      try {
-        await runTool("Screen capture", found.path, captureCommand(found.tool, { display, screen, width, quality, file }), { env: env(), timeout: 15_000 });
-        const jpeg = readFileSync(file);
-        const size = jpegSize(jpeg);
-        if (!size) throw new Failure("The screen couldn't be captured.");
-        return { jpeg, ...size };
-      } finally {
-        rmSync(folder, { recursive: true, force: true });
-      }
+      const width = Math.max(2, Math.round(maxWidth) || 1920);
+      const jpeg = await runTool("Screen capture", found.path, captureCommand(found.tool, { display, width, quality }), { env: env(), timeout: 15_000, binary: true });
+      const size = jpegSize(jpeg);
+      if (!size) throw new Failure("The screen couldn't be captured.");
+      return { jpeg, ...size };
     },
     // X11 asks for no permission: whoever may open the display may read it and post input to it.
     permissions: async () => ({ screenRecording: true, accessibility: true }),

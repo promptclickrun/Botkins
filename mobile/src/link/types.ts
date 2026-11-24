@@ -1891,7 +1891,7 @@ export type Calls = {
   "link.credentials.link"(input: { manager: PasswordManagerId; vaultId: string; itemId: string; fieldId: string; name: string }): string;
   "link.screen.info"(): ScreenInfo;
   /** The newest picture of a display. With `after`, waits a moment for a change and leaves `jpeg` out when there is none. */
-  "link.screen.frame"(options: { display?: string; maxWidth?: number; quality?: number; after?: number }): ScreenFrame;
+  "link.screen.frame"(options: { display?: string; maxWidth?: number; quality?: number; after?: number; wait?: boolean }): ScreenFrame;
   "link.screen.input"(display: string, events: ScreenInput[]): void;
   /** The phone stopped watching. */
   "link.screen.stop"(): void;

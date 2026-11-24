@@ -256,6 +256,8 @@ screen: {
 }
 ```
 
+A viewer can pass `wait: false` to `link.screen.frame` to sample the display once. An unchanged frame returns its sequence and dimensions. Omitting the option keeps the interactive long poll. Older hosts ignore the option.
+
 Without an adapter, macOS falls back on its own `screencapture` and `sips` (one display), and other systems say that viewing isn't available. On macOS the app needs the Screen Recording permission to capture, and the Accessibility permission for clicks and typing. A phone is told which one is missing. Display ids should be numbers as text (`"1"` is the main display, then `"2"`, and so on), or clicks go to the main display. Frames are only sent while the mode allows it (a picture taken just as the person turned the screen off is dropped), and only if the adapter's picture is a JPEG of at most 3 MB. What `link.screen.info` learns about permissions and displays is reused for 5 seconds. Input is checked before anything is posted: at most 64 actions a call, at most 256 once text is split at new lines and tabs, and at most 8 calls waiting. A call whose phone has been removed, or that arrives after control was turned off, is skipped, and a mouse button a phone is holding is let go when the mode changes, when that phone stops watching, and when it is removed. In control mode, macOS posts input with a fixed `osascript` script, Windows with a fixed PowerShell script, and Linux with `xdotool` on an X11 session. In every case the events are data passed in, and no text from a phone is ever built into a script or a command.
 
 ## What a paired phone can now do

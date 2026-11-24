@@ -822,6 +822,13 @@ test("the screen is off until the person turns it on; frames have numbers and sa
   assert.equal(screen.captured.length, count + 1);
   screen.shown.lag = 20;
 
+  // A paced preview already schedules its next check. One request samples the screen once.
+  const beforePreview = screen.captured.length;
+  const still = await frame({ after: second.seq, wait: false });
+  assert.equal(still.seq, second.seq);
+  assert.equal(still.jpeg, undefined);
+  assert.equal(screen.captured.length - beforePreview, 1);
+
   // Waiting for a change: nothing new answers without a picture after about 1.5 seconds.
   const started = Date.now();
   const quiet = await frame({ after: second.seq });

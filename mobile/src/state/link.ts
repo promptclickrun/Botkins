@@ -11,7 +11,7 @@ import { checkJoin, findHost, findInvite, type FetchLike, type JoinAttempt, type
 import { setRandomSource } from "@/link/crypto";
 import type { PairTarget } from "@/link/pairing";
 import { relayFetch } from "@/link/relay";
-import type { Calls, ChatDetail } from "@/link/types";
+import type { Calls, ChatDetail, ScreenFrame, ScreenInput } from "@/link/types";
 import { textMode, useChatPrefs } from "./chatPrefs";
 import { loadPrefs } from "./prefs";
 import { newPresenceKey, removePresenceKey } from "./presence";
@@ -332,6 +332,19 @@ export const api = new Proxy({} as Api, {
     return client.call(method, ...args);
   },
 });
+
+/** The frame request belongs to the viewer and the computer on which it opened. */
+export async function readScreenFrame(computer: string, options: Parameters<Calls["link.screen.frame"]>[0], signal: AbortSignal) {
+  if (!client || useApp.getState().pairing?.serverId !== computer) throw new LinkError("offline", "The computer changed.");
+  return client.callWithSignal<ScreenFrame>("link.screen.frame", signal, options);
+}
+
+/** A final button-up may follow an in-flight call. Bind it to this computer at viewer creation. */
+export function screenInputSender() {
+  const host = client;
+  return (display: string, events: ScreenInput[]) =>
+    host && host === client && host.state === "online" ? host.call("link.screen.input", display, events) : Promise.resolve();
+}
 
 /** Also update an older loaded page, outside the live chat subscription. */
 export async function reactToMessage(chatId: string, index: number, time: number | null, emoji: string) {

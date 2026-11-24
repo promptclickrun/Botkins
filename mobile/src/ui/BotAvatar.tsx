@@ -9,6 +9,7 @@
 import { Image } from "expo-image";
 import { memo, type ReactNode, useEffect, useLayoutEffect, useMemo, useState } from "react";
 import { AccessibilityInfo, Animated, Easing, type StyleProp, useAnimatedValue, View, type ViewStyle } from "react-native";
+import { useAppActive } from "@/state/useAppActive";
 import Svg, { Circle, Ellipse, G, Path } from "react-native-svg";
 import { BADGE_ICONS, type BotkinClip, type BotkinState, CLIPS, FILLED_BADGES, MOUTHS } from "@/data/botkinMotion";
 import { lookOf, type ResolvedLook, resolveLook } from "@/data/botLook";
@@ -121,7 +122,8 @@ export const BotAvatar = memo(function BotAvatar({ bot, look: given, state = "id
   const still = !avatarCanMove(animations, reducedMotion, animated);
   // Under another page, or in a tab that isn't selected, the head holds the pose it has: nothing
   // jumps while the next screen slides over it, and it starts its clip again when it is seen.
-  const seen = useOnShow();
+  const visible = useOnShow(!still);
+  const seen = useAppActive(visible && !still);
 
   // The head moves through the clip's poses; `step` runs from 0 to the last pose.
   const step = useAnimatedValue(0);
@@ -131,9 +133,9 @@ export const BotAvatar = memo(function BotAvatar({ bot, look: given, state = "id
   const motion = avatarMotion[state];
   const { blinkMs, firstBlinkMs } = avatarBeat(head.name);
   useLayoutEffect(() => {
-    if (!seen) return;
+    if (still) step.setValue(0);
+    if (!seen || last < 1) return;
     step.setValue(0);
-    if (still || last < 1) return;
     // Ease each equal-length segment within one timing so a working loop repeats entirely natively.
     const pass = Animated.timing(step, {
       ...nativeTiming,
@@ -162,9 +164,8 @@ export const BotAvatar = memo(function BotAvatar({ bot, look: given, state = "id
 
   const blinks = eyes !== "smile" && eyes !== "sleepy";
   useLayoutEffect(() => {
-    if (!seen) return;
     lids.setValue(1);
-    if (still || !blinks) return;
+    if (!seen || !blinks) return;
     const blink = Animated.sequence([
       Animated.timing(lids, { ...nativeTiming, toValue: 0.09, duration: blinkMs * 0.02, easing: ease }),
       Animated.timing(lids, { ...nativeTiming, toValue: 0.09, duration: blinkMs * 0.006 }),

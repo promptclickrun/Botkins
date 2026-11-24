@@ -1,107 +1,82 @@
 // The picture loop: ask the computer for its screen, show the picture, ask again for whatever
 // changed after it. One loop at a time. Each picture goes into the image slot that is not on
 // screen and takes the front only once it has been drawn, so the screen never flickers.
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { ScreenFrame } from "@/link/types";
-import { api } from "@/state/link";
+import { AppState } from "react-native";
+import { readScreenFrame } from "@/state/link";
+import { useApp } from "@/state/store";
+import { holdScreen } from "@/features/pane/watching";
+import { type FeedState, runScreenFeed } from "./screenFeed";
 
 export type SlotName = "a" | "b";
-export type Slot = { uri: string; id: number };
+export type Slot = { uri: string; id: number; display: string; width: number; height: number };
 export type Pictures = { a: Slot | null; b: Slot | null; front: SlotName };
 
-/** Tries in a row before the loop gives up and shows the error with Retry. */
-const RETRIES = 5;
-const RETRY_MS = 1000;
-/** How long to wait for a picture to be drawn before asking for the next one anyway. */
+/** A native load that never draws is retried with fresh bytes. */
 const DRAW_WAIT_MS = 1500;
-
-export type FeedState = "starting" | "live" | "retrying" | "failed";
-
-const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
-const messageOf = (error: unknown) => (error instanceof Error && error.message ? error.message : "Couldn't get the picture.");
 
 /**
  * `gapMs` is the least time from one ask to the next (default 0: ask again as soon as an answer is
- * in, as Settings › Screen does). A screen card in a chat and the side pane ask more slowly.
+ * in, as Settings › Screen does). The pane paces its samples, and a chat card takes just one.
  */
-export function useFeed({ enabled, display, maxWidth, quality, gapMs = 0 }: { enabled: boolean; display: string | undefined; maxWidth: number; quality: number; gapMs?: number }) {
+export function useFeed({ enabled, display, maxWidth, quality, gapMs = 0, once = false }: { enabled: boolean; display: string | undefined; maxWidth: number; quality: number; gapMs?: number; once?: boolean }) {
   const [pictures, setPictures] = useState<Pictures>({ a: null, b: null, front: "a" });
-  /** The latest picture's size in pixels, and the display it shows. */
-  const [size, setSize] = useState<{ width: number; height: number; display: string } | null>(null);
   const [state, setState] = useState<FeedState>("starting");
   const [error, setError] = useState<string | null>(null);
   const [run, setRun] = useState(0);
   const front = useRef<SlotName>("a");
   const waiting = useRef<{ id: number; finish: (promote: boolean) => void } | null>(null);
   const counter = useRef(0);
-  const shown = useRef(false);
+  const computer = useApp(state => state.pairing?.serverId);
 
   useEffect(() => {
-    if (!enabled) return;
-    let alive = true;
+    if (!enabled || !computer) return;
+    const controller = new AbortController();
+    const { signal } = controller;
+    const release = holdScreen(computer);
+    const stop = () => release(AppState.currentState !== "active");
+    setState("starting");
+    setError(null);
 
     const present = (frame: ScreenFrame) =>
-      new Promise<void>((resolve) => {
+      new Promise<boolean>((resolve) => {
         const slot: SlotName = front.current === "a" ? "b" : "a";
         const id = ++counter.current;
         const finish = (promote: boolean) => {
           clearTimeout(timer);
           if (waiting.current?.id !== id) return;
           waiting.current = null;
-          if (promote && alive) {
+          if (promote && !signal.aborted) {
             front.current = slot;
             setPictures((held) => ({ ...held, front: slot }));
+          } else if (!signal.aborted) {
+            // Remount the decoder on retry even if the host sends the same JPEG.
+            setPictures((held) => ({ ...held, [slot]: null }));
           }
-          resolve();
+          resolve(promote);
         };
-        const timer = setTimeout(() => finish(true), DRAW_WAIT_MS);
+        const timer = setTimeout(() => finish(false), DRAW_WAIT_MS);
         waiting.current?.finish(false);
         waiting.current = { id, finish };
-        setPictures((held) => ({ ...held, [slot]: { uri: "data:image/jpeg;base64," + frame.jpeg, id } }));
-        setSize((held) => (held && held.width === frame.width && held.height === frame.height && held.display === frame.display ? held : { width: frame.width, height: frame.height, display: frame.display }));
+        setPictures((held) => ({ ...held, [slot]: { uri: "data:image/jpeg;base64," + frame.jpeg, id, display: frame.display, width: frame.width, height: frame.height } }));
       });
 
-    void (async () => {
-      let after: number | undefined;
-      let failures = 0;
-      while (alive) {
-        const asked = Date.now();
-        try {
-          const frame = await api["link.screen.frame"]({ display, maxWidth, quality, after });
-          if (!alive) break;
-          failures = 0;
-          setError(null);
-          if (frame.jpeg) {
-            await present(frame);
-            if (!alive) break;
-            shown.current = true;
-          } else if (Date.now() - asked < 100) {
-            // Nothing changed and the computer answered at once: don't spin.
-            await sleep(250);
-          }
-          if (shown.current) setState("live");
-          after = frame.seq;
-          const rest = gapMs - (Date.now() - asked);
-          if (rest > 0) await sleep(rest);
-        } catch (caught) {
-          if (!alive) break;
-          failures += 1;
-          if (failures > RETRIES) {
-            setError(messageOf(caught));
-            setState("failed");
-            break;
-          }
-          setState("retrying");
-          await sleep(RETRY_MS);
-        }
-      }
-    })();
+    void runScreenFeed({
+      signal, once, gapMs, draw: present,
+      read: after => readScreenFrame(computer, { display, maxWidth, quality, after, ...((once || gapMs > 0) && { wait: false }) }, signal),
+      report: (value, error) => {
+        setState(value);
+        setError(error ?? null);
+      },
+    }).finally(stop);
 
     return () => {
-      alive = false;
+      controller.abort();
       waiting.current?.finish(false);
+      stop();
     };
-  }, [enabled, display, maxWidth, quality, gapMs, run]);
+  }, [enabled, computer, display, maxWidth, quality, gapMs, once, run]);
 
   /** The image in `slot` was drawn (or failed to load, with `promote` false). */
   function drawn(slot: SlotName, id: number, promote = true) {
@@ -110,12 +85,17 @@ export function useFeed({ enabled, display, maxWidth, quality, gapMs = 0 }: { en
     if (wait && wait.id === id && held?.id === id) wait.finish(promote);
   }
 
-  function retry() {
+  const retry = useCallback(() => {
     setError(null);
     setState((held) => (held === "failed" ? "retrying" : held));
     setRun((n) => n + 1);
-  }
+  }, []);
 
-  const hasPicture = !!pictures[pictures.front];
-  return { pictures, size, state, error, hasPicture, drawn, retry };
+  // A pending image supplies the initial layout so it can decode. Keep the front image's
+  // geometry until the swap, and never draw the previous display under the new display's controls.
+  const a = !display || pictures.a?.display === display ? pictures.a : null;
+  const b = !display || pictures.b?.display === display ? pictures.b : null;
+  const visible = a === pictures.a && b === pictures.b ? pictures : { a, b, front: pictures.front };
+  const picture = visible[visible.front];
+  return { pictures: visible, size: picture ?? a ?? b, state, error, hasPicture: !!picture, drawn, retry };
 }

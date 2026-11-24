@@ -5,11 +5,17 @@ import { router } from "expo-router";
 import { useState } from "react";
 import { StyleSheet, View } from "react-native";
 import { fitPicture } from "@/features/remote/gestures";
+import { useScreenKey } from "@/features/pane/watching";
 import { Button, radius, space, useOnShow, useTheme } from "@/ui";
 import { GateCover, gateLabel, ScreenPicture, useLiveScreen } from "./LiveScreen";
 import { screenLabel, WORDS } from "./screenLive";
 
 export function PaneScreen() {
+  const host = useScreenKey();
+  return <ScreenTab key={host} />;
+}
+
+function ScreenTab() {
   const { colors } = useTheme();
   const shown = useOnShow();
   const screen = useLiveScreen("pane", { role: "live", visible: shown });

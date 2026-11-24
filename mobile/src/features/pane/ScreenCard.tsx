@@ -1,16 +1,12 @@
-// The computer's screen as a card in a chat: where a bot showed the screen, the chat draws this. It
-// shows the screen live, at the screen's own proportions and the chat's width, and a tap opens the
-// side pane on that tab. For looking only: it sends no pointer or keyboard input.
-//
-// Only the card of the pane's newest screen tab is live, and only while it can be seen: its screen is
-// on show, the app is in front, the card is in the chat's view and the pane doesn't show the screen
-// over it. The rules are in screenLive.ts.
+// The newest screen card takes one still while visible. Tapping opens the live pane.
+// Older cards keep their own still. Cards never send input or keep the phone awake.
 import { useState } from "react";
 import { StyleSheet, useWindowDimensions, View, type ViewStyle } from "react-native";
 import type { PanePanel } from "@/link/types";
 import { useApp } from "@/state/store";
+import { useScreenKey } from "@/features/pane/watching";
 import { api, attempt } from "@/state/link";
-import { Dot, HoldMenu, radius, space, T, Tap, useTheme } from "@/ui";
+import { HoldMenu, radius, space, T, Tap, useTheme } from "@/ui";
 import { GateCover, gateLabel, ScreenPicture, useLiveScreen } from "./LiveScreen";
 import { cardRole, cardSize, screenLabel, WORDS } from "./screenLive";
 
@@ -27,7 +23,12 @@ export type ScreenCardProps = {
 /** The card is never taller than this share of the window. */
 const MAX_HEIGHT_SHARE = 0.5;
 
-export function ScreenCard({ chatId, panel, onOpen, inView }: ScreenCardProps) {
+export function ScreenCard(props: ScreenCardProps) {
+  const host = useScreenKey();
+  return <Card key={JSON.stringify([host, props.panel.id])} {...props} />;
+}
+
+function Card({ chatId, panel, onOpen, inView }: ScreenCardProps) {
   const { colors } = useTheme();
   const loaded = useApp((state) => !!state.chats[chatId]);
   const pane = useApp((state) => state.chats[chatId]?.pane);
@@ -52,7 +53,7 @@ export function ScreenCard({ chatId, panel, onOpen, inView }: ScreenCardProps) {
   };
   // Before the chat is known (another computer was just chosen), nothing of a picture shows.
   const content = !open ? <GateCover gate={screen.gate} /> : role === "waiting" ? null : <ScreenPicture screen={screen} />;
-  const label = open ? screenLabel("card", screen.look) : gateLabel(screen.gate);
+  const label = open && role !== "waiting" ? screenLabel("card", screen.look) : gateLabel(screen.gate);
 
   return (
     <View onLayout={({ nativeEvent }) => setWidth(nativeEvent.layout.width)} style={{ gap: space.sm }}>
@@ -73,14 +74,6 @@ export function ScreenCard({ chatId, panel, onOpen, inView }: ScreenCardProps) {
         <T variant="footnote" color="muted" numberOfLines={1} style={{ flex: 1 }}>
           {panel.title || WORDS.title}
         </T>
-        {screen.look.live && (
-          <View style={styles.live}>
-            <Dot tone="success" size={7} />
-            <T variant="footnote" color="muted">
-              {WORDS.live}
-            </T>
-          </View>
-        )}
       </View>
     </View>
   );
@@ -88,5 +81,4 @@ export function ScreenCard({ chatId, panel, onOpen, inView }: ScreenCardProps) {
 
 const styles = StyleSheet.create({
   caption: { flexDirection: "row", alignItems: "center", gap: space.sm, paddingHorizontal: space.xs },
-  live: { flexDirection: "row", alignItems: "center", gap: space.xs },
 });
