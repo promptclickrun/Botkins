@@ -137,6 +137,19 @@ const SAVE_SOON_MS = 750;
 const unsaved = new Set();
 let exitHooked = false;
 
+/** One message that holds a batch (`all`, the first message among them), prefixed so the model reads every one. */
+function mergeMessages(first, all) {
+  const attachments = [...new Map(all.flatMap((each) => each.attachments).map((a) => [a.path, a])).values()];
+  return {
+    ...first,
+    text: mergedPrompt(all.map((each) => quotedPrompt(each.text, each.quote))),
+    quote: undefined,
+    attachments,
+    mentions: all.flatMap((each) => each.refs.list),
+    context: all.map((each) => each.refs.context).filter(Boolean).join("") || undefined,
+  };
+}
+
 export class Workspace {
   /**
    * @param providers  The model providers (desktop/providers). Tests may pass a function that
@@ -204,6 +217,9 @@ export class Workspace {
     // Queued messages share the atomic workspace write with the run that consumes them.
     this.queues = new Map(Object.entries(this.state.pendingMessages ?? {}));
     delete this.state.pendingMessages;
+    // Detached questions are kept apart from the live waits of turns, which a restart ends.
+    this.interactions.restore(this.state.detachedQuestions);
+    delete this.state.detachedQuestions;
     this.state.panels ??= [];
     // Pages of html blocks in panels and cards (desktop/frames.mjs)
     this.frames = new Frames(this);
@@ -350,7 +366,7 @@ export class Workspace {
     for (const run of this.state.runs) {
       if (run.status !== "Working" || this.active.has(run.chatId)) continue;
       const chat = this.chat(run.chatId);
-      const message = chat.messages.find((m) => m.role === "user" && m.runId === run.id);
+      const message = this.rejoined(chat, run, chat.messages.find((m) => m.role === "user" && m.runId === run.id));
       turns.push(this.startTurn(chat, this.bot(chat.botId), message, run, true));
     }
     for (const chatId of this.queues.keys()) {
@@ -395,7 +411,11 @@ export class Workspace {
     this.artifacts?.batch(() => {
       for (const chat of this.state.chats) this.artifactEvents.messages(chat);
     });
-    const persisted = this.queues.size ? { ...this.state, pendingMessages: Object.fromEntries(this.queues) } : this.state;
+    const detachedQuestions = this.interactions.detachedViews();
+    const persisted =
+      this.queues.size || detachedQuestions.length
+        ? { ...this.state, ...(this.queues.size && { pendingMessages: Object.fromEntries(this.queues) }), ...(detachedQuestions.length && { detachedQuestions }) }
+        : this.state;
     writeFileSync(this.file + ".tmp", JSON.stringify(persisted), {
       mode: 0o600,
     });
@@ -853,15 +873,20 @@ export class Workspace {
       chat.messages.push(added);
       all.push({ text: added.text, quote: added.quote, attachments, refs });
     }
-    const attachments = [...new Map(all.flatMap((each) => each.attachments).map((a) => [a.path, a])).values()];
-    return {
-      ...first,
-      text: mergedPrompt(all.map((each) => quotedPrompt(each.text, each.quote))),
-      quote: undefined,
-      attachments,
-      mentions: all.flatMap((each) => each.refs.list),
-      context: all.map((each) => each.refs.context).filter(Boolean).join("") || undefined,
-    };
+    return mergeMessages(first, all);
+  }
+
+  /**
+   * The message a turn started from, again: the first bubble of a merged batch, joined with the bubbles
+   * saved behind it (`joined`). A turn that restarts before its provider input is checkpointed would
+   * otherwise read only the first one.
+   */
+  rejoined(chat, run, first) {
+    if (!first) return first;
+    const rest = chat.messages.filter((m) => m.role === "user" && m.joined && m.steeredRunId === run.id);
+    if (!rest.length) return first;
+    const each = (m) => ({ text: m.text, quote: m.quote, attachments: m.attachments ?? [], refs: { list: m.mentions ?? [], context: m.context } });
+    return mergeMessages(first, [each(first), ...rest.map(each)]);
   }
 
   /**
@@ -1712,7 +1737,8 @@ export class Workspace {
         : this.executeTurn(chat, bot, prompt, run, task),
     );
     if (task.retry && !this.closing && !task.stopped) {
-      const message = chat.messages.find((m) => m.role === "user" && m.runId === run.id) ?? task.message;
+      const found = chat.messages.find((m) => m.role === "user" && m.runId === run.id);
+      const message = found ? this.rejoined(chat, run, found) : task.message;
       return this.startTurn(chat, bot, message, run, true);
     }
   }
@@ -1978,7 +2004,8 @@ export class Workspace {
    * message. Returns true when the turn was stopped (or Botkins is closing) and must end now.
    */
   async keepMoving(session, chat, bot, run, task, said) {
-    const chain = { count: 0, stalls: 0, signature: undefined };
+    // A run resumed after a restart picks its chain up where the last continuation left it (kept with the run's recovery record): the limits are for the whole turn.
+    const chain = { count: 0, stalls: 0, signature: undefined, ...run.recovery?.chain };
     let text = said;
     try {
       for (;;) {
@@ -1991,6 +2018,7 @@ export class Workspace {
         if (move.reason === "plan") chain.signature = move.signature;
         else chain.stalls++;
         run.continued = { count: chain.count, limit: MAX_CONTINUATIONS, reason: move.reason, open: move.open.length };
+        (run.recovery ??= {}).chain = { ...chain };
         // The new reply stands apart from what came before it, and this is no recovery of the turn.
         Object.assign(task, { recovering: false, showingDraft: false, stream: "", streamTime: undefined, sourceMessageId: undefined, sourceText: undefined,
           streamMessage: undefined, streamBreak: false, thinking: "", replyFrom: chat.messages.length });

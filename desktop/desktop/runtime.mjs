@@ -1335,7 +1335,7 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
       // A routine's script stops with Botkins; its run is ended when Botkins opens again.
       routines.stopScripts();
       closeWorkspaceSocket?.();
-      workspace.interactions.cancel(undefined, { detached: true });
+      workspace.interactions.cancel(undefined, { detached: true, keep: true });
       workspace.connects.close();
       workspace.mcpApps.close();
       clearInterval(timer);
