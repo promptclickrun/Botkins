@@ -26,6 +26,12 @@ export const fromLine = (agent: Pick<MarketAgent, "builtIn" | "marketplaceName">
 // An id is opaque and may hold any character, so it travels as a query parameter.
 export const agentHref = (id: string) => ("/market/agent?id=" + encodeURIComponent(id)) as unknown as Href;
 
+/** A template's suggested pairing, as a title: "Routine · Weekdays at 8:00", or "Proactive". */
+export function pairingTitle(pairing: NonNullable<MarketAgent["pairing"]>) {
+  if (pairing.kind === "routine") return ["Routine", pairing.cadence].filter(Boolean).join(" · ");
+  return "Proactive";
+}
+
 export function templateAvailability(supported: boolean, online: boolean) {
   if (!online) return "Connect to your computer";
   if (!supported) return "Update the app on your computer";
