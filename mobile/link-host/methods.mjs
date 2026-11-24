@@ -80,7 +80,7 @@ export const REMOTE_METHODS = new Set([
   "addSection", "renameSection", "deleteSection",
   "saveTemplate", "renameTemplate", "deleteTemplate", "exportTemplateText", "importTemplateText",
   // Chats
-  "createChat", "createGroupChat", "setChatFlags", "renameChat", "regenerateChatTitle", "deleteChat", "forkChat", "reactToMessage", "warmChat",
+  "createChat", "createGroupChat", "setChatFlags", "markChatsRead", "renameChat", "regenerateChatTitle", "deleteChat", "forkChat", "reactToMessage", "warmChat",
   "setChatProject", "startProjectChat", "recordVoiceLine",
   "send", "stop", "unqueue", "sendNow", "retry", "compact", "sideQuestion", "respond", "clearApprovals",
   "mentionables", "catalog", "linkPreview",
@@ -465,6 +465,12 @@ function catalogArgs(method, args) {
  * path kept is the file's real one. Its mentions are cleaned to the shapes above.
  */
 export function remoteArgs(method, args, { deviceId, uploads } = {}) {
+  if (method === "markChatsRead") {
+    if (args.length !== 1 || !Array.isArray(args[0]) || args[0].length > 2000 || !args[0].every((id) => clean(id))) {
+      throw new Error("Choose valid chats to mark as read.");
+    }
+    return [[...new Set(args[0])]];
+  }
   if (method === "regenerateChatTitle") {
     if (args.length !== 1 || !clean(args[0])) throw new Error("Choose a chat to regenerate its title.");
     return args;

@@ -54,6 +54,7 @@ function ChatRow({ chat, bots, sections, actions }: { chat: ChatSummary; bots: M
   const bot = bots.get(chat.botId);
   const live = activityLabel(state);
   const group = chat.botIds && chat.botIds.length > 1;
+  const canView = useCan("agents", "view");
   const canChat = useCan("agents", "chat");
   const me = myself(usePart("meta"));
   const speaker = chat.last?.role === "user" ? "You" : group && chat.last?.botId ? bots.get(chat.last.botId)?.name : undefined;
@@ -80,15 +81,16 @@ function ChatRow({ chat, bots, sections, actions }: { chat: ChatSummary; bots: M
         { id: "archive", title: "Archive", image: "archivebox" },
         ...ends,
       ];
+  const viewOnlyMenu = canView && !chat.archived && chat.unread ? [{ id: "unread", title: "Mark as read", image: "envelope.open" }] : [];
   return (
     <>
     <HoldMenu
-      actions={canChat ? menu : []}
+      actions={canChat ? menu : viewOnlyMenu}
       onPressAction={({ nativeEvent }) => {
         const action = nativeEvent.event;
         if (runSectionChoice(chat, action, prompt.ask)) return;
         if (action === "pin") void attempt(api.setChatFlags(chat.id, { pinned: !chat.pinned }));
-        else if (action === "unread") void attempt(api.setChatFlags(chat.id, { unread: !chat.unread }));
+        else if (action === "unread") void attempt(api.setChatFlags(chat.id, { unread: canChat ? !chat.unread : false }));
         else if (action === "archive") void attempt(api.setChatFlags(chat.id, { archived: true }), "Archived");
         else if (action === "restore") void attempt(api.setChatFlags(chat.id, { archived: false }), "Restored");
         else if (action === "rename") rename(chat, prompt.ask);

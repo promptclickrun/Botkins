@@ -1,7 +1,7 @@
 import { storageKey } from "./storage";
 import { useBotDrag } from "./useBotDrag";
 import { useChatDrag } from "./useChatDrag";
-import { chatGroups, hasChatSections, movedSection, type ChatGroup } from "./chatSections";
+import { chatGroups, chatsPageUnreadChats, hasChatSections, movedSection, type ChatGroup } from "./chatSections";
 import {
   useEffect,
   useLayoutEffect,
@@ -51,7 +51,7 @@ import {
 import { BotAvatar, activityLabel, botActivity, chatActivity } from "./Avatar";
 import type { Bot, Chat, Section, State } from "./types";
 import { memberTeam, teamCan } from "./teamAccess";
-import { allUnreadChats, botUnreadChats, unreadBotIds } from "./unread";
+import { botUnreadChats, unreadBotIds } from "./unread";
 import "./agents.css";
 import "./groups.css";
 
@@ -442,8 +442,8 @@ export function botMenuItems(state: State, b: Bot, actions: PageActions, ask: As
   ];
   const kept = items.filter((item) => {
     if (item === "separator") return true;
-    if (item.label === "New chat" || item.label === "Mark as read") return teamCan(state, "agents", "chat");
-    if (item.label === "Bot page") return teamCan(state, "agents");
+    if (item.label === "New chat") return teamCan(state, "agents", "chat");
+    if (item.label === "Bot page" || item.label === "Mark as read") return teamCan(state, "agents");
     if (item.label === "Duplicate") return teamCan(state, "agents", "create");
     if (item.label.startsWith("Delete")) return teamCan(state, "agents", "delete");
     return teamCan(state, "agents", "manage");
@@ -1054,8 +1054,19 @@ export function ChatRow({
   const menu = useMenu();
   const dialogs = useAsk();
   if (!b) return null;
-  const controls = teamCan(state, "agents", "chat") ? actions : undefined;
-  const items = () => chatMenuItems(state, chat, controls!, dialogs.ask);
+  const canChat = teamCan(state, "agents", "chat");
+  const canMarkRead = !canChat && !!chat.unread && teamCan(state, "agents");
+  const controls = canChat || canMarkRead ? actions : undefined;
+  const items = (): MenuItem[] =>
+    canChat
+      ? chatMenuItems(state, chat, controls!, dialogs.ask)
+      : [
+          {
+            label: "Mark read",
+            icon: MailOpen,
+            run: () => run(controls!, api().setChatFlags(chat.id, { unread: false })),
+          },
+        ];
   const last = chat.messages.at(-1)?.text;
   const row = (
     <button className={"row chatrow" + (chat.unread ? " unread" : "")} onClick={() => open(chat.id)}>
@@ -1072,7 +1083,7 @@ export function ChatRow({
       <span className="rowtext">
         <span className="rowtop">
           <strong>
-            {chat.pinned && controls && <Pin size={12} className="row-pin" aria-label="Pinned" />}
+            {chat.pinned && canChat && controls && <Pin size={12} className="row-pin" aria-label="Pinned" />}
             {chat.title}
           </strong>
           <time>{shortTime(chat.time)}</time>
@@ -1177,7 +1188,7 @@ export function ChatsPage({
   const dialogs = useAsk();
   const drag = useChatDrag(state.chats, (e) => runSection(actions, Promise.reject(e)));
   const chats = state.chats;
-  const unread = allUnreadChats(chats).length;
+  const unread = chatsPageUnreadChats(chats).length;
   const archived = chats.filter((c) => c.archived).length;
   // Sections are there only when the computer in use keeps them ("chat-sections-v1").
   const sections = hasChatSections(state) ? state.chatSections ?? [] : undefined;
@@ -1261,7 +1272,7 @@ export function ChatsPage({
               </button>
             ))}
           </div>
-          {unread > 0 && teamCan(state, "agents", "chat") && (
+          {unread > 0 && teamCan(state, "agents") && (
             <button className="ghost chat-mark-read" onClick={() => actions.markAllRead()}>
               <MailOpen size={14} />
               Mark all as read

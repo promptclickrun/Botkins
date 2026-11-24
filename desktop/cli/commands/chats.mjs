@@ -224,6 +224,21 @@ export const chatsCommands = {
           context.print(await context.client.call("chats.flags", one(context, CHAT), patch), (chat) => named(chat) + ": " + (state(chat) || "no flags") + ".");
         },
       },
+      read: {
+        summary: "Mark one or more chats as read",
+        usage: "botkins chats read [<chat>…] [--bot <bot>] [--all]",
+        options: {
+          bot: { type: "string", value: "bot", about: "Mark every unread chat of this bot as read" },
+          all: { type: "boolean", about: "Mark every unread chat as read" },
+        },
+        async run(context) {
+          const { bot, all } = context.options;
+          const modes = Number(context.args.length > 0) + Number(bot !== undefined) + Number(!!all);
+          if (modes !== 1) throw usage("Give one or more chats, --bot <bot>, or --all.");
+          const done = await context.client.call("chats.read", context.args, { ...(bot !== undefined && { bot }), ...(all && { all: true }) });
+          context.print(done, (result) => (result.count === 0 ? "No unread chats." : "Marked " + result.count + " chat" + (result.count === 1 ? "" : "s") + " as read."));
+        },
+      },
       project: {
         summary: "Put a chat in a project, or take it out, and set how it works there",
         usage: "botkins chats project <chat> [<project> | --none] [--folder <path>] [--mode <mode>] [--yes]",

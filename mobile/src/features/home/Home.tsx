@@ -10,7 +10,7 @@ import Animated, { FadeIn, useAnimatedRef, useAnimatedScrollHandler, useSharedVa
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { scheduleOnRN } from "react-native-worklets";
 import { markAllChatsRead, openBotChat } from "@/features/chat/open";
-import { allUnreadChats, isUnreadConversation } from "@/features/chat/unread";
+import { allUnreadChats, isUnreadChat } from "@/features/chat/unread";
 import { useSpacesOn } from "@/features/spaces/data";
 import { HomePins } from "@/features/spaces/HomePins";
 import { makeSeenSignal, TodayContent } from "@/features/today/Today";
@@ -274,6 +274,7 @@ export default function Home() {
   const requests = useApp((state) => state.parts.live?.requests);
   const board = usePart("board");
   const panels = usePart("panels");
+  const canView = useCan("agents", "view");
   const canChat = useCan("agents", "chat");
   const canCreate = useCan("agents", "create");
   const canArrange = useCanArrange();
@@ -286,14 +287,16 @@ export default function Home() {
     return pinned.length > 0 ? pinned : shown.slice(0, 3);
   }, [shown]);
   const full = top.length >= TOP.perRow;
-  // Each bot's latest one-to-one chat, and whether any of its chats is unread.
+  // Each bot's latest one-to-one chat for preview, and whether any of its chats lights its unread dot.
   const latest = useMemo(() => {
     const out = new Map<string, { chat?: ChatSummary; unread: boolean }>();
     for (const chat of chats) {
-      if (chat.botIds || !isConversation(chat)) continue;
+      const unread = isUnreadChat(chat);
+      const oneToOne = !chat.botIds && isConversation(chat);
+      if (!unread && !oneToOne) continue;
       const entry = out.get(chat.botId) ?? { unread: false };
-      if (!entry.chat || chat.time > entry.chat.time) entry.chat = chat;
-      if (isUnreadConversation(chat)) entry.unread = true;
+      if (oneToOne && (!entry.chat || chat.time > entry.chat.time)) entry.chat = chat;
+      if (unread) entry.unread = true;
       out.set(chat.botId, entry);
     }
     return out;
@@ -353,7 +356,7 @@ export default function Home() {
           <ServerLinkStatus />
         </View>
         <View style={{ flexDirection: "row", alignItems: "center", gap: space.sm }}>
-          {canChat && hasUnread && <IconButton icon={MailOpen} label="Mark all as read" variant="soft" size={44} onPress={() => void markAllChatsRead()} />}
+          {canView && hasUnread && <IconButton icon={MailOpen} label="Mark all as read" variant="soft" size={44} onPress={() => void markAllChatsRead()} />}
           {canCreate && <IconButton icon={Plus} label="New bot" variant="soft" size={44} onPress={() => router.push("/bot/new")} />}
           <SettingsButton />
         </View>
