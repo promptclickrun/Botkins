@@ -69,6 +69,29 @@ const VOICE_OPTIONS = {
   "same-voice": { type: "boolean", about: "Give the bot no voice of its own: it follows Settings › Voice" },
 };
 
+export async function approvalAction(context, request) {
+  context.stderr.write("The bot asks for your approval to:\n  " + shownText(request.title) + "\n");
+  if (request.dispatch) {
+    if (request.label) context.stderr.write(shownText(request.label) + "\n");
+    context.stderr.write(String(request.detail ?? "").split("\n").map(shownText).join("\n") + "\n");
+  }
+  if (!context.stdin.isTTY || context.json) {
+    context.note("Refused: there is no terminal to ask at. Approve a request at a terminal, in the app's window or on a phone.");
+    return "deny";
+  }
+  if (request.dispatch) {
+    const choice = await ask(context, "1 Allow this time   2 Allow for today   3 Always allow   4 Deny [4] ");
+    switch (choice?.trim()) {
+      case "1": return "approve";
+      case "2": return "today";
+      case "3": return "remember";
+      default: return "deny";
+    }
+  }
+  const choice = await ask(context, context.color.yellow("Approve? ") + "[y/N] ");
+  return /^y(es)?$/i.test(choice?.trim() ?? "") ? "approve" : "deny";
+}
+
 /**
  * Sends one message and shows the reply as it comes. Returns { reply, status }.
  * A bot that asks for an approval or an answer is answered at the terminal, or refused when there is none.
@@ -100,13 +123,7 @@ async function turn(context, chatId, message, { live }) {
       printed = "";
       let answer;
       if (request.kind === "permission") {
-        // What the bot wants to do is shown first, on standard error, also with --json.
-        context.stderr.write("The bot asks for your approval to:\n  " + shownText(request.title) + "\n");
-        if (!context.stdin.isTTY || context.json) {
-          // Nobody to ask: the request is refused. No flag approves it: a yes to a bot's request comes from a person, at a terminal, in the window or on a phone.
-          answer = { action: "deny" };
-          context.note("Refused: there is no terminal to ask at. Approve a request at a terminal, in the app's window or on a phone.");
-        } else answer = { action: /^y(es)?$/i.test((await ask(context, color.yellow("Approve? ") + "[y/N] ")).trim()) ? "approve" : "deny" };
+        answer = { action: await approvalAction(context, request) };
       } else if (!context.stdin.isTTY || context.json) {
         // Nobody to ask: a question is left unanswered.
         answer = { action: "cancel" };
@@ -116,7 +133,7 @@ async function turn(context, chatId, message, { live }) {
         answer = value ? { action: "answer", value } : { action: "cancel" };
       }
       // A yes carries the mark `{ agreed: true }`, which the service needs: it is given only after the person said yes at the terminal.
-      await client.call("chat.respond", ...(answer.action === "approve" ? [request.id, answer, { agreed: true }] : [request.id, answer])).catch((error) => context.note(error.message));
+      await client.call("chat.respond", ...(["approve", "today", "remember"].includes(answer.action) ? [request.id, answer, { agreed: true }] : [request.id, answer])).catch((error) => context.note(error.message));
       continue;
     }
     if (!view.working) {

@@ -18,6 +18,7 @@ import { loadConfig, saveConfig } from "./config.mjs";
 import { changeCounter, ownFolder, startControl } from "./control-start.mjs";
 import { createLog } from "./logs.mjs";
 import { prepareReach } from "./reach.mjs";
+import { installTeamworkPeers } from "../teamwork-peers.mjs";
 import { ProfileManager } from "../profile.mjs";
 import { RemoteHosts } from "../remotehosts.mjs";
 import * as profileLib from "../remote/link-client.mjs";
@@ -118,6 +119,7 @@ export async function startService({ paths, version, trial = false, reach = !tri
       changed: bump,
       log: (line) => log.info(line),
     });
+    installTeamworkPeers(runtime, profile, remote.transport());
     const originalAddBot = runtime.handlers.addBot;
     runtime.handlers.addBot = (data) => {
       const result = originalAddBot(data);

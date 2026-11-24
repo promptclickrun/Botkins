@@ -20,10 +20,10 @@ export default function People() {
   const people = team?.people ?? [];
   const [busy, setBusy] = useState<string | null>(null);
 
-  if (!chat || !capable)
+  if (!chat || !capable || chat.hostDispatch)
     return (
       <Sheet title="People in this chat">
-        <EmptyState title={chat ? "Update the app on your computer" : "This chat is gone"} />
+        <EmptyState title={chat?.hostDispatch ? "This Teamwork chat is private" : chat ? "Update the app on your computer" : "This chat is gone"} />
       </Sheet>
     );
   const me = myself(meta);

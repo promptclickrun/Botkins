@@ -32,7 +32,7 @@ export type CardWorld = {
   bots?: { id: string; name?: string; model?: { provider?: string; model?: string } }[];
   chats?: { id: string; botId: string; botIds?: string[]; temporary?: boolean; panelId?: string; title: string; model?: { provider?: string; model?: string } }[];
   runs?: { id: string; chatId: string; status: string; time: number; finished?: number; detail?: string; ending?: string; scheduleId?: number | null; trigger?: string; panelId?: string; steps?: { name: string; label?: string; status: string; started?: number }[] }[];
-  requests?: { id: string; chatId: string; kind: string; title: string; label?: string; preview?: string; choices?: string[]; freeform?: boolean; remember?: string }[];
+  requests?: { id: string; chatId: string; kind: string; dispatch?: true; title: string; label?: string; preview?: string; choices?: string[]; freeform?: boolean; remember?: string }[];
   streams?: Record<string, unknown>;
   thinking?: Record<string, string | undefined>;
   intents?: Record<string, string | undefined>;

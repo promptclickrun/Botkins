@@ -265,7 +265,7 @@ export default function RunActivity() {
               <Row
                 key={ask.id}
                 leading={<MessageCircle size={18} color={colors.muted} strokeWidth={2.2} />}
-                title={"Asked " + botName(ask.botId) + ": " + ask.message}
+                title={"Asked " + (ask.remote ? ask.remote.botName + " on " + ask.remote.hostName : botName(ask.botId)) + ": " + ask.message}
                 subtitle={ask.reply ?? ask.error ?? ask.intent}
                 subtitleLines={2}
                 trailing={<Badge label={ask.status} tone={TEAM_TONE[ask.status]} />}

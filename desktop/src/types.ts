@@ -181,6 +181,7 @@ export type Message = {
   author?: { memberId: string; name: string };
 };
 export type Chat = {
+  hostDispatch?: true;
   fastMode?: FastMode;
   /** Latest message count advertised by a paired computer, even before its chat page arrives. */
   count?: number;
@@ -304,6 +305,7 @@ export type TeamAsk = {
   botId: string;
   /** The bot that asked. */
   fromBotId: string;
+  remote?: { hostId: string; hostName: string; botName: string };
   message: string;
   expecting?: string;
   /** waiting: queued behind another ask to the same teammate. working: the teammate is on it. */
@@ -678,15 +680,7 @@ declare global {
         },
       ): Promise<void>;
       sideQuestion(id: string, question: string): Promise<string>;
-      respond(
-        id: string,
-        answer: {
-          action: string;
-          /** A saved credential's reference instead of text: the computer puts the value in. */
-          value?: string | CredentialRef;
-          content?: Record<string, unknown>;
-        },
-      ): Promise<void>;
+      respond(id: string, answer: RequestAnswer): Promise<void>;
       clearApprovals(chatId?: string): Promise<void>;
       copyReply(chatId: string): Promise<void>;
       subscribe(fn: (state: State) => void): () => void;
@@ -2058,7 +2052,16 @@ export type FormField = {
   maxLength?: number;
   format?: string;
 };
+/** A cross-host permission is scoped to the source and target bots and hosts shown on the card. */
+export type DispatchAction = "approve" | "today" | "remember" | "deny";
+export type RequestAnswer = {
+  action: DispatchAction | "cancel" | "answer" | "accept";
+  /** A saved credential's reference instead of text: the computer puts the value in. */
+  value?: string | CredentialRef;
+  content?: Record<string, unknown>;
+};
 export type AgentRequest = {
+  dispatch?: true;
   id: string;
   chatId: string;
   botId: string;

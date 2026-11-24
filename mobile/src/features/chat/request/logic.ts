@@ -90,7 +90,8 @@ export function headerLabel(request: AgentRequest, { bot, danger, count }: { bot
 export const foldHint = (open: boolean) => (open ? "Folds the request so you can read the chat" : "Opens the request");
 
 /** The buttons' words. `quiet` is Deny or Dismiss, `main` the card's one main action. */
-export function wordsFor(kind: AgentRequest["kind"]): { quiet: string; main: string; remember?: string } {
+export function wordsFor(kind: AgentRequest["kind"], dispatch = false): { quiet: string; main: string; remember?: string } {
+  if (dispatch && kind === "permission") return { quiet: "Deny", main: "Allow this time", remember: "Always allow" };
   if (kind === "permission") return { quiet: "Deny", main: "Allow once", remember: "Allow for this chat" };
   if (kind === "secure") return { quiet: "Decline", main: "Send securely" };
   return { quiet: "Dismiss", main: "Send answer" };
@@ -107,7 +108,7 @@ export const rememberNote = (remember: string) => "Remembering this approval all
 /** The full request is folded under "Full request" when there is a preview, and shown without one. */
 export function detailMode(request: AgentRequest): "none" | "folded" | "open" {
   if (!request.detail) return "none";
-  return request.preview ? "folded" : "open";
+  return request.preview && !request.dispatch ? "folded" : "open";
 }
 
 /** A question takes a typed answer when the bot allows one, or when it gives no choices to pick. */

@@ -1288,6 +1288,7 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
     tickChatSchedules(workspace);
     if (Date.now() - remindedAt >= 30_000) {
       remindedAt = Date.now();
+      void workspace.teamwork.outgoing.reconcile().catch(error => console.error("Teamwork cancellation:", error.message));
       try {
         // A role, the team or a bot's name may have changed since the routines were last brought in step.
         if (!workspace.proactive.inStep()) workspace.proactive.sync();
@@ -1359,6 +1360,7 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
       stopAnnouncing();
       workspace.closing = true;
       workspace.reactionTurns?.close();
+      workspace.hostDispatch.close();
       updates?.stopAuto?.();
       // A routine's script stops with Botkins; its run is ended when Botkins opens again.
       routines.stopScripts();

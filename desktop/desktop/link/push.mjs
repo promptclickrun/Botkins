@@ -375,6 +375,7 @@ export class Push {
    * owner was invited. `people` is the link's own answer (server.mjs, inChat).
    */
   maySeeChat(device, chat) {
+    if (chat?.hostDispatch && (device.kind === "gadget" || device.memberId)) return false;
     if (!chat) return !device.memberId;
     const person = device.memberId ?? "owner";
     // Without the link's list of who was invited, a chat is its starter's alone.
@@ -391,6 +392,7 @@ export class Push {
     for (const device of targets) {
       // A request only the owner can answer (an approval, a secure input) goes to the owner's devices
       // whoever's chat it is: nobody else can unblock the bot. Any other goes to the chat's people.
+      if (request.dispatch && device.kind === "gadget") continue;
       const ownerOnly = request.kind === "permission" || request.kind === "secure";
       if (ownerOnly ? !!device.memberId : !this.maySeeChat(device, chat)) continue;
       if (!this.wants(device, "requests") || this.present(device.id, request.chatId)) continue;
@@ -414,6 +416,7 @@ export class Push {
   onReminder(sends, targets, reminder, chats) {
     const chat = chats.get(reminder.chatId);
     for (const device of targets) {
+      if (chat?.hostDispatch && device.kind === "gadget") continue;
       if ((device.memberId ?? "owner") !== reminder.person) continue;
       // A request only the owner can answer is the owner's whoever's chat it is. Anything else is for the chat's people.
       if (reminder.ownerOnly ? !!device.memberId : !this.maySeeChat(device, chat)) continue;

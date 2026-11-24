@@ -17,7 +17,7 @@ export default function TeamworkSettings({
 }) {
   return (
     <div className="int-section">
-      <Group footer="A bot can hand part of a request to another bot whose role fits. The helper sees only what it is sent.">
+      <Group footer="A bot can ask a teammate here or on another computer in your profile. The other computer asks you to approve the message before its bot answers.">
         <SwitchRow label="Bots ask each other for help" checked={on} onChange={change} />
       </Group>
       <Group title="Bots" footer={on ? "A bot that doesn't take part neither asks for help nor is asked." : "Turn on Teamwork above to choose which bots take part."}>
