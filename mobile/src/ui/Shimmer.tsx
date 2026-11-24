@@ -13,8 +13,9 @@ import { useIsFocused } from "expo-router";
 import { type ComponentType, type ReactElement, type ReactNode, useEffect, useId, useState } from "react";
 import { AccessibilityInfo, Animated, StyleSheet, useAnimatedValue, View, type ViewProps, type ViewStyle } from "react-native";
 import Svg, { Defs, LinearGradient, Rect, Stop } from "react-native-svg";
+import { trackResource } from "@/state/ledger";
 import { useAppActive } from "@/state/useAppActive";
-import { startShimmerSteps } from "./shimmerSteps";
+import { SHIMMER_MAX_MS, shimmerCoordinator, startShimmerSteps } from "./shimmerSteps";
 
 // The package's types build its class from React Native's old `NativeMethods` mixin, which React
 // Native 0.88's types no longer fit. Its props are these. (It ships natively already: expo-router
@@ -55,19 +56,51 @@ export function Shimmer({ on, children, lit, style }: { on: boolean; children: R
   const front = useAppActive(on && focused && !reduced);
   const [room, setRoom] = useState(0);
   const [width, setWidth] = useState(0);
+  const [expired, setExpired] = useState(false);
+  const [hasSlot, setHasSlot] = useState(false);
   const progress = useAnimatedValue(0, { useNativeDriver: true });
-  const mask = "shimmer-" + useId().replace(/[^a-zA-Z0-9_-]/g, "");
-  const running = on && !reduced && front && focused && width > 0;
+  const rawId = useId();
+  const mask = "shimmer-" + rawId.replace(/[^a-zA-Z0-9_-]/g, "");
+
+  useEffect(() => {
+    if (!on) setExpired(false);
+  }, [on]);
+
+  const eligible = on && !reduced && front && focused && !expired;
+  useEffect(() => {
+    if (!eligible) {
+      setHasSlot(false);
+      return;
+    }
+    const claim = () => setHasSlot(shimmerCoordinator.acquire(rawId));
+    claim();
+    const unsub = shimmerCoordinator.subscribe(claim);
+    return () => {
+      unsub();
+      shimmerCoordinator.release(rawId);
+      setHasSlot(false);
+    };
+  }, [eligible, rawId]);
+
+  const running = eligible && hasSlot && width > 0;
 
   useEffect(() => {
     progress.setValue(0);
     if (!running) return;
-    return startShimmerSteps(progress);
+    const entry = trackResource("animation", "Shimmer", "active-sweep");
+    const stop = startShimmerSteps(progress, {
+      maxMs: SHIMMER_MAX_MS,
+      onDone: () => setExpired(true),
+    });
+    return () => {
+      stop();
+      entry.release();
+    };
   }, [running, progress]);
 
   if (!on) return <View style={style}>{children}</View>;
-  // Less motion: the line in ink, still, as it was drawn before the shimmer.
-  if (reduced) return <View style={style}>{lit}</View>;
+  // Less motion, timed-out long work, or secondary active row: keep the static ink status label.
+  if (reduced || expired || (eligible && !hasSlot)) return <View style={style}>{lit}</View>;
 
   const sweep = progress.interpolate({ inputRange: [0, 1], outputRange: [-BAND, width] });
   const back = progress.interpolate({ inputRange: [0, 1], outputRange: [BAND, -width] });
