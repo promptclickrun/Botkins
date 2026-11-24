@@ -456,6 +456,8 @@ export class Routines {
       if (entry.enabled === false) entry.nextAt = upcoming(entry, now);
     }
     entry.enabled = enabled;
+    // Pausing the routine Botkins keeps for a person is that person's own alerts switch: it is kept there, so it stays as they left it.
+    if (entry.proactive) this.ws.proactive.routineSwitched(this.ws.chat(chatId), enabled);
     this.ws.save();
     return entry;
   }

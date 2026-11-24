@@ -1258,6 +1258,8 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
     if (Date.now() - remindedAt >= 30_000) {
       remindedAt = Date.now();
       try {
+        // A role, the team or a bot's name may have changed since the routines were last brought in step.
+        if (!workspace.proactive.inStep()) workspace.proactive.sync();
         workspace.reminders.tick();
       } catch (error) {
         console.error("Reminders:", error.message);

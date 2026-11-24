@@ -196,6 +196,25 @@ export class Proactive {
     for (const id of new Set([...Object.keys(this.ws.state.settings.proactive.bots), ...Object.keys(this.state.bots)])) this.syncBot(id, now);
     this.ws.save();
   }
+  /**
+   * Whether every routine agrees with its settings as they stand now: false when a role or the team changed, a
+   * bot was renamed, or a saved routine still has an earlier name, until `sync`. It changes and saves nothing,
+   * so the scheduler can ask often.
+   */
+  inStep() {
+    const team = this.ws.teamOf();
+    for (const [botId, config] of Object.entries(this.ws.state.settings.proactive.bots)) {
+      const bot = this.ws.state.bots.find((b) => b.id === botId);
+      if (!bot) return false;
+      for (const person of Object.keys(config.people)) {
+        const found = this.routine(botId, person);
+        const active = this.active(botId, person);
+        if (active !== !!(found && found.entry.enabled !== false)) return false;
+        if (active && found.entry.name !== routineName(bot, person, team)) return false;
+      }
+    }
+    return true;
+  }
   syncBot(botId, now = Date.now()) {
     const config = this.config(botId);
     if (!config || !this.ws.state.bots.some((b) => b.id === botId)) return this.drop(botId);
@@ -282,7 +301,9 @@ export class Proactive {
       }
     this.syncBot(botId);
     this.ws.save();
-    return this.view(botId, by);
+    // The answer goes to the device that called: what another person's check did is not part of it.
+    const { activity: _others, ...own } = this.view(botId, by);
+    return own;
   }
   /** Removing a person's routine turns that person's check off, or it would come back at the next change. */
   routineRemoved(chat) {
@@ -293,6 +314,12 @@ export class Proactive {
     if (entry) entry.on = false;
     delete gate.chatId;
     this.ws.save();
+  }
+  /** Pausing or resuming a person's routine from Routines is their own switch (`on`): the routine then stays as they left it. */
+  routineSwitched(chat, enabled) {
+    const mine = this.owns(chat);
+    const entry = mine && this.config(mine.botId)?.people?.[mine.person];
+    if (entry) entry.on = enabled === true;
   }
   /** What one person's check did, without the keys of what it raised or anything it learned from. */
   activity(botId, person) {

@@ -155,7 +155,9 @@ test("a saved workspace from before is brought over: the routine and its history
   assert.equal(ws.proactive.active("pip", "owner"), true);
   assert.equal(managed(ws).length, 1, "the routine is kept, not made again");
   assert.equal(ws.proactive.routine("pip", "owner").chat.id, "c1");
+  assert.equal(ws.proactive.inStep(), false, "the scheduler sees that the routine still has its earlier name");
   ws.proactive.sync();
+  assert.equal(ws.proactive.inStep(), true);
   assert.equal(managed(ws).length, 1);
   assert.doesNotMatch(managed(ws)[0].entry.name, /Proactive agent/, "its routine is named for the bot");
   assert.match(managed(ws)[0].entry.name, /^Pip looks out for /);
@@ -243,6 +245,12 @@ test("notify off delivers quietly: the alert is in the person's chat with no not
   ws.proactive.setBot("pip", wizard(["owner", "m_avery"]));
   ws.proactive.setBot("pip", { people: { m_avery: { notify: false } } });
   assert.equal(ws.proactive.routine("pip", "m_avery").entry.notify, false);
+  // Pausing a person's routine from Routines is their own switch, so the scheduler leaves it paused.
+  ws.panels.routines.setEnabled(ws.proactive.routine("pip", "owner").chat.id, null, false);
+  assert.equal(ws.proactive.config("pip").people.owner.on, false);
+  assert.equal(ws.proactive.inStep(), true);
+  ws.panels.routines.setEnabled(ws.proactive.routine("pip", "owner").chat.id, null, true);
+  assert.equal(ws.proactive.config("pip").people.owner.on, true);
   assert.notEqual(ws.proactive.routine("pip", "owner").entry.notify, false);
   const averysChat = chatOf(ws, "pip", "m_avery");
   failedRun(ws, "a", averysChat, "Avery report");
@@ -325,7 +333,10 @@ test("the host enforces it: the owner sets anyone, a member only their own entry
   // A role that no longer sees the bot pauses that person's check, and brings it back with the role.
   await set(owner, "pip", { people: { m_blake: { on: true } } });
   current.roles.find((r) => r.id === "r_see").bots = [];
+  assert.equal(ws.proactive.inStep(), false, "the scheduler sees the role change");
+  assert.equal(ws.proactive.wake("pip", "manual", Date.now(), "m_blake"), null, "and even before it does, the check doesn't wake");
   ws.proactive.sync();
+  assert.equal(ws.proactive.inStep(), true);
   assert.equal(ws.proactive.routine("pip", "m_blake").entry.enabled, false);
   assert.equal(ws.proactive.active("pip", "m_blake"), false);
   current.roles.find((r) => r.id === "r_see").bots = ["pip"];
