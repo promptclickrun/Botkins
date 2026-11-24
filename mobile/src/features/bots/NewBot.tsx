@@ -3,7 +3,7 @@ import { Bot as BotIcon, FileUp, LayoutTemplate, Palette, Shuffle } from "lucide
 import { type ReactNode, useEffect, useState } from "react";
 import { ScrollView, View } from "react-native";
 import Animated, { FadeIn } from "react-native-reanimated";
-import { type BotkinLook, cleanLook, lookOf, needsLooksV2, randomLook } from "@/data/botLook";
+import { type BotkinLook, cleanLook, lookForHost, lookOf, randomLook } from "@/data/botLook";
 import { MarketTemplates } from "./MarketTemplates";
 import { fromLine } from "@/features/market/agents/logic";
 import type { BotInput, BotTemplate, ImportableAgent, MarketAgentTemplate } from "@/link/types";
@@ -12,7 +12,7 @@ import { useCan, useCapability, usePart } from "@/state/hooks";
 import { api, attempt } from "@/state/link";
 import { showToast, useApp } from "@/state/store";
 import { BotAvatar, Button, Chip, EmptyState, Field, Group, HoldMenu, Label, Row, Sheet, space, T, type TextPromptOptions, useTextPrompt } from "@/ui";
-import { LookEditor, useLooksV2 } from "./LookEditor";
+import { LookEditor, useLookOptions } from "./LookEditor";
 import { LookStage } from "./LookStage";
 import { addable } from "./agents";
 import { counter, LIMITS } from "./limits";
@@ -73,9 +73,9 @@ function NewBotEditor() {
   const canManage = useCan("agents", "manage");
   const saved = usePart("templates");
   const [picker, setPicker] = useState<"templates" | "import">();
-  const advanced = useLooksV2();
+  const options = useLookOptions();
   const prompt = useTextPrompt();
-  const [look, setLook] = useState<BotkinLook>(() => randomLook());
+  const [look, setLook] = useState<BotkinLook>(() => randomLook({ capabilities: options.capabilities }));
   const [customizing, setCustomizing] = useState(false);
   const [name, setName] = useState("");
   const [role, setRole] = useState("");
@@ -113,7 +113,7 @@ function NewBotEditor() {
     setRole(next.role);
     setSummary(next.summary ?? "");
     setInstructions(next.instructions);
-    if (next.look) setLook(next.look);
+    if (next.look) setLook(lookForHost(next.look, next.key, options));
     setStart(next);
     setPicker(undefined);
   };
@@ -153,8 +153,7 @@ function NewBotEditor() {
       id = await attempt(api.addBot(bot));
     }
     if (id) {
-      // An older computer can't save eyes or custom colors; it keeps the character and palette.
-      const keep = !advanced && needsLooksV2(look) ? { head: look.head, palette: look.palette === "custom" ? "original" : look.palette } : look;
+      const keep = lookForHost(look, id, options);
       if (canManage) await attempt(api["link.setLook"](id, cleanLook(keep)));
       router.replace({ pathname: "/bot/[id]", params: { id } });
     }
@@ -226,14 +225,14 @@ function NewBotEditor() {
       {prompt.node}
       <LookStage look={look} size={120}>
         <View style={{ flexDirection: "row", gap: space.sm }}>
-          <Button title="Shuffle" icon={Shuffle} variant="secondary" size="sm" onPress={() => setLook(randomLook({ advanced }))} />
+          <Button title="Shuffle" icon={Shuffle} variant="secondary" size="sm" onPress={() => setLook(randomLook(options))} />
           <Button title={customizing ? "Done" : "Customize"} icon={Palette} variant="secondary" size="sm" onPress={() => setCustomizing(!customizing)} accessibilityLabel={customizing ? "Hide look options" : "Customize look"} />
         </View>
       </LookStage>
 
       {customizing && (
         <Animated.View entering={FadeIn.duration(200)}>
-          <LookEditor value={look} onChange={setLook} advanced={advanced} />
+          <LookEditor value={look} onChange={setLook} {...options} />
         </Animated.View>
       )}
 

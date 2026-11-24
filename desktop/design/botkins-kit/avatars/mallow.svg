@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256"><title>Mallow</title><style data-layer="blink">@keyframes bk-blink{0%,92%,100%{transform:scaleY(1)}94%,94.6%{transform:scaleY(.09)}97%{transform:scaleY(1)}}.bk-blink-2297350940{transform-box:fill-box;transform-origin:center;animation:bk-blink 3875ms ease-in-out -940ms infinite}@media(prefers-reduced-motion:reduce){.bk-blink-2297350940{animation:none}}</style>
+<g transform="translate(0 0) scale(1)">
+  <path data-role="shell" fill="#d5a096" d="M43 85C41 64 51 49 72 44C98 38 139 30 166 29C189 27 203 38 211 58C222 85 230 146 229 173C229 194 219 208 201 215C176 225 113 232 83 227C60 222 47 209 43 186C39 157 43 117 43 85Z"/>
+  <path data-role="shell" fill="#edbeb0" d="M48 80C48 62 57 53 75 49C105 42 140 35 166 34C181 34 192 39 200 52C185 45 169 45 150 48C118 52 88 58 71 63C61 66 54 72 48 80Z"/>
+  <path data-role="shell" fill="#ba857c" d="M198 48C208 65 212 104 215 141C217 165 215 184 208 193C198 204 177 210 151 214C119 220 94 223 78 221C103 236 171 227 201 215C221 207 229 193 229 173C230 144 221 84 211 58C207 49 203 45 198 48Z"/>
+  <path data-role="accent" fill="#bc7780" d="M73 64C82 60 91 59 97 61C100 63 97 67 92 68C85 70 77 71 72 70C67 69 68 66 73 64ZM102 61C106 59 112 59 114 61C115 64 110 67 106 67C101 67 99 64 102 61Z"/>
+  <path data-role="shell" fill="#c38e83" d="M61 116C60 100 67 91 83 87C107 81 142 78 161 79C181 80 192 90 196 109C201 133 202 154 199 172C195 190 183 199 166 203C142 209 111 212 91 209C73 207 64 199 61 181C58 164 60 133 61 116Z"/>
+  <path data-role="paper" fill="#f7e3ca" d="M64 114C64 100 70 92 84 89C109 83 139 81 160 81C179 82 188 91 191 109C196 130 196 153 193 169C190 184 181 192 163 196C141 202 112 204 93 201C77 199 68 192 65 177C62 162 63 135 64 114Z"/>
+  <path data-role="paper" fill="#fff0da" d="M71 105C75 96 83 94 96 91C115 87 137 86 153 87C138 88 117 92 99 96C85 99 78 100 71 105Z"/>
+  <g data-layer="eyes" data-anchors="106,153,140" fill="#593515"><ellipse class="bk-blink-2297350940" cx="106" cy="140" rx="8.5" ry="17"/><ellipse class="bk-blink-2297350940" cx="153" cy="140" rx="8.5" ry="17"/></g>
+</g></svg>

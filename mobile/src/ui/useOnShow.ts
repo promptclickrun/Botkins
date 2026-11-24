@@ -10,13 +10,13 @@ const APPEARING_MS = 3000;
  * Whether the screen this component is on can be seen (the rule is in onShow.ts). It follows the
  * navigators from the screen up to the root, and answers true outside any screen.
  */
-export function useOnShow(): boolean {
+export function useOnShow(enabled = true): boolean {
   const navigation = useContext(NavigationContext);
   const routeKey = useContext(NavigationRouteContext)?.key;
   const [seen, setSeen] = useState(true);
 
   useLayoutEffect(() => {
-    if (!navigation || routeKey === undefined) return;
+    if (!enabled || !navigation || routeKey === undefined) return;
     const chain: (typeof navigation)[] = [];
     for (let nav: typeof navigation | undefined = navigation; nav; nav = nav.getParent()) {
       chain.push(nav);
@@ -57,7 +57,7 @@ export function useOnShow(): boolean {
       clearTimeout(check);
       unsubscribe.forEach((stop) => stop());
     };
-  }, [navigation, routeKey]);
+  }, [enabled, navigation, routeKey]);
 
-  return !navigation || routeKey === undefined || seen;
+  return enabled && (!navigation || routeKey === undefined || seen);
 }

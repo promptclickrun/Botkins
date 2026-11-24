@@ -1,9 +1,7 @@
-// Bots are Botkins: one of the design kit's 20 characters in one of its 7 palettes (or in four
-// colors of the person's own), with one of its six eye styles, acting out what the bot is doing. The characters (design/botkins-kit/avatars) are drawn by the kit's own
-// renderer (customize.js and motion/render.js), which returns an animated SVG string for a
-// character, a palette and a state. The same looks and states as the phone app
-// (botkins: src/data/botLook.ts, src/state/hooks.ts).
+// Desktop and phone use the design kit's characters, palettes, eye styles and activity clips.
+// The kit draws the colored shell and expression. Avatar.tsx plays the catalog's poses.
 import { Botkins, BotkinsMotion, BotkinsMotionCatalog } from "virtual:botkins-kit";
+import { makeHeadPicker, originalHeadIds } from "../desktop/link/botkin-heads.mjs";
 import { CUSTOM, type FourColors, isCustom, isFourColors, kitOptions } from "./lookRender";
 import type { BotLook, LookEyes, State } from "./types";
 
@@ -22,6 +20,8 @@ export const HEADS: Head[] = Object.entries(sources)
   }))
   .sort((a, b) => a.id.localeCompare(b.id));
 const heads = new Map(HEADS.map((head) => [head.id, head]));
+const remoteHeads = makeHeadPicker(HEADS);
+export const availableHeads = (remote?: State["remote"]) => remote?.using ? remoteHeads(remote.using.capabilities) : HEADS;
 
 export type Palette = { id: string; name: string; swatch: string | null; colors: FourColors | null };
 /** The palettes. Original keeps each character's own colors, so it has no swatch. */
@@ -50,18 +50,27 @@ export const TEMPLATES: { id: string; name: string; colors: FourColors }[] = [
  */
 const OWN: Record<string, FourColors> = {
   beacon: ["#6e926c", "#a68447", "#ffeba8", "#593515"],
+  brim: ["#ac4d52", "#b58045", "#f9e5be", "#593515"],
+  clover: ["#659579", "#c49a35", "#f7e9c0", "#593515"],
   crumb: ["#e78c13", "#788449", "#ffebab", "#593515"],
+  drip: ["#c15b39", "#d37c27", "#fde5b9", "#593515"],
+  dune: ["#c08d3a", "#ad6f4d", "#fde6ba", "#593515"],
   fathom: ["#7b8d68", "#c09235", "#ffeda4", "#593515"],
+  gloop: ["#9e5c76", "#c66935", "#f5dcc1", "#593515"],
   goggle: ["#da5f21", "#c78733", "#ffeba9", "#593515"],
   luna: ["#6a9173", "#d2a126", "#ffeaa7", "#593515"],
+  mallow: ["#b05a4a", "#a9515c", "#f6dec1", "#593515"],
   morel: ["#db5920", "#dd8c1d", "#ffeaa8", "#593515"],
   muse: ["#72926b", "#b96c3a", "#ffeba8", "#593515"],
   oakley: ["#ba9a3f", "#d07b29", "#ffeca5", "#593515"],
+  orbit: ["#5f809c", "#c17f39", "#f4e1c2", "#593515"],
   pearl: ["#de5e1c", "#ef7d0b", "#ffeca3", "#593515"],
+  pebble: ["#8b9c5e", "#c08a3a", "#f8ebbf", "#593515"],
   pip: ["#d75623", "#e88d13", "#ffe9ac", "#593515"],
   posy: ["#70926a", "#cea528", "#ffeba8", "#593515"],
   pounce: ["#e88012", "#9a9a67", "#ffeea3", "#593515"],
   ramble: ["#6b936d", "#b1a243", "#ffeba6", "#593515"],
+  ripple: ["#5f999b", "#b39347", "#f2e4c5", "#593515"],
   skiff: ["#be9c3c", "#788449", "#ffeaa9", "#593515"],
   spool: ["#b69744", "#c98331", "#ffeca5", "#593515"],
   sprig: ["#d55d25", "#d5b925", "#ffeba5", "#593515"],
@@ -69,6 +78,7 @@ const OWN: Record<string, FourColors> = {
   toast: ["#e88f12", "#d96d21", "#ffeda3", "#593515"],
   wick: ["#ec8b0f", "#788449", "#ffeda3", "#593515"],
   wicket: ["#c19a39", "#788449", "#ffeda5", "#593515"],
+  wisp: ["#7a6a91", "#ae844c", "#f3dec4", "#593515"],
 };
 
 /** The eye styles, in the kit's order. Oval is each character's own. */
@@ -76,15 +86,15 @@ export const EYES: { id: LookEyes; name: string }[] = Botkins.eyeStyles.map((nam
 const eyeNames = new Map(EYES.map((eyes) => [eyes.id as string, eyes.name]));
 
 const hash = (text: string) => [...text].reduce((sum, char) => (sum * 31 + char.charCodeAt(0)) >>> 0, 7);
-/** The look a bot shows until it has one of its own: always the same character for the same bot. */
-export const defaultLook = (botId: string): BotLook => ({ head: HEADS[hash(botId) % HEADS.length].id, palette: "original" });
+/** A bot without a saved look keeps its original character when new heads join the kit. */
+export const defaultLook = (botId: string): BotLook => ({ head: originalHeadIds[hash(botId) % originalHeadIds.length], palette: "original" });
 /**
  * A look at random, the way the phone picks one: Original comes up most (most characters look best
  * in their own colors), then a kit palette, then one of the templates; half the time with eyes.
  */
-export function randomLook(): BotLook {
+export function randomLook(choices: Head[] = HEADS): BotLook {
   const pick = <T,>(list: readonly T[]) => list[Math.floor(Math.random() * list.length)];
-  const head = pick(HEADS).id;
+  const head = pick(choices).id;
   const eyes = Math.random() < 0.5 ? undefined : pick(EYES.slice(1)).id;
   const roll = Math.random();
   if (roll < 0.4) return { head, palette: "original", ...(eyes && { eyes }) };
@@ -93,11 +103,11 @@ export function randomLook(): BotLook {
 }
 
 /** A look for a bot that is being made: a character few of the others have, in its own colors. */
-export function freshLook(others: (BotLook | undefined)[] = []): BotLook {
-  const used = new Map(HEADS.map((head) => [head.id, 0]));
+export function freshLook(others: (BotLook | undefined)[] = [], choices: Head[] = HEADS): BotLook {
+  const used = new Map(choices.map((head) => [head.id, 0]));
   for (const look of others) if (look && used.has(look.head)) used.set(look.head, used.get(look.head)! + 1);
   const fewest = Math.min(...used.values());
-  const free = HEADS.filter((head) => used.get(head.id) === fewest);
+  const free = choices.filter((head) => used.get(head.id) === fewest);
   return { head: free[Math.floor(Math.random() * free.length)].id, palette: "original" };
 }
 
@@ -150,72 +160,101 @@ const CLIP: Record<AvatarState, string> = {
   "needs-input": "Needs input", retrying: "Retrying", completed: "Completed", error: "Error", like: "Like", love: "Love", laugh: "Laugh", sad: "Sad",
   waiting: "Needs input", pending: "Waiting", talking: "Listening", happy: "Completed", sleeping: "Waiting",
 };
-/** True for a state that plays once and holds (an outcome or a reaction). */
-export const playsOnce = (state: AvatarState) => !BotkinsMotionCatalog.states[CLIP[state]].loop;
+// The catalog uses a 256-unit artboard. Percent translations scale with the picture even when
+// a responsive layout resizes it. The kit eases each segment separately.
+const clips = Object.fromEntries(Object.entries(BotkinsMotionCatalog.states).map(([name, clip]) => [name, {
+  frames: clip.poses.map(([x, y, angle]) => ({
+    transform: `translate(${x / 256 * 100}%, ${y / 256 * 100}%) rotate(${angle}deg)`,
+    easing: "ease-in-out",
+  })),
+  timing: { duration: clip.durationMs, iterations: clip.loop ? Infinity : 1, fill: "forwards" as const },
+}]));
+export const motionOf = (state: AvatarState) => clips[CLIP[state]];
 export const clipDuration = (state: AvatarState) => BotkinsMotionCatalog.states[CLIP[state]].durationMs;
 
 /** A key for everything that changes how a look is drawn. */
 export const lookKey = (look: BotLook) => [look.head, look.palette, eyesOf(look), isCustom(look) ? look.colors!.join(",").toLowerCase() : ""].join("|");
 
-// Kit palettes are few, so their drawings are kept for the life of the window. Custom colors
-// change with every drag of the color picker, so only the ones used most recently are kept.
-const RECENT = 80;
-const drawn = new Map<string, string>();
-const drawnCustom = new Map<string, string>();
-/** A kept drawing, moved to the newest end so the ones on screen stay. */
-function recall<T>(map: Map<string, T>, key: string): T | undefined {
-  const value = map.get(key);
-  if (value !== undefined) {
-    map.delete(key);
-    map.set(key, value);
+const eyeGroup = /<g data-layer="eyes"[^>]*>[\s\S]*?<\/g>/;
+type ImageRef = (image: HTMLImageElement | null) => void | (() => void);
+const kitArt = new Map<string, ImageRef>();
+const customArt = new Map<string, ImageRef>();
+
+/** Share just the colored shell, grain and shading across every expression and activity. */
+export function botkinArt(look: BotLook): ImageRef {
+  const head = heads.get(look.head) ?? HEADS[0];
+  const custom = isCustom(look);
+  const key = head.id + "|" + (custom ? look.colors!.slice(0, 3).join(",").toLowerCase() : look.palette);
+  const cache = custom ? customArt : kitArt;
+  let attach = cache.get(key);
+  if (attach) {
+    if (custom) {
+      cache.delete(key);
+      cache.set(key, attach);
+    }
+    return attach;
   }
-  return value;
-}
-function remember<T>(map: Map<string, T>, key: string, value: T, drop?: (value: T) => void) {
-  map.set(key, value);
-  if (map.size <= RECENT) return;
-  const [oldest, gone] = map.entries().next().value!;
-  map.delete(oldest);
-  drop?.(gone);
+  const { palette } = kitOptions(look, "Oval", Botkins.palettes);
+  const svg = Botkins.render(head.source.replace(eyeGroup, ""), "Oval", palette, { reducedMotion: true });
+  const blob = new Blob([svg], { type: "image/svg+xml" });
+  let url: string | undefined;
+  let users = 0;
+  attach = (image) => {
+    if (!image) return;
+    image.src = url ??= URL.createObjectURL(blob);
+    if (custom) {
+      users++;
+      return () => {
+        if (--users === 0) {
+          URL.revokeObjectURL(url!);
+          url = undefined;
+        }
+      };
+    }
+  };
+  cache.set(key, attach);
+  // The color picker can create many shells. A mounted image keeps its URL even after eviction.
+  if (custom && cache.size > 80) cache.delete(cache.keys().next().value!);
+  return attach;
 }
 
-/**
- * A look acting out a state, as an SVG string from the kit's renderer.
- * `still` holds the pose and stops the blinking; `badge: false` leaves the state's badge out.
- */
-export function botkinSvg(look: BotLook, state: AvatarState = "idle", { still = false, badge = true } = {}): string {
-  const key = [lookKey(look), state, still, badge].join("|");
-  const cache = isCustom(look) ? drawnCustom : drawn;
-  let svg = cache === drawn ? drawn.get(key) : recall(drawnCustom, key);
-  if (svg === undefined) {
-    const head = heads.get(look.head) ?? HEADS[0];
-    const clip = CLIP[state] ?? "Idle";
-    // The renderer's options for the look (src/lookRender.ts): its palette or four colors, and its eyes.
-    svg = BotkinsMotion.render(head.source, clip, { ...kitOptions(look, BotkinsMotionCatalog.states[clip].eyes, Botkins.palettes), reducedMotion: still });
-    // The renderer draws the badge last, at a fixed place. Small avatars leave it out.
-    if (!badge) svg = svg.replace(/<g transform="translate\(191 181\)"><circle[^]*?<\/g><\/svg>$/, "</svg>");
-    if (cache === drawn) drawn.set(key, svg);
-    else remember(drawnCustom, key, svg);
+// Let the kit draw only the small expression and badge when a state changes. Keep the same
+// placement and eye anchors that it reads from the original character.
+const faceTemplates = new Map<string, string>();
+function drawFace(look: BotLook, state: AvatarState) {
+  const head = heads.get(look.head) ?? HEADS[0];
+  let template = faceTemplates.get(head.id);
+  if (!template) {
+    const placement = /<g transform="[^"]+">/.exec(head.source)![0];
+    const anchors = /<g data-layer="eyes"[^>]*>/.exec(head.source)![0];
+    template = `<svg><title>${head.name}</title>${placement}${anchors}</g></g></svg>`;
+    faceTemplates.set(head.id, template);
   }
-  return svg;
+  const clip = CLIP[state];
+  const options = kitOptions(look, BotkinsMotionCatalog.states[clip].eyes, Botkins.palettes);
+  const svg = BotkinsMotion.render(template, clip, { ...options, reducedMotion: true });
+  const root = new DOMParser().parseFromString(svg, "image/svg+xml").documentElement;
+  const headLayer = root.querySelector("g")!;
+  const seed = [...head.name].reduce((n, c) => (n * 31 + c.charCodeAt(0)) >>> 0, 0);
+  return {
+    expression: headLayer.innerHTML,
+    badge: headLayer.nextElementSibling?.outerHTML,
+    blinkDuration: 3800 + seed % 1201,
+    blinkDelay: -(seed % 2200),
+  };
 }
 
-const urls = new Map<string, string>();
-const urlsCustom = new Map<string, string>();
-/**
- * The same as a picture address for an <img>. One address per drawing, kept for the life of the
- * window; a custom look's address is let go once many newer ones have been made.
- */
-export function botkinUrl(look: BotLook, state: AvatarState = "idle", options: { still?: boolean; badge?: boolean } = {}): string {
-  const svg = botkinSvg(look, state, options);
-  const cache = isCustom(look) ? urlsCustom : urls;
-  let url = cache === urls ? urls.get(svg) : recall(urlsCustom, svg);
-  if (!url) {
-    url = URL.createObjectURL(new Blob([svg], { type: "image/svg+xml" }));
-    if (cache === urls) urls.set(svg, url);
-    else remember(urlsCustom, svg, url, (gone) => URL.revokeObjectURL(gone));
-  }
-  return url;
+// Chat rows and the picker often show the same expression. Parse its small SVG once. Keep the
+// cache bounded for custom looks while mounted avatars continue to hold their own drawing.
+const faces = new Map<string, ReturnType<typeof drawFace>>();
+export function botkinFace(look: BotLook, state: AvatarState) {
+  const key = lookKey(look) + "|" + CLIP[state];
+  const drawn = faces.get(key);
+  if (drawn) return drawn;
+  const face = drawFace(look, state);
+  faces.set(key, face);
+  if (faces.size > 256) faces.delete(faces.keys().next().value!);
+  return face;
 }
 
 type Live = Pick<State, "requests" | "streams" | "chats"> & Partial<Pick<State, "speakers" | "intents">>;

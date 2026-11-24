@@ -9,21 +9,10 @@ export const SCREEN_CAPABILITY = "screen-v1";
 /** Where the picture is shown: a card in the chat's list, or the side pane's screen tab. */
 export type Place = "card" | "pane";
 export type Route = "direct" | "relay" | null;
-/** A picture at most `maxWidth` pixels wide, at JPEG `quality`, and the next ask no sooner than `gapMs` after the last one began. */
-export type FeedPlan = { maxWidth: number; quality: number; gapMs: number };
-
-/**
- * How large and how often, by place and route. The computer takes widths from 480 to 1920 and
- * qualities from 30 to 85, and sends a picture only when the screen changed, so a still screen costs
- * one short answer per ask. It counts a phone as watching for 5 seconds after its last ask, so every
- * gap stays well under that.
- * - The card is a glance at the chat's width: 640 pixels at a modest quality, at most one picture
- *   every 2 seconds. Through the relay, 480 pixels every 3.5 seconds.
- * - The pane's tab fills the sheet: Settings › Screen's own "Balanced" (1280 at 60), at most two
- *   pictures a second. Through the relay, its "Data saver" size, every 1.5 seconds.
- */
+/** Cards take one still per visible visit. Only the live pane schedules another sample. */
+export type FeedPlan = { maxWidth: number; quality: number; gapMs?: number };
 export const PLANS: Record<Place, { direct: FeedPlan; relay: FeedPlan }> = {
-  card: { direct: { maxWidth: 640, quality: 45, gapMs: 2000 }, relay: { maxWidth: 480, quality: 40, gapMs: 3500 } },
+  card: { direct: { maxWidth: 640, quality: 45 }, relay: { maxWidth: 480, quality: 40 } },
   pane: { direct: { maxWidth: 1280, quality: 60, gapMs: 500 }, relay: { maxWidth: 800, quality: 45, gapMs: 1500 } },
 };
 export const feedPlan = (place: Place, route: Route): FeedPlan => PLANS[place][route === "relay" ? "relay" : "direct"];
@@ -97,6 +86,7 @@ export const WORDS = {
  * - `feed` and `hasPicture`: the picture loop's state, and whether there is a picture to show.
  */
 export type Seen = {
+  place?: Place;
   gate: Gate;
   role: Role;
   wants: boolean;
@@ -118,15 +108,16 @@ export function screenLook(seen: Seen): Look {
   if (!seen.wants) return quiet;
   if (!seen.online) return stale(WORDS.away);
   if (seen.problem !== undefined) return stale(seen.problem || WORDS.cantSee);
-  if (seen.feed === "failed") return stale(WORDS.lost);
+  if (seen.feed === "failed") return stale(seen.place === "card" ? "Preview unavailable" : WORDS.lost);
   if (seen.feed === "retrying") return stale(WORDS.retrying);
   if (!seen.hasPicture) return { ...quiet, busy: true };
-  return { ...quiet, live: true };
+  return { ...quiet, live: seen.place !== "card" && seen.feed === "live" };
 }
 
 /** What VoiceOver reads for the picture. On a live card it says that a tap opens it. */
 export function screenLabel(place: Place, look: Look): string {
-  if (look.live) return place === "card" ? WORDS.title + ", live. Tap to open it in the side pane." : WORDS.title + ", live";
+  if (place === "card" && !look.line) return WORDS.title + ". Tap to open the live screen in the side pane.";
+  if (look.live) return WORDS.title + ", live";
   return WORDS.title + (look.line ? ". " + look.line : "");
 }
 
@@ -152,46 +143,25 @@ const realTimers: Timers = { set: (run, ms) => setTimeout(run, ms), clear: (id) 
  * Who shows the screen on this phone. Each card or tab that asks for pictures holds it, and the
  * release says it stopped (`now`: at once, because the app is going to the background). When the
  * last one lets go, `stop` runs once after `delayMs`, unless another takes hold first.
- * Settings › Screen holds it with `own`: it tells the computer itself when it closes, so while it
- * holds nothing else is said, and once it lets go the cards' stop is owed only for what they ask
- * for after that.
  */
 export function screenWatchers(stop: () => void, delayMs: number, timers: Timers = realTimers) {
   let held = 0;
-  /** A card or tab asked for pictures since the computer was last told. */
-  let owed = false;
   let timer: unknown;
-  const cancel = () => {
-    if (timer === undefined) return;
-    timers.clear(timer);
-    timer = undefined;
-  };
-  const tell = () => {
-    cancel();
-    if (held > 0 || !owed) return;
-    owed = false;
-    stop();
-  };
   return {
-    hold({ own = false }: { own?: boolean } = {}) {
-      held += 1;
-      cancel();
-      if (!own) owed = true;
-      let done = false;
+    hold() {
+      if (timer !== undefined) timers.clear(timer);
+      timer = undefined;
+      held++;
+      let released = false;
       return (now = false) => {
-        if (done) return;
-        done = true;
-        held -= 1;
-        if (held > 0) return;
-        // Settings › Screen told the computer itself, after everything asked before it closed.
-        if (own) owed = false;
-        if (!owed) return;
-        if (now) tell();
-        else
-          timer = timers.set(() => {
-            timer = undefined;
-            tell();
-          }, delayMs);
+        if (released) return;
+        released = true;
+        if (--held > 0) return;
+        if (now) stop();
+        else timer = timers.set(() => {
+          timer = undefined;
+          stop();
+        }, delayMs);
       };
     },
   };

@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { serialize } from "node:v8";
 import { createWindowPush, shapeOf } from "../desktop/window-push.mjs";
-import { applyHot, share } from "../src/hotState.ts";
+import { applyHot, share, WindowState } from "../src/hotState.ts";
 
 const bytes = (value) => serialize(value).length;
 
@@ -269,4 +269,60 @@ test("share matches lists of things with an id by the id, and other lists by pla
   assert.equal(appended.chats[0].messages[0], before.chats[0].messages[0]);
   assert.equal(appended.chats[1], before.chats[1]);
   assert.equal(share(before, structuredClone(before)), before);
+});
+
+test("two streaming chats publish their text to their own rows and activity transitions to the workspace", () => {
+  const window = new WindowState();
+  const input = makeState({ chats: 2, messages: 500 });
+  input.streams = { "chat-0": "", "chat-1": "started" };
+  let workspace = 0, foreground = 0, background = 0;
+  window.subscribe(() => workspace++);
+  window.subscribeText("chat-0", () => foreground++);
+  const leave = window.subscribeText("chat-1", () => background++);
+  window.whole({ ...input, seq: 1 });
+  const history = window.workspace().chats;
+  const send = (seq, fields) => window.hot({ base: 1, seq, fields });
+  let stream = "First paragraph\n\n```js\n";
+  send(2, { streams: { ...input.streams, "chat-0": stream } });
+  assert.equal(workspace, 2, "the first text changes the bot from thinking to replying");
+  for (let i = 0; i < 100; i++) {
+    stream += "const line" + i + " = " + i + ";\n";
+    assert.ok(send(i + 3, { streams: { "chat-0": stream, "chat-1": "started" } }));
+  }
+  assert.equal(window.text("local", "chat-0"), stream);
+  assert.deepEqual([workspace, foreground, background], [2, 102, 1]);
+  send(103, { streams: { "chat-0": stream, "chat-1": "background reply" } });
+  assert.deepEqual([workspace, foreground, background], [2, 102, 2]);
+  assert.equal(window.workspace().chats, history);
+  leave();
+  // A mid-turn message and cleared live tail arrive together. Old text never moves onto a new turn or host.
+  const final = stream + "```";
+  const chats = structuredClone(input.chats);
+  chats[0].messages.push({ role: "assistant", text: final, runId: "run-live" });
+  window.whole({ ...input, chats, streams: {}, seq: 104 });
+  assert.equal(window.workspace().chats[0].messages.at(-1).text, final);
+  assert.equal(window.text("local", "chat-0"), "");
+  assert.ok(send(103, { streams: { "chat-0": "old" } }));
+  window.whole({ ...input, seq: 105, remote: { using: { id: "remote" } }, streams: { "chat-0": "other host" } });
+  assert.equal(window.text("local", "chat-0"), "");
+  assert.equal(window.text("remote", "chat-0"), "other host");
+  assert.equal(background, 2);
+});
+
+test("a missing patch needs a fresh base, and a duplicate or stale patch cannot replace it", () => {
+  const window = new WindowState();
+  const state = makeState({ chats: 1, messages: 1, steps: 1 });
+  const hot = (base, seq, text) => window.hot({ base, seq, fields: { streams: { "chat-0": text } } });
+  window.whole({ ...state, seq: 7 });
+  assert.ok(hot(7, 8, "one"));
+  assert.ok(hot(7, 8, "duplicate"));
+  assert.equal(hot(7, 10, "gap"), false);
+  assert.equal(window.text("local", "chat-0"), "one");
+  assert.equal(hot(11, 12, "unknown base"), false);
+  window.whole({ ...state, seq: 13, streams: { "chat-0": "fresh" } });
+  window.whole({ ...state, seq: 11 });
+  assert.ok(hot(7, 10, "old"));
+  assert.equal(window.text("local", "chat-0"), "fresh");
+  assert.ok(hot(13, 14, "after recovery"));
+  assert.equal(window.text("local", "chat-0"), "after recovery");
 });

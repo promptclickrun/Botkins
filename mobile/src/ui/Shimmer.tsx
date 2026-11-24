@@ -11,8 +11,9 @@
 import MaskedViewClass from "@react-native-masked-view/masked-view";
 import { useIsFocused } from "expo-router";
 import { type ComponentType, type ReactElement, type ReactNode, useEffect, useId, useState } from "react";
-import { AccessibilityInfo, Animated, AppState, StyleSheet, useAnimatedValue, View, type ViewProps, type ViewStyle } from "react-native";
+import { AccessibilityInfo, Animated, StyleSheet, useAnimatedValue, View, type ViewProps, type ViewStyle } from "react-native";
 import Svg, { Defs, LinearGradient, Rect, Stop } from "react-native-svg";
+import { useAppActive } from "@/state/useAppActive";
 import { startShimmerSteps } from "./shimmerSteps";
 
 // The package's types build its class from React Native's old `NativeMethods` mixin, which React
@@ -44,23 +45,14 @@ function useReducedMotion(): boolean {
   return reduced;
 }
 
-function useInFront(): boolean {
-  const [front, setFront] = useState(AppState.currentState === "active");
-  useEffect(() => {
-    const subscription = AppState.addEventListener("change", (next) => setFront(next === "active"));
-    return () => subscription.remove();
-  }, []);
-  return front;
-}
-
 /**
  * `on`: the bot is on this line now. `children`: the line, drawn muted. `lit`: the same line in
  * ink, laid out exactly as `children`. Off, only `children` is drawn.
  */
 export function Shimmer({ on, children, lit, style }: { on: boolean; children: ReactNode; lit: ReactNode; style?: ViewStyle }) {
   const reduced = useReducedMotion();
-  const front = useInFront();
   const focused = useIsFocused();
+  const front = useAppActive(on && focused && !reduced);
   const [room, setRoom] = useState(0);
   const [width, setWidth] = useState(0);
   const progress = useAnimatedValue(0, { useNativeDriver: true });

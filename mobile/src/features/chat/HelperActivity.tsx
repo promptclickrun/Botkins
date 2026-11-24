@@ -3,30 +3,17 @@
 // computer doesn't say which steps were a helper's; the sheet says where to get that.
 import { useLocalSearchParams } from "expo-router";
 import { CircleDashed } from "lucide-react-native";
-import { useEffect, useState } from "react";
+import { useElapsedClock } from "./useElapsedClock";
 import { View } from "react-native";
 import { useCapability, useWatchedChat } from "@/state/hooks";
 import { useApp } from "@/state/store";
 import { duration } from "@/state/time";
-import { Badge, EmptyState, Group, Label, Markdown, Sheet, space, T, type Tone, useOnShow, useTheme } from "@/ui";
+import { Badge, EmptyState, Group, Label, Markdown, Sheet, space, T, type Tone, useTheme } from "@/ui";
 import { helperDetail } from "./helpers";
 import { StepRow } from "./RunActivity";
 import { TIMELINE_V1 } from "./turn";
 
 const TONE: Record<string, Tone> = { Running: "accent", Done: "success", Failed: "danger" };
-
-/** The time now, once a second while `ticking` and the sheet is on show. */
-function useNow(ticking: boolean) {
-  const seen = useOnShow();
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    if (!ticking || !seen) return;
-    setNow(Date.now());
-    const timer = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(timer);
-  }, [ticking, seen]);
-  return now;
-}
 
 export default function HelperActivity() {
   const { colors } = useTheme();
@@ -37,7 +24,7 @@ export default function HelperActivity() {
   const run = running?.id === runId ? running : saved;
   const timeline = useCapability(TIMELINE_V1);
   const ticking = run?.agents?.find((agent) => agent.id === helperId)?.status === "Running";
-  const now = useNow(ticking);
+  const now = useElapsedClock(ticking);
   const detail = run ? helperDetail(run, helperId, timeline, now) : null;
 
   if (!detail)

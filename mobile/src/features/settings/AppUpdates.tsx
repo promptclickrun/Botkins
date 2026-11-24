@@ -11,6 +11,7 @@ import type { AppUpdate } from "@/link/types";
 import { markRestarting, useRestarting } from "@/state/appUpdate";
 import { useCapability, useOnline } from "@/state/hooks";
 import { api, attempt } from "@/state/link";
+import { useAppActive } from "@/state/useAppActive";
 import { useApp } from "@/state/store";
 import { Button, Group, haptic, IconTile, Label, Row, space, useOnShow, useTheme } from "@/ui";
 import { installQuestion, lastLine, UPDATE_CAPABILITY, updateBusy, updateButton, updateLine } from "./updates";
@@ -23,7 +24,7 @@ export function AppUpdates({ name }: { name: string }) {
   const { colors } = useTheme();
   const capable = useCapability(UPDATE_CAPABILITY);
   const online = useOnline();
-  const visible = useOnShow();
+  const visible = useAppActive(useOnShow());
   const serverId = useApp((state) => state.pairing?.serverId);
   const restarting = useRestarting();
   const [update, setUpdate] = useState<AppUpdate>();

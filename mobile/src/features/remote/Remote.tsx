@@ -1,20 +1,20 @@
 // Screen: see the computer's screen from the phone and, when the computer allows it, use its
 // pointer and keyboard. Full screen, on black whatever the theme.
 import * as LocalAuthentication from "expo-local-authentication";
-import { activateKeepAwakeAsync, deactivateKeepAwake } from "expo-keep-awake";
-import { router, Stack } from "expo-router";
+import { useKeepAwake } from "expo-keep-awake";
+import { router, Stack, useIsFocused } from "expo-router";
 import * as ScreenOrientation from "expo-screen-orientation";
 import { Monitor, MonitorOff, RefreshCw, X } from "lucide-react-native";
 import { type ComponentRef, useEffect, useRef, useState } from "react";
-import { ActivityIndicator, AppState, Platform, StyleSheet, type TextInput, useWindowDimensions, View } from "react-native";
+import { ActivityIndicator, Platform, StyleSheet, type TextInput, useWindowDimensions, View } from "react-native";
 import { useKeyboardState } from "react-native-keyboard-controller";
 import { useSharedValue } from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { screenWatch } from "@/features/pane/watching";
+import { useAppActive } from "@/state/useAppActive";
 import type { Meta, ScreenInfo, ScreenInput } from "@/link/types";
-import { usePart } from "@/state/hooks";
-import { api } from "@/state/link";
-import { useApp } from "@/state/store";
+import { useOnline, usePart } from "@/state/hooks";
+import { api, screenInputSender } from "@/state/link";
+import { useScreenKey } from "@/features/pane/watching";
 import { Button, EmptyState, haptic, IconButton, space, T, useShape, useTheme } from "@/ui";
 import { BAR_HIDE_MS, chrome, QUALITY, type QualityId } from "./chrome";
 import { ControlBar, ProblemLine, StatusLine } from "./Controls";
@@ -32,6 +32,15 @@ const remembered: { quality: QualityId; mode: PointerMode } = { quality: "balanc
 const messageOf = (error: unknown, fallback: string) => (error instanceof Error && error.message ? error.message : fallback);
 
 export default function Remote() {
+  const host = useScreenKey();
+  return <RemoteScreen key={host} />;
+}
+
+function RemoteScreen() {
+  const focused = useIsFocused();
+  const active = useAppActive(focused);
+  const online = useOnline();
+  const [displayId, setDisplayId] = useState<string>();
   const meta = usePart("meta");
   const mode = usePart("host")?.screen ?? "off";
   const headless = usePart("host")?.headless === true;
@@ -40,6 +49,8 @@ export default function Remote() {
   const [owner, setOwner] = useState<"checking" | "ok" | "failed">("checking");
   const asking = useRef(false);
   const mounted = useRef(true);
+  const inView = useRef(focused);
+  inView.current = focused;
 
   useEffect(() => {
     mounted.current = true;
@@ -50,34 +61,38 @@ export default function Remote() {
 
   // It has to be the phone's owner: Face ID, Touch ID or the passcode, every time the Screen opens.
   useEffect(() => {
-    if (!needsCheck || owner !== "checking" || asking.current) return;
+    if (!active || !online || !needsCheck || owner !== "checking" || asking.current) return;
     asking.current = true;
     void (async () => {
       try {
         const level = await LocalAuthentication.getEnrolledLevelAsync();
+        if (!mounted.current || !inView.current) return;
         if (level === LocalAuthentication.SecurityLevel.NONE) return setOwner("ok");
         const result = await LocalAuthentication.authenticateAsync({ promptMessage: "Show your computer's screen", cancelLabel: "Cancel" });
+        if (!mounted.current || !inView.current) return;
         if (result.success) setOwner("ok");
         else if (result.error === "user_cancel") {
           // Only the person's own Cancel closes the Screen; an interrupted check offers another try.
-          if (mounted.current) router.back();
+          router.back();
         } else if (result.error === "not_enrolled" || result.error === "passcode_not_set") setOwner("ok");
         else setOwner("failed");
       } catch {
-        setOwner("failed");
+        if (mounted.current && inView.current) setOwner("failed");
       } finally {
         asking.current = false;
       }
     })();
-  }, [needsCheck, owner]);
+  }, [active, online, needsCheck, owner]);
 
+  if (!active) return null;
+  if (!online) return <Gate title="Can't reach your computer" />;
   if (!meta) return <Waiting />;
   if (!supported) return <Gate title="Update the app on your computer to use Screen." />;
   // A headless host has no window to turn it on in: there the phone does it, on the computer's page.
   if (mode === "off") return <Gate title="Screen is off for phones" text={headless ? "Turn it on in Settings, on this computer's page, under Screen." : "Turn it on in the app on your computer, under Phone."} icon />;
   if (owner === "failed") return <Gate title="Couldn't check it's you" action="Try again" onAction={() => setOwner("checking")} />;
   if (owner === "checking") return <Waiting />;
-  return <Viewer mode={mode} meta={meta} />;
+  return <Viewer mode={mode} meta={meta} displayId={displayId} setDisplayId={setDisplayId} />;
 }
 
 function Waiting() {
@@ -109,7 +124,12 @@ function CloseCorner({ themed }: { themed?: boolean }) {
   return <IconButton icon={X} label="Close" size={44} color={chrome.ink} onPress={() => router.back()} style={[position, { backgroundColor: chrome.glass }]} />;
 }
 
-function Viewer({ mode, meta }: { mode: "view" | "control"; meta: Meta }) {
+function KeepScreenAwake() {
+  useKeepAwake(undefined, { suppressDeactivateWarnings: true });
+  return null;
+}
+
+function Viewer({ mode, meta, displayId, setDisplayId }: { mode: "view" | "control"; meta: Meta; displayId?: string; setDisplayId: (id: string) => void }) {
   const insets = useSafeAreaInsets();
   // Half open and flat on a table (iPhone Duo's laptop pose): the picture keeps to the upright half,
   // above the fold, and the controls stay on the half that lies on the table.
@@ -117,21 +137,18 @@ function Viewer({ mode, meta }: { mode: "view" | "control"; meta: Meta }) {
   const { height: windowHeight } = useWindowDimensions();
   const laptop = shape.pose === "laptop" && shape.fold ? shape.fold : null;
   const below = laptop ? Math.max(0, windowHeight - laptop.y) : 0;
-  const link = useApp((state) => state.link);
   const keyboardShown = useKeyboardState((state) => state.isVisible);
   const keyboardHeight = useKeyboardState((state) => state.height);
 
   const [info, setInfo] = useState<ScreenInfo | null>(null);
   const [infoError, setInfoError] = useState<string | null>(null);
   const [infoRun, setInfoRun] = useState(0);
-  const [displayId, setDisplayId] = useState<string>();
   const [quality, setQuality] = useState<QualityId>(remembered.quality);
   const [pointerMode, setPointerMode] = useState<PointerMode>(remembered.mode);
   const [barVisible, setBarVisible] = useState(true);
   const [menuOpen, setMenuOpen] = useState(false);
   const [typing, setTyping] = useState(false);
   const [modifiers, setModifiers] = useState<Modifier[]>([]);
-  const [awake, setAwake] = useState(AppState.currentState !== "background");
   const [note, setNote] = useState<string | null>(null);
 
   const scale = useSharedValue(1);
@@ -141,7 +158,7 @@ function Viewer({ mode, meta }: { mode: "view" | "control"; meta: Meta }) {
   const pointerY = useSharedValue(0.5);
   const [gestures] = useState(() => new ScreenGestures({ scale, x, y, pointerX, pointerY }, { send: () => {}, clicked: () => {}, grabbed: () => {}, showBar: () => {}, touched: () => {} }));
   const failedRef = useRef<(error: unknown) => void>(() => {});
-  const [sender] = useState(() => new InputSender("", (error) => failedRef.current(error)));
+  const [sender] = useState(() => new InputSender(screenInputSender(), (error) => failedRef.current(error)));
   const inputRef = useRef<ComponentRef<typeof TextInput>>(null);
   const hideTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const holdBar = useRef(false);
@@ -149,7 +166,6 @@ function Viewer({ mode, meta }: { mode: "view" | "control"; meta: Meta }) {
 
   // What the computer offers: its displays, whether it can be watched or used, and any problem.
   useEffect(() => {
-    if (!awake) return;
     let alive = true;
     api["link.screen.info"]()
       .then((next) => {
@@ -161,41 +177,18 @@ function Viewer({ mode, meta }: { mode: "view" | "control"; meta: Meta }) {
     return () => {
       alive = false;
     };
-  }, [mode, infoRun, awake]);
+  }, [mode, infoRun]);
 
   const displays = info?.displays ?? [];
   const display = displays.find((item) => item.id === displayId) ?? displays.find((item) => item.primary) ?? displays[0];
-  const control = mode === "control" && info?.canControl !== false;
-  const canView = info?.canView !== false;
+  const canView = info?.canView === true;
   const preset = QUALITY[quality];
-  const feed = useFeed({ enabled: !!info && canView && awake, display: display?.id, maxWidth: preset.maxWidth, quality: preset.quality });
+  const feed = useFeed({ enabled: canView, display: display?.id, maxWidth: preset.maxWidth, quality: preset.quality });
   const target = display?.id ?? feed.size?.display ?? "";
 
-  // The phone stays awake only while a picture is being followed. Once the loop has given up, or the
-  // computer can't be reached, it may sleep again: a phone left on this page must not stay lit.
-  const following = !!info && canView && awake && feed.state !== "failed";
-  useEffect(() => {
-    if (!following) return;
-    void activateKeepAwakeAsync("remote-screen").catch(() => {});
-    return () => {
-      void deactivateKeepAwake("remote-screen").catch(() => {});
-    };
-  }, [following]);
-
-  // The app in the background: the loop stops, and the computer is told.
-  useEffect(() => {
-    const subscription = AppState.addEventListener("change", (state) => {
-      if (state === "background") {
-        gestures.cancel();
-        setAwake(false);
-        void api["link.screen.stop"]().catch(() => {});
-      } else if (state === "active") setAwake(true);
-    });
-    return () => subscription.remove();
-  }, [gestures]);
-
-  // While the Screen is open, a chat's screen cards and the side pane leave telling the computer to it.
-  useEffect(() => screenWatch.hold({ own: true }), []);
+  const ready = feed.state === "live" && !!target && feed.pictures[feed.pictures.front]?.display === target;
+  const canControl = mode === "control" && info?.canControl === true;
+  const control = ready && canControl;
 
   // Leaving the Screen: let go of everything and tell the computer.
   useEffect(
@@ -204,7 +197,6 @@ function Viewer({ mode, meta }: { mode: "view" | "control"; meta: Meta }) {
       sender.close();
       clearTimeout(hideTimer.current);
       clearTimeout(noteTimer.current);
-      void api["link.screen.stop"]().catch(() => {});
     },
     [gestures, sender],
   );
@@ -223,17 +215,6 @@ function Viewer({ mode, meta }: { mode: "view" | "control"; meta: Meta }) {
       void ScreenOrientation.lockAsync(pad && previous !== undefined ? previous : ScreenOrientation.OrientationLock.PORTRAIT_UP).catch(() => {});
     };
   }, []);
-
-  // Back online after the loop gave up: try again by itself.
-  const lastLink = useRef(link);
-  useEffect(() => {
-    const was = lastLink.current;
-    lastLink.current = link;
-    if (was !== "online" && link === "online") {
-      if (feed.state === "failed") feed.retry();
-      if (infoError) setInfoRun((n) => n + 1);
-    }
-  }, [link, feed, infoError]);
 
   function say(text: string) {
     setNote(text);
@@ -265,8 +246,8 @@ function Viewer({ mode, meta }: { mode: "view" | "control"; meta: Meta }) {
   });
 
   useEffect(() => {
-    sender.setDisplay(target);
-  }, [sender, target]);
+    sender.setDisplay(control ? target : "");
+  }, [sender, target, control]);
 
   useEffect(() => {
     const out: GestureOutput = { send: (event) => sender.push(event), clicked: () => haptic.tap(), grabbed: () => haptic.select(), showBar, touched: poke };
@@ -292,11 +273,12 @@ function Viewer({ mode, meta }: { mode: "view" | "control"; meta: Meta }) {
     setQuality(id);
   }
   function chooseDisplay(id: string) {
+    gestures.cancel();
     gestures.resetZoom();
     setDisplayId(id);
   }
 
-  const retrying = feed.state === "retrying" || (link !== "online" && feed.hasPicture);
+  const retrying = feed.state === "retrying";
   let blocked: { title: string; text?: string; action: string; onAction: () => void } | null = null;
   if (infoError && !info) blocked = { title: "Couldn't reach your computer", text: infoError, action: "Retry", onAction: () => setInfoRun((n) => n + 1) };
   else if (info && !canView) blocked = { title: "Can't see the screen", text: info.problem, action: "Retry", onAction: () => setInfoRun((n) => n + 1) };
@@ -304,6 +286,7 @@ function Viewer({ mode, meta }: { mode: "view" | "control"; meta: Meta }) {
 
   return (
     <View style={[styles.fill, { backgroundColor: chrome.stage }]}>
+      {ready && <KeepScreenAwake />}
       <Stack.Screen options={{ statusBarStyle: "light" }} />
       <View style={[styles.fill, { paddingTop: insets.top, paddingLeft: insets.left, paddingRight: insets.right, paddingBottom: laptop ? below : keyboardUp ? keyboardHeight + KEY_BAR_HEIGHT : insets.bottom }]}>
         {!!info?.problem && canView && <ProblemLine text={info.problem} />}
@@ -319,7 +302,7 @@ function Viewer({ mode, meta }: { mode: "view" | "control"; meta: Meta }) {
             showPointer={control && pointerMode === "trackpad" && feed.hasPicture}
             drawn={feed.drawn}
           >
-            <StatusLine visible={barVisible || !!note} top={space.sm} name={meta.name} viewOnly={!control} waiting={!feed.hasPicture} reconnecting={retrying} note={note} />
+            <StatusLine visible={barVisible || !!note} top={space.sm} name={meta.name} viewOnly={!canControl} waiting={!feed.hasPicture} reconnecting={retrying} note={note} />
           </Stage>
         )}
       </View>

@@ -25,6 +25,42 @@ export const HEAD_LIST: BotkinHead[] = [
     ]
   },
   {
+    "id": "brim",
+    "name": "Brim",
+    "tx": 0,
+    "ty": 0,
+    "scale": 1,
+    "left": 100,
+    "right": 146,
+    "y": 173,
+    "ink": "#593515",
+    "shell": "#b75f63",
+    "own": [
+      "#ac4d52",
+      "#b58045",
+      "#f9e5be",
+      "#593515"
+    ]
+  },
+  {
+    "id": "clover",
+    "name": "Clover",
+    "tx": 0,
+    "ty": 0,
+    "scale": 1,
+    "left": 102,
+    "right": 149,
+    "y": 149,
+    "ink": "#593515",
+    "shell": "#639277",
+    "own": [
+      "#659579",
+      "#c49a35",
+      "#f7e9c0",
+      "#593515"
+    ]
+  },
+  {
     "id": "crumb",
     "name": "Crumb",
     "tx": 26.115,
@@ -43,6 +79,42 @@ export const HEAD_LIST: BotkinHead[] = [
     ]
   },
   {
+    "id": "drip",
+    "name": "Drip",
+    "tx": 0,
+    "ty": 0,
+    "scale": 1,
+    "left": 84,
+    "right": 135,
+    "y": 163,
+    "ink": "#593515",
+    "shell": "#c46443",
+    "own": [
+      "#c15b39",
+      "#d37c27",
+      "#fde5b9",
+      "#593515"
+    ]
+  },
+  {
+    "id": "dune",
+    "name": "Dune",
+    "tx": 0,
+    "ty": 0,
+    "scale": 1,
+    "left": 96,
+    "right": 147,
+    "y": 159,
+    "ink": "#593515",
+    "shell": "#c99949",
+    "own": [
+      "#c08d3a",
+      "#ad6f4d",
+      "#fde6ba",
+      "#593515"
+    ]
+  },
+  {
     "id": "fathom",
     "name": "Fathom",
     "tx": 15,
@@ -57,6 +129,24 @@ export const HEAD_LIST: BotkinHead[] = [
       "#7b8d68",
       "#c09235",
       "#ffeda4",
+      "#593515"
+    ]
+  },
+  {
+    "id": "gloop",
+    "name": "Gloop",
+    "tx": 0,
+    "ty": 0,
+    "scale": 1,
+    "left": 96,
+    "right": 148,
+    "y": 139,
+    "ink": "#593515",
+    "shell": "#aa6e86",
+    "own": [
+      "#9e5c76",
+      "#c66935",
+      "#f5dcc1",
       "#593515"
     ]
   },
@@ -93,6 +183,24 @@ export const HEAD_LIST: BotkinHead[] = [
       "#6a9173",
       "#d2a126",
       "#ffeaa7",
+      "#593515"
+    ]
+  },
+  {
+    "id": "mallow",
+    "name": "Mallow",
+    "tx": 0,
+    "ty": 0,
+    "scale": 1,
+    "left": 106,
+    "right": 153,
+    "y": 140,
+    "ink": "#593515",
+    "shell": "#d5a096",
+    "own": [
+      "#b05a4a",
+      "#a9515c",
+      "#f6dec1",
       "#593515"
     ]
   },
@@ -151,6 +259,24 @@ export const HEAD_LIST: BotkinHead[] = [
     ]
   },
   {
+    "id": "orbit",
+    "name": "Orbit",
+    "tx": 0,
+    "ty": 0,
+    "scale": 1,
+    "left": 100,
+    "right": 145,
+    "y": 117,
+    "ink": "#593515",
+    "shell": "#7996ad",
+    "own": [
+      "#5f809c",
+      "#c17f39",
+      "#f4e1c2",
+      "#593515"
+    ]
+  },
+  {
     "id": "pearl",
     "name": "Pearl",
     "tx": 15,
@@ -165,6 +291,24 @@ export const HEAD_LIST: BotkinHead[] = [
       "#de5e1c",
       "#ef7d0b",
       "#ffeca3",
+      "#593515"
+    ]
+  },
+  {
+    "id": "pebble",
+    "name": "Pebble",
+    "tx": 0,
+    "ty": 0,
+    "scale": 1,
+    "left": 118,
+    "right": 166,
+    "y": 153,
+    "ink": "#593515",
+    "shell": "#849459",
+    "own": [
+      "#8b9c5e",
+      "#c08a3a",
+      "#f8ebbf",
       "#593515"
     ]
   },
@@ -237,6 +381,24 @@ export const HEAD_LIST: BotkinHead[] = [
       "#6b936d",
       "#b1a243",
       "#ffeba6",
+      "#593515"
+    ]
+  },
+  {
+    "id": "ripple",
+    "name": "Ripple",
+    "tx": 0,
+    "ty": 0,
+    "scale": 1,
+    "left": 85,
+    "right": 132,
+    "y": 163,
+    "ink": "#593515",
+    "shell": "#598f91",
+    "own": [
+      "#5f999b",
+      "#b39347",
+      "#f2e4c5",
       "#593515"
     ]
   },
@@ -365,6 +527,24 @@ export const HEAD_LIST: BotkinHead[] = [
       "#ffeda5",
       "#593515"
     ]
+  },
+  {
+    "id": "wisp",
+    "name": "Wisp",
+    "tx": 0,
+    "ty": 0,
+    "scale": 1,
+    "left": 104,
+    "right": 148,
+    "y": 176,
+    "ink": "#593515",
+    "shell": "#9182a4",
+    "own": [
+      "#7a6a91",
+      "#ae844c",
+      "#f3dec4",
+      "#593515"
+    ]
   }
 ];
 
@@ -440,18 +620,27 @@ export const PALETTE_LIST: { id: string; name: string; colors: [string, string, 
 /** The picture of each head in each palette, without eyes. */
 export const HEAD_IMAGES: Record<string, Record<string, number>> = {
   "beacon": { "original": require("../../assets/botkins/beacon-original.webp"), "terracotta": require("../../assets/botkins/beacon-terracotta.webp"), "honey": require("../../assets/botkins/beacon-honey.webp"), "fern": require("../../assets/botkins/beacon-fern.webp"), "tidepool": require("../../assets/botkins/beacon-tidepool.webp"), "bluebell": require("../../assets/botkins/beacon-bluebell.webp"), "fig": require("../../assets/botkins/beacon-fig.webp") },
+  "brim": { "original": require("../../assets/botkins/brim-original.webp"), "terracotta": require("../../assets/botkins/brim-terracotta.webp"), "honey": require("../../assets/botkins/brim-honey.webp"), "fern": require("../../assets/botkins/brim-fern.webp"), "tidepool": require("../../assets/botkins/brim-tidepool.webp"), "bluebell": require("../../assets/botkins/brim-bluebell.webp"), "fig": require("../../assets/botkins/brim-fig.webp") },
+  "clover": { "original": require("../../assets/botkins/clover-original.webp"), "terracotta": require("../../assets/botkins/clover-terracotta.webp"), "honey": require("../../assets/botkins/clover-honey.webp"), "fern": require("../../assets/botkins/clover-fern.webp"), "tidepool": require("../../assets/botkins/clover-tidepool.webp"), "bluebell": require("../../assets/botkins/clover-bluebell.webp"), "fig": require("../../assets/botkins/clover-fig.webp") },
   "crumb": { "original": require("../../assets/botkins/crumb-original.webp"), "terracotta": require("../../assets/botkins/crumb-terracotta.webp"), "honey": require("../../assets/botkins/crumb-honey.webp"), "fern": require("../../assets/botkins/crumb-fern.webp"), "tidepool": require("../../assets/botkins/crumb-tidepool.webp"), "bluebell": require("../../assets/botkins/crumb-bluebell.webp"), "fig": require("../../assets/botkins/crumb-fig.webp") },
+  "drip": { "original": require("../../assets/botkins/drip-original.webp"), "terracotta": require("../../assets/botkins/drip-terracotta.webp"), "honey": require("../../assets/botkins/drip-honey.webp"), "fern": require("../../assets/botkins/drip-fern.webp"), "tidepool": require("../../assets/botkins/drip-tidepool.webp"), "bluebell": require("../../assets/botkins/drip-bluebell.webp"), "fig": require("../../assets/botkins/drip-fig.webp") },
+  "dune": { "original": require("../../assets/botkins/dune-original.webp"), "terracotta": require("../../assets/botkins/dune-terracotta.webp"), "honey": require("../../assets/botkins/dune-honey.webp"), "fern": require("../../assets/botkins/dune-fern.webp"), "tidepool": require("../../assets/botkins/dune-tidepool.webp"), "bluebell": require("../../assets/botkins/dune-bluebell.webp"), "fig": require("../../assets/botkins/dune-fig.webp") },
   "fathom": { "original": require("../../assets/botkins/fathom-original.webp"), "terracotta": require("../../assets/botkins/fathom-terracotta.webp"), "honey": require("../../assets/botkins/fathom-honey.webp"), "fern": require("../../assets/botkins/fathom-fern.webp"), "tidepool": require("../../assets/botkins/fathom-tidepool.webp"), "bluebell": require("../../assets/botkins/fathom-bluebell.webp"), "fig": require("../../assets/botkins/fathom-fig.webp") },
+  "gloop": { "original": require("../../assets/botkins/gloop-original.webp"), "terracotta": require("../../assets/botkins/gloop-terracotta.webp"), "honey": require("../../assets/botkins/gloop-honey.webp"), "fern": require("../../assets/botkins/gloop-fern.webp"), "tidepool": require("../../assets/botkins/gloop-tidepool.webp"), "bluebell": require("../../assets/botkins/gloop-bluebell.webp"), "fig": require("../../assets/botkins/gloop-fig.webp") },
   "goggle": { "original": require("../../assets/botkins/goggle-original.webp"), "terracotta": require("../../assets/botkins/goggle-terracotta.webp"), "honey": require("../../assets/botkins/goggle-honey.webp"), "fern": require("../../assets/botkins/goggle-fern.webp"), "tidepool": require("../../assets/botkins/goggle-tidepool.webp"), "bluebell": require("../../assets/botkins/goggle-bluebell.webp"), "fig": require("../../assets/botkins/goggle-fig.webp") },
   "luna": { "original": require("../../assets/botkins/luna-original.webp"), "terracotta": require("../../assets/botkins/luna-terracotta.webp"), "honey": require("../../assets/botkins/luna-honey.webp"), "fern": require("../../assets/botkins/luna-fern.webp"), "tidepool": require("../../assets/botkins/luna-tidepool.webp"), "bluebell": require("../../assets/botkins/luna-bluebell.webp"), "fig": require("../../assets/botkins/luna-fig.webp") },
+  "mallow": { "original": require("../../assets/botkins/mallow-original.webp"), "terracotta": require("../../assets/botkins/mallow-terracotta.webp"), "honey": require("../../assets/botkins/mallow-honey.webp"), "fern": require("../../assets/botkins/mallow-fern.webp"), "tidepool": require("../../assets/botkins/mallow-tidepool.webp"), "bluebell": require("../../assets/botkins/mallow-bluebell.webp"), "fig": require("../../assets/botkins/mallow-fig.webp") },
   "morel": { "original": require("../../assets/botkins/morel-original.webp"), "terracotta": require("../../assets/botkins/morel-terracotta.webp"), "honey": require("../../assets/botkins/morel-honey.webp"), "fern": require("../../assets/botkins/morel-fern.webp"), "tidepool": require("../../assets/botkins/morel-tidepool.webp"), "bluebell": require("../../assets/botkins/morel-bluebell.webp"), "fig": require("../../assets/botkins/morel-fig.webp") },
   "muse": { "original": require("../../assets/botkins/muse-original.webp"), "terracotta": require("../../assets/botkins/muse-terracotta.webp"), "honey": require("../../assets/botkins/muse-honey.webp"), "fern": require("../../assets/botkins/muse-fern.webp"), "tidepool": require("../../assets/botkins/muse-tidepool.webp"), "bluebell": require("../../assets/botkins/muse-bluebell.webp"), "fig": require("../../assets/botkins/muse-fig.webp") },
   "oakley": { "original": require("../../assets/botkins/oakley-original.webp"), "terracotta": require("../../assets/botkins/oakley-terracotta.webp"), "honey": require("../../assets/botkins/oakley-honey.webp"), "fern": require("../../assets/botkins/oakley-fern.webp"), "tidepool": require("../../assets/botkins/oakley-tidepool.webp"), "bluebell": require("../../assets/botkins/oakley-bluebell.webp"), "fig": require("../../assets/botkins/oakley-fig.webp") },
+  "orbit": { "original": require("../../assets/botkins/orbit-original.webp"), "terracotta": require("../../assets/botkins/orbit-terracotta.webp"), "honey": require("../../assets/botkins/orbit-honey.webp"), "fern": require("../../assets/botkins/orbit-fern.webp"), "tidepool": require("../../assets/botkins/orbit-tidepool.webp"), "bluebell": require("../../assets/botkins/orbit-bluebell.webp"), "fig": require("../../assets/botkins/orbit-fig.webp") },
   "pearl": { "original": require("../../assets/botkins/pearl-original.webp"), "terracotta": require("../../assets/botkins/pearl-terracotta.webp"), "honey": require("../../assets/botkins/pearl-honey.webp"), "fern": require("../../assets/botkins/pearl-fern.webp"), "tidepool": require("../../assets/botkins/pearl-tidepool.webp"), "bluebell": require("../../assets/botkins/pearl-bluebell.webp"), "fig": require("../../assets/botkins/pearl-fig.webp") },
+  "pebble": { "original": require("../../assets/botkins/pebble-original.webp"), "terracotta": require("../../assets/botkins/pebble-terracotta.webp"), "honey": require("../../assets/botkins/pebble-honey.webp"), "fern": require("../../assets/botkins/pebble-fern.webp"), "tidepool": require("../../assets/botkins/pebble-tidepool.webp"), "bluebell": require("../../assets/botkins/pebble-bluebell.webp"), "fig": require("../../assets/botkins/pebble-fig.webp") },
   "pip": { "original": require("../../assets/botkins/pip-original.webp"), "terracotta": require("../../assets/botkins/pip-terracotta.webp"), "honey": require("../../assets/botkins/pip-honey.webp"), "fern": require("../../assets/botkins/pip-fern.webp"), "tidepool": require("../../assets/botkins/pip-tidepool.webp"), "bluebell": require("../../assets/botkins/pip-bluebell.webp"), "fig": require("../../assets/botkins/pip-fig.webp") },
   "posy": { "original": require("../../assets/botkins/posy-original.webp"), "terracotta": require("../../assets/botkins/posy-terracotta.webp"), "honey": require("../../assets/botkins/posy-honey.webp"), "fern": require("../../assets/botkins/posy-fern.webp"), "tidepool": require("../../assets/botkins/posy-tidepool.webp"), "bluebell": require("../../assets/botkins/posy-bluebell.webp"), "fig": require("../../assets/botkins/posy-fig.webp") },
   "pounce": { "original": require("../../assets/botkins/pounce-original.webp"), "terracotta": require("../../assets/botkins/pounce-terracotta.webp"), "honey": require("../../assets/botkins/pounce-honey.webp"), "fern": require("../../assets/botkins/pounce-fern.webp"), "tidepool": require("../../assets/botkins/pounce-tidepool.webp"), "bluebell": require("../../assets/botkins/pounce-bluebell.webp"), "fig": require("../../assets/botkins/pounce-fig.webp") },
   "ramble": { "original": require("../../assets/botkins/ramble-original.webp"), "terracotta": require("../../assets/botkins/ramble-terracotta.webp"), "honey": require("../../assets/botkins/ramble-honey.webp"), "fern": require("../../assets/botkins/ramble-fern.webp"), "tidepool": require("../../assets/botkins/ramble-tidepool.webp"), "bluebell": require("../../assets/botkins/ramble-bluebell.webp"), "fig": require("../../assets/botkins/ramble-fig.webp") },
+  "ripple": { "original": require("../../assets/botkins/ripple-original.webp"), "terracotta": require("../../assets/botkins/ripple-terracotta.webp"), "honey": require("../../assets/botkins/ripple-honey.webp"), "fern": require("../../assets/botkins/ripple-fern.webp"), "tidepool": require("../../assets/botkins/ripple-tidepool.webp"), "bluebell": require("../../assets/botkins/ripple-bluebell.webp"), "fig": require("../../assets/botkins/ripple-fig.webp") },
   "skiff": { "original": require("../../assets/botkins/skiff-original.webp"), "terracotta": require("../../assets/botkins/skiff-terracotta.webp"), "honey": require("../../assets/botkins/skiff-honey.webp"), "fern": require("../../assets/botkins/skiff-fern.webp"), "tidepool": require("../../assets/botkins/skiff-tidepool.webp"), "bluebell": require("../../assets/botkins/skiff-bluebell.webp"), "fig": require("../../assets/botkins/skiff-fig.webp") },
   "spool": { "original": require("../../assets/botkins/spool-original.webp"), "terracotta": require("../../assets/botkins/spool-terracotta.webp"), "honey": require("../../assets/botkins/spool-honey.webp"), "fern": require("../../assets/botkins/spool-fern.webp"), "tidepool": require("../../assets/botkins/spool-tidepool.webp"), "bluebell": require("../../assets/botkins/spool-bluebell.webp"), "fig": require("../../assets/botkins/spool-fig.webp") },
   "sprig": { "original": require("../../assets/botkins/sprig-original.webp"), "terracotta": require("../../assets/botkins/sprig-terracotta.webp"), "honey": require("../../assets/botkins/sprig-honey.webp"), "fern": require("../../assets/botkins/sprig-fern.webp"), "tidepool": require("../../assets/botkins/sprig-tidepool.webp"), "bluebell": require("../../assets/botkins/sprig-bluebell.webp"), "fig": require("../../assets/botkins/sprig-fig.webp") },
@@ -459,6 +648,7 @@ export const HEAD_IMAGES: Record<string, Record<string, number>> = {
   "toast": { "original": require("../../assets/botkins/toast-original.webp"), "terracotta": require("../../assets/botkins/toast-terracotta.webp"), "honey": require("../../assets/botkins/toast-honey.webp"), "fern": require("../../assets/botkins/toast-fern.webp"), "tidepool": require("../../assets/botkins/toast-tidepool.webp"), "bluebell": require("../../assets/botkins/toast-bluebell.webp"), "fig": require("../../assets/botkins/toast-fig.webp") },
   "wick": { "original": require("../../assets/botkins/wick-original.webp"), "terracotta": require("../../assets/botkins/wick-terracotta.webp"), "honey": require("../../assets/botkins/wick-honey.webp"), "fern": require("../../assets/botkins/wick-fern.webp"), "tidepool": require("../../assets/botkins/wick-tidepool.webp"), "bluebell": require("../../assets/botkins/wick-bluebell.webp"), "fig": require("../../assets/botkins/wick-fig.webp") },
   "wicket": { "original": require("../../assets/botkins/wicket-original.webp"), "terracotta": require("../../assets/botkins/wicket-terracotta.webp"), "honey": require("../../assets/botkins/wicket-honey.webp"), "fern": require("../../assets/botkins/wicket-fern.webp"), "tidepool": require("../../assets/botkins/wicket-tidepool.webp"), "bluebell": require("../../assets/botkins/wicket-bluebell.webp"), "fig": require("../../assets/botkins/wicket-fig.webp") },
+  "wisp": { "original": require("../../assets/botkins/wisp-original.webp"), "terracotta": require("../../assets/botkins/wisp-terracotta.webp"), "honey": require("../../assets/botkins/wisp-honey.webp"), "fern": require("../../assets/botkins/wisp-fern.webp"), "tidepool": require("../../assets/botkins/wisp-tidepool.webp"), "bluebell": require("../../assets/botkins/wisp-bluebell.webp"), "fig": require("../../assets/botkins/wisp-fig.webp") },
 };
 
 /**
@@ -468,18 +658,27 @@ export const HEAD_IMAGES: Record<string, Record<string, number>> = {
 export type BotkinLayers = { shell: number | null; accent: number | null; paper: number | null; shade: number | null; rest: number | null };
 export const HEAD_LAYERS: Record<string, BotkinLayers> = {
   "beacon": { shell: require("../../assets/botkins/layers/beacon-shell.webp"), accent: require("../../assets/botkins/layers/beacon-accent.webp"), paper: require("../../assets/botkins/layers/beacon-paper.webp"), shade: require("../../assets/botkins/layers/beacon-shade.webp"), rest: require("../../assets/botkins/layers/beacon-rest.webp") },
+  "brim": { shell: require("../../assets/botkins/layers/brim-shell.webp"), accent: require("../../assets/botkins/layers/brim-accent.webp"), paper: require("../../assets/botkins/layers/brim-paper.webp"), shade: require("../../assets/botkins/layers/brim-shade.webp"), rest: require("../../assets/botkins/layers/brim-rest.webp") },
+  "clover": { shell: require("../../assets/botkins/layers/clover-shell.webp"), accent: require("../../assets/botkins/layers/clover-accent.webp"), paper: require("../../assets/botkins/layers/clover-paper.webp"), shade: require("../../assets/botkins/layers/clover-shade.webp"), rest: null },
   "crumb": { shell: require("../../assets/botkins/layers/crumb-shell.webp"), accent: null, paper: require("../../assets/botkins/layers/crumb-paper.webp"), shade: require("../../assets/botkins/layers/crumb-shade.webp"), rest: require("../../assets/botkins/layers/crumb-rest.webp") },
+  "drip": { shell: require("../../assets/botkins/layers/drip-shell.webp"), accent: require("../../assets/botkins/layers/drip-accent.webp"), paper: require("../../assets/botkins/layers/drip-paper.webp"), shade: require("../../assets/botkins/layers/drip-shade.webp"), rest: null },
+  "dune": { shell: require("../../assets/botkins/layers/dune-shell.webp"), accent: require("../../assets/botkins/layers/dune-accent.webp"), paper: require("../../assets/botkins/layers/dune-paper.webp"), shade: require("../../assets/botkins/layers/dune-shade.webp"), rest: null },
   "fathom": { shell: require("../../assets/botkins/layers/fathom-shell.webp"), accent: require("../../assets/botkins/layers/fathom-accent.webp"), paper: require("../../assets/botkins/layers/fathom-paper.webp"), shade: require("../../assets/botkins/layers/fathom-shade.webp"), rest: require("../../assets/botkins/layers/fathom-rest.webp") },
+  "gloop": { shell: require("../../assets/botkins/layers/gloop-shell.webp"), accent: require("../../assets/botkins/layers/gloop-accent.webp"), paper: require("../../assets/botkins/layers/gloop-paper.webp"), shade: require("../../assets/botkins/layers/gloop-shade.webp"), rest: null },
   "goggle": { shell: require("../../assets/botkins/layers/goggle-shell.webp"), accent: require("../../assets/botkins/layers/goggle-accent.webp"), paper: require("../../assets/botkins/layers/goggle-paper.webp"), shade: require("../../assets/botkins/layers/goggle-shade.webp"), rest: require("../../assets/botkins/layers/goggle-rest.webp") },
   "luna": { shell: require("../../assets/botkins/layers/luna-shell.webp"), accent: require("../../assets/botkins/layers/luna-accent.webp"), paper: require("../../assets/botkins/layers/luna-paper.webp"), shade: require("../../assets/botkins/layers/luna-shade.webp"), rest: require("../../assets/botkins/layers/luna-rest.webp") },
+  "mallow": { shell: require("../../assets/botkins/layers/mallow-shell.webp"), accent: require("../../assets/botkins/layers/mallow-accent.webp"), paper: require("../../assets/botkins/layers/mallow-paper.webp"), shade: require("../../assets/botkins/layers/mallow-shade.webp"), rest: null },
   "morel": { shell: require("../../assets/botkins/layers/morel-shell.webp"), accent: require("../../assets/botkins/layers/morel-accent.webp"), paper: require("../../assets/botkins/layers/morel-paper.webp"), shade: require("../../assets/botkins/layers/morel-shade.webp"), rest: require("../../assets/botkins/layers/morel-rest.webp") },
   "muse": { shell: require("../../assets/botkins/layers/muse-shell.webp"), accent: require("../../assets/botkins/layers/muse-accent.webp"), paper: require("../../assets/botkins/layers/muse-paper.webp"), shade: require("../../assets/botkins/layers/muse-shade.webp"), rest: require("../../assets/botkins/layers/muse-rest.webp") },
   "oakley": { shell: require("../../assets/botkins/layers/oakley-shell.webp"), accent: require("../../assets/botkins/layers/oakley-accent.webp"), paper: require("../../assets/botkins/layers/oakley-paper.webp"), shade: require("../../assets/botkins/layers/oakley-shade.webp"), rest: require("../../assets/botkins/layers/oakley-rest.webp") },
+  "orbit": { shell: require("../../assets/botkins/layers/orbit-shell.webp"), accent: require("../../assets/botkins/layers/orbit-accent.webp"), paper: require("../../assets/botkins/layers/orbit-paper.webp"), shade: require("../../assets/botkins/layers/orbit-shade.webp"), rest: null },
   "pearl": { shell: require("../../assets/botkins/layers/pearl-shell.webp"), accent: require("../../assets/botkins/layers/pearl-accent.webp"), paper: require("../../assets/botkins/layers/pearl-paper.webp"), shade: require("../../assets/botkins/layers/pearl-shade.webp"), rest: require("../../assets/botkins/layers/pearl-rest.webp") },
+  "pebble": { shell: require("../../assets/botkins/layers/pebble-shell.webp"), accent: require("../../assets/botkins/layers/pebble-accent.webp"), paper: require("../../assets/botkins/layers/pebble-paper.webp"), shade: require("../../assets/botkins/layers/pebble-shade.webp"), rest: null },
   "pip": { shell: require("../../assets/botkins/layers/pip-shell.webp"), accent: require("../../assets/botkins/layers/pip-accent.webp"), paper: require("../../assets/botkins/layers/pip-paper.webp"), shade: require("../../assets/botkins/layers/pip-shade.webp"), rest: require("../../assets/botkins/layers/pip-rest.webp") },
   "posy": { shell: require("../../assets/botkins/layers/posy-shell.webp"), accent: require("../../assets/botkins/layers/posy-accent.webp"), paper: require("../../assets/botkins/layers/posy-paper.webp"), shade: require("../../assets/botkins/layers/posy-shade.webp"), rest: require("../../assets/botkins/layers/posy-rest.webp") },
   "pounce": { shell: require("../../assets/botkins/layers/pounce-shell.webp"), accent: require("../../assets/botkins/layers/pounce-accent.webp"), paper: require("../../assets/botkins/layers/pounce-paper.webp"), shade: require("../../assets/botkins/layers/pounce-shade.webp"), rest: require("../../assets/botkins/layers/pounce-rest.webp") },
   "ramble": { shell: require("../../assets/botkins/layers/ramble-shell.webp"), accent: require("../../assets/botkins/layers/ramble-accent.webp"), paper: require("../../assets/botkins/layers/ramble-paper.webp"), shade: require("../../assets/botkins/layers/ramble-shade.webp"), rest: require("../../assets/botkins/layers/ramble-rest.webp") },
+  "ripple": { shell: require("../../assets/botkins/layers/ripple-shell.webp"), accent: require("../../assets/botkins/layers/ripple-accent.webp"), paper: require("../../assets/botkins/layers/ripple-paper.webp"), shade: require("../../assets/botkins/layers/ripple-shade.webp"), rest: null },
   "skiff": { shell: require("../../assets/botkins/layers/skiff-shell.webp"), accent: null, paper: require("../../assets/botkins/layers/skiff-paper.webp"), shade: require("../../assets/botkins/layers/skiff-shade.webp"), rest: require("../../assets/botkins/layers/skiff-rest.webp") },
   "spool": { shell: require("../../assets/botkins/layers/spool-shell.webp"), accent: require("../../assets/botkins/layers/spool-accent.webp"), paper: require("../../assets/botkins/layers/spool-paper.webp"), shade: require("../../assets/botkins/layers/spool-shade.webp"), rest: require("../../assets/botkins/layers/spool-rest.webp") },
   "sprig": { shell: require("../../assets/botkins/layers/sprig-shell.webp"), accent: require("../../assets/botkins/layers/sprig-accent.webp"), paper: require("../../assets/botkins/layers/sprig-paper.webp"), shade: require("../../assets/botkins/layers/sprig-shade.webp"), rest: require("../../assets/botkins/layers/sprig-rest.webp") },
@@ -487,4 +686,5 @@ export const HEAD_LAYERS: Record<string, BotkinLayers> = {
   "toast": { shell: require("../../assets/botkins/layers/toast-shell.webp"), accent: require("../../assets/botkins/layers/toast-accent.webp"), paper: require("../../assets/botkins/layers/toast-paper.webp"), shade: require("../../assets/botkins/layers/toast-shade.webp"), rest: require("../../assets/botkins/layers/toast-rest.webp") },
   "wick": { shell: require("../../assets/botkins/layers/wick-shell.webp"), accent: null, paper: require("../../assets/botkins/layers/wick-paper.webp"), shade: require("../../assets/botkins/layers/wick-shade.webp"), rest: require("../../assets/botkins/layers/wick-rest.webp") },
   "wicket": { shell: require("../../assets/botkins/layers/wicket-shell.webp"), accent: null, paper: require("../../assets/botkins/layers/wicket-paper.webp"), shade: require("../../assets/botkins/layers/wicket-shade.webp"), rest: require("../../assets/botkins/layers/wicket-rest.webp") },
+  "wisp": { shell: require("../../assets/botkins/layers/wisp-shell.webp"), accent: require("../../assets/botkins/layers/wisp-accent.webp"), paper: require("../../assets/botkins/layers/wisp-paper.webp"), shade: require("../../assets/botkins/layers/wisp-shade.webp"), rest: null },
 };

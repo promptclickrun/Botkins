@@ -1,4 +1,4 @@
-// The computer's screen, live, where a bot showed it: the hook behind a chat's ScreenCard and the side
+// The computer's screen where a bot showed it: a still in a chat's ScreenCard and live in the side
 // pane's screen tab, the picture they draw, and what covers it while a gate is closed. The rules are
 // in screenLive.ts; the picture loop is Settings › Screen's own (src/features/remote/useFeed.ts).
 //
@@ -8,7 +8,7 @@
 import { Image } from "expo-image";
 import { Monitor } from "lucide-react-native";
 import { useEffect, useState } from "react";
-import { ActivityIndicator, AppState, StyleSheet, View } from "react-native";
+import { ActivityIndicator, StyleSheet, View } from "react-native";
 import { create } from "zustand";
 import { checkOwner, type OwnerCheck, useOwnerCheck } from "@/features/credentials/shared";
 import { PictureSlots } from "@/features/remote/Picture";
@@ -19,7 +19,8 @@ import { api } from "@/state/link";
 import { onComputerChange, useApp } from "@/state/store";
 import { Button, radius, space, T, useTheme } from "@/ui";
 import { DEFAULT_RATIO, feedPlan, type Gate, type Look, type Owner, type Place, type Role, screenGate, screenLook, WORDS } from "./screenLive";
-import { screenWatch } from "./watching";
+import { useAppActive } from "@/state/useAppActive";
+import { useIsFocused } from "expo-router";
 
 // ── The owner check ───────────────────────────────────────────────────────────────────────────
 // A bot showing the screen must never make Face ID appear by itself: the check starts only from a
@@ -66,16 +67,6 @@ const PROBLEM_RETRY_MS = 10_000;
 const INFO_RETRY_MS = 5_000;
 const LOST_RETRY_MS = 10_000;
 
-/** Whether the app is in front (as Settings › Screen counts it: anything but the background). */
-export function useInFront() {
-  const [front, setFront] = useState(AppState.currentState !== "background");
-  useEffect(() => {
-    const subscription = AppState.addEventListener("change", (state) => setFront(state !== "background"));
-    return () => subscription.remove();
-  }, []);
-  return front;
-}
-
 export type LiveScreen = ReturnType<typeof useLiveScreen>;
 
 /**
@@ -88,9 +79,9 @@ export function useLiveScreen(place: Place, { role, visible }: { role: Role; vis
   const owner = OWNER[useOwnerCheck()];
   const online = useOnline();
   const route = useApp((state) => state.route);
-  const front = useInFront();
+  const focused = useIsFocused();
+  const front = useAppActive(focused && visible);
   const paneShows = usePaneScreen((state) => state.shown > 0);
-  const stillKept = useLastScreen((state) => state.still);
 
   const gate: Gate = screenGate({ capabilities: meta?.capabilities, host, owner });
   const mode = host?.screen ?? "off";
@@ -106,7 +97,7 @@ export function useLiveScreen(place: Place, { role, visible }: { role: Role; vis
     let alive = true;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const again = (ms: number) => {
-      timer = setTimeout(() => setInfoRun((n) => n + 1), ms);
+      if (place === "pane") timer = setTimeout(() => setInfoRun((n) => n + 1), ms);
     };
     const kept = keptInfo(mode);
     if (kept) setInfo(kept);
@@ -118,23 +109,20 @@ export function useLiveScreen(place: Place, { role, visible }: { role: Role; vis
           if (next.canView) infoKept = { mode, at: Date.now(), info: next };
           else again(PROBLEM_RETRY_MS);
         })
-        .catch(() => alive && again(INFO_RETRY_MS));
+        .catch(() => {
+          if (!alive) return;
+          setInfo({ mode, displays: [], canView: false, canControl: false, problem: WORDS.away });
+          again(INFO_RETRY_MS);
+        });
     return () => {
       alive = false;
       clearTimeout(timer);
     };
-  }, [asking, mode, infoRun]);
+  }, [asking, mode, infoRun, place]);
 
   const canView = info?.canView === true;
   const following = asking && canView;
-  const feed = useFeed({ enabled: following, display: undefined, maxWidth: plan.maxWidth, quality: plan.quality, gapMs: plan.gapMs });
-
-  // This phone shows the screen while it follows it; the computer is told once nothing does.
-  useEffect(() => {
-    if (!following) return;
-    const release = screenWatch.hold();
-    return () => release(AppState.currentState === "background");
-  }, [following]);
+  const feed = useFeed({ enabled: following, display: undefined, maxWidth: plan.maxWidth, quality: plan.quality, gapMs: plan.gapMs, once: place === "card" });
 
   // The pane's tab over the chat: the card under it waits.
   useEffect(() => {
@@ -146,10 +134,10 @@ export function useLiveScreen(place: Place, { role, visible }: { role: Role; vis
   // A lost picture comes back by itself (coming back online restarts the loop anyway).
   const { retry } = feed;
   useEffect(() => {
-    if (!following || feed.state !== "failed") return;
+    if (place === "card" || !following || feed.state !== "failed") return;
     const timer = setTimeout(retry, LOST_RETRY_MS);
     return () => clearTimeout(timer);
-  }, [following, feed.state, retry]);
+  }, [place, following, feed.state, retry]);
 
   // The newest picture, for the other places. Forgotten when the screen is turned off.
   const picture = feed.pictures[feed.pictures.front];
@@ -159,12 +147,13 @@ export function useLiveScreen(place: Place, { role, visible }: { role: Role; vis
   }, [picture, size]);
   const off = gate.kind === "off";
   useEffect(() => {
-    if (off) keepStill(null);
+    if (off) { keepStill(null); infoKept = null; }
   }, [off]);
 
   // Only the live place borrows the newest picture; an older card keeps only its own.
-  const still = feed.hasPicture || role !== "live" ? null : stillKept;
+  const still = useLastScreen(state => wants && !feed.hasPicture ? state.still : null);
   const look: Look = screenLook({
+    place,
     gate,
     role,
     wants,

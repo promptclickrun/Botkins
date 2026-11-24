@@ -2,7 +2,7 @@ import { useDeferredValue, useEffect, useId, useRef, useState, type KeyboardEven
 import { createPortal } from "react-dom";
 import { Shuffle, X } from "lucide-react";
 import { BotAvatar, type AvatarState } from "./Avatar";
-import { CUSTOM, EYES, HEADS, PALETTES, TEMPLATES, colorsOf, eyesOf, headName, paletteName, randomLook, sameLook, type FourColors } from "./botkins";
+import { CUSTOM, EYES, HEADS, PALETTES, TEMPLATES, colorsOf, eyesOf, headName, paletteName, randomLook, sameLook, type FourColors, type Head } from "./botkins";
 import { ColorPicker } from "./ColorPicker";
 import type { BotLook, LookEyes } from "./types";
 import "./botpage.css";
@@ -48,10 +48,10 @@ function rove(e: KeyboardEvent<HTMLElement>) {
 }
 
 /**
- * Chooses a bot's look: one of the 20 characters, a palette or template, its eyes and its own
+ * Chooses a bot's look: a character, a palette or template, its eyes and its own
  * colors, with a live preview.
  */
-export default function LookPicker({ value, onChange, previewSize = 132 }: { value: BotLook; onChange: (look: BotLook) => void; previewSize?: number }) {
+export default function LookPicker({ value, onChange, previewSize = 132, characters = HEADS }: { value: BotLook; onChange: (look: BotLook) => void; previewSize?: number; characters?: Head[] }) {
   const id = useId();
   // The preview follows every move of the color picker; the grids of small avatars catch up after.
   const settled = useDeferredValue(value);
@@ -87,8 +87,8 @@ export default function LookPicker({ value, onChange, previewSize = 132 }: { val
           className="look-surprise"
           onClick={() => {
             // A new look every time, never the one already showing.
-            let next = randomLook();
-            while (sameLook(next, value)) next = randomLook();
+            let next = randomLook(characters);
+            while (sameLook(next, value)) next = randomLook(characters);
             onChange(next);
             setShow((s) => ({ state: "like", n: s.n + 1 }));
           }}
@@ -102,7 +102,7 @@ export default function LookPicker({ value, onChange, previewSize = 132 }: { val
         Character
       </span>
       <div className="look-heads" ref={grid} role="radiogroup" aria-labelledby={id + "head"} onKeyDown={rove}>
-        {HEADS.map((head) => {
+        {characters.map((head) => {
           const on = head.id === value.head;
           return (
             <button key={head.id} type="button" role="radio" aria-checked={on} tabIndex={on ? 0 : -1} className={on ? "on" : ""} onClick={() => onChange({ ...value, head: head.id })}>
@@ -252,7 +252,7 @@ function ColorSlots({ colors, onChange, labelledBy }: { colors: FourColors; onCh
  * Bot Studio: the look picker in its own sheet over whatever opened it.
  * Edits a draft; Save hands the look back and Cancel (or Escape) discards it.
  */
-export function BotStudio({ value, save, cancel, saving }: { value: BotLook; save: (look: BotLook) => void; cancel: () => void; /** Disables Save while the caller stores the look. */ saving?: boolean }) {
+export function BotStudio({ value, save, cancel, saving, characters }: { value: BotLook; save: (look: BotLook) => void; cancel: () => void; /** Disables Save while the caller stores the look. */ saving?: boolean; characters?: Head[] }) {
   const [draft, setDraft] = useState(value);
   const ref = useRef<HTMLDialogElement>(null);
   const id = useId();
@@ -279,7 +279,7 @@ export function BotStudio({ value, save, cancel, saving }: { value: BotLook; sav
           <X size={17} />
         </button>
       </div>
-      <LookPicker value={draft} onChange={setDraft} />
+      <LookPicker value={draft} onChange={setDraft} characters={characters} />
       <footer className="studio-foot">
         <button type="button" className="set-button" onClick={cancel}>
           Cancel

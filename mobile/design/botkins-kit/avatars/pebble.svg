@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256"><title>Pebble</title><style data-layer="blink">@keyframes bk-blink{0%,92%,100%{transform:scaleY(1)}94%,94.6%{transform:scaleY(.09)}97%{transform:scaleY(1)}}.bk-blink-2386624846{transform-box:fill-box;transform-origin:center;animation:bk-blink 3848ms ease-in-out -1046ms infinite}@media(prefers-reduced-motion:reduce){.bk-blink-2386624846{animation:none}}</style>
+<g transform="translate(0 0) scale(1)">
+  <path data-role="shell" fill="#849459" d="M16 136C10 111 16 83 34 63C53 41 83 29 106 39C134 51 132 76 153 86C174 96 197 77 217 89C239 102 245 134 236 158C227 185 207 205 180 215C148 227 99 228 67 214C38 201 21 171 16 136Z"/>
+  <path data-role="shell" fill="#a7b679" d="M24 111C26 82 50 52 78 45C98 40 111 47 121 59C106 51 94 50 79 54C56 59 36 81 24 111Z"/>
+  <path data-role="shell" fill="#657747" d="M20 153C33 186 51 203 76 212C117 227 172 216 198 202C218 191 229 175 236 158C227 186 208 205 180 215C148 227 100 228 67 214C42 204 26 181 20 153Z"/>
+  <path data-role="accent" fill="#d8ab69" d="M41 88C41 82 46 78 49 80C53 82 50 89 46 92C43 94 40 92 41 88ZM52 77C54 72 59 70 61 73C63 76 59 81 56 82C52 84 50 81 52 77Z"/>
+  <path data-role="accent" fill="#b6935c" d="M54 89C56 86 60 85 62 88C64 91 60 95 57 95C53 96 52 92 54 89Z"/>
+  <path data-role="shell" fill="#6b804d" d="M73 151C77 129 98 112 126 111C151 110 167 119 184 116C205 112 222 120 225 137C231 163 210 188 180 200C152 212 117 214 94 202C77 193 69 173 73 151Z"/>
+  <path data-role="paper" fill="#f2e5bb" d="M74 148C79 127 98 110 125 110C152 109 167 118 184 115C203 112 220 118 222 136C225 158 207 181 177 193C149 204 119 207 97 197C80 190 69 169 74 148Z"/>
+  <path data-role="paper" fill="#fbefca" d="M80 139C90 122 106 115 124 114C141 113 153 118 163 119C146 120 136 117 124 118C106 119 92 126 80 139Z"/>
+  <g data-layer="eyes" data-anchors="118,166,153" fill="#593515"><ellipse class="bk-blink-2386624846" cx="118" cy="153" rx="8.5" ry="17"/><ellipse class="bk-blink-2386624846" cx="166" cy="153" rx="8.5" ry="17"/></g>
+</g></svg>

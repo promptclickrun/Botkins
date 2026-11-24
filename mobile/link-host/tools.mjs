@@ -116,11 +116,11 @@ export function runTool(label, file, args, options = {}) {
   return toolGate.run(label, () => start(label, file, args, options));
 }
 
-function start(label, file, args, { env, cwd, timeout = TOOL_TIMEOUT, cap = TOOL_OUTPUT, keepError = false }) {
+function start(label, file, args, { env, cwd, timeout = TOOL_TIMEOUT, cap = TOOL_OUTPUT, keepError = false, binary = false }) {
   return new Promise((resolve, reject) => {
     let child;
     try {
-      child = execFile(file, args, { env, cwd, timeout, killSignal: "SIGKILL", maxBuffer: cap, windowsHide: true, encoding: "utf8" }, (error, stdout, stderr) => {
+      child = execFile(file, args, { env, cwd, timeout, killSignal: "SIGKILL", maxBuffer: cap, windowsHide: true, encoding: binary ? "buffer" : "utf8" }, (error, stdout, stderr) => {
         if (!error) return resolve(stdout);
         const kind = error.code === "ENOENT" ? "missing" : error.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER" ? "output" : error.killed ? "timeout" : "exit";
         reject(new ToolError(label, kind, keepError ? String(stderr ?? "").slice(0, 2000) : ""));

@@ -28,7 +28,7 @@ import ProviderIcon from "./ProviderIcon";
 import { isConnected, useModelCatalog, useProviders } from "./providers";
 import { AvatarAnimations } from "./Avatar";
 import ChatView, { type SideAnswer } from "./ChatView";
-import { applyHot, share, type HotMessage } from "./hotState";
+import { WindowState, type HotMessage } from "./hotState";
 import { ChatsPage, HomePage, SidebarBots, type PageActions } from "./Pages";
 import { ActivityPage } from "./Work";
 import { WORK_TABS, WorkBack, type WorkNav, type WorkTab } from "./WorkBar";
@@ -67,7 +67,8 @@ const personalChat = (chat: Chat) =>
   !chat.archived && !chat.botIds && !chat.panelId && !chat.schedules?.some((entry) => entry.routine);
 const visitKey = (host: string, bot: string) => "botkins.lastChat." + JSON.stringify([host, bot]);
 function App() {
-  const [snapshot, setSnapshot] = useState<State>();
+  const [updates] = useState(() => new WindowState());
+  const snapshot = useSyncExternalStore(updates.subscribe, updates.workspace);
   const [outboxes] = useState(() => new Map<string, PendingSends<Message & { clientMessageId: string }>>());
   function outbox(host: string) {
     let box = outboxes.get(host);
@@ -80,46 +81,40 @@ function App() {
   const [completionByHost] = useState(() => new Map<string, CompletionScroll>());
   const [display, setDisplay] = useState(readChatDisplay);
   const position = useRef(settleChatDisplay(display).completionPosition);
-  /** The state the window has, and the newest number it has been given (desktop/window-push.mjs). */
-  const held = useRef<{ state?: State; seq: number }>({ seq: 0 });
-  function receiveSnapshot(received: State) {
-    // A whole state older than what the window has already took in is not taken in.
-    if (received.seq !== undefined && received.seq < held.current.seq) return;
-    // Parts that did not change stay the same objects, so only what changed is drawn again.
-    const next = share(held.current.state, received);
-    const hostId = next.remote?.using?.id ?? "local";
-    const scroll = completionByHost.get(hostId) ?? new CompletionScroll();
-    completionByHost.set(hostId, scroll);
-    scroll.observe(next.chats, next.runs, position.current);
-    const box = outboxes.get(hostId);
+  function observeQueue(next: State) {
+    const box = outboxes.get(next.remote?.using?.id ?? "local");
     if (box) for (const id of box.chatIds()) {
       const chat = next.chats.find(chat => chat.id === id);
       box.observe(id, chat?.loaded?.from ?? 0, chat?.messages ?? [], next.queued?.[id] ?? []);
     }
-    held.current = { state: next, seq: Math.max(held.current.seq, next.seq ?? 0) };
-    setSnapshot(next);
   }
-  /** A small update from a streaming turn: onto the state it was made for, or the whole state is asked for. */
+  function receiveSnapshot(received: State) {
+    updates.whole(received, next => {
+      const hostId = next.remote?.using?.id ?? "local";
+      const scroll = completionByHost.get(hostId) ?? new CompletionScroll();
+      completionByHost.set(hostId, scroll);
+      scroll.observe(next.chats, next.runs, position.current);
+      observeQueue(next);
+    });
+  }
+  // Only one recovery request at a time. A newer delta may arrive before its base's RPC reply.
+  const missed = useRef<HotMessage | null>(null);
   function receiveHot(hot: HotMessage) {
-    const { state: now, seq } = held.current;
-    if (!now || now.seq !== hot.base || hot.seq <= seq) return;
-    const next = applyHot(now, hot);
-    if (!next) {
-      void api.snapshot().then(receiveSnapshot).catch(fail);
+    if (updates.hot(hot, observeQueue)) return;
+    if (missed.current) {
+      if (hot.seq > missed.current.seq) missed.current = hot;
       return;
     }
-    held.current = { state: next, seq: hot.seq };
-    if (next === now) return;
-    // Messages the phone link or this window sent wait in the outbox until the computer's queue has them.
-    if (next.queued !== now.queued) {
-      const hostId = next.remote?.using?.id ?? "local";
-      const box = outboxes.get(hostId);
-      if (box) for (const id of box.chatIds()) {
-        const chat = next.chats.find(chat => chat.id === id);
-        box.observe(id, chat?.loaded?.from ?? 0, chat?.messages ?? [], next.queued?.[id] ?? []);
-      }
-    }
-    setSnapshot(next);
+    missed.current = hot;
+    void api.snapshot().then(next => {
+      const last = missed.current;
+      missed.current = null;
+      receiveSnapshot(next);
+      if (last && next.seq !== undefined && last.seq > next.seq) receiveHot(last);
+    }).catch(error => {
+      missed.current = null;
+      fail(error);
+    });
   }
   useEffect(() => {
     const read = () => {
@@ -896,6 +891,7 @@ function App() {
           <HostUnreachable state={state} pairAgain={() => settings("Computers")} />
         ) : chat && bot ? (
           <ChatView
+            updates={updates}
             completions={completionByHost.get(host)!}
             onScreen={onScreen === chat.id}
             state={state}

@@ -2,7 +2,7 @@ import { useEffect, useEffectEvent, useRef, useState } from "react";
 import { Bot as BotIcon, ChevronDown, Download, Ellipsis, LayoutTemplate, Plus, Trash2, Upload } from "lucide-react";
 import { BotStudio } from "./BotStudio";
 import { BotAvatar } from "./Avatar";
-import { freshLook } from "./botkins";
+import { availableHeads, freshLook } from "./botkins";
 import type { BotLook, BotTemplate, ImportableAgent, MarketAgent, MarketAgentTemplate, State } from "./types";
 import { supportsAgentTemplates } from "./MarketAgents";
 import { errorText } from "./SettingsRows";
@@ -47,7 +47,12 @@ export default function BotForm({
   /** The existing agent the form was filled from. */
   const [agentKey, setAgentKey] = useState<string>();
   const agent = agents.find((a) => a.key === agentKey);
-  const [look, setLook] = useState<BotLook>(() => start?.look ?? freshLook(taken));
+  const characters = availableHeads(remote);
+  const formLook = (look?: BotLook) => {
+    if (!look) return freshLook(taken, characters);
+    return characters.some((head) => head.id === look.head) ? look : { ...look, head: freshLook(taken, characters).head };
+  };
+  const [look, setLook] = useState<BotLook>(() => formLook(start?.look));
   const [studio, setStudio] = useState(false);
   const [mine, setMine] = useState<string>();
   /** The marketplace template the form was filled from, until another start is chosen. */
@@ -67,7 +72,7 @@ export default function BotForm({
     setRole(t.role);
     setSummary(t.summary);
     setInstructions(t.instructions);
-    setLook(t.look ?? freshLook(taken));
+    setLook(formLook(t.look));
     setPicking(undefined);
   }
   function useAgent(a: ImportableAgent) {
@@ -88,7 +93,7 @@ export default function BotForm({
     setRole(t.role);
     setSummary(t.summary ?? "");
     setInstructions(t.instructions);
-    if (t.look) setLook(t.look);
+    if (t.look) setLook(formLook(t.look));
     setPicking(undefined);
   }
   async function importOne() {
@@ -242,6 +247,7 @@ export default function BotForm({
       {studio && (
         <BotStudio
           value={look}
+          characters={characters}
           cancel={() => setStudio(false)}
           save={(v) => {
             setLook(v);

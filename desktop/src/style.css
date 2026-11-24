@@ -1688,7 +1688,7 @@ article .command-output {
   padding: 0;
   text-align: center;
 }
-.heroface img {
+.heroface :where(.bot-avatar) {
   width: min(176px, 100%);
   height: auto;
 }

@@ -49,6 +49,36 @@ function follow(pairing: Pairing) {
   return { client, parts, states, until };
 }
 
+test("closing a screen read after its HTTP headers aborts the frame body", async t => {
+  const { link } = await host();
+  t.after(() => link.stop());
+  const target = parsePairingUrl(link.startPairing().url)!;
+  const paired = await pair(fetcher, { ...target, hosts: [loopback(link)] }, device);
+  const reading = Promise.withResolvers<void>();
+  const body = Promise.withResolvers<ArrayBuffer>();
+  let transport: AbortSignal | undefined;
+  const client = new LinkClient(paired, {
+    fetch: async (url, init) => {
+      if (!url.endsWith("/rpc")) return fetcher(url, init);
+      transport = init?.signal;
+      return { ok: true, status: 200, arrayBuffer: () => { reading.resolve(); return body.promise; }, json: async () => ({}) };
+    },
+    onState() {}, onParts() {},
+  });
+  t.after(() => client.stop());
+  const viewer = new AbortController();
+  const frame = client.callWithSignal("link.screen.frame", viewer.signal, {});
+  await reading.promise;
+  viewer.abort();
+  // A suspended native transport may never finish the body itself.
+  try {
+    assert.equal(transport?.aborted, true);
+  } finally {
+    body.resolve(new ArrayBuffer(0));
+    await assert.rejects(frame);
+  }
+});
+
 test("a phone pairs from the QR link, then follows and changes the computer", async () => {
   const { link } = await host();
   const pairing = link.startPairing();

@@ -29,14 +29,14 @@ Pair the phone app, and your team goes with you.
 - **Your computer does the work.** Chats, files, memory and the wiki stay on your disk as plain files.
 - **Your plans do the thinking.** Sign in with the providers you have. Botkins never sees your passwords.
 - **Your rules apply.** You choose what each bot can see, touch and send. Risky steps ask you first.
-- **Your team has character.** Every bot is a Botkin: 20 characters, 8 themes, live animations that show what the bot is doing.
+- **Your team has character.** Every bot is a Botkin: 30 characters, 8 themes, live animations that show what the bot is doing.
 
 ## Features
 
 ### Bots that feel like a team
 
 - **Create a bot in seconds.** Start from a template, from your GitHub Copilot agents, or from scratch. Give it a name, a role and instructions.
-- **Make it yours in Bot Studio.** Pick 1 of 20 characters, 7 palettes, 6 eye styles, or 4 colors of your own. The Botkin acts out the work: it thinks, plans, codes, browses, waits and celebrates.
+- **Make it yours in Bot Studio.** Pick 1 of 30 characters, 7 palettes, 6 eye styles, or 4 colors of your own. The Botkin acts out the work: it thinks, plans, codes, browses, waits and celebrates.
 - **Give every bot a memory.** Each bot keeps a `MEMORY.md` of facts and preferences. It reads the file at the start of every chat. You can read, edit or clear it.
 - **Shape how a bot works.** Each bot can keep its own `AGENTS.md`, `USER.md` and `IDENTITY.md`.
 - **Save and share templates.** Export a bot as a `.json` file. Templates never include chats, folders or credentials.

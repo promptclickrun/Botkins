@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256"><title>Dune</title><style data-layer="blink">@keyframes bk-blink{0%,92%,100%{transform:scaleY(1)}94%,94.6%{transform:scaleY(.09)}97%{transform:scaleY(1)}}.bk-blink-2141736{transform-box:fill-box;transform-origin:center;animation:bk-blink 4153ms ease-in-out -1136ms infinite}@media(prefers-reduced-motion:reduce){.bk-blink-2141736{animation:none}}</style>
+<g transform="translate(0 0) scale(1)">
+  <path data-role="shell" fill="#c99949" d="M16 160C29 146 39 131 52 117C71 97 87 93 108 92C132 92 152 77 170 56C178 47 188 47 193 57C202 76 205 104 219 129C230 149 247 164 246 182C245 207 206 222 157 224C108 225 55 218 28 205C10 196 2 179 16 160Z"/>
+  <path data-role="shell" fill="#e3b96e" d="M19 162C34 151 44 133 57 122C75 105 87 101 111 99C138 95 156 82 178 59C180 69 160 88 145 97C129 106 117 108 100 109C78 110 65 121 52 133C39 146 29 159 19 162Z"/>
+  <path data-role="shell" fill="#ab7f3c" d="M186 57C195 76 199 101 213 129C226 155 242 167 240 183C238 197 220 207 197 212C222 201 231 192 228 182C225 169 207 154 198 138C181 106 193 80 186 57Z"/>
+  <path data-role="shell" fill="#ac8040" d="M12 184C30 202 72 211 119 215C173 219 208 213 232 202C209 220 180 224 151 224C100 224 54 218 28 205C19 200 13 194 12 184Z"/>
+  <path data-role="accent" fill="#ae7150" d="M159 91C166 87 174 79 180 75C184 73 184 76 182 80C178 89 165 99 157 101C152 102 149 99 151 96C152 94 155 93 159 91ZM174 97C177 95 181 91 183 93C186 96 179 104 175 105C171 106 170 102 174 97Z"/>
+  <path data-role="shell" fill="#b68943" d="M47 161C52 139 79 127 111 123C146 119 174 124 188 141C205 164 191 190 166 202C139 215 103 210 75 200C55 194 42 180 47 161Z"/>
+  <path data-role="paper" fill="#fae3b8" d="M50 157C56 139 79 127 113 124C144 121 171 125 184 142C197 160 185 182 161 194C138 204 105 201 77 193C57 188 46 175 50 157Z"/>
+  <path data-role="paper" fill="#fff0d0" d="M56 149C66 136 89 129 115 128C141 125 158 129 171 135C153 131 136 132 118 133C90 134 71 140 56 149Z"/>
+  <g data-layer="eyes" data-anchors="96,147,159" fill="#593515"><ellipse class="bk-blink-2141736" cx="96" cy="159" rx="8.5" ry="17"/><ellipse class="bk-blink-2141736" cx="147" cy="159" rx="8.5" ry="17"/></g>
+</g></svg>

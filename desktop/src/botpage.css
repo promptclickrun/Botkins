@@ -238,7 +238,7 @@
   .look-preview {
     grid-row: span 2;
   }
-  .look-preview img {
+  .look-preview .bot-avatar {
     width: 96px;
     height: 96px;
   }
@@ -463,7 +463,7 @@
   .profile-hero {
     gap: 18px;
   }
-  .profile-portrait img {
+  .profile-portrait .bot-avatar {
     width: 104px;
     height: 104px;
   }

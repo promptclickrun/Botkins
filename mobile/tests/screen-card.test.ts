@@ -17,14 +17,14 @@ const WIDTHS = [480, 1920];
 const QUALITIES = [30, 85];
 const VIEWER_MS = 5000;
 
-test("the card asks for small pictures slowly, the pane for more, and the relay for less", () => {
+test("the card takes a small still, the pane sets a cadence, and the relay uses fewer pixels", () => {
   const card = feedPlan("card", "direct");
   const pane = feedPlan("pane", "direct");
   const cardAway = feedPlan("card", "relay");
   const paneAway = feedPlan("pane", "relay");
-  assert.ok(card.maxWidth < pane.maxWidth && card.gapMs > pane.gapMs);
-  assert.ok(cardAway.maxWidth <= card.maxWidth && cardAway.quality <= card.quality && cardAway.gapMs > card.gapMs);
-  assert.ok(paneAway.maxWidth < pane.maxWidth && paneAway.quality < pane.quality && paneAway.gapMs > pane.gapMs);
+  assert.ok(card.maxWidth < pane.maxWidth && card.gapMs === undefined);
+  assert.ok(cardAway.maxWidth <= card.maxWidth && cardAway.quality <= card.quality && cardAway.gapMs === undefined);
+  assert.ok(paneAway.maxWidth < pane.maxWidth && paneAway.quality < pane.quality && paneAway.gapMs! > pane.gapMs!);
   // No route yet counts as direct: the phone always tries the computer's own addresses first.
   assert.deepEqual(feedPlan("card", null), card);
   for (const place of Object.values(PLANS))
@@ -32,7 +32,7 @@ test("the card asks for small pictures slowly, the pane for more, and the relay 
       assert.ok(plan.maxWidth >= WIDTHS[0]! && plan.maxWidth <= WIDTHS[1]!, "a width the computer takes as it is");
       assert.ok(plan.quality >= QUALITIES[0]! && plan.quality <= QUALITIES[1]!, "a quality the computer takes as it is");
       // The next ask arrives before the computer stops counting the phone as watching, with a second to spare.
-      assert.ok(plan.gapMs > 0 && plan.gapMs <= VIEWER_MS - 1000);
+      if (plan.gapMs !== undefined) assert.ok(plan.gapMs > 0 && plan.gapMs <= VIEWER_MS - 1000);
     }
 });
 
@@ -95,7 +95,8 @@ test("the words for each gate, and what VoiceOver reads", () => {
   assert.match(WORDS.off(false), /^Screen is off/);
   assert.match(WORDS.off(false), /on your computer/);
   assert.match(WORDS.off(true), /Settings, on this computer's page/);
-  const live = screenLabel("card", { live: true, dim: false, busy: false, line: null });
+  assert.equal(screenLook(seen({ place: "card" })).live, false);
+  const live = screenLabel("card", { live: false, dim: false, busy: false, line: null });
   assert.match(live, /computer's screen/);
   assert.match(live, /live/);
   assert.match(live, /[Tt]ap to open/);
@@ -170,29 +171,17 @@ test("when nothing shows the screen any more, the computer is told once", () => 
   assert.equal(stops, 2);
 });
 
-test("Settings › Screen stops by itself, so its time on the screen is never stopped twice", () => {
+test("the full viewer can take over a preview, then stop immediately on background", () => {
   const time = clock();
   let stops = 0;
   const watch = screenWatchers(() => stops++, 2000, time);
-  // The card lets go as the Screen opens over the chat; the Screen takes over within the grace.
   const card = watch.hold();
   card();
-  const remote = watch.hold({ own: true });
+  const full = watch.hold();
   time.tick(5000);
-  assert.equal(stops, 0, "the Screen is still watching");
-  remote();
-  time.tick(5000);
-  assert.equal(stops, 0, "the Screen told the computer itself");
-  // The card comes back while the Screen is still closing: the card's own stop is still owed.
-  const remote2 = watch.hold({ own: true });
-  const card2 = watch.hold();
-  remote2();
-  card2();
-  time.tick(2000);
-  assert.equal(stops, 1);
-  // Nothing held and nothing asked: nothing to say.
-  const idle = watch.hold({ own: true });
-  idle();
+  assert.equal(stops, 0);
+  full(true);
+  full();
   time.tick(5000);
   assert.equal(stops, 1);
 });

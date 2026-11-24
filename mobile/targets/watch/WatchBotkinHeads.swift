@@ -13,18 +13,27 @@ struct WatchHeadGeometry {
 
 let watchHeads: [String: WatchHeadGeometry] = [
   "beacon": .init(tx: 29.891, ty: 15, scale: 0.87597, left: 99, right: 159, y: 184, ink: "#593515"),
+  "brim": .init(tx: 0, ty: 0, scale: 1, left: 100, right: 146, y: 173, ink: "#593515"),
+  "clover": .init(tx: 0, ty: 0, scale: 1, left: 102, right: 149, y: 149, ink: "#593515"),
   "crumb": .init(tx: 26.115, ty: 15, scale: 0.92623, left: 105, right: 162, y: 169, ink: "#593515"),
+  "drip": .init(tx: 0, ty: 0, scale: 1, left: 84, right: 135, y: 163, ink: "#593515"),
+  "dune": .init(tx: 0, ty: 0, scale: 1, left: 96, right: 147, y: 159, ink: "#593515"),
   "fathom": .init(tx: 15, ty: 28.521, scale: 0.96581, left: 118, right: 174, y: 119, ink: "#593515"),
+  "gloop": .init(tx: 0, ty: 0, scale: 1, left: 96, right: 148, y: 139, ink: "#593515"),
   "goggle": .init(tx: 15, ty: 34.549, scale: 0.95359, left: 115, right: 174, y: 116, ink: "#593515"),
   "luna": .init(tx: 15, ty: 42.572, scale: 0.904, left: 100, right: 166, y: 113, ink: "#593515"),
+  "mallow": .init(tx: 0, ty: 0, scale: 1, left: 106, right: 153, y: 140, ink: "#593515"),
   "morel": .init(tx: 15, ty: 40.625, scale: 0.84015, left: 134, right: 186, y: 143, ink: "#593515"),
   "muse": .init(tx: 15, ty: 23.73, scale: 0.96996, left: 113, right: 172, y: 141, ink: "#593515"),
   "oakley": .init(tx: 16.974, ty: 15, scale: 0.9869, left: 73, right: 132, y: 158, ink: "#593515"),
+  "orbit": .init(tx: 0, ty: 0, scale: 1, left: 100, right: 145, y: 117, ink: "#593515"),
   "pearl": .init(tx: 15, ty: 22.062, scale: 1.00893, left: 83, right: 143, y: 145, ink: "#593515"),
+  "pebble": .init(tx: 0, ty: 0, scale: 1, left: 118, right: 166, y: 153, ink: "#593515"),
   "pip": .init(tx: 26.578, ty: 15, scale: 0.92623, left: 89, right: 148, y: 168, ink: "#593515"),
   "posy": .init(tx: 15, ty: 29.364, scale: 0.95763, left: 116, right: 172, y: 130, ink: "#593515"),
   "pounce": .init(tx: 15, ty: 31.83, scale: 0.9617, left: 119, right: 176, y: 122, ink: "#593515"),
   "ramble": .init(tx: 15, ty: 21.761, scale: 0.96581, left: 51, right: 101, y: 149, ink: "#593515"),
+  "ripple": .init(tx: 0, ty: 0, scale: 1, left: 85, right: 132, y: 163, ink: "#593515"),
   "skiff": .init(tx: 15.983, ty: 15, scale: 0.98261, left: 104, right: 162, y: 157, ink: "#593515"),
   "spool": .init(tx: 15, ty: 43.565, scale: 0.84015, left: 132, right: 188, y: 124, ink: "#593515"),
   "sprig": .init(tx: 15, ty: 16.384, scale: 0.92245, left: 122, right: 182, y: 165, ink: "#593515"),
@@ -32,6 +41,7 @@ let watchHeads: [String: WatchHeadGeometry] = [
   "toast": .init(tx: 15, ty: 30.453, scale: 0.96581, left: 59, right: 116, y: 124, ink: "#593515"),
   "wick": .init(tx: 18.88, ty: 15, scale: 0.96996, left: 97, right: 157, y: 160, ink: "#593515"),
   "wicket": .init(tx: 15, ty: 43.496, scale: 0.98261, left: 98, right: 163, y: 101, ink: "#593515"),
+  "wisp": .init(tx: 0, ty: 0, scale: 1, left: 104, right: 148, y: 176, ink: "#593515"),
 ]
 
 let watchPaletteInk: [String: String] = [

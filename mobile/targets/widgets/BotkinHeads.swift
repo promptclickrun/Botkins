@@ -9,18 +9,27 @@ struct BotkinHead {
 
 let botkinHeads: [String: BotkinHead] = [
   "beacon": BotkinHead(tx: 29.891, ty: 15, scale: 0.87597, left: 99, right: 159, y: 184, ink: "#593515"),
+  "brim": BotkinHead(tx: 0, ty: 0, scale: 1, left: 100, right: 146, y: 173, ink: "#593515"),
+  "clover": BotkinHead(tx: 0, ty: 0, scale: 1, left: 102, right: 149, y: 149, ink: "#593515"),
   "crumb": BotkinHead(tx: 26.115, ty: 15, scale: 0.92623, left: 105, right: 162, y: 169, ink: "#593515"),
+  "drip": BotkinHead(tx: 0, ty: 0, scale: 1, left: 84, right: 135, y: 163, ink: "#593515"),
+  "dune": BotkinHead(tx: 0, ty: 0, scale: 1, left: 96, right: 147, y: 159, ink: "#593515"),
   "fathom": BotkinHead(tx: 15, ty: 28.521, scale: 0.96581, left: 118, right: 174, y: 119, ink: "#593515"),
+  "gloop": BotkinHead(tx: 0, ty: 0, scale: 1, left: 96, right: 148, y: 139, ink: "#593515"),
   "goggle": BotkinHead(tx: 15, ty: 34.549, scale: 0.95359, left: 115, right: 174, y: 116, ink: "#593515"),
   "luna": BotkinHead(tx: 15, ty: 42.572, scale: 0.904, left: 100, right: 166, y: 113, ink: "#593515"),
+  "mallow": BotkinHead(tx: 0, ty: 0, scale: 1, left: 106, right: 153, y: 140, ink: "#593515"),
   "morel": BotkinHead(tx: 15, ty: 40.625, scale: 0.84015, left: 134, right: 186, y: 143, ink: "#593515"),
   "muse": BotkinHead(tx: 15, ty: 23.73, scale: 0.96996, left: 113, right: 172, y: 141, ink: "#593515"),
   "oakley": BotkinHead(tx: 16.974, ty: 15, scale: 0.9869, left: 73, right: 132, y: 158, ink: "#593515"),
+  "orbit": BotkinHead(tx: 0, ty: 0, scale: 1, left: 100, right: 145, y: 117, ink: "#593515"),
   "pearl": BotkinHead(tx: 15, ty: 22.062, scale: 1.00893, left: 83, right: 143, y: 145, ink: "#593515"),
+  "pebble": BotkinHead(tx: 0, ty: 0, scale: 1, left: 118, right: 166, y: 153, ink: "#593515"),
   "pip": BotkinHead(tx: 26.578, ty: 15, scale: 0.92623, left: 89, right: 148, y: 168, ink: "#593515"),
   "posy": BotkinHead(tx: 15, ty: 29.364, scale: 0.95763, left: 116, right: 172, y: 130, ink: "#593515"),
   "pounce": BotkinHead(tx: 15, ty: 31.83, scale: 0.9617, left: 119, right: 176, y: 122, ink: "#593515"),
   "ramble": BotkinHead(tx: 15, ty: 21.761, scale: 0.96581, left: 51, right: 101, y: 149, ink: "#593515"),
+  "ripple": BotkinHead(tx: 0, ty: 0, scale: 1, left: 85, right: 132, y: 163, ink: "#593515"),
   "skiff": BotkinHead(tx: 15.983, ty: 15, scale: 0.98261, left: 104, right: 162, y: 157, ink: "#593515"),
   "spool": BotkinHead(tx: 15, ty: 43.565, scale: 0.84015, left: 132, right: 188, y: 124, ink: "#593515"),
   "sprig": BotkinHead(tx: 15, ty: 16.384, scale: 0.92245, left: 122, right: 182, y: 165, ink: "#593515"),
@@ -28,6 +37,7 @@ let botkinHeads: [String: BotkinHead] = [
   "toast": BotkinHead(tx: 15, ty: 30.453, scale: 0.96581, left: 59, right: 116, y: 124, ink: "#593515"),
   "wick": BotkinHead(tx: 18.88, ty: 15, scale: 0.96996, left: 97, right: 157, y: 160, ink: "#593515"),
   "wicket": BotkinHead(tx: 15, ty: 43.496, scale: 0.98261, left: 98, right: 163, y: 101, ink: "#593515"),
+  "wisp": BotkinHead(tx: 0, ty: 0, scale: 1, left: 104, right: 148, y: 176, ink: "#593515"),
 ]
 
 /// The eye color of each kit palette. Original keeps the head's own.

@@ -182,7 +182,7 @@ try {
   await reply.getByRole("link", { name: "www.example.org" }).click();
   // An image is a link to it: the page loads nothing remote.
   // The only picture in a reply is the bot's own avatar: an image in the text is shown as a link.
-  await expect(reply.locator("img:not(.bot-avatar)")).toHaveCount(0);
+  await expect(reply.locator("img:not(.botkin-art)")).toHaveCount(0);
   await reply.getByRole("link", { name: "Architecture diagram" }).click();
   await expect
     .poll(() => app.evaluate(() => globalThis.__opened))

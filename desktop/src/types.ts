@@ -63,7 +63,7 @@ export type ImportableAgent = {
   /** Why this agent can't become a bot. */
   problem?: string;
 };
-/** One of the design kit's 20 characters in one of its 7 palettes, by id: { head: "sprig", palette: "original" }. */
+/** One of the design kit's characters in one of its 7 palettes, by id: { head: "sprig", palette: "original" }. */
 /** A bot's eyes at rest. "oval" is each character's own and is not saved. */
 export type LookEyes = "oval" | "button" | "smile" | "sleepy" | "wink" | "curious";
 /**

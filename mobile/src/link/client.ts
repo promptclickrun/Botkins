@@ -720,8 +720,8 @@ export class LinkClient {
     const seq = ++session.seq;
     const sealed = seal(session.toHost, seqNonce(seq), utf8(JSON.stringify({ m: method, a: args })), "rpc:" + session.id);
     let first = true;
-    const response = await timed(timeout, signal, (inner, renew) =>
-      this.options.fetch(session.base + PREFIX + "rpc", {
+    const body = await timed(timeout, signal, async (inner, renew) => {
+      const response = await this.options.fetch(session.base + PREFIX + "rpc", {
         method: "POST",
         headers: { "content-type": "application/octet-stream", "x-botkins-session": session.id },
         body: concat(seqBytes(seq), sealed),
@@ -744,29 +744,36 @@ export class LinkClient {
           renew();
           onNews(news);
         } }),
-      }),
-    );
-    if (response.status === 401) {
-      // The computer forgot the session (its app restarted, or the phone was away for long).
-      if (this.session === session) this.useSession(null);
-      throw new Retry();
-    }
-    if (!response.ok) throw new LinkError("protocol", "Your computer couldn't read that (" + response.status + ").");
-    const bytes = new Uint8Array(await response.arrayBuffer());
+      });
+      if (response.status === 401) {
+        // The computer forgot the session (its app restarted, or the phone was away for long).
+        if (this.session === session) this.useSession(null);
+        throw new Retry();
+      }
+      if (!response.ok) throw new LinkError("protocol", "Your computer couldn't read that (" + response.status + ").");
+      // fetch can resolve at headers; the viewer still owns the download until the last byte.
+      return response.arrayBuffer();
+    });
+    const bytes = new Uint8Array(body);
     const answer = JSON.parse(fromUtf8(open(session.toPhone, seqNonce(seq), bytes, "ok:" + session.id))) as { r?: T; e?: { message: string } };
     if (answer.e) throw new LinkError("remote", answer.e.message);
     return answer.r as T;
   }
 
   /** One of the computer's calls. Rejects with a LinkError: "remote" carries the computer's own message. */
-  async call<T = unknown>(method: string, ...args: unknown[]): Promise<T> {
+  call<T = unknown>(method: string, ...args: unknown[]): Promise<T> {
+    return this.callWithSignal<T>(method, undefined, ...args);
+  }
+
+  async callWithSignal<T>(method: string, signal: AbortSignal | undefined, ...args: unknown[]): Promise<T> {
     const lifetime = this.lifetime;
     for (let attempt = 0; ; attempt++) {
       try {
+        if (signal?.aborted) throw new Error("The request was cancelled");
         // Pi waits for npm to finish installing dependencies on the computer.
-        return await this.request<T>(method, args, method === "cloneProjectRepository" ? 300_000 : method === "piPackages.install" ? 150_000 : 60_000);
+        return await this.request<T>(method, args, method === "cloneProjectRepository" ? 300_000 : method === "piPackages.install" ? 150_000 : 60_000, signal);
       } catch (error) {
-        if (this.lifetime === lifetime && error instanceof Retry && attempt < 2) continue;
+        if (!signal?.aborted && this.lifetime === lifetime && error instanceof Retry && attempt < 2) continue;
         if (error instanceof LinkError) throw error;
         throw new LinkError("offline", "Your computer can't be reached right now.");
       }

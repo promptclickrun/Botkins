@@ -18,9 +18,11 @@
 // Those fields are still read from files and left where they are, and nothing draws them.
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { headIds as HEADS, originalHeadIds } from "./link/botkin-heads.mjs";
 
-/** The 20 characters, by id (the names of design/botkins-kit/avatars/*.svg). */
-export const HEADS = ["beacon", "crumb", "fathom", "goggle", "luna", "morel", "muse", "oakley", "pearl", "pip", "posy", "pounce", "ramble", "skiff", "spool", "sprig", "tinker", "toast", "wick", "wicket"];
+/** The characters by id, matching design/botkins-kit/avatars/*.svg. */
+export { HEADS };
+export { HEADS_CAPABILITY, headCapabilities } from "./link/botkin-heads.mjs";
 /** The 7 palettes (design/botkins-kit/customize.js). Original keeps each character's own colors. */
 export const PALETTES = ["original", "terracotta", "honey", "fern", "tidepool", "bluebell", "fig"];
 
@@ -70,12 +72,13 @@ const hash = (text) => [...text].reduce((sum, char) => (sum * 31 + char.charCode
  * small team is all different. The same bot among the same others always gets the same one.
  * @param id     The bot's id.
  * @param looks  The looks already in use.
+ * @param heads  The original set when restoring a workspace that predates saved looks.
  */
-export function nextLook(id, looks = []) {
-  const used = new Map(HEADS.map((head) => [head, 0]));
+export function nextLook(id, looks = [], heads = HEADS) {
+  const used = new Map(heads.map((head) => [head, 0]));
   for (const look of looks) if (used.has(look?.head)) used.set(look.head, used.get(look.head) + 1);
   const fewest = Math.min(...used.values());
-  const free = HEADS.filter((head) => used.get(head) === fewest);
+  const free = heads.filter((head) => used.get(head) === fewest);
   return { head: free[hash(String(id)) % free.length], palette: "original" };
 }
 
@@ -97,7 +100,7 @@ export function migrateLooks(state, saved = {}) {
   }
   for (const bot of bots) {
     if (bot.look) continue;
-    bot.look = nextLook(bot.id, bots.map((b) => b.look));
+    bot.look = nextLook(bot.id, bots.map((b) => b.look), originalHeadIds);
     changed = true;
   }
   return changed;

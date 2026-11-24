@@ -16,8 +16,7 @@ function tools(t, which) {
   writeFileSync(join(dir, "shot.jpg"), JPEG);
   const scripts = {
     xdotool: '#!/bin/sh\n[ "$DISPLAY" = ":20" ] && [ "$XAUTHORITY" = "/x/auth" ] && echo "1440 900"\n',
-    // The last argument is where the picture goes.
-    ffmpeg: '#!/bin/sh\nfor last; do :; done\necho "$@" > "' + join(dir, "args") + '"\ncp "' + join(dir, "shot.jpg") + '" "$last"\n',
+    ffmpeg: '#!/bin/sh\ncat "' + join(dir, "shot.jpg") + '"\n',
   };
   for (const name of which) {
     writeFileSync(join(dir, name), scripts[name]);
@@ -30,9 +29,14 @@ test("an X11 display is read and captured with the computer's tools", { skip: pr
   const screen = x11Screen({ display: ":20", xauthority: "/x/auth", dirs: tools(t, ["xdotool", "ffmpeg"]) });
   assert.deepEqual(await screen.displays(), [{ id: "1", label: "Display :20", width: 1440, height: 900, primary: true }]);
   const shot = await screen.capture({ display: "1", maxWidth: 641, quality: 60 });
-  assert.deepEqual([shot.width, shot.height, shot.jpeg.length], [640, 400, JPEG.length]);
+  assert.deepEqual([shot.width, shot.height, shot.jpeg], [640, 400, JPEG]);
   await assert.rejects(screen.capture({ display: "2", maxWidth: 640 }), /That display isn't available\./);
   assert.deepEqual(await screen.permissions(), { screenRecording: true, accessibility: true });
+});
+
+test("capturing a frame needs only the encoder, even without a separate geometry tool", { skip: process.platform === "win32" }, async t => {
+  const screen = x11Screen({ display: ":20", dirs: tools(t, ["ffmpeg"]) });
+  assert.deepEqual((await screen.capture({ display: "1", maxWidth: 800, quality: 60 })).jpeg, JPEG);
 });
 
 test("with no capture tool, the screen says which to install", { skip: process.platform === "win32" }, async (t) => {
@@ -41,10 +45,10 @@ test("with no capture tool, the screen says which to install", { skip: process.p
 });
 
 test("the capture commands scale to the width asked for", () => {
-  const ff = captureCommand("ffmpeg", { display: ":20", screen: { width: 1440, height: 900 }, width: 720, quality: 100, file: "/o.jpg" });
-  assert.deepEqual([ff[ff.indexOf("-video_size") + 1], ff[ff.indexOf("-i") + 1], ff[ff.indexOf("-vf") + 1], ff[ff.indexOf("-q:v") + 1], ff.at(-1)], ["1440x900", ":20", "scale=720:-2", "2", "/o.jpg"]);
-  const im = captureCommand("import", { display: ":20", screen: { width: 1440, height: 900 }, width: 720, quality: 60, file: "/o.jpg" });
-  assert.deepEqual(im.slice(-5), ["-resize", "720x", "-quality", "60", "jpg:/o.jpg"]);
+  const ff = captureCommand("ffmpeg", { display: ":20", width: 720, quality: 100 });
+  assert.deepEqual([ff[ff.indexOf("-i") + 1], ff[ff.indexOf("-vf") + 1], ff[ff.indexOf("-q:v") + 1], ff.at(-1)], [":20", "scale='max(2,trunc(min(iw,720)/2)*2)':-2", "2", "pipe:1"]);
+  const im = captureCommand("import", { display: ":20", width: 720, quality: 60 });
+  assert.deepEqual(im.slice(-5), ["-resize", "720x>", "-quality", "60", "jpg:-"]);
 });
 
 test("the headless host shows a screen only on Linux with a DISPLAY", () => {

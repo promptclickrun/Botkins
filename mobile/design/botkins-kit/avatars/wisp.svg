@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256"><title>Wisp</title><style data-layer="blink">@keyframes bk-blink{0%,92%,100%{transform:scaleY(1)}94%,94.6%{transform:scaleY(.09)}97%{transform:scaleY(1)}}.bk-blink-2696399{transform-box:fill-box;transform-origin:center;animation:bk-blink 3954ms ease-in-out -1399ms infinite}@media(prefers-reduced-motion:reduce){.bk-blink-2696399{animation:none}}</style>
+<g transform="translate(0 0) scale(1)">
+  <path data-role="shell" fill="#9182a4" d="M79 130C90 120 105 116 106 103C109 87 92 83 84 69C71 49 83 27 104 20C118 15 134 17 143 23C147 26 146 30 141 31C129 34 118 36 116 45C113 55 128 62 143 68C167 78 179 92 172 111C168 124 170 128 184 136C205 147 214 169 208 193C200 222 167 238 130 237C88 237 55 221 48 195C41 170 54 146 79 130Z"/>
+  <path data-role="shell" fill="#b5a6c4" d="M96 76C82 64 82 48 93 36C100 27 113 23 127 24C113 26 103 32 98 40C89 53 92 65 96 76ZM58 162C68 147 81 140 96 129C114 116 119 106 113 93C126 103 121 119 108 130C89 147 74 151 58 162Z"/>
+  <path data-role="shell" fill="#766a8b" d="M49 184C55 207 75 221 107 226C148 233 189 217 205 192C198 221 166 238 129 237C87 236 55 220 49 196C47 190 47 185 49 184Z"/>
+  <path data-role="accent" fill="#bd9a6c" d="M125 66C138 71 149 78 152 86C154 91 151 94 149 91C142 82 131 78 125 72C120 68 121 64 125 66ZM155 99C157 96 161 98 161 102C161 107 158 110 155 109C152 108 153 103 155 99Z"/>
+  <path data-role="shell" fill="#7e7090" d="M67 177C69 156 85 142 109 135C135 128 163 132 180 148C198 167 195 190 178 206C160 224 130 228 105 220C81 213 65 198 67 177Z"/>
+  <path data-role="paper" fill="#f4e2cb" d="M70 174C72 156 87 143 109 137C135 130 159 134 176 149C191 166 188 185 172 200C154 215 130 220 107 213C84 207 68 193 70 174Z"/>
+  <path data-role="paper" fill="#fcefd9" d="M78 159C87 147 101 141 117 138C134 135 147 137 158 141C145 139 134 139 119 142C104 145 88 151 78 159Z"/>
+  <g data-layer="eyes" data-anchors="104,148,176" fill="#593515"><ellipse class="bk-blink-2696399" cx="104" cy="176" rx="8.5" ry="17"/><ellipse class="bk-blink-2696399" cx="148" cy="176" rx="8.5" ry="17"/></g>
+</g></svg>

@@ -142,7 +142,7 @@ export type BotkinEyes = "oval" | "button" | "smile" | "sleepy" | "wink" | "curi
 /**
  * How a bot looks. `palette` is one of the kit's, or "custom" with `colors`
  * ([shell, accent, faceplate, eyes], each "#rrggbb"). `eyes` and "custom" need a computer whose
- * capabilities include "looks-v2"; an older one refuses them.
+ * capabilities include "looks-v2". Drip, Orbit and Pebble were added in "botkin-heads-v2". All ten additional heads are available with "botkin-heads-v3".
  */
 export type BotkinLook = { head: string; palette: string; eyes?: BotkinEyes; colors?: [string, string, string, string] };
 export type BotAccessGrant = { all: boolean; projects: string[] };
@@ -1013,6 +1013,7 @@ export type UsageReport = {
  * name of the person each device belongs to, and "link.devices.setPerson"),
  * "side-pane-v1" (a bot can open a pane beside a chat: a custom view, a table, a website, the screen),
  * "adoptMcpSignIn", and what the computer's app supports itself: "looks-v2" (eyes and custom colors),
+ * "botkin-heads-v2" and "botkin-heads-v3" (the 23- and 30-character catalogs in Bot Studio),
  * "routine-delivery-v1" (where a routine's result lands, and whether it notifies), "models-v2"
  * (context window and other model details), "files-v1" (a file out or in without a dialog on the
  * computer: a template, the usage table, a wiki export), "folders-v1" (the folder browser, and
@@ -1891,7 +1892,7 @@ export type Calls = {
   "link.credentials.link"(input: { manager: PasswordManagerId; vaultId: string; itemId: string; fieldId: string; name: string }): string;
   "link.screen.info"(): ScreenInfo;
   /** The newest picture of a display. With `after`, waits a moment for a change and leaves `jpeg` out when there is none. */
-  "link.screen.frame"(options: { display?: string; maxWidth?: number; quality?: number; after?: number }): ScreenFrame;
+  "link.screen.frame"(options: { display?: string; maxWidth?: number; quality?: number; after?: number; wait?: boolean }): ScreenFrame;
   "link.screen.input"(display: string, events: ScreenInput[]): void;
   /** The phone stopped watching. */
   "link.screen.stop"(): void;
