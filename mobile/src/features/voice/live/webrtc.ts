@@ -31,6 +31,8 @@ export class WebRTCTransport extends LiveBase {
   private stream: Stream | null = null;
   private protocol: OpenAIRealtime;
   private muted = false;
+  private speaker = false;
+  private routing = false;
   /** A response is under way, so there is one to cancel. */
   private responding = false;
   /** The provider is sending the bot's sound, so there is some to clear. */
@@ -115,6 +117,11 @@ export class WebRTCTransport extends LiveBase {
 
   async start() {
     const { RTCPeerConnection, mediaDevices } = this.webrtc;
+    // Select the system call route before opening a microphone on the phone or an accessory.
+    this.routing = true;
+    // Some devices accept the port override only once WebRTC activates its audio session.
+    await this.route(this.speaker).catch(() => {});
+    if (this.ended) return;
     let stream: Stream;
     try {
       stream = await mediaDevices.getUserMedia({ audio: true });
@@ -135,6 +142,8 @@ export class WebRTCTransport extends LiveBase {
     const channel = peer.createDataChannel("oai-events");
     this.channel = channel;
     channel.addEventListener("open", () => {
+      if (this.ended) return;
+      void this.route(this.speaker).catch(() => {});
       // The person's words are written down only when the session asks for it. Push to talk turns
       // the provider's turn detection off (the Realtime conversations guide, "push-to-talk").
       const input = { transcription: transcription(this.language), ...(this.input === "push" && { turn_detection: null }) };
@@ -216,7 +225,8 @@ export class WebRTCTransport extends LiveBase {
   }
 
   setSpeaker(on: boolean) {
-    return this.route(on);
+    this.speaker = on;
+    if (this.routing && !this.ended) return this.route(on);
   }
 
   protected close() {

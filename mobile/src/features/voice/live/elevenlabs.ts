@@ -31,7 +31,7 @@ export class ElevenLabsTransport extends LiveBase {
   private cutAt = -1;
   /** The person cut the agent off: its sound is dropped until ElevenLabs takes their turn. */
   private cutting = false;
-  private speaker = true;
+  private speaker = false;
   private muted = false;
   private ready: ((rates?: { input: number; output: number } | Error) => void) | null = null;
 

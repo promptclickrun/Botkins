@@ -10,6 +10,7 @@ import { endLiveCall } from "./liveCall";
 import { LiveSessionController, type LiveSessionState, phoneLiveKit } from "./live/session";
 import type { LiveStatus } from "./live/types";
 import { effectiveLive } from "./botVoice";
+import { callRoutes } from "../../../modules/botkins-audio";
 import { audioModule, keepAwakeModule } from "./native";
 import { useVoiceSupported, useVoiceSettings } from "./state";
 
@@ -30,7 +31,7 @@ const INITIAL: LiveSessionState = {
   problem: null,
   started: false,
   muted: false,
-  speaker: true,
+  speaker: false,
   input: "conversation",
   holding: false,
   level: 0,
@@ -81,6 +82,7 @@ export function useLiveSession({ chatId, botId, computer }: { chatId: string; bo
       return;
     }
     const kit = phoneLiveKit(async (speaker) => {
+      if (callRoutes?.setSpeaker) return callRoutes.setSpeaker(speaker);
       await audioModule()?.setAudioModeAsync({ allowsRecording: true, playsInSilentMode: true, shouldRouteThroughEarpiece: !speaker }).catch(() => {});
     });
     const next = new LiveSessionController({ chatId, botId, computer, provider, kit, savesTurns, savesHistory });
@@ -107,7 +109,7 @@ export function useLiveSession({ chatId, botId, computer }: { chatId: string; bo
       off();
       controller.current = null;
       next.end();
-      void audioModule()?.setAudioModeAsync({ allowsRecording: false, shouldRouteThroughEarpiece: false }).catch(() => {});
+      if (!callRoutes?.endCall) void audioModule()?.setAudioModeAsync({ allowsRecording: false, shouldRouteThroughEarpiece: false }).catch(() => {});
     };
   }, [ready, chatId, botId, provider, savesHistory, savesTurns, computer, level]);
 

@@ -16,7 +16,7 @@ import ExpoModulesCore
 struct DuplexOptions: Record {
   @Field var inputRate: Double = 16000
   @Field var outputRate: Double = 24000
-  @Field var speaker: Bool = true
+  @Field var speaker: Bool = false
 }
 
 public final class BotkinsAudioModule: Module {
@@ -89,9 +89,8 @@ public final class BotkinsAudioModule: Module {
         if on { sessionOptions.insert(.defaultToSpeaker) }
         try? session.setCategory(.playAndRecord, mode: .voiceChat, options: sessionOptions)
         try? session.overrideOutputAudioPort(on ? .speaker : .none)
-        // A route change can stop the engine; the configuration observer starts it again, and so does this.
-        if let engine = self.engine, !engine.isRunning { try? engine.start() }
-        self.player?.play()
+        // A route change can stop the engine. Let the configuration observer rebuild
+        // the taps for the new microphone format before restarting it.
       }
     }
 
@@ -154,6 +153,7 @@ public final class BotkinsAudioModule: Module {
 
     let micFormat = engine.inputNode.outputFormat(forBus: 0)
     guard micFormat.sampleRate > 0, micFormat.channelCount > 0, let converter = AVAudioConverter(from: micFormat, to: wireFormat) else { throw NSError(domain: "BotkinsAudio", code: 2) }
+    held.removeAll(keepingCapacity: true)
     self.wireFormat = wireFormat
     self.playFormat = playFormat
 
