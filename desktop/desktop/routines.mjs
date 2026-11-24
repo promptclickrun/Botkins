@@ -623,9 +623,9 @@ export class Routines {
       });
     const str = { type: "string" };
     const cadenceProps = {
-      cadence: { enum: CADENCES },
+      cadence: { type: "string", enum: CADENCES },
       time: { type: "string", description: "24-hour HH:MM, for once, daily, weekdays and weekly" },
-      days: { type: "array", items: { enum: DAY_NAMES }, description: "For weekly" },
+      days: { type: "array", items: { type: "string", enum: DAY_NAMES }, description: "For weekly" },
       date: { type: "string", description: "YYYY-MM-DD, for once" },
       cron: { type: "string", description: "Five cron fields, for custom" },
       timezone: { type: "string", description: "IANA time zone. Defaults to " + localZone() },
@@ -638,7 +638,7 @@ export class Routines {
           "{\"to\":\"chat\"} sends your reply to the person as a message in your chat with them: use it when they ask to be reminded or told something in the chat, e.g. \"remind me in our chat every morning\". " +
           "{\"to\":\"feed\"}, {\"to\":\"idea\"} and {\"to\":\"goal\"} post your reply to Today's Feed, Ideas or Goals; a goal may take a category (" + GOAL_CATEGORIES.join(", ") + "). " +
           "chatId picks a particular chat of yours; leave it out for this chat (or your latest chat with the person when this one can't take it).",
-        properties: { to: { enum: DELIVER_TARGETS }, chatId: str, category: { enum: GOAL_CATEGORIES } },
+        properties: { to: { type: "string", enum: DELIVER_TARGETS }, chatId: str, category: { type: "string", enum: GOAL_CATEGORIES } },
         required: ["to"],
         additionalProperties: false,
       },
@@ -664,6 +664,7 @@ export class Routines {
           "routine_create",
           "Create a routine when the person asks you to do something on a schedule or to remind them later. " +
             "The routine runs `instructions` as a new turn in its own chat at each time, and `deliver` can send the result to your chat with the person, their Feed, Ideas or Goals. Write instructions as what you should do then, e.g. \"Remind the person to review their inbox.\" " +
+            "Before you create it, confirm with the person how often it runs, where the result goes (`deliver`), and whether they want a notification each run (`notify`), unless they already said. " +
             "Today is " + new Date().toISOString().slice(0, 10) + ".",
           { name: str, instructions: str, ...cadenceProps, ...deliverProp, ...notifyProp },
           ["name", "instructions", "cadence"],

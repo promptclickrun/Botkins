@@ -5,115 +5,15 @@
 //
 //   sh firmware/build-host.sh && node --test tests/*.test.mjs
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { createServer } from "node:net";
-import { dirname, join } from "node:path";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { after, test } from "node:test";
-import { fileURLToPath } from "node:url";
 import { introduce } from "../../mobile/link-host/gadget-setup.mjs";
 import { pcmFromWav } from "../../mobile/link-host/gadget.mjs";
-import { LinkHost } from "../../mobile/link-host/index.mjs";
-import { MockBackend } from "../../mobile/link-host/mock-backend.mjs";
 import { wavFromPcm } from "../../mobile/link-host/voice.mjs";
+import { SIM, cleanup, folder, gadget, heard, host, spokenBytes, tone, until } from "./harness.mjs";
 
-const here = dirname(fileURLToPath(import.meta.url));
-const SIM = process.env.BOTKINS_GADGET_SIM ?? join(here, "../firmware/build/botkins-gadget-sim");
-const folders = [];
-const running = [];
-after(() => {
-  for (const child of running) child.kill();
-  for (const folder of folders) rmSync(folder, { recursive: true, force: true });
-});
-const folder = (name) => {
-  const dir = realpathSync(mkdtempSync(join(tmpdir(), name)));
-  folders.push(dir);
-  return dir;
-};
-function tone(seconds, rate) {
-  const pcm = Buffer.alloc(Math.floor(seconds * rate) * 2);
-  for (let i = 0; i < pcm.length / 2; i++) pcm.writeInt16LE(Math.round(8000 * Math.sin((2 * Math.PI * 440 * i) / rate)), i * 2);
-  return pcm;
-}
-
-/** The gadget as a process: lines in, lines out. `view` is what a board would draw now. */
-function gadget(dir) {
-  const child = spawn(SIM, [dir], { stdio: ["pipe", "pipe", "inherit"] });
-  running.push(child);
-  const lines = [];
-  const sim = { view: {}, views: [], spoken: [], answers: [], lines };
-  let held = "";
-  child.stdout.on("data", (chunk) => {
-    held += chunk;
-    for (let at = held.indexOf("\n"); at >= 0; at = held.indexOf("\n")) {
-      const line = held.slice(0, at);
-      held = held.slice(at + 1);
-      lines.push(line);
-      if (line.startsWith("view ")) sim.views.push((sim.view = JSON.parse(line.slice(5))));
-      else if (line.startsWith("@botkins ")) sim.answers.push(JSON.parse(line.slice(9)));
-      else if (line.startsWith("spoken ")) sim.spoken.push(line.split(" ")[1]);
-    }
-  });
-  sim.send = (line) => child.stdin.write(line + "\n");
-  sim.ask = async (object) => {
-    const before = sim.answers.length;
-    sim.send("@botkins " + JSON.stringify(object));
-    await until(() => sim.answers.length > before, "an answer to " + object.do);
-    return sim.answers[before];
-  };
-  // The same pair of line streams as a serial port gives the introducer (gadget-setup.mjs).
-  const listeners = new Set();
-  child.stdout.on("data", () => {
-    for (; sim.heardLines < lines.length; sim.heardLines++) for (const listener of listeners) listener(lines[sim.heardLines]);
-  });
-  sim.heardLines = 0;
-  sim.io = { write: sim.send, onLine: (listener) => (listeners.add(listener), () => listeners.delete(listener)) };
-  sim.quit = () => new Promise((resolve) => {
-    child.once("exit", resolve);
-    sim.send("quit");
-  });
-  return sim;
-}
-async function until(check, what, ms = 10000) {
-  const end = Date.now() + ms;
-  while (!check()) {
-    if (Date.now() > end) throw new Error("Timed out waiting for " + what);
-    await new Promise((resolve) => setTimeout(resolve, 15));
-  }
-}
-
-const heard = [];
-const said = [];
-async function host() {
-  const backend = new MockBackend({ speed: 0.05 });
-  backend.voice = {
-    local: {
-      models: () => [{ id: "ears", name: "Ears", kind: "stt", installed: true }, { id: "mouth", name: "Mouth", kind: "tts", installed: true, voices: ["one"] }],
-      transcribe: async (wav) => {
-        const { pcm, rate } = pcmFromWav(wav);
-        heard.push({ bytes: pcm.length, rate });
-        return { text: "Plan the launch week" };
-      },
-      // A second of tone for each 40 characters, at 24 kHz: the gadget asks for 16 kHz.
-      synthesize: async (text) => {
-        said.push(text);
-        return { audio: wavFromPcm(tone(text.length / 40, 24000), 24000) };
-      },
-    },
-  };
-  // A port of its own, kept when the link is turned off and on, as the app's is: the gadget finds it again there.
-  const port = await new Promise((resolve) => {
-    const probe = createServer().listen(0, "127.0.0.1", () => {
-      const { port: free } = probe.address();
-      probe.close(() => resolve(free));
-    });
-  });
-  const link = new LinkHost({ relay: false, dir: folder("botkins-gadget-host-"), backend, port, extraHosts: ["127.0.0.1"] });
-  await link.setEnabled(true);
-  link.voice.set({ stt: { provider: "local" }, tts: { provider: "local" } });
-  return { link, backend };
-}
+after(cleanup);
 
 test("a gadget is set up over its USB port, talks, listens, reads replies aloud, answers a request, restarts and is removed", { skip: !existsSync(SIM) && "build the gadget first: sh firmware/build-host.sh" }, async () => {
   const { link } = await host();
@@ -150,8 +50,7 @@ test("a gadget is set up over its USB port, talks, listens, reads replies aloud,
   const first = pcmFromWav(readFileSync(sim.spoken[0]));
   assert.equal(first.rate, 16000);
   // Every part of the reply was played, whole: a second for each 40 characters, at two thirds the samples.
-  const expected = said.reduce((sum, text) => sum + Math.floor((Math.floor((text.length / 40) * 24000) * 16000) / 24000) * 2, 0);
-  assert.equal(first.pcm.length, expected);
+  assert.equal(first.pcm.length, spokenBytes());
   let peak = 0;
   for (let i = 0; i < first.pcm.length; i += 2) peak = Math.max(peak, Math.abs(first.pcm.readInt16LE(i)));
   assert.ok(peak > 6500 && peak <= 8000, "the samples are the tone, peak " + peak);

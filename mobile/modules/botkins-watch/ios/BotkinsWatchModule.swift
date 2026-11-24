@@ -94,8 +94,13 @@ public final class BotkinsWatchModule: Module {
     AsyncFunction("clear") { () async in
       await self.bridge.clear()
     }
-    AsyncFunction("voiceStarted") { (sessionId: String, inputRate: Int, outputRate: Int) async throws in
-      try await self.bridge.voiceStarted(sessionId, inputRate, outputRate)
+    AsyncFunction("voiceStarted") { (sessionId: String, inputRate: Int, outputRate: Int, promise: Promise) -> Void in
+      Task { @MainActor in
+        do {
+          try await self.bridge.voiceStarted(sessionId, inputRate, outputRate)
+          promise.resolve(nil)
+        } catch { promise.reject(error) }
+      }
     }
     AsyncFunction("voiceEnded") { (sessionId: String, reason: String?) async in
       await self.bridge.voiceEnded(sessionId, reason)
@@ -106,8 +111,11 @@ public final class BotkinsWatchModule: Module {
     Function("flush") { (sessionId: String) in
       DispatchQueue.main.async { self.bridge.flush(sessionId) }
     }
-    AsyncFunction("rtcStart") { (sessionId: String) async throws -> String in
-      try await self.bridge.rtcStart(sessionId)
+    AsyncFunction("rtcStart") { (sessionId: String, promise: Promise) -> Void in
+      Task { @MainActor in
+        do { promise.resolve(try await self.bridge.rtcStart(sessionId)) }
+        catch { promise.reject(error) }
+      }
     }
     AsyncFunction("rtcAnswer") { (sessionId: String, sdp: String) async throws in
       try await self.bridge.rtcAnswer(sessionId, sdp)

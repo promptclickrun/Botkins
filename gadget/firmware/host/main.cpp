@@ -7,14 +7,25 @@
 // Lines on standard input:
 //   @botkins {...}          the setup protocol, as on a board's USB port
 //   say <words>             typed words
-//   hear <file.wav>         a recording: 16-bit mono WAV at the microphone's rate (16 kHz)
+//   hear <file.wav>         a press of the talk button with this recording: 16-bit mono WAV at the
+//                           microphone's rate (16 kHz). It goes through live voice when the computer has one.
+//   tap <file.wav>          the same, as a press the board gives up (shorter than its shortest talk)
 //   answer <action> [text]  answers the request on show
 //   new | next | stop       a new chat, the next bot, stop the turn
+//   away | home             away from the computer's network (none of its own addresses answers), or back
 //   quit
 // Each change of what a board would draw is printed as one line: "view {json}". What the speaker
 // plays is written to <folder>/spoken-<n>.wav when the reply has been read.
+//
+// The relay and a live provider are reached over ws:// (host/websocket.cpp), so only on this computer.
+// In the environment, BOTKINS_SIM_AWAY=1 starts away, BOTKINS_SIM_PROBE_MS sets how soon a gadget on the
+// relay looks for its computer's own addresses again, BOTKINS_SIM_LIVE_IDLE_MS how soon a live voice
+// session closes, and BOTKINS_SIM_REALTIME=1 makes the speaker take as long to play as a real one.
+#include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <fstream>
 #include <iostream>
@@ -24,8 +35,18 @@
 
 #include "botkins/gadget.hpp"
 #include "botkins/sockets.hpp"
+#include "websocket.hpp"
 
 using namespace botkins;
+
+/** The computer's own network, which the gadget can leave: away, no address of the computer's answers. */
+struct HostTransport : SocketTransport {
+  std::atomic<bool> away{false};
+  HttpResponse request(const std::string& host, const char* method, const std::string& path, const std::vector<std::pair<std::string, std::string>>& headers, const std::string& body, int timeout_ms) override {
+    if (away) return HttpResponse();
+    return SocketTransport::request(host, method, path, headers, body, timeout_ms);
+  }
+};
 
 static void fill_random(uint8_t* out, size_t size) {
   FILE* file = fopen("/dev/urandom", "rb");
@@ -54,21 +75,34 @@ struct HostNetwork : Network {
   std::string address() override { return "127.0.0.1"; }
 };
 
-/** The speaker: what was played is kept, and written as a WAV file when the reply ends. */
+/**
+ * The speaker: what was played is kept, and written as a WAV file when the reply ends. `realtime`: a
+ * write returns once its samples would have played, as a board's does, and a cut stops it at once.
+ */
 struct FileSpeaker : Speaker {
   std::string folder;
   std::mutex mutex;
+  std::condition_variable wake;
   std::vector<int16_t> played;
   int rate = 16000, files = 0;
+  bool realtime = false, cutting = false;
   bool begin(int next) override {
     std::lock_guard<std::mutex> lock(mutex);
     rate = next;
     played.clear();
+    cutting = false;
     return true;
   }
   void write(const int16_t* samples, size_t count) override {
-    std::lock_guard<std::mutex> lock(mutex);
+    std::unique_lock<std::mutex> lock(mutex);
+    if (cutting) return;
     played.insert(played.end(), samples, samples + count);
+    if (realtime) wake.wait_for(lock, std::chrono::microseconds((long long)count * 1000000 / rate), [this] { return cutting; });
+  }
+  void cut() override {
+    std::lock_guard<std::mutex> lock(mutex);
+    cutting = true;
+    wake.notify_all();
   }
   void end(bool cut) override {
     std::lock_guard<std::mutex> lock(mutex);
@@ -100,6 +134,7 @@ static std::string view_line(const View& view) {
   if (view.listening) json.set("listening", true);
   if (view.sending) json.set("sending", true);
   if (view.speaking) json.set("speaking", true);
+  if (view.live) json.set("live", true);
   json.set("hear", view.can_hear).set("speak", view.can_speak);
   const auto& s = view.settings;
   json.set("settings", Json::object().set("volume", s.volume).set("mic", s.mic).set("mute", s.mute).set("brightness", s.brightness).set("dimAfter", s.dim_after).set("offAfter", s.off_after));
@@ -119,12 +154,16 @@ int main(int argc, char** argv) {
     fprintf(stderr, "crypto self test failed\n");
     return 1;
   }
-  SocketTransport transport;
+  HostTransport transport;
+  const char* away = getenv("BOTKINS_SIM_AWAY");
+  transport.away = away && strcmp(away, "1") == 0;
   FileStorage storage;
   storage.folder = argv[1];
   HostNetwork network;
   FileSpeaker speaker;
   speaker.folder = argv[1];
+  const char* realtime = getenv("BOTKINS_SIM_REALTIME");
+  speaker.realtime = realtime && strcmp(realtime, "1") == 0;
 
   Board board;
   board.transport = &transport;
@@ -141,6 +180,14 @@ int main(int argc, char** argv) {
     puts("restart");
     fflush(stdout);
   };
+  board.socket = [] { return std::unique_ptr<Socket>(new HostSocket()); };
+  // The core's own lines go to standard error: standard output carries the protocol.
+  board.log = [](const std::string& line) {
+    fprintf(stderr, "core: %s\n", line.c_str());
+    fflush(stderr);
+  };
+  if (const char* probe = getenv("BOTKINS_SIM_PROBE_MS")) board.relay_probe_ms = atoi(probe) > 0 ? atoi(probe) : board.relay_probe_ms;
+  if (const char* idle = getenv("BOTKINS_SIM_LIVE_IDLE_MS")) board.live_idle_ms = atoi(idle) > 0 ? atoi(idle) : board.live_idle_ms;
 
   Gadget gadget(board);
   std::mutex printing;
@@ -172,10 +219,11 @@ int main(int argc, char** argv) {
     else if (verb == "next") gadget.next_bot();
     else if (verb == "stop") gadget.stop_turn();
     else if (verb == "quiet") gadget.stop_speaking();
+    else if (verb == "away" || verb == "home") transport.away = verb == "away";
     else if (verb == "answer") {
       size_t space = rest.find(' ');
       gadget.answer(rest.substr(0, space), space == std::string::npos ? "" : rest.substr(space + 1));
-    } else if (verb == "hear") {
+    } else if (verb == "hear" || verb == "tap") {
       // The file's samples go in as a microphone gives them: a tenth of a second at a time, in real time or faster.
       std::ifstream file(rest, std::ios::binary);
       std::stringstream bytes;
@@ -194,7 +242,8 @@ int main(int argc, char** argv) {
         gadget.feed(samples.data() + at, std::min(step, samples.size() - at));
         std::this_thread::sleep_for(std::chrono::milliseconds(5));
       }
-      gadget.stop_listening();
+      // "tap": a press the board gives up (shorter than its shortest talk), as a quick press and let go is.
+      gadget.stop_listening(verb == "hear");
     }
   }
   gadget.stop();

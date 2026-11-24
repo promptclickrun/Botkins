@@ -981,6 +981,25 @@ test("live with Gemini: a one-use token, the constrained socket, and the setup m
   assert.equal(plain.setup.setup.generationConfig.speechConfig.voiceConfig.prebuiltVoiceConfig.voiceName, "Kore");
 });
 
+test("live with Gemini: the chosen speech language goes in its instructions, so unclear sound isn't answered in another language", async () => {
+  const { voice } = make({ "POST generativelanguage.googleapis.com/v1beta/auth_tokens": () => ({ name: "auth_tokens/abc", uses: 1 }) });
+  voice.setKey("gemini", "AIza-gemini-key-123456");
+  voice.set({ live: { provider: "gemini" }, stt: { language: "en-US" } });
+  // After the caller's own instructions.
+  const told = await voice.live({ instructions: "Be brief." });
+  const [own, language] = told.setup.setup.systemInstruction.parts[0].text.split("\n\n");
+  assert.equal(own, "Be brief.");
+  assert.match(language, /^The person speaks American English \(en-US\)\. Always answer in American English/);
+  assert.match(language, /noise/);
+  // Alone, when the caller has none.
+  const alone = await voice.live({});
+  assert.equal(alone.setup.setup.systemInstruction.parts[0].text, language);
+  // No language chosen: nothing is added.
+  voice.set({ stt: { language: "" } });
+  const none = await voice.live({});
+  assert.equal(none.setup.setup.systemInstruction, undefined);
+});
+
 test("live with ElevenLabs: tools and the agent are made once, reused after a reload, and the signed URL comes with the overrides", async () => {
   let tools = 0;
   let agents = 0;

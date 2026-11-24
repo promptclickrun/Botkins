@@ -338,6 +338,8 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
   });
   // Conversations from builds that shared ~/.copilot keep their history.
   copilot.adoptSessions(workspace.sessionIds());
+  // A reaction's turn reads the chat model's plan, as the provider reports it, before it spends a turn (desktop/reaction-turns.mjs).
+  workspace.reactionTurns.usage = async (id) => (await providerUsage.list()).find((entry) => entry.provider === id) ?? null;
   host.theme.set(workspace.state.settings.appearance.theme);
   // Routines and notifications (desktop/routines.mjs, desktop/notify.mjs)
   const notifier = new Notifier(workspace, {
@@ -1296,6 +1298,7 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
     stop() {
       stopAnnouncing();
       workspace.closing = true;
+      workspace.reactionTurns?.close();
       updates?.stopAuto?.();
       // A routine's script stops with Botkins; its run is ended when Botkins opens again.
       routines.stopScripts();

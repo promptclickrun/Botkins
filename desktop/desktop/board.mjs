@@ -218,7 +218,7 @@ export class Board {
       tool(
         "board_post",
         "Post to the person's Today board. kind feed: something useful or timely to read (news, a finding, a reminder). kind idea: a suggestion the person can say yes to. kind goal: a goal to track, with a category (" + GOAL_CATEGORIES.join(", ") + "). Use a short title and an optional Markdown body. Post only when asked or when a routine says to.",
-        { kind: { enum: BOARD_KINDS }, title: string, body: string, links: linkList, category: { enum: GOAL_CATEGORIES } },
+        { kind: { type: "string", enum: BOARD_KINDS }, title: string, body: string, links: linkList, category: { type: "string", enum: GOAL_CATEGORIES } },
         ["kind", "title"],
         (args) => {
           if (++posted > 10) throw new Error("Post at most ten items per reply.");
@@ -232,14 +232,14 @@ export class Board {
       tool(
         "board_list",
         "List your own Feed posts, ideas and goals, with the person's answers: rating up or down, the reason for a thumbs down, and whether they said yes to an idea or finished a goal. Use it to avoid repeats and to post more of what helps.",
-        { kind: { enum: BOARD_KINDS } },
+        { kind: { type: "string", enum: BOARD_KINDS } },
         [],
         ({ kind }) => this.list(bot.id, kind, new Set(turn.sees() ? spaces.open(turn.people).map((space) => space.id) : [])),
       ),
       tool(
         "board_update",
         "Change one of your own board items: its title, body, links or goal category, or set status to done, cleared or open.",
-        { id: string, title: string, body: string, links: linkList, category: { enum: GOAL_CATEGORIES }, status: { enum: ["open", "done", "cleared"] } },
+        { id: string, title: string, body: string, links: linkList, category: { type: "string", enum: GOAL_CATEGORIES }, status: { type: "string", enum: ["open", "done", "cleared"] } },
         ["id"],
         ({ id, ...patch }) => {
           const item = this.items.find((entry) => entry.id === id && entry.botId === bot.id && spaces.canAll(spaces.of(entry), turn.people));

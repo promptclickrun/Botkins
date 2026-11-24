@@ -2,6 +2,7 @@
 // calls. gadget/docs/contract.md ("The link's bytes") is the description; mobile/src/link/client.ts
 // is the phone's version of the same thing.
 #pragma once
+#include <chrono>
 #include <cstdint>
 #include <functional>
 #include <mutex>
@@ -53,6 +54,13 @@ class Link {
   const Introduction& introduction() const { return intro_; }
   /** Forgets the session, so the next call opens a new one (after the network came back). */
   void reset();
+  /**
+   * While the session goes through the relay, asks the computer's own addresses now and then (after
+   * `probe_ms`, doubling each time to 10 minutes): when one answers as this computer, the session is
+   * dropped, so the next call opens one there. Waits up to 1.5 s for each address. A no-op otherwise.
+   */
+  void probe();
+  int probe_ms = 30000;
 
  private:
   struct Session {
@@ -61,18 +69,21 @@ class Link {
     uint64_t seq = 0;
   };
   Error open_session();
-  Error open_at(const std::string& host);
+  Error open_at(const std::string& host, int hello_ms);
+  bool answers(const std::string& host, int hello_ms);
 
   Transport& transport_;
   KeyPair keys_;
   Introduction intro_;
   uint8_t device_key_[32];
   bool has_device_key_ = false;
-  std::mutex mutex_;       // guards session_, epoch_ and intro_.hosts
+  std::mutex mutex_;       // guards session_, epoch_, intro_.hosts and the probe's time
   std::mutex opening_;     // one thread opens a session at a time
   Session session_;
   bool has_session_ = false;
   std::string epoch_;
+  std::chrono::steady_clock::time_point probe_at_;
+  int probe_wait_ = 0;
 };
 
 }  // namespace botkins
