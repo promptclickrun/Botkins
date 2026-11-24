@@ -199,3 +199,34 @@ test("a pane and a full viewer on the same display keep independent unchanged-fr
   assert.equal((await screen.frame("one", { maxWidth: 640, after: pane.seq, wait: false })).jpeg, undefined);
   assert.equal((await screen.frame("two", { maxWidth: 1280, after: full.seq, wait: false })).jpeg, undefined);
 });
+
+test("static screen capture backs off instead of re-capturing every 300ms and resets on change", async (t) => {
+  let version = 1;
+  let captures = 0;
+  const adapter = {
+    displays: async () => [{ id: "1" }],
+    capture: async () => {
+      captures += 1;
+      return { jpeg: Buffer.from([0xff, 0xd8, version, 0xff, 0xd9]), width: 640, height: 400 };
+    },
+  };
+  const screen = new Screen({ dirs: [], adapter: () => adapter, mode: () => "view" });
+  t.after(() => screen.dispose());
+
+  const first = await screen.frame("phone", {});
+  assert.equal(screen.pollDelay("1"), 300);
+
+  // One full WAIT_MS (1500ms) unchanged poll should back off (300 -> 600 -> 1200 -> 1500)
+  // rather than capturing 5-6 times every 300ms.
+  captures = 0;
+  const unchanged = await screen.frame("phone", { after: first.seq });
+  assert.equal(unchanged.jpeg, undefined);
+  assert.ok(captures <= 3, `expected <= 3 captures during static wait, got ${captures}`);
+  assert.ok(screen.pollDelay("1") >= 1200, `expected backed-off delay, got ${screen.pollDelay("1")}`);
+
+  // When the display changes, pollDelay snaps back to 300ms.
+  version = 2;
+  const changed = await screen.frame("phone", { after: first.seq, wait: false });
+  assert.ok(changed.jpeg);
+  assert.equal(screen.pollDelay("1"), 300);
+});

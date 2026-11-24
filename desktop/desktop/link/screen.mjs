@@ -21,6 +21,7 @@ export const MODES = ["off", "view", "control"];
 const NEED_RECORDING = "Allow screen recording for this app in System Settings › Privacy & Security.";
 const NO_VIEWING = "Viewing the screen isn't available in this app yet.";
 const POLL_MS = 300;
+const MAX_POLL_MS = 1500;
 const WAIT_MS = 1500;
 const VIEWER_MS = 5000;
 const DISPLAYS_TTL = 5000;
@@ -221,6 +222,13 @@ export class Screen {
     }
     return connection;
   }
+  /** Compute the next capture poll interval, backing off while frames remain unchanged. */
+  pollDelay(display) {
+    const entry = this.shots.get(display);
+    const unchanged = entry?.unchanged ?? 0;
+    if (unchanged <= 0) return POLL_MS;
+    return Math.min(MAX_POLL_MS, Math.round(POLL_MS * Math.pow(2, Math.min(unchanged, 4))));
+  }
   /** An interactive viewer waits for a change. A paced preview (wait: false) samples once. */
   async frame(deviceId, options, gone) {
     this.stillAllowed(deviceId);
@@ -239,12 +247,16 @@ export class Screen {
       check();
       this.watch(deviceId);
       let shot = await this.grab(display.id, size, check);
+      const entry = this.shots.get(display.id);
+      if (entry) entry.unchanged = shot.seq === after ? (entry.unchanged ?? 0) + 1 : 0;
       const until = Date.now() + WAIT_MS;
       while (o.wait !== false && shot.seq === after && Date.now() < until) {
         check();
-        await sleep(Math.min(POLL_MS, Math.max(0, until - Date.now())));
+        const delay = this.pollDelay(display.id);
+        await sleep(Math.min(delay, Math.max(0, until - Date.now())));
         check();
         shot = await this.grab(display.id, size, check);
+        if (entry) entry.unchanged = shot.seq === after ? (entry.unchanged ?? 0) + 1 : 0;
       }
       check();
       return { seq: shot.seq, display: display.id, width: shot.width, height: shot.height,

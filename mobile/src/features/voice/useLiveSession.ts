@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Animated, AppState } from "react-native";
 import { type AvatarState, useCapability } from "@/state/hooks";
+import { trackResource } from "@/state/ledger";
 import { showToast, useApp } from "@/state/store";
 import { haptic } from "@/ui";
 import { useReducedMotion } from "@/ui/BotAvatar";
@@ -104,8 +105,10 @@ export function useLiveSession({ chatId, botId, computer }: { chatId: string; bo
         setState(current);
       }
     });
+    const micHandle = trackResource("mic", "useLiveSession", `live-voice:${provider}`, computer);
     void next.start();
     return () => {
+      micHandle.release();
       off();
       controller.current = null;
       next.end();
@@ -116,12 +119,14 @@ export function useLiveSession({ chatId, botId, computer }: { chatId: string; bo
   const keepAwake = ready && state.started && state.status !== "ended";
   useEffect(() => {
     if (!keepAwake) return;
+    const awakeHandle = trackResource("keep-awake", "useLiveSession", "live-voice", computer ?? undefined);
     const module = keepAwakeModule();
     void module?.activateKeepAwakeAsync("live-voice").catch(() => {});
     return () => {
+      awakeHandle.release();
       void module?.deactivateKeepAwake("live-voice").catch(() => {});
     };
-  }, [keepAwake]);
+  }, [keepAwake, computer]);
 
   useEffect(() => {
     let timer: ReturnType<typeof setTimeout> | null = null;

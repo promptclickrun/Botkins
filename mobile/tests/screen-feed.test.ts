@@ -1,6 +1,8 @@
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
+import { activeFeedCount, claimScreenFeed } from "../src/features/remote/feedRegistry";
 import { runScreenFeed } from "../src/features/remote/screenFeed";
+import { ledgerSnapshot, resetLedger, setLedgerEnabled } from "../src/state/ledger";
 
 const frame = { jpeg: "image", display: "1", seq: 1, width: 640, height: 400 };
 
@@ -97,4 +99,31 @@ test("a failed passive preview parks until the next visible visit", async () => 
   });
   assert.deepEqual(states, ["failed"]);
   assert.equal(samples, 1);
+});
+
+test("claimScreenFeed enforces at most one active feed per host/display and tracks the ledger", () => {
+  setLedgerEnabled(true);
+  resetLedger();
+  let firstAborted = 0;
+  let secondAborted = 0;
+
+  const release1 = claimScreenFeed("host-1", "1", "PaneScreen", () => { firstAborted += 1; });
+  assert.equal(activeFeedCount(), 1);
+  assert.equal(ledgerSnapshot().activeByKind.feed, 1);
+
+  // Claiming the same host/display aborts the previous feed so only one stays active.
+  const release2 = claimScreenFeed("host-1", "1", "Remote", () => { secondAborted += 1; });
+  assert.equal(firstAborted, 1);
+  assert.equal(secondAborted, 0);
+  assert.equal(activeFeedCount(), 1);
+  assert.equal(ledgerSnapshot().activeByKind.feed, 1);
+
+  // Releasing the already-superseded handle is a no-op and does not drop the newer feed.
+  release1();
+  assert.equal(activeFeedCount(), 1);
+  assert.equal(ledgerSnapshot().activeByKind.feed, 1);
+
+  release2();
+  assert.equal(activeFeedCount(), 0);
+  assert.equal(ledgerSnapshot().activeByKind.feed, 0);
 });
