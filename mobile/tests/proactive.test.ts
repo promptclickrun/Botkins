@@ -124,6 +124,14 @@ test("the list of bots with an agent follows the computer's switch and the bots'
   assert.deepEqual(proactiveBots(undefined, [{ id: "a" }]), []);
 });
 
+test("a member's setup steps can save their choices without ending the owner's pause", () => {
+  const viewer = { id: "m_sam", manages: true };
+  const paused = { enabled: false, setUp: true, pausedBy: "owner", people: { m_sam: { on: true, notify: true } } } as const;
+  const draft = wizardStart(paused, viewer, [{ id: viewer.id, name: "Sam", you: true }]);
+  assert.equal(wizardPatch(draft, paused, viewer).enabled, undefined);
+  assert.equal(wizardPatch(draft, paused, OWNER).enabled, true);
+});
+
 test("the recent log is newest first, at most what is asked, and skips what it can't read", () => {
   const line = (n: number) => ({ at: n, reason: "sweep", signals: 0, outcome: "silent", runId: "r" + n });
   const entry = { enabled: true, log: [line(3), { at: "x", reason: "sweep", outcome: "silent", runId: "bad" }, { ...line(2), outcome: "exploded" }, line(1)] } as unknown as ProactiveBot;
@@ -133,7 +141,7 @@ test("the recent log is newest first, at most what is asked, and skips what it c
   assert.deepEqual(recentLog(undefined), []);
 });
 
-test("through the link: the owner sets anyone, a member only their own entry, each is sent only their own, and an alert is its recipient's", async () => {
+test("through the link: the owner sets anyone, a member only their own entry, each is sent only their own, and an alert is its recipient's", async (t) => {
   const dir = mkdtempSync(join(tmpdir(), "botkins-proactive-"));
   const backend = new MockBackend({ speed: 0.01 });
   const link = new LinkHost({ dir, backend, relay: false, port: 0, extraHosts: ["127.0.0.1"] });
@@ -239,12 +247,56 @@ test("through the link: the owner sets anyone, a member only their own entry, ea
     await assert.rejects(owner.call("proactiveAct", "bot-mira", samsRun, "take"), /no longer available/);
     await assert.rejects(pat.client.call("proactiveAct", "bot-mira", samsRun, "later"), /no longer available/);
     await assert.rejects(sam.client.call("proactiveAct", "bot-mira", ownersRun, "take"), /no longer available/);
-    const taken = await sam.client.call<any>("proactiveAct", "bot-mira", samsRun, "take");
-    assert.equal(taken.chatId, samsAlert.chatId);
     const samsChat = (backend as any).state.chats.find((chat: any) => chat.id === samsAlert.chatId);
-    assert.equal(samsChat.messages.find((item: any) => item.proactiveRunId === samsRun).alert.chosen, "take");
-    assert.ok(samsChat.messages.some((item: any) => item.role === "user" && item.text === samsAlert.prompt && item.author?.memberId === samId), "a normal turn, as Sam's own message");
-    await assert.rejects(sam.client.call("proactiveAct", "bot-mira", samsRun, "later"), /already chose/);
+    await t.test("a member cannot share their private alert in the demo", async () => {
+      await assert.rejects(sam.client.call("link.team.inviteToChat", samsAlert.chatId, "owner"), /holds one person's alerts and can't be shared/);
+      assert.equal(ownerParts.chats.some((chat: { id: string }) => chat.id === samsAlert.chatId), false);
+    });
+    await t.test("a demo offer starts a new chat with only its request", async () => {
+      const taken = await sam.client.call<any>("proactiveAct", "bot-mira", samsRun, "take");
+      assert.notEqual(taken.chatId, samsAlert.chatId);
+      const work = (backend as any).state.chats.find((chat: any) => chat.id === taken.chatId);
+      assert.equal(work.createdBy, samId);
+      assert.equal(work.title, message.alert.offer);
+      assert.equal(work.schedules, undefined);
+      assert.equal(work.messages.some((item: any) => item.alert || item.text === message.text), false);
+      assert.equal(samsChat.messages.find((item: any) => item.proactiveRunId === samsRun).alert.chosen, "take");
+      assert.ok(work.messages.some((item: any) => item.role === "user" && item.text === samsAlert.prompt && item.author?.memberId === samId), "a normal turn, as Sam's own message");
+      await assert.rejects(sam.client.call("proactiveAct", "bot-mira", samsRun, "later"), /already chose/);
+    });
+    await t.test("an owner phone can watch and page the approval without seeing the alert", async () => {
+      const state = (backend as any).state;
+      state.requests.push({ id: "approval-alert", kind: "permission", chatId: samsChat.id, title: "Approve report?" });
+      samsChat.messages.push({ role: "user", text: "Please run the report.", time: Date.now() });
+      owner.watch([samsChat.id]);
+      backend.changed();
+      try {
+        const key = "chat:" + samsChat.id;
+        await until(() => !!ownerParts[key], "the approval chat in the owner's parts");
+        const page = await owner.call("link.messages", samsChat.id, samsChat.messages.length, 32);
+        for (const view of [ownerParts[key], page]) {
+          assert.ok(JSON.stringify(view).includes("Please run the report."));
+          assert.ok(!JSON.stringify(view).includes(message.text));
+          assert.ok(!JSON.stringify(view).includes(samsRun));
+        }
+      } finally {
+        state.requests.pop();
+        owner.watch([]);
+        backend.changed();
+      }
+    });
+    await t.test("a demo manager cannot resume a bot paused by the owner", async () => {
+      await owner.call("setBotProactive", "bot-mira", { enabled: false });
+      await assert.rejects(sam.client.call("setBotProactive", "bot-mira", { enabled: true }), /The owner paused this bot's Proactive agent/);
+      await until(() => sam.parts.proactive?.bots?.["bot-mira"]?.pausedBy === "owner", "the owner's pause in Sam's parts");
+      const viewer = { id: samId, manages: true };
+      const paused = sam.parts.proactive.bots["bot-mira"];
+      const draft = wizardStart(paused, viewer, wizardPeople(team, "bot-mira", viewer));
+      await sam.client.call("setBotProactive", "bot-mira", wizardPatch(draft, paused, viewer));
+      assert.equal(mira().enabled, false);
+      await owner.call("setBotProactive", "bot-mira", { enabled: true });
+      assert.equal(mira().enabled, true);
+    });
     const later = await owner.call<any>("proactiveAct", "bot-mira", ownersRun, "later");
     assert.ok(later.until > Date.now());
 

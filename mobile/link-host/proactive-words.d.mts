@@ -36,7 +36,7 @@ export type WizardDraft = {
 };
 export type WizardPatch = {
   setUp: true;
-  enabled: true;
+  enabled?: true;
   people: Record<string, ProactivePerson | null>;
   watch: string[];
   instructions: string;
@@ -44,7 +44,7 @@ export type WizardPatch = {
   maxPerDay: number;
   sweepHours?: number;
 };
-type Entry = { setUp?: boolean; enabled?: boolean; people?: Record<string, ProactivePerson | undefined>; watch?: string[]; instructions?: string; sweepHours?: number; every?: number; maxPerDay?: number } | undefined;
+type Entry = { setUp?: boolean; enabled?: boolean; pausedBy?: "owner"; people?: Record<string, ProactivePerson | undefined>; watch?: string[]; instructions?: string; sweepHours?: number; every?: number; maxPerDay?: number } | undefined;
 type Team = { members?: { id: string; name: string; groupId?: string }[]; groups?: { id: string; roleId: string }[]; roles?: { id: string; perms?: Record<string, string[]>; bots?: "all" | string[] }[]; people?: { id: string; name: string }[] } | null | undefined;
 
 export function wizardPeople(team: Team, botId: string, viewer: ProactiveViewer, ownerName?: string): WizardPerson[];

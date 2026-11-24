@@ -215,8 +215,8 @@ export function botsApi({ workspace, handlers, bot }) {
       return proactiveView(bot(found.id));
     },
     /**
-     * What the owner does with an alert a bot sent them: "take" starts a normal turn in their chat with what the bot offered
-     * (it answers that chat's id; the turn's tools still ask for approval as usual), "later" holds what it was about back
+     * What the owner does with an alert a bot sent them: "take" starts a normal turn in a new private chat with what the bot
+     * offered (it answers that chat's id; tools still ask for approval), "later" holds the evidence back across their bots
      * for a day. The alert is named by its run id (`bots.proactive` lists them).
      */
     async "bots.proactive.act"([ref, runId, action]) {

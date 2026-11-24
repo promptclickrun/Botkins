@@ -24,7 +24,7 @@ import { sendAnswers, startAnswers } from "./answers";
 import { ALL_CARD, cardOver } from "../../link-host/cards.mjs";
 import { botsWithWork, hasWork, MAX_CARDS, phoneCard } from "./cards";
 import { answerPendingAsks } from "./device";
-import { api, chatOnScreen, freshSync, onChatOnScreen, restIfAway, switchComputer, tellOthers } from "./link";
+import { api, attempt, chatOnScreen, freshSync, onChatOnScreen, restIfAway, switchComputer, tellOthers } from "./link";
 import { useApp } from "./store";
 
 const KEY = "botkins.push.v1";
@@ -225,17 +225,22 @@ function alertOf(response: import("expo-notifications").NotificationResponse): {
 }
 /**
  * "Take care of it" on an alert's notification: the computer is asked once the link is up. The chat opens
- * meanwhile, and the alert there has the same button, so nothing is lost when the computer can't be reached.
+ * meanwhile, and the new work chat opens when the computer accepts.
  */
-function takeAlert(alert: { bot: string; run: string }) {
-  const send = () => void api.proactiveAct(alert.bot, alert.run, "take").catch(() => {});
-  if (useApp.getState().link === "online") return send();
+function takeAlert(alert: { bot: string; run: string }, serverId?: string) {
+  const send = async () => {
+    const answer = await attempt(api.proactiveAct(alert.bot, alert.run, "take"));
+    if (answer?.chatId && serverId === useApp.getState().pairing?.serverId && chatOnScreen() !== answer.chatId)
+      router.push({ pathname: "/chat/[id]", params: { id: answer.chatId } });
+  };
+  const ready = (state: ReturnType<typeof useApp.getState>) => state.link === "online" && state.pairing?.serverId === serverId;
+  if (ready(useApp.getState())) return void send();
   const timer = setTimeout(() => stop(), 20_000);
   const stop = useApp.subscribe((state) => {
-    if (state.link !== "online") return;
+    if (!ready(state)) return;
     stop();
     clearTimeout(timer);
-    send();
+    void send();
   });
 }
 /** A notification's actions that answer a bot where they are (the native side queues them; src/state/answers.ts sends them). */
@@ -278,7 +283,7 @@ function openFrom(response: import("expo-notifications").NotificationResponse | 
     if (!chatId) return;
     // The button on a proactive alert: the bot starts on what it offered, in the chat that opens.
     const offered = response.actionIdentifier === "alert.take" ? alertOf(response) : undefined;
-    if (offered) takeAlert(offered);
+    if (offered) takeAlert(offered, other ? host : state.pairing?.serverId);
     if (chatOnScreen() === chatId) return;
     router.push({ pathname: "/chat/[id]", params: { id: chatId } });
   };

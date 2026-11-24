@@ -79,7 +79,7 @@ export const wizardReady = (draft) => Object.values(draft.people).some((person) 
 /**
  * What finishing the steps saves, as one change (`setBotProactive`): the bot is set up and on, each ticked
  * person is on with their notify choice, and a person who was unticked is taken out. A member's change
- * names only themselves and leaves look-around alone. `entry` is the bot's settings before.
+ * names only themselves and leaves look-around and the owner's pause alone. `entry` is the bot's settings before.
  */
 export function wizardPatch(draft, entry, viewer) {
   const held = plain(entry?.people) ? entry.people : {};
@@ -92,7 +92,7 @@ export function wizardPatch(draft, entry, viewer) {
   }
   return {
     setUp: true,
-    enabled: true,
+    ...((owner || entry?.pausedBy !== OWNER) && { enabled: true }),
     people,
     watch: owner ? [...draft.watch] : draft.watch.filter((item) => item !== "tasks"),
     instructions: draft.instructions.trim(),

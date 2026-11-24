@@ -349,7 +349,11 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
     open: (chatId) => host.window.openChat(chatId),
     openSettings: (tab) => host.window.openSettings(tab),
     // A proactive alert's buttons on the computer's own notification: the computer's notifications are the owner's.
-    act: ({ botId, runId }, action) => void workspace.proactive.act(botId, runId, action, "owner").turn?.catch((error) => console.error("Workspace turn:", error.message)),
+    act: ({ botId, runId }, action) => {
+      const { turn, ...result } = workspace.proactive.act(botId, runId, action, "owner");
+      turn?.catch((error) => console.error("Workspace turn:", error.message));
+      return result;
+    },
   });
   // A sign-in page a provider asks for opens in the person's browser, and only a web page does.
   signIns = new SignIns({

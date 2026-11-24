@@ -1152,9 +1152,9 @@ export type ProactiveAlert = { runId: string; offer?: string; chosen?: "take" | 
  * "proactive-team-v1": `setUp` says its setup steps were finished (until then it never wakes), and `people` holds each
  * person's own entry, by "owner" or a member's id.
  */
-export type ProactiveBotSettings = { enabled: boolean; setUp?: boolean; every: number; sweepHours: number; maxPerDay: number; deliver: "chat" | "feed"; watch: ProactiveWatch[]; instructions: string; people?: Record<string, ProactivePerson> };
+export type ProactiveBotSettings = { enabled: boolean; pausedBy?: "owner"; setUp?: boolean; every: number; sweepHours: number; maxPerDay: number; deliver: "chat" | "feed"; watch: ProactiveWatch[]; instructions: string; people?: Record<string, ProactivePerson> };
 /** A change to a bot's agent: only what it names. In `people` an entry changes what it names, and null takes that person out. */
-export type ProactivePatch = Partial<Omit<ProactiveBotSettings, "people">> & { people?: Record<string, Partial<ProactivePerson> | null> };
+export type ProactivePatch = Partial<Omit<ProactiveBotSettings, "people" | "pausedBy">> & { people?: Record<string, Partial<ProactivePerson> | null> };
 /**
  * One bot's agent as this phone is sent it. The owner is sent everyone in `people` and their own activity (`log`, `pings`…).
  * A member is sent the shared settings, only their own entry in `people`, and their own activity: never another person's.

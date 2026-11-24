@@ -103,7 +103,7 @@ export class Proactive {
     // Saved in an earlier shape (one bot was the agent, then one person per bot), it is brought over once.
     const { settings, state } = migrateProactive(ws.state.settings.proactive, ws.state.proactive);
     ws.state.settings.proactive = settings;
-    // { shape, bots: { [botId]: { people: { [person]: { chatId, seen: { key: time }, told, snoozed, alerts, lastSweepAt, day, pings, log, learning } } } }, reminders }
+    // { shape, bots: { [botId]: { people: { [person]: { chatId, seen, told, alerts, lastSweepAt, day, pings, log, learning } } } }, reminders, snoozed: { [person]: { [key]: until } } }
     ws.state.proactive = state;
     ws.events?.on("turn", ({ run, proactiveCheck }) => run?.proactive && this.finished(run, proactiveCheck));
   }
@@ -276,8 +276,7 @@ export class Proactive {
    *   settings, everyone's state and every routine.
    * - A member changes only their own entry in `people` (`on`, `notify`), and adds themselves only when their
    *   role manages the bot. Such a role may also finish the setup steps and change what the people share,
-   *   but never look-around (it reads the computer's own accounts), the tasks watch (tasks are the owner's) or
-   *   the bot's switch to off. A member's `null` takes only that member out.
+   *   but not look-around, the tasks watch, or the owner's pause. A member's `null` takes only that member out.
    *
    * The rule itself is `proactivePatch` (desktop/link/proactive-rules.mjs), which the demo computer uses too.
    * Answers the bot's entry as `by` is shown it.
@@ -330,7 +329,7 @@ export class Proactive {
   }
   /** What one person's check did, without the keys of what it raised or anything it learned from. */
   activity(botId, person) {
-    const { seen: _seen, told: _told, snoozed: _snoozed, alerts: _alerts, contextKey: _context, learning, review, ...gate } = this.held(botId, person) ?? {};
+    const { seen: _seen, told: _told, alerts: _alerts, contextKey: _context, learning, review, ...gate } = this.held(botId, person) ?? {};
     return { ...gate, ...(review && { nextReviewAt: review.at }), learning: learningView(learning) };
   }
   /**
@@ -392,11 +391,10 @@ export class Proactive {
    * still holds: a plain reminder for the same thing would be a second ping.
    */
   told(person, now = Date.now()) {
-    const keys = new Set();
+    const keys = new Set(Object.entries(this.snoozes(person, now)).filter(([, until]) => until > now).map(([key]) => key));
     for (const [, who, gate] of this.gates()) {
       if (who !== person) continue;
       for (const key of Object.keys(gate.told ?? {})) keys.add(key);
-      for (const [key, until] of Object.entries(gate.snoozed ?? {})) if (until > now) keys.add(key);
     }
     for (const task of this.ws.active.values()) {
       const check = task.run?.recovery?.proactiveCheck;
@@ -416,8 +414,8 @@ export class Proactive {
     return (gate.pings ?? 0) < config.maxPerDay && !inQuietHours(this.ws.state.settings.notifications?.quietHours, new Date(now), this.zone);
   }
   /** What a person asked to hear of again later, by key: until when it is held back. Old entries are let go. */
-  snoozes(gate, now) {
-    const snoozed = gate.snoozed ?? {};
+  snoozes(person, now) {
+    const snoozed = Object.hasOwn(this.state.snoozed, person) ? this.state.snoozed[person] : {};
     for (const [key, until] of Object.entries(snoozed)) if (now - until > 2 * SNOOZE) delete snoozed[key];
     return snoozed;
   }
@@ -432,12 +430,12 @@ export class Proactive {
       for (const [key, at] of Object.entries(g.told ?? {})) if (now - at > SEEN_DAYS * 86400_000) delete g.told[key];
     }
     const seen = this.processed(person);
-    const snoozed = this.snoozes(gate, now);
+    const snoozed = this.snoozes(person, now);
     const fresh = signals(this.ws.state, this.ws.interactions?.snapshot?.() ?? [], config.watch, now, this.scope(person), new Set(Object.keys(snoozed)))
       .filter((s) => !seen.has(s.key) && !(snoozed[s.key] > now)).slice(0, 12);
     const sweep = person === OWNER && config.sweepHours > 0 && (trigger === "manual" || now - (gate.lastSweepAt ?? 0) >= config.sweepHours * 3600_000);
     if (trigger !== "manual" && !fresh.length && !sweep && !config.watch.includes("context")) return null;
-    const personal = personalEvidence(this.ws, botId, person);
+    const personal = personalEvidence(this.ws, botId, person).filter((e) => !(snoozed[e.key] > now));
     const contextKey = personal.length ? digest(personal.map((e) => e.id).sort().join("\n")) : null;
     const changed = config.watch.includes("context") && contextKey && contextKey !== gate.contextKey;
     if (!contextKey && gate.contextKey) {
@@ -509,13 +507,15 @@ export class Proactive {
   /** The only text a learning run may deliver. Recheck local evidence at the decision
    * boundary so an erased memory or inaccessible conversation cannot ground a new alert. */
   refreshEvidence(botId, check) {
+    const now = Date.now();
+    const snoozed = this.snoozes(check.person, now);
     const personal = new Set(personalEvidence(this.ws, botId, check.person).map((e) => e.id));
     const config = this.config(botId);
-    const kept = new Set(Object.keys(this.held(botId, check.person)?.snoozed ?? {}));
-    const currentSignals = signals(this.ws.state, this.ws.interactions?.snapshot?.() ?? [], config.watch, Date.now(), this.scope(check.person), kept);
+    const kept = new Set(Object.keys(snoozed));
+    const currentSignals = signals(this.ws.state, this.ws.interactions?.snapshot?.() ?? [], config.watch, now, this.scope(check.person), kept);
     const present = new Set(currentSignals.map((s) => fact("signal", s.key, s.text).id));
     const previous = check.evidence.length;
-    check.evidence = check.evidence.filter((e) => e.kind === "signal" ? present.has(e.id) : personal.has(e.id));
+    check.evidence = check.evidence.filter((e) => !(snoozed[e.key] > now) && (e.kind === "signal" ? present.has(e.id) : personal.has(e.id)));
     return check.evidence.length === previous;
   }
   decide(chat, check, proposals) {
@@ -536,9 +536,10 @@ export class Proactive {
     if (config.watch.includes("context")) check.nextReview = reviewFrom(proposals.revisit, check.evidence, Date.now());
     const live = config.sweepHours && check.sweep ? check.live ?? [] : [];
     // Only what this person's own check was given can ground an alert: an ID from anyone else's is unknown here.
-    const evidence = [...check.evidence, ...live];
-    // What this person was told lately by any of their bots is not said again. An alert they answered "Not now" stops counting when its day is over.
     const now = Date.now();
+    const snoozed = this.snoozes(check.person, now);
+    const evidence = [...check.evidence, ...live.filter((e) => !(snoozed[e.key] > now))];
+    // What this person was told lately by any of their bots is not said again. An alert they answered "Not now" stops counting when its day is over.
     const recent = this.gates().filter(([, who]) => who === check.person).flatMap(([, , g]) => (g.learning?.history ?? []).filter((row) => !(g.alerts?.find((a) => a.runId === row.runId)?.until <= now)));
     const choice = selectSuggestion(proposals.candidates, evidence, gate.learning, recent);
     check.choice = choice?.example;
@@ -548,6 +549,7 @@ export class Proactive {
       // a chance on the next tick, even when a personal recommendation won this one.
       const pending = new Set(evidence.filter((e) => e.kind === "signal" && !choice.refs.includes(e.id)).map((e) => e.key));
       check.keys = check.keys.filter((key) => !pending.has(key));
+      check.alertKeys = evidence.filter((e) => choice.refs.includes(e.id)).map((e) => e.key);
       if (choice.offer) check.offer = choice.offer;
     }
     return choice?.text ?? SILENT;
@@ -581,14 +583,14 @@ export class Proactive {
    * What a person does with an alert they were sent. Only the person it was for has it: anyone else is told
    * it is gone.
    *
-   * - "take": the bot's offer becomes a normal turn in that person's chat with the bot (the chat the alert is
-   *   in, or their own private chat for a Feed card), written as their message. It runs with the chat's usual
+   * - "take": the bot's offer becomes a normal turn in a new private chat with the bot, written as that
+   *   person's message. It runs with the chat's usual
    *   tools and approvals: an alert never approves anything ahead of time. Answers `{ chatId, turn }`.
    * - "later": what the alert was about is not raised for 24 hours, then may come back.
    */
   act(botId, runId, action, by = OWNER) {
     if (!ACTIONS.includes(action)) throw new Error("Choose take or later.");
-    const bot = this.ws.bot(botId);
+    this.ws.bot(botId);
     const gate = this.held(botId, by);
     const alert = gate?.alerts?.find((a) => a.runId === runId);
     if (!alert || !this.config(botId)?.people?.[by] || !this.eligible(by, botId)) throw new Error("This alert is no longer available.");
@@ -596,11 +598,11 @@ export class Proactive {
     const now = Date.now();
     if (action === "later") {
       Object.assign(alert, { chosen: "later", until: now + SNOOZE });
-      gate.snoozed ??= {};
+      const snoozed = (this.state.snoozed[by] ??= {});
       for (const key of alert.keys ?? []) {
         delete gate.seen[key];
         if (gate.told) delete gate.told[key];
-        gate.snoozed[key] = alert.until;
+        snoozed[key] = alert.until;
       }
       this.mark(botId, alert, "later");
       this.ws.save();
@@ -610,11 +612,14 @@ export class Proactive {
     // Taking it starts a turn with the bot, as sending a message does (the link checks the same: link/team.mjs).
     if (!proactiveChats(this.ws.teamOf(), by)) throw new Error("Your team role can't chat with this bot.");
     const createdBy = by === OWNER ? undefined : by;
-    const delivered = alert.chatId && this.ws.state.chats.find((c) => c.id === alert.chatId);
-    const chat = delivered && this.ws.inChat(delivered.id, by) ? delivered : this.ws.panels.routines.chatTarget(botId, { to: "chat" }, bot.name, createdBy, true);
+    const title = alert.offer.label;
+    const chat = this.ws.chat(this.ws.createChat(botId));
+    if (createdBy) chat.createdBy = createdBy;
+    chat.titleSet = true;
     const author = createdBy && { memberId: by, name: personName(this.ws.teamOf(), by) || "A member" };
     // Marked once the turn has started: a start that fails leaves the alert to try again.
     const turn = this.ws.submit(chat.id, alert.offer.prompt, { delivery: "queue", ...(author && { author }) });
+    chat.title = title;
     alert.chosen = "take";
     this.mark(botId, alert, "take");
     this.ws.save();
@@ -633,7 +638,6 @@ export class Proactive {
     if (check && !check.deferred && outcome !== "failed" && this.current(chat, person)) {
       for (const key of check.keys) {
         gate.seen[key] = check.at;
-        if (gate.snoozed) delete gate.snoozed[key];
       }
       if (check.sweep) gate.lastSweepAt = check.at;
       if (check.contextKey && this.config(botId).watch.includes("context")) gate.contextKey = check.contextKey;
@@ -651,7 +655,7 @@ export class Proactive {
         // What the person was told about, so a plain reminder for the same thing stays quiet, and what the apps may act on.
         gate.told ??= {};
         for (const key of check.keys) gate.told[key] = check.at;
-        gate.alerts = [{ runId: run.id, at: check.at, keys: [...check.keys], ...(check.offer && { offer: check.offer }), ...(run.delivery.chatId ? { chatId: run.delivery.chatId } : { itemId: run.delivery.itemId }) }, ...(gate.alerts ?? [])].slice(0, ALERTS_KEPT);
+        gate.alerts = [{ runId: run.id, at: check.at, keys: [...(check.alertKeys ?? check.keys)], ...(check.offer && { offer: check.offer }), ...(run.delivery.chatId ? { chatId: run.delivery.chatId } : { itemId: run.delivery.itemId }) }, ...(gate.alerts ?? [])].slice(0, ALERTS_KEPT);
       }
     }
     const reply = chat.messages.findLast((m) => m.runId === run.id && m.role === "assistant" && !m.interim)?.text;

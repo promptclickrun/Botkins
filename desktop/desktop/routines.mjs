@@ -572,6 +572,7 @@ export class Routines {
     let to = entry.deliver.to;
     const maker = entry.createdBy ?? chat.createdBy;
     try {
+      if (run.proactive && !this.ws.proactive.current(chat, personOf(maker))) throw new Error("This proactive check is no longer available.");
       if (run.proactive && to === "feed") {
         const person = personOf(maker);
         const space = this.ws.spaces.forCards(person, "feed");

@@ -40,6 +40,7 @@ const pick = (list, value, what) => {
   return value;
 };
 const plain = (value) => !!value && typeof value === "object" && !Array.isArray(value);
+const botField = (key) => key === "pausedBy" || Object.hasOwn(defaultBotProactive, key);
 
 /** The computer's switch checked whole. `current` is what it was; the bots' own settings are not changed here. */
 export function proactiveField(value, current = defaultProactive) {
@@ -80,14 +81,16 @@ export function peopleField(value, current = {}) {
 /** One bot's settings checked whole. `current` is what they were; a patch changes only what it names. */
 export function botProactiveField(value, current = defaultBotProactive) {
   if (!plain(value)) throw new Error("Invalid Proactive agent setting");
-  const unknown = Object.keys(value).find((key) => !Object.hasOwn(defaultBotProactive, key));
+  const unknown = Object.keys(value).find((key) => !botField(key));
   if (unknown) throw new Error("Unknown Proactive agent setting: " + unknown);
   const next = { ...defaultBotProactive, ...current, ...value };
   if (typeof next.enabled !== "boolean" || typeof next.setUp !== "boolean") throw new Error("Choose on or off");
+  if (next.pausedBy !== undefined && next.pausedBy !== OWNER) throw new Error("Only the owner can pause this bot's Proactive agent.");
   if (!Array.isArray(next.watch) || next.watch.some((w) => !WATCHES.includes(w))) throw new Error("Watch any of: " + WATCHES.join(", ") + ".");
   if (typeof next.instructions !== "string" || next.instructions.length > 2000) throw new Error("Use up to 2,000 characters for the Proactive agent's instructions.");
   return {
     enabled: next.enabled,
+    ...(!next.enabled && next.pausedBy === OWNER && { pausedBy: OWNER }),
     setUp: next.setUp,
     every: pick(EVERY, next.every, "how often it checks, in minutes"),
     sweepHours: pick(SWEEP_HOURS, next.sweepHours, "how often it looks around, in hours (0 for never)"),
@@ -104,7 +107,7 @@ function savedBot(entry) {
   if (!plain(entry)) return null;
   const fields = {};
   for (const [key, value] of Object.entries(entry)) {
-    if (!Object.hasOwn(defaultBotProactive, key)) continue;
+    if (!botField(key)) continue;
     try {
       fields[key] = botProactiveField({ [key]: value }, defaultBotProactive)[key];
     } catch {
@@ -114,8 +117,25 @@ function savedBot(entry) {
   return botProactiveField(fields, defaultBotProactive);
 }
 
-/** The shape this file writes. A saved state without it is from before a bot looked out for several people. */
-export const PROACTIVE_SHAPE = 3;
+/** The shape this file writes. Shape 3 had several people but still kept each person's snoozes on each bot. */
+export const PROACTIVE_SHAPE = 4;
+
+function migrateSnoozes(gates, saved) {
+  const snoozed = Object.fromEntries(Object.entries(plain(saved) ? saved : {}).filter(([, keys]) => plain(keys)).map(([person, keys]) => [person, { ...keys }]));
+  for (const bot of Object.values(gates)) {
+    for (const [person, held] of Object.entries(bot.people)) {
+      if (!plain(held.snoozed)) continue;
+      const { snoozed: old, ...own } = held;
+      bot.people[person] = own;
+      for (const [key, until] of Object.entries(old)) {
+        if (!Number.isFinite(until)) continue;
+        const keys = Object.hasOwn(snoozed, person) ? snoozed[person] : (snoozed[person] = {});
+        keys[key] = Math.max(keys[key] ?? 0, until);
+      }
+    }
+  }
+  return snoozed;
+}
 
 /**
  * The settings and the state of the Proactive agent as saved, brought to the current shape. Pure, and the
@@ -134,18 +154,18 @@ export const PROACTIVE_SHAPE = 3;
 export function migrateProactive(saved, state) {
   const old = plain(saved) ? saved : {};
   const gate = plain(state) ? state : {};
-  if (gate.shape === PROACTIVE_SHAPE) {
+  if (gate.shape === 3 || gate.shape === PROACTIVE_SHAPE) {
     const bots = {};
     for (const [id, entry] of Object.entries(plain(old.bots) ? old.bots : {})) {
       const kept = savedBot(entry);
-      if (kept) bots[id] = kept;
+      if (kept) bots[id] = { ...kept, ...(gate.shape === 3 && entry.enabled === false && { pausedBy: OWNER }) };
     }
     const gates = {};
     for (const [id, held] of Object.entries(plain(gate.bots) ? gate.bots : {})) {
       if (!plain(held)) continue;
       gates[id] = { people: Object.fromEntries(Object.entries(plain(held.people) ? held.people : {}).filter(([, own]) => plain(own))) };
     }
-    return { settings: { enabled: old.enabled !== false, bots }, state: { shape: PROACTIVE_SHAPE, bots: gates, reminders: plain(gate.reminders) ? gate.reminders : {} } };
+    return { settings: { enabled: old.enabled !== false, bots }, state: { shape: PROACTIVE_SHAPE, bots: gates, reminders: plain(gate.reminders) ? gate.reminders : {}, snoozed: migrateSnoozes(gates, gate.snoozed) } };
   }
   // Before: one entry per bot, each with the one `person` it worked for.
   const before = {};
@@ -167,8 +187,8 @@ export function migrateProactive(saved, state) {
     const person = typeof entry.person === "string" && entry.person ? entry.person.slice(0, 200) : OWNER;
     const { people: _people, setUp: _setUp, person: _person, ...own } = entry;
     const kept = savedBot(own);
-    bots[id] = { ...kept, setUp: wasOn && kept.enabled, people: { [person]: { on: kept.enabled, notify: true } } };
+    bots[id] = { ...kept, ...(entry.enabled === false && { pausedBy: OWNER }), setUp: wasOn && kept.enabled, people: { [person]: { on: kept.enabled, notify: true } } };
     if (gatesBefore[id]) gates[id] = { people: { [person]: gatesBefore[id] } };
   }
-  return { settings: { enabled: true, bots }, state: { shape: PROACTIVE_SHAPE, bots: gates, reminders: {} } };
+  return { settings: { enabled: true, bots }, state: { shape: PROACTIVE_SHAPE, bots: gates, reminders: {}, snoozed: migrateSnoozes(gates) } };
 }
