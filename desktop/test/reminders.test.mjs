@@ -89,7 +89,10 @@ test("one reminder for each thing, to the person it waits on, with quiet hours, 
   const mine = ws.createChat("patch");
   const averys = ws.createChat("patch");
   ws.chat(averys).createdBy = "m_avery";
-  const now = Date.now();
+  const now = new Date(2026, 10, 22, 12, 0, 0, 0).getTime();
+  const realNow = Date.now;
+  Date.now = () => now;
+  t.after(() => (Date.now = realNow));
   ask(ws, [
     { id: "q1", kind: "question", title: "Which branch?", chatId: mine, botId: "patch", time: now - 20 * MIN },
     { id: "q2", kind: "question", title: "Avery's question", chatId: averys, botId: "patch", time: now - 20 * MIN },
