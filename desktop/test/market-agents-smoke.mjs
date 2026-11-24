@@ -1,5 +1,5 @@
 // Isolated Electron renderer smoke for Marketplace › Agents: the Marketplace button beside New chat,
-// a local marketplace's agent templates, a template's page, and Install filling in Create a bot.
+// a local marketplace's agent templates, a template's page, and Add filling in Create a bot.
 // It uses a local marketplace folder for its templates. Run after `npm run build`:
 //   node test/market-agents-smoke.mjs        (BOTKINS_QA_DIR=<folder> keeps screenshots)
 import assert from "node:assert/strict";
@@ -63,24 +63,25 @@ try {
   await dialog.getByRole("heading", { name: "Marketplace", exact: true }).waitFor();
 
   // Agents: the local templates, with their categories as chips.
-  await dialog.getByRole("tab", { name: "Agents", exact: true }).click();
-  const mine = dialog.locator(".agent-listing", { hasText: "local-agent-market" });
+  await dialog.getByRole("tab", { name: "Bots", exact: true }).click();
+  const mine = dialog.locator(".bot-card");
   const listing = (text) => mine.filter({ hasText: text });
   const sorter = listing("Sorter");
   await sorter.waitFor({ timeout: 60000 });
   await expect(sorter).toContainText("Sorts your inbox");
-  await expect(sorter).toContainText("Productivity · local-agent-market");
+  await expect(sorter).toContainText("Productivity");
   await shot(page, "agents-list");
   await dialog.getByRole("button", { name: /^Writing/ }).click();
   await expect(listing("Quill")).toBeVisible();
   await expect(listing("Sorter")).toHaveCount(0);
   await dialog.getByRole("button", { name: /^All/ }).click();
-  await dialog.getByRole("searchbox", { name: "Search agents" }).fill("inbox");
-  await expect(mine).toHaveCount(1);
-  await dialog.getByRole("searchbox", { name: "Search agents" }).fill("");
+  await dialog.getByRole("searchbox", { name: "Search bots" }).fill("inbox");
+  await expect(sorter).toHaveCount(1);
+  await expect(listing("Quill")).toHaveCount(0);
+  await dialog.getByRole("searchbox", { name: "Search bots" }).fill("");
 
   // A template's page: its Botkin, role, where it is from, and its instructions as they will be given.
-  await listing("Sorter").click();
+  await listing("Sorter").getByRole("button", { name: "About Sorter" }).click();
   await dialog.getByRole("heading", { name: "Sorter", exact: true }).waitFor();
   await expect(dialog.locator(".agent-detail")).toContainText("Inbox triage");
   await expect(dialog.locator(".agent-detail")).toContainText("Productivity · local-agent-market · v1.0.0 · Botkins");
@@ -88,8 +89,8 @@ try {
   await expect(dialog.locator(".agent-detail")).toContainText("Someone else wrote these instructions");
   await shot(page, "agent-page");
 
-  // Install opens Create a bot, filled in. The person changes the name and creates it.
-  await dialog.getByRole("button", { name: "Install", exact: true }).click();
+  // Add opens Create a bot, filled in. The person changes the name and creates it.
+  await dialog.getByRole("button", { name: "Add", exact: true }).click();
   const sheet = page.locator("dialog.bot-sheet");
   await sheet.getByRole("heading", { name: "Create a bot", exact: true }).waitFor();
   await expect(sheet.locator("input[name=name]")).toHaveValue("Sorter");
