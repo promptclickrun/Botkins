@@ -117,7 +117,7 @@ test("`botkins help --json` names every command with its usage, its arguments an
   // One area or one command, by its words.
   out = "";
   assert.equal(await main(["help", "bots", "--json"], io), 0);
-  assert.deepEqual(JSON.parse(out).areas.map((area) => [area.name, area.commands.map((entry) => entry.command)]), [["bots", ["bots list", "bots add", "bots edit", "bots remove", "bots tools", "bots skills", "bots access", "bots menu", "bots duplicate", "bots order", "bots primary", "bots flags", "bots proactive", "bots memory", "bots sections list", "bots sections add", "bots sections rename", "bots sections remove", "bots import"]]]);
+  assert.deepEqual(JSON.parse(out).areas.map((area) => [area.name, area.commands.map((entry) => entry.command)]), [["bots", ["bots list", "bots add", "bots edit", "bots remove", "bots tools", "bots skills", "bots access", "bots menu", "bots duplicate", "bots order", "bots primary", "bots flags", "bots proactive", "bots alert", "bots memory", "bots sections list", "bots sections add", "bots sections rename", "bots sections remove", "bots import"]]]);
   out = "";
   assert.equal(await main(["help", "bots", "edit", "--json"], io), 0);
   const [edit] = JSON.parse(out).areas[0].commands;

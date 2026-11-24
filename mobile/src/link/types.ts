@@ -325,6 +325,10 @@ export type Message = {
   author?: { memberId: string; name: string };
   /** A person's message delivered into a turn that was under way (a steer): that turn's run. The desktop app records it today. */
   steeredRunId?: string;
+  /** A proactive alert the bot sent on its own: the run that made it (a 👍 or 👎 on it teaches the bot). */
+  proactiveRunId?: string;
+  /** That alert's actions ("proactive-team-v1"): what the bot offers to do, and what the person chose. */
+  alert?: ProactiveAlert;
   /**
    * Text a bot wrote during a turn before a step, a steer or a request, or before the turn ended
    * without a reply ("turn-timeline-v1", docs/turn-timeline.md). `time` is when its first words came.
@@ -834,6 +838,9 @@ export type BoardItem = {
   read: boolean;
   rating?: "up" | "down";
   snoozedUntil?: number;
+  /** A proactive alert's run and its actions ("proactive-team-v1"), as on a chat message. */
+  proactiveRunId?: string;
+  alert?: ProactiveAlert;
   createdAt: number;
   updatedAt: number;
 };
@@ -934,7 +941,14 @@ export type Appearance = {
   /** Missing on older computers means the desktop's usual default: on. */
   avatarAnimations?: boolean;
 };
-export type NotificationSettings = { replies: boolean; routines: boolean; requests: boolean; quietHours: { enabled: boolean; from: string; to: string } };
+export type NotificationSettings = {
+  replies: boolean;
+  routines: boolean;
+  requests: boolean;
+  /** One plain reminder when something is left waiting on a person, with no model. On from the start. Missing on a computer without "proactive-team-v1". */
+  reminders?: boolean;
+  quietHours: { enabled: boolean; from: string; to: string };
+};
 export type Preferences = {
   fastMode?: FastMode;
   model: ModelChoice;
@@ -1129,12 +1143,23 @@ export type Meta = {
 export type ProactiveWatch = "runs" | "tasks" | "requests" | "context";
 /** The computer's switch for the Proactive agent. Off pauses every bot's agent without forgetting its settings. */
 export type ProactiveSettings = { enabled: boolean };
-/** What a bot's Proactive agent is set to. */
-export type ProactiveBotSettings = { enabled: boolean; every: number; sweepHours: number; maxPerDay: number; deliver: "chat" | "feed"; watch: ProactiveWatch[]; instructions: string };
+/** One person a bot looks out for ("proactive-team-v1"): `on` is their own check, `notify: false` delivers their alerts with no notification. */
+export type ProactivePerson = { on: boolean; notify: boolean };
+/** What a delivered proactive alert carries: its run, the label of what the bot offers to do, and what the person chose. Never the offer's own request. */
+export type ProactiveAlert = { runId: string; offer?: string; chosen?: "take" | "later" };
 /**
- * One bot's agent as this phone is sent it. The owner is sent `person` ("owner", or the member it works for). A member is sent
- * `mine` for their own agents and, for another person's, only `{ enabled, taken }`: every other field may be missing, and a
- * computer may add more.
+ * What a bot's Proactive agent is set to. Everything but `people` is shared by everyone the bot looks out for. With
+ * "proactive-team-v1": `setUp` says its setup steps were finished (until then it never wakes), and `people` holds each
+ * person's own entry, by "owner" or a member's id.
+ */
+export type ProactiveBotSettings = { enabled: boolean; setUp?: boolean; every: number; sweepHours: number; maxPerDay: number; deliver: "chat" | "feed"; watch: ProactiveWatch[]; instructions: string; people?: Record<string, ProactivePerson> };
+/** A change to a bot's agent: only what it names. In `people` an entry changes what it names, and null takes that person out. */
+export type ProactivePatch = Partial<Omit<ProactiveBotSettings, "people">> & { people?: Record<string, Partial<ProactivePerson> | null> };
+/**
+ * One bot's agent as this phone is sent it. The owner is sent everyone in `people` and their own activity (`log`, `pings`…).
+ * A member is sent the shared settings, only their own entry in `people`, and their own activity: never another person's.
+ * Every field may be missing, and a computer may add more. `person` and `taken` are from a computer without
+ * "proactive-team-v1", where a bot's agent worked for one person.
  */
 export type ProactiveBot = Partial<ProactiveBotSettings> & {
   enabled: boolean;
@@ -1623,10 +1648,19 @@ export type Calls = {
   setBotAccess(botId: string, grant: BotAccessGrant): void;
   setBotIntegrations(botId: string, off: { skillsOff?: string[]; mcpOff?: string[] }): void;
   /**
-   * Changes what a bot's Proactive agent is set to (only what `patch` names), or with null forgets it. Needs "proactive-agent-v2".
-   * A role that manages the bot may; the agent works for the person who set it up, and is theirs alone to change (the owner may change any).
+   * Changes what a bot's Proactive agent is set to (only what `patch` names), or with null forgets it. Needs "proactive-agent-v2";
+   * `setUp` and `people` need "proactive-team-v1". The computer checks who calls: the owner changes anything and adds or takes out
+   * anyone whose role sees the bot; a member changes only their own entry in `people`, and adds themselves or changes what the
+   * people share only when their role manages the bot (never look-around, the tasks watch or the bot's switch to off). A member's
+   * null takes only that member out.
    */
-  setBotProactive(botId: string, patch: Partial<ProactiveBotSettings> | null): void;
+  setBotProactive(botId: string, patch: ProactivePatch | null): void;
+  /**
+   * What a person does with a proactive alert they were sent ("proactive-team-v1"). "take" starts a normal turn in their chat with
+   * the bot, with what the bot offered as their message (its tools ask for approval as usual), and answers that chat. "later" holds
+   * what the alert was about back for a day. Only the person the alert was for has it; anyone else is told it is gone.
+   */
+  proactiveAct(botId: string, runId: string, action: "take" | "later"): { chatId?: string; until?: number };
   botMemory(botId: string): string;
   setBotMemory(botId: string, text: string): void;
   saveTemplate(botId: string, name?: string): string;

@@ -88,6 +88,7 @@ import { Artifacts } from "./artifacts.mjs";
 import { ArtifactEvents } from "./artifact-events.mjs";
 import { Tasks } from "./tasks.mjs";
 import { Proactive } from "./proactive.mjs";
+import { Reminders } from "./reminders.mjs";
 import { proposalsFrom } from "./proactive-learning.mjs";
 import { Templates } from "./templates.mjs";
 import { readWorkspace } from "./workspace-file.mjs";
@@ -336,6 +337,8 @@ export class Workspace {
     }
     this.tasks = new Tasks(this);
     this.proactive = new Proactive(this);
+    // One plain nudge for what is left waiting on a person, with no model (desktop/reminders.mjs).
+    this.reminders = new Reminders(this);
     // A person's reaction to a bot's message gives the bot a quiet turn (desktop/reaction-turns.mjs).
     this.reactionTurns = new ReactionTurns(this);
     this.save();
@@ -411,6 +414,8 @@ export class Workspace {
       projects: this.projects.listed(),
       // The Proactive agent: the computer's switch, and each proactive bot's settings and log, without the keys of what it raised.
       proactive: this.proactive.views(),
+      // The reminders sent in the last few minutes, for the link to pass to that person's phones (desktop/link/push.mjs). No app is sent this.
+      reminders: this.reminders.recent(),
       // Resolved provider inputs are private restart data and can contain large attachments.
       // A reaction's turn shows only once it really replies (desktop/reaction-turns.mjs).
       runs: this.state.runs.filter((run) => !hiddenRun(run)).map((run) => {
@@ -1090,7 +1095,7 @@ export class Workspace {
     if (!run) throw new Error("Unknown work item");
     const chat = this.chat(run.chatId);
     if (run.proactive) {
-      if (this.proactive.routine(chat.botId)?.chat.id !== chat.id) throw new Error("This proactive routine is no longer configured.");
+      if (!this.proactive.owns(chat)) throw new Error("This proactive routine is no longer configured.");
       return this.panels.routines.run(chat.id);
     }
     const message = chat.messages.find(

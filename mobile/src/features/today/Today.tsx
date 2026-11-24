@@ -6,6 +6,7 @@ import { Ellipsis, ExternalLink, MessageCircle, Plus, ThumbsDown, ThumbsUp } fro
 import { type ComponentRef, createContext, type ReactNode, type RefObject, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { Alert, Dimensions, StyleSheet, View } from "react-native";
 import Animated, { FadeIn } from "react-native-reanimated";
+import { AlertActions } from "@/features/bots/AlertActions";
 import { actOnIdea, discussBoardItem } from "@/features/chat/open";
 import type { BoardItem, Bot, Panel } from "@/link/types";
 import { cronLabel } from "@/features/work/cron";
@@ -236,6 +237,8 @@ export function ItemCard({ item, bot, onSeen }: { item: BoardItem; bot?: Bot; on
           ))}
         </View>
       )}
+      {/* A proactive alert: what the bot offers to do, and "Not now". The ratings below teach it what helps. */}
+      {!finished && canChat && <AlertActions botId={item.botId} alert={item.alert} />}
       {finished ? (
         <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: space.sm }}>
           {canUse && <Button title="Reopen" variant="secondary" size="sm" onPress={() => act("reopen", "Reopened")} />}

@@ -17,6 +17,7 @@ import { DEMO_FEATURED, demoCatalogAdd, demoCatalogList } from "./mock-catalog.m
 import { uploadSkill } from "./skill-import.mjs";
 import { parseSkill } from "./skill-format.mjs";
 import { botVoiceField } from "./voice.mjs";
+import { proactiveChats, proactivePatch, proactiveSees, proactiveStart } from "./proactive-rules.mjs";
 
 const now = () => Date.now();
 /** The demo computer's owner, as a person. */
@@ -302,8 +303,8 @@ export function seed() {
     skills: { folders: [{ id: "folder-team", path: "/Users/demo/team-skills" }], plugins: [{ id: "plugin-review", path: "/Users/demo/.plugins/code-review" }], disabled: [] },
     wiki: { revision: 1 },
     providers: { revision: 1 },
-    // The Proactive agent: the computer's switch, and each bot's agent by bot id (the desktop's desktop/proactive.mjs).
-    proactive: { enabled: false, bots: {} },
+    // The Proactive agent: the computer's switch (on from the start), and each bot's agent by bot id (the desktop's desktop/proactive.mjs).
+    proactive: { enabled: true, bots: {} },
     settings: {
       model: { model: "auto" },
       appearance: { theme: "system", lightBackground: "cream", darkBackground: "charcoal", bubble: "theme", colorTheme: "ink", themePicked: false, font: "system", fontPicked: false, textSize: "default", avatarAnimations: true },
@@ -315,14 +316,14 @@ export function seed() {
       approval: "ask",
       clarify: ["missing"],
       clarificationInstructions: "",
-      notifications: { replies: true, routines: true, requests: true, quietHours: { enabled: false, from: "22:00", to: "07:00" } },
+      notifications: { replies: true, routines: true, requests: true, reminders: true, quietHours: { enabled: false, from: "22:00", to: "07:00" } },
       access: { allBots: true },
       background: { keepRunning: true, runAtStartup: false },
       sidebar: { order: ["Home", "Today", "Chats", "Work", "Wiki"], collapsed: true },
       teamwork: true,
       // Turns between a chat's summaries into a new title: 5 to 30, or 0 for off (the desktop's desktop/summaries.mjs).
       autoSummarize: 10,
-      proactive: { enabled: false },
+      proactive: { enabled: true },
       harness: "copilot",
       providers: { copilot: { enabled: true }, codex: { enabled: true }, claude: { enabled: true }, opencode: { enabled: false }, openrouter: { enabled: false }, foundry: { enabled: false }, "openai-api": { enabled: false }, grok: { enabled: false } },
     },
@@ -1256,7 +1257,7 @@ export class MockBackend {
     // What this stand-in app supports itself, beyond the link's own list.
     // "files-v1": a file out and in as text, without a dialog. "folders-v1": the folder browser.
     // "artifacts-v1": what the bots made or were given, from an index the app keeps (here: made up).
-    this.capabilities = ["message-reactions-v1", "client-message-id-v1", "voice-turns-v1", "voice-history-v1", "quiet-replies-v1", "routine-delivery-v1", ...(process.env.BOTKINS_DEV_NO_OUTPUT === "off" ? [] : ["routine-no-output-v1"]), "routine-scripts-v1", "routine-models-v1", "routine-silent-v1", "proactive-agent-v2", "proactive-learning-v1", "models-v2", "fast-mode-v1", "side-pane-v1", "files-v1", "folders-v1", "project-artifacts-v1", "artifacts-v1", "secure-input-v1", "chat-title-regeneration-v1", ...(process.env.BOTKINS_DEV_USAGE === "off" ? [] : ["provider-usage-v1"])];
+    this.capabilities = ["message-reactions-v1", "client-message-id-v1", "voice-turns-v1", "voice-history-v1", "quiet-replies-v1", "routine-delivery-v1", ...(process.env.BOTKINS_DEV_NO_OUTPUT === "off" ? [] : ["routine-no-output-v1"]), "routine-scripts-v1", "routine-models-v1", "routine-silent-v1", "proactive-agent-v2", "proactive-learning-v1", "proactive-team-v1", "models-v2", "fast-mode-v1", "side-pane-v1", "files-v1", "folders-v1", "project-artifacts-v1", "artifacts-v1", "secure-input-v1", "chat-title-regeneration-v1", ...(process.env.BOTKINS_DEV_USAGE === "off" ? [] : ["provider-usage-v1"])];
     this.capabilities.push("project-folders-v1", "project-mode-v1", "project-clone-v1");
     if (this.timeline) this.capabilities.push("turn-timeline-v1");
     // "bot-voice-v1": a bot may have a voice of its own. BOTKINS_DEV_BOT_VOICE=off is an older computer.
@@ -1307,6 +1308,10 @@ export class MockBackend {
     }
     this.cache = { bytes: 48_340_992, catalogs: 6 };
     this.callContexts = [];
+    // The demo's made-up proactive alerts, by run id: whose each is, where it is, and the request its offer sends (never sent to a phone).
+    this.proactiveAlerts = new Map();
+    /** The team, when the link gives it (dev-host.mjs, tests): who may change a bot's Proactive agent is checked with it. */
+    this.teamOf = null;
     state.artifacts = { revision: 1 };
     this.artifacts = demoArtifacts(state);
     // A server with no window of its own: a phone may set what phones do with its screen (grant.mjs).
@@ -1514,6 +1519,21 @@ export class MockBackend {
   }
   changed() {
     for (const fn of this.listeners) fn();
+  }
+  /** A made-up proactive alert in a person's own chat with a bot, with one offer ("proactive-team-v1"). The offer's prompt stays here. */
+  demoAlert(bot, person) {
+    const mine = (chat) => chat.botId === bot.id && !chat.schedules?.length && !chat.botIds && !chat.panelId && (chat.createdBy ?? "owner") === person;
+    let chat = this.state.chats.find(mine);
+    if (!chat) {
+      chat = { id: "chat-" + randomUUID().slice(0, 8), botId: bot.id, title: "New chat", time: now(), messages: [], ...(person !== "owner" && { createdBy: person }) };
+      this.state.chats.unshift(chat);
+    }
+    const runId = "run-look-" + randomUUID().slice(0, 8);
+    const text = "The launch checklist has three items with no owner.\n\nThe launch is in four days and nobody has picked up the press kit, the status page or the support macros.\n\nI can draft who takes what for you to send.";
+    chat.messages.push({ role: "assistant", text, time: now(), proactiveRunId: runId, alert: { runId, offer: "Draft who takes what" } });
+    chat.time = now();
+    chat.unread = true;
+    this.proactiveAlerts.set(runId, { botId: bot.id, person, chatId: chat.id, prompt: "Draft who should take the press kit, the status page and the support macros, and show it to me before anything is sent." });
   }
   async call(method, args, context = {}) {
     this.callContexts.push({ method, principal: context.principal ? structuredClone(context.principal) : null });
@@ -2183,27 +2203,67 @@ export class MockBackend {
       if (skillsOff) bot.skillsOff = skillsOff;
       if (mcpOff) bot.mcpOff = mcpOff;
     },
-    // A bot's Proactive agent, for the person who calls: the one who first sets it up is the one it works for (the desktop's desktop/proactive.mjs).
+    // A bot's Proactive agent ("proactive-team-v1"), changed as the person who calls. Who may change what is the same
+    // rule the app on a computer uses (proactive-rules.mjs); the desktop's desktop/proactive.mjs is the real thing.
     setBotProactive(id, patch) {
-      this.bot(id);
+      const bot = this.bot(id);
       const person = this.caller.id;
-      const held = this.state.proactive.bots[id];
-      if (person !== "owner" && held && held.person !== person) throw new Error("This bot's Proactive agent is set up for someone else.");
+      const team = this.teamOf?.() ?? null;
+      const bots = this.state.proactive.bots;
+      const held = bots[id];
+      if (person !== "owner" && team && !proactiveSees(team, person, id)) throw new Error("Your team role can't see this bot.");
       if (patch === null) {
-        delete this.state.proactive.bots[id];
+        // The owner forgets everything; a member takes only themselves out.
+        if (person === "owner") delete bots[id];
+        else if (held?.people?.[person]) delete held.people[person];
         return null;
       }
-      const usual = { enabled: false, every: 30, sweepHours: 3, maxPerDay: 6, deliver: "chat", watch: ["runs", "tasks", "requests", "context"], instructions: "" };
+      const usual = { enabled: false, setUp: false, every: 30, sweepHours: 3, maxPerDay: 6, deliver: "chat", watch: ["runs", "tasks", "requests", "context"], instructions: "", people: {} };
       if (!patch || typeof patch !== "object" || Array.isArray(patch)) throw new Error("Invalid Proactive agent setting");
       const unknown = Object.keys(patch).find((key) => !Object.hasOwn(usual, key));
       if (unknown) throw new Error("Unknown Proactive agent setting: " + unknown);
-      const owner = (held?.person ?? person) === "owner";
-      // A member's agent never looks around the computer's own accounts, and tasks are the owner's.
-      const next = { ...(held ?? { ...usual, ...(!owner && { sweepHours: 0, watch: ["runs", "requests", "context"] }) }), ...patch, person: held?.person ?? person };
-      if (!owner && next.sweepHours !== 0) throw new Error("Only the owner can turn on look-around: it reads the computer's own tools and accounts.");
-      if (!owner) next.watch = next.watch.filter((watch) => watch !== "tasks");
-      this.state.proactive.bots[id] = next;
+      const start = held ?? proactiveStart(usual, person);
+      // The demo has a team only when it is given one (dev-host.mjs): without it a member who reached this far manages the bot.
+      const checked = team ? proactivePatch({ patch, start, by: person, team, botId: id }) : patch;
+      const { people: named, ...shared } = checked;
+      for (const key of ["enabled", "setUp"]) if (shared[key] !== undefined && typeof shared[key] !== "boolean") throw new Error("Choose on or off");
+      const people = { ...start.people };
+      for (const [who, own] of Object.entries(named ?? {})) {
+        if (own === null) delete people[who];
+        else {
+          const unknownField = Object.keys(own ?? {}).find((key) => key !== "on" && key !== "notify");
+          if (!own || typeof own !== "object" || unknownField) throw new Error(unknownField ? "Unknown setting for a person: " + unknownField : "Choose on or off for each person.");
+          people[who] = { on: true, notify: true, ...people[who], ...own };
+        }
+      }
+      const next = (bots[id] = { ...start, ...shared, people });
+      // So that the demo has something to show: a person the bot now looks out for gets one made-up alert, with an offer.
+      if (this.state.proactive.enabled && next.enabled && next.setUp && next.people[person]?.on && ![...this.proactiveAlerts.values()].some((alert) => alert.botId === id && alert.person === person)) this.demoAlert(bot, person);
       return null;
+    },
+    // What a person does with an alert they were sent: only the person it was for has it.
+    proactiveAct(id, runId, action) {
+      this.bot(id);
+      if (action !== "take" && action !== "later") throw new Error("Choose take or later.");
+      const alert = this.proactiveAlerts.get(runId);
+      if (!alert || alert.botId !== id || alert.person !== this.caller.id) throw new Error("This alert is no longer available.");
+      if (alert.chosen) throw new Error("You already chose what to do with this alert.");
+      const mark = () => {
+        alert.chosen = action;
+        const message = this.chat(alert.chatId).messages.find((item) => item.proactiveRunId === runId);
+        if (message) message.alert = { ...message.alert, chosen: action };
+      };
+      if (action === "later") {
+        mark();
+        return { until: now() + 24 * HOUR };
+      }
+      // Taking it starts a turn with the bot, as sending a message does.
+      if (this.teamOf?.() && !proactiveChats(this.teamOf(), this.caller.id)) throw new Error("Your team role can't chat with this bot.");
+      // A normal turn, as the person's own message: the demo bot answers it as it answers any message.
+      this.handlers.send.call(this, alert.chatId, alert.prompt, this.caller.id === "owner" ? undefined : { author: { memberId: this.caller.id, name: this.caller.name } });
+      // Marked once the turn has started: a start that fails leaves the alert to try again.
+      mark();
+      return { chatId: alert.chatId };
     },
     botMemory(id) {
       return this.memory.get(id) ?? (id === "bot-mira" ? "- Prefers short lists\n- Launch is on the 24th\n- Weekly review happens on Fridays" : "");

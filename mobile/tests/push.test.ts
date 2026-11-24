@@ -750,3 +750,76 @@ test("a phone that named the wrong one of Apple's services is corrected from the
     await done();
   }
 });
+
+test("a proactive alert is titled with the bot's name alone and carries its action; a check that failed says nothing", async () => {
+  const { call, until, done, sent, paired, backend, bodies } = await setup();
+  try {
+    await call("link.push.register", { token: TOKEN, env: "production" });
+    const state = (backend as any).state;
+    const look = { id: "chat-look", botId: "bot-mira", title: "Routine · Mira looks out for you", time: Date.now(), messages: [] as any[], schedules: [{ id: 1, routine: true, proactive: true, enabled: true, name: "Mira looks out for you" }] };
+    state.chats.unshift(look);
+    const check = (id: string) => {
+      const run: any = { id, chatId: "chat-look", scheduleId: 1, proactive: true, title: "Mira looks out for you", status: "Working", time: Date.now() };
+      state.runs.unshift(run);
+      backend.changed();
+      return run;
+    };
+    // A check that failed is in the bot's Proactive log, not a notification.
+    const failed = check("run-failed");
+    await delay(400);
+    Object.assign(failed, { status: "Needs you", detail: "The model didn't answer.", finished: Date.now() });
+    backend.changed();
+    await delay(900);
+    assert.equal(sent.filter((item) => item.type === "alert").length, 0);
+
+    const run = check("run-look");
+    await delay(400);
+    const words = "Ana is waiting on three replies.\n\nThe oldest is from Monday.";
+    look.messages.push({ role: "assistant", runId: "run-look", text: words, time: Date.now() });
+    const chat = state.chats.find((c: any) => c.id === "chat-launch");
+    chat.messages.push({ role: "assistant", text: words, time: Date.now(), proactiveRunId: "run-look", alert: { runId: "run-look", offer: "Draft the replies" } });
+    Object.assign(run, { status: "Completed", finished: Date.now(), delivery: { to: "chat", chatId: "chat-launch" } });
+    backend.changed();
+    await until(() => sent.some((item) => item.type === "alert"), "the alert");
+    const content = unseal(paired, sent.find((item) => item.type === "alert")!.payload.b);
+    assert.equal(content.t, "Mira", "the bot's name alone");
+    assert.equal(content.m, "Ana is waiting on three replies.");
+    assert.equal(content.c, "chat-launch", "a tap opens the alert where it was delivered");
+    assert.deepEqual(content.a, { b: "bot-mira", r: "run-look" }, "what the phone needs for Take care of it");
+    assert.doesNotMatch(JSON.stringify(content), /Proactive agent|looks out for/);
+    assert.ok(!JSON.stringify(bodies).includes("Ana"), "nothing crossed the relay in the clear");
+  } finally {
+    await done();
+  }
+});
+
+test("a reminder reaches only the person it is for, once, by their own choices", async () => {
+  const { call, until, done, sent, paired, backend } = await setup();
+  try {
+    await call("link.push.register", { token: TOKEN, env: "production" });
+    const state = (backend as any).state;
+    await delay(400);
+    const reminder = (key: string, person: string) => ({ key, person, botId: "bot-patch", chatId: "chat-auth", title: "Patch is waiting on your answer", body: "Which branch should I use?", sentAt: Date.now() });
+    state.reminders = [reminder("request:theirs", "m_someone")];
+    backend.changed();
+    await delay(900);
+    assert.equal(sent.length, 0, "another person's reminder is not the owner's phone's");
+    state.reminders = [reminder("request:theirs", "m_someone"), reminder("request:mine", "owner")];
+    backend.changed();
+    await until(() => sent.length === 1, "the reminder");
+    const content = unseal(paired, sent[0].payload.b);
+    assert.deepEqual([content.t, content.m, content.c, content.k], ["Patch is waiting on your answer", "Which branch should I use?", "chat-auth", "reminder"]);
+    assert.equal(sent[0].payload.aps.alert.body, "A bot needs you");
+    backend.changed();
+    await delay(900);
+    assert.equal(sent.length, 1, "once");
+    // A phone that turned "A bot needs me" off gets no reminder either.
+    await call("link.push.prefs", { requests: false });
+    state.reminders = [...state.reminders, reminder("request:another", "owner")];
+    backend.changed();
+    await delay(900);
+    assert.equal(sent.length, 1);
+  } finally {
+    await done();
+  }
+});

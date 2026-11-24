@@ -164,6 +164,8 @@ function App() {
   const [side, setSide] = useState<Record<string, SideAnswer>>({});
   /** The bot whose page is open, or "". */
   const [profileId, setProfileId] = useState("");
+  // The bot whose page opens on the setup steps of its Proactive agent (`actions.proactiveSetup`).
+  const [setupId, setSetupId] = useState("");
   const [settingsBot, setSettingsBot] = useState("");
   function settings(tab: string, botId = "") {
     setSettingsTab(tab);
@@ -370,11 +372,12 @@ function App() {
       setRoutineTarget((t) => ({ ...target, n: t.n + 1 }));
     });
   }
-  function botPage(id: string) {
+  function botPage(id: string, setup = false) {
     leave(() => {
       setChatId("");
       setModal("");
       setError("");
+      setSetupId(setup ? id : "");
       setProfileId(id);
     });
   }
@@ -713,7 +716,8 @@ function App() {
     newChat: () => setModal("chat"),
     showChats: () => nav("Chats"),
     newChatWith: (id) => void newChat(id).catch(fail),
-    botPage,
+    botPage: (id) => botPage(id),
+    proactiveSetup: (id) => botPage(id, true),
     capabilities: (id) => settings("Capabilities", id),
     fail,
   };
@@ -930,6 +934,7 @@ function App() {
               bot={profileBot}
               actions={actions}
               back={() => setProfileId("")}
+              proactiveSetup={setupId === profileBot.id}
               routines={routines}
             />
           </div>

@@ -214,6 +214,30 @@ function kindOf(response: import("expo-notifications").NotificationResponse): st
   if (typeof kind === "string" && kind) return kind;
   return request.content.categoryIdentifier === "botkins_team" ? "team" : undefined;
 }
+/** A proactive alert that offers something ("proactive-team-v1"): the bot and the run its notification names, for "Take care of it". */
+function alertOf(response: import("expo-notifications").NotificationResponse): { bot: string; run: string } | undefined {
+  const request = response.notification.request;
+  const payload = request.trigger && "payload" in request.trigger ? (request.trigger.payload as Record<string, unknown> | undefined) : undefined;
+  const data = request.content.data as Record<string, unknown> | undefined;
+  const bot = payload?.alertBot ?? data?.alertBot;
+  const run = payload?.alertRun ?? data?.alertRun;
+  return typeof bot === "string" && bot && typeof run === "string" && run ? { bot, run } : undefined;
+}
+/**
+ * "Take care of it" on an alert's notification: the computer is asked once the link is up. The chat opens
+ * meanwhile, and the alert there has the same button, so nothing is lost when the computer can't be reached.
+ */
+function takeAlert(alert: { bot: string; run: string }) {
+  const send = () => void api.proactiveAct(alert.bot, alert.run, "take").catch(() => {});
+  if (useApp.getState().link === "online") return send();
+  const timer = setTimeout(() => stop(), 20_000);
+  const stop = useApp.subscribe((state) => {
+    if (state.link !== "online") return;
+    stop();
+    clearTimeout(timer);
+    send();
+  });
+}
 /** A notification's actions that answer a bot where they are (the native side queues them; src/state/answers.ts sends them). */
 const ANSWERED_THERE = /^(approve|remember|deny|reply|choice\.\d)$/;
 function openFrom(response: import("expo-notifications").NotificationResponse | null) {
@@ -252,6 +276,9 @@ function openFrom(response: import("expo-notifications").NotificationResponse | 
       return;
     }
     if (!chatId) return;
+    // The button on a proactive alert: the bot starts on what it offered, in the chat that opens.
+    const offered = response.actionIdentifier === "alert.take" ? alertOf(response) : undefined;
+    if (offered) takeAlert(offered);
     if (chatOnScreen() === chatId) return;
     router.push({ pathname: "/chat/[id]", params: { id: chatId } });
   };
@@ -495,6 +522,9 @@ async function setCategories() {
       ]),
       Notifications.setNotificationCategoryAsync("botkins_question", [reply, { identifier: "open", buttonTitle: "Open chat", options: open }]),
       Notifications.setNotificationCategoryAsync("botkins_open", [{ identifier: "open", buttonTitle: "Open to answer", options: open }]),
+      // A proactive alert that offers to take care of something ("proactive-team-v1"). The button opens the app, which asks the
+      // computer; "Not now" is on the alert itself. A tap on the notification opens the alert.
+      Notifications.setNotificationCategoryAsync("botkins_alert", [{ identifier: "alert.take", buttonTitle: "Take care of it", options: { ...open, isAuthenticationRequired: true } }]),
     ]);
   } catch {
     // Notifications still arrive; they only open the app.

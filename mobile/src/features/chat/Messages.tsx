@@ -19,6 +19,7 @@ import type { MessagePart } from "@/features/artifacts/logic";
 import { workWidth } from "./bits";
 import { CONTINUE_OPEN_STEPS } from "./keep";
 import { boardKindLabel, splitBoardQuote } from "./compose";
+import { AlertActions } from "@/features/bots/AlertActions";
 import { ConnectCard } from "./ConnectCard";
 import { McpAppCard } from "./McpAppCard";
 import { myself, speakerLabel } from "./people";
@@ -371,6 +372,8 @@ export const MessageRow = memo(function MessageRow({ item, chatId, group, bots, 
         <Reply message={message} index={item.index} id={chatId + ":" + item.key} botId={speaker} markdown={markdown} actions={actions} paths={links.paths} parts={links.parts} />
       )}
       <Reactions message={message} />
+      {/* A proactive alert: what the bot offers to do, and "Not now". */}
+      {!!message.alert && !!speaker && <AlertActions botId={speaker} alert={message.alert} chatId={chatId} />}
       {!!message.text.trim() && (
         <View style={{ flexDirection: "row", alignItems: "center", gap: space.sm }}>
           <ReadAloud id={chatId + ":" + item.key} text={message.text} botId={speaker} />

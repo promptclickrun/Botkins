@@ -59,9 +59,10 @@ const placeText = (bot) =>
 /** A bot's Proactive agent as `bots proactive` shows it. */
 const proactiveText = (view) =>
   [
-    named(view.name) + ": the Proactive agent is " + (view.enabled ? "on" : "off") + (view.enabled && !view.computerOn ? " but paused (the computer's switch is off: `botkins preferences set proactive.enabled on`)" : "") + ".",
+    named(view.name) + ": the Proactive agent is " + (view.enabled ? "on" : "off") + (view.enabled && !view.computerOn ? " but paused (the computer's switch is off: `botkins preferences set proactive.enabled on`)" : view.enabled && !view.setUp ? " but not set up yet (`botkins bots proactive " + shellWord(view.name) + " on` finishes its setup)" : "") + ".",
+    "Looks out for: " + (view.people?.length ? view.people.map((person) => named(person.name) + (person.on ? "" : " (off)") + (person.notify ? "" : " (not notified)")).join(", ") : "nobody yet") + ".",
     "Checks for changes every " + view.every + " minutes. " + (view.sweepHours ? "Looks around its own sources every " + view.sweepHours + " hours." : "Never looks around its own sources.") + " At most " + view.maxPerDay + " alerts a day.",
-    "Alerts go to " + (view.deliver === "feed" ? "the Feed" : "its chat") + " of " + (view.person === "owner" ? "the owner" : "a team member") + ". Watches: " + (view.watch.length ? view.watch.join(", ") : "nothing") + ".",
+    "Alerts go to " + (view.deliver === "feed" ? "each person's Feed" : "its chat with each person") + ". Watches: " + (view.watch.length ? view.watch.join(", ") : "nothing") + ".",
     ...(view.nextReviewAt ? ["Planned follow-up: " + new Date(view.nextReviewAt).toLocaleString()] : []),
     ...(view.learning?.rated ? ["Rated suggestions: " + view.learning.rated,
       ...view.learning.preferred.map((r) => "Preferred approach: " + safe(r)), ...view.learning.retired.map((r) => "Set aside: " + safe(r))] : []),
@@ -166,9 +167,14 @@ export const botsCommands = {
       },
       proactive: {
         summary: "Show or change a bot's Proactive agent (experimental)",
-        usage: "botkins bots proactive <bot> [on | off] [--every <minutes>] [--look-around <hours>] [--max-alerts <n>] [--deliver <chat|feed>] [--watch <runs,tasks,requests,context|none>] [--rules <text> | --rules-file <path>] [--reset] [--yes]",
+        usage: "botkins bots proactive <bot> [on | off] [--add <person>] [--remove <person>] [--person <person>] [--alerts <on|off>] [--notify <on|off>] [--every <minutes>] [--look-around <hours>] [--max-alerts <n>] [--deliver <chat|feed>] [--watch <runs,tasks,requests,context|none>] [--rules <text> | --rules-file <path>] [--reset] [--yes]",
         arguments: [{ name: "bot", required: true }, { name: "state", required: false }],
         options: {
+          add: { type: "string", value: "person", about: "Look out for this person too: owner, or a team member's name or id (their role must see the bot)" },
+          remove: { type: "string", value: "person", about: "Stop looking out for this person" },
+          person: { type: "string", value: "person", about: "The person --alerts and --notify are for. Without it they are for the owner" },
+          alerts: { type: "string", value: "on|off", about: "Turn that person's own check on or off" },
+          notify: { type: "string", value: "on|off", about: "Whether that person is notified of an alert. Off still delivers it, quietly" },
           every: { type: "string", value: "minutes", about: "Minutes between its checks for changes: 15, 30, 60 or 120 (a check with nothing new uses no model)" },
           "look-around": { type: "string", value: "hours", about: "Hours between its looks around its own sources: 0 (never), 1, 2, 3, 6 or 12 (each look uses the model)" },
           "max-alerts": { type: "string", value: "n", about: "The most alerts it gives in a day: 3, 6, 10 or 20" },
@@ -179,7 +185,7 @@ export const botsCommands = {
           reset: { type: "boolean", about: "Forget this bot's Proactive settings and routine" },
           ...YES,
         },
-        details: "Each bot has its own Proactive agent: with no option this shows it. `on` and `off` turn this bot's agent on and off; the computer's switch is the preference `proactive.enabled` and pauses every bot's agent without forgetting its settings. Turning an agent on is shown first and needs your yes (--yes with no terminal), because the bot then wakes with nobody watching, reads what its tools reach and messages you. Its routine is \"Proactive agent\" in `botkins routines list`; `botkins routines run \"Proactive agent\"` checks now. Only what you name changes.",
+        details: "Each bot has its own Proactive agent: with no option this shows it. `on` finishes its setup and turns it on (for the owner, when it looks out for nobody yet); `off` turns the bot's agent off for everyone. The computer's switch is the preference `proactive.enabled` and pauses every bot's agent without forgetting its settings. Turning an agent on is shown first and needs your yes (--yes with no terminal), because the bot then wakes with nobody watching, reads what its tools reach and messages you. A bot looks out for several people: --add and --remove say who, and --alerts and --notify set one person's own check and whether they are notified (an alert goes only to the person it is about). Botkins keeps one routine for each person, named \"<bot> looks out for <person>\" in `botkins routines list`; `botkins routines run` on it checks now. `botkins bots alert` acts on an alert. Only what you name changes.",
         async run(context) {
           const [ref, word, ...extra] = context.args;
           if (ref === undefined || extra.length) throw usage("Name the bot (its name or id), and on or off to turn its agent on or off.");
@@ -192,8 +198,28 @@ export const botsCommands = {
             return { [flag]: Number(o[flag]) };
           };
           const given = { ...number("every", "minutes"), ...number("look-around", "hours"), ...number("max-alerts", "alerts") };
+          const onOff = (flag) => {
+            if (o[flag] === undefined) return undefined;
+            const said = o[flag].trim().toLowerCase();
+            if (!["on", "off"].includes(said)) throw usage("--" + flag + " takes on or off.");
+            return said === "on";
+          };
+          const alerts = onOff("alerts");
+          const notify = onOff("notify");
+          if (o.person !== undefined && alerts === undefined && notify === undefined) throw usage("Give --alerts or --notify with --person.");
+          const people = {
+            ...(o.add !== undefined && { [o.add]: { on: true } }),
+            ...(o.remove !== undefined && { [o.remove]: null }),
+            ...((alerts !== undefined || notify !== undefined) && { [o.person ?? "owner"]: { ...(alerts !== undefined && { on: alerts }), ...(notify !== undefined && { notify }) } }),
+          };
+          const before = await call(context, "bots.proactive", ref);
+          const turningOn = word !== undefined && word.toLowerCase() === "on";
+          // `on` stands for the setup steps of the app: the bot is set up, and looks out for the owner when it looks out for nobody.
+          if (turningOn && !before.people.length && !Object.keys(people).length) people.owner = { on: true };
           const patch = {
-            ...(word !== undefined && { enabled: word.toLowerCase() === "on" }),
+            ...(word !== undefined && { enabled: turningOn }),
+            ...(turningOn && !before.setUp && { setUp: true }),
+            ...(Object.keys(people).length && { people }),
             ...(given.every !== undefined && { every: given.every }),
             ...(given["look-around"] !== undefined && { sweepHours: given["look-around"] }),
             ...(given["max-alerts"] !== undefined && { maxPerDay: given["max-alerts"] }),
@@ -204,15 +230,31 @@ export const botsCommands = {
           };
           stdinMeansYes(context, o["rules-file"]);
           if (o.reset && Object.keys(patch).length) throw usage("Give --reset alone, or the settings to change.");
-          const before = await call(context, "bots.proactive", ref);
           let agreed = false;
-          if (patch.enabled === true && !before.enabled) {
+          if ((patch.enabled === true && !before.enabled) || patch.setUp === true) {
             show(context, "Turning on a bot's Proactive agent lets " + named(before.name) + " wake on its own, read what its tools reach (such as your inbox and calendar) and message you, with nobody watching. Each wake uses the model.");
             if (!(await confirm(context, "Turn on the Proactive agent for " + named(before.name) + "?"))) return EXIT.failed;
             agreed = true;
           }
           const shown = o.reset ? await call(context, "bots.proactive.set", ref, null) : Object.keys(patch).length ? await call(context, "bots.proactive.set", ref, patch, ...(agreed ? [{ agreed: true }] : [])) : before;
           context.print(shown, (view) => proactiveText(view));
+        },
+      },
+      alert: {
+        summary: "List the alerts a bot sent you, or act on one: take its offer, or hear of it again later",
+        usage: "botkins bots alert <bot> [<alert> <take | later>]",
+        arguments: [{ name: "bot", required: true }, { name: "alert", required: false }, { name: "action", required: false }],
+        details: "A bot that looks out for you sends alerts, and an alert may offer one thing the bot can do. With only the bot, this lists the alerts you were sent lately with their ids. `take` starts a normal turn in your chat with the bot, with what it offered as your message: its tools still ask for approval as usual, so an alert never approves anything ahead of time. `later` holds what the alert was about back for a day. Each alert is acted on once. These are the owner's alerts: a team member acts on theirs in the app.",
+        async run(context) {
+          const [ref, alert, action, ...extra] = context.args;
+          if (ref === undefined || extra.length || (alert !== undefined && action === undefined)) throw usage("Name the bot. To act on an alert, give its id and take or later.");
+          if (alert === undefined) {
+            const view = await call(context, "bots.proactive", ref);
+            return void context.print(view.alerts, (list) => (list.length ? table(["ALERT", "SENT", "OFFERS", "CHOSEN"], list.map((entry) => [entry.runId, new Date(entry.at).toLocaleString(), entry.offer ? safe(entry.offer) : "—", entry.chosen === "take" ? "taken" : entry.chosen === "later" ? "later" : "—"])) : named(view.name) + " has sent you no alert lately."));
+          }
+          const chosen = action.toLowerCase();
+          if (!["take", "later"].includes(chosen)) throw usage("Say take or later.");
+          context.print(await call(context, "bots.proactive.act", ref, alert, chosen), (done) => (chosen === "take" ? named(done.name) + " is taking care of it in chat " + done.chatId + ". Its tools ask for approval as usual." : named(done.name) + " will bring it up again after a day."));
         },
       },
       memory: {

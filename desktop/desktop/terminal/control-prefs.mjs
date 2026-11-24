@@ -55,6 +55,7 @@ export const PREFERENCES = {
   "notifications.replies": switches("Tell me when a bot replies"),
   "notifications.routines": switches("Tell me when a routine finishes"),
   "notifications.requests": switches("Tell me when a bot asks for something"),
+  "notifications.reminders": switches("Remind me once when something is left waiting on me"),
   "notifications.quietHours.enabled": switches("Keep quiet during the quiet hours"),
   "notifications.quietHours.from": { type: "clock", about: "The quiet hours start, as HH:MM" },
   "notifications.quietHours.to": { type: "clock", about: "The quiet hours end, as HH:MM" },

@@ -75,7 +75,7 @@ export const REMOTE_METHODS = new Set([
   // no call takes a version, an address or a channel (appUpdateArgs).
   "appUpdateStatus", "checkAppUpdate", "installAppUpdate", "setAppUpdateAuto",
   // Bots
-  "addBot", "updateBot", "setBotProactive", "setBotFlags", "makePrimary", "reorderBots", "deleteBot", "duplicateBot",
+  "addBot", "updateBot", "setBotProactive", "proactiveAct", "setBotFlags", "makePrimary", "reorderBots", "deleteBot", "duplicateBot",
   "importableAgents", "importAgents", "setBotAccess", "setBotIntegrations", "botMemory", "setBotMemory",
   "addSection", "renameSection", "deleteSection",
   "saveTemplate", "renameTemplate", "deleteTemplate", "exportTemplateText", "importTemplateText",

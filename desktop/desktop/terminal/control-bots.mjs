@@ -13,6 +13,7 @@
 // words from elsewhere). No call here answers a secret: none of these things holds one.
 import { parseTemplateFile } from "../../desktop/templates.mjs";
 import { defaultBotProactive } from "../proactive-settings.mjs";
+import { personName } from "../team-turn.mjs";
 import { ControlError } from "./socket.mjs";
 
 const text = (value, max, what) => {
@@ -50,16 +51,36 @@ export function botsApi({ workspace, handlers, bot }) {
   const template = (ref, exact) => pick(templates(), ref, "template", "botkins templates list", undefined, exact);
   const time = (value) => (value ? new Date(value).toISOString() : null);
 
-  /** A bot's Proactive agent as the command line shows it: its settings (the usual ones when it has none) and what it did. */
-  const proactiveView = (entry) => ({
-    id: entry.id,
-    name: entry.name,
-    computerOn: workspace.proactive.master,
-    running: workspace.proactive.active(entry.id),
-    person: "owner",
-    ...defaultBotProactive,
-    ...workspace.proactive.view(entry.id),
-  });
+  /** A person's name for the command line: "owner", or a team member's name. */
+  const personLabel = (person) => (person === "owner" ? "owner" : personName(workspace.teamOf(), person) || person);
+  /** A person by "owner", a member's id, or a member's name (capitals do not matter). */
+  const person = (ref) => {
+    const wanted = text(ref, 200, "a person: owner, or a team member's name or id");
+    if (["owner", "me"].includes(wanted.toLowerCase())) return "owner";
+    const members = workspace.teamOf()?.members ?? [];
+    const found = members.find((member) => member.id === wanted) ?? members.filter((member) => String(member.name ?? "").toLowerCase() === wanted.toLowerCase());
+    if (Array.isArray(found) && found.length > 1) throw new ControlError("Two team members are named " + wanted + ". Use the member's id (see `botkins team members`).", "AMBIGUOUS");
+    const one = Array.isArray(found) ? found[0] : found;
+    if (!one) throw new ControlError("No team member is named " + wanted + ". Say owner, or a member's name or id.", "NOT_FOUND");
+    return one.id;
+  };
+  /**
+   * A bot's Proactive agent as the command line shows it: its settings (the usual ones when it has none), who it looks
+   * out for, and what the owner's own check did. `running` is the owner's check; each person has their own.
+   */
+  const proactiveView = (entry) => {
+    const { activity: _others, people, ...view } = { ...defaultBotProactive, ...workspace.proactive.view(entry.id) };
+    return {
+      id: entry.id,
+      name: entry.name,
+      computerOn: workspace.proactive.master,
+      running: workspace.proactive.active(entry.id, "owner"),
+      ...view,
+      people: Object.entries(people).map(([id, own]) => ({ id, name: personLabel(id), on: own.on, notify: own.notify, running: workspace.proactive.active(entry.id, id) })),
+      // What the owner was told lately and may still act on (`bots alert`).
+      alerts: workspace.proactive.alerts(entry.id, "owner"),
+    };
+  };
 
   /** What a bot has of its place in the list: where it stands, and its flags. */
   const placeView = (entry) => {
@@ -173,17 +194,35 @@ export function botsApi({ workspace, handlers, bot }) {
     /** A bot's Proactive agent: its settings, and whether it runs now (the computer's switch is `preferences`' `proactive.enabled`). */
     "bots.proactive": ([ref]) => proactiveView(bot(ref)),
     /**
-     * Changes a bot's Proactive agent: { enabled?, every?, sweepHours?, maxPerDay?, deliver?, watch?, instructions? }, or null to
-     * forget its settings and routine. Turning it on needs `{ agreed: true }` as the third argument: the caller showed the person
-     * that the bot then wakes with nobody watching, reads what its tools reach and messages them, and got a yes.
+     * Changes a bot's Proactive agent: { enabled?, setUp?, every?, sweepHours?, maxPerDay?, deliver?, watch?, instructions?,
+     * people? }, or null to forget its settings and routines. `people` is `{ [person]: { on?, notify? } | null }`, each person
+     * by "owner" or a team member's name or id; null takes a person out. Turning it on, or marking its setup as finished
+     * (`setUp`), needs `{ agreed: true }` as the third argument: the caller showed the person that the bot then wakes with
+     * nobody watching, reads what its tools reach and messages them, and got a yes.
      */
     async "bots.proactive.set"([ref, patch, options]) {
       const found = bot(ref);
       if (patch !== null && (!patch || typeof patch !== "object" || Array.isArray(patch))) throw new ControlError("Give what to change, or null to forget the settings.", "BAD_ARGUMENT");
-      if (patch?.enabled === true && workspace.proactive.config(found.id)?.enabled !== true && options?.agreed !== true)
+      const held = workspace.proactive.config(found.id);
+      if (((patch?.enabled === true && held?.enabled !== true) || (patch?.setUp === true && held?.setUp !== true)) && options?.agreed !== true)
         throw new ControlError("Turning on a bot's Proactive agent lets it wake on its own, read what its tools reach (such as your inbox and calendar) and message you, with nobody watching. Each wake uses the model. Show that to the person, and give `{ \"agreed\": true }` after the settings (on the command line, `--yes`).", "NEEDS_YES");
-      await handlers.setBotProactive(found.id, patch);
+      let next = patch;
+      if (patch?.people !== undefined) {
+        if (!patch.people || typeof patch.people !== "object" || Array.isArray(patch.people)) throw new ControlError("Give the people as { person: { on, notify } }, or null to take a person out.", "BAD_ARGUMENT");
+        next = { ...patch, people: Object.fromEntries(Object.entries(patch.people).map(([who, own]) => [person(who), own])) };
+      }
+      await handlers.setBotProactive(found.id, next);
       return proactiveView(bot(found.id));
+    },
+    /**
+     * What the owner does with an alert a bot sent them: "take" starts a normal turn in their chat with what the bot offered
+     * (it answers that chat's id; the turn's tools still ask for approval as usual), "later" holds what it was about back
+     * for a day. The alert is named by its run id (`bots.proactive` lists them).
+     */
+    async "bots.proactive.act"([ref, runId, action]) {
+      const found = bot(ref);
+      const answer = await handlers.proactiveAct(found.id, text(runId, 200, "the alert's id (see `botkins bots alert <bot>`)"), action);
+      return { id: found.id, name: found.name, alert: runId, action, ...answer };
     },
 
     // ── A bot's memory ──

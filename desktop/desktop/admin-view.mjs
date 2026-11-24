@@ -44,7 +44,8 @@ export function ownerWindowView(state, link, admin) {
   if (admin) return { ...state, spaces: link.spacesFor("owner", { admin: true }), adminMode: true };
   // The link names the live lists as one part; the window's snapshot has them side by side.
   const live = { ...Object.fromEntries(LIVE.filter((name) => state[name] && typeof state[name] === "object").map((name) => [name, state[name]])), requests: state.requests ?? [], active: Object.keys(state.streams ?? {}) };
-  const cut = link.ownerParts({ chats: state.chats ?? [], runs: state.runs ?? [], bots: state.bots ?? [], panels: state.panels ?? [], board: state.board ?? [], live });
+  // What a bot told another person is that person's: the Proactive part goes through the same cut as a phone's.
+  const cut = link.ownerParts({ chats: state.chats ?? [], runs: state.runs ?? [], bots: state.bots ?? [], panels: state.panels ?? [], board: state.board ?? [], live, ...(state.proactive && { proactive: state.proactive }) });
   return {
     ...state,
     chats: cut.chats,
@@ -54,6 +55,9 @@ export function ownerWindowView(state, link, admin) {
     board: cut.board,
     ...Object.fromEntries(LIVE.filter((name) => Object.hasOwn(live, name)).map((name) => [name, cut.live[name]])),
     requests: cut.live.requests,
+    ...(state.proactive && { proactive: cut.proactive }),
+    // The reminders in the snapshot are for the link to pass on: the window is shown only the owner's own.
+    ...(Array.isArray(state.reminders) && { reminders: state.reminders.filter((reminder) => reminder?.person === "owner") }),
     spaces: link.spacesFor("owner", { admin: false }),
     adminMode: false,
   };

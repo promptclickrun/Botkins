@@ -717,12 +717,15 @@ function NotificationPreferences({
     ["routines", "Routines", "When a routine finishes or fails."],
     ["requests", "Questions & approvals", "When a bot needs your answer or approval."],
   ];
+  // One plain reminder for what is left waiting, for each person and their own phones too. No model. Missing on an older computer.
+  const reminders = value.reminders;
   return (
     <>
       <Group title="Notify me about">
         {toggles.map(([key, label, hint]) => (
           <SwitchRow key={key} label={label} help={hint} checked={value[key] as boolean} onChange={(on) => set({ [key]: on })} />
         ))}
+        {reminders !== undefined && <SwitchRow label="Reminders" help="Once, when a bot is left waiting on someone." checked={reminders} onChange={(on) => set({ reminders: on })} />}
       </Group>
       <Group
         title="Quiet hours"

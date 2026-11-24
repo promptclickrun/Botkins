@@ -1,7 +1,7 @@
 // The computer's own notifications (its Settings › Notifications): what it alerts about, and quiet
 // hours. These are the computer's alerts, not this phone's, so they sit in a group of their own.
 import DateTimePicker from "@react-native-community/datetimepicker";
-import { BellOff, BellRing, CircleHelp, MessageCircle, Repeat } from "lucide-react-native";
+import { AlarmClock, BellOff, BellRing, CircleHelp, MessageCircle, Repeat } from "lucide-react-native";
 import { useState } from "react";
 import { Platform, View } from "react-native";
 import type { NotificationSettings } from "@/link/types";
@@ -22,6 +22,7 @@ export function ComputerAlerts() {
   const [alerts, hold] = useHeld(useSettings()?.notifications);
   const [picking, setPicking] = useState<"from" | "to">();
   const canTest = useCapability("maintenance-v1");
+  const canRemind = useCapability("proactive-team-v1");
   if (!alerts) return null;
   // The computer takes the whole setting at once.
   const set = (patch: Partial<NotificationSettings>) => void hold(patch, () => api.setPreferences({ notifications: { ...alerts, ...patch } }));
@@ -62,6 +63,15 @@ export function ComputerAlerts() {
           <Row leading={<IconTile icon={MessageCircle} color={colors.ink2} />} title="Replies" subtitle="When a bot finishes in the background" toggled={alerts.replies} disabled={!online} onToggle={(replies) => set({ replies })} />
           <Row leading={<IconTile icon={Repeat} color={colors.ink2} />} title="Routines" subtitle="When a routine finishes or fails" toggled={alerts.routines} disabled={!online} onToggle={(routines) => set({ routines })} />
           <Row leading={<IconTile icon={CircleHelp} color={colors.ink2} />} title="Questions and approvals" subtitle="When a bot needs your answer" toggled={alerts.requests} disabled={!online} onToggle={(requests) => set({ requests })} />
+          {/* One plain reminder for what is left waiting, for each person and their own phones too. No model. */}
+          <Row
+            leading={<IconTile icon={AlarmClock} color={colors.ink2} />}
+            title="Reminders"
+            subtitle={canRemind ? "Once, when a bot is left waiting on someone" : "Update the app on your computer"}
+            toggled={canRemind && alerts.reminders !== false}
+            disabled={!canRemind || !online}
+            onToggle={(reminders) => set({ reminders })}
+          />
           <Row
             leading={<IconTile icon={BellRing} color={colors.ink2} />}
             title="Send test"

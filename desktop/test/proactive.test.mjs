@@ -1,5 +1,6 @@
 // The Proactive agent (Settings › Experimental, and each bot's profile): the computer's switch, a bot's own
-// settings and managed routine, the gate that wakes it, and who a bot's agent works for.
+// settings and managed routine, and the gate that wakes it. Several people, who may change what, offers and
+// the earlier shape are in proactive-team.test.mjs.
 import test from "node:test";
 import assert from "node:assert/strict";
 import { copyFileSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -44,16 +45,18 @@ const packet = (prompt) => JSON.parse(prompt.split("\n\n").at(-2));
 const candidate = (title, refs, method = "alert") => ({ title, refs, method, why: "This affects the next step.", next: "Check the details today." });
 const proposal = (title) => (prompt) => JSON.stringify({ candidates: [candidate(title, [packet(prompt)[0]?.id])] });
 
-/** The routine of a bot's agent, ticking as its clock does. */
+/** Turns a bot's agent on for one person, as finishing its setup steps does. */
+const on = (ws, botId, patch = {}, person = "owner") => ws.proactive.setBot(botId, { enabled: true, setUp: true, people: { [person]: { on: true } }, ...patch });
+/** The routine a bot keeps for the one person it looks out for in these tests, ticking as its clock does. */
 const tick = (ws, botId, trigger = "scheduled") => {
-  const { chat, entry } = ws.proactive.routine(botId);
+  const { chat, entry } = ws.proactive.routine(botId, Object.keys(ws.proactive.config(botId).people)[0]);
   return dispatch(ws, chat, entry, trigger);
 };
 const failedRun = (ws, id, chatId, title) => ws.state.runs.unshift({ id, chatId, scheduleId: 9, status: "Needs you", title, time: Date.now(), finished: Date.now() });
 const managed = (ws) => ws.panels.routines.list().filter(({ entry }) => entry.proactive);
 
 test("the computer's switch and a bot's settings are each checked whole", () => {
-  assert.equal(proactiveField({}).enabled, false);
+  assert.equal(proactiveField({}).enabled, true, "on from the start: a bot still waits for its setup steps");
   assert.deepEqual(proactiveField({ enabled: true }, { enabled: false, bots: { pip: { enabled: true } } }), { enabled: true, bots: { pip: { enabled: true } } }, "the switch leaves the bots' settings as they are");
   assert.throws(() => proactiveField({ botId: "pip" }), /Unknown/, "the switch no longer picks a bot");
   assert.equal(botProactiveField({}).enabled, false);
@@ -69,7 +72,7 @@ test("one bot is proactive and another is not: only its routine exists, runs and
   const { ws, seen } = setup(t);
   ws.setPreferences({ proactive: { enabled: true } });
   assert.equal(managed(ws).length, 0, "the switch alone makes no routine");
-  ws.proactive.setBot("pip", { enabled: true, every: 15, sweepHours: 0 });
+  on(ws, "pip", { every: 15, sweepHours: 0 });
   assert.equal(managed(ws).length, 1);
   assert.equal(managed(ws)[0].chat.botId, "pip");
   assert.equal(managed(ws)[0].entry.cron, "*/15 * * * *");
@@ -82,7 +85,7 @@ test("one bot is proactive and another is not: only its routine exists, runs and
   await tick(ws, "pip");
   assert.equal(seen.prompts.length, 1);
   assert.match(seen.prompts[0], /Routine “Bills” needs the person/);
-  assert.equal(ws.state.proactive.bots.pip.log[0].outcome, "alerted");
+  assert.equal(ws.state.proactive.bots.pip.people.owner.log[0].outcome, "alerted");
   assert.equal(ws.state.proactive.bots.scout, undefined, "a bot that is not proactive has no gate state");
   assert.deepEqual(ws.snapshot().proactive.bots.scout, undefined);
 });
@@ -90,29 +93,29 @@ test("one bot is proactive and another is not: only its routine exists, runs and
 test("each proactive bot keeps its own seen signals, alerts a day, look-around clock and log", async (t) => {
   const { ws, seen } = setup(t);
   ws.setPreferences({ proactive: { enabled: true } });
-  ws.proactive.setBot("pip", { enabled: true, sweepHours: 0, maxPerDay: 3 });
-  ws.proactive.setBot("scout", { enabled: true, sweepHours: 0, maxPerDay: 3 });
+  on(ws, "pip", { sweepHours: 0, maxPerDay: 3 });
+  on(ws, "scout", { sweepHours: 0, maxPerDay: 3 });
   seen.reply = proposal("Something needs you.");
   failedRun(ws, "bad", ws.createChat("patch"), "Bills");
 
   await tick(ws, "pip");
   assert.equal(seen.prompts.length, 1);
-  assert.equal(ws.state.proactive.bots.pip.pings, 1);
+  assert.equal(ws.state.proactive.bots.pip.people.owner.pings, 1);
   await tick(ws, "scout");
   assert.equal(seen.prompts.length, 1, "what pip already told the person doesn't wake scout as well");
-  assert.deepEqual(Object.keys(ws.state.proactive.bots.scout.seen), [], "and isn't written into scout's own list");
-  assert.ok(Object.keys(ws.state.proactive.bots.pip.seen).length > 0);
+  assert.deepEqual(Object.keys(ws.state.proactive.bots.scout.people.owner.seen), [], "and isn't written into scout's own list");
+  assert.ok(Object.keys(ws.state.proactive.bots.pip.people.owner.seen).length > 0);
 
   ws.memory.save("scout", "The next review is tomorrow.");
   seen.reply = proposal("Prepare for your review.");
   await tick(ws, "scout", "manual");
   assert.equal(seen.prompts.length, 2, "Check now wakes it whatever the other did");
-  assert.equal(ws.state.proactive.bots.scout.pings, 1);
-  assert.equal(ws.state.proactive.bots.pip.pings, 1, "its count is its own");
-  assert.equal(ws.state.proactive.bots.pip.log.length, 1);
-  assert.equal(ws.state.proactive.bots.scout.log.length, 1);
+  assert.equal(ws.state.proactive.bots.scout.people.owner.pings, 1);
+  assert.equal(ws.state.proactive.bots.pip.people.owner.pings, 1, "its count is its own");
+  assert.equal(ws.state.proactive.bots.pip.people.owner.log.length, 1);
+  assert.equal(ws.state.proactive.bots.scout.people.owner.log.length, 1);
 
-  ws.state.proactive.bots.pip.pings = 3;
+  ws.state.proactive.bots.pip.people.owner.pings = 3;
   failedRun(ws, "worse", ws.createChat("patch"), "Backups");
   await tick(ws, "pip");
   assert.equal(seen.prompts.length, 2, "pip is at its cap for the day");
@@ -123,7 +126,7 @@ test("each proactive bot keeps its own seen signals, alerts a day, look-around c
 test("the gate wakes the bot once per signal, sweeps on its clock, and keeps quiet hours and the cap", async (t) => {
   const { ws, seen } = setup(t);
   ws.setPreferences({ proactive: { enabled: true } });
-  ws.proactive.setBot("pip", { enabled: true, sweepHours: 0, maxPerDay: 3 });
+  on(ws, "pip", { sweepHours: 0, maxPerDay: 3 });
   const go = (trigger) => tick(ws, "pip", trigger);
 
   await go();
@@ -134,7 +137,7 @@ test("the gate wakes the bot once per signal, sweeps on its clock, and keeps qui
   assert.equal(seen.prompts.length, 1);
   assert.match(seen.prompts[0], /\[SILENT\]/);
   assert.equal(ws.state.runs.find((r) => r.proactive).silent, true);
-  assert.equal(ws.state.proactive.bots.pip.log[0].outcome, "silent");
+  assert.equal(ws.state.proactive.bots.pip.people.owner.log[0].outcome, "silent");
 
   await go();
   assert.equal(seen.prompts.length, 1, "the same signal never wakes it twice");
@@ -144,20 +147,20 @@ test("the gate wakes the bot once per signal, sweeps on its clock, and keeps qui
   ws.memory.save("pip", "The Bills routine depends on the Gmail sign-in.");
   seen.reply = proposal("Bills routine is failing: Gmail sign-in expired.");
   ws.proactive.setBot("pip", { sweepHours: 1 });
-  ws.state.proactive.bots.pip.lastSweepAt = 0;
+  ws.state.proactive.bots.pip.people.owner.lastSweepAt = 0;
   await go();
   assert.equal(seen.prompts.length, 3, "a due sweep wakes it");
   assert.match(seen.prompts[2], /inbox, calendar/, "the owner's bot may look at the sources its tools reach");
-  assert.equal(ws.state.proactive.bots.pip.log[0].outcome, "alerted");
-  assert.equal(ws.state.proactive.bots.pip.pings, 1);
+  assert.equal(ws.state.proactive.bots.pip.people.owner.log[0].outcome, "alerted");
+  assert.equal(ws.state.proactive.bots.pip.people.owner.pings, 1);
   assert.match(ws.proactive.prompt("pip", ws.proactive.wake("pip", "manual")), /already told the person[\s\S]*Gmail sign-in expired/);
 
-  ws.state.proactive.bots.pip.pings = 3;
-  ws.state.proactive.bots.pip.lastSweepAt = 0;
+  ws.state.proactive.bots.pip.people.owner.pings = 3;
+  ws.state.proactive.bots.pip.people.owner.lastSweepAt = 0;
   await go();
   assert.equal(seen.prompts.length, 3, "the day's cap holds it");
 
-  ws.state.proactive.bots.pip.pings = 0;
+  ws.state.proactive.bots.pip.people.owner.pings = 0;
   ws.setPreferences({ notifications: { quietHours: { enabled: true, from: "00:00", to: "23:59" } } });
   await go();
   assert.equal(seen.prompts.length, 3, "quiet hours hold it");
@@ -166,8 +169,8 @@ test("the gate wakes the bot once per signal, sweeps on its clock, and keeps qui
 test("the computer's switch off pauses every proactive bot, and on brings them back as they were", async (t) => {
   const { ws, seen } = setup(t);
   ws.setPreferences({ proactive: { enabled: true } });
-  ws.proactive.setBot("pip", { enabled: true, every: 60, instructions: "Skip newsletters." });
-  ws.proactive.setBot("scout", { enabled: true, every: 15 });
+  on(ws, "pip", { every: 60, instructions: "Skip newsletters." });
+  on(ws, "scout", { every: 15 });
   assert.equal(managed(ws).length, 2);
 
   ws.setPreferences({ proactive: { enabled: false } });
@@ -187,22 +190,22 @@ test("the computer's switch off pauses every proactive bot, and on brings them b
 test("a bot's agent is turned off for good by removing its routine, its settings or the bot", async (t) => {
   const { ws } = setup(t);
   ws.setPreferences({ proactive: { enabled: true } });
-  ws.proactive.setBot("patch", { enabled: true });
-  ws.proactive.setBot("scout", { enabled: true });
+  on(ws, "patch");
+  on(ws, "scout");
   await ws.panels.routines.remove(ws.proactive.routine("patch").chat.id);
-  assert.equal(ws.proactive.config("patch").enabled, false, "removing the routine turns that bot's agent off");
+  assert.equal(ws.proactive.config("patch").people.owner.on, false, "removing the routine turns that person's check off");
   assert.equal(ws.proactive.routine("patch"), null);
-  assert.equal(ws.proactive.config("scout").enabled, true, "and no other");
+  assert.equal(ws.proactive.config("scout").people.owner.on, true, "and no other");
 
   await ws.agents.deleteBot("scout");
   assert.equal(ws.proactive.config("scout"), undefined);
   assert.equal(ws.state.proactive.bots.scout, undefined);
 
-  ws.proactive.setBot("patch", { enabled: true });
+  on(ws, "patch");
   ws.proactive.setBot("patch", null);
   assert.equal(ws.proactive.config("patch"), undefined, "null forgets a bot's settings");
   assert.equal(ws.proactive.routine("patch"), null);
-  assert.throws(() => ws.proactive.setBot("ghost", { enabled: true }), /Unknown bot/);
+  assert.throws(() => on(ws, "ghost"), /Unknown bot/);
 });
 
 test("the single-bot setting of an earlier version becomes that bot's, with its routine and state kept", (t) => {
@@ -218,13 +221,13 @@ test("the single-bot setting of an earlier version becomes that bot's, with its 
   });
   assert.deepEqual(ws.state.settings.proactive, {
     enabled: true,
-    bots: { scout: { enabled: true, person: "owner", every: 15, sweepHours: 6, maxPerDay: 10, deliver: "feed", watch: ["runs"], instructions: "Be brief." } },
+    bots: { scout: { enabled: true, setUp: true, every: 15, sweepHours: 6, maxPerDay: 10, deliver: "feed", watch: ["runs"], instructions: "Be brief.", people: { owner: { on: true, notify: true } } } },
   });
   assert.equal(ws.state.proactive.botId, undefined);
-  assert.deepEqual(ws.state.proactive.bots.scout.seen, { "run:a": 5 });
-  assert.equal(ws.state.proactive.bots.scout.pings, 2);
-  assert.equal(ws.state.proactive.bots.scout.chatId, "c1");
-  assert.equal(ws.state.proactive.bots.scout.log.length, 1);
+  assert.deepEqual(ws.state.proactive.bots.scout.people.owner.seen, { "run:a": 5 });
+  assert.equal(ws.state.proactive.bots.scout.people.owner.pings, 2);
+  assert.equal(ws.state.proactive.bots.scout.people.owner.chatId, "c1");
+  assert.equal(ws.state.proactive.bots.scout.people.owner.log.length, 1);
   assert.equal(managed(ws).length, 1, "the routine is kept, not made again");
   assert.equal(managed(ws)[0].chat.id, "c1");
   ws.proactive.sync();
@@ -234,19 +237,19 @@ test("the single-bot setting of an earlier version becomes that bot's, with its 
 
 test("older and damaged shapes are tolerated", () => {
   const mig = (settings, state) => migrateProactive(settings, state);
-  assert.deepEqual(mig(undefined, undefined), { settings: { enabled: false, bots: {} }, state: { bots: {} } });
-  assert.deepEqual(mig("nope", 5).settings, { enabled: false, bots: {} });
+  assert.deepEqual(mig(undefined, undefined), { settings: { enabled: true, bots: {} }, state: { shape: 3, bots: {}, reminders: {} } });
+  assert.deepEqual(mig("nope", 5).settings, { enabled: true, bots: {} });
   assert.deepEqual(mig({ enabled: true, botId: 5 }, {}).settings, { enabled: true, bots: {} });
   assert.equal(mig({ enabled: false, botId: "pip", every: 7 }, {}).settings.bots.pip.every, 30, "a value that is no longer valid is the usual one");
   assert.equal(mig({ enabled: false, botId: "pip" }, {}).settings.bots.pip.enabled, false);
   const current = { enabled: true, bots: { pip: { enabled: true, person: "m_a", every: 60 }, bad: 3, other: { every: 999 } } };
   const kept = mig(current, { bots: { pip: { pings: 1 } } });
-  assert.equal(kept.settings.bots.pip.person, "m_a");
+  assert.deepEqual(kept.settings.bots.pip.people, { m_a: { on: true, notify: true } });
   assert.equal(kept.settings.bots.pip.every, 60);
   assert.equal(kept.settings.bots.bad, undefined);
   assert.equal(kept.settings.bots.other.every, 30);
-  assert.equal(kept.settings.bots.other.person, "owner");
-  assert.equal(kept.state.bots.pip.pings, 1);
+  assert.deepEqual(kept.settings.bots.other.people, { owner: { on: false, notify: true } });
+  assert.equal(kept.state.bots.pip.people.m_a.pings, 1);
   assert.deepEqual(mig(kept.settings, kept.state), kept, "migrating twice changes nothing");
 });
 
@@ -292,46 +295,21 @@ const avery = member("m_avery", "Avery");
 const bots = ["pip", "scout"].map((id) => ({ id }));
 const lookups = { bot: (id) => bots.find((bot) => bot.id === id) };
 
-test("a member whose role manages a bot may set its Proactive agent; others, and the computer's switch, are the owner's", () => {
+// Who may change what, and what each person is sent, are in proactive-team.test.mjs.
+test("a member whose role sees a bot may reach its Proactive agent; the computer's switch is the owner's", () => {
   const t = team();
   const call = (principal, method, ...args) => authorize(principal, t, method, args, lookups);
   assert.equal(call(avery, "setBotProactive", "pip", { enabled: true }), "");
   assert.match(call(avery, "setBotProactive", "scout", { enabled: true }), /isn't available to your team role/, "a bot the role can't see");
-  assert.match(call(member("m_casey", "Casey"), "setBotProactive", "pip", { enabled: true }), /role can't do that/, "a role that doesn't manage bots");
+  assert.match(call(member("m_casey", "Casey"), "setBotProactive", "pip", { enabled: true }), /isn't available to your team role/, "a role that doesn't see the bot");
   assert.match(call(avery, "setPreferences", { proactive: { enabled: true } }), /display preferences only/, "the computer's switch");
   assert.equal(call({ kind: "owner" }, "setBotProactive", "scout", { enabled: true }), "");
-});
-
-test("a member's call sets their own agent, marked as theirs; another member and a bot they don't manage are refused", async (t) => {
-  const { ws } = setup(t, { team: team() });
-  ws.setPreferences({ proactive: { enabled: true } });
-  const handlers = { setBotProactive: (...args) => ws.proactive.setBot(...args) };
-  const call = deviceCall({ workspace: ws, handlers, folders: {} });
-
-  await call("setBotProactive", ["pip", { enabled: true, deliver: "chat" }], { principal: avery });
-  assert.equal(ws.proactive.config("pip").person, "m_avery");
-  const { chat, entry } = ws.proactive.routine("pip");
-  assert.equal(chat.createdBy, "m_avery", "its routine and chat are the member's");
-  assert.equal(entry.deliver.to, "chat");
-
-  await assert.rejects(call("setBotProactive", ["pip", { enabled: false }], { principal: member("m_blake", "Blake") }), /set up for someone else/);
-  await assert.rejects(call("setBotProactive", ["scout", { enabled: true }], { principal: avery }), /can't manage/);
-  await assert.rejects(call("setBotProactive", ["pip", { sweepHours: 3 }], { principal: avery }), /Only the owner/, "a member's agent never reads the computer's own accounts");
-  await call("setBotProactive", ["pip", { enabled: false }], { principal: avery });
-  assert.equal(ws.proactive.config("pip").enabled, false);
-  assert.equal(ws.proactive.routine("pip").entry.enabled, false);
-
-  // The owner may set up any bot, and take over one that a member left by forgetting it.
-  await call("setBotProactive", ["pip", null], { principal: { kind: "owner" } });
-  await call("setBotProactive", ["pip", { enabled: true }], { principal: { kind: "owner" } });
-  assert.equal(ws.proactive.config("pip").person, "owner");
-  assert.equal(ws.proactive.routine("pip").chat.createdBy, undefined);
 });
 
 test("a member's agent hears only of what that member may see, and tells that member", async (t) => {
   const { ws, seen } = setup(t, { team: team() });
   ws.setPreferences({ proactive: { enabled: true } });
-  ws.proactive.setBot("pip", { enabled: true }, "m_avery");
+  on(ws, "pip", {}, "m_avery");
 
   const ownerChat = ws.createChat("pip");
   const averysChat = ws.createChat("pip");
@@ -358,58 +336,15 @@ test("a member's agent hears only of what that member may see, and tells that me
   const said = ws.chat(averysChat).messages.findLast((m) => m.role === "assistant");
   assert.match(said?.text, /^Your report failed\./, "the alert is in the member's chat");
   for (const id of [ownerChat, blakesChat]) assert.equal(ws.chat(id).messages.some((m) => m.text?.startsWith("Your report failed.")), false);
-  assert.equal(ws.notifiesOwner(ws.proactive.routine("pip").chat.id), false, "and not the owner's to be told of");
+  assert.equal(ws.notifiesOwner(ws.proactive.routine("pip", "m_avery").chat.id), false, "and not the owner's to be told of");
 
   // The owner's agent is the owner's: not Avery's or Blake's private runs.
-  ws.proactive.setBot("scout", { enabled: true, sweepHours: 0 });
+  on(ws, "scout", { sweepHours: 0 });
   await tick(ws, "scout");
   assert.match(seen.prompts[1], /Owner payroll/);
   assert.match(seen.prompts[1], /Owner roadmap/);
   assert.match(seen.prompts[1], /Owner question/);
   assert.doesNotMatch(seen.prompts[1], /Avery|Blake/);
-});
-
-test("a member's agent pauses when their role no longer manages the bot, and comes back with it", async (t) => {
-  const current = team();
-  const { ws, seen } = setup(t, { team: current });
-  ws.setPreferences({ proactive: { enabled: true } });
-  ws.proactive.setBot("pip", { enabled: true }, "m_avery");
-  failedRun(ws, "a", (() => { const id = ws.createChat("pip"); ws.chat(id).createdBy = "m_avery"; return id; })(), "Avery report");
-
-  current.roles.find((r) => r.id === "r_mgr").perms.agents = ["view", "chat"];
-  ws.proactive.sync();
-  assert.equal(ws.proactive.routine("pip").entry.enabled, false);
-  await tick(ws, "pip", "manual");
-  assert.equal(seen.prompts.length, 0);
-
-  current.roles.find((r) => r.id === "r_mgr").perms.agents = ["view", "chat", "manage"];
-  ws.proactive.sync();
-  assert.equal(ws.proactive.routine("pip").entry.enabled, true);
-  await tick(ws, "pip", "manual");
-  assert.equal(seen.prompts.length, 1);
-});
-
-test("a member is sent their own agent's state, not the owner's or another member's", (t) => {
-  const { ws } = setup(t, { team: team() });
-  ws.setPreferences({ proactive: { enabled: true } });
-  ws.proactive.setBot("pip", { enabled: true, instructions: "Avery's private rules" }, "m_avery");
-  ws.proactive.setBot("scout", { enabled: true, instructions: "Owner's private rules" });
-  const parts = { bots: [{ id: "pip" }, { id: "scout" }], chats: [], proactive: ws.snapshot().proactive, settings: ws.state.settings };
-  const t2 = team();
-  const sees = (id, name) => filterParts(parts, member(id, name), t2);
-
-  const averys = sees("m_avery", "Avery").proactive;
-  assert.equal(averys.enabled, true);
-  assert.deepEqual(Object.keys(averys.bots), ["pip"], "only the bots the role sees");
-  assert.equal(averys.bots.pip.instructions, "Avery's private rules");
-  assert.equal(averys.bots.pip.mine, true);
-  assert.equal("person" in averys.bots.pip, false);
-  assert.equal("seen" in averys.bots.pip, false, "never the keys of what it raised");
-
-  const blakes = sees("m_blake", "Blake").proactive;
-  assert.deepEqual(blakes.bots.pip, { enabled: true, taken: true }, "another member's agent is only known to be there");
-  assert.equal(JSON.stringify(blakes).includes("private rules"), false);
-  assert.equal(JSON.stringify(sees("m_casey", "Casey").proactive.bots), "{}", "a role that doesn't manage bots is sent none");
 });
 
 test("a past conversation and a goal surface preparation without an inbox event, with no model call on the next quiet tick", async (t) => {
@@ -419,7 +354,7 @@ test("a past conversation and a goal surface preparation without an inbox event,
   ws.memory.save("pip", "Interested in railway photography.");
   ws.board.post("pip", { kind: "goal", title: "Build my station photo portfolio" });
   ws.setPreferences({ proactive: { enabled: true } });
-  ws.proactive.setBot("pip", { enabled: true, sweepHours: 0 });
+  on(ws, "pip", { sweepHours: 0 });
   seen.reply = (prompt) => {
     const facts = packet(prompt);
     const from = (type) => facts.find((e) => e.id.startsWith(type + "-")).id;
@@ -461,7 +396,7 @@ test("a past conversation and a goal surface preparation without an inbox event,
 test("chat and Feed feedback train only the recipient, survive restart, and curate the next wake", async (t) => {
   const { ws, seen, dir } = setup(t);
   ws.setPreferences({ proactive: { enabled: true } });
-  ws.proactive.setBot("pip", { enabled: true, sweepHours: 0, deliver: "feed" });
+  on(ws, "pip", { sweepHours: 0, deliver: "feed" });
   const addInterest = (workspace, text) => workspace.memory.save("pip", text);
   const discover = (prompt) => {
     const last = packet(prompt).filter((e) => e.id.startsWith("memory-")).at(-1);
@@ -508,7 +443,7 @@ test("chat and Feed feedback train only the recipient, survive restart, and cura
   restarted.ws.board.act(card.id, "up", undefined, "owner");
   assert.equal(restarted.ws.proactive.view("pip").learning.rated, 0, "neutral/retracted reactions undo both training labels");
   restarted.ws.proactive.setBot("pip", null);
-  restarted.ws.proactive.setBot("pip", { enabled: true });
+  on(restarted.ws, "pip");
   react(restarted.ws, "👍", "owner");
   assert.equal(restarted.ws.proactive.view("pip").learning.rated, 0, "an old delivery never trains a new setup");
 });
@@ -530,7 +465,7 @@ test("prior-session grounding and delivery stay inside the recipient and bot bou
   const shared = make("m_avery", "m_avery", "PRIVATE planning with Blake", { time: Date.now() + HOUR });
   ws.peopleOf = (id) => ({ invited: id === shared.id ? ["m_blake"] : [] });
   ws.setPreferences({ proactive: { enabled: true } });
-  ws.proactive.setBot("pip", { enabled: true }, "m_avery");
+  on(ws, "pip", {}, "m_avery");
   seen.reply = proposal("Plan a poster rehearsal");
   await tick(ws, "pip");
   assert.match(seen.prompts[0], /conference poster/);
@@ -548,8 +483,8 @@ test("prior-session grounding and delivery stay inside the recipient and bot bou
 test("failed checks release their evidence, concurrent ticks reserve it and revoked evidence stays quiet", async (t) => {
   const { ws, seen } = setup(t);
   ws.setPreferences({ proactive: { enabled: true } });
-  ws.proactive.setBot("pip", { enabled: true, sweepHours: 0 });
-  ws.proactive.setBot("scout", { enabled: true, sweepHours: 0 });
+  on(ws, "pip", { sweepHours: 0 });
+  on(ws, "scout", { sweepHours: 0 });
   failedRun(ws, "bad", ws.createChat("patch"), "Prepare agenda");
   const started = Promise.withResolvers(), answer = Promise.withResolvers();
   seen.reply = async () => { started.resolve(); return answer.promise; };
@@ -581,7 +516,7 @@ test("an enabled live read supplies an evidence ID, invented IDs cannot alert, a
   const current = team();
   const { ws, seen } = setup(t, { team: current });
   ws.setPreferences({ proactive: { enabled: true } });
-  ws.proactive.setBot("pip", { enabled: true, deliver: "feed" });
+  on(ws, "pip", { deliver: "feed" });
   const feed = ws.spaces.forCards("owner", "feed");
   current.spaces = { [feed.id]: { access: "link" } };
   const calls = [];
@@ -610,7 +545,7 @@ test("an enabled live read supplies an evidence ID, invented IDs cannot alert, a
 test("a quiet decision can schedule one grounded follow-up, which rechecks the underlying facts", async (t) => {
   const { ws, seen, dir } = setup(t);
   ws.setPreferences({ proactive: { enabled: true } });
-  ws.proactive.setBot("pip", { enabled: true, sweepHours: 0 });
+  on(ws, "pip", { sweepHours: 0 });
   ws.memory.save("pip", "I need a rehearsal before the poster session on Friday.");
   const at = Date.now() + 2 * HOUR;
   const defer = (prompt) => JSON.stringify({ candidates: [], revisit: { at: new Date(at).toISOString(), refs: [packet(prompt)[0].id] } });
@@ -636,7 +571,7 @@ test("a quiet decision can schedule one grounded follow-up, which rechecks the u
 test("a persisted in-flight check resumes once after restart, and refuses a late result after reset", async (t) => {
   const { ws, seen, dir } = setup(t);
   ws.setPreferences({ proactive: { enabled: true } });
-  ws.proactive.setBot("pip", { enabled: true, sweepHours: 0 });
+  on(ws, "pip", { sweepHours: 0 });
   ws.memory.save("pip", "I want to practise French before my trip.");
   const started = Promise.withResolvers(), finish = Promise.withResolvers();
   seen.reply = async (prompt) => { started.resolve(); await finish.promise; return proposal("A French rehearsal")(prompt); };
@@ -654,7 +589,7 @@ test("a persisted in-flight check resumes once after restart, and refuses a late
   assert.equal(gate.pings, 1);
   assert.equal(await tick(restarted.ws, "pip"), null);
   ws.proactive.setBot("pip", null);
-  ws.proactive.setBot("pip", { enabled: true });
+  on(ws, "pip");
   finish.resolve();
   await pending;
   assert.deepEqual(ws.proactive.view("pip").log, []);
@@ -664,7 +599,7 @@ test("a persisted in-flight check resumes once after restart, and refuses a late
 test("selecting one suggestion leaves another distinct waiting request available for the next tick", async (t) => {
   const { ws, seen } = setup(t);
   ws.setPreferences({ proactive: { enabled: true } });
-  ws.proactive.setBot("pip", { enabled: true, sweepHours: 0 });
+  on(ws, "pip", { sweepHours: 0 });
   const chat = ws.createChat("patch");
   failedRun(ws, "first", chat, "Reconcile invoices");
   failedRun(ws, "second", chat, "Prepare the launch");

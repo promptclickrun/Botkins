@@ -48,6 +48,7 @@ const KEYS = [
   ["notifications.replies", "on | off", "Tell me when a bot replies"],
   ["notifications.routines", "on | off", "Tell me when a routine finishes"],
   ["notifications.requests", "on | off", "Tell me when a bot asks for something"],
+  ["notifications.reminders", "on | off", "Remind me once when something is left waiting on me"],
   ["notifications.quietHours.enabled", "on | off", "Keep quiet during the quiet hours"],
   ["notifications.quietHours.from", "HH:MM", "The quiet hours start"],
   ["notifications.quietHours.to", "HH:MM", "The quiet hours end"],

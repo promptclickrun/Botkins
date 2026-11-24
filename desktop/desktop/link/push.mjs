@@ -310,6 +310,9 @@ export class Push {
     const first = this.working === null;
     const before = this.working ?? new Map();
     const requests = state.requests ?? [];
+    // The reminders the app sent in the last few minutes (its desktop/reminders.mjs): each goes once, to the person it is for.
+    const reminders = (Array.isArray(state.reminders) ? state.reminders : []).filter((reminder) => reminder && typeof reminder.key === "string" && typeof reminder.person === "string");
+    const reminderId = (reminder) => reminder.person + " " + reminder.key;
     const sends = [];
     // The chats whose turn ended at this look, for the card for all Botkins: it makes its sound for
     // these. A turn the person stopped themselves ends quietly.
@@ -319,6 +322,7 @@ export class Push {
       const chats = new Map((state.chats ?? []).map((chat) => [chat.id, chat]));
       const bots = new Map((state.bots ?? []).map((bot) => [bot.id, bot]));
       for (const request of requests) if (!this.asked.has(request.id)) this.onRequest(sends, targets, request, chats, bots);
+      for (const reminder of reminders) if (!this.reminded?.has(reminderId(reminder))) this.onReminder(sends, targets, reminder, chats);
       for (const run of runs) {
         const working = run.status === "Working";
         const was = before.get(run.id);
@@ -336,6 +340,7 @@ export class Push {
     if (targets.length) this.cards(sends, targets, state, ended);
     this.working = known;
     this.asked = new Set(requests.map((request) => request.id));
+    this.reminded = new Set(reminders.map(reminderId));
     if (sends.length) void this.send(sends);
   }
 
@@ -393,9 +398,30 @@ export class Push {
     }
   }
 
+  /**
+   * One plain reminder that something is left waiting on a person (the app decides when: once for each
+   * thing, never in quiet hours, a few a day). It goes only to that person's own devices, by their own
+   * "A bot needs me" choice, and not to a phone that is showing that chat. Its title is the bot's name and
+   * what it waits on; its text is shown only with previews on.
+   */
+  onReminder(sends, targets, reminder, chats) {
+    const chat = chats.get(reminder.chatId);
+    for (const device of targets) {
+      if ((device.memberId ?? "owner") !== reminder.person) continue;
+      // A request only the owner can answer is the owner's whoever's chat it is. Anything else is for the chat's people.
+      if (reminder.ownerOnly ? !!device.memberId : !this.maySeeChat(device, chat)) continue;
+      if (!this.wants(device, "requests") || this.present(device.id, reminder.chatId)) continue;
+      const record = this.store.push(device.id);
+      const text = record.prefs.previews ? firstLine(reminder.body) || "Open Botkins to see it." : "Open Botkins to see it.";
+      sends.push(this.alert(device.id, record, { t: String(reminder.title ?? "Botkins").slice(0, 80), m: text, c: reminder.chatId, k: "reminder" }, { expiration: 3600 }));
+    }
+  }
+
   /** Whether a run that finished is worth a notification, and of which kind (the desktop's own rules). */
   kindOf(run, chat) {
     if (!chat || chat.temporary || run.status === "Stopped" || run.notify === false) return null;
+    // A bot's own check that failed is in its Proactive log, not a notification.
+    if (run.proactive && run.status !== "Completed") return null;
     // A run that published nothing (a routine set to "No output", or one that reached the end with
     // no result to deliver) has nothing to tell: a notification would show an earlier run's words.
     // One that failed is still worth a look.
@@ -445,11 +471,15 @@ export class Push {
       if (run.delivery?.chatId && run.delivery.chatId !== run.chatId && !this.maySeeChat(device, chats.get(run.delivery.chatId))) continue;
       // The person is reading this chat on the computer itself: a reply there needs no second ping.
       if (kind === "replies" && watching?.focused && (watching.chatId === undefined || watching.chatId === run.chatId)) continue;
-      const title = kind === "routines" ? run.title || name : chat?.title && !/^new chat$/i.test(chat.title) ? name + " · " + chat.title : name;
+      // A bot that looks out for the person speaks under its own name: never the name of the routine Botkins keeps for it.
+      const title = run.proactive ? name : kind === "routines" ? run.title || name : chat?.title && !/^new chat$/i.test(chat.title) ? name + " · " + chat.title : name;
+      // What the alert offers ("proactive-team-v1"): the phone's button asks the computer by these, and never holds the offer's words.
+      const delivered = run.proactive && run.delivery?.chatId ? (chats.get(run.delivery.chatId)?.messages ?? []).find((message) => message.proactiveRunId === run.id) : run.proactive && run.delivery?.itemId ? (state.board ?? []).find((item) => item.id === run.delivery.itemId) : null;
+      const offered = delivered?.alert?.offer && chat?.botId ? { a: { b: chat.botId, r: run.id } } : null;
       const said = failed ? (run.status === "Failed" ? "Failed" : run.status) + (run.detail ? ": " + firstLine(run.detail) : "") : firstLine(reply?.text) || "Finished.";
       const text = record.prefs.previews ? said : failed ? "A run needs a look." : "New message";
       // A routine that sends its result to a chat is opened there, where the person reads it.
-      const alert = this.alert(device.id, record, { t: title.slice(0, 80), m: text, c: run.delivery?.chatId ?? run.chatId, k: kind === "routines" ? "routine" : "reply" }, { expiration: 900 });
+      const alert = this.alert(device.id, record, { t: title.slice(0, 80), m: text, c: run.delivery?.chatId ?? run.chatId, k: kind === "routines" ? "routine" : "reply", ...offered }, { expiration: 900 });
       if (!this.hold(device.id, record, run.chatId, alert, "finish")) sends.push(alert);
     }
   }
@@ -539,7 +569,7 @@ export class Push {
       collapse: b64u(hkdf(Buffer.from(thread, "utf8"), Buffer.from(deviceId, "utf8"), "botkins/push/collapse/v1", 24)),
       payload: {
         aps: {
-          alert: { title: "Botkins", body: content.k === "request" ? "A bot needs you" : content.k === "update" ? "An update is available" : content.k === "space" ? "A space changed" : "New message" },
+          alert: { title: "Botkins", body: content.k === "request" || content.k === "reminder" ? "A bot needs you" : content.k === "update" ? "An update is available" : content.k === "space" ? "A space changed" : "New message" },
           sound: "default",
           "mutable-content": 1,
           "thread-id": b64u(hkdf(Buffer.from(thread, "utf8"), Buffer.from(deviceId, "utf8"), "botkins/push/thread/v1", 12)),

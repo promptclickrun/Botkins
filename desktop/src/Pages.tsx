@@ -96,6 +96,8 @@ export type PageActions = {
   newChatWith: (botId: string) => void;
   /** Opens the bot page. */
   botPage: (botId: string) => void;
+  /** Opens the bot page on the setup steps of its Proactive agent ("Who should <Bot> look out for?"), for right after a bot is made. */
+  proactiveSetup: (botId: string) => void;
   /** Opens Settings on its Capabilities tab for this bot. */
   capabilities: (botId: string) => void;
   fail: (e: unknown) => void;

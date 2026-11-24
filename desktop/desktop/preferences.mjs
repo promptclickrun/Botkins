@@ -167,6 +167,8 @@ export const defaultSettings = {
     replies: true,
     routines: true,
     requests: true,
+    // One plain nudge when something is left waiting on a person (desktop/reminders.mjs). No model.
+    reminders: true,
     quietHours: { enabled: false, from: "22:00", to: "07:00" },
   },
 };
@@ -279,9 +281,10 @@ export function changeSettings(settings, patch) {
           !value ||
           typeof value !== "object" ||
           Object.keys(n).some(
-            (k) => !["replies", "routines", "requests", "quietHours"].includes(k),
+            (k) => !["replies", "routines", "requests", "reminders", "quietHours"].includes(k),
           ) ||
           ["replies", "routines", "requests"].some((k) => typeof n[k] !== "boolean") ||
+          (n.reminders !== undefined && typeof n.reminders !== "boolean") ||
           typeof n.quietHours.enabled !== "boolean" ||
           !clock.test(n.quietHours.from) ||
           !clock.test(n.quietHours.to)
@@ -291,6 +294,8 @@ export function changeSettings(settings, patch) {
           replies: n.replies,
           routines: n.routines,
           requests: n.requests,
+          // Saved before reminders, it is on.
+          reminders: n.reminders !== false,
           quietHours: {
             enabled: n.quietHours.enabled,
             from: n.quietHours.from,
