@@ -9,15 +9,16 @@
 // Values are only returned by read(). Everything else returns labels. A tool's own error text is
 // never passed on: a driver throws a Failure whose message is a short sentence.
 import { Failure, findShim, findTool, inherit, parseJson, runTool, toolEnv } from "./tools.mjs";
+import { protonVaults } from "./proton-setup.mjs";
 
 const IDLE_LOCK = 8 * 60 * 60_000;
 const UNLOCK_TRIES = 5; // a minute's worth
 const MAX_ITEMS = 200;
 
 /** An id from a phone, before it goes to a command. A leading "-" could be taken for an option. */
-function cleanId(value, what, { dash = false } = {}) {
+function cleanId(value, what) {
   const id = typeof value === "string" ? value : "";
-  if (!/^[\w.:@=+~-]{1,200}$/.test(id) || (!dash && id.startsWith("-"))) throw new Failure("That " + what + " isn't valid.");
+  if (!/^[\w.:@=+~-]{1,200}$/.test(id) || id.startsWith("-")) throw new Failure("That " + what + " isn't valid.");
   return id;
 }
 const cleanQuery = (query) => String(query ?? "").replace(/^[\s-]+/, "").trim().slice(0, 100);
@@ -40,6 +41,7 @@ export function context({ dirs, now = Date.now, platform = process.platform }) {
     dirs,
     /** The system the tools are looked for on (the app's own, or the one a caller named). */
     platform,
+    protonLegacyEnv: () => inherit(["PROTON_PASS", "PASS_CLI"]),
   };
 }
 
@@ -217,16 +219,16 @@ export function bitwarden(ctx) {
 }
 
 // ── Proton Pass ───────────────────────────────────────────────────────────────────────────────
-// Written from `pass-cli --help` and each subcommand's help. Its JSON has not been seen on a
-// signed-in account, so the parsing accepts the likely spellings of each key.
+// The parser accepts the documented shapes and the spellings previously accepted by Botkins.
 
-export function protonPass(ctx) {
+export function protonPass(ctx, setup) {
   const id = "protonpass";
   const name = "Proton Pass";
   const base = { id, name };
-  const pass = (args) => ctx.run(name, "pass-cli", args, inherit(["PROTON_PASS", "PASS_CLI"]));
+  const legacy = (args) => ctx.run(name, "pass-cli", args, ctx.protonLegacyEnv());
+  const pass = (args, vault) => setup ? setup.run(args, vault) : legacy(args);
   const array = (value, key) => (Array.isArray(value) ? value : Array.isArray(value?.[key]) ? value[key] : []);
-  const loginOf = (item) => item?.content?.content?.Login ?? item?.content?.login ?? item?.login ?? {};
+  const loginOf = (item) => item?.content?.content?.Login ?? item?.content?.login ?? item?.login ?? item?.content ?? item ?? {};
   const fieldsOf = (item) => {
     const login = loginOf(item);
     const fields = [];
@@ -235,14 +237,15 @@ export function protonPass(ctx) {
     if (text(login.password)) fields.push({ id: "password", label: "Password", secret: true });
     if (text(login.totp_uri ?? login.totp)) fields.push({ id: "totp", label: "One-time password", secret: true });
     for (const f of list(item?.content?.extra_fields ?? item?.extra_fields)) {
-      const label = text(f?.name ?? f?.label, 100);
-      if (label) fields.push({ id: "extra:" + label, label, secret: /hidden|secret|password/i.test(String(f?.type ?? f?.field_type ?? "")) });
+      const label = text(f?.title ?? f?.name ?? f?.label, 100);
+      if (label) fields.push({ id: "extra:" + label, label, secret: /hidden|secret|password|totp/i.test(String(f?.kind ?? f?.type ?? f?.field_type ?? "")) });
     }
     return fields;
   };
   return {
     ...base,
     async status() {
+      if (setup) return setup.status();
       if (!ctx.find("pass-cli")) return missing(ctx, base, "pass-cli", { url: "https://proton.me/pass" });
       let version;
       try {
@@ -260,14 +263,13 @@ export function protonPass(ctx) {
       }
     },
     async vaults() {
-      const vaults = array(parseJson(name, await pass(["vault", "list", "--output", "json"])), "vaults");
-      return vaults.map((v) => ({ id: pick(v, "share_id", "shareId", "shareID", "id"), name: text(pick(v, "name", "vault_name")) })).filter((v) => text(v.id) && v.name);
+      return protonVaults(parseJson(name, await pass(["vault", "list", "--output", "json"])));
     },
     async items(vaultId, query) {
-      const share = cleanId(vaultId, "vault", { dash: true });
+      const share = cleanId(vaultId, "vault");
       const q = cleanQuery(query);
       // No --show-secrets: the list holds titles, not values.
-      const items = array(parseJson(name, await pass(["item", "list", "--share-id=" + share, "--output", "json"])), "items");
+      const items = array(parseJson(name, await pass(["item", "list", "--share-id=" + share, "--output", "json"], share)), "items");
       return items
         .map((i) => ({ id: pick(i, "id", "item_id", "itemId"), title: text(pick(i, "title", "name") ?? i?.content?.title ?? i?.content?.name), subtitle: text(loginOf(i).username ?? loginOf(i).email) }))
         .filter((i) => text(i.id) && matches(q, i.title, i.subtitle))
@@ -275,18 +277,23 @@ export function protonPass(ctx) {
         .map((i) => ({ id: i.id, title: i.title || "Untitled", ...(i.subtitle && { subtitle: i.subtitle }) }));
     },
     async item(vaultId, itemId) {
-      const share = cleanId(vaultId, "vault", { dash: true });
-      const item = cleanId(itemId, "item", { dash: true });
-      const found = parseJson(name, await pass(["item", "view", "--share-id=" + share, "--item-id=" + item, "--output", "json"]));
+      const share = cleanId(vaultId, "vault");
+      const item = cleanId(itemId, "item");
+      const found = parseJson(name, await pass(["item", "view", "--share-id=" + share, "--item-id=" + item, "--output", "json"], share));
       const body = found?.item ?? found;
       return { id: item, title: text(pick(body, "title", "name") ?? body?.content?.title ?? body?.content?.name) || "Untitled", fields: fieldsOf(body) };
     },
     async read({ vaultId, itemId, fieldId }) {
-      const share = cleanId(vaultId, "vault", { dash: true });
-      const item = cleanId(itemId, "item", { dash: true });
+      const share = cleanId(vaultId, "vault");
+      const item = cleanId(itemId, "item");
       const field = String(fieldId ?? "").replace(/^extra:/, "");
-      if (!field || field.startsWith("-") || field.length > 120) throw new Failure("That field isn't valid.");
-      return String(await pass(["item", "view", "--share-id=" + share, "--item-id=" + item, "--field=" + field])).replace(/\r?\n$/, "");
+      if (!field || /^[\s-]/.test(field) || field.length > 120 || /[\x00-\x1f]/.test(field)) throw new Failure("That field isn't valid.");
+      if (setup?.record()?.agent && fieldId === "totp") {
+        const code = String(await pass(["item", "view", "pass://" + share + "/" + item + "/totp?totp=code"], share)).trim();
+        if (!/^\d{6,10}$/.test(code)) throw new Failure("Proton Pass didn't return a one-time code.");
+        return code;
+      }
+      return String(await pass(["item", "view", "--share-id=" + share, "--item-id=" + item, "--field=" + field], share)).replace(/\r?\n$/, "");
     },
   };
 }
@@ -294,5 +301,5 @@ export function protonPass(ctx) {
 /** All three drivers, in the order the phone lists them. */
 export function drivers(options) {
   const ctx = context(options);
-  return [onePassword(ctx), bitwarden(ctx), protonPass(ctx)];
+  return [onePassword(ctx), bitwarden(ctx), protonPass(ctx, options.proton?.(ctx))];
 }
