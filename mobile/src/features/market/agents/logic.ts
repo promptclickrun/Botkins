@@ -18,7 +18,8 @@ export function agentChips(categories: MarketAgentCategory[], chosen?: { id: str
 export const listLine = (agent: MarketAgent) => [agent.categoryName, agent.marketplaceName].filter(Boolean).join(" · ");
 
 /** On a template's page: "Productivity · Botkins · v1.0.0 · Botkins". */
-export const pageLine = (agent: MarketAgent) => [agent.categoryName, agent.marketplaceName, agent.version && "v" + agent.version.replace(/^v/i, ""), agent.author].filter(Boolean).join(" · ");
+export const pageLine = (agent: MarketAgent) =>
+  [agent.categoryName, agent.marketplaceName, agent.version && "v" + agent.version.replace(/^v/i, ""), agent.author !== agent.marketplaceName && agent.author].filter(Boolean).join(" · ");
 
 /** Create a bot's one line for a template from a marketplace that doesn't come with Botkins. */
 export const fromLine = (agent: Pick<MarketAgent, "builtIn" | "marketplaceName">) => (agent.builtIn ? undefined : "From " + agent.marketplaceName + ". Someone else wrote these instructions: read them first.");

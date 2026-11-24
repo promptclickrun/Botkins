@@ -12,6 +12,7 @@ import { api } from "@/state/link";
 import { BotAvatar, Button, EmptyState, Group, Label, Loading, Page, radius, Row, space, T } from "@/ui";
 import { useBotWash } from "../art";
 import { AGENTS_CAPABILITY, pageLine, pairingTitle, tooLong } from "./logic";
+import { sentence } from "../catalog";
 
 type Loaded = { id: string; template?: MarketAgentTemplate; error?: string };
 
@@ -80,7 +81,7 @@ function Template({ template, online }: { template: MarketAgentTemplate; online:
       </LinearGradient>
       {(!!template.deliverable || !!template.dayOne || !!template.approval) && (
         <Group>
-          {!!template.deliverable && <Row title="What you get" subtitle={template.deliverable} subtitleLines={4} />}
+          {!!template.deliverable && <Row title="What you get" subtitle={sentence(template.deliverable)} subtitleLines={4} />}
           {!!template.dayOne && <Row title="Works on day one" subtitle={template.dayOne} subtitleLines={6} />}
           {!!template.approval && <Row title="Asks first" subtitle={template.approval} subtitleLines={6} />}
         </Group>

@@ -60,7 +60,7 @@ export const entryLine = (entry: McpCatalogEntry) => [entryState(entry)?.line, e
 export function connectsLines(entry: McpCatalogEntry): { how: string; auth: string } {
   return {
     how: entry.transport === "stdio" ? "A program on your computer" : entry.local ? "An app on your computer" : "Over the internet",
-    auth: entry.auth === "oauth" ? "Signs in in your browser" : entry.auth === "key" ? "Needs an API key" : "No sign-in",
+    auth: entry.auth === "oauth" ? "In your browser" : entry.auth === "key" ? "Needs an API key" : "No sign-in",
   };
 }
 
@@ -191,7 +191,10 @@ export const botSections = (agents: MarketAgent[], options: { query?: string; ch
 export const jobLine = (agent: MarketAgent) => (agent.role && agent.role.trim().toLowerCase() !== agent.name.trim().toLowerCase() ? agent.role : agent.summary);
 
 /** Under a starter's job: what it hands back, else its category. */
-export const deliverableLine = (agent: MarketAgent) => agent.deliverable || agent.categoryName || "";
+/** A line that may start lowercase in the data ("a short plan…"), shown as a sentence. */
+export const sentence = (text: string | undefined) => (text ? text.charAt(0).toUpperCase() + text.slice(1) : "");
+
+export const deliverableLine = (agent: MarketAgent) => sentence(agent.deliverable) || agent.categoryName || "";
 
 /** A bot that stops to ask before it acts has an approval step. */
 export const asksFirst = (agent: MarketAgent) => !!agent.approval?.trim();

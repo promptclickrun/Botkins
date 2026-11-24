@@ -84,5 +84,5 @@ test("an app's chip: nothing before it is added, then Added, Sign in, Needs a ke
 
 test("how an app connects is two short lines", () => {
   assert.deepEqual(connectsLines(entry({ id: "a", transport: "stdio", auth: "key" })), { how: "A program on your computer", auth: "Needs an API key" });
-  assert.deepEqual(connectsLines(entry({ id: "b", auth: "oauth" })), { how: "Over the internet", auth: "Signs in in your browser" });
+  assert.deepEqual(connectsLines(entry({ id: "b", auth: "oauth" })), { how: "Over the internet", auth: "In your browser" });
 });

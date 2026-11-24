@@ -134,6 +134,6 @@ export function appBadge(entry: McpCatalogEntry): { label: string; tone: "ok" | 
 export function connectsLines(entry: McpCatalogEntry): { how: string; auth: string } {
   return {
     how: entry.transport === "stdio" ? "A program on your computer" : entry.local ? "An app on your computer" : "Over the internet",
-    auth: entry.auth === "oauth" ? "Signs in in your browser" : entry.auth === "key" ? "Needs an API key" : "No sign-in",
+    auth: entry.auth === "oauth" ? "In your browser" : entry.auth === "key" ? "Needs an API key" : "No sign-in",
   };
 }

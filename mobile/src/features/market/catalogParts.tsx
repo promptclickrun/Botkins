@@ -207,10 +207,13 @@ export const BotCard = memo(function BotCard({ agent, width }: { agent: MarketAg
             {agent.summary || agent.role}
           </T>
           <View style={{ flexDirection: "row", alignItems: "center", gap: space.sm, minHeight: 22, marginTop: 2 }}>
-            <T variant="caption" color="muted" numberOfLines={1} style={{ flex: 1 }}>
-              {agent.categoryName || agent.marketplaceName}
-            </T>
-            {asksFirst(agent) && <Badge label="Asks first" tone="info" />}
+            {asksFirst(agent) ? (
+              <Badge label="Asks first" tone="info" />
+            ) : (
+              <T variant="caption" color="muted" numberOfLines={1} style={{ flex: 1 }}>
+                {agent.categoryName || agent.marketplaceName}
+              </T>
+            )}
           </View>
         </View>
       </Tap>
