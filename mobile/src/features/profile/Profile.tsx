@@ -84,7 +84,7 @@ export default function Profile() {
           </Group>
         ) : (
           <Group>
-            <Row leading={<IconTile icon={ShieldCheck} color={colors.success} />} title="Use a profile" subtitle="Passkey sign-in plus trusted-device approval or an email code" chevron disabled={busy} onPress={() => void browser()} />
+            <Row leading={<IconTile icon={ShieldCheck} color={colors.success} />} title="Use a profile" subtitle="Create one or sign in, with a passkey" chevron disabled={busy} onPress={() => void browser()} />
             <Row leading={<IconTile icon={Monitor} color={colors.ink2} />} title="Keep using this phone only" subtitle="Your local pairings stay here and are not changed" chevron onPress={noThanks} />
           </Group>
         )}
