@@ -26,6 +26,7 @@ import { buildInventory, resolvePrompt } from "../commands.mjs";
 import { SessionStore, serversWithTokens, transcriptContext, uuidFor } from "../sessions.mjs";
 import { skillChoices, skillSupport } from "../skills.mjs";
 import { displayValue } from "../../display.mjs";
+import { PLAN_INSTRUCTIONS, updatePlanTool } from "./plan.mjs";
 
 export const PI_ID = "pi";
 export const OMP_ID = "omp";
@@ -332,8 +333,12 @@ class PiSession extends ProviderSession {
     return {
       providers: (spec.inference?.providers ?? []).map(({ name, config }) => ({ name, config })),
       servers,
-      prompt: (spec.instructions ?? "") + this.skills.instructions + (spec.context ?? "") + this.lost,
+      prompt: (spec.instructions ?? "") + (this.bridge && this.planTools().length ? "\n\n" + PLAN_INSTRUCTIONS + "\n\n" : "") + this.skills.instructions + (spec.context ?? "") + this.lost,
     };
+  }
+  /** Pi's plan, the one tool Botkins adds to Pi itself. Pi has no plan of its own (OMP does), and a plan means nothing in a throwaway session. */
+  planTools() {
+    return this.provider.runtime === PI_ID && this.spec.handlers && !this.spec.temporary && !this.spec.sourcesOnly ? [updatePlanTool(this)] : [];
   }
   /** Starts this conversation's process when its chat opens, so its first message doesn't wait for it (Workspace.prewarm). */
   async warm() {
@@ -346,7 +351,7 @@ class PiSession extends ProviderSession {
   }
   async openProcess() {
     const { provider, spec } = this;
-    const tools = spec.handlers ? [...spec.tools, ...this.skills.tools] : [];
+    const tools = spec.handlers ? [...spec.tools, ...this.skills.tools, ...this.planTools()] : [];
     this.bridge ??= await provider.bridge?.open(tools, spec.temporary ? {} : { key: provider.id + ":" + spec.sessionId });
     this.bridge?.set(tools);
     const known = provider.sessions.get(spec.sessionId);
@@ -610,8 +615,9 @@ class PiSession extends ProviderSession {
     this.mode = mode === "plan" ? "plan" : "interactive";
     return true;
   }
+  /** The plan the model kept with update_plan this turn, or null when it made none. */
   async todos() {
-    return null;
+    return this.plan ? { rows: this.plan, dependencies: [] } : null;
   }
   async compact() {
     const live = await this.start();

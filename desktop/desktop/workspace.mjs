@@ -50,6 +50,7 @@ import { friendlyModel } from "./modelnames.mjs";
 import { meterLimit } from "./modeldetails.mjs";
 import { ToolBridge } from "./providers/toolbridge.mjs";
 import { Interactions } from "./interactions.mjs";
+import { MAX_CONTINUATIONS, mergedPrompt, nextMove, openSteps, takeBatch } from "./keep-moving.mjs";
 import { recordActivity } from "./activity.mjs";
 import {
   finishCanvas,
@@ -749,7 +750,7 @@ export class Workspace {
   }
   send(chatId, text, options = {}) {
     if (this.closing) throw new Error("Botkins is closing");
-    const { attachments: files, quote: rawQuote, mentions: rawMentions, voiceId, clientMessageId, author, also: rawAlso, proactiveCheck, ...context } = options;
+    const { attachments: files, quote: rawQuote, mentions: rawMentions, voiceId, clientMessageId, author, also: rawAlso, proactiveCheck, merged: rawMerged, ...context } = options;
     // People whose limits apply to this turn beside the chat's maker and the message's writer:
     // someone else wrote text that runs in it (a routine's prompt on a panel that another person
     // refreshes). Members only: the owner narrows nothing.
@@ -775,6 +776,13 @@ export class Workspace {
       throw new Error("Group chats take text only. Send files in a chat with one bot.");
     // "#" projects, wiki pages and files become text and attachments for the model (desktop/mentions.mjs).
     const refs = this.mentions.resolve(chat, rawMentions, author);
+    // Messages queued behind this one by the same person, read in the same turn (see `drain`). Checked now,
+    // before anything changes, so one that can't be sent is refused with the first and nothing is half done.
+    const joined = (Array.isArray(rawMerged) ? rawMerged : []).map((item) => ({
+      item,
+      attachments: validateAttachments(item.attachments),
+      refs: this.mentions.resolve(chat, item.mentions, item.author ?? author),
+    }));
     // What a routine posted into this chat since the bot's last turn here (desktop/routines.mjs).
     // The session behind the chat never saw those messages, so the bot is told of them once, with
     // this turn, or it would not know what the person is answering.
@@ -814,7 +822,43 @@ export class Workspace {
     run.recovery = { extra, ...(proactiveCheck && { proactiveCheck }), ...(message.voiceId && { voicePrompt: prompt }) };
     // With auto-summarize on, the first message is named while the bot replies (desktop/summaries.mjs).
     if (first && !context.panelId && context.scheduleId == null) this.summaries.started(chat);
-    return this.startTurn(chat, bot, message, run, false);
+    return this.startTurn(chat, bot, joined.length ? this.joinMessages(chat, run, message, refs, joined) : message, run, false);
+  }
+
+  /**
+   * The messages that wait behind a turn's first one, read together with it. Each is its own message in the
+   * chat, in its own bubble with its own attachments and mentions (like a steer, `steeredRunId`). The turn
+   * is started from one message that holds them all, prefixed so the model reads every one.
+   */
+  joinMessages(chat, run, first, firstRefs, joined) {
+    const all = [{ text: first.text, quote: first.quote, attachments: first.attachments ?? [], refs: firstRefs }];
+    for (const { item, attachments, refs } of joined) {
+      const added = { role: "user", text: textField(item.text, 32000, "message"), ...clientMessageTag(item.clientMessageId), steeredRunId: run.id, joined: true, time: Date.now(),
+        ...(item.author && { author: item.author }),
+        ...(typeof item.quote === "string" && item.quote.trim() && { quote: item.quote.trim().slice(0, 4000) }),
+        ...(attachments.length && { attachments }),
+        ...(refs.list.length && { mentions: refs.list, context: refs.context }) };
+      chat.messages.push(added);
+      all.push({ text: added.text, quote: added.quote, attachments, refs });
+    }
+    const attachments = [...new Map(all.flatMap((each) => each.attachments).map((a) => [a.path, a])).values()];
+    return {
+      ...first,
+      text: mergedPrompt(all.map((each) => quotedPrompt(each.text, each.quote))),
+      quote: undefined,
+      attachments,
+      mentions: all.flatMap((each) => each.refs.list),
+      context: all.map((each) => each.refs.context).filter(Boolean).join("") || undefined,
+    };
+  }
+
+  /**
+   * A question that outlived its turn was answered: the answer is the person's next message, quoting the
+   * question, and starts a new turn (or waits its place in the queue). Throws when it can't be sent.
+   */
+  answerDetached(view, text, person = "owner") {
+    const author = person && person !== "owner" ? this.memberAuthor(person) : undefined;
+    this.submit(view.chatId, text, { quote: view.title, ...(author && { author }) })?.catch((error) => console.error("Answer to a waiting question:", error.message));
   }
 
   /**
@@ -973,7 +1017,9 @@ export class Workspace {
   drain(chatId) {
     if (this.closing || this.active.has(chatId)) return;
     const list = this.queues.get(chatId);
-    const next = list?.shift();
+    const chat = this.state.chats.find((c) => c.id === chatId);
+    // Messages from one person that wait together are read in one turn; someone else's keeps its own turn, in order.
+    const { first: next, rest } = list ? takeBatch(list, (item) => this.canSend(chat, item)) : {};
     if (!list?.length) this.queues.delete(chatId);
     if (!next) return;
     try {
@@ -985,11 +1031,14 @@ export class Workspace {
         ...(next.notify === false && { notify: false }),
         voiceId: next.voiceId,
         clientMessageId: next.clientMessageId,
+        ...(rest.length && { merged: rest }),
       }).catch((err) => console.error("Queued turn:", err.message));
     } catch (err) {
       // The message can't be sent as it is (a mentioned record is gone, or access changed).
       // It is kept in the chat as a failed turn, and the messages behind it still go out.
       console.error("Queued message:", err.message);
+      // The messages that were to be read with it still go out, after it.
+      if (rest.length) this.queues.set(chatId, [...rest, ...(this.queues.get(chatId) ?? [])]);
       try {
         const chat = this.state.chats.find((c) => c.id === chatId);
         if (chat && !this.closing) {
@@ -1015,6 +1064,17 @@ export class Workspace {
         console.error("Queued message:", failure.message);
       }
       if (this.queues.has(chatId)) setImmediate(() => this.drain(chatId));
+    }
+  }
+  /** Whether a queued message could be sent now: its mentioned records are there and its files too. */
+  canSend(chat, item) {
+    try {
+      if (!chat) return false;
+      this.mentions.resolve(chat, item.mentions, item.author);
+      validateAttachments(item.attachments);
+      return true;
+    } catch {
+      return false;
     }
   }
   /** Sends a failed or stopped turn's message again. */
@@ -1046,10 +1106,16 @@ export class Workspace {
         return false;
       }
     });
+    // A turn that began with several messages begins with all of them again.
+    const merged = chat.messages
+      .filter((m) => m.role === "user" && m.steeredRunId === runId && m.joined)
+      .map(({ text, quote, attachments, mentions, author }) => ({ text, quote, attachments, mentions, author }))
+      .filter((item) => this.canSend(chat, item));
     return this.submit(chat.id, message.text, {
       attachments,
       quote: message.quote,
       author: message.author,
+      ...(merged.length && { merged }),
       ...(message.also?.length && { also: message.also }),
       ...(mentions.length && { mentions }),
       ...(run.panelId && { panelId: run.panelId }),
@@ -1729,7 +1795,8 @@ export class Workspace {
       // (Botkins' own notes about a plugin are not the bot's work: the model is not told of them.)
       const progress = botSteps(run.steps).filter((step) => !step.botId || step.botId === bot.id)
         .slice(-12).map((step) => step.status + ": " + step.label + (step.output ? " — " + step.output.slice(-300) : ""));
-      const followups = this.chat(run.chatId).messages.filter(m => m.steeredRunId === run.id);
+      // (Messages that started the turn with its first one are already in the saved prompt.)
+      const followups = this.chat(run.chatId).messages.filter(m => m.steeredRunId === run.id && !m.joined);
       const context = [
         ...followups.map(m => "The person added during this turn: " + quotedPrompt(m.text, m.quote) + (m.context || "") +
           (m.attachments?.length ? "\nAttached: " + m.attachments.map(a => a.path).join(", ") : "")),
@@ -1758,9 +1825,11 @@ export class Workspace {
     delete checkpoint.eventId;
     this.save();
     const chat = this.chat(run.chatId);
-    const prompt = this.speakerPrompt(input.prompt, chat, run, task, { labelled: isGroup(chat) });
+    // Botkins' own note (a continuation) is not from the person, so no speaker is put in front of it.
+    const { note, ...sent } = input;
+    const prompt = note ? input.prompt : this.speakerPrompt(input.prompt, chat, run, task, { labelled: isGroup(chat) });
     // No time limit: the person stops a turn that runs too long, and a turn whose harness is gone ends by itself.
-    return session.send({ ...input, ...(prompt !== input.prompt && { prompt }) }, undefined, onReady);
+    return session.send({ ...sent, ...(prompt !== input.prompt && { prompt }) }, undefined, onReady);
   }
   /**
    * A coding chat in Plan mode runs in Copilot's plan mode: the agent plans and asks before it
@@ -1864,6 +1933,66 @@ export class Workspace {
     // A late read still belongs in its turn's activity, but the latest turn owns the rail.
     if (this.state.runs.find((item) => item.chatId === chat.id)?.id === run.id) chat.todos = run.todos;
     this.notify();
+  }
+  /**
+   * What the turn's plan came to, for the apps and for alerts about stalled work: `plan` is how many
+   * steps are open of how many, and `stoppedOpen` says the turn ended with steps open and nothing went on
+   * (the cap, the same steps again, Stop, a waiting message or request, or an error stopped the chain).
+   */
+  settlePlan(run) {
+    delete run.stoppedOpen;
+    if (!run.todos?.length) return;
+    const open = openSteps(run.todos).length;
+    run.plan = { open, total: run.todos.length };
+    if (open && (run.status === "Completed" || run.status === "Stopped")) run.stoppedOpen = true;
+  }
+  /** Whether a turn is one that keeps the work moving: a person's turn in a one-bot chat, not a routine, a Proactive run or Plan mode. */
+  keepsMoving(chat, run, check, routine) {
+    return !check && !routine && run.panelId == null && run.taskId == null && !run.proactive && !run.reaction &&
+      !chat.helper && !chat.temporary && !isGroup(chat) && chat.mode !== "plan";
+  }
+  /**
+   * After a reply: gives the bot another turn in the same session and run while its plan has open steps
+   * (desktop/keep-moving.mjs: at most 8, and not when the same steps come back), or when it named its
+   * next step without doing it. Never past a question to the person, an open request, Stop or a waiting
+   * message. Returns true when the turn was stopped (or Botkins is closing) and must end now.
+   */
+  async keepMoving(session, chat, bot, run, task, said) {
+    const chain = { count: 0, stalls: 0, signature: undefined };
+    let text = said;
+    try {
+      for (;;) {
+        // The plan as it is now: the last change may still have been being read when the reply ended.
+        if (task.todoRead) await this.readSessionTodos(session, chat, run, task);
+        const blocked = task.stopped || this.closing || !!this.queues.get(chat.id)?.length || this.interactions.openFor(task).length > 0;
+        const move = nextMove({ text, todos: run.todos, chain, blocked });
+        if (move.move === "stop") return !!(task.stopped || this.closing);
+        chain.count++;
+        if (move.reason === "plan") chain.signature = move.signature;
+        else chain.stalls++;
+        run.continued = { count: chain.count, limit: MAX_CONTINUATIONS, reason: move.reason, open: move.open.length };
+        // The new reply stands apart from what came before it, and this is no recovery of the turn.
+        Object.assign(task, { recovering: false, showingDraft: false, stream: "", streamTime: undefined, sourceMessageId: undefined, sourceText: undefined,
+          streamMessage: undefined, streamBreak: false, thinking: "", replyFrom: chat.messages.length });
+        this.save();
+        let reply;
+        try {
+          reply = await this.sendTurn(session, run, task, bot, { prompt: move.input, note: true });
+        } catch (error) {
+          if (task.stopped || this.closing) return true;
+          // The person already has the reply before it; the open steps stay open for them to continue.
+          console.error("Continuation:", error.message);
+          await session.abort().catch(() => {});
+          return false;
+        }
+        if (task.stopped || this.closing) return true;
+        text = reply?.text || task.stream;
+        finishReply(chat, run, task, text);
+        this.save();
+      }
+    } finally {
+      delete task.replyFrom;
+    }
   }
   /** One member's reply inside a group turn. Returns its text. */
   async memberTurn(chat, bot, members, run, task) {
@@ -2089,7 +2218,10 @@ export class Workspace {
         }
         if (empty && !run.cards?.length && !botSteps(run.steps).length && !task.stream?.trim() && !routine && !run.reaction && task.reactedBy !== bot.id)
           throw new Error(bot.name + " finished without a reply.");
-        if (!noOutput) finishReply(chat, run, task, text || task.stream);
+        const said = text || task.stream;
+        if (!noOutput) finishReply(chat, run, task, said);
+        // A plan with open steps, or a reply that stopped short of its next step, gets another turn in this session (bounded).
+        if (!noOutput && this.keepsMoving(chat, run, check, routine) && (await this.keepMoving(session, chat, bot, run, task, said))) return;
       } else {
         let text;
         switch (effect.kind) {
@@ -2195,6 +2327,7 @@ export class Workspace {
       delete run.stopRequested;
       if (task.stopped) { run.status = "Stopped"; run.ending = "stopped"; }
       if (run.status === "Needs you") run.ending ??= "failed";
+      if (this.keepsMoving(chat, run, check, routine) && !run.noOutput) this.settlePlan(run);
       if (check && proposals && run.status === "Working") {
         run.status = "Completed";
         const reply = this.proactive.decide(chat, check, proposals);

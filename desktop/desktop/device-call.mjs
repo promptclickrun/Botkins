@@ -34,7 +34,8 @@ export function deviceCall({ workspace, handlers, folders }) {
     const answeredIn = member && name === "respond" ? workspace.interactions.snapshot().find((item) => item.id === args[0])?.chatId : null;
     // A member's message carries their name with it, wherever `send` puts it: in the chat now, in
     // the queue, or into the turn under way.
-    const callArgs = member && name === "send" ? [checked[0], checked[1], { ...(checked[2] ?? {}), author: member }] : checked;
+    // An answer to a question that outlived its turn becomes the answerer's next message, so it says who they are.
+    const callArgs = member && name === "send" ? [checked[0], checked[1], { ...(checked[2] ?? {}), author: member }] : name === "respond" ? [checked[0], checked[1], member?.memberId ?? "owner"] : checked;
     if (name === "recordVoiceLine") return handlers[name](checked[0], checked[1], checked[2], checked[3], member, checked[4]);
     if (member) {
       // These three take the member's id beside what the device sent; a handler never reads it from the device.

@@ -12,7 +12,9 @@ export function commitInterim(chat, run, task) {
 
 export function finishReply(chat, run, task, final) {
   if (run.noOutput) return;
-  const segments = chat.messages.filter(m => !m.voiceId && m.interim && m.runId === run.id && m.botId === task.speaker);
+  // A continuation of the turn (desktop/keep-moving.mjs) is its own reply: it is not made of the text before it.
+  const from = task.replyFrom ?? 0;
+  const segments = chat.messages.filter((m, i) => i >= from && !m.voiceId && m.interim && m.runId === run.id && m.botId === task.speaker);
   const last = segments.at(-1);
   let text = final?.trim() || "";
   if (last) {
