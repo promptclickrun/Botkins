@@ -1,7 +1,7 @@
 // The phone's link client against the desktop's link host, over real HTTP on loopback.
 // Run by `npm test` (tsx); the host is plain JavaScript, so this file is left out of `tsc`.
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -10,6 +10,7 @@ import { MockBackend } from "../link-host/mock-backend.mjs";
 import { type FetchLike, LinkClient, LinkError, type LinkState, pair, type Pairing } from "../src/link/client";
 import { parsePairingUrl } from "../src/link/pairing";
 import type { ChatDetail, ChatSummary, Live, Run } from "../src/link/types";
+import { PROTON_CAPABILITY, sendProtonPassword, supportsProtonSetup } from "../src/link/proton-pass";
 
 import { VoiceHistoryWriter } from "../src/features/voice/live/history";
 
@@ -23,6 +24,55 @@ async function host(options: Record<string, unknown> = {}) {
   return { link, backend };
 }
 const loopback = (link: { port: number }) => "127.0.0.1:" + link.port;
+
+test("Proton Pass setup is negotiated, and the demo can install and share a selected vault", async (t) => {
+  assert.equal(supportsProtonSetup(["credentials-v1"]), false);
+  const old = await host({ backend: new MockBackend({ proton: false }) });
+  t.after(() => old.link.stop());
+  assert.equal(supportsProtonSetup(old.link.meta().capabilities), false);
+  const { link } = await host();
+  t.after(() => link.stop());
+  const paired = await pair(fetcher, { hosts: [loopback(link)], code: link.startPairing().code }, device);
+  const client = new LinkClient(paired, { fetch: fetcher });
+  assert.ok(link.meta().capabilities.includes(PROTON_CAPABILITY));
+  const plan = await client.call("link.credentials.protonPassInstallPlan");
+  await assert.rejects(client.call("link.credentials.protonPassInstall", { sha256: "wrong" }), /review/i);
+  const install = await client.call("link.credentials.protonPassInstall", { sha256: plan.sha256 });
+  assert.equal((await client.call("link.credentials.protonPassSignInRead", install)).done, false);
+  assert.equal((await client.call("link.credentials.protonPassSignInRead", install)).result?.state, "signed-out");
+  const signIn = await client.call("link.credentials.protonPassSignInStart", {});
+  const open = await client.call("link.credentials.protonPassSignInRead", signIn);
+  assert.ok(open.events.some((event) => event.type === "open"));
+  const prep = await client.call("link.credentials.protonPassSignInRead", { ...signIn, after: open.next });
+  const choice = prep.events.find((event) => event.type === "choose-vaults");
+  assert.ok(choice && choice.type === "choose-vaults");
+  await client.call("link.credentials.protonPassSignInInput", { ...signIn, vaultIds: [choice.vaults[0].id] });
+  const done = await client.call("link.credentials.protonPassSignInRead", { ...signIn, after: prep.next });
+  assert.deepEqual(done.result?.sharedVaults, [choice.vaults[0].name]);
+  assert.equal(done.done, true);
+  assert.deepEqual(await client.call("link.credentials.vaults", "protonpass"), [{ id: choice.vaults[0].id, name: choice.vaults[0].name }]);
+});
+
+test("Proton Pass extra-password fields clear before awaiting a send, even when the send fails", async () => {
+  let field = "test-password";
+  await assert.rejects(sendProtonPassword(
+    () => field,
+    () => { field = ""; },
+    async (password) => {
+      assert.equal(password, "test-password");
+      assert.equal(field, "");
+      throw new Error("didn't send");
+    },
+  ), /didn't send/);
+  assert.equal(field, "");
+});
+
+test("the phone link host and desktop share the same Proton Pass driver and implementation", () => {
+  for (const file of ["managers.mjs", "proton-setup.mjs", "proton-login.mjs", "proton-install.mjs", "proton-pins.mjs"]) {
+    assert.equal(readFileSync(new URL("../link-host/" + file, import.meta.url), "utf8"),
+      readFileSync(new URL("../../desktop/desktop/link/" + file, import.meta.url), "utf8"), file);
+  }
+});
 
 /** A client that records every part it is sent. */
 function follow(pairing: Pairing) {

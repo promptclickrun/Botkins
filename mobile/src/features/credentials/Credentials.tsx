@@ -7,7 +7,7 @@ import { Alert, View } from "react-native";
 import { usePart } from "@/state/hooks";
 import { attempt } from "@/state/link";
 import { Dot, Group, IconTile, Label, Loading, Page, Row, space, T, Tap, useTheme } from "@/ui";
-import { byName, CredentialMark, credentialLine, desktopVault, GateView, KeptNote, loadManagers, ManagerMark, managerBadge, type ToolCredential, useComputerName, useGate, useManagers } from "./shared";
+import { byName, CredentialMark, credentialLine, desktopVault, GateView, KeptNote, loadManagers, ManagerMark, managerBadge, type ToolCredential, useComputerName, useGate, useManagers, useProtonSupport } from "./shared";
 
 const open = (id: string) => router.push({ pathname: "/credentials/[id]", params: { id } });
 
@@ -26,6 +26,7 @@ function Body() {
   const computer = useComputerName();
   const credentials = usePart("credentials");
   const managers = useManagers((state) => state.managers);
+  const proton = useProtonSupport();
   const mcp = usePart("mcp");
   const [toolKeys, setToolKeys] = useState<ToolCredential[] | undefined>(undefined);
   const [refreshing, setRefreshing] = useState(false);
@@ -113,7 +114,7 @@ function Body() {
         ) : (
           <Group>
             {managers.map((manager) => {
-              const badge = managerBadge(manager);
+              const badge = managerBadge(manager, proton);
               return (
                 <Row
                   key={manager.id}

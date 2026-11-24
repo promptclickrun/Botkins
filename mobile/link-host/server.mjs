@@ -14,6 +14,7 @@ import { EventEmitter } from "node:events";
 import { createServer } from "node:http";
 import { createHash } from "node:crypto";
 import { Credentials, scrub } from "./credentials.mjs";
+import { PROTON_SETUP } from "./proton-setup.mjs";
 import { agree, b64u, box, cleanCode, hkdf, INFO, newCode, newKeyPair, open, random, seal, pushNonce, seqNonce, unb64u, unbox } from "./crypto.mjs";
 import { DeviceTools } from "./device.mjs";
 import { botkinRenderer } from "./botkin-svg.mjs";
@@ -242,7 +243,8 @@ export class LinkHost extends EventEmitter {
     this.relayOptions = relay === false ? null : relay && typeof relay === "object" ? relay : {};
     this.relayLink = null;
     this.store = new LinkStore(dir, { protect, reveal });
-    this.credentials = new Credentials({ dir, protect, reveal, searchPath: managerSearchPath ?? searchPath, onChange: () => this.changed() });
+    this.credentials = new Credentials({ dir, protect, reveal, searchPath: managerSearchPath ?? searchPath, onChange: () => this.changed(), protonDemo: backend.protonDemo,
+      onProtonFinished: (action, outcome) => this.log("Proton Pass setup: " + action + " (" + outcome + ")") });
     this.uploads = new Uploads({ dir, log: (line) => this.log(line) });
     this.prs = new PullRequests({ backend, searchPath });
     this.screen = new Screen({
@@ -353,6 +355,13 @@ export class LinkHost extends EventEmitter {
       "link.credentials.items": (_session, a) => this.credentials.items(a[0], a[1], a[2]),
       "link.credentials.item": (_session, a) => this.credentials.item(a[0], a[1], a[2]),
       "link.credentials.link": (_session, a) => this.credentials.link(a[0]),
+      "link.credentials.protonPassInstallPlan": () => this.protonPass("protonPassInstallPlan"),
+      "link.credentials.protonPassInstall": (_session, a) => this.protonPass("protonPassInstall", a[0]),
+      "link.credentials.protonPassSignInStart": (_session, a) => this.protonPass("protonPassSignInStart", a[0]),
+      "link.credentials.protonPassSignInRead": (_session, a) => this.protonPass("protonPassSignInRead", a[0]),
+      "link.credentials.protonPassSignInInput": (_session, a) => this.protonPass("protonPassSignInInput", a[0]),
+      "link.credentials.protonPassSignInCancel": (_session, a) => this.protonPass("protonPassSignInCancel", a[0]),
+      "link.credentials.protonPassDisconnect": (_session, a) => this.protonPass("protonPassDisconnect", a[0]),
       "link.screen.info": () => this.screen.info(),
       "link.screen.frame": (session, a, gone) => this.screen.frame(session.deviceId, a[0], gone),
       "link.screen.input": (session, a) => this.screen.input(session.deviceId, a[0], a[1]),
@@ -645,7 +654,14 @@ export class LinkHost extends EventEmitter {
     this.voice.close?.();
     this.screen.dispose();
     this.uploads.dispose();
+    await this.credentials.proton.stop();
     await this.close();
+  }
+
+  protonPass(method, input) {
+    if (this.backend.protonDemo) return this.backend.protonDemo.call(method, input);
+    if (this.backend.protonSetup === false) throw new Failure("This computer doesn't support Proton Pass setup yet.");
+    return this.credentials.protonPass(method, input);
   }
 
   // ── What the desktop's own page shows ───────────────────────────────────────────────────────
@@ -2025,7 +2041,7 @@ export class LinkHost extends EventEmitter {
       protocol: PROTOCOL,
       // The app names what it supports itself (`backend.capabilities`); a look with eyes and its own
       // colors is one of those when the app keeps looks on its bots, and the link's own otherwise.
-      capabilities: [...new Set([...Object.keys(this.backend.extras ?? {}), ...(Array.isArray(this.backend.capabilities) ? this.backend.capabilities : []), ...CAPABILITIES.filter((c) => (c !== "stream-appends-v1" && c !== "reasoning-appends-v1") || this.backend.streamAppends !== false), ...(this.headless() ? [GRANT_CAPABILITY, ...(this.ownRelay() ? [GRANT_RELAY_CAPABILITY] : [])] : []), ...(typeof this.backend.frames?.page === "function" ? ["frames-v1"] : []), ...(typeof this.backend.setLook === "function" ? [] : ["looks-v2", ...headCapabilities]), ...(this.spaces.on ? [SPACE_ALERTS_CAPABILITY] : [])])],
+      capabilities: [...new Set([...Object.keys(this.backend.extras ?? {}), ...(Array.isArray(this.backend.capabilities) ? this.backend.capabilities : []), ...CAPABILITIES.filter((c) => (c !== "stream-appends-v1" && c !== "reasoning-appends-v1") || this.backend.streamAppends !== false), ...(this.backend.protonSetup === false ? [] : [PROTON_SETUP]), ...(this.headless() ? [GRANT_CAPABILITY, ...(this.ownRelay() ? [GRANT_RELAY_CAPABILITY] : [])] : []), ...(typeof this.backend.frames?.page === "function" ? ["frames-v1"] : []), ...(typeof this.backend.setLook === "function" ? [] : ["looks-v2", ...headCapabilities]), ...(this.spaces.on ? [SPACE_ALERTS_CAPABILITY] : [])])],
     };
   }
   /**

@@ -233,6 +233,9 @@ export const WORKSPACE = {
   // picker then hands over. (`passwordManagers` and `lockPasswordManager` have commands.)
   ...each("unlockPasswordManager passwordManagerVaults passwordManagerItems passwordManagerItem linkPasswordManagerField", no("person")),
   passwordManagers: cmd("password-managers list"),
+  ...each("protonPassInstallPlan protonPassInstall", cmd("password-managers install")),
+  ...each("protonPassSignInStart protonPassSignInRead protonPassSignInInput protonPassSignInCancel", cmd("password-managers sign-in")),
+  protonPassDisconnect: cmd("password-managers disconnect"),
   lockPasswordManager: cmd("password-managers lock"),
   usage: cmd("usage show"),
   exportUsageText: cmd("usage export"),
@@ -358,6 +361,9 @@ export const LINK = {
   "link.team.setAdminMode": no("phone's own"),
   // A phone's way to the computer's saved credentials and password managers. The owner at the terminal has the commands of the app's own calls for what a command covers; the rest needs a person at the app.
   ...each("link.credentials.check link.credentials.item link.credentials.items link.credentials.link link.credentials.lock link.credentials.managers link.credentials.remove link.credentials.save link.credentials.unlock link.credentials.vaults", no("phone's own")),
+  ...each("link.credentials.protonPassInstallPlan link.credentials.protonPassInstall", cmd("password-managers install")),
+  ...each("link.credentials.protonPassSignInStart link.credentials.protonPassSignInRead link.credentials.protonPassSignInInput link.credentials.protonPassSignInCancel", cmd("password-managers sign-in")),
+  "link.credentials.protonPassDisconnect": cmd("password-managers disconnect"),
   ...each("link.device.answer link.device.file link.device.sources link.upload link.pullRequests", no("phone's own")),
   ...each("link.push.activity link.push.prefs link.push.presence link.push.register link.push.test link.push.unregister", no("phone's own")),
   ...each("link.screen.frame link.screen.grant.begin link.screen.grant.confirm link.screen.info link.screen.input link.screen.revoke link.screen.stop", no("phone's own")),
@@ -545,6 +551,8 @@ export const CHANGES = {
   // The line says that the vault was reset, and only when it was: a refused reset is a "Tried" line that does not say so.
   "credentials.vaultReset": (args, value) => (value?.reset === true ? "the vault was reset" : null),
   "credentials.managerLock": (args, value) => value?.id ?? args?.[0],
+  "protonPass.install": () => "Proton Pass",
+  "protonPass.disconnect": () => "Proton Pass",
   // The provider as the caller named it; the command that runs is the provider's own and is never in the line.
   "providers.install": 0,
   // The provider and the model service: `opencode/anthropic`.
@@ -621,7 +629,7 @@ export const MORE_READS = {
   projects: ["projects.list", "projects.get", "projects.artifacts", "projects.changes", "projects.diff", "todos.list", "todos.get", "tasks.list", "tasks.get", "artifacts.list", "artifacts.read", "artifacts.resolve"],
   wiki: ["wiki.tree", "wiki.find", "wiki.page", "wiki.search", "wiki.history", "wiki.version", "wiki.exportPlan"],
   prefs: ["preferences.get", "preferences.harnesses", "usage.report", "usage.export", "cache.info", "macTools.status"],
-  credentials: ["credentials.list", "credentials.vault", "credentials.managers", "providers.usage", "providers.installPlan", "providers.install.read", "providers.install.input", "providers.install.cancel"],
+  credentials: ["credentials.list", "credentials.vault", "credentials.managers", "protonPass.installPlan", "protonPass.signInRead", "providers.usage", "providers.installPlan", "providers.install.read", "providers.install.input", "providers.install.cancel"],
   voice: ["voice.get", "voice.options"], // (`voice.options` can make the service ask a provider for its lists, with the saved key, at the address that the app saved: the call cannot choose it.)
   // (Spaces and panels)
   spaces: ["space.list", "space.get", "panel.list", "panel.get", "panel.routine.review", "card.list", "card.get"],
@@ -641,7 +649,8 @@ READS.push(...Object.values(MORE_READS).flat());
  * "(signed in again)" when it replaces one. The name is the service's own record of the tool, never a word the caller typed
  * (so a code in the place of a name is nowhere in the log), and the page, the pasted address and its code are never there.
  */
-export const LOGS_ITSELF = ["tools.signIn", "tools.signIn.answer", "tools.signIn.end", "plugins.signIn", "plugins.signIn.answer", "plugins.signIn.end"];
+export const LOGS_ITSELF = ["tools.signIn", "tools.signIn.answer", "tools.signIn.end", "plugins.signIn", "plugins.signIn.answer", "plugins.signIn.end",
+  "protonPass.signInStart", "protonPass.signInInput", "protonPass.signInCancel"];
 
 /** A few names for one line of the log: the first ones, then how many more. */
 const some = (names) => (Array.isArray(names) && names.length ? names.slice(0, 4).join(", ").slice(0, 60) + (names.length > 4 ? " and " + (names.length - 4) + " more" : "") : null);

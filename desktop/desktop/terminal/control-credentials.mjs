@@ -74,6 +74,11 @@ const managerView = (entry) => ({
   ...(entry.message && { message: entry.message }),
   ...(entry.canUnlock && { canUnlock: true }),
   ...(entry.install && { install: entry.install }),
+  ...(entry.source && { source: entry.source }),
+  ...(entry.expiresAt && { expiresAt: entry.expiresAt, sharedVaults: entry.sharedVaults }),
+  ...(entry.step && { step: entry.step }),
+  ...(entry.code && { code: entry.code }),
+  ...(entry.unsupported && { unsupported: true }),
 });
 const LIMIT = ["id", "label", "percentRemaining", "percentUsed", "resetAt", "primary", "window", "model", "used", "limit", "unit", "unlimited"];
 const keep = (object, keys) => Object.fromEntries(keys.filter((key) => object?.[key] !== undefined).map((key) => [key, object[key]]));
@@ -191,6 +196,19 @@ export function credentialsApi({ workspace, handlers, signIns }) {
     async "credentials.managerLock"([ref]) {
       const found = pick(await handlers.passwordManagers(false), ref, "password manager", "botkins password-managers list");
       return managerView(await handlers.lockPasswordManager(found.id));
+    },
+    "protonPass.installPlan": () => handlers.protonPassInstallPlan(),
+    "protonPass.install": ([input]) => {
+      if (!agreedBy(input)) throw needsYes("Installing Proton Pass", "botkins password-managers install proton-pass");
+      return handlers.protonPassInstall(input);
+    },
+    "protonPass.signInStart": ([input]) => handlers.protonPassSignInStart(input),
+    "protonPass.signInRead": ([input]) => handlers.protonPassSignInRead(input),
+    "protonPass.signInInput": ([input]) => handlers.protonPassSignInInput(input),
+    "protonPass.signInCancel": ([input]) => handlers.protonPassSignInCancel(input),
+    "protonPass.disconnect": ([input]) => {
+      if (!agreedBy(input)) throw needsYes("Disconnecting Proton Pass", "botkins password-managers disconnect proton-pass");
+      return handlers.protonPassDisconnect(input);
     },
 
     // ── The rest of a provider: its plan and limits, installing its tool, and a model service ──

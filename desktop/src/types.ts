@@ -2,6 +2,7 @@ import type { Calls } from "../desktop/remote/client/types";
 import type { CallToolResult, ReadResourceResult } from "@modelcontextprotocol/client";
 import type { SpaceContent, SpaceNotify, SpaceShareInput, SpaceStart, SpaceSummary } from "./spaces";
 import type { HotMessage } from "./hotState";
+import type { ProtonCalls, ProtonStatusFields } from "./proton-pass";
 export type SkillUpload = { filename: string; data: string; replace?: string[] };
 export type SkillImportResult = { added: string[]; conflicts: string[] };
 export type CatalogSkill = { id: string; source: string; skillId: string; name: string; installs: number; available: boolean; installed?: string };
@@ -826,6 +827,13 @@ declare global {
       checkSavedCredential(id: string): Promise<{ ok: boolean; message?: string }>;
       /** 1Password, Bitwarden and Proton Pass, each with its state. `refresh` looks again now. */
       passwordManagers(refresh?: boolean): Promise<PasswordManagerStatus[]>;
+      protonPassInstallPlan: ProtonCalls["plan"];
+      protonPassInstall: ProtonCalls["install"];
+      protonPassSignInStart: ProtonCalls["start"];
+      protonPassSignInRead: ProtonCalls["read"];
+      protonPassSignInInput: ProtonCalls["input"];
+      protonPassSignInCancel: ProtonCalls["cancel"];
+      protonPassDisconnect: ProtonCalls["disconnect"];
       /** Bitwarden: the master password goes to its tool and isn't kept. */
       unlockPasswordManager(manager: PasswordManagerId, password: string): Promise<PasswordManagerStatus>;
       lockPasswordManager(manager: PasswordManagerId): Promise<PasswordManagerStatus>;
@@ -1255,11 +1263,11 @@ export type SavedCredential = {
 /** `value: null` (or none) keeps the saved value. */
 export type SavedCredentialInput = { id?: string; name: string; kind?: CredentialKind; username?: string; website?: string; notes?: string; value?: string | null };
 export type PasswordManagerId = Exclude<CredentialSource, "vault">;
-export type PasswordManagerStatus = {
+export type PasswordManagerStatus = ProtonStatusFields & {
   id: PasswordManagerId;
   name: string;
   /** ready: signed in and readable. locked: needs unlocking. signed-out: needs a sign-in on this computer. missing: its command-line tool isn't installed. */
-  state: "ready" | "locked" | "signed-out" | "missing" | "error";
+  state: "ready" | "locked" | "signed-out" | "missing" | "error" | "installing" | "signing-in" | "expiring" | "expired";
   version?: string;
   account?: string;
   /** One line about what to do next. */

@@ -14,6 +14,7 @@
 import { CliError, EXIT, ago, table, usage } from "../output.mjs";
 import { shownText } from "../../desktop/shown-text.mjs";
 import { ask, confirm, secret } from "./input.mjs";
+import { protonCommands } from "./proton-pass.mjs";
 
 const safe = shownText;
 const YES = { yes: { type: "boolean", about: "Do not ask first" } };
@@ -202,9 +203,10 @@ const vault = {
 const STATES = { ready: "ready", locked: "locked", "signed-out": "signed out", missing: "not installed", error: "error" };
 const MANAGER = "Name the password manager (see `botkins password-managers list`).";
 const passwordManagers = {
-  summary: "Password managers (1Password, Bitwarden, Proton Pass): their state, and locking one",
+  summary: "Password managers: their state, locking Bitwarden, and setting up Proton Pass",
   details: "A saved credential can be read from a password manager each time it is used. A manager's items and fields, its master password and the linking of a field to a credential stay in the app's window and on a paired phone.",
   commands: {
+    ...protonCommands,
     list: {
       summary: "List the password managers and whether each is ready",
       usage: "botkins password-managers list [--refresh]",
@@ -212,7 +214,10 @@ const passwordManagers = {
       details: "This runs each manager's own command-line tool (op, bw, pass-cli) to ask its state, as the user that runs Botkins. It starts nothing else.",
       async run(context) {
         context.print(await context.client.call("credentials.managers", context.options.refresh === true), (list) => {
-          const note = (entry) => (entry.state === "locked" ? "Unlock it in the app's window or on a paired phone." : entry.state === "missing" ? "Its command-line tool is not installed." : (entry.message ?? ""));
+          const note = (entry) => entry.id !== "protonpass" && entry.state === "missing" ? "Its command-line tool is not installed."
+            : entry.message ?? (entry.state === "locked" ? "Unlock it in the app's window or on a paired phone."
+            : entry.expiresAt ? "Access ends " + new Date(entry.expiresAt).toISOString().slice(0, 10) + ". Shared vaults: " + (entry.sharedVaults ?? []).join(", ")
+            : entry.state === "missing" ? "Its command-line tool is not installed." : "");
           const lines = [table(["MANAGER", "STATE", "VERSION", "ACCOUNT", "NOTE"], list.map((entry) => [safe(entry.name), STATES[entry.state] ?? safe(entry.state), safe(entry.version ?? ""), safe(entry.account ?? ""), safe(note(entry))]))];
           for (const entry of list.filter((one) => one.state === "missing" && one.install)) lines.push(safe(entry.name) + ": install its tool from " + safe(entry.install.url) + (entry.install.command ? " (" + safe(entry.install.command) + ")" : "") + ".");
           return lines.join("\n");

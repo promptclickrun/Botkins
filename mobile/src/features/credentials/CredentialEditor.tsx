@@ -4,12 +4,13 @@ import { router, useLocalSearchParams } from "expo-router";
 import { ShieldCheck, Trash2 } from "lucide-react-native";
 import { useState } from "react";
 import { ActivityIndicator, Alert } from "react-native";
+import { isUnsharedProtonVault } from "@/link/proton-pass";
 import type { Credential, CredentialInput, CredentialKind } from "@/link/types";
 import { usePart } from "@/state/hooks";
 import { api, attempt } from "@/state/link";
 import { useApp } from "@/state/store";
 import { Badge, EmptyState, Field, Group, IconTile, Loading, Row, Segmented, Sheet, useTheme } from "@/ui";
-import { CredentialMark, GateView, KIND_LABEL, KeptNote, managerName, SECRET_LABEL, SecretField, useComputerName, useGate } from "./shared";
+import { CredentialMark, GateView, KIND_LABEL, KeptNote, managerName, SECRET_LABEL, SecretField, useComputerName, useGate, useProtonSupport } from "./shared";
 
 export default function CredentialEditor() {
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -39,6 +40,7 @@ const draftOf = (credential: Credential | undefined): Draft => ({
 const KINDS: { value: CredentialKind; label: string }[] = (["api-key", "login", "note"] as const).map((value) => ({ value, label: KIND_LABEL[value] }));
 
 function Editor({ credential }: { credential: Credential | undefined }) {
+  const proton = useProtonSupport();
   const { colors } = useTheme();
   const computer = useComputerName();
   const [start] = useState(() => draftOf(credential));
@@ -143,6 +145,9 @@ function Editor({ credential }: { credential: Credential | undefined }) {
             trailing={check.running ? <ActivityIndicator color={colors.muted} /> : checkResult ? <Badge label={checkResult.label} tone={checkResult.tone} /> : undefined}
             onPress={check.running ? undefined : () => void runCheck()}
           />
+          {proton && credential.source === "protonpass" && isUnsharedProtonVault(check.message) && (
+            <Row title="Share more vaults" onPress={() => router.push({ pathname: "/credentials/manager/[id]", params: { id: "protonpass", share: "1" } })} />
+          )}
           <Row leading={<IconTile icon={Trash2} color={colors.danger} />} title="Remove credential" tone="danger" onPress={remove} />
         </Group>
       )}

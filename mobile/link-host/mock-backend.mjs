@@ -19,8 +19,100 @@ import { parseSkill } from "./skill-format.mjs";
 import { botVoiceField } from "./voice.mjs";
 import { proactiveChats, proactivePatch, proactiveSees, proactiveStart } from "./proactive-rules.mjs";
 import { chatPeople } from "./team.mjs";
+import { Failure } from "./tools.mjs";
+import { PROTON_DOWNLOADS, PROTON_GUIDE } from "./proton-install.mjs";
+import { PINS, VERSION } from "./proton-pins.mjs";
 
 const now = () => Date.now();
+
+class DemoProtonPass {
+  state = "missing";
+  jobs = new Map();
+  vaults = [{ id: "demo-personal", name: "Personal", suggested: true }, { id: "demo-work", name: "Work", suggested: false }];
+
+  status() {
+    return { id: "protonpass", name: "Proton Pass", state: this.state, setup: true, install: { url: PROTON_GUIDE },
+      ...(this.state !== "missing" && { version: VERSION, source: "managed" }),
+      ...(this.expiresAt && { account: "demo@example.test", sharedVaults: this.shared.map((vault) => vault.name), expiresAt: this.expiresAt }) };
+  }
+
+  record() { return undefined; }
+
+  run(args, vaultId) {
+    const [command, action] = args;
+    if (!this.shared || (vaultId && !this.shared.some((vault) => vault.id === vaultId))) throw new Failure("Not shared with Botkins. Share more vaults to use this credential.");
+    if (command === "vault") return JSON.stringify(this.shared);
+    const item = { id: "demo-login", title: "Example service", username: "demo" };
+    if (action === "list") return JSON.stringify({ items: [item], folders: [] });
+    if (args.some((arg) => arg.startsWith("--field="))) return "demo-value";
+    return JSON.stringify({ ...item, password: "demo-value" });
+  }
+
+  start(kind) {
+    if (this.active) throw new Failure("Proton Pass setup is already in progress.");
+    const session = randomUUID();
+    const job = { kind, session, events: [], previous: this.state };
+    this.jobs.set(session, job);
+    this.active = job;
+    this.state = kind === "install" ? "installing" : "signing-in";
+    if (kind !== "install") job.events.push({ type: "step", name: "page" }, { type: "open", url: "https://account.proton.me/" });
+    return { session };
+  }
+
+  done(job, state) {
+    this.state = state;
+    this.active = undefined;
+    job.result = this.status();
+  }
+
+  call(method, input = {}) {
+    const pin = PINS["darwin-arm64"];
+    if (method === "protonPassInstallPlan") return { version: VERSION, url: `${PROTON_DOWNLOADS}/${VERSION}/${pin.asset}`,
+      sha256: pin.sha256, sizeBytes: pin.sizeBytes, destination: `/demo/botkins/proton-pass/${VERSION}` };
+    if (method === "protonPassInstall") {
+      if (input.sha256 !== pin.sha256) throw new Failure("Review the install plan before installing Proton Pass.");
+      return this.start("install");
+    }
+    if (method === "protonPassSignInStart") {
+      if (this.state === "missing") throw new Failure("Install Proton Pass before signing in.");
+      return this.start("sign-in");
+    }
+    if (method === "protonPassDisconnect") return this.expiresAt ? { ...this.start("disconnect"), ...this.status() } : this.status();
+    const job = this.jobs.get(input.session);
+    if (!job) throw new Failure("That Proton Pass setup session no longer exists.");
+    if (method === "protonPassSignInRead") {
+      if (!job.result) {
+        if (job.kind === "install" && job.read) this.done(job, "signed-out");
+        if (job.kind === "sign-in" && !job.picking && job.read) {
+          job.picking = true;
+          job.events.push({ type: "step", name: "choose-vaults" }, { type: "choose-vaults", vaults: this.vaults });
+        }
+        if (job.kind === "disconnect" && job.read) {
+          this.expiresAt = undefined;
+          this.shared = undefined;
+          this.done(job, "signed-out");
+        }
+        job.read = true;
+      }
+      return { events: job.events.slice(input.after ?? 0), done: !!job.result, next: job.events.length, result: job.result };
+    }
+    if (method === "protonPassSignInCancel") {
+      if (!job.result) this.done(job, job.previous);
+      return {};
+    }
+    if (method !== "protonPassSignInInput" || job.result || !job.picking) throw new Failure("Proton Pass isn't waiting for an answer.");
+    const ids = input.vaultIds;
+    if (!Array.isArray(ids) || ids.some((id) => !this.vaults.some((vault) => vault.id === id))) throw new Failure("Choose vaults from the list Proton Pass returned.");
+    if (!ids.length && !input.createDedicated) throw new Failure("Choose at least one vault to share.");
+    const dedicated = { id: "demo-botkins", name: "Botkins" };
+    if (input.createDedicated && !this.vaults.some((vault) => vault.id === dedicated.id)) this.vaults.push(dedicated);
+    this.shared = this.vaults.filter((vault) => ids.includes(vault.id) || (input.createDedicated && vault.id === dedicated.id));
+    this.expiresAt = now() + 365 * 86400_000;
+    job.events.push({ type: "step", name: "setting-up" });
+    this.done(job, "ready");
+    return {};
+  }
+}
 /** The demo computer's owner, as a person. */
 const OWNER_NAME = "Alex";
 const DESIGN_SKILL = "---\nname: design-review\ndescription: Review a design.\n---\nCheck readability and contrast.";
@@ -1244,7 +1336,7 @@ const marketAgentOf = ({ instructions: _instructions, ...listing }) => listing;
 const agentMatches = (agent, words) => words.every((word) => [agent.name, agent.role, agent.summary, agent.category ?? "", agent.categoryName ?? "", ...(agent.keywords ?? [])].some((part) => part.toLowerCase().includes(word)));
 
 export class MockBackend {
-  constructor({ state = seed(), speed = 1, appends = process.env.BOTKINS_DEV_APPENDS !== "off", timeline = process.env.BOTKINS_DEV_TIMELINE !== "off", pluginPage = PLUGIN_PAGE } = {}) {
+  constructor({ state = seed(), speed = 1, appends = process.env.BOTKINS_DEV_APPENDS !== "off", timeline = process.env.BOTKINS_DEV_TIMELINE !== "off", pluginPage = PLUGIN_PAGE, proton = process.env.BOTKINS_DEV_PROTON !== "off" } = {}) {
     // "turn-timeline-v1" (docs/turn-timeline.md). BOTKINS_DEV_TIMELINE=off is an older computer.
     if (process.env.BOTKINS_DEV_PRS === "1") this.runGitHub = demoGitHub;
     this.streamAppends = appends;
@@ -1266,6 +1358,8 @@ export class MockBackend {
     if (this.botVoice) this.capabilities.push("bot-voice-v1");
     // "provider-signin-v1": signing a model provider in, and installing one, from a phone (mock-signin.mjs).
     this.signIns = new DemoSignIns(this);
+    this.protonSetup = proton;
+    if (proton) this.protonDemo = new DemoProtonPass();
     if (process.env.BOTKINS_DEV_SIGNIN !== "off") this.capabilities.push("provider-signin-v1");
     // "keyed-providers-v1": OpenRouter, Azure Foundry and an OpenAI endpoint, on a key and settings.
     if (process.env.BOTKINS_DEV_KEYED !== "off") this.capabilities.push("keyed-providers-v1");
