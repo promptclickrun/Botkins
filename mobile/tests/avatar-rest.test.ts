@@ -25,8 +25,8 @@ test("only working states loop, resting states pause, and outcomes play once", (
 });
 
 test("phone avatar animation is off unless the person enables it", () => {
-  assert.equal(readAvatarAnimations(undefined), false, "older saved preferences");
-  assert.equal(readAvatarAnimations("yes"), false, "invalid saved preferences");
+  assert.equal(readAvatarAnimations(undefined), true, "a phone that never chose gets motion, as the desktop does");
+  assert.equal(readAvatarAnimations("yes"), true, "an invalid saved value falls back to the default");
   assert.equal(readAvatarAnimations(true), true);
   assert.equal(readAvatarAnimations(false), false);
   assert.equal(AVATAR_ANIMATIONS_WARNING, "May consume battery faster on this phone");
@@ -115,6 +115,7 @@ const MOVING_FACES = [
   "src/features/chat/ChatScreen.tsx", // the chat's header face (one bot, or a group's two)
   "src/features/chat/StatusCapsule.tsx", // the face in the working capsule, shown while a turn runs
   "src/features/voice/VoiceDock.tsx", // live voice
+  "src/features/bots/LookStage.tsx", // the look editor's preview: part of the bot's own page, as on the desktop
 ];
 const root = new URL("..", import.meta.url).pathname;
 function sources(dir: string): string[] {

@@ -10,12 +10,12 @@ export type MascotProps = {
   head?: string;
   palette?: string;
   state?: AvatarState;
-  /** Moves and blinks. On by default. */
+  /** Moves and blinks. Off by default: mascots sit on Home and in empty lists, which hold still (owner, 2026-11-24). */
   alive?: boolean;
   style?: StyleProp<ViewStyle>;
 };
 
-export function Mascot({ size = 96, head = "sprig", palette = "original", state = "idle", alive = true, style }: MascotProps) {
+export function Mascot({ size = 96, head = "sprig", palette = "original", state = "idle", alive = false, style }: MascotProps) {
   return (
     <View style={style} accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
       <BotAvatar look={{ head, palette }} state={state} size={size} animated={alive} badge={false} />
