@@ -7,7 +7,7 @@ import { useModels, usePart, useSettings, useSkills } from "@/state/hooks";
 import { api, attempt, unpair } from "@/state/link";
 import { usePrefs } from "@/state/prefs";
 import { useApp } from "@/state/store";
-import { useProfile } from "@/state/profile";
+import { useProfile, useProfileHosts } from "@/state/profile";
 import { can } from "@/state/team";
 import { Badge, brand, Group, IconTile, Label, Page, ProviderIcon, Row, useTheme } from "@/ui";
 import { harnessName } from "./Harness";
@@ -33,7 +33,7 @@ export default function Settings() {
   const mode = usePrefs((prefs) => prefs.mode);
   const member = meta?.you?.kind === "member" && team && "me" in team ? team : undefined;
   const profile = useProfile((state) => state.session);
-  const profileHosts = useProfile((state) => state.home?.hosts ?? []);
+  const profileHosts = useProfileHosts();
   const computers = localComputers.length + profileHosts.filter((host) => !localComputers.some((pairing) => pairing.serverId === host.serverId)).length;
   const permission = (scope: Parameters<typeof can>[1], action: string) => can({ meta, team }, scope, action);
   const owner = meta?.you?.kind !== "member";

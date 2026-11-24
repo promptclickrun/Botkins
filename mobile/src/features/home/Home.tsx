@@ -20,7 +20,7 @@ import { activityLabel, isConversation, useBotActivity, useBots, useCan, useChat
 import { api, attempt } from "@/state/link";
 import { setPrefs, usePrefs } from "@/state/prefs";
 import { useApp } from "@/state/store";
-import { useProfile } from "@/state/profile";
+import { useProfileHosts } from "@/state/profile";
 import { badgeColors, BotAvatar, Button, Chip, Dot, EmptyState, Group, HoldMenu, IconButton, IconTile, LinkBanner, Mascot, Row, space, T, Tap, useShape, useTheme } from "@/ui";
 import { computerActions } from "@/state/computers";
 import { arrangeBots, type BotFilter, filterBots, filterLabels, todayRow } from "./arrange";
@@ -268,7 +268,7 @@ export default function Home() {
   const computer = useApp((state) => state.pairing?.name) ?? "Computer";
   const adminOn = useApp((state) => state.parts.meta?.you?.kind === "owner" && state.parts.meta.you.admin === true);
   const computers = useApp((state) => state.pairings);
-  const directoryHosts = useProfile((state) => state.home?.hosts ?? []);
+  const directoryHosts = useProfileHosts();
   const inUse = useApp((state) => state.pairing?.serverId);
   const requests = useApp((state) => state.parts.live?.requests);
   const board = usePart("board");

@@ -2,7 +2,7 @@ import { router } from "expo-router";
 import { Check, Monitor, Plus, QrCode, UserPlus, Users } from "lucide-react-native";
 import { View } from "react-native";
 import { useApp } from "@/state/store";
-import { selectProfileHost, useProfile } from "@/state/profile";
+import { selectProfileHost, useProfile, useProfileHosts } from "@/state/profile";
 import { brand, Group, IconTile, Page, Row, space, T, useTheme } from "@/ui";
 import { addComputer, switchTo } from "@/features/home/computers";
 import { linkLabel } from "./shared";
@@ -16,7 +16,7 @@ export default function Computers() {
   const { colors } = useTheme();
   const pairings = useApp((state) => state.pairings);
   const profile = useProfile((state) => state.session);
-  const directoryHosts = useProfile((state) => state.home?.hosts ?? []);
+  const directoryHosts = useProfileHosts();
   const profilePairings = useProfile((state) => state.pairings);
   const boundLocal = useProfile((state) => state.boundLocal);
   const excluded = useProfile((state) => state.excluded);

@@ -9,7 +9,7 @@ import { PROFILE_ORIGIN, profileApi, ProfileError, type ProfileAttempt, type Pro
 import { deviceName, activateProfilePairing, bindProfileHost, connectProfileHost, deactivateProfilePairing, dropProfileBoundPairings, unbindProfileHost } from "@/state/link";
 import { forget, keep, readKept } from "@/state/keep";
 import { useApp } from "@/state/store";
-import { profilePrompt, type ProfilePrompt } from "@/features/profile/profileLogic";
+import { profileHostsOf, profilePrompt, type ProfilePrompt } from "@/features/profile/profileLogic";
 
 export const PROFILE_SESSION_KEY = "botkins.profile.session.v1";
 export const PROFILE_ATTEMPT_KEY = "botkins.profile.attempt.v1";
@@ -38,6 +38,11 @@ type ProfileState = {
 
 const empty: ProfileState = { loaded: false, session: null, attempt: null, home: null, pairings: {}, boundLocal: [], excluded: [], pendingRemovals: [], prompt: null, busy: false, error: null };
 export const useProfile = create<ProfileState>(() => empty);
+
+/** The profile's hosts, the same empty list while there is no profile (see `profileHostsOf`). */
+export function useProfileHosts(): ProfileHost[] {
+  return useProfile(profileHostsOf);
+}
 
 const text = (value: unknown): value is string => typeof value === "string" && value.length > 0;
 const validSession = (value: unknown): value is ProfileSession => {

@@ -29,3 +29,11 @@ export function profileHostSubtitle(host: ProfileHost, local: boolean, enrolled:
 export function pendingDeviceLabel(label: string) {
   return label.trim() || "Another device";
 }
+
+const NO_HOSTS: ProfileHost[] = [];
+/**
+ * The profile's hosts for a store selector. With no profile this is always the same empty list: a
+ * selector that makes a new array on each read never settles, and React stops the screen with
+ * "Maximum update depth exceeded".
+ */
+export const profileHostsOf = (state: { home: { hosts: ProfileHost[] } | null }): ProfileHost[] => state.home?.hosts ?? NO_HOSTS;
