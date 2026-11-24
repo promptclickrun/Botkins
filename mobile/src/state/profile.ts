@@ -374,9 +374,15 @@ function registerLifecycle() {
   }
 }
 
-export function dismissPrompt() {
-  useProfile.setState({ prompt: null });
-  void keep(PROFILE_CHOICE_KEY, "dismissed").catch(() => {});
+export async function dismissPrompt() {
+  authGeneration += 1;
+  useProfile.setState({ prompt: null, attempt: null, busy: false, error: null });
+  await queueProfileStorage(async () => {
+    await Promise.all([
+      keep(PROFILE_CHOICE_KEY, "dismissed").catch(() => {}),
+      forget(PROFILE_ATTEMPT_KEY).catch(() => {}),
+    ]);
+  });
 }
 
 export async function beginProfile(label = deviceName()): Promise<ProfileAttempt | undefined> {
@@ -386,10 +392,15 @@ export async function beginProfile(label = deviceName()): Promise<ProfileAttempt
   try {
     const attempt = await profileApi.start(label.trim() || deviceName());
     if (generation !== authGeneration) return undefined;
-    await keep(PROFILE_ATTEMPT_KEY, JSON.stringify(attempt));
+    await queueProfileStorage(async () => {
+      if (generation !== authGeneration) return;
+      await keep(PROFILE_ATTEMPT_KEY, JSON.stringify(attempt));
+    });
+    if (generation !== authGeneration) return undefined;
     useProfile.setState({ attempt, busy: false, prompt: null });
     return attempt;
   } catch (error) {
+    if (generation !== authGeneration) return undefined;
     useProfile.setState({ busy: false, error: error instanceof Error ? error.message : "The profile sign-in could not start." });
     return undefined;
   }
@@ -397,8 +408,9 @@ export async function beginProfile(label = deviceName()): Promise<ProfileAttempt
 
 /** Discards an expired browser request so a fresh six-digit request can be started. */
 export async function restartProfileAttempt() {
-  await forget(PROFILE_ATTEMPT_KEY).catch(() => {});
-  useProfile.setState({ attempt: null, error: null });
+  authGeneration += 1;
+  useProfile.setState({ attempt: null, busy: false, error: null });
+  await queueProfileStorage(() => forget(PROFILE_ATTEMPT_KEY).catch(() => {}));
 }
 
 export async function finishPending(): Promise<ProfileSession | null | undefined> {

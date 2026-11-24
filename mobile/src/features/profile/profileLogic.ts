@@ -15,7 +15,14 @@ export function profilePrompt(options: { pairings: number; session: ProfileSessi
   return options.pairings > 0 ? "migration" : "first";
 }
 
-export const profileCode = (code: string) => code.length === 6 ? code.slice(0, 3) + " " + code.slice(3) : code;
+/** Renders the raw verification digits without spaces so manual selection copies cleanly into the six-digit browser field. */
+export const profileCode = (code: string) => code.trim();
+
+/** Screen-reader label spelling out each verification digit individually. */
+export const profileCodeLabel = (code: string) => {
+  const clean = profileCode(code);
+  return clean ? "Profile code " + clean.split("").join(" ") : "Profile code";
+};
 
 export const profileHostIsLocal = (host: ProfileHost, pairings: ReadonlyArray<{ serverId: string }>) => pairings.some((pairing) => pairing.serverId === host.serverId);
 

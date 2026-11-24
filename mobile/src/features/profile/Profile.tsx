@@ -8,7 +8,7 @@ import type { ProfileHost } from "@/link/profile";
 import { deviceName } from "@/state/link";
 import { showToast, useApp } from "@/state/store";
 import { useProfile, approveDevice, beginProfile, deleteProfileAccount, dismissPrompt, finishPending, profileDeviceLabel, refreshProfile, removeProfileHost, restartProfileAttempt, revokeDevice, selectProfileHost, signOutProfile, syncLocalPairings, updateProfile } from "@/state/profile";
-import { pendingDeviceLabel, profileCode, profileHostIsLocal, profileHostSubtitle, PROFILE_BROWSER_COPY, PROFILE_MIGRATION_COPY, PROFILE_OPTIONAL_COPY } from "./profileLogic";
+import { pendingDeviceLabel, profileCode, profileCodeLabel, profileHostIsLocal, profileHostSubtitle, PROFILE_BROWSER_COPY, PROFILE_MIGRATION_COPY, PROFILE_OPTIONAL_COPY } from "./profileLogic";
 import { Badge, Button, EmptyState, Group, IconTile, Label, Loading, Page, Row, space, T, useTextPrompt, useTheme } from "@/ui";
 
 function close() {
@@ -47,7 +47,7 @@ export default function Profile() {
       }
     : start;
   const noThanks = () => {
-    dismissPrompt();
+    void dismissPrompt();
     close();
   };
   const refreshAll = () => void syncLocalPairings();
@@ -70,7 +70,7 @@ export default function Profile() {
             <View style={{ padding: space.lg, gap: space.sm }}>
               <T variant="headline">Verify in your browser</T>
               <T variant="subhead" color="muted">{PROFILE_BROWSER_COPY}</T>
-              <T variant="display" center selectable accessibilityLabel={"Profile code " + profileCode(attempt.code)} style={{ letterSpacing: 4, paddingVertical: space.md }}>
+              <T variant="display" center selectable accessibilityLabel={profileCodeLabel(attempt.code)} style={{ letterSpacing: 6, fontVariant: ["tabular-nums"], paddingVertical: space.md }}>
                 {profileCode(attempt.code)}
               </T>
               <T variant="footnote" color="muted" center>
