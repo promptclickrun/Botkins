@@ -31,7 +31,7 @@ const PICTURES = [".png", ".jpg", ".jpeg", ".heic", ".heif", ".gif", ".webp"];
 const string = { type: "string" };
 const number = { type: "number" };
 const boolean = { type: "boolean" };
-const when = { type: "string", description: "A date and time, ISO 8601, such as 2026-11-19T09:00:00-06:00. A date alone means the start of that day in the phone's time zone." };
+const when = { type: "string", description: "An ISO 8601 date-time with offset (YYYY-MM-DDTHH:MM:SS±HH:MM) or YYYY-MM-DD for the start of that day in the phone's time zone." };
 const object = (properties, required = []) => ({ type: "object", properties, required, additionalProperties: false });
 const HEALTH_TYPES = ["steps", "distance", "activeEnergy", "exerciseMinutes", "standHours", "flightsClimbed", "heartRate", "restingHeartRate", "heartRateVariability", "sleep", "weight", "bodyFat", "bloodOxygen", "respiratoryRate", "water", "caffeine", "mindfulMinutes", "workouts"];
 const HEALTH_LOGS = ["water", "weight", "caffeine", "mindfulMinutes", "bodyFat"];
@@ -60,10 +60,10 @@ export const DEVICE_TOOLS = [
     name: "phone_calendar_update_event",
     source: "calendar",
     level: "interact",
-    description: "Changes an event on the person's phone. Give its id (from phone_calendar_events) and only the fields to change.",
+    description: "Update an existing calendar event on the person's phone. Resolve the exact event id and source calendar with phone_calendar_events (and phone_calendar_list if needed) first, send only the fields to change, then read the event back with phone_calendar_events to verify.",
     parameters: object({ id: string, title: string, start: when, end: when, allDay: boolean, location: string, notes: string, url: string }, ["id"]),
   },
-  { name: "phone_calendar_delete_event", source: "calendar", level: "interact", description: "Deletes an event from the person's phone, by id. Ask the person first unless they already said to.", parameters: object({ id: string }, ["id"]) },
+  { name: "phone_calendar_delete_event", source: "calendar", level: "interact", description: "Delete a calendar event from the person's phone by id (ask the person first unless they already said to). Resolve the exact event id and source calendar with phone_calendar_events first, then verify removal by reading back.", parameters: object({ id: string }, ["id"]) },
 
   {
     name: "phone_contacts_search",

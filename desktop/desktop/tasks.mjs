@@ -172,7 +172,7 @@ export class Tasks {
     return [
       tool(
         "task_create",
-        "Add a task to the person's task board. Give it to a bot by name (yourself or another bot) or leave it for anyone. Status ready starts it automatically when that bot is free; later keeps it for the person to schedule. Use this when the person asks you to track, queue or delegate work. Tasks added during a routine or another task always wait in Later for the person.",
+        "Create a Task Board job (not an in-chat update_plan checklist); status \"ready\" with a bot automatically starts background work when that bot is free, while \"later\" queues it for the person. Give it to a bot by name (yourself or another bot) or leave it for anyone. Use this when the person asks you to track, queue or delegate work. Tasks added during a routine or another task always wait in Later for the person.",
         { title: string, details: string, bot: string, priority: { type: "string", enum: PRIORITIES }, status: { type: "string", enum: ["later", "ready"] } },
         ["title"],
         ({ title, details, bot: name, priority, status }) => {
@@ -195,7 +195,7 @@ export class Tasks {
       ),
       tool(
         "task_update",
-        "Change a task given to you or created by you: its title, details, priority, or status (later, ready, review, done or archived). " +
+        "Update a Task Board job you own or created; setting status to \"ready\" on a bot-assigned task can automatically start background work. Change title, details, priority, or status (later, ready, review, done or archived). " +
           "The task you are working on right now needs no status from you: it moves to Review by itself when your reply ends, with your reply as its result, and the person marks it done. Its title and details stay as the person wrote them.",
         { id: string, title: string, details: string, priority: { type: "string", enum: PRIORITIES }, status: { type: "string", enum: ["later", "ready", "review", "done", "archived"] } },
         ["id"],

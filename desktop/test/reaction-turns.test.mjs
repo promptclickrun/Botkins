@@ -230,7 +230,8 @@ test("bots are told about reactions and about confirming a routine's notificatio
   const told = reactionPrompt([{ emoji: "👍", text: "Done.", latest: true }]).split("\n").filter((line) => !line.startsWith("- "));
   for (const line of told) assert.doesNotMatch(line, /\p{Extended_Pictographic}/u, line);
   assert.match(text, /\[SILENT\]/);
-  assert.match(text, /Before you create a routine .* confirm with the person how often it runs, where its result goes, and whether they want a notification/);
+  assert.match(text, /Before creating a routine .* confirm only relevant settings the person has not already specified/);
+  assert.match(text, /panel refresh \(today_routine\) always updates that one fixed panel in its space silently and alerts only on failure/);
 });
 
 test("streamed text is held back only while it can still be [SILENT]", () => {

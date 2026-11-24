@@ -113,7 +113,7 @@ export class Apps {
     return [
       tool(
         "show_app",
-        "Show the person a small interactive app in this chat, such as a calculator, a form, a checklist, a picker or a visualization. Write one self-contained HTML document with inline CSS and JavaScript. The page has no network access and cannot load outside scripts, styles, fonts or images (use inline SVG or data: URLs). Read data with `await window.botkins.getData()` and live updates with `window.botkins.onData(fn)`. When the person finishes, call `window.botkins.sendAnswer(text)`: the text goes into the person's message box for them to review and send. Set sends_answers when the app does that.",
+        "Launch a standalone interactive HTML app from this chat in its own sandboxed window (not an inline render_card, side pane tab, or persistent Today panel), such as a calculator, form, checklist, picker or visualization. Write one self-contained HTML document with inline CSS and JavaScript. The page has no network access and cannot load outside scripts, styles, fonts or images (use inline SVG or data: URLs). Read data with `await window.botkins.getData()` and live updates with `window.botkins.onData(fn)`. When the person finishes, call `window.botkins.sendAnswer(text)`: the text goes into the person's message box for them to review and send. Set sends_answers when the app does that.",
         { title: string, description: string, html: string, data: {}, sends_answers: { type: "boolean" } },
         ["title", "description", "html"],
         ({ title, description, html, data, sends_answers }) => {

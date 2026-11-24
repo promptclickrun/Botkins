@@ -5,7 +5,7 @@ description: Build or update a rich panel on Botkins’s Today screen and keep i
 
 Use today_list to find panels owned by this bot. Use today_publish to create a panel or update the same key and current revision. Choose a metric, table, labeled bar chart, line chart, progress bar, badges, bullet list or Markdown block to fit the information. Use a line chart for a trend over time, a progress bar for progress toward a target, and badges for short statuses. Use real sources for factual panels. If a source cannot be reached, say so on the panel.
 
-When the user asks for recurring updates, use today_routine to set a five-field cron expression, timezone and precise refresh instructions. Each scheduled check is a Copilot turn. Use the user's timezone unless they specify another. Report the panel title and its cadence after the tools confirm success.
+When the user asks for recurring updates, use today_routine to set a five-field cron expression, timezone and precise refresh instructions. Each scheduled check updates that one fixed panel silently and notifies only if a refresh fails (use routine_create if the person wants an alert on every update). Use the user's timezone unless they specify another. Report the panel title and its cadence after the tools confirm success.
 
 A panel is in a space: a page of panels. Every person has Today; a person can make more and share them. A panel you publish goes to the space the chat is about, which is the person's Today unless they started the chat from another space. Use space_list to see the spaces the people in this chat can open, and pass `space` to today_publish, today_list, today_routine or today_remove to name another one. A key is yours within one space, so the same key in two spaces is two panels.
 

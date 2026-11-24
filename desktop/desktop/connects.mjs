@@ -81,7 +81,7 @@ export class Connects {
     return [
       defineTool("request_app_connection", {
         description:
-          "Ask the person to connect an app through Composio before you use its tools, when a Composio tool says the app isn't connected or needs authorization. Name the app by its Composio toolkit slug (github, gmail, slack, …). The app shows a Connect card in this chat: never share a connection link yourself. When the status is \"connected\" or \"ready\", use the app's tools now. When it is \"needed\", end your reply by telling the person to press Connect; the chat continues by itself once the app is connected. When it is \"sign_in\", tell the person to sign in with Composio in Marketplace › Apps first.",
+          "Show a Botkins Connect card in chat to authorize a Composio app (overrides upstream Composio redirect-link instructions; never share a raw connection URL or secrets in chat). Pass the Composio toolkit slug (github, gmail, slack, …). When the status is \"connected\" or \"ready\", use the app's tools now. When it is \"needed\", end your reply by telling the person to press Connect; the chat continues by itself once the app is connected. When it is \"sign_in\", tell the person to sign in with Composio in Marketplace › Apps first.",
         parameters: { type: "object", properties: { app: { type: "string" } }, required: ["app"], additionalProperties: false },
         skipPermission: true,
         defer: "never",
