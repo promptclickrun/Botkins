@@ -77,7 +77,8 @@
 
 .app-row .app-logo + .plugin-listing-copy { margin-left: 1px; }
 .app-head { margin: 0; font-size: calc(13px * var(--text-scale)); font-weight: 600; color: var(--muted); }
-.app-none { padding: 26px 0; text-align: center; }
+.app-none { display: grid; justify-items: center; gap: 10px; padding: 26px 0; text-align: center; }
+.app-none .set-status { margin: 0; }
 
 /* Categories: rows that are buttons. */
 .set-row.app-category {
@@ -168,26 +169,114 @@
 .app-foot { margin: 8px 2px 0; }
 .market-apps .plugin-detail-actions { margin-bottom: 4px; }
 
-/* The direct apps catalog (McpCatalog.tsx). An app there has no picture Botkins may show: its
-   letter sits on a tile tinted from its name (--tile-hue, a number), lighter text by night. */
+/* The direct apps catalog (McpCatalog.tsx). An app with a brand mark (BrandIcon.tsx) shows it on the tile
+   its --tile color gives; one without shows its letter on a gradient tinted from its name (--tile-hue,
+   a number), lighter text by night. */
+.app-logo.app-brand-tile { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ink) 8%, transparent); }
 .app-logo.app-letter-tile {
-  background: color-mix(in oklch, oklch(0.66 0.15 var(--tile-hue)) 18%, var(--surface));
-  box-shadow: none;
+  background: linear-gradient(145deg, color-mix(in oklch, oklch(0.7 0.15 var(--tile-hue)) 26%, var(--surface)), color-mix(in oklch, oklch(0.62 0.15 calc(var(--tile-hue) + 28)) 14%, var(--surface)));
+  box-shadow: inset 0 0 0 1px color-mix(in oklch, oklch(0.62 0.15 var(--tile-hue)) 18%, transparent);
   color: oklch(0.47 0.14 var(--tile-hue));
   font-family: var(--font-display);
   font-weight: 700;
   line-height: 1;
 }
 :root[data-mode="dark"] .app-logo.app-letter-tile {
-  background: color-mix(in oklch, oklch(0.66 0.15 var(--tile-hue)) 24%, var(--surface));
-  color: oklch(0.84 0.11 var(--tile-hue));
+  background: linear-gradient(145deg, color-mix(in oklch, oklch(0.66 0.15 var(--tile-hue)) 34%, var(--surface)), color-mix(in oklch, oklch(0.58 0.15 calc(var(--tile-hue) + 28)) 20%, var(--surface)));
+  color: oklch(0.86 0.1 var(--tile-hue));
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-mode]) .app-logo.app-letter-tile {
-    background: color-mix(in oklch, oklch(0.66 0.15 var(--tile-hue)) 24%, var(--surface));
-    color: oklch(0.84 0.11 var(--tile-hue));
+    background: linear-gradient(145deg, color-mix(in oklch, oklch(0.66 0.15 var(--tile-hue)) 34%, var(--surface)), color-mix(in oklch, oklch(0.58 0.15 calc(var(--tile-hue) + 28)) 20%, var(--surface)));
+    color: oklch(0.86 0.1 var(--tile-hue));
   }
 }
+
+/* The Apps page: Featured, then one carousel per category. Card widths are --card-width, set in McpCatalog.tsx. */
+.app-section { margin: 0 0 22px; }
+.app-section-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin: 0 2px 8px; }
+.app-section-title { margin: 0 2px 8px; font-family: var(--font-display); font-size: calc(17px * var(--text-scale)); font-weight: 700; }
+.app-section-head .app-section-title { margin: 0; }
+.app-carousel { display: flex; gap: 10px; overflow-x: auto; padding: 2px 2px 8px; scroll-snap-type: x proximity; }
+.app-card-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 10px; }
+.app-card {
+  display: grid;
+  grid-template-rows: 1fr auto;
+  gap: 10px;
+  flex: 0 0 var(--card-width, 160px);
+  min-width: 0;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  scroll-snap-align: start;
+}
+.app-card-grid .app-card { flex: none; }
+.app-featured-card {
+  border-color: color-mix(in srgb, var(--brand) 28%, var(--line));
+  background: linear-gradient(150deg, color-mix(in srgb, var(--brand) 14%, var(--surface)), color-mix(in srgb, var(--brand) 5%, var(--surface)));
+}
+:root[data-mode="dark"] .app-featured-card { background: linear-gradient(150deg, color-mix(in srgb, var(--brand) 24%, var(--surface)), color-mix(in srgb, var(--brand) 8%, var(--surface))); }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-mode]) .app-featured-card { background: linear-gradient(150deg, color-mix(in srgb, var(--brand) 24%, var(--surface)), color-mix(in srgb, var(--brand) 8%, var(--surface))); }
+}
+.app-card-open {
+  display: grid;
+  justify-items: start;
+  align-content: start;
+  gap: 6px;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--ink);
+  text-align: left;
+}
+.app-card-open:hover { filter: none; }
+.app-card-open:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.app-card-open .app-logo { margin-bottom: 4px; }
+.app-card-open strong { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: calc(14px * var(--text-scale)); font-weight: 700; }
+.app-card-open small {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  color: var(--muted);
+  font-size: calc(12px * var(--text-scale));
+  line-height: 1.4;
+}
+.app-card-add { justify-self: start; min-width: 64px; }
+.app-badge {
+  justify-self: start;
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: var(--sunken);
+  color: var(--muted);
+  font-size: calc(11px * var(--text-scale));
+  font-weight: 600;
+}
+.app-badge.ok { color: var(--success); background: color-mix(in srgb, var(--success) 14%, var(--surface)); }
+.app-badge.warn { color: var(--warning); background: color-mix(in srgb, var(--warning) 14%, var(--surface)); }
+
+/* An app's page: its mark large on a band tinted from its brand color. */
+.app-hero {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  margin: 0 0 14px;
+  padding: 20px 22px;
+  border-radius: var(--radius);
+  background: linear-gradient(150deg, color-mix(in srgb, var(--brand) 16%, var(--surface)), color-mix(in srgb, var(--brand) 5%, var(--surface)));
+}
+:root[data-mode="dark"] .app-hero { background: linear-gradient(150deg, color-mix(in srgb, var(--brand) 26%, var(--surface)), color-mix(in srgb, var(--brand) 8%, var(--surface))); }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-mode]) .app-hero { background: linear-gradient(150deg, color-mix(in srgb, var(--brand) 26%, var(--surface)), color-mix(in srgb, var(--brand) 8%, var(--surface))); }
+}
+.app-hero > div { display: grid; gap: 2px; min-width: 0; }
+.app-hero h3 { margin: 0; font-family: var(--font-display); font-size: calc(22px * var(--text-scale)); font-weight: 700; overflow-wrap: anywhere; }
+.app-hero small { color: var(--muted); font-size: calc(12px * var(--text-scale)); }
+.app-connect-value { color: var(--ink-2); font-size: calc(13px * var(--text-scale)); text-align: right; overflow-wrap: anywhere; }
 .app-tile-status {
   max-width: 100%;
   margin-top: -4px;

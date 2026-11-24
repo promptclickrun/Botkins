@@ -36,3 +36,6 @@ export function templateAvailability(supported: boolean, online: boolean) {
   if (!online) return "Connect to your computer";
   if (!supported) return "Update the app on your computer";
 }
+
+/** Whether a text runs past `lines` lines on a phone: about 42 letters a line, and each line break counts. */
+export const tooLong = (text: string, lines: number, perLine = 42) => text.split("\n").reduce((sum, row) => sum + Math.max(1, Math.ceil(row.length / perLine)), 0) > lines;

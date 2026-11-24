@@ -11,11 +11,15 @@ import type { McpCatalogEntry } from "@/link/types";
 import { useCan, useMember, useOnline } from "@/state/hooks";
 import { api, attempt } from "@/state/link";
 import { showToast } from "@/state/store";
-import { AppLogo, Button, EmptyState, Group, Label, Loading, radius, Row, Sheet, space, T, useTheme } from "@/ui";
+import { Button, EmptyState, Group, Label, Loading, radius, Row, Sheet, space, T, useTheme } from "@/ui";
 import { shownText } from "@/ui/shownText";
 import { SecretField } from "../credentials/shared";
-import { addOptions, connectsLine, entryPlan, entryState, keysFilled, needsConfirm, openableUrl } from "./catalog";
+import { addOptions, connectsLines, entryPlan, entryState, keysFilled, needsConfirm, openableUrl } from "./catalog";
+import { BrandIcon, useBrandTint } from "./art";
 import { loadMcpCatalog, useMcpCatalog } from "./data";
+
+/** The brand mark on the sheet's tinted band. */
+const HERO_ICON = 72;
 
 /** The browser sign-in, as a tool's page starts it: not awaited for long, "Signed in" when it is. */
 function startSignIn(id: string, done?: () => void) {
@@ -56,6 +60,8 @@ function Entry({ entry }: { entry: McpCatalogEntry }) {
   const canView = useCan("mcp", "view");
   const canManage = useCan("mcp", "manage");
   const plan = entryPlan(entry);
+  const connects = connectsLines(entry);
+  const wash = useBrandTint(entry.id, entry.name);
   const state = entryState(entry);
   const [keys, setKeys] = useState<Record<string, string>>({});
   const [changing, setChanging] = useState(false);
@@ -127,7 +133,9 @@ function Entry({ entry }: { entry: McpCatalogEntry }) {
     <View>
       <Label>How it connects</Label>
       <Group>
-        <Row title={connectsLine(entry)} subtitleLines={3} subtitle={entry.transport === "http" && entry.url ? shownText(entry.url) : undefined} />
+        <Row title="Runs" subtitle={connects.how} subtitleLines={3} />
+        <Row title="Sign-in" subtitle={connects.auth} subtitleLines={3} />
+        {entry.transport === "http" && !!entry.url && <Row title="Address" subtitle={shownText(entry.url)} subtitleLines={3} />}
         {entry.transport === "stdio" && !!entry.env?.length && <Row title="Gets" subtitle={entry.env.map((name) => shownText(name)).join(", ")} subtitleLines={3} />}
         {entry.transport === "stdio" && !!entry.package && (
           <Row title="Package" subtitle={[shownText(entry.package) + (entry.version ? "@" + shownText(entry.version) : ""), entry.license].filter(Boolean).join(" · ")} subtitleLines={2} />
@@ -140,16 +148,14 @@ function Entry({ entry }: { entry: McpCatalogEntry }) {
   return (
     <Sheet title="">
       <View style={{ gap: space.md }}>
-        <View style={{ flexDirection: "row", alignItems: "center", gap: space.lg }}>
-          <AppLogo name={entry.name} size={64} />
-          <View style={{ flex: 1, minWidth: 0, gap: 2 }}>
-            <T variant="title2" numberOfLines={2} accessibilityRole="header">
-              {entry.name}
-            </T>
-            <T variant="footnote" color="muted" numberOfLines={1}>
-              {[entry.categoryName, state?.line].filter(Boolean).join(" · ")}
-            </T>
-          </View>
+        <View style={{ backgroundColor: wash, borderRadius: radius.xl, paddingVertical: space.xl, paddingHorizontal: space.lg, alignItems: "center", gap: space.sm }}>
+          <BrandIcon id={entry.id} name={entry.name} size={HERO_ICON} />
+          <T variant="title2" center numberOfLines={2} accessibilityRole="header">
+            {entry.name}
+          </T>
+          <T variant="footnote" color="muted" center numberOfLines={1}>
+            {[entry.categoryName, state?.line].filter(Boolean).join(" · ")}
+          </T>
         </View>
         {!!entry.description && (
           <T variant="subhead" color="ink2">

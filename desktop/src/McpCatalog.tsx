@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ArrowLeft, Check, ExternalLink, Loader2, Search, SquareTerminal, TriangleAlert } from "lucide-react";
+import { ArrowLeft, ExternalLink, Loader2, Search, SquareTerminal, TriangleAlert } from "lucide-react";
 import { Group, Sheet, errorText } from "./SettingsRows";
+import { BrandIcon, brandColor } from "./BrandIcon";
+import { appBadge, appChips, appsBlocks, connectsLines } from "./marketLogic";
 import { teamCan } from "./teamAccess";
 import type { McpCatalog, McpCatalogEntry, State } from "./types";
 import "./plugins.css";
@@ -66,20 +68,6 @@ export function useMcpCatalog(state: State) {
 
 // ── Pieces ────────────────────────────────────────────────────────────────────────────────────
 
-/** A hue from a name, so a letter tile keeps its color everywhere (as the phone's AppLogo). */
-const HUES = [25, 45, 75, 145, 180, 230, 265, 290, 320, 350];
-export const hueOf = (name: string) => HUES[[...name].reduce((sum, char) => (sum * 31 + char.charCodeAt(0)) >>> 0, 7) % HUES.length];
-
-/** An app with no picture Botkins may show: its letter on a tile tinted from its name. */
-export function LetterTile({ name, letter, size = 48 }: { name: string; letter?: string; size?: number }) {
-  const style = { width: size, height: size, borderRadius: Math.round(size * 0.24), fontSize: Math.round(size * 0.42), "--tile-hue": hueOf(name) } as React.CSSProperties;
-  return (
-    <span className="app-logo app-letter-tile" style={style} aria-hidden="true">
-      {(letter || name.match(/[\p{L}\p{N}]/u)?.[0] || "?").toUpperCase()}
-    </span>
-  );
-}
-
 /** Where an entry stands, in one or two words, or nothing when it isn't added. */
 export function entryStatus(entry: McpCatalogEntry): { text: string; tone: "ok" | "warn" | "" } | undefined {
   if (!entry.added) return undefined;
@@ -90,38 +78,66 @@ export function entryStatus(entry: McpCatalogEntry): { text: string; tone: "ok" 
   return { text: "Added", tone: "ok" };
 }
 
-function EntryTile({ entry, open }: { entry: McpCatalogEntry; open: (id: string) => void }) {
-  const status = entryStatus(entry);
+/** How big the Featured cards are, the category cards, and how many apps a carousel shows before "See all". */
+const FEATURED_WIDTH = 300;
+const CARD_WIDTH = 160;
+const FEATURED_ICON = 56;
+const CARD_ICON = 48;
+const SHELF_APPS = 12;
+const HERO_ICON = 72;
+
+/** What an app's card ends with: its status chip once it is added, else a button to add it. */
+function CardAction({ entry, open }: { entry: McpCatalogEntry; open: (id: string) => void }) {
+  const badge = appBadge(entry);
+  if (badge) return <span className={"app-badge " + badge.tone}>{badge.label}</span>;
   return (
-    <button type="button" className="app-tile" onClick={() => open(entry.id)} aria-label={entry.name + (status ? ", " + status.text : "")} title={entry.description}>
-      <span className="app-tile-logo">
-        <LetterTile name={entry.name} letter={entry.icon.letter} size={48} />
-        {status?.tone === "ok" && (
-          <span className="app-check" aria-hidden="true">
-            <Check size={11} strokeWidth={3.4} />
-          </span>
-        )}
-      </span>
-      <span className="app-tile-name">{entry.name}</span>
-      {status && <span className={"app-tile-status " + status.tone}>{status.text}</span>}
+    <button type="button" className="set-button app-card-add" aria-label={(entry.auth === "oauth" ? "Connect " : "Add ") + entry.name} onClick={() => open(entry.id)}>
+      {entry.auth === "oauth" ? "Connect" : "Add"}
     </button>
   );
 }
 
-function matches(entry: McpCatalogEntry, q: string) {
-  return (entry.name + " " + entry.id + " " + entry.description + " " + entry.categoryName).toLowerCase().includes(q);
+function AppCard({ entry, open }: { entry: McpCatalogEntry; open: (id: string) => void }) {
+  const badge = appBadge(entry);
+  return (
+    <div className="app-card" style={{ "--card-width": CARD_WIDTH + "px" } as React.CSSProperties}>
+      <button type="button" className="app-card-open" onClick={() => open(entry.id)} aria-label={entry.name + (badge ? ", " + badge.label : "")}>
+        <BrandIcon id={entry.id} name={entry.name} letter={entry.icon.letter} size={CARD_ICON} />
+        <strong>{entry.name}</strong>
+        <small>{entry.description}</small>
+      </button>
+      <CardAction entry={entry} open={open} />
+    </div>
+  );
+}
+
+function FeaturedCard({ entry, open }: { entry: McpCatalogEntry; open: (id: string) => void }) {
+  const badge = appBadge(entry);
+  const style = { "--card-width": FEATURED_WIDTH + "px", "--brand": brandColor(entry.id, entry.name) } as React.CSSProperties;
+  return (
+    <div className="app-card app-featured-card" style={style}>
+      <button type="button" className="app-card-open" onClick={() => open(entry.id)} aria-label={entry.name + (badge ? ", " + badge.label : "")}>
+        <BrandIcon id={entry.id} name={entry.name} letter={entry.icon.letter} size={FEATURED_ICON} />
+        <strong>{entry.name}</strong>
+        <small>{entry.description}</small>
+      </button>
+      <CardAction entry={entry} open={open} />
+    </div>
+  );
 }
 
 /**
- * The catalog as tiles: a search field, category chips, and the apps grouped by category (one grid
- * once a category is chosen or a search is typed). `after` follows the grids (the Composio tile).
+ * The catalog as cards: a search field, category chips, then the Featured apps and each category as
+ * a carousel with "See all" (one grid once a category is chosen or a search is typed). `after`
+ * follows the cards (the Composio row).
  */
 export function CatalogBrowser({ catalog, error, retry, open, after, label = "Search apps" }: { catalog?: McpCatalog; error: string; retry: () => void; open: (id: string) => void; after?: React.ReactNode; label?: string }) {
   const [query, setQuery] = useState("");
-  const [category, setCategory] = useState("");
-  const q = query.trim().toLowerCase();
-  const shown = useMemo(() => (catalog?.entries ?? []).filter((entry) => (!category || entry.category === category) && (!q || matches(entry, q))), [catalog, category, q]);
-  const grouped = !q && !category;
+  const [category, setCategory] = useState("all");
+  const entries = catalog?.entries ?? [];
+  const chips = useMemo(() => appChips(entries), [catalog]);
+  const blocks = useMemo(() => appsBlocks(entries, { query, category }), [catalog, query, category]);
+  const narrowed = !!query.trim() || category !== "all";
   return (
     <>
       <div className="set-toolbar int-toolbar plugin-toolbar">
@@ -130,18 +146,13 @@ export function CatalogBrowser({ catalog, error, retry, open, after, label = "Se
           <input type="search" aria-label={label} placeholder={label} value={query} onChange={(e) => setQuery(e.target.value)} />
         </label>
       </div>
-      {catalog && catalog.categories.length > 1 && (
+      {catalog && chips.length > 2 && (
         <div className="plugin-market-chips" role="group" aria-label="Categories">
-          <button type="button" className={category ? "" : "selected"} aria-pressed={!category} onClick={() => setCategory("")}>
-            All
-          </button>
-          {catalog.categories
-            .filter((item) => item.count > 0)
-            .map((item) => (
-              <button type="button" key={item.id} className={category === item.id ? "selected" : ""} aria-pressed={category === item.id} onClick={() => setCategory(category === item.id ? "" : item.id)}>
-                {item.name}
-              </button>
-            ))}
+          {chips.map((chip) => (
+            <button type="button" key={chip.key} className={category === chip.key ? "selected" : ""} aria-pressed={category === chip.key} onClick={() => setCategory(chip.key)}>
+              {chip.label}
+            </button>
+          ))}
         </div>
       )}
       {error && !catalog && (
@@ -154,31 +165,49 @@ export function CatalogBrowser({ catalog, error, retry, open, after, label = "Se
       )}
       {!catalog ? (
         !error && <p className="set-status">Loading apps…</p>
-      ) : shown.length === 0 ? (
-        <p className="set-status app-none">No apps match</p>
-      ) : grouped ? (
-        catalog.categories.map((item) => {
-          const entries = shown.filter((entry) => entry.category === item.id);
-          if (!entries.length) return null;
-          return (
-            <section className="set-group" key={item.id}>
-              <h3>{item.name}</h3>
-              <div className="app-grid">
-                {entries.map((entry) => (
-                  <EntryTile key={entry.id} entry={entry} open={open} />
+      ) : blocks.length === 0 ? (
+        <div className="app-none">
+          <p className="set-status">No apps match</p>
+          <button
+            type="button"
+            className="set-button"
+            onClick={() => {
+              setQuery("");
+              setCategory("all");
+            }}
+          >
+            Clear
+          </button>
+        </div>
+      ) : (
+        blocks.map((block) =>
+          block.kind === "featured" ? (
+            <section className="app-section" key="featured">
+              <h3 className="app-section-title">Featured</h3>
+              <div className="app-carousel">
+                {block.entries.map((entry) => (
+                  <FeaturedCard key={entry.id} entry={entry} open={open} />
                 ))}
               </div>
             </section>
-          );
-        })
-      ) : (
-        <section className="set-group">
-          <div className="app-grid">
-            {shown.map((entry) => (
-              <EntryTile key={entry.id} entry={entry} open={open} />
-            ))}
-          </div>
-        </section>
+          ) : (
+            <section className="app-section" key={block.id}>
+              <div className="app-section-head">
+                <h3 className="app-section-title">{block.name}</h3>
+                {!narrowed && block.entries.length > 0 && (
+                  <button type="button" className="set-link" onClick={() => setCategory(block.id)}>
+                    See all
+                  </button>
+                )}
+              </div>
+              <div className={narrowed ? "app-card-grid" : "app-carousel"}>
+                {(narrowed ? block.entries : block.entries.slice(0, SHELF_APPS)).map((entry) => (
+                  <AppCard key={entry.id} entry={entry} open={open} />
+                ))}
+              </div>
+            </section>
+          ),
+        )
       )}
       {after}
     </>
@@ -417,8 +446,8 @@ export function CatalogEntryPage({ state, catalog, id, back, backLabel = "Back t
   return (
     <div className="plugin-detail market-apps">
       {backLink}
-      <div className="app-detail-head">
-        <LetterTile name={entry.name} letter={entry.icon.letter} size={56} />
+      <div className="app-hero" style={{ "--brand": brandColor(entry.id, entry.name) } as React.CSSProperties}>
+        <BrandIcon id={entry.id} name={entry.name} letter={entry.icon.letter} size={HERO_ICON} />
         <div>
           <h3>{entry.name}</h3>
           <small>
@@ -433,6 +462,20 @@ export function CatalogEntryPage({ state, catalog, id, back, backLabel = "Back t
           Docs
         </OutLink>
       </p>
+      <Group title="How it connects">
+        <div className="set-row">
+          <div className="set-label">
+            <span className="set-name">Runs</span>
+          </div>
+          <div className="set-control app-connect-value">{connectsLines(entry).how}</div>
+        </div>
+        <div className="set-row">
+          <div className="set-label">
+            <span className="set-name">Sign-in</span>
+          </div>
+          <div className="set-control app-connect-value">{connectsLines(entry).auth}</div>
+        </div>
+      </Group>
       {entry.local && (
         <p className="plugin-held" role="note">
           <TriangleAlert size={15} aria-hidden="true" />

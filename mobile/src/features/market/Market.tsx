@@ -3,27 +3,34 @@
 // apps are the computer's own catalog, and Composio is one way in on the Apps page.
 import { router } from "expo-router";
 import { BookOpen, Package, Puzzle, Search } from "lucide-react-native";
-import { type ReactNode, useMemo, useState } from "react";
-import { ScrollView, View } from "react-native";
+import { useMemo, useState } from "react";
+import { View } from "react-native";
 import type { MarketAgent } from "@/link/types";
 import { useCan, useCapability } from "@/state/hooks";
 import { BotAvatar, Button, Group, IconTile, Page, radius, Row, space, T, Tap, useTheme } from "@/ui";
 import { agentHref } from "./agents/logic";
+import { BotArt } from "./art";
 import { cardLine, landingResults, landingShelves } from "./catalog";
-import { addTemplate, BotCard, CatalogRow, SectionHead, SkillCard, SkillRow, skillsHref, TileGrid } from "./catalogParts";
+import { addTemplate, BotCard, CatalogRow, SectionHead, Shelf, SkillCard, SkillRow, skillsHref, TileGrid } from "./catalogParts";
 import { loadMcpCatalog, useFeaturedSkills, useMcpCatalog, useTemplates } from "./data";
 import { SearchField, TileSkeleton } from "./parts";
 
+/** The featured bot's art band and its Botkin. */
+const HERO = { art: 148, avatar: 104 } as const;
+
+/** A bot card on the landing's shelf. */
+const BOT_SHELF_WIDTH = 176;
+
 const openSkill = (id: string) => router.push(("/market/skills?open=" + encodeURIComponent(id)) as never);
 
-/** The featured bot: its Botkin (bare), name, category and summary, and Add. */
+/** The featured bot: its art band with its Botkin (bare), then name, category and summary, and Add. */
 function Hero({ agent }: { agent: MarketAgent }) {
   const { colors } = useTheme();
   return (
-    <View style={{ backgroundColor: colors.surface, borderRadius: radius.lg, padding: space.lg, gap: space.md }}>
-      <Tap onPress={() => router.push(agentHref(agent.id))} sink={0.97} hitSlop={0} accessibilityLabel={[agent.name, agent.categoryName, agent.summary].filter(Boolean).join(", ")} style={{ flexDirection: "row", alignItems: "center", gap: space.lg }}>
-        <BotAvatar bot={{ id: agent.id, look: agent.look }} size={84} />
-        <View style={{ flex: 1, minWidth: 0, gap: 2 }}>
+    <View style={{ backgroundColor: colors.surface, borderRadius: radius.xl, overflow: "hidden" }}>
+      <Tap onPress={() => router.push(agentHref(agent.id))} sink={0.98} hitSlop={0} accessibilityLabel={[agent.name, agent.categoryName, agent.summary].filter(Boolean).join(", ")}>
+        <BotArt id={agent.id} look={agent.look} height={HERO.art} avatar={HERO.avatar} />
+        <View style={{ padding: space.lg, paddingBottom: space.md, gap: 2 }}>
           {!!agent.categoryName && (
             <T variant="caption" color="muted" numberOfLines={1}>
               {agent.categoryName}
@@ -39,7 +46,9 @@ function Hero({ agent }: { agent: MarketAgent }) {
           )}
         </View>
       </Tap>
-      <Button title="Add" wide accessibilityLabel={"Add " + agent.name} onPress={() => addTemplate(agent.id)} />
+      <View style={{ paddingHorizontal: space.lg, paddingBottom: space.lg }}>
+        <Button title="Add" wide accessibilityLabel={"Add " + agent.name} onPress={() => addTemplate(agent.id)} />
+      </View>
     </View>
   );
 }
@@ -47,16 +56,7 @@ function Hero({ agent }: { agent: MarketAgent }) {
 /** A grey stand-in for the featured bot while the templates load. */
 function HeroSkeleton() {
   const { colors } = useTheme();
-  return <View style={{ height: 172, borderRadius: radius.lg, backgroundColor: colors.surface }} accessibilityLabel="Loading bots" />;
-}
-
-/** A horizontal shelf that runs to the page's edges. */
-function Shelf({ children }: { children: ReactNode }) {
-  return (
-    <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginHorizontal: -space.xl }} contentContainerStyle={{ paddingHorizontal: space.xl, gap: space.sm }}>
-      {children}
-    </ScrollView>
-  );
+  return <View style={{ height: 300, borderRadius: radius.xl, backgroundColor: colors.surface }} accessibilityLabel="Loading bots" />;
 }
 
 export default function Market() {
@@ -147,7 +147,7 @@ export default function Market() {
               <SectionHead title="Popular bots" link="See all" onLink={() => router.push("/market/agents" as never)} />
               <Shelf>
                 {shelves.bots.map((agent) => (
-                  <BotCard key={agent.id} agent={agent} />
+                  <BotCard key={agent.id} agent={agent} width={BOT_SHELF_WIDTH} />
                 ))}
               </Shelf>
             </View>
