@@ -35,7 +35,7 @@ function passphrase() {
 for (const arch of ["x64", "arm64"]) {
   const stage = mkdtempSync(join(tmpdir(), `botkins-linux-${arch}-`));
   try {
-    for (const item of ["dist", "desktop", "cli", "assets"])
+    for (const item of ["dist", "desktop", "cli", "assets", "design/botkins-kit/customize.js", "design/botkins-kit/motion", "design/botkins-kit/avatars"])
       cpSync(join(root, item), join(stage, item), { recursive: true });
     const staged = structuredClone(pkg);
     staged.build.directories.output = out;

@@ -14,7 +14,7 @@ import { fileURLToPath } from "node:url";
 const root = fileURLToPath(new URL("../", import.meta.url));
 const stage = mkdtempSync(join(tmpdir(), "botkins-win-"));
 try {
-  for (const item of ["dist", "desktop", "assets"])
+  for (const item of ["dist", "desktop", "cli", "assets", "design/botkins-kit/customize.js", "design/botkins-kit/motion", "design/botkins-kit/avatars"])
     cpSync(join(root, item), join(stage, item), { recursive: true });
   const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
   pkg.build.directories.output = join(
