@@ -5,6 +5,8 @@ import { loadDevicePrefs, useDevicePrefs } from "@/state/devicePrefs";
 import { api } from "@/state/link";
 import { showToast, useApp } from "@/state/store";
 import { VoiceTurns } from "../../../../link-host/voice-history.mjs";
+import { CallOutput } from "./routing";
+import { callRoutes } from "../../../../modules/botkins-audio";
 import { VoiceHistoryWriter } from "./history";
 import { liveContext } from "./context";
 import { chatTools, type Kit, type Line, type LiveStatus, type LiveTransport, planFor, socketTransport, watchRtcTransport, webrtcTransport } from "./index";
@@ -54,7 +56,7 @@ const connect: Connect = (url, protocols, headers) => {
 
 /** The normal iPhone kit. A Watch call replaces `duplex` (and the WebRTC endpoint when needed). */
 export function phoneLiveKit(route: (speaker: boolean) => Promise<void>): Kit {
-  return { webrtc: webrtcModule(), duplex: duplexAudio(), connect, route };
+  return { callRoutes, webrtc: webrtcModule(), duplex: duplexAudio(), connect, route };
 }
 
 /** A companion endpoint uses the same socket transports, with Watch-owned input/output. */
@@ -77,6 +79,7 @@ export class LiveSessionController {
   private ended = false;
   private started = false;
   private errorTimer: ReturnType<typeof setTimeout> | null = null;
+  private output = new CallOutput();
   private lastMeter = 0;
 
   constructor(private readonly options: LiveSessionOptions) {
@@ -85,7 +88,7 @@ export class LiveSessionController {
       problem: null,
       started: false,
       muted: false,
-      speaker: true,
+      speaker: false,
       input: "conversation",
       holding: false,
       level: 0,
@@ -127,15 +130,21 @@ export class LiveSessionController {
     inputItem(id: string): void;
   }) {
     this.transport = next;
-    let routed = false;
+    const routes = this.options.kit.callRoutes;
+    if (routes) {
+      const refresh = () => {
+        if (this.ended || !this.output.devicesChanged(routes.accessory())) return;
+        this.update({ speaker: this.output.speaker });
+        void Promise.resolve(next.setSpeaker(this.output.speaker)).catch(() => {});
+      };
+      const subscription = routes.addListener("devicesChanged", refresh);
+      this.offs.push(() => subscription.remove());
+      refresh();
+    }
     this.offs.push(
       next.on("status", (status) => {
         if (status === "ended") { this.end(this.state.problem ?? undefined); return; }
         this.update({ status });
-        if (planFor(this.options.provider, this.options.kit) === "offer" && !routed && status !== "connecting") {
-          routed = true;
-          void this.options.kit.route(this.state.speaker).catch(() => {});
-        }
       }),
       next.on("line", history.heard),
       next.on("level", (level) => {
@@ -263,7 +272,8 @@ export class LiveSessionController {
   }
 
   toggleSpeaker() {
-    const speaker = !this.state.speaker;
+    this.output.toggle();
+    const speaker = this.output.speaker;
     this.update({ speaker });
     void Promise.resolve(this.transport?.setSpeaker(speaker)).catch(() => {});
   }
@@ -293,6 +303,7 @@ export class LiveSessionController {
     if (!this.transport) void this.options.kit.duplex?.stop().catch(() => {});
     for (const off of this.offs) off();
     this.offs = [];
+    this.options.kit.callRoutes?.endCall?.();
     const id = this.sessionId;
     if (id) this.endRemote(id);
     this.update({ status: "ended", started: false, holding: false, problem: reason ?? this.state.problem });

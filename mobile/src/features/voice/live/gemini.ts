@@ -27,7 +27,7 @@ export class GeminiTransport extends LiveBase {
   private botOpen = false;
   private botLine = 0;
   private cancelled = new Set<string>();
-  private speaker = true;
+  private speaker = false;
   private muted = false;
   private ready: (() => void) | null = null;
   /** Gemini is still sending the bot's turn. */

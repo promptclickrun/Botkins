@@ -46,8 +46,7 @@ async function startOnPhone(handlers: Handlers): Promise<Session | null> {
       requiresOnDeviceRecognition: local,
       volumeChangeEventOptions: { enabled: true, intervalMillis: 100 },
       iosTaskHint: "dictation",
-      // What is read aloud afterwards comes out of the speaker, not the earpiece.
-      iosCategory: { category: "playAndRecord", categoryOptions: ["defaultToSpeaker", "allowBluetooth"], mode: "default" },
+      iosCategory: { category: "playAndRecord", categoryOptions: ["allowBluetooth"], mode: "default" },
     });
   const subscriptions = [
     module.addListener("result", (event) => {
@@ -145,7 +144,7 @@ async function startRecording(handlers: Handlers): Promise<Session | null> {
     showToast(MIC_ONLY_REFUSED, "error");
     return null;
   }
-  await audio.setAudioModeAsync({ allowsRecording: true, playsInSilentMode: true }).catch(() => {});
+  await audio.setAudioModeAsync({ allowsRecording: true, playsInSilentMode: true, shouldRouteThroughEarpiece: true }).catch(() => {});
   const recorder = new audio.AudioModule.AudioRecorder(recordingOptions(audio));
   try {
     await recorder.prepareToRecordAsync();

@@ -63,7 +63,7 @@ export interface LiveTransport {
   /** Connects and starts both ways. Rejects with a plain sentence. */
   start(): Promise<void>;
   mute(muted: boolean): void;
-  /** The speaker (true) or the earpiece. */
+  /** Use the phone speaker (true) or follow the system call route. */
   setSpeaker(on: boolean): void | Promise<void>;
   /** Stops the bot's sound and its response at once; the phone listens. */
   interrupt(): void;

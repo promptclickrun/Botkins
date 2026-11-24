@@ -15,7 +15,7 @@ export type DuplexOptions = {
   inputRate: number;
   /** The rate of the sound given to `play`. */
   outputRate: number;
-  /** Play through the speaker (the default) or the earpiece. */
+  /** Use the phone speaker or the connected call accessory / earpiece. */
   speaker?: boolean;
 };
 
@@ -37,5 +37,15 @@ type Native = {
   /** The system took the sound away (a phone call) or gave it back. `failed`: the sound could not be kept going, and the call is over. */
   addListener(name: "interrupted", listener: (event: { began: boolean; failed?: boolean }) => void): EventSubscription;
 };
+
+type CallRoutes = {
+  accessory(): string | null;
+  addListener(name: "devicesChanged", listener: () => void): EventSubscription;
+  // WebRTC call routing. Socket calls configure the duplex engine directly.
+  setSpeaker?(speaker: boolean): void;
+  endCall?(): void;
+};
+
+export const callRoutes = requireOptionalNativeModule<CallRoutes>("BotkinsCallRoutes");
 
 export const DuplexAudio = requireOptionalNativeModule<Native>("BotkinsAudio");

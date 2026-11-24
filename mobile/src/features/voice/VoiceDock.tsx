@@ -148,7 +148,7 @@ function Dock({ chatId, botId, computer, typing }: { chatId: string; botId: stri
               </View>
             </>
           )}
-          {!call.failed && <IconButton icon={call.speaker ? Speaker : Volume1} variant="soft" size={CONTROL} label={call.speaker ? "Use the earpiece" : "Use the speaker"} onPress={call.toggleSpeaker} />}
+          {!call.failed && <IconButton icon={call.speaker ? Speaker : Volume1} variant="soft" size={CONTROL} disabled={!call.live} label={call.speaker ? "Use headset or earpiece" : "Use the phone speaker"} onPress={call.toggleSpeaker} />}
           <IconButton icon={PhoneOff} size={CONTROL} color={colors.danger} label={call.failed ? "Close" : "End live voice"} onPress={endLiveCall} style={{ backgroundColor: colors.dangerSoft }} />
         </View>
       </View>

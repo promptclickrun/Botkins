@@ -12,6 +12,7 @@ import { askBot, type ChatMessage, CUT_NOTE, LOOK_AT_PHONE, MAX_REPLY, replyText
 import { liveContext, locationFor, locationOn } from "../src/features/voice/live/context";
 import { BARGE_IN, CUT_SETTLE_MS, ECHO_TAIL_MS, MicGate, MIN_TURN_MS, pcmMs, RELEASE_TAIL_MS, silenceLike, SPEECH_LEVEL } from "../src/features/voice/live/input";
 import { type AudioFrame, type DuplexLike, LEVEL_EVERY_MS, type Line, type LiveStatus, textOf } from "../src/features/voice/live/types";
+import { CallOutput } from "../src/features/voice/live/routing";
 import { WebRTCTransport } from "../src/features/voice/live/webrtc";
 import { CLIP_SPEECH_LEVEL, hasSpeech, MIN_CLIP_MS } from "../src/features/voice/clip";
 import { FIRST_PART, LATER_PART_MAX, nextPhrase, speakable, splitForSpeech } from "../src/features/voice/speakable";
@@ -203,6 +204,7 @@ test("OpenAI socket: token, first message, microphone, transcripts and sound", a
   const h = harness();
   const session = { url: "wss://api.openai.com/v1/realtime?model=gpt-realtime-2.1", token: "ek_test", session: { type: "session.update", session: { type: "realtime" } } };
   const transport = new OpenAISocketTransport(session, h.audio, h.connect, h.tools);
+  transport.setSpeaker(true);
   const seen = watch(transport);
   const started = transport.start();
   const socket = h.sockets[0]!;
@@ -322,7 +324,7 @@ test("Gemini: setup first, sound after setupComplete, transcripts, interruption 
   // Gemini may send JSON in a binary frame.
   socket.receive({ setupComplete: {} }, true);
   await started;
-  assert.deepEqual(h.audio.started[0], { inputRate: 16000, outputRate: 24000, speaker: true });
+  assert.deepEqual(h.audio.started[0], { inputRate: 16000, outputRate: 24000, speaker: false });
   h.audio.frame("CCCC");
   assert.deepEqual(socket.sent[1], { realtimeInput: { audio: { data: "CCCC", mimeType: "audio/pcm;rate=16000" } } });
 
@@ -381,7 +383,7 @@ test("ElevenLabs: init, formats from the first message, pong, tools and interrup
   assert.deepEqual(socket.sent[0], init);
   socket.receive({ type: "conversation_initiation_metadata", conversation_initiation_metadata_event: { conversation_id: "c1", agent_output_audio_format: "pcm_24000", user_input_audio_format: "pcm_16000" } });
   await started;
-  assert.deepEqual(h.audio.started[0], { inputRate: 16000, outputRate: 24000, speaker: true });
+  assert.deepEqual(h.audio.started[0], { inputRate: 16000, outputRate: 24000, speaker: false });
   h.audio.frame("EEEE");
   assert.deepEqual(socket.sent[1], { user_audio_chunk: "EEEE" });
 
@@ -429,7 +431,7 @@ test("ElevenLabs: a μ-law agent is refused in one sentence; no formats in time 
   const second = quiet.start();
   h.sockets[1]!.open();
   await second;
-  assert.deepEqual(h.audio.started[h.audio.started.length - 1], { inputRate: 16000, outputRate: 22050, speaker: true });
+  assert.deepEqual(h.audio.started[h.audio.started.length - 1], { inputRate: 16000, outputRate: 22050, speaker: false });
   quiet.end();
 });
 
@@ -713,6 +715,42 @@ function fakeWebRTC(mic?: { level: number }) {
   const negotiate = async () => ({ id: "call_1", kind: "webrtc" as const, sdp: "v=0 answer" });
   return { webrtc: webrtc as never, negotiate, track, channels };
 }
+
+test("call replies use the speaker on a bare handset and follow an accessory as it connects or disconnects", () => {
+  const output = new CallOutput();
+  assert.ok(output.devicesChanged(null));
+  assert.equal(output.speaker, true);
+  output.toggle();
+  assert.equal(output.devicesChanged(null), false);
+  assert.equal(output.speaker, false, "keep the private earpiece choice");
+  assert.ok(output.devicesChanged("car"));
+  assert.equal(output.speaker, false);
+  output.toggle();
+  assert.equal(output.devicesChanged("car"), false);
+  assert.equal(output.speaker, true, "keep an explicit speaker override");
+  assert.ok(output.devicesChanged("wired headset"));
+  assert.equal(output.speaker, false);
+  assert.ok(output.devicesChanged(null));
+  assert.equal(output.speaker, true);
+  const connected = new CallOutput();
+  assert.ok(connected.devicesChanged("car"));
+  assert.equal(connected.speaker, false, "already paired at call start");
+});
+
+test("WebRTC applies the selected route before capture and allows an override during the call", async () => {
+  const rtc = fakeWebRTC();
+  const routes: boolean[] = [];
+  const transport = new WebRTCTransport(rtc.webrtc, rtc.negotiate, harness().tools, async (speaker) => {
+    routes.push(speaker);
+  });
+  await transport.setSpeaker(true);
+  await transport.start();
+  assert.deepEqual(routes, [true]);
+  rtc.channels[0]!.open();
+  await transport.setSpeaker(false);
+  assert.deepEqual(routes, [true, true, false]);
+  transport.end();
+});
 
 test("WebRTC: the microphone is off while the bot's sound plays and for its echo after", async () => {
   const h = harness();

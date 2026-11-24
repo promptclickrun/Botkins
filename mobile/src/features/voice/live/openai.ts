@@ -169,7 +169,7 @@ export class OpenAISocketTransport extends LiveBase {
   private sending: ReturnType<typeof setTimeout> | null = null;
   /** How long the button has been held in this turn (a quick press again goes on with it). */
   private turnMs = 0;
-  private speaker = true;
+  private speaker = false;
   private muted = false;
 
   constructor(

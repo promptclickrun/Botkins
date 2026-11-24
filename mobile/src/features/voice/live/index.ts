@@ -12,7 +12,14 @@ export { chatTools, type ChatAccess, type ChatSnapshot } from "./askBot";
 
 type WebRTC = typeof import("react-native-webrtc");
 
-export type Kit = { webrtc: WebRTC | null; duplex: DuplexLike | null; watchRtc?: WatchRtcLike | null; connect: Connect; route: (speaker: boolean) => Promise<void> };
+export type Kit = {
+  callRoutes?: typeof import("../../../../modules/botkins-audio").callRoutes;
+  webrtc: WebRTC | null;
+  duplex: DuplexLike | null;
+  watchRtc?: WatchRtcLike | null;
+  connect: Connect;
+  route: (speaker: boolean) => Promise<void>;
+};
 
 /** Whether this build can talk to a provider, and how: with an offer (WebRTC) or without one (a socket). */
 export function planFor(provider: LiveProvider, kit: Pick<Kit, "webrtc" | "duplex" | "watchRtc">): "offer" | "socket" | null {
