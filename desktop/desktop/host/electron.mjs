@@ -107,7 +107,14 @@ export function electronHost({ window, showWindow, viewing, fillSecurePage, star
     }),
     displayStatus: () => ({ available: true }),
     /** The keychain's own wrapping, for what the desktop app keeps besides the vault and the link (the computers it is paired to); null in a run that doesn't ask the keychain. */
-    protect: ({ trial }) => (guarded(trial) ? own : null),
+    protect: ({ trial, profile = false }) => {
+      if (!guarded(trial)) return null;
+      if (profile && process.platform === "linux") {
+        const backend = safeStorage.getSelectedStorageBackend();
+        if (backend === "basic_text" || backend === "unknown") return null;
+      }
+      return own;
+    },
     // In the installed app the vault's key and the link's are wrapped by the system keychain. A
     // development run keeps them in files in its own data folder, so it never asks for keychain access.
     async keys({ dataDir, trial }) {

@@ -45,7 +45,8 @@ if (source !== copy) {
 }
 const digest = sourcesDigest(copy);
 const entry = [
-  'export { PROTOCOL, LinkClient, LinkError, checkJoin, findHost, findInvite, join, pair, startJoin } from "./client/client";',
+  'export { PROTOCOL, LinkClient, LinkError, checkJoin, findHost, findInvite, join, pair, profileConnect, startJoin } from "./client/client";',
+  'export { profileApi } from "./client/profile";',
   'export { isRelayHost, relayFetch } from "./client/relay";',
   'export { DEFAULT_PORT, formatCode, normalizeCode, normalizeHost, parseJoinUrl, parsePairingUrl } from "./client/pairing";',
 ].join("\n");

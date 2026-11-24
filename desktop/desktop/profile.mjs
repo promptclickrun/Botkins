@@ -188,7 +188,9 @@ export class ProfileManager {
 
   async start(label = "This device") {
     const api = this.profileApi();
+    const epoch = ++this.generation;
     const attempt = await api.start(text(label) || "This device");
+    if (epoch !== this.generation) throw new Error("Profile setup was cancelled.");
     if (!attempt || !text(attempt.id, 200) || !text(attempt.verifier, 4000)) throw new Error("The profile service did not start a sign-in.");
     this.pending = {
       id: text(attempt.id, 200),
@@ -204,16 +206,17 @@ export class ProfileManager {
   async finish() {
     if (!this.pending) return null;
     const epoch = this.generation;
+    const pending = this.pending;
     const api = this.profileApi();
     let session;
     try {
       session = await api.finish({ id: this.pending.id, verifier: this.pending.verifier });
     } catch (error) {
-      if (epoch !== this.generation || this.pending === null) return null;
+      if (epoch !== this.generation || this.pending !== pending) return null;
       if (isUnauthorized(error)) this.invalidate();
       throw error;
     }
-    if (epoch !== this.generation || this.pending === null) return null;
+    if (epoch !== this.generation || this.pending !== pending) return null;
     if (!session) return null;
     if (!text(session.token, 64) || !text(session.profileId, 1)) throw new Error("The profile service returned an incomplete session.");
     this.session = { ...session };
@@ -233,16 +236,13 @@ export class ProfileManager {
 
   invalidate() {
     this.generation++;
-    const profileId = text(this.session?.profileId, 160);
-    if (!this.localDisconnected && profileId && typeof this.localHost()?.unbindOwnerProfile === "function") {
-      try { this.localHost().unbindOwnerProfile(profileId); this.localDisconnected = true; this.localPublished = false; } catch (error) { this.log("Profile host binding could not be revoked locally: " + (error?.message ?? error)); }
-    }
     this.remoteHosts()?.dropProfileBound?.();
     this.session = null;
     this.directory = null;
     this.pending = null;
     this.pendingBindings = [];
     this.boundHosts = {};
+    this.localPublished = false;
     this.save();
     this.changed();
   }
@@ -305,8 +305,10 @@ export class ProfileManager {
     if (!token) throw new Error("Sign in to manage your profile.");
     if (!expected || typed !== expected) throw new Error("Type the signed-in profile email to delete this profile.");
     if (typeof this.profileApi().deleteAccount !== "function") throw new Error("Profile deletion is not available in this Botkins build.");
+    const profileId = this.session.profileId;
+    const epoch = this.generation;
     await this.profileApi().deleteAccount(token, typed);
-    const profileId = text(this.session?.profileId, 160);
+    if (epoch !== this.generation || token !== this.token()) return this.status();
     try {
       if (!this.localDisconnected && profileId && typeof this.localHost()?.unbindOwnerProfile === "function") {
         await this.localHost().unbindOwnerProfile(profileId);
@@ -316,13 +318,17 @@ export class ProfileManager {
     } catch (error) {
       this.log("Profile host unbind after deletion failed: " + (error?.message ?? error));
     }
-    await this.clearAccount({ optedOut: false });
+    if (epoch !== this.generation || token !== this.token()) return this.status();
+    this.optedOut = true;
+    this.migrationPrompted = true;
+    this.invalidate();
     return this.status();
   }
 
   /** Changes the public profile identity used by this installation and future pairings. */
   async update(name, avatar) {
     const token = this.token();
+    const epoch = this.generation;
     if (!token) throw new Error("Sign in to manage your profile.");
     const nextName = text(name, PROFILE_NAME_LIMIT);
     if (!nextName) throw new Error("Give your profile a name.");
@@ -330,13 +336,14 @@ export class ProfileManager {
     if (!PROFILE_AVATARS.includes(nextAvatar)) throw new Error("Choose one of the available profile avatars.");
     try {
       await this.profileApi().update(token, nextName, nextAvatar || undefined);
+      if (epoch !== this.generation || token !== this.token()) return this.status();
       this.session = { ...this.session, name: nextName, ...(nextAvatar ? { avatar: nextAvatar } : {}) };
       if (!nextAvatar) delete this.session.avatar;
       this.save();
       this.changed();
       return this.status();
     } catch (error) {
-      if (isUnauthorized(error)) this.invalidate();
+      if (epoch === this.generation && token === this.token() && isUnauthorized(error)) this.invalidate();
       throw error;
     }
   }
@@ -357,37 +364,19 @@ export class ProfileManager {
    * service is logged explicitly; no old token or pairing is retained locally for a later retry.
    */
   async clearAccount({ optedOut }) {
-    this.generation++;
     const token = this.token();
-    const deviceId = text(this.session?.deviceId, 160);
-    const profileId = text(this.session?.profileId, 160);
-    this.remoteHosts()?.dropProfileBound?.();
-    if (!this.localDisconnected && profileId && typeof this.localHost()?.unbindOwnerProfile === "function") {
-      try {
-        await this.localHost().unbindOwnerProfile(profileId);
-        this.localDisconnected = true;
-        this.localPublished = false;
-      } catch (error) {
-        this.log("Profile host binding could not be revoked locally: " + (error?.message ?? error));
-      }
-    }
-    if (token) {
-      try {
-        if (deviceId && typeof this.profileApi().revoke === "function") await this.profileApi().revoke(token, deviceId);
-      } catch (error) {
-        this.log("Profile device revoke could not reach the service; local profile access was removed: " + (error?.message ?? error));
-      }
-    }
-    this.session = null;
-    this.pending = null;
-    this.directory = null;
-    this.pendingBindings = [];
-    this.boundHosts = {};
-    this.localPublished = false;
-    this.optedOut = optedOut === true;
+    const deviceId = this.session?.deviceId;
+    this.optedOut = optedOut;
     this.migrationPrompted = true;
-    this.save();
-    this.changed();
+    // The host's owner binding belongs to the profile. Other trusted installations still use it.
+    this.invalidate();
+    if (token && deviceId) {
+      try {
+        await this.profileApi().revoke(token, deviceId);
+      } catch (error) {
+        this.log("Could not revoke this installation on the profile service: " + (error?.message ?? error));
+      }
+    }
   }
 
   markMigrationPrompted() {
@@ -399,24 +388,28 @@ export class ProfileManager {
 
   async approve(id, code) {
     const token = this.token();
+    const epoch = this.generation;
     if (!token) throw new Error("Sign in to manage your profile.");
     try {
       await this.profileApi().approve(token, text(id, 160), safeCode(code));
+      if (epoch !== this.generation || token !== this.token()) return this.status();
       return this.refresh({ retry: false });
     } catch (error) {
-      if (isUnauthorized(error)) this.invalidate();
+      if (epoch === this.generation && token === this.token() && isUnauthorized(error)) this.invalidate();
       throw error;
     }
   }
 
   async revoke(id) {
     const token = this.token();
+    const epoch = this.generation;
     if (!token) throw new Error("Sign in to manage your profile.");
     try {
       await this.profileApi().revoke(token, text(id, 160));
+      if (epoch !== this.generation || token !== this.token()) return this.status();
       return this.refresh({ retry: false });
     } catch (error) {
-      if (isUnauthorized(error)) this.invalidate();
+      if (epoch === this.generation && token === this.token() && isUnauthorized(error)) this.invalidate();
       throw error;
     }
   }
@@ -475,14 +468,21 @@ export class ProfileManager {
     const serverId = text(link.status?.()?.serverId, 160);
     if (!profileId || !serverId) throw new Error("This computer has no profile connection.");
     const epoch = this.generation;
-    await link.unbindOwnerProfile(profileId);
+    if (!this.localDisconnected) {
+      this.localDisconnected = true;
+      try {
+        await this.localBindPromise?.catch(() => {});
+        await link.unbindOwnerProfile(profileId);
+      } catch (error) {
+        this.localDisconnected = false;
+        throw error;
+      }
+      this.localPublished = false;
+      this.save();
+    }
     if (epoch !== this.generation || token !== this.token()) return null;
-    // Suppress the status listener immediately after a successful unbind. A directory removal
-    // or a later address update must not silently enroll this same host again.
-    this.localDisconnected = true;
-    this.localPublished = false;
-    this.save();
     await this.profileApi().removeHost(token, serverId);
+    if (epoch !== this.generation || token !== this.token()) return null;
     delete this.boundHosts[serverId];
     this.pendingBindings = this.pendingBindings.filter((id) => id !== serverId);
     this.directory = this.directory ? { ...this.directory, hosts: this.directory.hosts.filter((host) => host.serverId !== serverId) } : this.directory;
@@ -504,46 +504,46 @@ export class ProfileManager {
     this.directory = { ...this.directory, hosts: [...this.directory.hosts.filter((host) => host.serverId !== descriptor.serverId), descriptor] };
   }
 
-  async bindLocal(epoch) {
+  bindLocal(epoch = this.generation) {
+    if (this.localDisconnected) return Promise.resolve(null);
+    if (!this.localBindPromise) {
+      this.localBindPromise = this.publishLocal(epoch).finally(() => { this.localBindPromise = null; });
+    }
+    return this.localBindPromise;
+  }
+
+  async publishLocal(epoch) {
     const token = this.token();
-    const profileId = text(this.session?.profileId, 160);
     const link = this.localHost();
     if (!token || typeof link?.bindOwnerProfile !== "function") return null;
     const before = this.localDescriptor();
     if (!before) throw new Error("This computer has no profile identity yet.");
     const ticket = await this.profileApi().proof(token, "bind", before.serverId, before.serverKey);
-    if (epoch !== undefined && (epoch !== this.generation || token !== this.token())) return null;
+    if (this.localDisconnected || epoch !== this.generation || token !== this.token()) return null;
     const descriptor = hostView(await link.bindOwnerProfile(ticket));
     if (!descriptor) throw new Error("This computer returned no profile identity.");
-    if (epoch !== undefined && (epoch !== this.generation || token !== this.token())) return null;
+    if (this.localDisconnected || epoch !== this.generation || token !== this.token()) return null;
     await this.profileApi().putHost(token, descriptor);
-    if (epoch !== undefined && (epoch !== this.generation || token !== this.token())) {
-      if (profileId && typeof link.unbindOwnerProfile === "function") await link.unbindOwnerProfile(profileId).catch(() => {});
-      return null;
-    }
+    if (this.localDisconnected || epoch !== this.generation || token !== this.token()) return null;
     this.rememberHost(descriptor);
     if (link === this.localHost()) this.localPublished = true;
     this.changed();
     return descriptor;
   }
 
-  async bindRemote(id, epoch) {
+  async bindRemote(id, epoch = this.generation) {
     const token = this.token();
-    const profileId = text(this.session?.profileId, 160);
     const remote = this.remoteHosts();
     if (!token || !remote || typeof remote.bindProfile !== "function") return null;
     const before = remote.profileDescriptor?.(id);
     if (!before) throw new Error("That computer is no longer paired.");
     const ticket = await this.profileApi().proof(token, "bind", before.serverId, before.serverKey);
-    if (epoch !== undefined && (epoch !== this.generation || token !== this.token())) return null;
+    if (epoch !== this.generation || token !== this.token()) return null;
     const descriptor = hostView(await remote.bindProfile(id, ticket));
     if (!descriptor) throw new Error("That computer returned no profile identity.");
-    if (epoch !== undefined && (epoch !== this.generation || token !== this.token())) return null;
+    if (epoch !== this.generation || token !== this.token()) return null;
     await this.profileApi().putHost(token, descriptor);
-    if (epoch !== undefined && (epoch !== this.generation || token !== this.token())) {
-      if (profileId && typeof remote.unbindProfile === "function") await remote.unbindProfile(id, profileId).catch(() => {});
-      return null;
-    }
+    if (epoch !== this.generation || token !== this.token()) return null;
     this.rememberHost(descriptor);
     this.changed();
     return descriptor;

@@ -67,11 +67,17 @@ const FOLLOW_QUIET_MS = 25_000;
 const FOLLOW_LIFE_MS = 4 * 60_000;
 const TEXT_PUMP_MS = 200; // Tuning value for text-only updates to a following phone.
 const MAX_WATCH = 4;
+const PROFILE_ORIGIN = "https://profile.botkins.app";
+const PROFILE_STATUS_CACHE_MS = 60_000;
+const PROFILE_MAX_CACHE = 64;
+const PROFILE_KEY_INFO = "botkins/profile/v1";
+const PROFILE_MAX_TEXT = 1024;
+const PROFILE_REQUEST_TIMEOUT = 10_000;
 /** What a phone can ask this computer for beyond the app's own calls (Meta.capabilities). */
 // "maintenance-v1": this copy lets a phone clear the cache and send the computer's own test notification.
 /** The link tells people of notes and changes in their spaces (space-alerts.mjs). Named only while the app has spaces. */
 const SPACE_ALERTS_CAPABILITY = "space-alerts-v1";
-const CAPABILITIES = ["sync-push-v1", "credentials-v1", "screen-v1", "prs-v1", "uploads-v1", "relay-v1", "push-v1", "device-v1", "voice-v1", "devices-v1", "device-person-v1", "maintenance-v1", "teams-v1", "stream-appends-v1", "reasoning-appends-v1", "text-streaming-off-v1", "text-chunks-v1", "step-details-v1", "team-people-v1", "chat-sections-v1", "activity-bots-v1", "activity-all-v1", "member-rename-v1", GADGET_CAPABILITY, GADGET_SETTINGS_CAPABILITY, "pr-panel-v1"];
+const CAPABILITIES = ["sync-push-v1", "credentials-v1", "screen-v1", "prs-v1", "uploads-v1", "relay-v1", "push-v1", "device-v1", "voice-v1", "devices-v1", "device-person-v1", "maintenance-v1", "teams-v1", "stream-appends-v1", "reasoning-appends-v1", "text-streaming-off-v1", "text-chunks-v1", "step-details-v1", "team-people-v1", "chat-sections-v1", "activity-bots-v1", "activity-all-v1", "member-rename-v1", "profile-v1", GADGET_CAPABILITY, GADGET_SETTINGS_CAPABILITY, "pr-panel-v1"];
 /** A custom view (an html block): the page a bot wrote and its data, at the sizes the desktop app keeps them to. */
 /** Calls that make a chat and answer its id. */
 const MAKES_CHAT = new Set(["createChat", "createGroupChat", "forkChat", "startProjectChat"]);
@@ -103,6 +109,20 @@ function validCursors(value, watching) {
 }
 function validReasoningWatch(value) {
   return Array.isArray(value) && value.length <= MAX_WATCH && value.every((id) => typeof id === "string" && id.length > 0 && id.length <= 128);
+}
+
+function profileText(value, limit = PROFILE_MAX_TEXT) {
+  return typeof value === "string" && value.length > 0 && value.length <= limit && !/[\u0000-\u001f\u007f]/.test(value) ? value : null;
+}
+
+function profileProof(value) {
+  if (!isPlainObject(value)) throw new Failure("The profile service returned an invalid answer.");
+  const profileId = profileText(value.profileId);
+  const deviceId = profileText(value.deviceId);
+  const name = profileText(value.name, 60);
+  const statusKey = profileText(value.statusKey, PROFILE_MAX_TEXT);
+  if (!profileId || !deviceId || !name || !statusKey) throw new Failure("The profile service returned an invalid answer.");
+  return { profileId, deviceId, name, statusKey };
 }
 
 /** Whether two reasoning snapshots (`{ run, items }`, or null) hold the same items and text. */
@@ -232,9 +252,9 @@ export class LinkHost extends EventEmitter {
    *   that address is this server's own and the only way phones reach it: a headless host then keeps a phone's
    *   presence key from a pairing through it and takes the screen grant calls through it (grant.mjs).
    */
-  constructor({ dir, backend, port, protect, reveal, extraHosts = [], searchPath, managerSearchPath, screenInput, relay, fetch, botkins, demoSpaceLinks = false, spaceLinkTiming, chunkTiming, log = () => {} }) {
+  constructor({ dir, backend, port, protect, reveal, extraHosts = [], searchPath, managerSearchPath, screenInput, relay, fetch, profileFetch, botkins, demoSpaceLinks = false, spaceLinkTiming, chunkTiming, log = () => {} }) {
     super();
-    Object.assign(this, { backend, log, portOverride: port, extraHosts, fetch: fetch ?? globalThis.fetch });
+    Object.assign(this, { backend, log, portOverride: port, extraHosts, fetch: fetch ?? globalThis.fetch, profileFetch: profileFetch ?? fetch ?? globalThis.fetch });
     this.botkins = botkins === undefined ? botkinRenderer() : botkins;
     // How often a phone that asked for text in chunks gets thinking and sentences (`every`) and the reply's own text (`live`), and how long text may wait for a sentence's end (tests set shorter ones).
     this.chunkTiming = { every: CHUNK_MS, live: CHUNK_LIVE_MS, holdMax: CHUNK_HOLD_MAX_MS, ...chunkTiming };
@@ -477,6 +497,8 @@ export class LinkHost extends EventEmitter {
     this.port = 0;
     this.failures = { http: new Failures(FAIL_BACKSTOP.http), relay: new Failures(FAIL_BACKSTOP.relay) };
     this.nonces = new Map(); // device id → the last session nonces seen
+    this.profileStatus = new Map(); // status key → { active, checkedAt }; 60s positive cache, 64 entries, checked on use and never polled
+    this.profileStatusPending = new Map(); // status key → one in-flight check, so active traffic coalesces
     this.unsubscribe = backend.subscribe(() => {
       this.changed();
       this.push.soon();
@@ -762,7 +784,8 @@ export class LinkHost extends EventEmitter {
       name: this.store.name,
       serverId: this.store.data.serverId,
       addresses: this.server ? reachable() : [],
-      devices: this.store.data.devices.map(({ publicKey: _key, ...device }) => ({ ...device, connected: live.has(device.id) })),
+      // Profile proofs and status keys are host-private; device lists are public Link state.
+      devices: this.store.data.devices.map(({ publicKey: _key, profile: _profile, ...device }) => ({ ...device, connected: live.has(device.id) })),
       pairing: pairing ? { code: pairing.code, expiresAt: pairing.expiresAt, url: this.pairingUrl(pairing.code) } : null,
       relay: { enabled: !!this.relaySettings(), connected: !!this.relayLink?.connected, url: this.relayUrl(), ...(this.relayLink?.taken && { problem: "taken" }) },
       // The phones that get notifications, and what each allows bots to use.
@@ -807,6 +830,178 @@ export class LinkHost extends EventEmitter {
     this.dirty = true;
     this.changed();
     this.emit("status");
+  }
+  /** The public descriptor shared by a bound owner/member profile and its Link enrollment. */
+  profileDescriptor(principal) {
+    const binding = this.profileBinding(principal);
+    if (!binding || binding.revoked) throw new Failure("Bind this computer to your Botkins profile first.");
+    return {
+      serverId: this.store.data.serverId,
+      serverKey: b64u(this.store.data.keys.publicKey),
+      name: this.store.name,
+      hosts: this.hosts(),
+      ...(principal.kind === "member" && { member: true }),
+    };
+  }
+  profileBinding(principal) {
+    if (principal?.kind === "member") return this.store.data.profiles?.members?.[principal.memberId] ?? null;
+    return this.store.data.profiles?.owner ?? null;
+  }
+  /** Calls the profile service, keeping its opaque ticket and status key on this host only. */
+  async profileRequest(path, body) {
+    let response;
+    try {
+      response = await this.profileFetch(PROFILE_ORIGIN + "/v1/" + path, {
+        method: "POST",
+        redirect: "error",
+        signal: AbortSignal.timeout(10_000),
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(PROFILE_REQUEST_TIMEOUT),
+      });
+    } catch {
+      throw new Failure("The profile service can't be reached right now.");
+    }
+    let value = {};
+    try { value = await response.json(); } catch {}
+    if (!response.ok) throw new Failure("The profile service refused this request.");
+    return value;
+  }
+  async redeemProfile(ticket, purpose, publicKey) {
+    if (!profileText(ticket, PROFILE_MAX_TEXT)) throw new Failure("That profile ticket is invalid.");
+    const body = { ticket, purpose, serverId: this.store.data.serverId, serverKey: b64u(this.store.data.keys.publicKey), ...(purpose === "connect" && { publicKey }) };
+    return profileProof(await this.profileRequest("proofs/redeem", body));
+  }
+  async profileActive(statusKey) {
+    if (!profileText(statusKey, PROFILE_MAX_TEXT)) return false;
+    const now = Date.now();
+    const cached = this.profileStatus.get(statusKey);
+    if (cached && now - cached.checkedAt < PROFILE_STATUS_CACHE_MS) return cached.active;
+    let pending = this.profileStatusPending.get(statusKey);
+    if (!pending) {
+      // Do not let a burst of distinct revoked/forged keys grow in-flight state without bound.
+      if (this.profileStatusPending.size >= PROFILE_MAX_CACHE) return false;
+      pending = (async () => {
+        const value = await this.profileRequest("devices/status", { statusKey });
+        const active = value?.active === true;
+        this.profileStatus.delete(statusKey);
+        this.profileStatus.set(statusKey, { active, checkedAt: Date.now() });
+        while (this.profileStatus.size > PROFILE_MAX_CACHE) this.profileStatus.delete(this.profileStatus.keys().next().value);
+        return active;
+      })();
+      this.profileStatusPending.set(statusKey, pending);
+    }
+    try { return await pending; } finally {
+      if (this.profileStatusPending.get(statusKey) === pending) this.profileStatusPending.delete(statusKey);
+    }
+  }
+  /** Binds a cloud profile to the principal already authenticated by this Link session. */
+  async bindProfile(principal, proof, callerDeviceId) {
+    if (!(await this.profileActive(proof.statusKey))) throw new Failure("That Botkins profile device is no longer active.");
+    // The profile-service round trip is asynchronous: membership and the existing binding are
+    // checked again immediately before the synchronous write, so a removed member cannot retain
+    // their principal by racing a bind request.
+    if (principal.kind === "member" && !this.store.data.team.members.some((member) => member.id === principal.memberId)) throw new Failure("That team membership is no longer available.");
+    const current = this.profileBinding(principal);
+    const all = [this.store.data.profiles?.owner, ...Object.values(this.store.data.profiles?.members ?? {})].filter(Boolean);
+    const conflict = all.find((binding) => binding.profileId === proof.profileId && binding !== current);
+    if (conflict) throw new Failure("That Botkins profile is already bound to another person on this computer.");
+    if (current?.revoked) throw new Failure("This profile binding was revoked on this computer.");
+    if (current && current.profileId !== proof.profileId) throw new Failure("This person already has a different Botkins profile bound.");
+    if (callerDeviceId !== undefined) {
+      const caller = this.store.device(callerDeviceId);
+      const still = this.principal(callerDeviceId);
+      if (!caller || !still || still.kind !== principal.kind || (still.kind === "member" && still.memberId !== principal.memberId)) throw new Failure("This device is no longer on the team.");
+      // An explicitly bound legacy connection becomes subject to the same profile status key;
+      // untouched QR/team pairings remain legacy-trusted until this call is made.
+      caller.profile = { ...proof };
+    }
+    const binding = { ...proof, ...(current?.profileId === proof.profileId && current.revokedDeviceIds?.length && { revokedDeviceIds: [...current.revokedDeviceIds] }) };
+    if (principal.kind === "member") {
+      // The account's verified name is the member's host-facing display name. The stable
+      // member id (and therefore its chats, views and permissions) remains unchanged.
+      this.store.nameMember(principal.memberId, proof.name);
+      const members = { ...(this.store.data.profiles?.members ?? {}), [principal.memberId]: binding };
+      this.store.set({ profiles: { owner: this.store.data.profiles?.owner ?? null, members } });
+    } else {
+      this.store.set({ profiles: { owner: binding, members: { ...(this.store.data.profiles?.members ?? {}) } } });
+    }
+    this.changed();
+    this.emit("status");
+    return this.profileDescriptor(principal);
+  }
+  /** Local desktop/CLI owner binding; no Link session is involved. */
+  async bindOwnerProfile(ticket) {
+    return this.bindProfile({ kind: "owner" }, await this.redeemProfile(ticket, "bind"));
+  }
+  /** Removes one principal's current host grant and only its profile-backed devices/sessions. */
+  unbindProfile(principal, expectedProfileId) {
+    if (!profileText(expectedProfileId, PROFILE_MAX_TEXT)) throw new Failure("That profile id is invalid.");
+    const current = this.profileBinding(principal);
+    if (!current || current.profileId !== expectedProfileId) throw new Failure("That profile is not bound to this person on this computer.");
+    const profiles = this.store.data.profiles ?? { owner: null, members: {} };
+    if (principal.kind === "member") {
+      const { [principal.memberId]: _gone, ...members } = profiles.members ?? {};
+      this.store.set({ profiles: { owner: profiles.owner ?? null, members } });
+    } else {
+      this.store.set({ profiles: { owner: null, members: { ...(profiles.members ?? {}) } } });
+    }
+    const roleMatches = (device) => principal.kind === "member" ? device.memberId === principal.memberId : !device.memberId;
+    for (const device of this.store.data.devices.filter((device) => roleMatches(device) && device.profile?.profileId === expectedProfileId)) {
+      this.removeDevice(device.id, { keepProfileBinding: true });
+    }
+    this.changed();
+    this.emit("status");
+    return { unbound: true, profileId: expectedProfileId };
+  }
+  /** Local desktop/CLI owner unbind; an expected id prevents clearing a newer grant by race. */
+  unbindOwnerProfile(expectedProfileId) {
+    return this.unbindProfile({ kind: "owner" }, expectedProfileId);
+  }
+  /** Decrypts one profile enrollment and gives it the already-bound host role. */
+  async profile(message) {
+    let theirs;
+    try { theirs = unb64u(message?.publicKey); } catch { throw new Refused(400, "bad_key"); }
+    if (theirs.length !== 32 || typeof message?.box !== "string") throw new Refused(400, "bad_profile");
+    let request;
+    const key = hkdf(agree(this.store.data.keys, theirs), Buffer.from(this.store.data.serverId, "utf8"), PROFILE_KEY_INFO);
+    try { request = unbox(key, message.box, "profile:" + this.store.data.serverId); } catch { throw new Refused(403, "profile_denied"); }
+    if (!isPlainObject(request) || request.publicKey !== message.publicKey || !profileText(request.ticket, PROFILE_MAX_TEXT) || !isPlainObject(request.device)) throw new Refused(403, "profile_denied");
+    const proof = await this.redeemProfile(request.ticket, "connect", message.publicKey);
+    const owner = this.store.data.profiles?.owner;
+    const memberEntries = Object.entries(this.store.data.profiles?.members ?? {});
+    const entry = owner?.profileId === proof.profileId ? { binding: owner, memberId: null } : memberEntries.map(([memberId, binding]) => ({ binding, memberId })).find(({ binding }) => binding.profileId === proof.profileId) ?? null;
+    // The bind proof's status key proves the account device at bind time. It is not the
+    // authority for later enrollments: a profile may revoke that seed device while another
+    // active profile device continues to enroll against this host binding.
+    if (!entry || entry.binding.revoked) throw new Refused(403, "profile_denied");
+    if (entry.memberId && !this.store.data.team.members.some((member) => member.id === entry.memberId)) throw new Refused(403, "profile_denied");
+    let active = false;
+    try { active = await this.profileActive(proof.statusKey); } catch { /* fail closed: no cloud status, no enrollment */ }
+    if (!active) throw new Refused(403, "profile_denied");
+    // The cloud device proof and role are rechecked after the status request: binding or
+    // membership changes may have raced the network round trip.
+    const current = this.profileBinding(entry.memberId ? { kind: "member", memberId: entry.memberId } : { kind: "owner" });
+    if (!current || current.revoked || current.profileId !== proof.profileId || current.revokedDeviceIds?.includes(proof.deviceId) || (entry.memberId && !this.store.data.team.members.some((member) => member.id === entry.memberId))) throw new Refused(403, "profile_denied");
+    // Re-enrolling the same account device replaces only that cloud device's local install.
+    // A different account device on this host must remain connected.
+    const old = this.store.data.devices.filter((device) => device.profile?.profileId === proof.profileId && device.profile?.deviceId === proof.deviceId && (device.memberId ?? null) === entry.memberId);
+    for (const device of old) this.removeDevice(device.id, { keepProfileBinding: true });
+    const supplied = request.device;
+    const kind = supplied.kind === "desktop" ? "desktop" : "phone";
+    const device = this.store.addDevice({
+      name: supplied.name,
+      platform: supplied.platform,
+      kind,
+      publicKey: theirs,
+      ...(entry.memberId && { memberId: entry.memberId }),
+      profile: { ...proof },
+    });
+    this.changed();
+    const { publicKey: _publicKey, profile: _profile, ...visible } = device;
+    this.emit("paired", visible);
+    this.emit("status");
+    return box(key, { serverId: this.store.data.serverId, serverKey: b64u(this.store.data.keys.publicKey), device: device.id, name: this.store.name, hosts: this.hosts(), ...(entry.memberId && { member: true }) }, "profile-ok:" + this.store.data.serverId);
   }
   activePairing() {
     if (this.pairing && this.pairing.expiresAt <= Date.now()) this.cancelPairing();
@@ -1302,6 +1497,11 @@ export class LinkHost extends EventEmitter {
     const member = team.members.find((item) => item.id === memberId);
     if (!member) throw new Failure("That member is no longer on the team.");
     for (const device of this.store.data.devices.filter((item) => item.memberId === memberId)) this.removeDevice(device.id);
+    const profiles = this.store.data.profiles ?? { owner: null, members: {} };
+    if (profiles.members?.[memberId]) {
+      const { [memberId]: _profileGone, ...members } = profiles.members;
+      this.store.set({ profiles: { owner: profiles.owner ?? null, members } });
+    }
     // Their invitations and their own view go with them.
     const chats = Object.fromEntries(Object.entries(team.chats ?? {}).map(([id, invited]) => [id, invited.filter((person) => person !== memberId)]).filter(([, invited]) => invited.length));
     const { [memberId]: _gone, ...views } = team.views ?? {};
@@ -1433,7 +1633,7 @@ export class LinkHost extends EventEmitter {
   }
   /** What the owner is called as a person: the name on one of the owner's devices ("Your name"), else the computer's. */
   ownerName() {
-    return this.store.data.devices.find((device) => !device.memberId && device.person)?.person || this.store.name || "";
+    return this.store.data.profiles?.owner?.name || this.store.data.devices.find((device) => !device.memberId && device.person)?.person || this.store.name || "";
   }
   /** A member as the link's rules see them, by id. */
   principalOfMember(memberId) {
@@ -1518,7 +1718,9 @@ export class LinkHost extends EventEmitter {
     void this.syncInvites();
     return this.team();
   }
-  removeDevice(id) {
+  removeDevice(id, { keepProfileBinding = false } = {}) {
+    const existing = this.store.device(id);
+    if (existing?.profile && !keepProfileBinding) this.tombstoneProfileDevice(existing);
     const removed = this.store.removeDevice(id);
     this.deviceKeys.delete(id);
     this.nonces.delete(id);
@@ -1532,6 +1734,19 @@ export class LinkHost extends EventEmitter {
     for (const waiter of [...this.waiters]) if (waiter.session.deviceId === id) waiter.end();
     if (removed) this.emit("status");
     return removed;
+  }
+  /** Explicit local removal revokes only this cloud device id for its bound role. */
+  tombstoneProfileDevice(device) {
+    const principal = device?.memberId ? { kind: "member", memberId: device.memberId } : { kind: "owner" };
+    const binding = this.profileBinding(principal);
+    const profile = device?.profile;
+    if (!binding || !profile || binding.profileId !== profile.profileId) return;
+    const revokedDeviceIds = [...new Set([...(binding.revokedDeviceIds ?? []), profile.deviceId])].slice(-64);
+    const profiles = this.store.data.profiles ?? { owner: null, members: {} };
+    const next = { ...binding, revokedDeviceIds };
+    if (principal.kind === "member") profiles.members = { ...(profiles.members ?? {}), [principal.memberId]: next };
+    else profiles.owner = next;
+    this.store.set({ profiles });
   }
 
   // ── HTTP ────────────────────────────────────────────────────────────────────────────────────
@@ -1565,7 +1780,7 @@ export class LinkHost extends EventEmitter {
       };
       if (route === "hello" && req.method === "GET") return answer(await this.serve({ route, from }));
       if (req.method !== "POST") throw new Refused(405, "method");
-      if (route !== "rpc" && route !== "pair" && route !== "join" && route !== "session") throw new Refused(404, "not_found");
+      if (route !== "rpc" && route !== "pair" && route !== "join" && route !== "session" && route !== "profile") throw new Refused(404, "not_found");
       // A call needs a known session and a body that fits before any of the body is read.
       const sessionId = String(req.headers["x-botkins-session"] ?? "");
       if (route === "rpc") this.knownSession(sessionId);
@@ -1594,7 +1809,13 @@ export class LinkHost extends EventEmitter {
     const json = (status, value) => ({ status, body: Buffer.from(JSON.stringify(value), "utf8"), json: true });
     try {
       if (route === "hello") return json(200, this.hello(via));
-      if (route !== "rpc" && route !== "pair" && route !== "join" && route !== "session") throw new Refused(404, "not_found");
+      if (route !== "rpc" && route !== "pair" && route !== "join" && route !== "session" && route !== "profile") throw new Refused(404, "not_found");
+      if (route === "profile") {
+        if (body.length > MAX_BODY) throw new Refused(413, "too_large");
+        let message;
+        try { message = JSON.parse(body.toString("utf8")); } catch { throw new Refused(400, "bad_json"); }
+        return json(200, { box: await this.profile(message) });
+      }
       const limit = route === "rpc" ? MAX_RPC_BODY : MAX_BODY;
       if (route === "rpc") {
         // The phone may have been removed while its call was on the way.
@@ -1628,7 +1849,7 @@ export class LinkHost extends EventEmitter {
           const direct = via === "http" || (via === "relay" && this.ownRelay());
           return json(200, route === "pair" ? this.pair(message, via + ":" + from, direct) : this.join(message, via + ":" + from, direct));
         }
-        return json(200, this.session(message, gate));
+        return json(200, await this.session(message, gate));
       } catch (error) {
         // Only a failure counts, and a source that is refused already isn't counted again.
         if (error instanceof Refused && error.status !== 429) failures.add(from);
@@ -1709,7 +1930,17 @@ export class LinkHost extends EventEmitter {
    * backstop (`gate.blocked()`, `gate.tripped()`), so strangers can't lock real phones out. A request that
    * fails, or is for an unknown device, meets the gates.
    */
-  session(message, gate = { blocked: () => false, tripped: () => false }) {
+  async profileDeviceAllowed(device) {
+    if (!device?.profile) return true;
+    let active = false;
+    try { active = await this.profileActive(device.profile.statusKey); } catch { /* fail closed on an unavailable status service */ }
+    if (!active) {
+      this.removeDevice(device.id, { keepProfileBinding: true });
+      return false;
+    }
+    return true;
+  }
+  async session(message, gate = { blocked: () => false, tripped: () => false }) {
     const device = this.store.device(String(message?.device ?? ""));
     if (!device) {
       if (gate.blocked() || gate.tripped()) throw new Refused(429, "slow_down");
@@ -1733,6 +1964,7 @@ export class LinkHost extends EventEmitter {
       if (gate.blocked()) throw new Refused(429, "slow_down");
       throw new Refused(403, "bad_session");
     }
+    if (!(await this.profileDeviceAllowed(device))) throw new Refused(403, "profile_revoked");
     const serverNonce = random(16);
     const salt = Buffer.concat([unb64u(hello.nonce), serverNonce]);
     const master = hkdf(Buffer.concat([shared, key]), salt, "botkins/session/v1");
@@ -1777,6 +2009,10 @@ export class LinkHost extends EventEmitter {
     for (const waiter of [...this.waiters]) if (waiter.session === session) waiter.end();
   }
   async rpc(session, body, gone, via = "http", push) {
+    if (session.deviceId !== undefined && !(await this.profileDeviceAllowed(this.store.device(session.deviceId)))) {
+      this.dropSession(session);
+      throw new Refused(403, "profile_revoked");
+    }
     if (body.length < 24) throw new Refused(400, "short");
     const seq = Number(body.readBigUInt64BE(0));
     // Each number is taken once, so a recorded message can't be played again.
@@ -1833,6 +2069,16 @@ export class LinkHost extends EventEmitter {
       }),
     });
     if (refusal) throw new Failure(refusal);
+    if (method === "link.profile.bind") {
+      if (this.store.device(session.deviceId)?.kind === "gadget") throw new Failure("A gadget cannot bind a profile.");
+      if (args.length !== 1 || typeof args[0] !== "string") throw new Failure("That profile ticket is invalid.");
+      return this.bindProfile(principal, await this.redeemProfile(args[0], "bind"), session.deviceId);
+    }
+    if (method === "link.profile.unbind") {
+      if (this.store.device(session.deviceId)?.kind === "gadget") throw new Failure("A gadget cannot unbind a profile.");
+      if (args.length !== 1 || typeof args[0] !== "string") throw new Failure("That profile id is invalid.");
+      return this.unbindProfile(principal, args[0]);
+    }
     let forApp = args;
     // Only the phone running this voice session can caption its bot in this chat.
     if (method === "recordVoiceLine" && args[4] != null) {

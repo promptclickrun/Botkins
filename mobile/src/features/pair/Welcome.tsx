@@ -1,11 +1,12 @@
 import { Image } from "expo-image";
 import { type Href, router } from "expo-router";
-import { type LucideIcon, Plus, QrCode, Users } from "lucide-react-native";
+import { type LucideIcon, Plus, QrCode, UserRound, Users } from "lucide-react-native";
 import { useState } from "react";
 import { ScrollView, useWindowDimensions, View } from "react-native";
 import Animated, { FadeIn, FadeInDown } from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { brand, radius, space, T, Tap, useTheme } from "@/ui";
+import { useProfile } from "@/state/profile";
 
 // How much of the illustration's ground the panel covers, so the bots stand just above it.
 const OVERLAP = 96;
@@ -39,6 +40,7 @@ export default function Welcome() {
   const insets = useSafeAreaInsets();
   const { width, height } = useWindowDimensions();
   const [panel, setPanel] = useState(0);
+  const profile = useProfile((state) => state.session);
   const art = Math.min(width, 560);
   // The panel may grow up to just under the wordmark; past that (a small phone, large text) it scrolls.
   const top = insets.top + space.xxl + WORDMARK * (421 / 1400) + space.lg;
@@ -67,6 +69,7 @@ export default function Welcome() {
           <Choice icon={QrCode} color={brand.tide} title="Connect to my computer" subtitle="Scan the code, or type it in" href="/pair/scan" primary />
           <Choice icon={Users} color={brand.clay} title="Join a team" subtitle="With the invite code from its owner" href="/join" />
           <Choice icon={Plus} color={brand.tide} title="Set up a new Botkins" subtitle="On your Mac or PC, or a server on Azure" href="/setup" />
+          <Choice icon={UserRound} color={brand.clay} title={profile ? "Use my Botkins profile" : "Set up a Botkins profile"} subtitle={profile ? "Choose a trusted computer or team" : "Optional · use your identity on other devices"} href="/profile" />
         </ScrollView>
       </View>
     </View>

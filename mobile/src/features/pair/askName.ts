@@ -1,12 +1,15 @@
-// "Your name" is one sheet (/pair/name) that every way of pairing or joining opens before it sends
-// anything: a scanned code, a typed one, a pairing link and a team invite. It answers once.
+// Use the signed-in person's profile for a new pairing or team request.
+// A local-only installation asks for a name in the existing sheet.
 import { router } from "expo-router";
+import { useProfile } from "@/state/profile";
 
 let waiting: ((name: string | null) => void) | undefined;
 
-/** Opens "Your name" and resolves to the name given, or null when the person closed the sheet. */
 export function askPersonName(): Promise<string | null> {
-  waiting?.(null);
+  answerPersonName(null);
+  const { home, session } = useProfile.getState();
+  const name = session && (home?.profile.name || session.name).trim();
+  if (name) return Promise.resolve(name);
   return new Promise((resolve) => {
     waiting = resolve;
     router.push("/pair/name");

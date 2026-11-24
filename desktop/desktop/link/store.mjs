@@ -20,6 +20,31 @@ export function setBy(value) {
 export const SCREEN_MODES = ["off", "view", "control"];
 export const MAX_OWNER_DEVICES = 20;
 export const MAX_MEMBER_DEVICES = 60;
+const MAX_PROFILE_TEXT = 300;
+const MAX_PROFILE_BINDINGS = 64;
+const MAX_PROFILE_REVOKED_DEVICES = 64;
+function profileText(value, limit = MAX_PROFILE_TEXT) {
+  return typeof value === "string" && value.length > 0 && value.length <= limit && !/[\u0000-\u001f\u007f]/.test(value) ? value : null;
+}
+function profileBinding(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const profileId = profileText(value.profileId);
+  const deviceId = profileText(value.deviceId);
+  const name = profileText(value.name, 60);
+  const statusKey = profileText(value.statusKey, 1024);
+  if (!profileId || !deviceId || !name || !statusKey) return null;
+  const revokedDeviceIds = Array.isArray(value.revokedDeviceIds) ? [...new Set(value.revokedDeviceIds.filter((id) => profileText(id)).slice(-MAX_PROFILE_REVOKED_DEVICES))] : [];
+  return { profileId, deviceId, name, statusKey, ...(value.revoked === true && { revoked: true }), ...(revokedDeviceIds.length && { revokedDeviceIds }) };
+}
+function loadProfiles(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return { owner: null, members: {} };
+  const members = Object.fromEntries(Object.entries(value.members && typeof value.members === "object" && !Array.isArray(value.members) ? value.members : {}).slice(0, MAX_PROFILE_BINDINGS).flatMap(([id, binding]) => {
+    const cleanId = profileText(id, 200);
+    const clean = profileBinding(binding);
+    return cleanId && clean ? [[cleanId, clean]] : [];
+  }));
+  return { owner: profileBinding(value.owner), members };
+}
 /** A paired device is a phone or a computer (another Botkins app that uses this one). */
 /** "gadget": a small device that talks with a bot (gadget.mjs). It is named, never guessed from a platform. */
 export const DEVICE_KINDS = ["phone", "desktop", "gadget"];
@@ -118,6 +143,7 @@ export class LinkStore {
           // What each phone set up, by device id: where its notifications go, and what bots may use on it.
           push: saved.push && typeof saved.push === "object" ? saved.push : {},
           sources: saved.sources && typeof saved.sources === "object" ? saved.sources : {},
+          profiles: loadProfiles(saved.profiles),
           team: this.revealCopies(this.loadTeam(saved.team), saved.wrapped),
         };
       } catch (error) {
@@ -191,12 +217,12 @@ export class LinkStore {
     return this.data.relay.key;
   }
   fresh() {
-    return { serverId: newId(12), keys: newKeyPair(), port: DEFAULT_PORT, enabled: false, name: "", devices: [], looks: {}, screen: "off", relay: { enabled: false, url: DEFAULT_RELAY_URL, key: null }, push: {}, sources: {}, team: defaultTeam() };
+    return { serverId: newId(12), keys: newKeyPair(), port: DEFAULT_PORT, enabled: false, name: "", devices: [], looks: {}, screen: "off", relay: { enabled: false, url: DEFAULT_RELAY_URL, key: null }, push: {}, sources: {}, profiles: { owner: null, members: {} }, team: defaultTeam() };
   }
   save() {
     // A store that couldn't open its key never overwrites the file it failed to read.
     if (this.data.locked) return;
-    const { keys, serverId, port, enabled, name, devices, looks, screen, screenSetBy, relay, push, sources, team } = this.data;
+    const { keys, serverId, port, enabled, name, devices, looks, screen, screenSetBy, relay, push, sources, profiles, team } = this.data;
     const secret = b64u(keys.privateKey);
     const body = {
       version: 1,
@@ -213,6 +239,7 @@ export class LinkStore {
       ...(screenSetBy && { screenSetBy }),
       push,
       sources,
+      profiles: loadProfiles(profiles),
       // An old relay key kept to take a shared space's copy back is wrapped like the one in use.
       team: !this.protect || !(team.spaceCopies ?? []).some((copy) => copy?.key) ? team : { ...team, spaceCopies: team.spaceCopies.map((copy) => (copy?.key ? { ...copy, key: { publicKey: copy.key.publicKey, privateKey: this.protect(copy.key.privateKey) } } : copy)) },
       // The relay's private key is wrapped like the link's own.
@@ -233,7 +260,7 @@ export class LinkStore {
    * `presenceKey` is the phone's second public key (P-256, SPKI as base64url), kept only when the
    * phone paired straight with this computer: what it signs with to turn the screen on (grant.mjs).
    */
-  addDevice({ name, platform, kind, publicKey, presenceKey, memberId, person }) {
+  addDevice({ name, platform, kind, publicKey, presenceKey, memberId, person, profile }) {
     const member = typeof memberId === "string" && memberId ? memberId : null;
     const count = this.data.devices.filter((device) => (member ? device.memberId : !device.memberId)).length;
     if (count >= (member ? MAX_MEMBER_DEVICES : MAX_OWNER_DEVICES)) throw new Error(member ? "Too many member devices. Remove one first." : "Too many paired owner devices. Remove one first.");
@@ -249,6 +276,7 @@ export class LinkStore {
       publicKey: b64u(publicKey),
       ...(member && { memberId: member }),
       ...(presenceKey && { presenceKey }),
+      ...(profile && { profile: profileBinding(profile) }),
       createdAt: Date.now(),
       lastSeenAt: Date.now(),
     };

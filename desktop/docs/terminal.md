@@ -635,7 +635,7 @@ Complete the passkey first, then the trusted-device or email step. Finish once y
 botkins profile finish
 botkins profile status
 botkins profile computers list
-botkins profile update --name "Gordie" --avatar "🙂"
+botkins profile update --name "Gordie" --avatar "🌱"
 ```
 
 Use a listed computer from the terminal host with a newly enrolled Link key:
@@ -644,7 +644,9 @@ Use a listed computer from the terminal host with a newly enrolled Link key:
 botkins profile computers connect <server-id>
 ```
 
-Approve or revoke trusted devices with `botkins profile devices approve <device>` (the short code is read from standard input) and `botkins profile devices revoke <device> --yes`. `botkins profile disconnect --yes` removes only this host from the profile directory; use `botkins profile reconnect` to explicitly enroll it again. `botkins profile delete --yes` permanently deletes the hosted profile after typing its verified email. To keep this host independent, use `botkins profile opt-out --yes`; this keeps local work here but gives up profile continuity until you sign in again. `botkins profile sign-out --yes` removes this host's account-bound session and profile-enrolled computer credentials while preserving the hosted directory for the account and other devices. If a computer is offline, `botkins profile refresh` retries it when it is reachable.
+Approve a new device with `botkins profile devices approve <device>` and enter its short code on standard input. Use `botkins profile devices revoke <device> --yes` to revoke one installation. Signing out or opting out removes this installation's credentials. Other trusted devices can still reach previously linked hosts.
+
+Use `botkins profile disconnect --yes` to remove this host from the profile and revoke its profile connections. Use `botkins profile reconnect` to link it again. To permanently delete the profile, run `botkins profile delete --yes` and enter its verified email. If a computer was offline during setup, `botkins profile refresh` retries the link when the computer is reachable.
 
 The terminal host must have secure key storage for a profile session or profile-enrolled computer. If it cannot open its host key, profile setup remains session-only and no token or browser verifier is written to disk.
 

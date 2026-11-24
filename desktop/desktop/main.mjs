@@ -291,9 +291,11 @@ else
     });
     // Other computers this app is paired to. Each credential is wrapped like the vault's key: by the
     // system keychain's key in the installed app, and kept in a trial run's own folder otherwise.
+    const profileProtection = host.protect({ trial, profile: true });
     remote = new RemoteHosts({
       file: join(dataDir, "remote-hosts.json"),
       protect: host.protect({ trial }),
+      persistProfileKeys: !!profileProtection,
       lib: await import("./remote/link-client.mjs"),
       device: { name: computerName(), platform: process.platform },
       changed: () => push(),
@@ -307,7 +309,7 @@ else
     ({ workspace, link } = runtime);
     profile = new ProfileManager({
       file: join(dataDir, "profile.json"),
-      protect: host.protect({ trial }),
+      protect: profileProtection,
       lib: remote.lib,
       local: () => link,
       remote: () => remote,

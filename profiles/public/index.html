@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <title>Your Botkins profile</title>
+    <link rel="icon" href="/mark.png" />
+    <link rel="stylesheet" href="/profile.css" />
+    <script src="/enroll.js" type="module"></script>
+  </head>
+  <body>
+    <main>
+      <header><img src="/mark.png" width="52" height="52" alt="" /><strong>Botkins</strong></header>
+      <section id="welcome">
+        <h1>Your profile</h1>
+        <p>Open Profile in the Botkins app to create a profile or sign in.</p>
+      </section>
+      <form id="match" hidden>
+        <h1>Connect this device</h1>
+        <p>
+          Enter the six digits shown in Botkins on the device you’re setting up. Only enter a code from an app you
+          opened yourself.
+        </p>
+        <label for="match-code">Device code</label
+        ><input id="match-code" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="off" required />
+        <button>Continue</button>
+      </form>
+      <section id="choose" hidden>
+        <h1>Your Botkins profile</h1>
+        <p class="device"></p>
+        <button id="signin">Sign in with a passkey</button
+        ><button class="secondary" id="new">Create a profile</button>
+      </section>
+      <form id="create" hidden>
+        <h1>Create your profile</h1>
+        <p class="device"></p>
+        <label for="name">Your name</label><input id="name" autocomplete="nickname" maxlength="60" required />
+        <label for="email">Email address</label
+        ><input id="email" type="email" autocomplete="email" maxlength="254" required />
+        <label for="avatar">Profile picture</label
+        ><select id="avatar">
+          <option value="">Use my initials</option>
+          <option>🌱</option>
+          <option>🌊</option>
+          <option>🌙</option>
+          <option>☀️</option>
+          <option>🦊</option>
+          <option>🐈</option>
+          <option>🌻</option>
+          <option>🪐</option>
+        </select>
+        <button>Create a passkey</button><button type="button" class="secondary" id="back">Back</button>
+      </form>
+      <section id="verify" hidden>
+        <h1>Verify this device</h1>
+        <p id="verify-copy"></p>
+        <button id="send">Send an email code</button
+        ><button id="check" class="secondary">I approved it on another device</button>
+      </section>
+      <form id="email-code" hidden>
+        <h1>Check your email</h1>
+        <p>Enter the code from Botkins. It’s valid for up to ten minutes.</p>
+        <label for="otp">Email code</label
+        ><input
+          id="otp"
+          inputmode="numeric"
+          pattern="[0-9]{6}"
+          maxlength="6"
+          autocomplete="one-time-code"
+          required
+        />
+        <button>Verify device</button
+        ><button type="button" id="resend" class="secondary">Request another code</button>
+      </form>
+      <section id="done" hidden>
+        <h1>Device verified</h1>
+        <p>Return to Botkins on the device you started from to open your profile.</p>
+      </section>
+      <p id="message" role="status" aria-live="polite"></p>
+    </main>
+  </body>
+</html>

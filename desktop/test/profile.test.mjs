@@ -60,7 +60,7 @@ test("opt out and sign out revoke the current profile device but preserve the ho
     await manager.finish();
     await manager.signOut();
     assert.deepEqual(calls.filter(([name]) => name === "revoke").map(([, token, id]) => [token, id]), [["private-token", "device-1"]]);
-    assert.ok(calls.some(([name, profileId]) => name === "unbindOwnerProfile" && profileId === "profile-1"));
+    assert.equal(calls.some(([name]) => name === "unbindOwnerProfile"), false, "other trusted devices keep the host grant");
     assert.equal(calls.some(([name]) => name === "removeHost"), false);
     assert.equal(manager.status().signedIn, false);
     assert.equal(manager.status({ existing: true }).migration.needed, false);
@@ -83,6 +83,7 @@ test("an expired session invalidates and drops profile-bound pairings", async ()
     await assert.rejects(manager.home(), /expired/);
     assert.equal(manager.status().signedIn, false);
     assert.ok(calls.some(([name]) => name === "dropProfileBound"));
+    assert.equal(calls.some(([name]) => name === "unbindOwnerProfile"), false);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

@@ -165,8 +165,9 @@ export class RemoteHosts {
    * @param options.device   { name, platform } as the host will list this app.
    * @param options.changed  Called when what the window shows changed: a host's state, or which host is in use.
    */
-  constructor({ file = null, protect = null, lib, fetch = globalThis.fetch, WebSocket = globalThis.WebSocket, device, changed = () => {}, log = () => {} }) {
+  constructor({ file = null, protect = null, persistProfileKeys = true, lib, fetch = globalThis.fetch, WebSocket = globalThis.WebSocket, device, changed = () => {}, log = () => {} }) {
     Object.assign(this, { file, protect, lib, fetch, WebSocket, device, changed, log });
+    this.persistProfileKeys = persistProfileKeys && typeof protect?.wrap === "function" && typeof protect?.unwrap === "function";
     this.hosts = [];
     this.current = null;
     this.client = null;
@@ -184,7 +185,7 @@ export class RemoteHosts {
         // Profile connections are account-bound credentials.  A development or headless host
         // without a usable vault may still use one for this process, but must never resurrect a
         // profile private key from the plaintext compatibility file.
-        if (entry.profileBound === true && !(typeof this.protect?.wrap === "function" && typeof this.protect?.unwrap === "function")) continue;
+        if (entry.profileBound === true && !this.persistProfileKeys) continue;
         const pairing = this.open(entry.pairing);
         if (pairing?.serverId && pairing.secretKey) this.hosts.push({ id: pairing.serverId, name: text(entry.name) || text(pairing.name) || "Computer", team: text(entry.team), member: pairing.member === true, profileBound: entry.profileBound === true, addedAt: Number(entry.addedAt) || Date.now(), pairing });
       }
@@ -229,7 +230,7 @@ export class RemoteHosts {
       current,
       // Keep profile-obtained private keys in memory when there is no protected store.  Legacy
       // manual pairings retain their existing trial-file behavior for local development.
-      hosts: this.hosts.filter((host) => host.profileBound !== true || (typeof this.protect?.wrap === "function" && typeof this.protect?.unwrap === "function")).map((host) => ({
+      hosts: this.hosts.filter((host) => host.profileBound !== true || this.persistProfileKeys).map((host) => ({
         name: host.name,
         addedAt: host.addedAt,
         ...(host.team && { team: host.team }),
