@@ -224,6 +224,20 @@ test("static screen capture backs off instead of re-capturing every 300ms and re
   assert.ok(captures <= 3, `expected <= 3 captures during static wait, got ${captures}`);
   assert.ok(screen.pollDelay("1") >= 1200, `expected backed-off delay, got ${screen.pollDelay("1")}`);
 
+  // Input on a backed-off display shows within about one POLL_MS, not the backed-off 1500ms.
+  for (let i = 0; i < 3; i++) await screen.frame("phone", { after: first.seq });
+  assert.equal(screen.pollDelay("1"), 1500);
+  const started = Date.now();
+  const waiting = screen.frame("phone", { after: first.seq });
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  version = 3;
+  screen.noteInput("1");
+  const afterInput = await waiting;
+  assert.ok(afterInput.jpeg, "the change after input is sent");
+  const took = Date.now() - started;
+  assert.ok(took < 900, `expected the change within ~300ms of input, took ${took}ms`);
+  assert.equal(screen.pollDelay("1"), 300);
+
   // When the display changes, pollDelay snaps back to 300ms.
   version = 2;
   const changed = await screen.frame("phone", { after: first.seq, wait: false });
