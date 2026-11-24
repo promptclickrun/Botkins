@@ -25,7 +25,8 @@ export default function BotForm({
   start,
   starter: firstStarter,
 }: {
-  created: (id: string) => void;
+  /** `setUp`: the bot came from a starter that suggests Proactive, so its setup steps should open. */
+  created: (id: string, after?: { setUp: boolean }) => void;
   fail: (e: unknown) => void;
   /** Closes the sheet without creating a bot. */
   cancel?: () => void;
@@ -147,7 +148,7 @@ export default function BotForm({
             ...(agent && { agent: agent.key }),
             ...(starter && { starter: starter.id }),
           });
-          created(id);
+          created(id, { setUp: !!starter?.suggestProactive });
         } catch (e) {
           fail(e);
         } finally {

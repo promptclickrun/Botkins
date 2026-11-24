@@ -17,6 +17,7 @@ import { LookStage } from "./LookStage";
 import { addable } from "./agents";
 import { counter, LIMITS } from "./limits";
 import { type Starter, starterById, STARTERS } from "../../../link-host/starters.mjs";
+import { PROACTIVE_TEAM } from "./proactive";
 
 type Start = { key: string; name: string; role: string; instructions: string; summary?: string; look?: BotkinLook; avatar?: BotInput["avatar"]; /** An agent the person already has: the bot is made from it. */ agent?: ImportableAgent; /** One of the three starters (link-host/starters.mjs). */ starter?: string };
 
@@ -83,6 +84,7 @@ export default function NewBot() {
 
 function NewBotEditor() {
   const canManage = useCan("agents", "manage");
+  const teams = useCapability(PROACTIVE_TEAM);
   const saved = usePart("templates");
   const [picker, setPicker] = useState<"templates" | "import">();
   const options = useLookOptions();
@@ -172,6 +174,8 @@ function NewBotEditor() {
       const keep = lookForHost(look, id, options);
       if (canManage) await attempt(api["link.setLook"](id, cleanLook(keep)));
       router.replace({ pathname: "/bot/[id]", params: { id } });
+      // Chief of Staff and Money manager suggest Proactive: its setup steps open over the new bot's page.
+      if (start?.starter && starterById(start.starter)?.suggestProactive && teams && canManage) router.push(("/bot/" + encodeURIComponent(id) + "/proactive-setup") as Href);
     }
     setBusy(false);
   };

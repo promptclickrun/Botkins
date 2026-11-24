@@ -372,6 +372,8 @@ function App() {
       setRoutineTarget((t) => ({ ...target, n: t.n + 1 }));
     });
   }
+  // A starter that suggests Proactive (Chief of Staff, Money manager) opens its setup steps once made, where the computer has them.
+  const proactiveTeam = !state?.remote?.using || state.remote.using.capabilities.includes("proactive-team-v1");
   function botPage(id: string, setup = false) {
     leave(() => {
       setChatId("");
@@ -706,7 +708,16 @@ function App() {
   // A workspace of this computer's with no bots opens on the first-run step: the person's existing
   // agents, or Create a bot. Never while another computer is in use: a bot made there would go to it.
   if (!state.bots.length && !state.remote?.using && !memberTeam(state))
-    return <FirstBot remote={state.remote} saved={state.templates} created={async () => receiveSnapshot(await api.snapshot())} />;
+    return (
+      <FirstBot
+        remote={state.remote}
+        saved={state.templates}
+        created={async (id, after) => {
+          receiveSnapshot(await api.snapshot());
+          if (id && after?.setUp && proactiveTeam) botPage(id, true);
+        }}
+      />
+    );
   const stream = state.streams[chatId];
   const elsewhere = state.requests.find((r) => r.chatId !== chatId);
   const actions: PageActions = {
@@ -1121,9 +1132,10 @@ function App() {
             cancel={() => setModal("")}
             saved={state.templates}
             taken={state.bots.map((b) => b.look)}
-            created={async () => {
+            created={async (id, after) => {
               receiveSnapshot(await api.snapshot());
               setModal("");
+              if (after?.setUp && proactiveTeam) botPage(id, true);
             }}
           />
         )}

@@ -25,7 +25,7 @@ export default function FirstBot({
   saved?: BotTemplate[];
   remote?: State["remote"];
   /** The workspace has bots now. */
-  created: () => Promise<void> | void;
+  created: (id?: string, after?: { setUp: boolean }) => Promise<void> | void;
 }) {
   const [agents, setAgents] = useState<ImportableAgent[]>();
   const [picked, setPicked] = useState<string[]>([]);
@@ -93,9 +93,9 @@ export default function FirstBot({
               saved={saved}
               agents={agents}
               fail={fail}
-              created={async () => {
+              created={async (id, after) => {
                 setProblem("");
-                await created();
+                await created(id, after);
               }}
             />
           </div>
