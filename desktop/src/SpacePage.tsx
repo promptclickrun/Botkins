@@ -9,6 +9,7 @@ import {
   LayoutList,
   Lightbulb,
   Lock,
+  MailOpen,
   Maximize2,
   MessageSquare,
   Pencil,
@@ -33,6 +34,7 @@ import OpenedPanel from "./SpacePanelOpen";
 import { usePanelDrag, usePanelResize, useSpaceDrag } from "./SpaceArrange";
 import { CadencePicker, ZoneInput, cronFromCadence } from "./Routines";
 import { memberTeam, teamCan } from "./teamAccess";
+import { changedSpaces } from "./unread";
 import {
   accessTag,
   arrangePin,
@@ -109,6 +111,7 @@ export function SidebarSpaces({
   const dialogs = useAsk();
   const menu = useMenu();
   const spaces = state.spaces ?? [];
+  const unreadSpaces = changedSpaces(spaces);
   // Pinned spaces are dragged up and down; a line shows where one lands.
   const drag = useSpaceDrag(spaces, fail);
   async function create() {
@@ -116,15 +119,26 @@ export function SidebarSpaces({
     if (!name) return;
     openSpace(await api["spaces.create"]({ name }));
   }
+  function markAllSpacesRead() {
+    if (unreadSpaces.length === 0) return;
+    void Promise.all(unreadSpaces.map((s) => api["link.spaces.seen"](s.id))).catch(fail);
+  }
   return (
     <>
       <div className="sidebarlabel">
         <span className="nav-label">Spaces</span>
-        {teamCan(state, "today", "create") && (
-          <button aria-label="New space…" title={collapsed ? "New space…" : undefined} onClick={() => void create().catch(fail)}>
-            <Plus size={15} />
-          </button>
-        )}
+        <span className="sidebarlabel-actions">
+          {!collapsed && unreadSpaces.length > 0 && (
+            <button aria-label="Mark all spaces as read" title="Mark all as read" onClick={markAllSpacesRead}>
+              <MailOpen size={15} />
+            </button>
+          )}
+          {teamCan(state, "today", "create") && (
+            <button aria-label="New space…" title={collapsed ? "New space…" : undefined} onClick={() => void create().catch(fail)}>
+              <Plus size={15} />
+            </button>
+          )}
+        </span>
       </div>
       <nav aria-label="Spaces" className="spacenav">
         {drag.shown.map((s) => {
@@ -139,6 +153,9 @@ export function SidebarSpaces({
               onClick={() => openSpace(s.id)}
               onContextMenu={(e) =>
                 menu.show(e, name, [
+                  ...(s.changed > 0
+                    ? [{ label: "Mark as read", icon: MailOpen, run: () => void api["link.spaces.seen"](s.id).catch(fail) }, "separator" as const]
+                    : []),
                   ...moveItems(spaces, s.id, drag.send),
                   "separator",
                   { label: "Unpin", icon: PinOff, run: () => void setPinned(spaces, s.id, false).catch(fail) },
@@ -177,6 +194,9 @@ export function AllSpaces({ state, openSpace, fail }: { state: State; openSpace:
           {items.map((s) => {
             const name = spaceName(s);
             const items = (): MenuItem[] => [
+              ...(s.changed > 0
+                ? [{ label: "Mark as read", icon: MailOpen, run: () => void api["link.spaces.seen"](s.id).catch(fail) }, "separator" as const]
+                : []),
               ...(s.pinned
                 ? [...moveItems(spaces, s.id, (next) => next && void api["link.spaces.arrange"](next).catch(fail)), "separator" as const]
                 : []),
