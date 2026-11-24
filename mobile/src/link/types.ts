@@ -1,5 +1,7 @@
 // The desktop's data, as the phone sees it. These mirror the desktop app's own types
 // (desktop/src/types.ts); a chat arrives as a summary and its messages come separately.
+import type { ProtonCalls, ProtonStatusFields } from "./proton-pass";
+type LinkProtonCall<K extends keyof ProtonCalls> = (...args: Parameters<ProtonCalls[K]>) => Awaited<ReturnType<ProtonCalls[K]>>;
 
 export type SkillUpload = { filename: string; data: string; replace?: string[] };
 export type SkillImportResult = { added: string[]; conflicts: string[] };
@@ -386,11 +388,11 @@ export type Credential = {
 /** `value: null` keeps the saved value. */
 export type CredentialInput = { id?: string; name: string; kind?: CredentialKind; username?: string; website?: string; notes?: string; value?: string | null };
 export type PasswordManagerId = Exclude<CredentialSource, "vault">;
-export type PasswordManagerStatus = {
+export type PasswordManagerStatus = ProtonStatusFields & {
   id: PasswordManagerId;
   name: string;
   /** ready: signed in and readable. locked: needs unlocking. signed-out: needs a sign-in on the computer. missing: its command-line tool isn't installed. */
-  state: "ready" | "locked" | "signed-out" | "missing" | "error";
+  state: "ready" | "locked" | "signed-out" | "missing" | "error" | "installing" | "signing-in" | "expiring" | "expired";
   version?: string;
   account?: string;
   /** One line about what to do next. */
@@ -1994,6 +1996,13 @@ export type Calls = {
   /** Whether a credential can be read right now. Never returns the value. */
   "link.credentials.check"(id: string): { ok: boolean; message?: string };
   "link.credentials.managers"(refresh?: boolean): PasswordManagerStatus[];
+  "link.credentials.protonPassInstallPlan": () => Awaited<ReturnType<ProtonCalls["plan"]>>;
+  "link.credentials.protonPassInstall": LinkProtonCall<"install">;
+  "link.credentials.protonPassSignInStart": LinkProtonCall<"start">;
+  "link.credentials.protonPassSignInRead": LinkProtonCall<"read">;
+  "link.credentials.protonPassSignInInput": LinkProtonCall<"input">;
+  "link.credentials.protonPassSignInCancel": LinkProtonCall<"cancel">;
+  "link.credentials.protonPassDisconnect": LinkProtonCall<"disconnect">;
   "link.credentials.unlock"(manager: PasswordManagerId, secret: { password: string }): PasswordManagerStatus;
   "link.credentials.lock"(manager: PasswordManagerId): PasswordManagerStatus;
   "link.credentials.vaults"(manager: PasswordManagerId): PasswordManagerVault[];

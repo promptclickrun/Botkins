@@ -21,7 +21,7 @@ const MANAGERS = ["onepassword", "bitwarden", "protonpass"];
 const KINDS = ["api-key", "login", "note"];
 // What the page may see of each thing. Anything else a store or a tool hands back is left out.
 const ENTRY = ["id", "name", "kind", "username", "website", "notes", "source", "reference", "createdAt", "updatedAt"];
-const STATUS = ["id", "name", "state", "version", "account", "message", "canUnlock"];
+const STATUS = ["id", "name", "state", "version", "account", "message", "canUnlock", "setup", "source", "expiresAt", "sharedVaults", "step", "code", "unsupported"];
 
 const isPlain = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
 const keep = (object, keys) => Object.fromEntries(keys.filter((key) => object?.[key] !== undefined).map((key) => [key, object[key]]));
@@ -109,6 +109,9 @@ export class SavedCredentials {
   /** Each manager's state, and the one thing to do next. `refresh` looks again now. */
   async managers(refresh = false) {
     return this.run(async (store) => (await store.managers(refresh === true)).map(status));
+  }
+  protonPass(method, input) {
+    return this.run((store) => store.protonPass(method, input));
   }
   /** Bitwarden: the master password goes to its tool and is dropped. Returns the new state. */
   async unlock(manager, password) {

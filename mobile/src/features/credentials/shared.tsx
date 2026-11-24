@@ -5,6 +5,7 @@ import { Eye, EyeOff, KeyRound, Lock, LockKeyhole, type LucideIcon, ShieldCheck,
 import { useEffect, useState } from "react";
 import { TextInput, type TextInputProps, View } from "react-native";
 import { create } from "zustand";
+import { protonBadge, supportsProtonSetup } from "@/link/proton-pass";
 import type { Credential, CredentialKind, CredentialSource, PasswordManagerId, PasswordManagerStatus } from "@/link/types";
 import { usePart } from "@/state/hooks";
 import { api, attempt } from "@/state/link";
@@ -135,7 +136,12 @@ export function putManager(status: PasswordManagerStatus, unlockedHere?: boolean
   }));
 }
 
-export function managerBadge(status: PasswordManagerStatus | undefined): { label: string; tone: Tone } {
+export function managerBadge(status: PasswordManagerStatus | undefined, proton = false): { label: string; tone: Tone } {
+  if (proton && status?.id === "protonpass") {
+    return { label: protonBadge(status), tone: status.state === "ready" ? "success"
+      : status.state === "error" || status.state === "expired" ? "danger"
+      : status.state === "expiring" ? "warning" : status.state === "signed-out" ? "accent" : "neutral" };
+  }
   switch (status?.state) {
     case "ready":
       return { label: "Ready", tone: "success" };
@@ -150,6 +156,10 @@ export function managerBadge(status: PasswordManagerStatus | undefined): { label
     default:
       return { label: "Checking…", tone: "neutral" };
   }
+}
+
+export function useProtonSupport() {
+  return supportsProtonSetup(usePart("meta")?.capabilities);
 }
 
 // Marks. Simple glyphs of our own, never the companies' logos.

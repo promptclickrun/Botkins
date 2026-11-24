@@ -158,6 +158,7 @@ const PASS = `
 echo "$*" >> "$STATE/pass.log"
 case "$*" in
   "--version") echo "Proton Pass CLI 2.2.5 (abc123)" ;;
+  "agent --help") echo "Manage agent tokens" ;;
   "info --output json") [ -f "$STATE/signedin" ] || exit 1; echo '{"user":{"email":"me@proton.test"}}' ;;
   "vault list --output json") echo '{"vaults":[{"share_id":"share-1","name":"Personal"}]}' ;;
   "item list --share-id=share-1 --output json") echo '{"items":[{"id":"p-item-1","content":{"title":"Mail","content":{"Login":{"username":"me","password":"p-VALUE"}}}}]}' ;;
@@ -524,7 +525,8 @@ test("Proton Pass is read through pass-cli with the syntax its help shows", asyn
   const status = async () => (await credentials.managers(true)).find((m: any) => m.id === "protonpass");
   assert.equal((await status()).state, "signed-out");
   tools.mark("signedin");
-  assert.deepEqual(await status(), { id: "protonpass", name: "Proton Pass", state: "ready", version: "2.2.5", account: "me@proton.test" });
+  assert.equal((await status()).state, "signed-out", "the user's legacy session is not a Botkins connection");
+  assert.equal((await status()).source, "path");
   assert.deepEqual(await credentials.vaults("protonpass"), [{ id: "share-1", name: "Personal" }]);
   assert.deepEqual(await credentials.items("protonpass", "share-1", "mail"), [{ id: "p-item-1", title: "Mail", subtitle: "me" }]);
   const item = await credentials.item("protonpass", "share-1", "p-item-1");

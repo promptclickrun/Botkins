@@ -20,6 +20,7 @@ import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { b64u, random, unb64u } from "./crypto.mjs";
 import { drivers } from "./managers.mjs";
+import { PROTON_CALLS, ProtonSetup } from "./proton-setup.mjs";
 import { Failure, searchDirs } from "./tools.mjs";
 
 const KINDS = ["api-key", "login", "note"];
@@ -56,6 +57,7 @@ class Vault {
     }
     // The list is shown even when the key can't be opened: only reading and changing need it.
     this.entries = saved.entries.filter((entry) => entry && typeof entry.id === "string" && typeof entry.name === "string");
+    this.proton = saved.proton;
     try {
       if (saved.wrapped && !this.reveal) throw new Error("locked");
       const key = unb64u(saved.wrapped ? this.reveal(saved.key) : saved.key);
@@ -74,7 +76,7 @@ class Vault {
     } catch {
       throw new Failure("The computer's keychain didn't answer, so nothing was saved.");
     }
-    const body = { version: 1, key, ...(this.protect && { wrapped: true }), entries: this.entries };
+    const body = { version: 1, key, ...(this.protect && { wrapped: true }), entries: this.entries, proton: this.proton };
     mkdirSync(this.dir, { recursive: true, mode: 0o700 });
     writeFileSync(this.file + ".tmp", JSON.stringify(body, null, 1), { mode: 0o600 });
     renameSync(this.file + ".tmp", this.file);
@@ -186,12 +188,40 @@ export class Credentials {
    * @param options.platform    Pretend to be another system (a test of the Windows .cmd message uses it).
    * @param options.onChange    Called after anything a phone shows has changed.
    */
-  constructor({ dir, protect, reveal, searchPath, now = Date.now, platform, onChange = () => {} }) {
+  constructor({ dir, protect, reveal, searchPath, now = Date.now, platform, onChange = () => {}, onProtonFinished, protonOptions, protonDemo }) {
     this.vault = new Vault(dir, { protect, reveal });
     this.now = now;
     this.onChange = onChange;
-    this.drivers = new Map(drivers({ dirs: searchDirs(searchPath), now, platform }).map((driver) => [driver.id, driver]));
+    this.drivers = new Map(drivers({ dirs: searchDirs(searchPath), now, platform, proton: (ctx) => {
+      this.proton = new ProtonSetup({
+        dir: join(dir, "proton-pass"), ctx,
+        record: (secret) => secret ? JSON.parse(this.vault.open({ id: "proton-pass-agent", secret: this.vault.proton.secret })) : this.vault.proton,
+        update: (record, data) => {
+          const before = this.vault.proton;
+          this.vault.proton = { ...record, ...(data && { secret: this.vault.seal("proton-pass-agent", JSON.stringify(data)) }) };
+          try {
+            this.vault.persist();
+          } catch (error) {
+            this.vault.proton = before;
+            throw error;
+          }
+        },
+        writable: () => this.writable(),
+        linked: () => this.vault.entries.filter((entry) => entry.source === "protonpass").map((entry) => entry.ref?.vaultId),
+        changed: () => this.onChange(),
+        finished: onProtonFinished,
+        ...protonOptions,
+      });
+      return protonDemo ?? this.proton;
+    } }).map((driver) => [driver.id, driver]));
     this.statuses = null;
+  }
+
+  protonPass(method, input) {
+    const index = PROTON_CALLS.indexOf(method);
+    if (index < 0) throw new Failure("That Proton Pass action isn't supported.");
+    const action = ["plan", "install", "start", "read", "input", "cancel", "disconnect"][index];
+    return this.guard(this.drivers.get("protonpass"), () => this.proton[action](input));
   }
 
   get locked() {
@@ -346,10 +376,12 @@ export class Credentials {
     }
   }
   async managers(refresh = false) {
-    if (!refresh && this.statuses && this.now() - this.statuses.at < STATUS_TTL) return this.statuses.list;
-    const list = await Promise.all([...this.drivers.values()].map((driver) => this.guard(driver, (d) => d.status()).catch((error) => ({ id: driver.id, name: driver.name, state: "error", message: error.message }))));
+    const status = (driver) => this.guard(driver, (d) => d.status()).catch((error) => ({ id: driver.id, name: driver.name, state: "error", message: error.message }));
+    const proton = status(this.drivers.get("protonpass"));
+    if (!refresh && this.statuses && this.now() - this.statuses.at < STATUS_TTL) return [...this.statuses.list, await proton];
+    const list = await Promise.all([...this.drivers.values()].filter((driver) => driver.id !== "protonpass").map(status));
     this.statuses = { at: this.now(), list };
-    return list;
+    return [...list, await proton];
   }
   async unlock(manager, secret) {
     const driver = this.driver(manager);
