@@ -16,7 +16,8 @@ import { textMode, useChatPrefs } from "./chatPrefs";
 import { loadPrefs } from "./prefs";
 import { newPresenceKey, removePresenceKey } from "./presence";
 import { currentOf, hasRoom, indexOf, type Kept, NO_COMPUTERS, pairingKey, readKeptComputers, savedIds, TOO_MANY, using, withDetails, withPairing, without } from "./computers";
-import { applyParts, forgetComputer, mergeChat, showToast, useApp } from "./store";
+import { applyParts, forgetComputer, mergeChat, onComputerChange, showToast, useApp } from "./store";
+import { createPartsBatcher } from "./partsBatch";
 import { canBrowse, NearbyPace } from "./reconnect";
 import { findNearby } from "./nearby";
 
@@ -33,18 +34,21 @@ const fetcher = relayFetch(expoFetch as unknown as FetchLike);
 setRandomSource((length) => Crypto.getRandomBytes(length));
 
 let client: LinkClient | null = null;
+const partsBatcher = createPartsBatcher(applyParts);
+onComputerChange(() => partsBatcher.clear());
 useChatPrefs.subscribe((prefs, before) => prefs.textStreaming !== before.textStreaming && client?.textStreamingChanged());
 /** Who waits for the next sync to come back (`freshSync`). */
 const syncWaiters = new Set<() => void>();
 
 function follow(pairing: Pairing) {
   client?.stop();
+  partsBatcher.clear();
   client = new LinkClient(pairing, {
     fetch: fetcher,
     streamAppends: true,
     lightSteps: true,
     textStreaming: (route) => textMode(useChatPrefs.getState().textStreaming, route),
-    onParts: applyParts,
+    onParts: partsBatcher.push,
     onState: (link) => {
       useApp.setState({ link });
       if (link === "online") nearbyPace.reset();
