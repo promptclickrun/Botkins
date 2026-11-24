@@ -168,12 +168,11 @@ test("native action vs Composio / Connect card: consistent routing and no contra
   assert.doesNotMatch(instructions, /show the returned redirect_url|paste the auth link/i);
 });
 
-test("calendar edit/read-back and Home Assistant lock/unlock guidance are present and mirrored", (t) => {
+test("calendar edit/read-back guidance is present and mirrored across desktop and mobile", (t) => {
   const { instructions } = setup(t);
 
   assert.match(instructions, /Before editing or deleting a calendar event, resolve the source calendar and exact event ID first.*read the event back to verify/i);
-  assert.match(instructions, /Home Assistant.*generic turn-on\/turn-off actions lock and unlock locks \(HassTurnOn locks; HassTurnOff unlocks\)/i);
-  assert.match(instructions, /Prefer explicit lock or security actions when available and keep all confirmation gates/i);
+  assert.doesNotMatch(instructions, /Home Assistant/i);
 
   const updateEvent = DEVICE_TOOLS.find((tool) => tool.name === "phone_calendar_update_event");
   const deleteEvent = DEVICE_TOOLS.find((tool) => tool.name === "phone_calendar_delete_event");
