@@ -13,6 +13,7 @@ import { demoGitHub } from "./mock-prs.mjs";
 import { starterById } from "./starters.mjs";
 import { DemoSignIns } from "./mock-signin.mjs";
 import { DemoUpdates } from "./mock-update.mjs";
+import { DEMO_FEATURED, demoCatalogAdd, demoCatalogList } from "./mock-catalog.mjs";
 import { uploadSkill } from "./skill-import.mjs";
 import { parseSkill } from "./skill-format.mjs";
 import { botVoiceField } from "./voice.mjs";
@@ -1286,7 +1287,7 @@ export class MockBackend {
     // "agent-templates-v1" (docs/agent-templates.md): made-up templates. Left out with BOTKINS_DEV_AGENTS=off.
     if (process.env.BOTKINS_DEV_AGENTS !== "off") this.capabilities.push("agent-templates-v1");
     // "plugins-v1" (docs/plugins.md): made-up catalogs and installs. One plugin starts installed.
-    this.capabilities.push("pi-packages-v1", "skill-upload-v1", "skills-catalog-v1");
+    this.capabilities.push("pi-packages-v1", "skill-upload-v1", "skills-catalog-v1", "skills-featured-v1", "mcp-catalog-v1");
     this.catalogToken = "";
     this.demoSkill = {id:"demo/skills/design-review", source:"demo/skills", skillId:"design-review", name:"design-review", installs:240, available:true};
 
@@ -3376,15 +3377,35 @@ export class MockBackend {
       const installed = this.demoInstalled && this.skillList.some(s => s.name === this.demoSkill.name);
       return this.demoSkill.name.includes(query.trim().toLowerCase()) ? [{...this.demoSkill, installed: installed ? this.demoSkill.name : undefined}] : [];
     },
+    "skillsCatalog.featured"() {
+      return DEMO_FEATURED.map((item) => ({ ...item, ...(this.skillList.some((s) => s.name === item.name) && { installed: item.name }) }));
+    },
+    // The direct apps catalog (mock-catalog.mjs): the demo's own tool servers say where each entry stands.
+    "mcpCatalog.list"() {
+      return demoCatalogList(this.state.mcpServers);
+    },
+    "mcpCatalog.add"(id, options) {
+      return demoCatalogAdd(this, id, options);
+    },
     "skillsCatalog.preview"(id) {
+      const item = DEMO_FEATURED.find((f) => f.id === id);
+      if (item) {
+        this.catalogToken = randomUUID();
+        this.catalogFeatured = item;
+        const { id: _id, name, summary, group, installed, ...source } = item;
+        return { name, description: summary, text: "---\nname: " + name + "\ndescription: " + JSON.stringify(summary) + "\n---\n\nA demo copy of " + name + " from " + item.repo + ".\n", token: this.catalogToken, source, files: ["SKILL.md", "LICENSE"] };
+      }
       if (id !== this.demoSkill.id) throw new Error("Unknown demo skill.");
+      this.catalogFeatured = null;
       this.catalogToken = randomUUID();
       return {name: this.demoSkill.name, description: "Review a design.", text: DESIGN_SKILL, token: this.catalogToken};
     },
     async "skillsCatalog.install"(token, replace) {
       if (!token || token !== this.catalogToken) throw new Error("Open the preview again.");
-      const data = Buffer.from(DESIGN_SKILL).toString("base64");
-      const result = await this.handlers["skills.upload"].call(this, {filename: "design-review.md", data, replace});
+      const item = this.catalogFeatured;
+      const text = item ? "---\nname: " + item.name + "\ndescription: " + JSON.stringify(item.summary) + "\n---\n\nA demo copy.\n" : DESIGN_SKILL;
+      const data = Buffer.from(text).toString("base64");
+      const result = await this.handlers["skills.upload"].call(this, {filename: (item?.name ?? "design-review") + ".md", data, replace});
       if (result.added.length) this.demoInstalled = true;
       return result;
     },

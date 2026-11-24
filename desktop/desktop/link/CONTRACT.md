@@ -401,6 +401,15 @@ With `skills-catalog-v1`, the computer makes these calls available:
 - `skillsCatalog.preview(id)` reads a GitHub skill and returns `{name, description, text, token, installed?}`. Domain sources open at `https://skills.sh/<id>`.
 - `skillsCatalog.install(token, replace?)` imports the files pinned by the preview and returns the upload result. The preview token expires after ten minutes.
 
+With `skills-featured-v1`, `skillsCatalog.featured()` returns the featured shelf: upstream skills pinned to a commit (`desktop/skills-featured.mjs`), each `{id, name, summary, group, author, license, repo, commit, path, url, pack?, installed?}`. The id is `owner/repo/skill@commit7`; preview and install it with `skillsCatalog.preview` and `skillsCatalog.install` like a skills.sh one. Its preview reads the tree at `commit`, never HEAD, and also returns `source` (the fields above) and `files`. The skill's license file goes with it: one that sits outside the skill's folder (pstack's) is installed as `LICENSE`, and a skill whose license is missing at that commit is not installed.
+
+With `mcp-catalog-v1`, the direct apps catalog (`desktop/mcp-catalog.mjs`):
+
+- `mcpCatalog.list()` returns `{entries, categories}`. An entry has `id, name, category, categoryName, description, transport ("http" | "stdio"), auth ("none" | "oauth" | "key"), keys: [{id, label, hint?}], docs, icon: {letter}`, then `url` for http, or `package, version, license, command, env` for stdio (`command` is the exact line, `env` the names of the values it gets), and `local` for a server another app runs on the computer. Its state: `added`, and when added `serverId, serverName, enabled`, `signedIn, signingIn` (oauth) and `keysSet` (key). An entry never holds a key's value, or where a key goes beyond the names in `env`.
+- `mcpCatalog.add(id, {keys?, confirm?})` adds the entry as a tool server, or, when it is already added, sets the keys given again (a key left out is kept). `keys` maps each key's `id` to the value typed; values go to the vault through `saveMcpServer`'s path and are never sent back. A stdio entry needs `confirm` equal to its `command`, which the client has shown and the person said yes to. It returns `{serverId, next}`: `"sign-in"` when the browser sign-in is next (`signInMcpServer(serverId)`), else `"done"`. The link refuses a saved credential's reference in `keys`. A server the person added by hand at the same address, or with the same npm package, counts as the entry.
+
+The list needs the team's Tools view permission. Adding is the owner's.
+
 Search and preview need the team's Skills read permission. Upload and install need create permission, and confirming replacement also needs manage permission. Phones use the link for every file and catalog operation.
 
 ## Project folders, modes and GitHub

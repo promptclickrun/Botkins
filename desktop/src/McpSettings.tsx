@@ -6,6 +6,7 @@ import {
   FileUp,
   Globe,
   KeyRound,
+  LayoutGrid,
   Loader2,
   LockKeyhole,
   LogIn,
@@ -26,6 +27,7 @@ import { useAsk } from "./Pages";
 import { Group, Sheet, errorText } from "./SettingsRows";
 import { stopCancel } from "./SkillsSettings";
 import MacTools from "./MacTools";
+import { CatalogSheet, supportsMcpCatalog } from "./McpCatalog";
 import SavedCredentials, { CredentialsIntro } from "./SavedCredentials";
 import "./integrations.css";
 
@@ -65,6 +67,8 @@ export default function McpSettings({ state, credentials }: { state: State; cred
   const servers = state.mcpServers ?? [];
   const [editing, setEditing] = useState<{ server?: McpServer } | null>(null);
   const [importing, setImporting] = useState(false);
+  const [cataloging, setCataloging] = useState(false);
+  const catalogShown = supportsMcpCatalog(state);
   const [tests, setTests] = useState<Record<string, Test>>({});
   const [signIns, setSignIns] = useState<Record<string, SignIn>>({});
   const [note, setNote] = useState("");
@@ -130,6 +134,12 @@ export default function McpSettings({ state, credentials }: { state: State; cred
   }
   const actions = (
     <span className="int-actions">
+      {catalogShown && (
+        <button type="button" className="set-button" onClick={() => setCataloging(true)}>
+          <LayoutGrid size={14} />
+          Add from catalog
+        </button>
+      )}
       <button type="button" className="set-button" onClick={() => setImporting(true)}>
         <Upload size={14} />
         Import…
@@ -340,6 +350,7 @@ export default function McpSettings({ state, credentials }: { state: State; cred
           }}
         />
       )}
+      {cataloging && <CatalogSheet state={state} close={() => setCataloging(false)} />}
       {importing && (
         <ImportSheet
           close={() => setImporting(false)}

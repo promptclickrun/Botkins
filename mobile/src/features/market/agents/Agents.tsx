@@ -7,7 +7,8 @@ import { ScrollView, View } from "react-native";
 import type { MarketAgent, MarketAgentCategory } from "@/link/types";
 import { useCan, useCapability, useOnline } from "@/state/hooks";
 import { api, attempt } from "@/state/link";
-import { BotAvatar, Chip, EmptyState, Group, Page, space, T, Tap, useTheme } from "@/ui";
+import { BotAvatar, Chip, EmptyState, Group, Label, Page, space, T, Tap, useTheme } from "@/ui";
+import { templateGroups } from "../catalog";
 import { SearchField } from "../parts";
 import { refreshCatalogs, useCanRefresh } from "../plugins/calls";
 import { AGENTS_CAPABILITY, agentChips, agentHref, listLine } from "./logic";
@@ -17,13 +18,12 @@ const AVATAR = 48;
 /** One search of one category. */
 type Listing = { key: string; agents: MarketAgent[]; categories: MarketAgentCategory[]; error?: string };
 
-export function AgentsPage({ switcher }: { switcher: ReactNode }) {
+export function AgentsPage() {
   const ready = useCapability(AGENTS_CAPABILITY);
   const allowed = useCan("agents", "create");
-  if (ready && allowed) return <Agents switcher={switcher} />;
+  if (ready && allowed) return <Agents />;
   return (
-    <Page tab title="Marketplace">
-      {switcher}
+    <Page title="Bots">
       <EmptyState icon={Bot} title={allowed ? "Update the app on your computer" : "Your team role can't create bots"} />
     </Page>
   );
@@ -76,7 +76,7 @@ function Skeleton() {
   );
 }
 
-function Agents({ switcher }: { switcher: ReactNode }) {
+function Agents() {
   const online = useOnline();
   // The templates are in the plugin catalogs, so a refresh reads those again (with the plugins' permission).
   const canCatalogs = useCan("plugins", "view");
@@ -143,23 +143,23 @@ function Agents({ switcher }: { switcher: ReactNode }) {
         {asked || category ? "No agents match" : "No agents here yet"}
       </T>
     );
-  else
-    body = (
-      <Group flat inset={space.lg + AVATAR + space.md}>
-        {shown.agents.map((agent) => (
-          <AgentRow key={agent.id} agent={agent} />
-        ))}
-      </Group>
-    );
+  else {
+    // Starters first, then Botkins' Everyday and Builder, then each other marketplace.
+    const groups = templateGroups(shown.agents);
+    body = groups.map((group) => (
+      <View key={group.key}>
+        {groups.length > 1 && <Label>{group.title}</Label>}
+        <Group flat inset={space.lg + AVATAR + space.md}>
+          {group.agents.map((agent) => (
+            <AgentRow key={agent.id} agent={agent} />
+          ))}
+        </Group>
+      </View>
+    ));
+  }
 
   return (
-    <Page
-      tab
-      title="Marketplace"
-      refreshing={refreshing}
-      onRefresh={reload}
-    >
-      {switcher}
+    <Page title="Bots" keyboard refreshing={refreshing} onRefresh={reload}>
       <SearchField value={query} onChange={setQuery} label="Search agents" />
       {chips.length > 1 && (
         <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginHorizontal: -space.xl, marginTop: -space.sm }} contentContainerStyle={{ paddingHorizontal: space.xl, paddingVertical: 2, gap: space.sm }}>

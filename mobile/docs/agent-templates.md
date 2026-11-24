@@ -30,6 +30,10 @@ A marketplace's catalog file (`.github/plugin/marketplace.json`, the file that l
 
 The computer reads the template files when someone browses templates, at most once an hour for each marketplace (with the catalog itself). A file it can't read, or that isn't a template, is left out. At most 200 templates are read from one marketplace, and a file is at most 256 KB.
 
+## Botkins' own templates
+
+The app on the computer also carries a set of its own (`desktop/agent-templates-first-party.mjs`), listed first under the marketplace `botkins-app` ("Botkins", built in). Each keeps one contract: one concrete job and a named deliverable that the summary says; useful on day one, with connected apps or from pasted text, files and screenshots; an explicit "Ask first" step before anything is sent, posted, filed or changed outside the chat; and, where watching over time helps, a suggested Routine or Proactive pairing that stays quiet when nothing is new. Their listings add `deliverable`, `dayOne`, `approval`, `group` ("everyday" or "builder"), `pairing` (`{kind: "routine" | "proactive", cadence?, note}`) and `apps` (ids in the direct apps catalog). A Home starter has `starter: true` and is listed before every other template.
+
 ## Calls
 
 Both are reads. A team member needs `agents` › `create` (a template is only good for making a bot). A phone makes them through the link. The window makes them as `window.botkins["agents.browse"]` and `["agents.template"]`.

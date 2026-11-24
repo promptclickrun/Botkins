@@ -4,7 +4,52 @@
 export type SkillUpload = { filename: string; data: string; replace?: string[] };
 export type SkillImportResult = { added: string[]; conflicts: string[] };
 export type CatalogSkill = { id: string; source: string; skillId: string; name: string; installs: number; available: boolean; installed?: string };
-export type CatalogPreview = { name: string; description: string; text: string; token: string; installed?: string };
+/** Where a featured skill comes from: its repository at a pinned commit, its license and who wrote it. */
+export type SkillSource = { author: string; license: string; repo: string; commit: string; path: string; url: string; pack?: string };
+export type CatalogPreview = { name: string; description: string; text: string; token: string; installed?: string; /** A featured skill's source. */ source?: SkillSource; /** A featured skill's files, the license among them. */ files?: string[] };
+/** A skill on the featured shelf ("skills-featured-v1"). Its id is `owner/repo/skill@commit7`: preview and install it as a catalog skill. */
+export type FeaturedSkill = SkillSource & { id: string; name: string; summary: string; group: string; installed?: string };
+
+/** How an app of the direct apps catalog signs in ("mcp-catalog-v1"). */
+export type McpCatalogAuth = "none" | "oauth" | "key";
+/** An app of the direct apps catalog, with where it stands on the computer. No value of a key is ever in it. */
+export type McpCatalogEntry = {
+  id: string;
+  name: string;
+  category: string;
+  categoryName: string;
+  /** One line, in Botkins' words. */
+  description: string;
+  transport: "http" | "stdio";
+  auth: McpCatalogAuth;
+  /** http: the server's address. */
+  url?: string;
+  /** stdio: the npm package, its exact version and license, the line that runs, and the names of the values it gets. */
+  package?: string;
+  version?: string;
+  license?: string;
+  command?: string;
+  env?: string[];
+  /** The fields a key entry asks for, by label only. */
+  keys: { id: string; label: string; hint?: string }[];
+  docs: string;
+  /** A letter tile: the app has no picture Botkins may show. */
+  icon: { letter: string };
+  /** A server on the computer that another app runs, and what it needs. */
+  local?: string;
+  added: boolean;
+  serverId?: string;
+  serverName?: string;
+  enabled?: boolean;
+  /** OAuth entries: signed in and not expired. */
+  signedIn?: boolean;
+  signingIn?: boolean;
+  /** Key entries: every key is in the vault. */
+  keysSet?: boolean;
+};
+export type McpCatalog = { entries: McpCatalogEntry[]; categories: { id: string; name: string; count: number }[] };
+/** What adding an app answers: its tool server, and whether the browser sign-in (signInMcpServer) comes next. */
+export type McpCatalogAdded = { serverId: string; next: "sign-in" | "done" };
 
 export type ModelChoice = { model: string; provider?: string; source?: string; reasoningEffort?: string };
 export type FastMode = "off" | "fast" | "ultrafast";
@@ -1199,6 +1244,16 @@ export type MarketAgent = {
   version?: string;
   author?: string;
   keywords?: string[];
+  /** Botkins' own templates: the named deliverable, how it is useful on day one, what it asks before, and a suggested pairing. */
+  deliverable?: string;
+  dayOne?: string;
+  approval?: string;
+  group?: "everyday" | "builder";
+  pairing?: { kind: "routine" | "proactive"; cadence?: string; note: string };
+  /** Catalog ids of apps that help it (mcpCatalog). */
+  apps?: string[];
+  /** A Home starter: shown before every other template. */
+  starter?: boolean;
 };
 /** A category's chip: how many templates the other filters leave in it. */
 export type MarketAgentCategory = { id: string; name: string; count: number };
@@ -1779,6 +1834,12 @@ export type Calls = {
   "skillsCatalog.search"(query: string): CatalogSkill[];
   "skillsCatalog.preview"(id: string): CatalogPreview;
   "skillsCatalog.install"(token: string, replace?: string[]): SkillImportResult;
+  /** The featured shelf ("skills-featured-v1"): upstream skills pinned to a commit. Preview and install them by id. */
+  "skillsCatalog.featured"(): FeaturedSkill[];
+  /** The direct apps catalog ("mcp-catalog-v1"). */
+  "mcpCatalog.list"(): McpCatalog;
+  /** Adds an app as a tool server, or sets its keys again. A stdio app needs `confirm`: its exact `command`. Owner only. */
+  "mcpCatalog.add"(id: string, options?: { keys?: Record<string, string>; confirm?: string }): McpCatalogAdded;
   "piPackages.browse"(query?: { query?: string; page?: number }): { packages: PiPackageListing[]; nextPage?: number };
   "piPackages.preview"(name: string): PiPackageVersion;
   "piPackages.list"(): InstalledPiPackage[];

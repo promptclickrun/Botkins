@@ -29,7 +29,19 @@ import {
 } from "node:fs";
 import { dirname, isAbsolute, join, normalize, relative, resolve, sep } from "node:path";
 import { configFile, declaredPath, dependencyFolder, describeStarts, filesReader, handedOn, lspNames, pluginStarts, startWarnings, STARTS } from "./plugin-reading.mjs";
-import { parseTemplateFile } from "./templates.mjs";
+import { parseTemplateFile, templateFields } from "./templates.mjs";
+import { bundledTemplates, contractOf, FIRST_PARTY_MARKETPLACE } from "./agent-templates-first-party.mjs";
+
+/** The templates that come with the app (desktop/agent-templates-first-party.mjs), checked as an imported template is. */
+const BUNDLED = bundledTemplates().map((entry) => ({ ...entry, template: { ...templateFields({ ...entry.template, instructions: entry.instructions }) } }));
+/** A bundled template as a client lists it: a marketplace listing with the template contract's fields. */
+function bundledListing(entry) {
+  return {
+    ...agentListing({ name: entry.name, category: entry.category, author: "Botkins", ...(entry.keywords && { keywords: entry.keywords }), template: entry.template }, FIRST_PARTY_MARKETPLACE),
+    ...contractOf(entry),
+    ...(entry.starter && { starter: true }),
+  };
+}
 
 export const PLUGIN_CATALOG_VERSION = "plugins-v1";
 export const MARKETPLACE_CACHE_TTL = 60 * 60 * 1000;
@@ -1119,6 +1131,12 @@ export class PluginCatalog {
     const marketplaceFilter = options.marketplace ? assertString(options.marketplace, "Marketplace id") : undefined;
     const category = options.category ? assertString(options.category, "Category") : undefined;
     const found = [];
+    const matches = (listing) => !text || [listing.name, listing.role, listing.summary, listing.categoryName, ...(listing.keywords || [])].filter(Boolean).join(" ").toLowerCase().includes(text);
+    // The app's own templates come first, the Home starters before the rest.
+    if (!marketplaceFilter || marketplaceFilter === FIRST_PARTY_MARKETPLACE.id) for (const entry of BUNDLED) {
+      const listing = bundledListing(entry);
+      if (matches(listing)) found.push(listing);
+    }
     for (const record of this.marketplacesById.values()) {
       if (marketplaceFilter && record.id !== marketplaceFilter) continue;
       for (const agent of await this._ensureAgents(record)) {
@@ -1140,6 +1158,11 @@ export class PluginCatalog {
     await this._init();
     assertString(id, "Template id");
     const at = id.lastIndexOf("@");
+    if (id.slice(at + 1) === FIRST_PARTY_MARKETPLACE.id) {
+      const entry = BUNDLED.find((item) => item.name === id.slice(0, at));
+      if (!entry) fail("That template is no longer in Botkins.");
+      return { ...bundledListing(entry), instructions: entry.template.instructions };
+    }
     const record = at > 0 ? this.marketplacesById.get(id.slice(at + 1)) : undefined;
     if (!record) fail("That template can't be found.");
     const agent = (await this._ensureAgents(record)).find((item) => item.name === id.slice(0, at));

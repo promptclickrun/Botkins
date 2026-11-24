@@ -567,7 +567,7 @@ test("a chat on a Claude model runs through the workspace with Botkins' tools on
   assert.equal(called.allowed.behavior, "allow");
   const options = log.queries.at(-1).options;
   assert.match(options.systemPrompt.append, /Pip/);
-  assert.match(options.systemPrompt.append, /Your skills:\n- today-panel: /);
+  assert.match(options.systemPrompt.append, /Your skills:\n(?:- .+\n)*- today-panel: /);
   assert.ok(called.names.includes("skill_read"));
   assert.deepEqual(options.skills, [], "the skills of the person's own Claude Code are not a bot's");
   assert.equal(options.effort, "max");

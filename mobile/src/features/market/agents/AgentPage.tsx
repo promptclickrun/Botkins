@@ -7,8 +7,8 @@ import { View } from "react-native";
 import type { MarketAgentTemplate } from "@/link/types";
 import { useCan, useCapability, useOnline } from "@/state/hooks";
 import { api } from "@/state/link";
-import { BotAvatar, Button, EmptyState, Group, Label, Loading, Page, space, T } from "@/ui";
-import { AGENTS_CAPABILITY, pageLine } from "./logic";
+import { BotAvatar, Button, EmptyState, Group, Label, Loading, Page, Row, space, T } from "@/ui";
+import { AGENTS_CAPABILITY, pageLine, pairingTitle } from "./logic";
 
 type Loaded = { id: string; template?: MarketAgentTemplate; error?: string };
 
@@ -63,6 +63,21 @@ export default function AgentPage() {
         )}
       </View>
       <Button title="Install" wide disabled={!online} onPress={() => router.push({ pathname: "/bot/new", params: { template: template.id } })} />
+      {(!!template.deliverable || !!template.dayOne || !!template.approval) && (
+        <Group>
+          {!!template.deliverable && <Row title="Delivers" subtitle={template.deliverable} subtitleLines={4} />}
+          {!!template.dayOne && <Row title="Works on day one" subtitle={template.dayOne} subtitleLines={6} />}
+          {!!template.approval && <Row title="Asks first" subtitle={template.approval} subtitleLines={6} />}
+        </Group>
+      )}
+      {!!template.pairing && (
+        <View>
+          <Label>Suggested pairing</Label>
+          <Group>
+            <Row title={pairingTitle(template.pairing)} subtitle={template.pairing.note || undefined} subtitleLines={6} />
+          </Group>
+        </View>
+      )}
       {!!template.instructions && (
         <View>
           <Label>Instructions</Label>
