@@ -1,0 +1,35 @@
+#!/bin/sh
+# What the Botkins desktop's menu opens:
+#   botkins   brings the Botkins window forward; with no window (the terminal host on a server),
+#             a terminal with `botkins status`
+#   terminal  a terminal in the kit's colors
+#   files     Midnight Commander, a file manager, in that terminal
+# xterm, mc and xdotool are installed with the display (desktop/Dockerfile, deploy/azure/install.sh).
+set -u
+
+# The service account's login shell is nologin. A terminal needs a real one.
+case "${SHELL:-}" in
+  ""|*nologin|*/false) if [ -x /bin/bash ]; then SHELL=/bin/bash; else SHELL=/bin/sh; fi ;;
+esac
+export SHELL
+cd "${HOME:-/}" 2>/dev/null || cd /
+
+term() { # <title> [command...]
+  title=$1; shift
+  exec xterm -title "$title" -class Botkins-Terminal -geometry 110x32 \
+    -fa 'DejaVu Sans Mono' -fs 11 -bg '#251E1A' -fg '#FFF0D6' -cr '#EF9E78' "$@"
+}
+
+case "${1:-}" in
+  botkins)
+    win=$(xdotool search --onlyvisible --class --classname '^botkins(-desktop)?$' 2>/dev/null | head -n 1)
+    if [ -n "$win" ]; then exec xdotool windowactivate "$win"; fi
+    if command -v botkins >/dev/null; then
+      term Botkins -e "$SHELL" -c 'botkins status; echo; exec "$SHELL"'
+    fi
+    term Terminal
+    ;;
+  terminal) term Terminal ;;
+  files) term Files -e mc ;;
+  *) echo "usage: botkins-desktop-open botkins|terminal|files" >&2; exit 64 ;;
+esac

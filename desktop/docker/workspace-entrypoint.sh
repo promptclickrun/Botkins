@@ -41,7 +41,9 @@ while ! xdpyinfo -display "$DISPLAY" >/dev/null 2>&1; do
   sleep 0.1
 done
 
-openbox --sm-disable >/tmp/botkins-openbox.log 2>&1 &
+# This container started the display above, so it gets the Botkins desktop: the kit's background,
+# and Openbox with the Botkins theme and menu (restarted if it stops). See docker/desktop.
+BOTKINS_DESKTOP_MANAGED=1 /usr/local/share/botkins-desktop/botkins-desktop >/tmp/botkins-openbox.log 2>&1 &
 wm_pid=$!
 
 # Use the normal Electron entry point with a virtual display. This intentionally does

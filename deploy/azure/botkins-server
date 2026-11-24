@@ -4,7 +4,7 @@
 #   botkins-server pair            open a new pairing code and print its link
 #   botkins-server link            print the open pairing link, if there is one
 #   botkins-server status          show the services and the status of Botkins
-#   botkins-server logs [service]  follow a log: botkins (the default), relay, caddy or display
+#   botkins-server logs [service]  follow a log: botkins (the default), relay, caddy, display or desktop
 #   botkins-server screen on|off   turn Screen access on or off. Paired phones stay paired.
 #   botkins-server update [ref]    update this server's setup, the relay and Botkins
 #
@@ -81,7 +81,7 @@ case "$1" in
   link) link || { echo "No pairing link is open. Run: botkins-server pair" >&2; exit 1; } ;;
   status)
     systemctl --no-pager --lines=0 status botkins.service botkins-relay.service caddy.service || true
-    if [ "$(setting MODE)" = screen ]; then systemctl --no-pager --lines=0 status botkins-display.service || true; fi
+    if [ "$(setting MODE)" = screen ]; then systemctl --no-pager --lines=0 status botkins-display.service botkins-desktop.service || true; fi
     echo
     botkins status
     ;;
@@ -91,7 +91,8 @@ case "$1" in
       relay) unit=botkins-relay ;;
       caddy) unit=caddy ;;
       display) unit=botkins-display ;;
-      *) echo "botkins-server logs: botkins, relay, caddy or display." >&2; exit 64 ;;
+      desktop) unit=botkins-desktop ;;
+      *) echo "botkins-server logs: botkins, relay, caddy, display or desktop." >&2; exit 64 ;;
     esac
     journalctl -u "$unit.service" -n 200 -f
     ;;
