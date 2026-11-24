@@ -974,6 +974,8 @@ export type Appearance = {
   font?: string;
   fontPicked?: boolean;
   textSize?: "small" | "default" | "large" | "larger";
+  /** Backdrop behind Liquid Glass surfaces, on computers that support it. */
+  backdrop?: "clean" | "mesh" | "botkins" | "grid";
   /** Missing on older computers means the desktop's usual default: on. */
   avatarAnimations?: boolean;
 };

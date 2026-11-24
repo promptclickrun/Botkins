@@ -18,8 +18,9 @@ import { activityLabel, type AvatarState, useBot, useBots, useCan, useCapability
 import { api, attempt, loadEarlier, reactToMessage, watchReasoning } from "@/state/link";
 import { effectiveModel, effortLabel, findModel, modelName } from "@/state/models";
 import { type ChatView, pendingSends, showToast, useApp } from "@/state/store";
+import { usePrefs } from "@/state/prefs";
 import { useTurnMarks } from "@/state/turnMarks";
-import { AvatarMotion, BotAvatar, Button, Chip, EmptyState, hasGlass, IconButton, LinkBanner, Loading, radius, space, T, Tap, tint, useOnShow, useShape, useTextPrompt, useTheme } from "@/ui";
+import { AvatarMotion, BackdropLayer, backdropBaseColor, BotAvatar, Button, Chip, EmptyState, Glass, hasGlass, IconButton, LinkBanner, Loading, radius, space, T, Tap, tint, useOnShow, useShape, useTextPrompt, useTheme } from "@/ui";
 import { speakText, stopSpeech } from "@/features/voice/tts";
 import { endTalk, TalkBar, useTalk } from "../voice/api";
 import { useLiveCall } from "../voice/liveCall";
@@ -231,23 +232,38 @@ function RoutineBanner({ chat }: { chat: ChatSummary }) {
 /** Messages waiting for the turn under way. Its button is the desktop app's: "Steer now" when the turn takes a steer, else "Send next". */
 function Queued({ chatId, items, steerable }: { chatId: string; items: QueuedMessage[]; steerable: boolean }) {
   const { colors } = useTheme();
+  const hasBackdrop = usePrefs((prefs) => prefs.backdrop !== "clean");
   return (
     <ScrollView horizontal showsHorizontalScrollIndicator={false} keyboardShouldPersistTaps="handled" contentContainerStyle={{ paddingHorizontal: space.lg, gap: space.sm }}>
-      {items.map((item) => (
-        <View key={item.id} style={{ height: 40, maxWidth: 300, flexDirection: "row", alignItems: "center", paddingLeft: space.md, borderRadius: radius.pill, backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.line }}>
-          <T variant="subhead" color="ink2" numberOfLines={1} style={{ flexShrink: 1 }} accessibilityLabel={"Queued: " + item.text}>
-            {item.text}
-          </T>
-          <Tap onPress={() => void attempt(api.sendNow(chatId, item.id))} feel="select" hitSlop={{ top: 4, bottom: 4 }} accessibilityLabel={steerable ? "Steer now" : "Send next"} style={{ height: 40, justifyContent: "center", paddingLeft: space.md, paddingRight: space.xs }}>
-            <T variant="footnote" weight="700" color="accentText">
-              {steerable ? "Steer now" : "Send next"}
+      {items.map((item) => {
+        const inner = (
+          <>
+            <T variant="subhead" color="ink2" numberOfLines={1} style={{ flexShrink: 1 }} accessibilityLabel={"Queued: " + item.text}>
+              {item.text}
             </T>
-          </Tap>
-          <Tap onPress={() => void attempt(api.unqueue(chatId, item.id))} feel="select" hitSlop={{ top: 4, bottom: 4, right: 4 }} accessibilityLabel="Remove from queue" style={{ width: 40, height: 40, alignItems: "center", justifyContent: "center" }}>
-            <X size={15} color={colors.muted} strokeWidth={2.4} />
-          </Tap>
-        </View>
-      ))}
+            <Tap onPress={() => void attempt(api.sendNow(chatId, item.id))} feel="select" hitSlop={{ top: 4, bottom: 4 }} accessibilityLabel={steerable ? "Steer now" : "Send next"} style={{ height: 40, justifyContent: "center", paddingLeft: space.md, paddingRight: space.xs }}>
+              <T variant="footnote" weight="700" color="accentText">
+                {steerable ? "Steer now" : "Send next"}
+              </T>
+            </Tap>
+            <Tap onPress={() => void attempt(api.unqueue(chatId, item.id))} feel="select" hitSlop={{ top: 4, bottom: 4, right: 4 }} accessibilityLabel="Remove from queue" style={{ width: 40, height: 40, alignItems: "center", justifyContent: "center" }}>
+              <X size={15} color={colors.muted} strokeWidth={2.4} />
+            </Tap>
+          </>
+        );
+        if (hasBackdrop) {
+          return (
+            <Glass key={item.id} style={{ height: 40, maxWidth: 300, flexDirection: "row", alignItems: "center", paddingLeft: space.md, borderRadius: radius.pill, overflow: "hidden" }}>
+              {inner}
+            </Glass>
+          );
+        }
+        return (
+          <View key={item.id} style={{ height: 40, maxWidth: 300, flexDirection: "row", alignItems: "center", paddingLeft: space.md, borderRadius: radius.pill, backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.line }}>
+            {inner}
+          </View>
+        );
+      })}
     </ScrollView>
   );
 }
@@ -959,20 +975,27 @@ function ChatScreenScreen({ pane: paneId, onLeave: leavePane, onList }: { pane?:
   // A pane in the Chats tab keeps its composer above a tab bar at the bottom (none when the bar is the side rail).
   const bottomInset = insets.bottom + (paneId ? shape.tabRoom : 0);
   const spacer = useAnimatedStyle(() => ({ height: Math.max(Math.abs(keyboard.height.value), bottomInset) }));
-  // T3 Code's open chat: on a phone with Liquid Glass the bar is see-through and the chat scrolls
-  // under it, behind a soft fade, and the message box floats over the chat on glass. The bar's
-  // height, the banners under it and the box are measured so the rows can rest clear of them.
-  const glassBar = !paneId && hasGlass();
+  const backdrop = usePrefs((prefs) => prefs.backdrop);
+  const hasBackdrop = backdrop !== "clean";
+  // T3 Code's open chat: on a phone with Liquid Glass (or an active backdrop on iOS) the bar is see-through
+  // and the chat scrolls under it, behind a soft fade, and the message box floats over the chat on glass.
+  const glassBar = !paneId && (hasGlass() || (hasBackdrop && Platform.OS === "ios"));
   const barHeight = useContext(HeaderHeightContext) ?? 0;
   const [paneBar, setPaneBar] = useState(0);
   const [banners, setBanners] = useState(0);
   const [dock, setDock] = useState(0);
   const topBar = glassBar ? barHeight : paneId ? paneBar : 0;
 
-  if (leaving) return <View style={{ flex: 1, backgroundColor: colors.canvas }} />;
+  if (leaving)
+    return (
+      <View style={{ flex: 1, backgroundColor: hasBackdrop ? "transparent" : colors.canvas }}>
+        {hasBackdrop && <BackdropLayer backdrop={backdrop} />}
+      </View>
+    );
   if (!chat)
     return (
-      <View style={{ flex: 1, backgroundColor: colors.canvas, justifyContent: "center" }}>
+      <View style={{ flex: 1, backgroundColor: hasBackdrop ? "transparent" : colors.canvas, justifyContent: "center" }}>
+        {hasBackdrop && <BackdropLayer backdrop={backdrop} />}
         {missing === "gone" && !paneId ? <EmptyState icon={X} title="This chat is gone" action="Back" onAction={leave} /> : missing === "loading" || paneId ? <Loading /> : null}
       </View>
     );
@@ -1014,7 +1037,8 @@ function ChatScreenScreen({ pane: paneId, onLeave: leavePane, onList }: { pane?:
   const room = { top: topBar + banners, dock: dock + idleTodoRoom, bottom: dock + idleTodoRoom + (working ? CAPSULE + space.sm : 0) };
   const column = (
     <MessageLink.Provider value={showPulls ? openMessageLink : openLink}>
-    <View style={{ flex: 1, backgroundColor: colors.canvas }}>
+    <View style={{ flex: 1, backgroundColor: hasBackdrop ? "transparent" : colors.canvas }}>
+      {hasBackdrop && <BackdropLayer backdrop={backdrop} />}
       {reaction?.chatId === chatId && reaction.computer === computer && <ReactionPicker close={() => setReaction(undefined)} submit={emoji => {
         setReaction(undefined);
         void attempt(reactToMessage(chatId, reaction.index, reaction.time ?? null, emoji));
@@ -1113,7 +1137,8 @@ function ChatScreenScreen({ pane: paneId, onLeave: leavePane, onList }: { pane?:
   );
   if (!book || !project) return column;
   return (
-    <View style={{ flex: 1, flexDirection: "row", backgroundColor: colors.canvas }}>
+    <View style={{ flex: 1, flexDirection: "row", backgroundColor: hasBackdrop ? "transparent" : colors.canvas }}>
+      {hasBackdrop && <BackdropLayer backdrop={backdrop} />}
       <View style={{ width: Math.max(0, book.x - shape.left) }}>{column}</View>
       <View style={{ width: book.width }} />
       <View style={{ flex: 1, paddingTop: insets.top }}>
@@ -1151,9 +1176,27 @@ function EdgeFree({ children }: { children: ReactNode & {} }) {
  */
 const FADE_EDGE = 28;
 function Fade({ edge, cover }: { edge: "top" | "bottom"; cover: number }) {
-  const { colors } = useTheme();
+  const { colors, dark } = useTheme();
+  const backdrop = usePrefs((prefs) => prefs.backdrop);
+  const hasBackdrop = backdrop !== "clean";
   if (cover <= 0) return null;
   const top = edge === "top";
+  if (hasBackdrop) {
+    // Soft translucent scrim so floating Liquid Glass chrome visibly refracts the backdrop while keeping text legible.
+    const base = backdropBaseColor(backdrop, dark, colors.canvas);
+    const strong = tint(base, dark ? 0.56 : 0.5);
+    const soft = tint(base, dark ? 0.24 : 0.2);
+    const clear = tint(base, 0);
+    return (
+      <View pointerEvents="none" style={{ position: "absolute", left: 0, right: 0, height: cover + FADE_EDGE, ...(top ? { top: 0 } : { bottom: 0 }) }}>
+        <LinearGradient
+          colors={top ? [strong, soft, clear] : [clear, soft, strong]}
+          locations={top ? [0, 0.72, 1] : [0, 0.28, 1]}
+          style={{ flex: 1 }}
+        />
+      </View>
+    );
+  }
   return (
     <View pointerEvents="none" style={{ position: "absolute", left: 0, right: 0, height: cover + FADE_EDGE, ...(top ? { top: 0 } : { bottom: 0 }) }}>
       {!top && <LinearGradient colors={[tint(colors.canvas, 0), colors.canvas]} style={{ height: FADE_EDGE }} />}

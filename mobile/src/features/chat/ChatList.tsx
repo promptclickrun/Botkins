@@ -6,9 +6,10 @@ import Animated, { FadeIn, useAnimatedRef, useAnimatedScrollHandler, useSharedVa
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import type { BoardScroll } from "@/features/home/BotBoard";
 import type { ChatSummary } from "@/link/types";
-import { useBots, useCan, useCapability, useChats, usePart } from "@/state/hooks";
+import { isConversation, useBots, useCan, useCapability, useChats, usePart } from "@/state/hooks";
+import { usePrefs } from "@/state/prefs";
 import { useApp } from "@/state/store";
-import { Chip, EmptyState, foldGap, IconButton, LinkBanner, listWidth, Mascot, radius, space, T, Tap, useShape, useTextPrompt, useTheme } from "@/ui";
+import { BackdropLayer, Chip, EmptyState, foldGap, Glass, IconButton, LinkBanner, listWidth, Mascot, radius, space, T, Tap, tint, useShape, useTextPrompt, useTheme } from "@/ui";
 import { ChatBoard } from "./ChatBoard";
 import { ChatPane } from "./ChatScreen";
 import { markChatsPageRead } from "./open";
@@ -18,8 +19,9 @@ import { chatsPageUnreadChats, isChatsPageArchived, isChatsPageChat } from "./un
 
 function SearchField({ value, onChange }: { value: string; onChange: (text: string) => void }) {
   const { colors, dark, type, control } = useTheme();
-  return (
-    <View style={{ height: control.field, flexDirection: "row", alignItems: "center", gap: space.sm, paddingLeft: space.md, borderRadius: radius.md, backgroundColor: colors.sunken }}>
+  const hasBackdrop = usePrefs((prefs) => prefs.backdrop !== "clean");
+  const inner = (
+    <>
       <Search size={17} color={colors.muted} strokeWidth={2.3} />
       <TextInput
         value={value}
@@ -42,6 +44,21 @@ function SearchField({ value, onChange }: { value: string; onChange: (text: stri
           </View>
         </Tap>
       )}
+    </>
+  );
+  if (hasBackdrop) {
+    return (
+      <Glass
+        tintColor={tint(colors.surface, dark ? 0.28 : 0.42)}
+        style={{ height: control.field, flexDirection: "row", alignItems: "center", gap: space.sm, paddingLeft: space.md, borderRadius: radius.md, overflow: "hidden" }}
+      >
+        {inner}
+      </Glass>
+    );
+  }
+  return (
+    <View style={{ height: control.field, flexDirection: "row", alignItems: "center", gap: space.sm, paddingLeft: space.md, borderRadius: radius.md, backgroundColor: colors.sunken }}>
+      {inner}
     </View>
   );
 }
@@ -72,6 +89,8 @@ function Skeleton() {
 function ChatsFrame({ children, scroll, scrollEnabled, actions, inner }: { children: ReactNode; scroll: BoardScroll; scrollEnabled: boolean; actions?: ReactNode; inner?: boolean }) {
   useScrollToTop(scroll.ref);
   const { colors } = useTheme();
+  const backdrop = usePrefs((prefs) => prefs.backdrop);
+  const hasBackdrop = backdrop !== "clean";
   const insets = useSafeAreaInsets();
   // Beside the side rail on iPhone Duo, and with no room for a tab bar that is in the rail.
   const shape = useShape();
@@ -88,10 +107,11 @@ function ChatsFrame({ children, scroll, scrollEnabled, actions, inner }: { child
     },
   });
   return (
-    <View style={{ flex: 1, backgroundColor: colors.canvas }}>
+    <View style={{ flex: 1, backgroundColor: hasBackdrop ? "transparent" : colors.canvas }}>
+      {hasBackdrop && <BackdropLayer backdrop={backdrop} />}
       <Animated.ScrollView
         ref={scroll.ref}
-        style={{ flex: 1 }}
+        style={{ flex: 1, backgroundColor: "transparent" }}
         contentContainerStyle={{ paddingLeft: space.xl + shape.left, paddingRight: inner ? space.lg : space.xl + shape.right, paddingTop: insets.top + space.md, paddingBottom: shape.tabRoom + insets.bottom + space.xxl, gap: space.xl }}
         contentInsetAdjustmentBehavior="never"
         keyboardShouldPersistTaps="handled"

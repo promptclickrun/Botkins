@@ -9,7 +9,7 @@ import type { SpaceSummary } from "@/link/types";
 import { useBots, usePart } from "@/state/hooks";
 import { type PanelPin, usePrefs } from "@/state/prefs";
 import { panelHeadline } from "@/state/widgetData";
-import { Dot, Label, lift, radius, slopFor, space as gap, T, Tap, useTheme } from "@/ui";
+import { Dot, Glass, Label, lift, radius, slopFor, space as gap, T, Tap, tint, useTheme } from "@/ui";
 import { markItemSeen, openPanel, openSpace, openSpaces, setPanelPinned, useSeenMarks, useSpaceContent, useSpaces } from "./data";
 import { spaceIcon } from "./icons";
 import { changedSince, moreLine, panelPinsHere, pinnedLine, spaceTitle } from "./logic";
@@ -22,7 +22,8 @@ const LINE = 38;
 /** A pinned space: its name and what it holds, then its first panels with what each says. Feed, Ideas and Goals say their newest cards. */
 function SpaceCard({ space }: { space: SpaceSummary }) {
   const theme = useTheme();
-  const { colors } = theme;
+  const { colors, dark } = theme;
+  const hasBackdrop = usePrefs((prefs) => prefs.backdrop !== "clean");
   const { content } = useSpaceContent(space.id);
   const me = myself(usePart("meta"));
   const marked = useSeenMarks((marks) => marks.spaces[space.id] ?? 0);
@@ -33,9 +34,10 @@ function SpaceCard({ space }: { space: SpaceSummary }) {
   const Icon = spaceIcon(space);
   const title = spaceTitle(space);
   const more = moreLine(panels.length || cards.length, LINES);
-  const line = { minHeight: LINE, flexDirection: "row", alignItems: "center", gap: gap.sm, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.line } as const;
-  return (
-    <View style={[{ paddingHorizontal: gap.lg, paddingVertical: gap.xs, borderRadius: radius.lg, backgroundColor: colors.surface, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.line }, lift(theme)]}>
+  const dividerColor = hasBackdrop ? (dark ? "rgba(255,255,255,0.12)" : "rgba(15,23,42,0.10)") : colors.line;
+  const line = { minHeight: LINE, flexDirection: "row", alignItems: "center", gap: gap.sm, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: dividerColor } as const;
+  const body = (
+    <>
       <Tap onPress={() => openSpace(space.id)} feel="select" sink={0.99} hitSlop={0} accessibilityLabel={title + ", " + pinnedLine(space) + ", open"} style={{ minHeight: 48, flexDirection: "row", alignItems: "center", gap: gap.sm }}>
         <Icon size={18} color={colors.ink} strokeWidth={2.2} />
         <T variant="headline" numberOfLines={1} style={{ flexShrink: 1 }}>
@@ -91,6 +93,20 @@ function SpaceCard({ space }: { space: SpaceSummary }) {
           </T>
         </Tap>
       )}
+    </>
+  );
+  if (hasBackdrop) {
+    return (
+      <View style={lift(theme)}>
+        <Glass tintColor={tint(colors.surface, dark ? 0.3 : 0.44)} style={{ paddingHorizontal: gap.lg, paddingVertical: gap.xs, borderRadius: radius.lg, overflow: "hidden" }}>
+          {body}
+        </Glass>
+      </View>
+    );
+  }
+  return (
+    <View style={[{ paddingHorizontal: gap.lg, paddingVertical: gap.xs, borderRadius: radius.lg, backgroundColor: colors.surface, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.line }, lift(theme)]}>
+      {body}
     </View>
   );
 }

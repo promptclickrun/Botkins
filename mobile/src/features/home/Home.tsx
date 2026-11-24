@@ -22,7 +22,7 @@ import { api, attempt } from "@/state/link";
 import { setPrefs, usePrefs } from "@/state/prefs";
 import { useApp } from "@/state/store";
 import { useProfileHosts } from "@/state/profile";
-import { badgeColors, BotAvatar, Button, Chip, Dot, EmptyState, Group, HoldMenu, IconButton, IconTile, LinkBanner, Mascot, Row, space, T, Tap, useShape, useTheme } from "@/ui";
+import { BackdropLayer, badgeColors, BotAvatar, Button, Chip, Dot, EmptyState, Group, HoldMenu, IconButton, IconTile, LinkBanner, Mascot, Row, space, T, Tap, useShape, useTheme } from "@/ui";
 import { computerActions } from "@/state/computers";
 import { arrangeBots, type BotFilter, filterBots, filterLabels, todayRow } from "./arrange";
 import { AVATAR, BotBoard, type BoardScroll, BotMenu, BotRow } from "./BotBoard";
@@ -173,6 +173,8 @@ function SettingsButton() {
 function HomeFrame({ children, scroll, scrollEnabled, onScrolled, quietLink }: { children: ReactNode; scroll: BoardScroll; scrollEnabled: boolean; onScrolled: () => void; /** The status beside the computer pill says the link is down, so only a revoked link keeps the banner. */ quietLink?: boolean }) {
   useScrollToTop(scroll.ref);
   const { colors } = useTheme();
+  const backdrop = usePrefs((prefs) => prefs.backdrop);
+  const hasBackdrop = backdrop !== "clean";
   const insets = useSafeAreaInsets();
   // Beside the side rail on iPhone Duo, and with no room for a tab bar that is in the rail.
   const shape = useShape();
@@ -196,10 +198,11 @@ function HomeFrame({ children, scroll, scrollEnabled, onScrolled, quietLink }: {
     onMomentumEnd: () => scheduleOnRN(onScrolled),
   });
   return (
-    <View style={{ flex: 1, backgroundColor: colors.canvas }}>
+    <View style={{ flex: 1, backgroundColor: hasBackdrop ? "transparent" : colors.canvas }}>
+      {hasBackdrop && <BackdropLayer backdrop={backdrop} />}
       <Animated.ScrollView
         ref={scroll.ref}
-        style={{ flex: 1 }}
+        style={{ flex: 1, backgroundColor: "transparent" }}
         contentContainerStyle={{ paddingLeft: space.xl + shape.left, paddingRight: space.xl + shape.right, paddingTop: insets.top + space.md, paddingBottom: shape.tabRoom + insets.bottom + space.xxl, gap: space.xl }}
         contentInsetAdjustmentBehavior="never"
         keyboardShouldPersistTaps="handled"

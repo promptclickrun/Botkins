@@ -5,7 +5,8 @@ import { FlatList, type ListViewToken, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { searchToolkits } from "@/composio/catalog";
 import { type Toolkit, useComposio } from "@/composio/store";
-import { EmptyState, space, T, useTheme } from "@/ui";
+import { usePrefs } from "@/state/prefs";
+import { BackdropLayer, EmptyState, space, T, useTheme } from "@/ui";
 import { ListCell, RowSkeleton, SearchField } from "./parts";
 
 // The accounts of the rows on screen are read a moment after scrolling stops. FlatList wants these
@@ -22,6 +23,8 @@ const keyOf = (toolkit: Toolkit) => toolkit.slug;
 /** Every app in a category (or every app, for "all"), most used first. */
 export default function Category() {
   const { colors } = useTheme();
+  const backdrop = usePrefs((prefs) => prefs.backdrop);
+  const hasBackdrop = backdrop !== "clean";
   const insets = useSafeAreaInsets();
   const { id } = useLocalSearchParams<{ id: string }>();
   const catalog = useComposio((state) => state.catalog);
@@ -62,8 +65,10 @@ export default function Category() {
   );
 
   return (
-    <View style={{ flex: 1, backgroundColor: colors.canvas }}>
+    <View style={{ flex: 1, backgroundColor: hasBackdrop ? "transparent" : colors.canvas }}>
+      {hasBackdrop && <BackdropLayer backdrop={backdrop} />}
       <FlatList
+        style={{ backgroundColor: "transparent" }}
         data={items}
         keyExtractor={keyOf}
         renderItem={({ item, index }) => <ListCell toolkit={item} first={index === 0} last={index === last} />}

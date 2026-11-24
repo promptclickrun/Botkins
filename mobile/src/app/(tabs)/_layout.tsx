@@ -19,6 +19,7 @@ export default function TabsLayout() {
   const spacesOn = useSpacesOn();
   const spaces = useCan("today", "view") && spacesOn;
   const order = usePrefs((prefs) => prefs.tabOrder);
+  const hasBackdrop = usePrefs((prefs) => prefs.backdrop !== "clean");
   // Each tab scrolls its own vertical view when reselected. Settings is a button on Home, not a tab.
   const tabs: Record<TabId, ReactElement> = {
     index: (
@@ -56,8 +57,9 @@ export default function TabsLayout() {
     ),
   };
   // The person's own order (Settings › Appearance › Tabs). The bar is built again when it changes.
+  // Omitting opaque backgroundColor when a backdrop is active lets the iOS Liquid Glass tab bar refract it.
   return (
-    <NativeTabs key={order.join()} tintColor={colors.accent} backgroundColor={colors.canvas} badgeBackgroundColor={badge.background} badgeTextColor={badge.text}>
+    <NativeTabs key={order.join()} tintColor={colors.accent} backgroundColor={hasBackdrop ? undefined : colors.canvas} badgeBackgroundColor={badge.background} badgeTextColor={badge.text}>
       {order.map((id) => tabs[id])}
     </NativeTabs>
   );

@@ -1,4 +1,6 @@
 export { AppLogo } from "./AppLogo";
+export { BackdropLayer, type BackdropLayerProps } from "./Backdrop";
+export { BACKDROP_IDS, BACKDROPS, backdropBaseColor, backdropById, type BackdropDef, type BackdropId, DEFAULT_BACKDROP, isBackdrop } from "./backdrops";
 export { Badge, Chip, Divider, Dot, EmptyState, Segmented, type Tone } from "./Bits";
 export { Blocks } from "./Blocks";
 export { AvatarMotion, useAvatarMotion } from "./avatarMotion";
@@ -9,7 +11,7 @@ export { useShape } from "./useShape";
 export { Button, IconButton } from "./Button";
 export { ColorPicker } from "./ColorPicker";
 export { Field } from "./Field";
-export { Glass, hasGlass } from "./Glass";
+export { Glass, type GlassProps, hasGlass } from "./Glass";
 export { haptic } from "./haptics";
 export { HoldMenu } from "./HoldMenu";
 export { TextHoldMenu } from "./LinkHold";

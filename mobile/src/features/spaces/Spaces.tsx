@@ -17,7 +17,7 @@ import { api, attempt } from "@/state/link";
 import { type PanelPin, usePrefs } from "@/state/prefs";
 import { panelHeadline } from "@/state/widgetData";
 import { useApp } from "@/state/store";
-import { BotAvatar, Dot, EmptyState, HoldMenu, IconButton, IconTile, Label, LinkBanner, Loading, Page, space as gap, T, Tap, type TextPromptOptions, useShape, useTextPrompt, useTheme } from "@/ui";
+import { BackdropLayer, BotAvatar, Dot, EmptyState, HoldMenu, IconButton, IconTile, Label, LinkBanner, Loading, Page, space as gap, T, Tap, type TextPromptOptions, useShape, useTextPrompt, useTheme } from "@/ui";
 import { markSpacesRead, openPanel, openShare, openSpace, setPanelPinned, setPinned, useArranging, useSpaceContent, useSpaces, useSpacesOn } from "./data";
 import { spaceIcon } from "./icons";
 import { panelPinsHere, rowLine, spaceDropPlan, spaceItems, spaceTitle, type SpaceZone, withMove } from "./logic";
@@ -100,6 +100,8 @@ const INSET = gap.lg + 40 + gap.md;
 function SpacesFrame({ children, scroll, scrollEnabled, actions }: { children: ReactNode; scroll: BoardScroll; scrollEnabled: boolean; actions?: ReactNode }) {
   useScrollToTop(scroll.ref);
   const { colors } = useTheme();
+  const backdrop = usePrefs((prefs) => prefs.backdrop);
+  const hasBackdrop = backdrop !== "clean";
   const insets = useSafeAreaInsets();
   // Beside the side rail on iPhone Duo, and with no room for a tab bar that is in the rail.
   const shape = useShape();
@@ -116,10 +118,11 @@ function SpacesFrame({ children, scroll, scrollEnabled, actions }: { children: R
     },
   });
   return (
-    <View style={{ flex: 1, backgroundColor: colors.canvas }}>
+    <View style={{ flex: 1, backgroundColor: hasBackdrop ? "transparent" : colors.canvas }}>
+      {hasBackdrop && <BackdropLayer backdrop={backdrop} />}
       <Animated.ScrollView
         ref={scroll.ref}
-        style={{ flex: 1 }}
+        style={{ flex: 1, backgroundColor: "transparent" }}
         contentContainerStyle={{ paddingLeft: gap.xl + shape.left, paddingRight: gap.xl + shape.right, paddingTop: insets.top + gap.md, paddingBottom: shape.tabRoom + insets.bottom + gap.xxl, gap: gap.xl }}
         contentInsetAdjustmentBehavior="never"
         showsVerticalScrollIndicator={false}

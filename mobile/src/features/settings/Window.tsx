@@ -8,7 +8,7 @@ import { StyleSheet, View } from "react-native";
 import type { Appearance, Preferences } from "@/link/types";
 import { useOnline, usePart, useSettings } from "@/state/hooks";
 import { api } from "@/state/link";
-import { brand, Group, IconButton, IconTile, Label, Loading, Page, radius, Row, Segmented, space, T, THEMES, type ThemeDef, themeById, useTheme } from "@/ui";
+import { BACKDROPS, backdropById, brand, Group, IconButton, IconTile, Label, Loading, Page, radius, Row, Segmented, space, T, THEMES, type ThemeDef, themeById, useTheme } from "@/ui";
 import { DESKTOP_TEXT_SIZES, desktopFonts, desktopFontShown, isUsualOrder, movePlace, type Place, PLACES, placeOrder } from "./computer";
 import { useHeld } from "./shared";
 
@@ -84,6 +84,17 @@ export default function Window() {
         <Label style={{ marginBottom: 0 }}>Light or dark</Label>
         <Segmented options={MODES} value={look.theme} onChange={(theme) => setLook({ theme })} />
       </View>
+
+      {look.backdrop !== undefined && (
+        <View style={{ gap: space.md }}>
+          <Label style={{ marginBottom: 0 }}>Backdrop</Label>
+          <Segmented
+            options={BACKDROPS.map((item) => ({ value: item.id, label: item.name }))}
+            value={backdropById(look.backdrop).id}
+            onChange={(backdrop) => setLook({ backdrop })}
+          />
+        </View>
+      )}
 
       {(font || look.textSize !== undefined) && (
         <View style={{ gap: space.md }}>

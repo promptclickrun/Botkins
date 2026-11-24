@@ -1,6 +1,7 @@
 // Choices that belong to this phone, not to the computer: how the app looks and feels.
 import { keep, readKept } from "@/state/keep";
 import { create } from "zustand";
+import { type BackdropId, DEFAULT_BACKDROP, isBackdrop } from "@/ui/backdrops";
 import { DEFAULT_FONT, FONT_IDS, type FontId } from "@/ui/fonts";
 import { DEFAULT_THEME, THEMES } from "@/ui/themes";
 import { DEFAULT_AVATAR_ANIMATIONS, readAvatarAnimations } from "./avatarPrefs";
@@ -16,6 +17,8 @@ export type Prefs = {
   darkTheme: string;
   /** The person picked a theme themselves. Until then the app wears the default one, whatever was saved. */
   themePicked: boolean;
+  /** The backdrop behind screens so Liquid Glass surfaces refract color or texture. */
+  backdrop: BackdropId;
   /** The body text size, 13 to 20. The whole type scale follows it. */
   textSize: number;
   /** The font the app is read in (ids from @/ui/fonts). */
@@ -44,7 +47,7 @@ export type Prefs = {
   primaryHost: string | null;
 };
 export type PanelPin = { spaceId: string; panelId: string };
-const defaults: Prefs = { mode: "system", lightTheme: DEFAULT_THEME, darkTheme: DEFAULT_THEME, themePicked: false, textSize: 16, font: DEFAULT_FONT, fontPicked: false, controlSize: "regular", haptics: true, avatarAnimations: DEFAULT_AVATAR_ANIMATIONS, todayOpen: true, foldedProviders: [], toldNotices: [], tabOrder: USUAL_TABS, openSpaces: [], homePanels: [], computerOrder: [], primaryHost: null };
+const defaults: Prefs = { mode: "system", lightTheme: DEFAULT_THEME, darkTheme: DEFAULT_THEME, themePicked: false, backdrop: DEFAULT_BACKDROP, textSize: 16, font: DEFAULT_FONT, fontPicked: false, controlSize: "regular", haptics: true, avatarAnimations: DEFAULT_AVATAR_ANIMATIONS, todayOpen: true, foldedProviders: [], toldNotices: [], tabOrder: USUAL_TABS, openSpaces: [], homePanels: [], computerOrder: [], primaryHost: null };
 
 export const usePrefs = create<Prefs>(() => defaults);
 
@@ -69,6 +72,7 @@ function read(saved: Record<string, unknown>): Prefs {
     lightTheme: theme(saved.lightTheme),
     darkTheme: theme(saved.darkTheme),
     themePicked: picked || (isTheme(saved.lightTheme) && saved.lightTheme !== OLD_DEFAULT) || (isTheme(saved.darkTheme) && saved.darkTheme !== OLD_DEFAULT),
+    backdrop: isBackdrop(saved.backdrop) ? saved.backdrop : defaults.backdrop,
     textSize: Math.max(13, Math.min(20, size)),
     // A saved font counts when the person picked it. Before that was recorded, the old default
     // (the kit's pairing) was saved for everyone, so only another font shows a choice was made.

@@ -2,6 +2,8 @@
 import { ChevronRight, type LucideIcon } from "lucide-react-native";
 import { Children, Fragment, isValidElement, type ReactNode } from "react";
 import { type StyleProp, StyleSheet, Switch, View, type ViewStyle } from "react-native";
+import { usePrefs } from "@/state/prefs";
+import { Glass } from "./Glass";
 import { haptic } from "./haptics";
 import { Tap } from "./Tap";
 import { T } from "./Text";
@@ -33,21 +35,32 @@ export type GroupProps = {
   inset?: number;
 };
 
-/** Rows that belong together: on a quiet card, or flat on the page. */
+/** Rows that belong together: on a quiet card (or frosted glass over a backdrop), or flat on the page. */
 export function Group({ children, style, flush, flat, inset = space.lg }: GroupProps) {
-  const { colors } = useTheme();
+  const { colors, dark } = useTheme();
+  const hasBackdrop = usePrefs((prefs) => prefs.backdrop !== "clean");
   const items = Children.toArray(children).filter(isValidElement);
+  const dividerColor = hasBackdrop ? (dark ? "rgba(255,255,255,0.12)" : "rgba(15,23,42,0.10)") : colors.line;
+  const rows = items.map((child, index) => (
+    <Fragment key={child.key ?? index}>
+      {index > 0 && !flush && <View style={{ height: StyleSheet.hairlineWidth, backgroundColor: dividerColor, marginLeft: inset }} />}
+      {child}
+    </Fragment>
+  ));
+
+  if (!flat && hasBackdrop) {
+    return (
+      <Glass
+        tintColor={tint(colors.surface, dark ? 0.3 : 0.42)}
+        style={[{ borderRadius: radius.lg, overflow: "hidden" }, style]}
+      >
+        {rows}
+      </Glass>
+    );
+  }
+
   const card = flat ? { marginHorizontal: -space.lg } : { backgroundColor: colors.surface, borderRadius: radius.lg, overflow: "hidden" as const };
-  return (
-    <View style={[card, style]}>
-      {items.map((child, index) => (
-        <Fragment key={child.key ?? index}>
-          {index > 0 && !flush && <View style={{ height: StyleSheet.hairlineWidth, backgroundColor: colors.line, marginLeft: inset }} />}
-          {child}
-        </Fragment>
-      ))}
-    </View>
-  );
+  return <View style={[card, style]}>{rows}</View>;
 }
 
 /** An icon on a soft square of its own color. */
