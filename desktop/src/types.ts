@@ -47,6 +47,8 @@ export type McpCatalogEntry = {
   signingIn?: boolean;
   /** Key entries: every key is in the vault. */
   keysSet?: boolean;
+  /** A program that holds this entry's keys but runs an older command: moving it to the catalog's version needs every key typed again. */
+  commandChanged?: true;
 };
 export type McpCatalog = { entries: McpCatalogEntry[]; categories: { id: string; name: string; count: number }[] };
 /** What adding an app answers: its tool server, and whether the browser sign-in (signInMcpServer) comes next. */
@@ -2008,6 +2010,8 @@ export type AgentRequest = {
   freeform?: boolean;
   schema?: { properties: Record<string, FormField>; required?: string[] };
   url?: string;
+  /** When the host raised it (milliseconds). Reminders and the Proactive agent wait on it. */
+  time?: number;
   /** A request raised by a member's turn, shown and notified to the owner. */
   askedBy?: { memberId: string; name: string };
   /** A question that waited ten minutes: its turn went on without an answer. It stays open as waiting, and an answer starts a new turn that quotes it. */

@@ -46,6 +46,8 @@ export type McpCatalogEntry = {
   signingIn?: boolean;
   /** Key entries: every key is in the vault. */
   keysSet?: boolean;
+  /** A program that holds this entry's keys but runs an older command: moving it to the catalog's version needs every key typed again. */
+  commandChanged?: true;
 };
 export type McpCatalog = { entries: McpCatalogEntry[]; categories: { id: string; name: string; count: number }[] };
 /** What adding an app answers: its tool server, and whether the browser sign-in (signInMcpServer) comes next. */
@@ -720,6 +722,8 @@ export type AgentRequest = {
   url?: string;
   /** A secure input's fields: 1 is a single value, 2 to 8 a multi-value. Answered with `{ action: "accept", content: { [key]: string | CredentialRef } }`. */
   fields?: SecureField[];
+  /** When the computer raised it (milliseconds). */
+  time?: number;
   /** A question that waited ten minutes: its turn went on without an answer. It stays open as waiting, and an answer starts a new turn that quotes it. */
   detached?: true;
 };

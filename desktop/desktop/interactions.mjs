@@ -22,6 +22,22 @@ export class Interactions {
   snapshot() {
     return [...this.entries.values()].map((e) => e.view);
   }
+  /** The detached questions, the only requests that outlive the program: the workspace file keeps them. */
+  detachedViews() {
+    return [...this.entries.values()].filter((entry) => entry.detached).map((entry) => entry.view);
+  }
+  /**
+   * Puts back the detached questions the workspace file kept, each with the id and time it had. A
+   * record that doesn't hold up (no question, or a chat that is gone) is left out. Only a detached
+   * question is ever restored: a live wait belonged to a turn that is gone.
+   */
+  restore(list) {
+    for (const view of Array.isArray(list) ? list : []) {
+      const chat = this.ws.state.chats.find((c) => c.id === view?.chatId);
+      if (!chat || view.kind !== "question" || typeof view.id !== "string" || typeof view.title !== "string" || !Array.isArray(view.choices) || this.entries.has(view.id)) continue;
+      this.entries.set(view.id, { chat, task: null, view: { ...view, detached: true }, resolve() {}, detached: true });
+    }
+  }
   /** The requests still open that were asked in a turn, a detached question among them. */
   openFor(task) {
     return [...this.entries.values()].filter((entry) => entry.task === task).map((entry) => entry.view);
@@ -38,6 +54,8 @@ export class Interactions {
         view: {
           botId: chat.botId,
           ...view,
+          // When it was raised: reminders (desktop/reminders.mjs) and the Proactive agent wait this long before they speak of it.
+          time: Date.now(),
           ...(task?.author && { askedBy: { memberId: task.author.memberId, name: task.author.name } }),
           id,
           chatId: chat.id,
@@ -65,7 +83,7 @@ export class Interactions {
     entry.view = { ...entry.view, detached: true };
     clearTimeout(entry.detachTimer);
     entry.resolve({ action: "detached" });
-    this.ws.notify();
+    this.ws.save();
   }
   /** `person` is who answered ("owner" or a member's id), for an answer that outlived its turn. */
   respond(id, answer, human = true, person = "owner") {
@@ -95,7 +113,7 @@ export class Interactions {
       // The answer is delivered before the card goes, so one that can't be sent leaves the question open.
       if (answer.action !== "cancel") this.ws.answerDetached(view, answer.value, person);
       this.entries.delete(id);
-      this.ws.notify();
+      this.ws.save();
       return;
     }
     if (human && entry.task.run && !entry.task.run.noOutput) {
@@ -113,16 +131,22 @@ export class Interactions {
   /**
    * Cancels what a turn was waiting for. A detached question is no turn's: it stays until the person
    * answers or dismisses it, unless `detached` says the whole chat (or program) is going away.
+   * With `keep` (the program is quitting) a detached question is left alone: the workspace file
+   * holds it, and it comes back when Botkins opens again.
    */
-  cancel(chatId, { detached = false } = {}) {
+  cancel(chatId, { detached = false, keep = false } = {}) {
     this.ws.secureInputs?.cancel(chatId);
+    let dropped = false;
     for (const [id, entry] of [...this.entries])
-      if ((!chatId || entry.view.chatId === chatId) && (detached || !entry.detached)) {
+      if ((!chatId || entry.view.chatId === chatId) && (detached || !entry.detached) && !(keep && entry.detached)) {
         clearTimeout(entry.detachTimer);
-        if (entry.detached) this.entries.delete(id);
-        else this.respond(id, { action: "cancel" }, false);
+        if (entry.detached) {
+          this.entries.delete(id);
+          dropped = true;
+        } else this.respond(id, { action: "cancel" }, false);
       }
-    if (detached) this.ws.notify();
+    if (dropped) this.ws.save();
+    else if (detached) this.ws.notify();
   }
   /**
    * Decides one permission request: Botkins' own rules first, then the person.

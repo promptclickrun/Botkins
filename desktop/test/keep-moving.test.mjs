@@ -65,6 +65,53 @@ test("a question to the person ends the chain, but asking whether to continue do
   for (const text of notQuestions.slice(0, 5)) assert.equal(asksUser(text), false, JSON.stringify(text));
 });
 
+// A question followed by a sign-off, and plain waiting-for-input language, are the person's turn too.
+const WAITS = [
+  "Which environment should I use?\n\nI will wait for your answer.",
+  "Which environment should I use?\nI'll wait for your answer.",
+  "Which environment should I use? I will wait for your answer.",
+  "Which environment should I use?\n\n**Let me know which.**",
+  "I found staging and production.\n\nWhich one is it?\n\nThanks!",
+  "I'll wait for your answer.",
+  "I'll hold off until you confirm.",
+  "Waiting for your go-ahead on the migration.",
+  "I'm waiting on your approval before I touch the database.",
+  "Let me know which environment to use.",
+  "Let me know what the token should be called.",
+  "Once you confirm the region, I'll deploy.",
+  "After you reply with the version, I'll pin it.",
+  "Please confirm the target before I go on.",
+  "I need your approval to continue.",
+  "- Awaiting your decision.",
+];
+// Offers, goodbyes, a rhetorical question the reply goes on to answer, and the narrow "go on?" ask.
+const NOT_WAITS = [
+  "Shall I continue?",
+  "Want me to proceed?",
+  "Should I go ahead with the next step?\n\nShall I continue?",
+  "Let me know if you need anything else.",
+  "I'll be here if you need anything.",
+  "Why did it fail?\n\nThe cache was stale.\n\nI cleared it and the tests pass now, and the build is green.",
+  "I'll wait for the build to finish, then run the tests.",
+  "Next I'll update the docs.",
+];
+
+test("a question followed by a sign-off, or waiting-for-input language, ends the chain", () => {
+  for (const text of WAITS) assert.equal(asksUser(text), true, JSON.stringify(text));
+  for (const text of NOT_WAITS) assert.equal(asksUser(text), false, JSON.stringify(text));
+});
+
+test("a question and a sign-off stop an open plan from continuing, and a stall from being caught", () => {
+  const todos = [{ id: "a", title: "Deploy", status: "pending" }];
+  const text = "Which environment should I use?\n\nI will wait for your answer.";
+  const first = nextMove({ text, todos, chain: { count: 0, stalls: 0, signature: undefined } });
+  assert.equal(first.move, "stop");
+  assert.equal(first.stoppedOpen, true);
+  assert.equal(nextMove({ text, todos: [], chain: { count: 0, stalls: 0, signature: undefined } }).move, "stop");
+  // "Shall I continue?" alone is still caught as a stall.
+  assert.equal(nextMove({ text: "Shall I continue?", todos: [], chain: { count: 0, stalls: 0, signature: undefined } }).reason, "next-step");
+});
+
 const step = (id, title, status = "pending") => ({ id, title, status });
 const chain = (more = {}) => ({ count: 0, stalls: 0, signature: undefined, ...more });
 

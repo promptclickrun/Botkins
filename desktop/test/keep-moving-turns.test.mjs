@@ -333,3 +333,107 @@ test("an approval keeps waiting with no limit", async (t) => {
   await settle();
   assert.deepEqual(result, { action: "cancel" });
 });
+
+// ── Restarts ────────────────────────────────────────────────────────────────────────────────────
+
+/** Opens the workspace in `dir` again, as after a restart, with a new session behind it. */
+const reopen = (dir, session) => new Workspace(dir, async () => ({ createSession: async () => session, resumeSession: async () => session }), () => {});
+const hangs = () => new Promise(() => {});
+
+test("a restart during a continuation does not give the chain its limits back", async (t) => {
+  const { ws, session, dir, chat } = setup(t, (n, { session }) => {
+    // The 8th continuation (the 9th send) is where Botkins closes.
+    if (n === 9) return hangs();
+    plan(session, ["s" + n, "Step " + n, "pending"]);
+    return "Step " + n + " is started.";
+  });
+  void ws.send(chat, "Go");
+  await until(() => session.sent.length === 9, "the 8th continuation");
+  const again = reopen(dir, fakeSession((n, { session }) => (plan(session, ["after", "Step after", "pending"]), "Back again.")));
+  const resumed = again.state.runs[0];
+  assert.equal(resumed.status, "Working");
+  await Promise.all(again.resumeActive());
+  assert.equal(again.state.runs[0].status, "Completed");
+  assert.equal(again.state.runs[0].continued.count, 8, "no ninth continuation");
+  assert.equal(again.state.runs[0].stoppedOpen, true);
+});
+
+test("a restart during the second catch does not allow more catches", async (t) => {
+  const { ws, session, dir, chat } = setup(t, (n) => (n === 3 ? hangs() : "Tests pass. Next I'll update the docs."));
+  void ws.send(chat, "Go");
+  await until(() => session.sent.length === 3, "the second catch");
+  const next = fakeSession(() => "Docs updated. Next I'll update the changelog.");
+  const again = reopen(dir, next);
+  await Promise.all(again.resumeActive());
+  assert.equal(next.sent.length, 1, "the resumed turn is not caught a third time");
+  assert.equal(again.state.runs[0].continued.count, 2);
+});
+
+test("a restart before the provider send keeps every message of a merged batch", async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "botkins-merge-restart-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const file = join(dir, "second.txt");
+  writeFileSync(file, "2");
+  // Botkins exits while the session starts: the provider input was never checkpointed.
+  const ws = new Workspace(dir, () => hangs(), () => {});
+  const chat = ws.createChat("pip");
+  void ws.send(chat, "first", { merged: [{ text: "second", attachments: [file] }, { text: "third" }] });
+  await settle();
+  assert.equal(ws.state.runs[0].status, "Working");
+  const session = fakeSession(() => "Read all three.");
+  const again = reopen(dir, session);
+  await Promise.all(again.resumeActive());
+  assert.equal(session.sent.length, 1);
+  assert.match(session.sent[0].prompt, /The person sent 3 messages while you were busy/);
+  for (const text of ["first", "second", "third"]) assert.match(session.sent[0].prompt, new RegExp("Message \\d:\\n" + text));
+  assert.deepEqual(session.sent[0].attachments.map((a) => a.path), [file]);
+  assert.deepEqual(again.chat(chat).messages.filter((m) => m.role === "user").map((m) => m.text), ["first", "second", "third"], "each is still its own bubble");
+});
+
+test("a question that detached comes back after a restart, and its answer still starts a turn", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const { ws, dir, chat } = setup(t, () => "Done.");
+  const task = { run: { id: "r1" }, stopped: false, ended: false };
+  void ws.interactions.question(ws.chat(chat), task, { question: "Which color?", choices: ["Red", "Blue"], allowFreeform: false });
+  // A live question and an approval are waits of a turn that is gone after a restart.
+  ws.interactions.question(ws.chat(chat), task, { question: "Live?", choices: [], allowFreeform: true }).catch(() => {});
+  const [detachedView] = ws.interactions.snapshot();
+  ws.interactions.detach(detachedView.id);
+  void ws.interactions.permission(ws.chat(chat), task, { label: "Run", title: "Run it?", preview: "ls" });
+  // The program quits the way runtime.stop does.
+  ws.closing = true;
+  ws.interactions.cancel(undefined, { detached: true, keep: true });
+  ws.flushSave();
+  const session = fakeSession(() => "Got it.");
+  const again = reopen(dir, session);
+  const [view, ...others] = again.interactions.snapshot();
+  assert.deepEqual(others, [], "only the detached question is restored");
+  assert.deepEqual([view.id, view.title, view.kind, view.detached, view.chatId, view.choices], [detachedView.id, "Which color?", "question", true, chat, ["Red", "Blue"]]);
+  assert.equal(view.time, detachedView.time, "it keeps the time it was asked");
+  assert.deepEqual(again.snapshot().requests.map((request) => request.id), [view.id]);
+  again.interactions.respond(view.id, { action: "answer", value: "Blue" });
+  await again.active.get(chat)?.done;
+  assert.equal(again.interactions.snapshot().length, 0);
+  assert.match(session.sent[0].prompt, /Replying to this earlier text:\n> Which color\?\n\nBlue$/);
+  // Answered, it does not come back again.
+  const third = reopen(dir, fakeSession(() => "x"));
+  assert.deepEqual(third.interactions.snapshot(), []);
+});
+
+test("a question dismissed or whose chat is deleted does not come back, but a waiting one does", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const { ws, dir, chat } = setup(t, () => "Done.");
+  const other = ws.createChat("pip");
+  const task = { run: { id: "r1" }, stopped: false, ended: false };
+  for (const [id, title] of [[chat, "Dismissed?"], [other, "Deleted?"], [chat, "Kept?"]])
+    void ws.interactions.question(ws.chat(id), task, { question: title, choices: [], allowFreeform: true });
+  await pass(t, 10 * MINUTE);
+  const byTitle = (title) => ws.interactions.snapshot().find((view) => view.title === title);
+  ws.interactions.respond(byTitle("Dismissed?").id, { action: "cancel" });
+  await ws.agents.deleteChat(other);
+  const kept = byTitle("Kept?").id;
+  ws.closing = true;
+  ws.interactions.cancel(undefined, { detached: true, keep: true });
+  ws.flushSave();
+  assert.deepEqual(reopen(dir, fakeSession(() => "x")).interactions.snapshot().map((view) => view.id), [kept]);
+});

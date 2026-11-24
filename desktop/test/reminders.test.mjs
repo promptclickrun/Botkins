@@ -10,6 +10,7 @@ import { Workspace } from "./starter.mjs";
 import { REMINDER_CAP, waiting } from "../desktop/reminders.mjs";
 import { decide as desktopNote } from "../desktop/notify.mjs";
 import { dispatch } from "../desktop/routines.mjs";
+import { signals } from "../desktop/proactive.mjs";
 import { defaultTeam } from "../desktop/link/team.mjs";
 
 const MIN = 60_000;
@@ -169,4 +170,26 @@ test("a reminder never doubles an alert the person's bot sends for the same thin
   ws.reminders.tick(now + 2 * HOUR);
   assert.equal(sent.some((r) => r.key === "run:r2"), true);
   assert.ok(chat);
+});
+
+test("a request the host raises is stamped, so it is reminded after 15 minutes and Proactive waits as long", (t) => {
+  const { ws, sent } = setup(t);
+  const chat = ws.createChat("patch");
+  const task = { run: { id: "r1" }, stopped: false, ended: false };
+  const before = Date.now();
+  void ws.interactions.request(ws.chat(chat), task, { kind: "question", title: "Which branch?", choices: [], freeform: true });
+  void ws.interactions.request(ws.chat(chat), task, { kind: "permission", label: "Run", title: "Run npm publish", preview: "npm publish" });
+  void ws.interactions.request(ws.chat(chat), task, { kind: "secure", title: "Sign in", fields: [] });
+  const requests = ws.interactions.snapshot();
+  assert.equal(requests.length, 3);
+  for (const request of requests) assert.ok(request.time >= before && request.time <= Date.now(), request.kind + " has the time it was raised");
+  const asked = Math.max(...requests.map((request) => request.time));
+  const everything = { run: () => true, task: () => true, request: () => true };
+  // Young requests are nobody's to hear of yet: no reminder, and no Proactive signal.
+  assert.deepEqual(ws.reminders.tick(asked + 5 * MIN), []);
+  assert.deepEqual(signals(ws.state, requests, ["requests"], asked + 5 * MIN, everything), []);
+  // Old enough: both readers see all three.
+  assert.deepEqual(signals(ws.state, requests, ["requests"], asked + 20 * MIN, everything).map((signal) => signal.key).sort(), requests.map((request) => "request:" + request.id).sort());
+  ws.reminders.tick(asked + 20 * MIN);
+  assert.deepEqual(sent.map((reminder) => reminder.key).sort(), requests.map((request) => "request:" + request.id).sort());
 });

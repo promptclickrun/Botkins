@@ -160,6 +160,13 @@ export function publicEntry(entry) {
   };
 }
 
+/** A stdio server that holds this entry's keys but runs another command than the catalog's: the vault will not carry a key to a changed command. */
+const moves = (entry, server) => {
+  if (entry.transport !== "stdio" || !entry.keys?.length || !server) return false;
+  const { command, args } = programOf(entry);
+  return server.command !== command || JSON.stringify(server.args ?? []) !== JSON.stringify(args);
+};
+
 /** Where a server added from an entry stands: added, on, signed in, and which keys are set. */
 function stateOf(entry, server) {
   if (!server) return { added: false };
@@ -174,6 +181,7 @@ function stateOf(entry, server) {
     enabled: server.enabled,
     ...(entry.auth === "oauth" && { signedIn: auth?.type === "oauth" ? auth.signedIn && !auth.needsSignIn : false, signingIn: auth?.type === "oauth" && auth.signingIn }),
     ...(entry.keys && { keysSet }),
+    ...(moves(entry, server) && { commandChanged: true }),
   };
 }
 
@@ -235,6 +243,16 @@ export function mcpCatalog(getIntegrations) {
       const servers = integrations.publicServers();
       const existing = serverFor(entry, servers);
       if (entry.transport === "stdio" && options.confirm !== commandLine(entry)) throw new Error("Botkins starts " + commandLine(entry) + " on this computer. Confirm it to add " + entry.name + ".");
+      // An older version that holds a key is moved to the catalog's command; the vault refuses to carry the key there, so it is asked for again before anything changes.
+      const moved = moves(entry, existing);
+      if (moved) {
+        try {
+          keyValues(entry, options.keys, { required: true });
+        } catch (error) {
+          if (/^Enter the /.test(error.message)) throw new Error(error.message.replace(/\.$/, "") + " again. Botkins is moving it to a newer version, and a saved key only goes to the command it was saved for.");
+          throw error;
+        }
+      }
       const keys = keyValues(entry, options.keys, { required: !existing });
       const where = (key) => key.env ?? key.header;
       const valueOf = (key) => (Object.hasOwn(keys, key.id) ? (key.prefix ?? "") + keys[key.id] : null);
@@ -246,7 +264,7 @@ export function mcpCatalog(getIntegrations) {
       let data;
       if (entry.transport === "stdio") {
         // A server added by hand with another version is moved to the catalog's version, which the person just confirmed.
-        data = { ...(existing && { id: existing.id }), name: existing?.name ?? freeName(entry, servers), type: "stdio", enabled: true, ...programOf(entry), env: pairsFor("env", existing?.env), ...(existing?.cwd && { cwd: existing.cwd }) };
+        data = { ...(existing && { id: existing.id }), name: existing?.name ?? freeName(entry, servers), type: "stdio", enabled: true, ...programOf(entry), env: pairsFor("env", moved ? [] : existing?.env), ...(existing?.cwd && { cwd: existing.cwd }) };
       } else {
         data = {
           ...(existing && { id: existing.id }),
