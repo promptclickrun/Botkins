@@ -13,6 +13,7 @@ import { runScript, scriptEnding, sleepsAgent, SCRIPT_LENGTH } from "./routine-s
 import { CronExpressionParser } from "cron-parser";
 import { nextTime, textField } from "./panels.mjs";
 import { BOARD_KINDS, GOAL_CATEGORIES } from "./board.mjs";
+import { spaceShare } from "./link/team.mjs";
 import { isGroup } from "./groups.mjs";
 
 export const CADENCES = ["once", "daily", "weekdays", "weekly", "custom"];
@@ -544,7 +545,7 @@ export class Routines {
    * The chat a routine's reply goes to: the one chosen, else the bot's latest chat that the
    * routine's creator is in. Makes one, theirs, when there is none.
    */
-  chatTarget(botId, deliver, title, createdBy) {
+  chatTarget(botId, deliver, title, createdBy, privateOnly = false) {
     const person = personOf(createdBy);
     if (deliver.chatId) {
       const chat = this.ws.state.chats.find((c) => c.id === deliver.chatId);
@@ -552,7 +553,7 @@ export class Routines {
       if (problem) throw new Error(problem);
       return chat;
     }
-    const latest = this.ws.state.chats.filter((c) => !chatProblem(c, botId, this.ws, person)).sort((a, b) => b.time - a.time)[0];
+    const latest = this.ws.state.chats.filter((c) => !chatProblem(c, botId, this.ws, person) && (!privateOnly || (personOf(c.createdBy) === person && !this.ws.chatPeople(c.id).invited.length))).sort((a, b) => b.time - a.time)[0];
     if (latest) return latest;
     const made = this.ws.chat(this.ws.createChat(botId, title));
     if (createdBy) made.createdBy = createdBy;
@@ -565,12 +566,21 @@ export class Routines {
     if (!entry?.deliver || entry.deliver.to === "none") return;
     const text = chat.messages.findLast((m) => m.runId === run.id && m.role === "assistant" && !m.interim)?.text?.trim();
     if (!text) return;
-    const { to, category } = entry.deliver;
+    const { category } = entry.deliver;
+    let to = entry.deliver.to;
+    const maker = entry.createdBy ?? chat.createdBy;
     try {
+      if (run.proactive && to === "feed") {
+        const person = personOf(maker);
+        const space = this.ws.spaces.forCards(person, "feed");
+        const team = this.ws.teamOf();
+        if (spaceShare(team, space.id).access !== "private" || team?.members?.some((m) => m.id !== person && this.ws.spaces.can(space, m.id)) ||
+          (person !== "owner" && !this.ws.turnPeople(chat).sees())) to = "chat";
+      }
       if (to === "chat") {
-        const target = this.chatTarget(chat.botId, entry.deliver, entry.name, entry.createdBy ?? chat.createdBy);
+        const target = this.chatTarget(chat.botId, entry.deliver, entry.name, maker, !!run.proactive);
         const time = Date.now();
-        target.messages.push({ role: "assistant", text, time });
+        target.messages.push({ role: "assistant", text, time, ...(run.proactive && { proactiveRunId: run.id }) });
         target.time = time;
         target.unread = true;
         // The message was written in the routine's own chat, so the session behind this chat has
@@ -581,6 +591,7 @@ export class Routines {
       } else {
         // The card goes to the Feed, Ideas or Goals of the person the routine is: a member's routine never writes into the owner's.
         const item = this.ws.board.post(chat.botId, { kind: to, ...boardText(text), category, source: entry.name }, this.ws.spaces.forCards(entry.createdBy ?? chat.createdBy ?? "owner", to).id);
+        if (run.proactive) item.proactiveRunId = run.id;
         run.delivery = { to, itemId: item.id };
       }
     } catch (error) {
@@ -701,9 +712,9 @@ export class Routines {
 export function dispatch(ws, chat, entry, trigger) {
   if (entry.routine && entry.proactive) {
     // The bot's Proactive agent gate decides, with no model, whether this tick wakes the bot (desktop/proactive.mjs).
-    const prompt = ws.proactive?.wake(chat.botId, trigger);
-    if (!prompt) return Promise.resolve(null);
-    const turn = ws.send(chat.id, prompt, { trigger, scheduleId: entry.id, title: entry.name, proactive: true });
+    const proactiveCheck = ws.proactive?.wake(chat.botId, trigger);
+    if (!proactiveCheck) return Promise.resolve(null);
+    const turn = ws.send(chat.id, "Check for a helpful suggestion.", { trigger, scheduleId: entry.id, title: entry.name, proactive: true, proactiveCheck });
     chat.title = "Routine · " + entry.name;
     return turn;
   }

@@ -112,6 +112,10 @@ class OpenCodeSession extends ProviderSession {
     return { providerID, id: rest.join("/"), ...(this.model.reasoningEffort && { variant: this.model.reasoningEffort }) };
   }
   rules() {
+    if (this.spec.sourcesOnly) return [
+      { action: "*", resource: "*", effect: "deny" },
+      ...(this.bridge ? [{ action: this.bridgeName + "_*", resource: "*", effect: "allow" }] : []),
+    ];
     return sessionRules(this.spec.approval, { plan: this.mode === "plan", bridge: this.bridge && this.bridgeName, servers: Object.keys(this.spec.mcpServers ?? {}) });
   }
   /** Creates or finds the OpenCode session on first need: a session that is only opened costs nothing. */

@@ -759,7 +759,7 @@ export class PiProvider extends ModelProvider {
     const { spec } = session;
     const target = session.target();
     // Both harnesses take connections and package state at start; OMP also takes its isolated MCP config.
-    const packages = this.packages.activePaths();
+    const packages = spec.sourcesOnly ? [] : this.packages.activePaths();
     const key = hash([spec.folder, described.providers, spec.temporary, packages, ...(this.runtime === OMP_ID ? [described.servers] : [])]);
     let live = this.live.get(spec.sessionId);
     if (live && (live.key !== key || live.rpc.closed)) {

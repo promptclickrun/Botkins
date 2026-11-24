@@ -175,6 +175,7 @@ export class Board {
       default:
         throw new Error("Unknown board action");
     }
+    if (item.proactiveRunId && (action === "up" || action === "down")) this.ws.proactive.feedback(item.botId, item.proactiveRunId, person ?? "owner", item.rating);
     if (action !== "read" && action !== "unread") {
       item.updatedAt = now;
       if (typeof person === "string" && person) item.by = person;

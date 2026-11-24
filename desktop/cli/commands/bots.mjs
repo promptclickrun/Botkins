@@ -62,6 +62,9 @@ const proactiveText = (view) =>
     named(view.name) + ": the Proactive agent is " + (view.enabled ? "on" : "off") + (view.enabled && !view.computerOn ? " but paused (the computer's switch is off: `botkins preferences set proactive.enabled on`)" : "") + ".",
     "Checks for changes every " + view.every + " minutes. " + (view.sweepHours ? "Looks around its own sources every " + view.sweepHours + " hours." : "Never looks around its own sources.") + " At most " + view.maxPerDay + " alerts a day.",
     "Alerts go to " + (view.deliver === "feed" ? "the Feed" : "its chat") + " of " + (view.person === "owner" ? "the owner" : "a team member") + ". Watches: " + (view.watch.length ? view.watch.join(", ") : "nothing") + ".",
+    ...(view.nextReviewAt ? ["Planned follow-up: " + new Date(view.nextReviewAt).toLocaleString()] : []),
+    ...(view.learning?.rated ? ["Rated suggestions: " + view.learning.rated,
+      ...view.learning.preferred.map((r) => "Preferred approach: " + safe(r)), ...view.learning.retired.map((r) => "Set aside: " + safe(r))] : []),
     ...(view.instructions ? ["Rules: " + safe(view.instructions).replace(/\s+/g, " ").slice(0, 200)] : []),
     ...(view.pings !== undefined && view.enabled ? ["Alerts today: " + view.pings + " of " + view.maxPerDay + "."] : []),
   ].join("\n");
@@ -163,14 +166,14 @@ export const botsCommands = {
       },
       proactive: {
         summary: "Show or change a bot's Proactive agent (experimental)",
-        usage: "botkins bots proactive <bot> [on | off] [--every <minutes>] [--look-around <hours>] [--max-alerts <n>] [--deliver <chat|feed>] [--watch <runs,tasks,requests|none>] [--rules <text> | --rules-file <path>] [--reset] [--yes]",
+        usage: "botkins bots proactive <bot> [on | off] [--every <minutes>] [--look-around <hours>] [--max-alerts <n>] [--deliver <chat|feed>] [--watch <runs,tasks,requests,context|none>] [--rules <text> | --rules-file <path>] [--reset] [--yes]",
         arguments: [{ name: "bot", required: true }, { name: "state", required: false }],
         options: {
           every: { type: "string", value: "minutes", about: "Minutes between its checks for changes: 15, 30, 60 or 120 (a check with nothing new uses no model)" },
           "look-around": { type: "string", value: "hours", about: "Hours between its looks around its own sources: 0 (never), 1, 2, 3, 6 or 12 (each look uses the model)" },
           "max-alerts": { type: "string", value: "n", about: "The most alerts it gives in a day: 3, 6, 10 or 20" },
           deliver: { type: "string", value: "chat|feed", about: "Where alerts go: the bot's chat with the person, or their Feed" },
-          watch: { type: "string", value: "list", about: "What Botkins watches for it: runs, tasks, requests, or none" },
+          watch: { type: "string", value: "list", about: "What Botkins watches for it: runs, tasks, requests, context, or none" },
           rules: { type: "string", value: "text", about: "Your own rules for what is worth telling you (up to 2000 characters)" },
           "rules-file": { type: "string", value: "path", about: "Read the rules from a file. \"-\" reads standard input" },
           reset: { type: "boolean", about: "Forget this bot's Proactive settings and routine" },

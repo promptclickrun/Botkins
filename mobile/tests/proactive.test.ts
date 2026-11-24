@@ -13,7 +13,7 @@ import { isPaused, proactiveBots, proactiveOf, proactiveRules, proactiveSummary,
 import type { ProactiveBot, ProactivePart } from "../src/link/types";
 
 test("an agent is read with the usual settings for what the computer left out or sent in a shape this phone doesn't know", () => {
-  assert.deepEqual(proactiveOf(undefined), { enabled: false, every: 30, sweepHours: 3, maxPerDay: 6, deliver: "chat", watch: ["runs", "tasks", "requests"], instructions: "" });
+  assert.deepEqual(proactiveOf(undefined), { enabled: false, every: 30, sweepHours: 3, maxPerDay: 6, deliver: "chat", watch: ["runs", "tasks", "requests", "context"], instructions: "" });
   const odd = { enabled: true, every: "soon", sweepHours: -1, maxPerDay: 20, deliver: "carrier pigeon", watch: ["runs", "gossip", 5], instructions: 7, extra: "kept" } as unknown as ProactiveBot;
   const read = proactiveOf(odd);
   assert.deepEqual([read.enabled, read.every, read.sweepHours, read.maxPerDay, read.deliver, read.watch, read.instructions], [true, 30, 3, 20, "chat", ["runs"], ""]);
@@ -25,11 +25,12 @@ test("an agent is read with the usual settings for what the computer left out or
 });
 
 test("what a person may change: not another person's agent, and as a member neither look-around nor tasks", () => {
-  assert.deepEqual(proactiveRules(undefined, false).watches.map((watch) => watch.id), ["runs", "tasks", "requests"]);
+  assert.deepEqual(proactiveRules(undefined, false).watches.map((watch) => watch.id), ["context", "runs", "tasks", "requests"]);
   assert.equal(proactiveRules(undefined, false).lookAround, true);
   const member = proactiveRules({ enabled: false, mine: true }, true);
-  assert.deepEqual(member.watches.map((watch) => watch.id), ["runs", "requests"]);
+  assert.deepEqual(member.watches.map((watch) => watch.id), ["context", "runs", "requests"]);
   assert.equal(member.lookAround, false);
+  assert.deepEqual(proactiveRules(undefined, true, false).watches.map((watch) => watch.id), ["runs", "requests"], "an older host never gets a context watch");
   assert.equal(proactiveRules({ enabled: true, taken: true }, true).taken, true);
 });
 

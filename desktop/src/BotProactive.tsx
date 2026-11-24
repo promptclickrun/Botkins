@@ -12,18 +12,19 @@ import "./access.css";
 
 const api = window.botkins;
 
-export const PROACTIVE_DEFAULTS: ProactiveBotSettings = { enabled: false, every: 30, sweepHours: 3, maxPerDay: 6, deliver: "chat", watch: ["runs", "tasks", "requests"], instructions: "" };
+export const PROACTIVE_DEFAULTS: ProactiveBotSettings = { enabled: false, every: 30, sweepHours: 3, maxPerDay: 6, deliver: "chat", watch: ["runs", "tasks", "requests", "context"], instructions: "" };
 const EVERY = [15, 30, 60, 120];
 const SWEEP = [0, 1, 2, 3, 6, 12];
 const CAP = [3, 6, 10, 20];
 const WATCH: { id: ProactiveWatch; label: string; help: string }[] = [
+  { id: "context", label: "Personal context", help: "Wake when goals, memories or your conversations with this bot change." },
   { id: "runs", label: "Failed routines and tasks", help: "A routine or task run that ended needing you." },
   { id: "tasks", label: "Tasks waiting on you", help: "In Review or Blocked for more than four hours." },
   { id: "requests", label: "Unanswered requests", help: "An approval or question open for more than 15 minutes." },
 ];
 const minutes = (m: number) => (m < 60 ? m + " minutes" : m / 60 + (m === 60 ? " hour" : " hours"));
 const OUTCOME = { alerted: "Told you", silent: "Nothing to say", failed: "Failed" } as const;
-const REASON = { signals: "Something changed", sweep: "Look around", check: "Check now" } as const;
+const REASON = { review: "Planned follow-up", context: "Personal context changed", signals: "Something changed", sweep: "Look around", check: "Check now" } as const;
 
 /** Whether the computer this window uses has per-bot Proactive agents ("proactive-agent-v2"). */
 export const hasProactive = (state: State) => !state.remote?.using || !!state.remote.using.capabilities?.includes("proactive-agent-v2");
@@ -33,10 +34,11 @@ export const proactiveOf = (entry?: ProactiveBot): ProactiveBotSettings & Proact
 
 /** The bot page's Proactive card. */
 export default function BotProactive({ state, bot }: { state: State; bot: Bot }) {
+  const learning = !state.remote?.using || state.remote.using.capabilities?.includes("proactive-learning-v1");
   const entry = state.proactive?.bots[bot.id];
   const p = proactiveOf(entry);
   // A member's agent never looks around the computer's own accounts, and tasks are the owner's.
-  const member = !!memberTeam(state) || state.remote?.using?.member === true;
+  const member = !!memberTeam(state) || state.remote?.using?.member === true || (!!p.person && p.person !== "owner");
   const [error, setError] = useState("");
   const dialogs = useAsk();
   const [instructions, setInstructions] = useState(p.instructions);
@@ -54,20 +56,22 @@ export default function BotProactive({ state, bot }: { state: State; bot: Bot })
     if (yes) set({ enabled: true });
   };
   const forget = async () => {
-    const yes = await dialogs.ask({ title: "Forget " + bot.name + "'s Proactive settings?", body: "Its routine and what it already told you are removed too.", confirm: "Forget", danger: true });
+    const yes = await dialogs.ask({ title: "Forget " + bot.name + "'s Proactive settings?", body: "This removes its proactive routine, planned follow-up and everything it learned from ratings.", confirm: "Forget", danger: true });
     if (yes) set(null);
   };
   const routine = p.chatId ? state.chats.find((c) => c.id === p.chatId) : undefined;
+  const description = learning
+    ? bot.name + " uses your goals and previous conversations" + (member ? "" : " and its saved memory") + " to suggest what you could do next. Rate a suggestion in your Feed or react with 👍 or 👎 in chat to teach it what helps."
+    : bot.name + " checks for changes and tells you what needs your attention.";
   const running = !!p.chatId && state.streams[p.chatId] !== undefined;
   const paused = p.enabled && state.proactive?.enabled !== true;
   const log: ProactiveLog[] = p.log ?? [];
-  const watches = WATCH.filter((w) => !member || w.id !== "tasks");
+  const watched = p.watch.filter((w) => learning || w !== "context");
+  const watches = WATCH.filter((w) => (learning || w.id !== "context") && (!member || w.id !== "tasks"));
   return (
     <section className="profile-card" aria-labelledby="bot-proactive-title">
       <h2 id="bot-proactive-title">Proactive</h2>
-      <p className="muted">
-        {bot.name} tells you what you need to know before you ask. Botkins checks for changes with no model, and wakes {bot.name} only when something changed{member ? "" : " or a look around is due"}. It reads and drafts only: it never sends, posts, buys or deletes on its own.
-      </p>
+      <p className="muted">{description}</p>
       {entry?.taken ? (
         <p className="muted">Another person has set up a Proactive agent for this bot.</p>
       ) : (
@@ -131,13 +135,13 @@ export default function BotProactive({ state, bot }: { state: State; bot: Bot })
               <option value="chat">{bot.name + "'s chat with you"}</option>
               <option value="feed">Your Feed</option>
             </select>
-            <small>Quiet hours in Notifications hold it back too.</small>
+            <small>{learning && p.deliver === "feed" ? "A shared Feed sends personal suggestions to private chat." : "Quiet hours in Notifications hold it back too."}</small>
           </label>
           <fieldset className="checklist">
             <legend>What Botkins watches</legend>
             {watches.map((w) => (
               <label key={w.id}>
-                <input type="checkbox" aria-label={w.label} checked={p.watch.includes(w.id)} onChange={(e) => set({ watch: e.target.checked ? [...p.watch, w.id] : p.watch.filter((x) => x !== w.id) })} />
+                <input type="checkbox" aria-label={w.label} checked={watched.includes(w.id)} onChange={(e) => set({ watch: e.target.checked ? [...watched, w.id] : watched.filter((x) => x !== w.id) })} />
                 <span>
                   {w.label} <small>{w.help}</small>
                 </span>
@@ -159,6 +163,15 @@ export default function BotProactive({ state, bot }: { state: State; bot: Bot })
               </button>
             )}
           </div>
+          {p.nextReviewAt && <p className="muted">Planned follow-up · {new Date(p.nextReviewAt).toLocaleString()}</p>}
+          {p.learning && p.learning.rated > 0 && (
+            <>
+              <h3>What helped</h3>
+              <p>{p.learning.rated} {p.learning.rated === 1 ? "rated suggestion" : "rated suggestions"}</p>
+              {p.learning.preferred.length > 0 && <p>Preferred approaches · {p.learning.preferred.join(", ")}</p>}
+              {p.learning.retired.length > 0 && <p>Set aside · {p.learning.retired.join(", ")}</p>}
+            </>
+          )}
           {routine && (
             <>
               <h3>Recent</h3>
@@ -167,7 +180,7 @@ export default function BotProactive({ state, bot }: { state: State; bot: Bot })
                   {log.slice(0, 5).map((l) => (
                     <li key={l.runId}>
                       {new Date(l.at).toLocaleString([], { dateStyle: "short", timeStyle: "short" })} · {REASON[l.reason]} · {OUTCOME[l.outcome]}
-                      {l.said ? ": " + l.said : ""}
+                      {l.score != null && " · Score " + l.score + "/100"}{l.said ? " · " + l.said : ""}
                     </li>
                   ))}
                 </ul>

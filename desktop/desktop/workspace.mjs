@@ -7,10 +7,13 @@ import { EventEmitter } from "node:events";
 import {
   existsSync,
   mkdirSync,
+  mkdtempSync,
   renameSync,
+  rmSync,
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
+import { tmpdir } from "node:os";
 
 import { Panels, textField } from "./panels.mjs";
 import { isSilent } from "./routines.mjs";
@@ -82,6 +85,7 @@ import { Artifacts } from "./artifacts.mjs";
 import { ArtifactEvents } from "./artifact-events.mjs";
 import { Tasks } from "./tasks.mjs";
 import { Proactive } from "./proactive.mjs";
+import { proposalsFrom } from "./proactive-learning.mjs";
 import { Templates } from "./templates.mjs";
 import { readWorkspace } from "./workspace-file.mjs";
 import { Access } from "./access.mjs";
@@ -374,6 +378,7 @@ export class Workspace {
     if (this.saveTimer) this.save();
   }
   save() {
+    if (this.batchingSave) return;
     if (this.saveTimer) {
       clearTimeout(this.saveTimer);
       this.saveTimer = null;
@@ -736,7 +741,7 @@ export class Workspace {
   }
   send(chatId, text, options = {}) {
     if (this.closing) throw new Error("Botkins is closing");
-    const { attachments: files, quote: rawQuote, mentions: rawMentions, voiceId, clientMessageId, author, also: rawAlso, ...context } = options;
+    const { attachments: files, quote: rawQuote, mentions: rawMentions, voiceId, clientMessageId, author, also: rawAlso, proactiveCheck, ...context } = options;
     // People whose limits apply to this turn beside the chat's maker and the message's writer:
     // someone else wrote text that runs in it (a routine's prompt on a panel that another person
     // refreshes). Members only: the owner narrows nothing.
@@ -796,7 +801,7 @@ export class Workspace {
       ...(quote && { quote }),
       ...(refs.list.length && { mentions: refs.list, context: refs.context }),
     }, voiceId);
-    run.recovery = { extra, ...(message.voiceId && { voicePrompt: prompt }) };
+    run.recovery = { extra, ...(proactiveCheck && { proactiveCheck }), ...(message.voiceId && { voicePrompt: prompt }) };
     // With auto-summarize on, the first message is named while the bot replies (desktop/summaries.mjs).
     if (first && !context.panelId && context.scheduleId == null) this.summaries.started(chat);
     return this.startTurn(chat, bot, message, run, false);
@@ -985,6 +990,10 @@ export class Workspace {
     const run = this.state.runs.find((r) => r.id === runId);
     if (!run) throw new Error("Unknown work item");
     const chat = this.chat(run.chatId);
+    if (run.proactive) {
+      if (this.proactive.routine(chat.botId)?.chat.id !== chat.id) throw new Error("This proactive routine is no longer configured.");
+      return this.panels.routines.run(chat.id);
+    }
     const message = chat.messages.find(
       (m) => m.role === "user" && m.runId === runId,
     );
@@ -1022,10 +1031,17 @@ export class Workspace {
     return this.submit(chatId, "/compact");
   }
   reactToMessage(chatId, index, time, emoji, actor = "owner") {
-    const message = this.chat(chatId).messages[index];
+    const chat = this.chat(chatId);
+    const message = chat.messages[index];
     if (!Number.isSafeInteger(index) || !message || (message.time ?? null) !== time)
       throw new Error("The message changed. Choose it again.");
     setReaction(message, emoji, actor);
+    const runId = message.proactiveRunId ?? (message.role === "assistant" && !message.interim ? message.runId : null);
+    if (runId && (actor === "owner" || actor.startsWith("member:"))) {
+      const person = actor === "owner" ? actor : actor.slice(7);
+      const thumb = emoji.replace(/[\u{1F3FB}-\u{1F3FF}\uFE0F]/gu, "");
+      this.proactive.feedback(chat.botId, runId, person, thumb === "👍" ? "up" : thumb === "👎" ? "down" : undefined);
+    }
     this.save();
     return message.reactions;
   }
@@ -1289,7 +1305,8 @@ export class Workspace {
     }
     // The bot's MCP servers start beside the harness and the plugins below, not after them.
     const access = this.accessForTurn(chat, task);
-    const routing = access.mcp ? this.mcpApps.prepare(bot) : Promise.resolve(new Map());
+    const check = run?.recovery?.proactiveCheck;
+    const routing = access.mcp && !check ? this.mcpApps.prepare(bot) : Promise.resolve(new Map());
     routing.catch(() => {});
     const previous = task?.recovering && run?.recovery?.botId === bot.id ? run.recovery.route : null;
     const choice = previous?.choice ?? this.effectiveModel(chat);
@@ -1298,6 +1315,20 @@ export class Workspace {
     if (task && !chat.helper) {
       task.gateway = hosted ? this.harness.gateway.server : null;
       task.route = { choice, hosted: !!hosted, via: hosted ? via : null };
+    }
+    if (check) {
+      // This session has no chat history, shared bot profile or plugin hooks. Its only
+      // Botkins tools are the recipient's read sources for this wake.
+      const folder = task.proactiveFolder = mkdtempSync(join(tmpdir(), "botkins-check-"));
+      return provider.openSession({
+        sessionId: "proactive-" + randomUUID(), established: false, hasReplies: false, temporary: true, sourcesOnly: true,
+        folder, coding: false, model: hosted?.model ?? choice, ...(hosted && { inference: hosted.inference }),
+        approval: "ask", instructions: "Generate evidence-grounded suggestions for this person's Botkins agent. Use only the supplied evidence and source tools. Return the requested JSON.",
+        context: "", tools: await this.proactive.sourceTools(bot, chat, run, task, check),
+        skills: { directories: [], disabled: [] }, mcpServers: {}, plugins: [], history: () => [],
+        handlers: { permission: () => ({ allow: false }), question: () => { throw new Error("This is a background check."); },
+          planExit: () => ({ approved: false }), autoSwitch: () => "no", form: () => ({ action: "cancel" }) },
+      });
     }
     // A changed provider, project or working folder starts a fresh session with the transcript.
     const moved = chat.restartSession || (chat.established && chat.sessionFolder !== undefined && chat.sessionFolder !== folder);
@@ -1896,11 +1927,16 @@ export class Workspace {
     }
   }
   async executeTurn(chat, bot, prompt, run, task) {
-    let session, unsubscribe;
+    let session, unsubscribe, proposals;
+    const check = run.recovery?.proactiveCheck;
     const routine = run.scheduleId != null;
     let noOutput = run.noOutput === true;
     try {
       if (task.stopped) return;
+      if (check && !this.proactive.current(chat, check.person)) {
+        proposals = { candidates: [] };
+        return;
+      }
       session = await this.openSession(chat, bot, run, task);
       task.session = session;
       task.opened(session);
@@ -1909,7 +1945,25 @@ export class Workspace {
       // model that the Copilot runtime ran is still that plan's model.
       const chosen = task.route.choice;
       if (task.route.hosted) run.model = { model: chosen.model, provider: this.providers.for(chosen).id, ...(current?.reasoningEffort && { reasoningEffort: current.reasoningEffort }), harness: task.route.via ?? "copilot" };
-      else if (current) run.model = { ...current, ...(chat.sessionProvider && { provider: chat.sessionProvider }) };
+      else if (current) {
+        const provider = check ? this.providers.for(chosen).id : chat.sessionProvider;
+        run.model = { ...current, ...(provider && { provider }) };
+      }
+      if (check) {
+        // Proposals and tool results stay out of the conversation. Only the host's
+        // selection below becomes a message. A restarted read-only check can run afresh.
+        unsubscribe = session.on((event) => {
+          if (event.type === "assistant.usage" || event.type === "session.usage_info") recordCanvas(run, chat, task, this.metered(event, run.model ?? chosen));
+        });
+        if (!task.stopped && !this.closing && this.proactive.current(chat, check.person)) {
+          check.live = [];
+          this.proactive.refreshEvidence(chat.botId, check);
+          const result = await session.send({ prompt: this.proactive.prompt(chat.botId, check) });
+          proposals = proposalsFrom(result.text);
+        }
+        proposals ??= { candidates: [] };
+        return;
+      }
       unsubscribe = session.on((event) => {
         if (!event.agentId && !event.data?.parentToolCallId) {
           if (event.type === "tool.execution_start") commitInterim(chat, run, task);
@@ -2044,7 +2098,7 @@ export class Workspace {
       }
       run.status = "Completed";
     } catch (error) {
-      if (error?.code === "BOTKINS_SESSION_LOST") {
+      if (!check && error?.code === "BOTKINS_SESSION_LOST") {
         const recovered = await this.recoverLost(session, chat, run);
         if (recovered != null) {
           task.stream = "";
@@ -2072,12 +2126,22 @@ export class Workspace {
       await Promise.allSettled(task.reads);
       unsubscribe?.();
       // The session stays open for the next message, also after Stop. Only a failed turn's session is closed.
-      if (session) await session.close({ discard: (task.retry || run.status === "Needs you") && !task.stopped });
+      try {
+        if (session) await session.close({ discard: (task.retry || run.status === "Needs you") && !task.stopped });
+      } finally {
+        if (task.proactiveFolder) rmSync(task.proactiveFolder, { recursive: true, force: true });
+      }
       if ((task.retry || this.closing) && !task.stopped && run.status === "Working") return;
       delete run.recovery;
       delete run.stopRequested;
       if (task.stopped) { run.status = "Stopped"; run.ending = "stopped"; }
       if (run.status === "Needs you") run.ending ??= "failed";
+      if (check && proposals && run.status === "Working") {
+        run.status = "Completed";
+        const reply = this.proactive.decide(chat, check, proposals);
+        if (isSilent(reply)) Object.assign(run, { noOutput: true, silent: true });
+        else finishReply(chat, run, task, reply);
+      }
       if (run.ending) commitInterim(chat, run, task);
       for (const step of run.steps ?? [])
         if (step.status === "Running") step.status = "Interrupted";
@@ -2101,11 +2165,18 @@ export class Workspace {
         if (panel) this.spaces.touch(panel.spaceId);
       }
       // A finished reply marks its conversation unread until the person opens it. Panel refreshes stay quiet.
-      if (run.status !== "Stopped" && !run.panelId && !chat.temporary) chat.unread = true;
+      if (run.status !== "Stopped" && !run.panelId && !chat.temporary && !(check && run.silent)) chat.unread = true;
       this.catalogs.delete(chat.id);
       this.active.delete(chat.id);
-      this.events.emit("turn", { chat, run });
-      this.save();
+      // Routine delivery may make a chat or Feed card and call save several times.
+      // Commit the delivery, its training example and its signal receipts in one rename.
+      this.batchingSave = !!check;
+      try {
+        this.events.emit("turn", { chat, run, proactiveCheck: check });
+      } finally {
+        this.batchingSave = false;
+        this.save();
+      }
       // Messages sent while this turn ran go next, in order.
       if (this.queues.has(chat.id)) setImmediate(() => this.drain(chat.id));
     }

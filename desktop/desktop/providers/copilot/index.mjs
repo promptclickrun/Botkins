@@ -130,14 +130,14 @@ export function sessionOptions(spec, turn) {
       manageScheduleEnabled: false,
       // Botkins has its own routines and tasks, so the runtime's workflow tools only cost tokens
       // (about 1,800 a turn). Code search is for project folders.
-      excludedTools: [
+      ...(spec.sourcesOnly ? { availableTools: spec.tools.map((tool) => "custom:" + tool.name) } : { excludedTools: [
         "builtin:run_dynamic_workflow",
         "builtin:dynamic_workflows_manage",
         ...(spec.coding ? [] : ["builtin:semantic_code_search"]),
-      ],
+      ] }),
     },
     skills: {
-      enabled: true,
+      enabled: !spec.sourcesOnly,
       directories: [...(spec.skills?.directories ?? [])],
       // The runtime's own skills are for pull requests; only coding chats get them. They are
       // switched off by name: the SDK's `includedBuiltinSkills` filter is applied with an
@@ -777,6 +777,7 @@ export class CopilotProvider extends ModelProvider {
     }
     const entry = {
       id: spec.sessionId,
+      ...(spec.sourcesOnly && { forget: () => client.deleteSession(spec.sessionId) }),
       sdk,
       signature,
       model: modelKey(spec.model),
@@ -821,6 +822,7 @@ export class CopilotProvider extends ModelProvider {
     this.teardowns.add(teardown);
     try {
       await teardown;
+      if (entry.forget) await entry.forget().catch(() => {});
     } finally {
       this.teardowns.delete(teardown);
     }
