@@ -1164,7 +1164,8 @@ test("Bitwarden unlock tries are limited, and a .cmd shim is said to be unsuppor
     assert.equal(found.state, "missing");
     assert.match(found.message, /\.cmd script, which can't be run safely/);
   }
-  assert.doesNotMatch(states.find((m: any) => m.id === "protonpass").message, /\.cmd/);
+  // Proton Pass is installed by Botkins itself (a pinned pass-cli), so a missing one may have no message at all; it never blames a shim.
+  assert.doesNotMatch(String(states.find((m: any) => m.id === "protonpass")?.message ?? ""), /\.cmd/);
 });
 
 test("command-line tools run a few at a time, and too many waiting are turned away", async () => {
