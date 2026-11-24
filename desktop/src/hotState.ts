@@ -109,3 +109,71 @@ export function applyHot(state: State, hot: HotMessage): State | null {
   }
   return changed ? (next as State) : state;
 }
+
+const hostOf = (state?: State) => state?.remote?.using?.id ?? "local";
+type Listener = () => void;
+
+/** One IPC sequence for the window. The workspace reads activity (absent, empty, or writing);
+ * only the live reply row reads the body. Both snapshots advance before either is published. */
+export class WindowState {
+  private current?: State;
+  private lastWorkspace?: State;
+  private seq = 0;
+  private listeners = new Set<Listener>();
+  private rows = new Map<string, Set<Listener>>();
+
+  workspace = () => this.lastWorkspace;
+  subscribe = (fn: Listener) => {
+    this.listeners.add(fn);
+    return () => { this.listeners.delete(fn); };
+  };
+  text(host: string, chat: string) {
+    return host === hostOf(this.current) ? this.current?.streams[chat] ?? "" : "";
+  }
+  subscribeText(chat: string, fn: Listener) {
+    const listeners = this.rows.get(chat) ?? new Set<Listener>();
+    this.rows.set(chat, listeners);
+    listeners.add(fn);
+    return () => {
+      listeners.delete(fn);
+      if (!listeners.size) this.rows.delete(chat);
+    };
+  }
+
+  whole(received: State, observe?: (next: State) => void) {
+    if (received.seq !== undefined && received.seq < this.seq) return;
+    const next = share(this.current, received);
+    this.seq = received.seq ?? this.seq;
+    this.publish(next, true, observe);
+  }
+
+  /** False when a delta was missed or does not fit: fetch a numbered full snapshot. */
+  hot(hot: HotMessage, observeQueue?: (next: State) => void): boolean {
+    if (hot.seq <= this.seq) return true;
+    const prev = this.current;
+    if (!prev || prev.seq !== hot.base || hot.seq !== this.seq + 1) return false;
+    const next = applyHot(prev, hot);
+    if (!next) return false;
+    this.seq = hot.seq;
+    if (next === prev) return true;
+    const before = prev.streams, after = next.streams;
+    const textOnly = before !== after && prev.runs === next.runs && Object.keys(hot.fields ?? {}).every(key => key === "streams")
+      && Object.keys(before).length === Object.keys(after).length
+      && Object.keys(before).every(id => Object.hasOwn(after, id) && !!before[id] === !!after[id]);
+    this.publish(next, !textOnly, next.queued !== prev.queued ? observeQueue : undefined);
+    return true;
+  }
+
+  private publish(next: State, workspaceChanged: boolean, observe?: (next: State) => void) {
+    const prev = this.current;
+    this.current = next;
+    if (workspaceChanged) this.lastWorkspace = next;
+    observe?.(next);
+    if (workspaceChanged) for (const fn of this.listeners) fn();
+    const switched = hostOf(prev) !== hostOf(next);
+    if (!switched && prev?.streams === next.streams) return;
+    for (const [id, listeners] of this.rows) {
+      if (switched || prev?.streams[id] !== next.streams[id]) for (const fn of listeners) fn();
+    }
+  }
+}

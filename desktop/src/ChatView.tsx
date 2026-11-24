@@ -1,5 +1,7 @@
 import {
   Fragment,
+  useCallback,
+  useSyncExternalStore,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -34,7 +36,8 @@ import { pullRequestUrl } from "../desktop/link/pr-url.mjs";
 import { RichText } from "./RichText";
 import { StreamingText } from "./StreamingText";
 import { useStableFunctions } from "./stable";
-import type { FilePreview } from "./ChatFileLink";
+import type { WindowState } from "./hotState";
+import type { ChatFiles, FilePreview } from "./ChatFileLink";
 import {
   HelperChip,
   HelperDrawer,
@@ -161,8 +164,17 @@ function ChatOptions({ state, chat, fail }: { state: State; chat: Chat; fail: (e
   );
 }
 
+/** Only this leaf follows a reply's text after the chat has switched to its writing state. */
+function LiveReply({ updates, files, follow }: { updates: WindowState; files: ChatFiles; follow: () => void }) {
+  const subscribe = useCallback((fn: () => void) => updates.subscribeText(files.chatId, fn), [updates, files.chatId]);
+  const text = useSyncExternalStore(subscribe, () => updates.text(files.hostId ?? "local", files.chatId));
+  useLayoutEffect(follow, [follow, text]);
+  return <StreamingText text={text} files={files} />;
+}
+
 /** One conversation: header, transcript, pending requests and the composer slot. */
 function ChatViewBody({
+  updates,
   completions,
   pending,
   onScreen,
@@ -184,6 +196,7 @@ function ChatViewBody({
   openRoutines,
   openBot,
 }: {
+  updates: WindowState;
   completions: CompletionScroll;
   pending: (Message & { clientMessageId: string })[];
   onScreen: boolean;
@@ -222,7 +235,7 @@ function ChatViewBody({
   const [notice, setNotice] = useState("");
   const [showChanges, setShowChanges] = useState(false);
   const [choosingProject, setChoosingProject] = useState(false);
-  const stream = state.streams[chat.id];
+  const hasText = !!state.streams[chat.id];
   // Group chats: 2 to 6 bots answer in turn (desktop/groups.mjs).
   const members = (chat.botIds ?? [])
     .map((id) => state.bots.find((b) => b.id === id))
@@ -246,7 +259,7 @@ function ChatViewBody({
   const blocked = blockedBots(state, chat);
   const mode: ChatMode = chat.mode ?? "default";
   const started = chat.messages.length > 0 || pending.length > 0 || busy0(state, chat.id);
-  const busy = stream !== undefined;
+  const busy = busy0(state, chat.id);
   const thinking = state.thinking?.[chat.id];
   const queued = state.queued?.[chat.id] ?? [];
   const showThinking = state.settings.showThinking !== false;
@@ -383,13 +396,14 @@ function ChatViewBody({
   }, [workingRunId]);
   // New output follows only while the person is at the bottom.
   const liveSteps = latest?.status === "Working" ? (latest.steps?.length ?? 0) + (latest.reasoning?.length ?? 0) : 0;
+  const follow = useCallback(() => {
+    const el = scroller.current;
+    if (stick.current && el) el.scrollTop = el.scrollHeight;
+  }, []);
   useLayoutEffect(() => {
-    if (stick.current) {
-      const el = scroller.current;
-      if (el) el.scrollTop = el.scrollHeight;
-    }
+    follow();
     // A turn that ends, and a teammate row that appears, add rows below the last message too.
-  }, [chat.messages.length, stream, thinking, liveSteps, requests.length, side?.answer, latest?.status, latest?.teamwork?.length]);
+  }, [follow, chat.messages.length, hasText, thinking, liveSteps, requests.length, side?.answer, latest?.status, latest?.teamwork?.length]);
   // Rows also change size without any of the above changing: a card loads, a row or the task
   // list is opened. While the view follows the latest, growth is followed too, except just after
   // the person opened something: that stays where it is, and Scroll to latest message shows if the end
@@ -744,7 +758,7 @@ function ChatViewBody({
         {/* A finished one-bot turn folds above its answer: the work, then the reply. */}
         {!group && !live && (folded || hasActivity) && fold}
         {!group && reply.map(({ message, index }) => timelineMessage(message, index))}
-        {live && stream && (
+        {live && hasText && (
           <article className="assistant live">
             {group && currentBot && (
               <b className="speaker">
@@ -752,7 +766,7 @@ function ChatViewBody({
                 <span className="speaker-name">{currentBot.name}</span>
               </b>
             )}
-            <StreamingText text={stream} files={files} />
+            <LiveReply updates={updates} files={files} follow={follow} />
           </article>
         )}
         {(live || group) && (live || folded || hasActivity) && fold}
@@ -1084,8 +1098,8 @@ function ChatViewBody({
                   <span className="speaker-name">{speaker.name}</span>
                 </b>
               )}
-              {stream ? (
-                <StreamingText text={stream} files={files} />
+              {hasText ? (
+                <LiveReply updates={updates} files={files} follow={follow} />
               ) : (
                 <p className="typing" role="status">
                   {requests.length ? "Waiting for your response…" : (speaker?.name ?? "The group") + " is typing…"}
@@ -1101,8 +1115,8 @@ function ChatViewBody({
                   <span className="speaker-name">{bot.name}</span>
                 </b>
               )}
-              {stream ? (
-                <StreamingText text={stream} files={files} />
+              {hasText ? (
+                <LiveReply updates={updates} files={files} follow={follow} />
               ) : (
                 <p className="typing" role="status">
                   {requests.length ? "Waiting for your response…" : state.intents[chat.id] || "Working…"}

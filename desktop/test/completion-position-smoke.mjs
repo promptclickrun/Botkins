@@ -66,10 +66,21 @@ try {
     contents.send = (channel, ...args) => channel === "changed"
       ? send(channel, globalThis.positionSnapshot) : send(channel, ...args);
   }, state);
-  const publish = () => app.evaluate(({ BrowserWindow }, value) => {
-    globalThis.positionSnapshot = value;
-    BrowserWindow.getAllWindows()[0].webContents.send("changed", value);
-  }, state);
+  let seq = state.seq;
+  const publish = () => {
+    state.seq = ++seq;
+    return app.evaluate(({ BrowserWindow }, value) => {
+      globalThis.positionSnapshot = value;
+      BrowserWindow.getAllWindows()[0].webContents.send("changed", value);
+    }, state);
+  };
+  const append = async (part) => {
+    state.streams[id] += part;
+    await app.evaluate(({ BrowserWindow }, hot) => {
+      BrowserWindow.getAllWindows()[0].webContents.send("changed-hot", hot);
+    }, { base: state.seq, seq: ++seq, fields: { streams: state.streams } });
+    await expect(view.locator(".assistant.live")).toContainText(part.trim());
+  };
   const view = page.locator(".messages");
   const distance = () => view.evaluate(el => el.scrollHeight - el.scrollTop - el.clientHeight);
   const run = { id: "field-guide", chatId: id, time: Date.now(), status: "Working", title: "Birdwatching", detail: "" };
@@ -82,14 +93,20 @@ try {
   await publish();
   await expect(view.getByText("Compare your notes", { exact: true })).toBeVisible();
   await expect.poll(distance).toBeLessThan(2);
+  // Grow one Markdown text node without changing the number of rows. Follow every line wrap
+  // at the live end, then leave a reader's scroll position and selection alone.
+  for (let i = 0; i < 8; i++) await append(" Field observation " + i + ". " + "More notes for this walk. ".repeat(8));
+  await expect.poll(distance).toBeLessThan(2);
+  await append(" The last observation.");
 
   // The host can announce completion before the final chat detail arrives.
+  const finishedReply = state.streams[id];
   delete state.streams[id];
   run.status = "Completed";
   run.finished = Date.now();
   await publish();
   await expect(view.locator(".assistant.live")).toHaveCount(0);
-  chat.messages.push({ role: "assistant", text: reply, time: run.finished, runId: run.id });
+  chat.messages.push({ role: "assistant", text: finishedReply, time: run.finished, runId: run.id });
   await publish();
   const row = view.locator("article.assistant").last();
   // The reply's top, measured from where the first message rests: below the faded top edge.
@@ -130,9 +147,20 @@ try {
   };
 
   const manual = await nextTurn("manual-scroll");
-  await view.evaluate(el => { el.scrollTop -= 450; });
+  await view.evaluate(el => {
+    el.scrollTop -= 450;
+    const range = document.createRange();
+    range.selectNodeContents(el.querySelector(".assistant.live h2"));
+    getSelection().removeAllRanges();
+    getSelection().addRange(range);
+  });
   await expect(page.getByRole("button", { name: "Scroll to latest message" })).toBeVisible();
   const before = await view.evaluate(el => el.scrollTop);
+  const selected = await view.evaluate(() => getSelection().toString());
+  assert.ok(selected);
+  await append(" Another observation.");
+  assert.equal(await view.evaluate(() => getSelection().toString()), selected);
+  assert.equal(await view.evaluate(el => el.scrollTop), before);
   await finish(manual, reply);
   await expect.poll(async () => Math.abs(await view.evaluate(el => el.scrollTop) - before)).toBeLessThan(2);
 
