@@ -167,3 +167,52 @@
 .app-told { color: var(--success); }
 .app-foot { margin: 8px 2px 0; }
 .market-apps .plugin-detail-actions { margin-bottom: 4px; }
+
+/* The direct apps catalog (McpCatalog.tsx). An app there has no picture Botkins may show: its
+   letter sits on a tile tinted from its name (--tile-hue, a number), lighter text by night. */
+.app-logo.app-letter-tile {
+  background: color-mix(in oklch, oklch(0.66 0.15 var(--tile-hue)) 18%, var(--surface));
+  box-shadow: none;
+  color: oklch(0.47 0.14 var(--tile-hue));
+  font-family: var(--font-display);
+  font-weight: 700;
+  line-height: 1;
+}
+:root[data-mode="dark"] .app-logo.app-letter-tile {
+  background: color-mix(in oklch, oklch(0.66 0.15 var(--tile-hue)) 24%, var(--surface));
+  color: oklch(0.84 0.11 var(--tile-hue));
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-mode]) .app-logo.app-letter-tile {
+    background: color-mix(in oklch, oklch(0.66 0.15 var(--tile-hue)) 24%, var(--surface));
+    color: oklch(0.84 0.11 var(--tile-hue));
+  }
+}
+.app-tile-status {
+  max-width: 100%;
+  margin-top: -4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+  font-size: calc(11px * var(--text-scale));
+}
+.app-tile-status.ok { color: var(--success); }
+.app-tile-status.warn { color: var(--warning); }
+.app-docs { margin-top: -10px; }
+.app-out-link { display: inline-flex; align-items: center; gap: 4px; }
+.app-confirm {
+  display: grid;
+  gap: 10px;
+  margin: 0 0 20px;
+  padding: 12px 14px 0;
+  border: 1px solid color-mix(in srgb, var(--warning) 45%, var(--line));
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--warning) 8%, var(--surface));
+}
+.app-confirm-head { display: inline-flex; align-items: center; gap: 8px; color: var(--ink); font-size: calc(14px * var(--text-scale)); }
+.app-confirm-head svg { flex: none; color: var(--warning); }
+.app-confirm .plugin-detail-actions { margin-bottom: 12px; }
+.app-catalog-sheet { min-width: 0; }
+.app-catalog-sheet .app-grid { background: var(--sunken); }
+.app-more .plugin-listing-icon { width: 36px; height: 36px; border-radius: 9px; }
