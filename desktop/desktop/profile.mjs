@@ -10,8 +10,12 @@ import { dirname } from "node:path";
 export const PROFILE_URL = "https://profile.botkins.app";
 const VERSION = 1;
 const LIMIT = 120;
+const EMAIL_LIMIT = 254;
+const PROFILE_NAME_LIMIT = 60;
+const PROFILE_AVATARS = ["", "🌱", "🌊", "🌙", "☀️", "🦊", "🐈", "🌻", "🪐"];
 
 const text = (value, max = LIMIT) => (typeof value === "string" && value.trim() ? value.trim().slice(0, max) : "");
+const avatarText = (value) => text(value, 32).replace(/[\u0000-\u001f\u007f]/g, "");
 const safeCode = (value) => text(value, 64).replace(/[^A-Za-z0-9_-]/g, "");
 const hostView = (host) => {
   if (!host || typeof host !== "object") return null;
@@ -33,7 +37,7 @@ const sessionView = (session) => {
   return {
     profileId,
     name: text(session.name) || "Botkins profile",
-    ...(text(session.email, 240) && { email: text(session.email, 240) }),
+    ...(text(session.email, EMAIL_LIMIT) && { email: text(session.email, EMAIL_LIMIT) }),
     ...(text(session.avatar, 32) && { avatar: text(session.avatar, 32) }),
     ...(text(session.deviceId, 160) && { deviceId: text(session.deviceId, 160) }),
   };
@@ -71,13 +75,16 @@ function isUnauthorized(error) {
  * @param options.changed    Called after local profile state changes.
  */
 export class ProfileManager {
-  constructor({ file, protect = null, lib, local, remote, fetch = globalThis.fetch, device, changed = () => {}, log = () => {} } = {}) {
-    Object.assign(this, { file, protect, lib, local, remote, fetch, device, changed, log });
+  constructor({ file, protect = null, lib, local, remote, workspace = () => false, fetch = globalThis.fetch, device, changed = () => {}, log = () => {} } = {}) {
+    Object.assign(this, { file, protect, lib, local, remote, workspace, fetch, device, changed, log });
     this.session = null;
     this.pending = null;
     this.directory = null;
     this.optedOut = false;
     this.migrationPrompted = false;
+    this.localLinkDisabled = false;
+    this.localPublished = false;
+    this.localDisconnected = false;
     this.pendingBindings = [];
     this.boundHosts = {};
     this.binding = false;
@@ -99,6 +106,8 @@ export class ProfileManager {
         // local-only choice, but never resurrect a token, verifier or profile-bound retry.
         this.optedOut = state.optedOut === true;
         this.migrationPrompted = state.migrationPrompted === true;
+        this.localLinkDisabled = state.localLinkDisabled === true;
+        this.localDisconnected = state.localDisconnected === true;
         this.save();
         return;
       }
@@ -106,6 +115,9 @@ export class ProfileManager {
       this.pending = state.pending && typeof state.pending === "object" ? state.pending : null;
       this.optedOut = state.optedOut === true;
       this.migrationPrompted = state.migrationPrompted === true;
+      this.localLinkDisabled = state.localLinkDisabled === true;
+      this.localPublished = state.localPublished === true;
+      this.localDisconnected = state.localDisconnected === true;
       this.pendingBindings = Array.isArray(state.pendingBindings) ? state.pendingBindings.filter((id) => typeof id === "string") : [];
       this.boundHosts = state.boundHosts && typeof state.boundHosts === "object" ? state.boundHosts : {};
     } catch {
@@ -124,6 +136,9 @@ export class ProfileManager {
       pending: this.pending,
       optedOut: this.optedOut,
       migrationPrompted: this.migrationPrompted,
+      localLinkDisabled: this.localLinkDisabled,
+      localPublished: this.localPublished,
+      localDisconnected: this.localDisconnected,
       pendingBindings: this.pendingBindings,
       boundHosts: this.boundHosts,
     });
@@ -167,6 +182,7 @@ export class ProfileManager {
       hosts: this.directory?.hosts ?? [],
       devices: this.directory?.devices ?? [],
       pendingDevices: this.directory?.pending ?? [],
+      localDisconnected: this.localDisconnected,
     };
   }
 
@@ -210,12 +226,17 @@ export class ProfileManager {
     // Binding is best effort.  A sleeping or offline computer is kept as a retry, while the
     // profile sign-in itself succeeds and can be used on this computer immediately.
     await this.bindAll();
+    await this.ensureLocalHost({ existing: this.workspace?.() === true }).catch((error) => this.log("Profile local host: " + (error?.message ?? error)));
     await this.refresh().catch((error) => this.log("Profile directory: " + (error?.message ?? error)));
     return sessionView(this.session);
   }
 
   invalidate() {
     this.generation++;
+    const profileId = text(this.session?.profileId, 160);
+    if (!this.localDisconnected && profileId && typeof this.localHost()?.unbindOwnerProfile === "function") {
+      try { this.localHost().unbindOwnerProfile(profileId); this.localDisconnected = true; this.localPublished = false; } catch (error) { this.log("Profile host binding could not be revoked locally: " + (error?.message ?? error)); }
+    }
     this.remoteHosts()?.dropProfileBound?.();
     this.session = null;
     this.directory = null;
@@ -263,6 +284,7 @@ export class ProfileManager {
   async refresh({ retry = true } = {}) {
     const answer = await this.home();
     if (retry && this.token()) await this.bindAll();
+    if (this.token()) await this.ensureLocalHost({ existing: this.workspace?.() === true }).catch((error) => this.log("Profile local host: " + (error?.message ?? error)));
     return answer ?? this.status();
   }
 
@@ -276,6 +298,58 @@ export class ProfileManager {
     return this.status();
   }
 
+  async deleteAccount(email) {
+    const token = this.token();
+    const expected = text(this.session?.email, EMAIL_LIMIT).toLowerCase();
+    const typed = text(email, EMAIL_LIMIT).toLowerCase();
+    if (!token) throw new Error("Sign in to manage your profile.");
+    if (!expected || typed !== expected) throw new Error("Type the signed-in profile email to delete this profile.");
+    if (typeof this.profileApi().deleteAccount !== "function") throw new Error("Profile deletion is not available in this Botkins build.");
+    await this.profileApi().deleteAccount(token, typed);
+    const profileId = text(this.session?.profileId, 160);
+    try {
+      if (!this.localDisconnected && profileId && typeof this.localHost()?.unbindOwnerProfile === "function") {
+        await this.localHost().unbindOwnerProfile(profileId);
+        this.localDisconnected = true;
+        this.localPublished = false;
+      }
+    } catch (error) {
+      this.log("Profile host unbind after deletion failed: " + (error?.message ?? error));
+    }
+    await this.clearAccount({ optedOut: false });
+    return this.status();
+  }
+
+  /** Changes the public profile identity used by this installation and future pairings. */
+  async update(name, avatar) {
+    const token = this.token();
+    if (!token) throw new Error("Sign in to manage your profile.");
+    const nextName = text(name, PROFILE_NAME_LIMIT);
+    if (!nextName) throw new Error("Give your profile a name.");
+    const nextAvatar = avatarText(avatar);
+    if (!PROFILE_AVATARS.includes(nextAvatar)) throw new Error("Choose one of the available profile avatars.");
+    try {
+      await this.profileApi().update(token, nextName, nextAvatar || undefined);
+      this.session = { ...this.session, name: nextName, ...(nextAvatar ? { avatar: nextAvatar } : {}) };
+      if (!nextAvatar) delete this.session.avatar;
+      this.save();
+      this.changed();
+      return this.status();
+    } catch (error) {
+      if (isUnauthorized(error)) this.invalidate();
+      throw error;
+    }
+  }
+
+  /** Records the person's explicit local Link choice; automatic profile setup never overrides it. */
+  noteLocalLinkSetting(enabled) {
+    this.localLinkDisabled = enabled !== true;
+    if (enabled === true) this.localDisconnected = false;
+    this.save();
+    this.changed();
+    return this.status();
+  }
+
   /**
    * Account loss is also a credential boundary. Drop profile-enrolled remote pairings before
    * network calls, then best-effort revoke this device while the old token is still available. The
@@ -286,7 +360,17 @@ export class ProfileManager {
     this.generation++;
     const token = this.token();
     const deviceId = text(this.session?.deviceId, 160);
+    const profileId = text(this.session?.profileId, 160);
     this.remoteHosts()?.dropProfileBound?.();
+    if (!this.localDisconnected && profileId && typeof this.localHost()?.unbindOwnerProfile === "function") {
+      try {
+        await this.localHost().unbindOwnerProfile(profileId);
+        this.localDisconnected = true;
+        this.localPublished = false;
+      } catch (error) {
+        this.log("Profile host binding could not be revoked locally: " + (error?.message ?? error));
+      }
+    }
     if (token) {
       try {
         if (deviceId && typeof this.profileApi().revoke === "function") await this.profileApi().revoke(token, deviceId);
@@ -299,6 +383,7 @@ export class ProfileManager {
     this.directory = null;
     this.pendingBindings = [];
     this.boundHosts = {};
+    this.localPublished = false;
     this.optedOut = optedOut === true;
     this.migrationPrompted = true;
     this.save();
@@ -353,10 +438,65 @@ export class ProfileManager {
     // `LinkHost.profileDescriptor()` is intentionally only callable after a binding and would
     // throw here. The public server key is safe to read from the host's local store.
     const key = status.serverKey ?? (link?.store?.data?.keys?.publicKey?.toString?.("base64url") ?? "");
-    const hosts = Array.isArray(status.addresses)
-      ? status.addresses.map((entry) => typeof entry === "string" ? entry : text(entry?.address) ? text(entry.address) + ":" + String(status.port ?? "") : "").filter(Boolean)
-      : [];
+    // LinkHost.hosts() is the public route list, including the relay room when the person has
+    // explicitly enabled the relay.  Do not reconstruct it from private listener state: doing so
+    // would miss relay rotation and make a stale profile directory entry look current.
+    const hosts = typeof link.hosts === "function"
+      ? link.hosts().filter((entry) => typeof entry === "string").slice(0, 16)
+      : (Array.isArray(status.addresses)
+        ? status.addresses.map((entry) => typeof entry === "string" ? entry : text(entry?.address) ? text(entry.address) + ":" + String(entry.port ?? status.port ?? "") : "").filter(Boolean)
+        : []);
     return hostView({ serverId: status.serverId, serverKey: key, name: status.name, hosts });
+  }
+
+  async ensureLocalHost({ existing = this.workspace?.() === true } = {}) {
+    const token = this.token();
+    const epoch = this.generation;
+    const link = this.localHost();
+    if (!token || !existing || this.localLinkDisabled || this.localPublished || !link) return null;
+    const status = link.status?.() ?? {};
+    if (status.locked || !status.serverId || typeof link.setEnabled !== "function") return null;
+    if (status.enabled !== true || status.listening !== true) {
+      await link.setEnabled(true);
+      if (epoch !== this.generation || token !== this.token()) return null;
+    }
+    // The status event raised by setEnabled may already be binding. Reuse the same queued
+    // operation so setup never issues two profile proofs for one local host.
+    await this.bindAll();
+    const descriptor = this.localDescriptor();
+    return descriptor ? this.directory?.hosts?.find((host) => host.serverId === descriptor.serverId) ?? null : null;
+  }
+
+  async disconnectLocal() {
+    const token = this.token();
+    const link = this.localHost();
+    if (!token || typeof link?.unbindOwnerProfile !== "function") throw new Error("Sign in to manage this computer's profile connection.");
+    const profileId = text(this.session?.profileId, 160);
+    const serverId = text(link.status?.()?.serverId, 160);
+    if (!profileId || !serverId) throw new Error("This computer has no profile connection.");
+    const epoch = this.generation;
+    await link.unbindOwnerProfile(profileId);
+    if (epoch !== this.generation || token !== this.token()) return null;
+    // Suppress the status listener immediately after a successful unbind. A directory removal
+    // or a later address update must not silently enroll this same host again.
+    this.localDisconnected = true;
+    this.localPublished = false;
+    this.save();
+    await this.profileApi().removeHost(token, serverId);
+    delete this.boundHosts[serverId];
+    this.pendingBindings = this.pendingBindings.filter((id) => id !== serverId);
+    this.directory = this.directory ? { ...this.directory, hosts: this.directory.hosts.filter((host) => host.serverId !== serverId) } : this.directory;
+    this.save();
+    this.changed();
+    return this.status();
+  }
+
+  async reconnectLocal() {
+    if (!this.token()) throw new Error("Sign in to manage this computer's profile connection.");
+    this.localDisconnected = false;
+    this.save();
+    this.changed();
+    return this.ensureLocalHost({ existing: this.workspace?.() === true });
   }
 
   rememberHost(descriptor) {
@@ -366,6 +506,7 @@ export class ProfileManager {
 
   async bindLocal(epoch) {
     const token = this.token();
+    const profileId = text(this.session?.profileId, 160);
     const link = this.localHost();
     if (!token || typeof link?.bindOwnerProfile !== "function") return null;
     const before = this.localDescriptor();
@@ -376,13 +517,19 @@ export class ProfileManager {
     if (!descriptor) throw new Error("This computer returned no profile identity.");
     if (epoch !== undefined && (epoch !== this.generation || token !== this.token())) return null;
     await this.profileApi().putHost(token, descriptor);
+    if (epoch !== undefined && (epoch !== this.generation || token !== this.token())) {
+      if (profileId && typeof link.unbindOwnerProfile === "function") await link.unbindOwnerProfile(profileId).catch(() => {});
+      return null;
+    }
     this.rememberHost(descriptor);
+    if (link === this.localHost()) this.localPublished = true;
     this.changed();
     return descriptor;
   }
 
   async bindRemote(id, epoch) {
     const token = this.token();
+    const profileId = text(this.session?.profileId, 160);
     const remote = this.remoteHosts();
     if (!token || !remote || typeof remote.bindProfile !== "function") return null;
     const before = remote.profileDescriptor?.(id);
@@ -393,21 +540,29 @@ export class ProfileManager {
     if (!descriptor) throw new Error("That computer returned no profile identity.");
     if (epoch !== undefined && (epoch !== this.generation || token !== this.token())) return null;
     await this.profileApi().putHost(token, descriptor);
+    if (epoch !== undefined && (epoch !== this.generation || token !== this.token())) {
+      if (profileId && typeof remote.unbindProfile === "function") await remote.unbindProfile(id, profileId).catch(() => {});
+      return null;
+    }
     this.rememberHost(descriptor);
     this.changed();
     return descriptor;
   }
 
   async bindAll() {
-    if (this.binding) return [];
+    if (this.binding) {
+      this.bindAgain = true;
+      return this.bindingPromise;
+    }
     this.binding = true;
-    try {
+    this.bindAgain = false;
+    const work = (async () => {
       const token = this.token();
       const epoch = this.generation;
       if (!token) return [];
-      const ids = new Set(this.pendingBindings);
       const local = this.localDescriptor();
-      if (local) ids.add(local.serverId);
+      const ids = new Set(this.pendingBindings.filter((id) => !(this.localDisconnected && local?.serverId === id)));
+      if (local && !this.localDisconnected) ids.add(local.serverId);
       for (const host of this.remoteHosts()?.list?.() ?? []) ids.add(host.id);
       const done = [];
       let dirty = false;
@@ -436,8 +591,16 @@ export class ProfileManager {
         this.changed();
       }
       return done;
+    })();
+    this.bindingPromise = work;
+    try {
+      return await work;
     } finally {
       this.binding = false;
+      const again = this.bindAgain;
+      this.bindAgain = false;
+      this.bindingPromise = null;
+      if (again && this.token()) void this.bindAll().catch((error) => this.log("Profile bind retry: " + (error?.message ?? error)));
     }
   }
 

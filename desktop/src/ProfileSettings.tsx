@@ -1,17 +1,27 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { ProfileState, State } from "./types";
 import { Group, errorText } from "./SettingsRows";
 
 const api = window.botkins;
+const PROFILE_AVATARS = ["", "🌱", "🌊", "🌙", "☀️", "🦊", "🐈", "🌻", "🪐"];
 
 function ProfileCard({ state, migration = false }: { state: State; migration?: boolean }) {
   const profile = state.profile;
   const [label, setLabel] = useState("This device");
+  const [profileName, setProfileName] = useState(profile?.profile?.name ?? "");
+  const [profileAvatar, setProfileAvatar] = useState(profile?.profile?.avatar ?? "");
+  const [deleteEmail, setDeleteEmail] = useState("");
   const [code, setCode] = useState("");
   const [attempt, setAttempt] = useState<ProfileState["pending"]>(profile?.pending ?? null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [note, setNote] = useState("");
+  useEffect(() => {
+    if (profile?.signedIn && profile.profile) {
+      setProfileName(profile.profile.name);
+      setProfileAvatar(profile.profile.avatar ?? "");
+    }
+  }, [profile?.signedIn, profile?.profile?.profileId, profile?.profile?.name, profile?.profile?.avatar]);
   const run = async (action: () => Promise<unknown>) => {
     setBusy(true);
     setError("");
@@ -27,7 +37,7 @@ function ProfileCard({ state, migration = false }: { state: State; migration?: b
   const start = () => void run(async () => {
     const next = await api.profileStart(label.trim() || "This device");
     setAttempt({ id: next.id, code: next.code, url: next.url, label: next.label });
-    setNote("Finish the passkey, trusted-device, or email step in your browser, then return here.");
+    setNote("Complete the passkey step first, then the trusted-device or email step in your browser. Return here when both are done.");
   });
   const finish = () => void run(async () => {
     const next = await api.profileFinish();
@@ -44,6 +54,13 @@ function ProfileCard({ state, migration = false }: { state: State; migration?: b
               <small>{profile.profile.email || "Signed in"}</small>
             </div>
             <div className="set-control"><button type="button" className="set-button" disabled={busy} onClick={() => void run(() => api.profileRefresh())}>Refresh</button></div>
+          </div>
+          <div className="set-row stacked">
+            <label className="set-label" htmlFor="profile-name"><span className="set-name">Profile name</span><small>Shown to people approving or pairing this device.</small></label>
+            <input id="profile-name" className="set-input" value={profileName} maxLength={60} onChange={(e) => setProfileName(e.target.value)} />
+            <label className="set-label" htmlFor="profile-avatar"><span className="set-name">Avatar</span><small>Optional emoji shared with your profile devices.</small></label>
+            <select id="profile-avatar" className="set-input" value={profileAvatar} onChange={(e) => setProfileAvatar(e.target.value)}>{PROFILE_AVATARS.map((avatar) => <option key={avatar || "none"} value={avatar}>{avatar || "No avatar"}</option>)}</select>
+            <button type="button" className="set-button primary" disabled={busy || !profileName.trim()} onClick={() => void run(async () => { await api.profileUpdate(profileName.trim(), profileAvatar.trim()); setNote("Profile identity updated."); })}>Save profile</button>
           </div>
         </Group>
         <Group title="Computers" footer="Offline computers remain listed and will retry binding when they are reachable.">
@@ -70,14 +87,25 @@ function ProfileCard({ state, migration = false }: { state: State; migration?: b
         </Group>
         {error && <small className="host-error host-note" role="alert">{error}</small>}
         {note && <small className="host-note" role="status">{note}</small>}
+        <Group title="This computer" footer="Disconnecting removes only this computer from the hosted directory. It does not sign out the account or delete local bots and chats.">
+          <div className="set-actions">{profile.localDisconnected ? <button type="button" className="set-button primary" disabled={busy} onClick={() => void run(() => api.profileReconnect())}>Connect this host to profile</button> : <button type="button" className="set-button" disabled={busy} onClick={() => void run(() => api.profileDisconnect())}>Disconnect this host from profile</button>}</div>
+        </Group>
+        <Group title="Delete profile" footer="This permanently deletes the hosted profile. Local bots, chats, and unrelated manual pairings stay on this computer.">
+          <div className="set-row stacked">
+            <label className="set-label" htmlFor="profile-delete-email"><span className="set-name">Verified email</span><small>Type {profile.profile.email || "your signed-in email"} to confirm.</small></label>
+            <input id="profile-delete-email" className="set-input" type="email" maxLength={254} value={deleteEmail} onChange={(e) => setDeleteEmail(e.target.value)} />
+            <button type="button" className="set-button" disabled={busy || !deleteEmail.trim()} onClick={() => { if (window.confirm("Delete this hosted Botkins profile permanently?")) void run(() => api.profileDeleteAccount(deleteEmail.trim())); }}>Delete profile</button>
+          </div>
+        </Group>
         <div className="set-actions"><button type="button" className="set-button" disabled={busy} onClick={() => void run(() => api.profileSignOut())}>Sign out of profile</button></div>
       </>
     );
   }
   return (
     <>
-      <Group title={migration ? "Keep your existing continuity" : "Optional profile"} footer="A profile lets you find and reconnect your computers. It does not move bots or chats off this computer.">
-        {migration && <p className="set-copy">This installation has existing bots or chats. Set up a profile to keep continuity across computers, or choose local-only below. Local-only keeps this workspace here but loses profile directory and cross-computer continuity.</p>}
+      <Group title={migration ? "Link your existing computers" : "Optional profile"} footer="A profile lets you find and reconnect your computers. It does not move bots or chats off this computer.">
+        {migration && <p className="set-copy">This installation has existing bots or chats. Set up a profile to link your existing computers, or continue without a profile. Without one, this workspace stays here and you’ll pair each device separately.</p>}
+        {!migration && <p className="set-copy">Without a profile this computer stays local-only: each other device must be paired separately, and there is no shared computer directory or continuity.</p>}
         <div className="set-row stacked">
           <label className="set-label" htmlFor="profile-device-label"><span className="set-name">Device name</span><small>Shown when you approve this device.</small></label>
           <input id="profile-device-label" className="set-input" value={label} maxLength={120} onChange={(e) => setLabel(e.target.value)} />
@@ -88,7 +116,7 @@ function ProfileCard({ state, migration = false }: { state: State; migration?: b
       </Group>
       {error && <small className="host-error host-note" role="alert">{error}</small>}
       {note && <small className="host-note" role="status">{note}</small>}
-      <div className="set-actions"><button type="button" className="set-button" disabled={busy} onClick={() => void run(() => api.profileOptOut())}>{migration ? "Keep this host local-only" : "Keep this computer local-only"}</button></div>
+      <div className="set-actions"><button type="button" className="set-button" disabled={busy} onClick={() => void run(() => api.profileOptOut())}>Continue without a profile</button></div>
     </>
   );
 }

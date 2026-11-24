@@ -629,12 +629,13 @@ Start enrollment and copy the HTTPS address and six-digit code into a browser:
 botkins profile start --label "Home server"
 ```
 
-Finish once you return from the passkey, trusted-device or email step:
+Complete the passkey first, then the trusted-device or email step. Finish once you return:
 
 ```sh
 botkins profile finish
 botkins profile status
 botkins profile computers list
+botkins profile update --name "Gordie" --avatar "🙂"
 ```
 
 Use a listed computer from the terminal host with a newly enrolled Link key:
@@ -643,7 +644,7 @@ Use a listed computer from the terminal host with a newly enrolled Link key:
 botkins profile computers connect <server-id>
 ```
 
-Approve or revoke trusted devices with `botkins profile devices approve <device>` (the short code is read from standard input) and `botkins profile devices revoke <device> --yes`. To keep this host independent, use `botkins profile opt-out --yes`; this keeps local work here but gives up profile continuity until you sign in again. `botkins profile sign-out --yes` removes this host's account-bound session and profile-enrolled computer credentials while preserving the hosted directory for the account and other devices. If a computer is offline, `botkins profile refresh` retries it when it is reachable.
+Approve or revoke trusted devices with `botkins profile devices approve <device>` (the short code is read from standard input) and `botkins profile devices revoke <device> --yes`. `botkins profile disconnect --yes` removes only this host from the profile directory; use `botkins profile reconnect` to explicitly enroll it again. `botkins profile delete --yes` permanently deletes the hosted profile after typing its verified email. To keep this host independent, use `botkins profile opt-out --yes`; this keeps local work here but gives up profile continuity until you sign in again. `botkins profile sign-out --yes` removes this host's account-bound session and profile-enrolled computer credentials while preserving the hosted directory for the account and other devices. If a computer is offline, `botkins profile refresh` retries it when it is reachable.
 
 The terminal host must have secure key storage for a profile session or profile-enrolled computer. If it cannot open its host key, profile setup remains session-only and no token or browser verifier is written to disk.
 

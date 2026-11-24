@@ -58,6 +58,10 @@ export const HERE = new Set([
   "profileFinish",
   "profileRefresh",
   "profileHome",
+  "profileUpdate",
+  "profileDisconnect",
+  "profileReconnect",
+  "profileDeleteAccount",
   "profileOptOut",
   "profileSignOut",
   "profileApprove",
@@ -177,6 +181,10 @@ export class RemoteHosts {
     try {
       const saved = JSON.parse(readFileSync(file, "utf8"));
       for (const entry of Array.isArray(saved?.hosts) ? saved.hosts : []) {
+        // Profile connections are account-bound credentials.  A development or headless host
+        // without a usable vault may still use one for this process, but must never resurrect a
+        // profile private key from the plaintext compatibility file.
+        if (entry.profileBound === true && !(typeof this.protect?.wrap === "function" && typeof this.protect?.unwrap === "function")) continue;
         const pairing = this.open(entry.pairing);
         if (pairing?.serverId && pairing.secretKey) this.hosts.push({ id: pairing.serverId, name: text(entry.name) || text(pairing.name) || "Computer", team: text(entry.team), member: pairing.member === true, profileBound: entry.profileBound === true, addedAt: Number(entry.addedAt) || Date.now(), pairing });
       }
@@ -219,7 +227,9 @@ export class RemoteHosts {
     const current = this.hosts.some((host) => host.id === this.current) ? this.current : null;
     writeFileSync(this.file, JSON.stringify({
       current,
-      hosts: this.hosts.map((host) => ({
+      // Keep profile-obtained private keys in memory when there is no protected store.  Legacy
+      // manual pairings retain their existing trial-file behavior for local development.
+      hosts: this.hosts.filter((host) => host.profileBound !== true || (typeof this.protect?.wrap === "function" && typeof this.protect?.unwrap === "function")).map((host) => ({
         name: host.name,
         addedAt: host.addedAt,
         ...(host.team && { team: host.team }),
@@ -297,9 +307,24 @@ export class RemoteHosts {
       client.stop();
     }
   }
+  /** Removes this installation's profile principal from an already paired host. */
+  async unbindProfile(id, profileId) {
+    const host = this.find(id);
+    const client = new this.lib.LinkClient(host.pairing, { fetch: this.transport(), onParts() {}, onState() {} });
+    try {
+      await client.call("link.profile.unbind", profileId);
+      host.profileBound = false;
+      this.save();
+      this.changed();
+    } catch (error) {
+      if (error?.code === "offline") throw new Error(host.name + " can't be reached right now.");
+      throw new Error(String(error?.message ?? error));
+    } finally {
+      client.stop();
+    }
+  }
   /** Stores a pairing returned by the profile directory's sealed connection flow. */
   adoptPairing(pairing, { name, member = false, team } = {}) {
-    if (!this.protect?.wrap || !this.protect?.unwrap) throw new Error("Secure storage is unavailable for a profile computer connection.");
     if (!pairing?.serverId || !pairing?.serverKey || !pairing?.secretKey) throw new Error("That profile computer returned an invalid pairing.");
     const earlier = this.hosts.find((host) => host.id === pairing.serverId);
     const host = {

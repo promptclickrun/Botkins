@@ -609,6 +609,10 @@ export const CHANGES = {
   "profile.approve": 0,
   "profile.revoke": 0,
   "profile.connect": 0,
+  "profile.update": null,
+  "profile.disconnect": null,
+  "profile.reconnect": null,
+  "profile.deleteAccount": null,
   "profile.markMigrationPrompted": null,
 };
 /** The service's own calls that only read, wait or talk in a chat: no line. Every call is in this list, in CHANGES or in LOGS_ITSELF. */

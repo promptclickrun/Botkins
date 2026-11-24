@@ -311,11 +311,27 @@ else
       lib: remote.lib,
       local: () => link,
       remote: () => remote,
+      workspace: () => !!workspace.state.bots.length || !!workspace.state.chats.length,
       fetch: host.fetch,
       device: { name: computerName(), platform: process.platform, kind: "desktop" },
       changed: () => push(),
       log: (line) => console.error(line),
     });
+    // The first real local bot is the point at which a signed-in installation becomes a host.
+    // Keep the automatic LAN enable one-shot and remember an explicit phone-link disable.
+    const originalAddBot = runtime.handlers.addBot;
+    runtime.handlers.addBot = (data) => {
+      const result = originalAddBot(data);
+      if (profile.token()) void profile.ensureLocalHost({ existing: true }).catch((error) => console.error("Profile local host:", error.message));
+      return result;
+    };
+    const originalSetPhoneLink = runtime.handlers.setPhoneLink;
+    runtime.handlers.setPhoneLink = async (enabled) => {
+      const result = await originalSetPhoneLink(enabled);
+      profile.noteLocalLinkSetting(enabled === true);
+      if (enabled === true && profile.token()) void profile.ensureLocalHost({ existing: true }).catch((error) => console.error("Profile local host:", error.message));
+      return result;
+    };
     // Load the hosted directory once on boot, then retry profile bindings for hosts that were
     // offline. This is an explicit startup attempt, never an idle poll.
     void profile.refresh({ retry: true }).catch((error) => console.error("Profile refresh:", error.message));
@@ -462,9 +478,15 @@ else
         if (!url || !url.startsWith("https://profile.botkins.app/#")) throw new Error("Start profile setup first.");
         await host.shell.openExternal(url);
       },
-      profileFinish: () => profile.finish(),
+      profileFinish: async () => {
+        return profile.finish();
+      },
       profileRefresh: () => profile.refresh({ retry: true }),
       profileHome: () => profile.home(),
+      profileUpdate: (name, avatar) => profile.update(name, avatar),
+      profileDisconnect: () => profile.disconnectLocal(),
+      profileReconnect: () => profile.reconnectLocal(),
+      profileDeleteAccount: (email) => profile.deleteAccount(email),
       profileOptOut: () => profile.optOut(),
       profileSignOut: () => profile.signOut(),
       profileApprove: (id, code) => profile.approve(id, code),

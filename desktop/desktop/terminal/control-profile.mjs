@@ -18,6 +18,18 @@ export function profileApi({ profile }) {
     "profile.finish": () => profile.finish(),
     "profile.refresh": () => profile.refresh({ retry: true }),
     "profile.home": () => profile.home(),
+    "profile.update": ([name, avatar] = []) => {
+      const next = text(name, 120);
+      if (!next) throw bad("Give your profile name.");
+      return profile.update(next, text(avatar, 32));
+    },
+    "profile.disconnect": () => profile.disconnectLocal(),
+    "profile.reconnect": () => profile.reconnectLocal(),
+    "profile.deleteAccount": ([email] = []) => {
+      const typed = text(email, 254);
+      if (!typed) throw bad("Give the signed-in profile email through standard input.");
+      return profile.deleteAccount(typed);
+    },
     "profile.optOut": () => profile.optOut(),
     "profile.signOut": () => profile.signOut(),
     "profile.approve": ([id, code] = []) => {

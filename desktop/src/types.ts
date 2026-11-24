@@ -322,6 +322,7 @@ export type ProfileState = {
   hosts: ProfileHost[];
   devices: ProfileDevice[];
   pendingDevices: ProfileDevice[];
+  localDisconnected?: boolean;
 };
 export type TeamScope = "agents" | "today" | "skills" | "mcp" | "plugins" | "settings";
 export type TeamRole = {
@@ -574,6 +575,10 @@ declare global {
       profileFinish(): Promise<ProfileState["profile"]>;
       profileRefresh(): Promise<ProfileState>;
       profileHome(): Promise<ProfileState | null>;
+      profileUpdate(name: string, avatar?: string): Promise<ProfileState>;
+      profileDisconnect(): Promise<ProfileState>;
+      profileReconnect(): Promise<ProfileState | null>;
+      profileDeleteAccount(email: string): Promise<ProfileState>;
       profileOptOut(): Promise<ProfileState>;
       profileSignOut(): Promise<ProfileState>;
       profileApprove(id: string, code: string): Promise<ProfileState>;

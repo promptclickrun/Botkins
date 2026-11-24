@@ -51,6 +51,49 @@ const profile = {
         context.print(await context.client.call("profile.refresh"), (answer) => answer?.signedIn ? "Profile refreshed: " + answer.hosts.length + " computer" + (answer.hosts.length === 1 ? "" : "s") + " listed." : "No profile is signed in.");
       },
     },
+    update: {
+      summary: "Update the signed-in profile name or avatar",
+      usage: "botkins profile update --name <name> [--avatar <emoji>]",
+      options: {
+        name: { type: "string", value: "name", about: "The name shown to other Botkins devices" },
+        avatar: { type: "string", value: "emoji", about: "A small avatar emoji" },
+      },
+      async run(context) {
+        const name = safe(context.options.name);
+        if (!name) throw usage("botkins profile update --name <name> [--avatar <emoji>]");
+        context.print(await context.client.call("profile.update", name, safe(context.options.avatar)), (answer) => "Updated profile " + safe(answer?.profile?.name || name) + ".");
+      },
+    },
+    disconnect: {
+      summary: "Disconnect this local computer from the hosted profile",
+      usage: "botkins profile disconnect [--yes]",
+      options: { yes: { type: "boolean", about: "Do not ask first" } },
+      details: "This removes only this computer from the profile directory. It does not sign out the account or delete local bots and chats.",
+      async run(context) {
+        show(context, "This disconnects this computer from the hosted profile and removes its directory entry. The account stays signed in here.");
+        if (!(await confirm(context, "Disconnect this computer from the profile?"))) { context.note("Still connected."); return EXIT.failed; }
+        context.print(await context.client.call("profile.disconnect"), "Disconnected this computer from the profile.");
+      },
+    },
+    reconnect: {
+      summary: "Reconnect this local computer to the hosted profile",
+      usage: "botkins profile reconnect",
+      async run(context) {
+        context.print(await context.client.call("profile.reconnect"), "Reconnected this computer to the profile.");
+      },
+    },
+    delete: {
+      summary: "Delete the hosted profile account",
+      usage: "botkins profile delete [--yes]",
+      options: { yes: { type: "boolean", about: "Do not ask first" } },
+      details: "Deletion is permanent. It leaves this computer's local bots and chats in place and keeps unrelated manual pairings.",
+      async run(context) {
+        show(context, "This permanently deletes the hosted profile. Local bots and chats stay on this computer; other profile devices lose account access.");
+        if (!(await confirm(context, "Delete the hosted profile?"))) { context.note("Profile not deleted."); return EXIT.failed; }
+        const email = await secret(context, "Type the signed-in profile email (not shown): ");
+        context.print(await context.client.call("profile.deleteAccount", email), "Deleted the hosted profile.");
+      },
+    },
     "sign-out": {
       summary: "Sign out of the profile on this host",
       usage: "botkins profile sign-out [--yes]",
