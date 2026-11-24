@@ -989,3 +989,36 @@ test("a tier rejected at turn start falls back once before the prompt is accepte
   await session.send({ prompt: "Hello" }, 2000);
   assert.deepEqual(sent("turn/start").map((p) => p.serviceTier), ["priority", null]);
 });
+
+test("dispatch isolates Codex environment and excludes configured MCP servers before sending", async t => {
+  const ordinary = turns(({ server, threadId }) => say(server, threadId, "m1", "reply"));
+  let reported = "disabled";
+  let instructions = [];
+  const { provider, sent } = setup(t, (method, params, server) => {
+    if (method === "config/read") return { config: { mcp_servers: { private_crm: {} } } };
+    if (method === "thread/start") return { ...ordinary(method, params, server), instructionSources: instructions };
+    if (method === "mcpServerStatus/list") return { data: [{ name: "private_crm", runtimeStatus: reported, tools: {} }], nextCursor: null };
+    return ordinary(method, params, server);
+  });
+  const make = () => provider.openSession(spec({ hostDispatch: true, sourcesOnly: true, temporary: true }));
+  const session = await make();
+  await session.send({ prompt: "approved" });
+  await session.close({ discard: true });
+  const [thread] = sent("thread/start");
+  assert.deepEqual(thread.environments, []);
+  assert.equal(thread.config["mcp_servers." + BRIDGE], undefined);
+  assert.equal(thread.config["mcp_servers.private_crm.enabled"], false);
+  assert.equal(thread.config["features.hooks"], false);
+  assert.deepEqual(sent("turn/start")[0].environments, []);
+  reported = "ready";
+  const unsafe = await make();
+  await assert.rejects(unsafe.send({ prompt: "keep private" }), /isolat/i);
+  assert.equal(sent("turn/start").length, 1);
+  await unsafe.close({ discard: true });
+  reported = "disabled";
+  instructions = ["/some/private/AGENTS.md"];
+  const inherited = await make();
+  await assert.rejects(inherited.send({ prompt: "keep private" }), /isolat/i);
+  assert.equal(sent("turn/start").length, 1);
+  await inherited.close({ discard: true });
+});

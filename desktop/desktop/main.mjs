@@ -31,6 +31,7 @@ import { createRuntime, isSplitHost } from "./runtime.mjs";
 import { withOwnerChatSections } from "./chat-sections-ipc.mjs";
 import { electronHost } from "./host/electron.mjs";
 import { createWindowPush } from "./window-push.mjs";
+import { installTeamworkPeers } from "./teamwork-peers.mjs";
 import { ProfileManager } from "./profile.mjs";
 
 // Use the Botkins path for an existing installation. A development run never changes it.
@@ -358,6 +359,7 @@ else
     });
     // The first real local bot is the point at which a signed-in installation becomes a host.
     // Keep the automatic LAN enable one-shot and remember an explicit phone-link disable.
+    installTeamworkPeers(runtime, profile, remote.transport());
     const originalAddBot = runtime.handlers.addBot;
     runtime.handlers.addBot = (data) => {
       const result = originalAddBot(data);

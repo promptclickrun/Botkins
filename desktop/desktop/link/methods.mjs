@@ -473,6 +473,11 @@ export function remoteArgs(method, args, { deviceId, uploads } = {}) {
     }
     return [[...new Set(args[0])]];
   }
+  if (method === "respond" && ["approve", "today", "remember", "deny"].includes(args[1]?.action)) {
+    if (args.length !== 2 || !clean(args[0]) || Object.keys(args[1]).some((key) => key !== "action"))
+      throw new Error("Choose one approval action for this request.");
+    return [args[0], { action: args[1].action }];
+  }
   if (method === "regenerateChatTitle") {
     if (args.length !== 1 || !clean(args[0])) throw new Error("Choose a chat to regenerate its title.");
     return args;

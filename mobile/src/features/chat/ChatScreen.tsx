@@ -19,7 +19,7 @@ import { api, attempt, loadEarlier, reactToMessage, watchReasoning } from "@/sta
 import { effectiveModel, effortLabel, findModel, modelName } from "@/state/models";
 import { type ChatView, pendingSends, showToast, useApp } from "@/state/store";
 import { useTurnMarks } from "@/state/turnMarks";
-import { AvatarMotion, BotAvatar, Chip, EmptyState, hasGlass, IconButton, LinkBanner, Loading, radius, space, T, Tap, tint, useOnShow, useShape, useTextPrompt, useTheme } from "@/ui";
+import { AvatarMotion, BotAvatar, Button, Chip, EmptyState, hasGlass, IconButton, LinkBanner, Loading, radius, space, T, Tap, tint, useOnShow, useShape, useTextPrompt, useTheme } from "@/ui";
 import { speakText, stopSpeech } from "@/features/voice/tts";
 import { endTalk, TalkBar, useTalk } from "../voice/api";
 import { useLiveCall } from "../voice/liveCall";
@@ -144,7 +144,7 @@ function ChatMenu({ chat, bot, bots, started, projects, settings, onDelete, pane
   // deleting and the chat's model, project and people are its starter's (and the owner's).
   const multiple = useCapability("project-folders-v1");
   const savesMode = useCapability("project-mode-v1");
-  const canShare = useCapability("team-people-v1");
+  const canShare = useCapability("team-people-v1") && !chat.hostDispatch;
   const teamSize = usePart("team")?.people?.length ?? 0;
   const place = myPlace(chat, myself(usePart("meta")));
   const mine = place === "manages";
@@ -1043,7 +1043,9 @@ function ChatScreenScreen({ pane: paneId, onLeave: leavePane, onList }: { pane?:
             </View>
           )}
           {canChat && !!queued?.length && <Queued chatId={chatId} items={queued} steerable={steerable} />}
-          {canChat ? (
+          {canChat && chat.hostDispatch ? (
+            working && <View style={{ paddingHorizontal: space.md }}><Button title="Stop request" variant="secondary" onPress={() => void attempt(api.stop(chatId))} /></View>
+          ) : canChat ? (
             <View style={{ paddingHorizontal: space.md, gap: space.sm }}>
               <TalkBar chatId={chatId} />
               <VoiceDock chatId={chatId} />

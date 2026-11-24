@@ -655,6 +655,11 @@ function App() {
     );
   }
   function composer(key: string, placeholder: string) {
+    if (key !== "home" && chat?.hostDispatch) {
+      return state?.streams[key] !== undefined
+        ? <button className="secondary" onClick={() => void api.stop(key).catch(fail)}>Stop request</button>
+        : null;
+    }
     const target = key === "home" ? state!.bots[0] : bot!;
     const chatPeople = key !== "home" && chat ? chatMentionPeople(state!, chat) : [];
     const canTyping =

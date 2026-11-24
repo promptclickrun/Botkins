@@ -238,7 +238,8 @@ botkins bots skills Nova --off weekly-report
 - `botkins skills edit`, `remove`, `enable` and `disable` change a skill. `botkins skills add-folder <path>` adds a skill from its folder, or links a folder of skills. The folder must be in the home folder of the user that runs Botkins, or on a plugged-in disk; `botkins folders` lists what you can choose, and on a server you copy the folder there first. A plugin folder is not taken as a folder of skills, because a plugin can run commands.
 - **A skill's header and the question.** A skill is a folder with a `SKILL.md`, and that file has a header with the skill's `name` and `description`. A header can have more keys. In other tools, `allowed-tools` lets a skill use tools with no question, and `hooks` or `mcp-servers` start programs. In Botkins a skill's header does none of that: Botkins asks before a command runs, as it does with no skill, and the header starts nothing. A check that uses the real runtime holds this for each version of the runtime (`test/skill-allowed-tools-live.mjs`).
 - `botkins bots access <bot> --all`, `--project <project>` or `--none` sets which projects a bot can use. `botkins bots menu <bot>` lists what the bot's chat offers; like each turn of the bot, it starts the bot's tools that are programs and are on.
-- `botkins tools forget-approvals` forgets the approvals that were given to tools "for this chat".
+- `botkins chats list` shows incoming Teamwork chats. On the destination computer, run `botkins chats approve <chat-id>` to read the message and decide whether to allow it once, for today, or always for that source and target. The command is also available in the terminal dashboard.
+- `botkins tools forget-approvals` clears saved tool and cross-host Teamwork approvals. Use `--chat <id>` to clear those associated with one chat.
 
 ## Plugins
 

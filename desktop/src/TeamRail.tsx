@@ -11,6 +11,8 @@ const who = (bots: Bot[], id: string): Named => {
   const bot = bots.find((b) => b.id === id);
   return bot ? { name: bot.name, bot } : { name: "a bot" };
 };
+const teammate = (bots: Bot[], ask: TeamAsk): Named =>
+  ask.remote ? { name: ask.remote.botName + " on " + ask.remote.hostName } : who(bots, ask.botId);
 const live = (a: TeamAsk) => a.status === "waiting" || a.status === "working";
 
 /** One ask's line in the rail, by its status. */
@@ -34,7 +36,7 @@ export function groupAsks(asks: TeamAsk[]) {
   const rows: TeamAsk[][] = [];
   for (const a of asks) {
     const last = rows.at(-1);
-    if (last && last[0].botId === a.botId && last[0].fromBotId === a.fromBotId) last.push(a);
+    if (last && last[0].botId === a.botId && last[0].fromBotId === a.fromBotId && last[0].remote?.hostId === a.remote?.hostId) last.push(a);
     else rows.push([a]);
   }
   return rows;
@@ -70,7 +72,7 @@ export function TeamRail({ run, bots }: { run: Run; bots: Bot[] }) {
     <section className="team-rail" aria-label="Teamwork">
       {rows.map((row, i) => {
         const latest = row.at(-1)!;
-        const mate = who(bots, latest.botId);
+        const mate = teammate(bots, latest);
         const asker = who(bots, latest.fromBotId);
         const working = row.some(live);
         const failed = !working && latest.status === "failed";
@@ -128,7 +130,7 @@ function TeamDetail({ row, bots, close }: { row: TeamAsk[]; bots: Bot[]; close: 
     if (d && !d.open) d.showModal();
     return () => d?.close();
   }, []);
-  const mate = who(bots, row[0].botId);
+  const mate = teammate(bots, row[0]);
   const asker = who(bots, row[0].fromBotId);
   const titleId = "team-detail-" + row[0].id;
   return (

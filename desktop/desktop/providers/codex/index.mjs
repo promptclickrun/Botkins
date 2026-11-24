@@ -167,6 +167,42 @@ function itemResult(item) {
   }
 }
 
+// A direct Codex CLI normally inherits the person's app-server configuration. A peer message
+// instead runs without an environment, external instructions, hooks, host skills or MCP tools.
+const dispatchIsolationError = () => Object.assign(new Error(
+  "Codex could not isolate this dispatch from local instructions or tools. Update the destination's Codex CLI or choose a different harness.",
+), { code: "BOTKINS_DISPATCH_ISOLATION" });
+
+async function dispatchConfig(provider, rpc, folder) {
+  // 0.171's thread/start and turn/start explicitly support environments: []. Older CLIs may ignore the field.
+  const [major, minor] = String(provider.cliVersion).split(".").map(Number);
+  if (!(major >= 1 || (major === 0 && minor >= 171))) throw dispatchIsolationError();
+  const { config } = await rpc.request("config/read", { cwd: folder, includeLayers: false }).catch(() => ({}));
+  if (!config || typeof config !== "object") throw dispatchIsolationError();
+  const overrides = {
+    "features.hooks": false, "features.skip_host_skill_discovery": true, "features.skill_search": false,
+    "features.multi_agent_v2": false, "features.browser_use": false, "features.view_image": false,
+    "features.code_mode": false, "features.memories": false, "features.image_generation": false,
+    project_doc_max_bytes: 0, instructions: "", developer_instructions: "",
+  };
+  for (const server of Object.keys(config.mcp_servers ?? {})) {
+    if (!/^[A-Za-z0-9_-]+$/.test(server)) throw dispatchIsolationError();
+    overrides["mcp_servers." + server + ".enabled"] = false;
+  }
+  return overrides;
+}
+
+async function checkDispatchThread(rpc, opened) {
+  if (!Array.isArray(opened.instructionSources) || opened.instructionSources.length) throw dispatchIsolationError();
+  let cursor;
+  do {
+    const page = await rpc.request("mcpServerStatus/list", { threadId: opened.thread.id, detail: "toolsAndAuthOnly", cursor }).catch(() => null);
+    if (!Array.isArray(page?.data) || page.data.some(server => server.runtimeStatus !== "disabled" || Object.keys(server.tools ?? {}).length))
+      throw dispatchIsolationError();
+    cursor = page.nextCursor;
+  } while (cursor);
+}
+
 class CodexSession extends ProviderSession {
   constructor(provider, spec) {
     super();
@@ -202,7 +238,9 @@ class CodexSession extends ProviderSession {
     const { provider, spec } = this;
     const rpc = await provider.rpc();
     // The address stays with the conversation: a thread that is still loaded keeps using it.
-    this.bridge = await provider.bridge.open(spec.handlers ? [...spec.tools, ...this.skills.tools] : [], spec.temporary ? {} : { key: provider.id + ":" + spec.sessionId });
+    if (!spec.hostDispatch)
+      this.bridge = await provider.bridge.open(spec.handlers ? [...spec.tools, ...this.skills.tools] : [], spec.temporary ? {} : { key: provider.id + ":" + spec.sessionId });
+    const isolation = spec.hostDispatch ? await dispatchConfig(provider, rpc, spec.folder) : null;
     const settings = approvalSettings(spec.approval);
     const params = {
       model: this.model.model,
@@ -210,10 +248,12 @@ class CodexSession extends ProviderSession {
       approvalPolicy: settings.approvalPolicy,
       approvalsReviewer: settings.approvalsReviewer,
       sandbox: settings.sandbox,
+      ...(isolation && { environments: [], runtimeWorkspaceRoots: [], selectedCapabilityRoots: [], baseInstructions: spec.instructions }),
       config: {
         ...threadConfig(await serversWithTokens(spec), this.bridge),
         ...(spec.sourcesOnly && { "features.shell_tool": false, "features.unified_exec": false, "features.multi_agent": false,
           "features.apps": false, "features.plugins": false, "features.computer_use": false, web_search: "disabled" }),
+        ...isolation,
       },
       developerInstructions: spec.instructions + this.skills.instructions + (spec.context ?? ""),
     };
@@ -243,12 +283,20 @@ class CodexSession extends ProviderSession {
     if (!thread) {
       // A conversation Codex doesn't hold continues from Botkins' own transcript.
       const lost = spec.established && spec.hasReplies ? transcriptContext(spec) : "";
-      ({ thread } = await rpc.request("thread/start", {
+      const opened = await rpc.request("thread/start", {
         ...params,
         developerInstructions: params.developerInstructions + lost,
         serviceName: "botkins",
         ...(spec.temporary && { ephemeral: true }),
-      }));
+      });
+      thread = opened.thread;
+      if (isolation) {
+        try { await checkDispatchThread(rpc, opened); }
+        catch (error) {
+          await provider.unsubscribe(thread.id);
+          throw error;
+        }
+      }
       if (!spec.temporary) provider.sessions.set(spec.sessionId, { ref: thread.id, turns: [] });
     }
     this.threadId = thread.id;
@@ -343,6 +391,7 @@ class CodexSession extends ProviderSession {
       try {
         const params = {
           threadId,
+          ...(this.spec.hostDispatch && { environments: [] }),
           input: userInput({
             ...message,
             // Codex has no plan mode on this channel: its read-only sandbox keeps the promise, and it is told.

@@ -11,7 +11,7 @@ export const OWNER = "owner";
 export function chatPeopleView(state: State, chat: Chat) {
   const team = state.team;
   const people: TeamPerson[] | undefined = team && "people" in team ? team.people : undefined;
-  if (!people || people.length < 2) return null;
+  if (chat.hostDispatch || !people || people.length < 2) return null;
   // On its own computer the window is the owner's. Using another computer it is whoever was paired: the owner, or a member.
   const me = team && "me" in team ? team.me.memberId : OWNER;
   const createdBy = chat.createdBy ?? OWNER;

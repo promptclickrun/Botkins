@@ -200,7 +200,7 @@ export function controlApi(service) {
       ...(task?.intent && { intent: task.intent }),
       messages,
       count: chat.messages.length,
-      ...(request && { request: { id: request.id, kind: request.kind, title: request.title } }),
+      ...(request && { request: { id: request.id, kind: request.kind, title: request.title, ...(request.dispatch && { dispatch: true, detail: request.detail, label: request.label }) } }),
       run: state().runs.find((run) => run.chatId === chat.id) ?? null,
     };
   };
@@ -522,9 +522,9 @@ export function controlApi(service) {
           return { id: run.id, chatId: run.chatId, title: run.title, status: run.status, ...(run.detail && { detail: String(run.detail).slice(0, 300) }), time: run.time ? new Date(run.time).toISOString() : null, bot: state().bots.find((entry) => entry.id === chat?.botId)?.name ?? null, ...(run.scheduleId != null && { routine: true }) };
         }),
     // The answer says which chat and which kind of request (never its text or the answer's), for the log line (coverage.mjs). The request is gone once it is answered, so it is read first.
-    // A yes to a request (`approve`, and `remember`, which also says yes to the next ones) needs the mark `{ agreed: true }` as the last argument: a bot's shell must not approve its own request by a quiet call. A no, a cancel and an answer to a question need none.
+    // A yes to a request (`approve`, `today` or `remember`) needs the mark `{ agreed: true }` as the last argument: a bot's shell must not approve its own request by a quiet call. A no, a cancel and an answer to a question need none.
     "chat.respond": async ([requestId, answer, mark]) => {
-      if ((answer?.action === "approve" || answer?.action === "remember") && !(mark !== null && typeof mark === "object" && !Array.isArray(mark) && mark.agreed === true))
+      if (["approve", "today", "remember"].includes(answer?.action) && !(mark !== null && typeof mark === "object" && !Array.isArray(mark) && mark.agreed === true))
         throw new ControlError("A yes to a request that waits in a chat needs a yes of the person. Show the request to the person, and give `{ \"agreed\": true }` as the last argument (on the command line, `botkins chat` asks the person at a terminal; no flag gives it).", "NEEDS_YES");
       const asked = workspace.interactions.snapshot().find((entry) => entry.id === String(requestId));
       await handlers.respond(String(requestId), answer);

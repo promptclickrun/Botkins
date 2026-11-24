@@ -46,6 +46,7 @@ const PREFIX = "/botkins/v1/";
 // A sealed call may carry a file part (4 MB, as base64 and sealed); the pairing steps are tiny.
 const MAX_RPC_BODY = 6 * 1024 * 1024;
 const MAX_BODY = 64 * 1024;
+const MAX_TEAMWORK_BODY = 160 * 1024;
 const PAIR_TTL = 5 * 60_000;
 // Wrong pairing codes: a source gets 8 tries for one open code, and the code is withdrawn only after 200
 // wrong tries from everyone together (it has 60 bits, so that stays safe). Per-source tables stay small.
@@ -1747,6 +1748,7 @@ export class LinkHost extends EventEmitter {
     const state = this.backend.snapshot();
     const chat = (state.chats ?? []).find((item) => item.id === chatId);
     if (!chat) throw new Failure("That chat is no longer available.");
+    if (chat.hostDispatch) throw new Failure("A cross-host Teamwork chat is private to the owner.");
     if (privateProactiveChat(chat)) throw new Failure("This chat holds one person's alerts and can't be shared.");
     if (person !== OWNER && !team.members.some((member) => member.id === person)) throw new Failure("That person is no longer on the team.");
     const people = chatPeople(team, chat);
@@ -1890,7 +1892,7 @@ export class LinkHost extends EventEmitter {
       // A call needs a known session and a body that fits before any of the body is read.
       const sessionId = String(req.headers["x-botkins-session"] ?? "");
       if (route === "rpc") this.knownSession(sessionId);
-      const limit = route === "rpc" ? MAX_RPC_BODY : MAX_BODY;
+      const limit = route === "rpc" ? MAX_RPC_BODY : route === "profile" ? MAX_TEAMWORK_BODY : MAX_BODY;
       if (Number(req.headers["content-length"]) > limit) throw new Refused(413, "too_large");
       const body = await readBody(req, limit);
       const gone = new Promise((resolve) => res.on("close", resolve));
@@ -1914,12 +1916,21 @@ export class LinkHost extends EventEmitter {
   async serve({ route, push, session: sessionId = "", body = Buffer.alloc(0), from = "", via = "http", gone = new Promise(() => {}) }) {
     const json = (status, value) => ({ status, body: Buffer.from(JSON.stringify(value), "utf8"), json: true });
     try {
-      if (route === "hello") return json(200, this.hello(via));
+      if (route === "hello") return json(200, { ...this.hello(via), ...(this.teamworkPeer && { teamworkBoot: this.teamworkPeer.boot }) });
       if (route !== "rpc" && route !== "pair" && route !== "join" && route !== "session" && route !== "profile") throw new Refused(404, "not_found");
       if (route === "profile") {
-        if (body.length > MAX_BODY) throw new Refused(413, "too_large");
+        if (body.length > MAX_TEAMWORK_BODY) throw new Refused(413, "too_large");
         let message;
         try { message = JSON.parse(body.toString("utf8")); } catch { throw new Refused(400, "bad_json"); }
+        if (message?.teamwork === 1) {
+          try {
+            if (!this.teamworkPeer) throw new Error();
+            return json(200, await this.teamworkPeer.receive(message));
+          } catch (error) {
+            throw new Refused(error?.code === "TEAMWORK_OFFLINE" ? 503 : 403, "teamwork_unavailable");
+          }
+        }
+        if (body.length > MAX_BODY) throw new Refused(413, "too_large");
         return json(200, { box: await this.profile(message) });
       }
       const limit = route === "rpc" ? MAX_RPC_BODY : MAX_BODY;
@@ -2163,6 +2174,7 @@ export class LinkHost extends EventEmitter {
     const refusal = authorize(principal, this.store.data.team, isFollow || cancel ? "link.sync" : method, args, {
       bot: (id) => (state.bots ?? []).find((bot) => bot.id === id),
       chat: (id) => (state.chats ?? []).find((chat) => chat.id === id),
+      gadget: this.store.device(session.deviceId)?.kind === "gadget",
       request: (id) => (state.requests ?? []).find((request) => request.id === id),
       run: (id) => (state.runs ?? []).find((run) => run.id === id),
       // The app says who made each routine once it names "routine-owner-v1".

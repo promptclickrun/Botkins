@@ -7,6 +7,7 @@
 import { readFileSync } from "node:fs";
 import { ago, CliError, EXIT, table, usage } from "../output.mjs";
 import { confirm, readAll } from "./input.mjs";
+import { approvalAction } from "./workspace.mjs";
 import { safe } from "./tools.mjs";
 
 const YES = { yes: { type: "boolean", about: "Don't ask first" } };
@@ -134,6 +135,17 @@ export const chatsCommands = {
           context.print(await context.client.call("chats.list", { ...(context.options.bot !== undefined && { bot: context.options.bot }) }), (list) =>
             list.length ? table(["TITLE", "WITH", "STATE", "SECTION", "ID"], list.map((chat) => [safe(chat.title), chat.group ? chat.bots.map((name) => safe(name ?? "?")).join(", ") : safe(chat.bot ?? "?"), state(chat), safe(chat.section ?? ""), chat.id])) : "There are no chats.",
           );
+        },
+      },
+      approve: {
+        summary: "Review and answer a pending permission on this computer",
+        usage: "botkins chats approve <chat-id>",
+        async run(context) {
+          const { request } = await context.client.call("chat.read", one(context, "Give the chat id from botkins chats list."));
+          if (request?.kind !== "permission") throw usage("This chat has no pending approval.");
+          const action = await approvalAction(context, request);
+          const result = await context.client.call("chat.respond", request.id, { action }, ...(action === "deny" ? [] : [{ agreed: true }]));
+          context.print(result, "Decision recorded.");
         },
       },
       show: {

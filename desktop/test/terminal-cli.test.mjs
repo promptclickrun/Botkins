@@ -303,6 +303,13 @@ test("one message is sent and its reply printed, and a script gets the reply as 
     await botkins(["chat", "Nova", "-m", "Clean up"], { service: person, input: typed, tty: true });
     assert.deepEqual(person.calls.find(([name]) => name === "chat.respond"), expected);
   }
+  const dispatch = { id: "r2", kind: "permission", title: "Pip on Laptop to Scout on Desktop", dispatch: true, detail: "  first line\nsecond line  " };
+  for (const [typed, action] of [["1", "approve"], ["2", "today"], ["3", "remember"], ["4", "deny"], ["y", "deny"]]) {
+    const service = fakeService({ "chat.read": () => ({ request: dispatch }), "chat.respond": null });
+    const result = await botkins(["chats", "approve", "c1"], { service, input: typed + "\n", tty: true });
+    assert.match(result.err, /  first line\nsecond line  /);
+    assert.deepEqual(service.calls.at(-1), ["chat.respond", "r2", { action }, ...(action === "deny" ? [] : [{ agreed: true }])]);
+  }
   // A turn that failed ends the command with a failure.
   reads.push({ working: false, stream: "", messages: [], count: 1, seen: "a", run: { status: "Failed", detail: "The model is unavailable." } });
   const failed = await botkins(["chat", "Nova", "-m", "Hi", "--json"], { service: fakeService(answers) });

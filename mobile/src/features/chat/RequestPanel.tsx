@@ -14,7 +14,7 @@ import { ChevronDown, ChevronUp, CircleHelp, Hand, Lock, ShieldAlert } from "luc
 import { useEffect, useRef, useState } from "react";
 import { AccessibilityInfo, Alert, Keyboard, StyleSheet, Switch, type TextInputInstance, View } from "react-native";
 import Animated, { FadeInDown } from "react-native-reanimated";
-import type { AgentRequest, Bot, CredentialRef, FormField } from "@/link/types";
+import type { AgentRequest, Bot, FormField, RequestAnswer } from "@/link/types";
 import { api, attempt } from "@/state/link";
 import { BotAvatar, Button, Field, haptic, lift, radius, space, switchColors, T, Tap, useTheme } from "@/ui";
 import { shownText } from "@/ui/shownText";
@@ -43,14 +43,12 @@ import { SecureInput } from "./request/SecureInput";
 
 export { looksDangerous, looksSecret } from "./request/logic";
 
-type Answer = { action: string; value?: string | CredentialRef; content?: Record<string, unknown> };
-
 /** What the lock icon beside a button's label adds to its width. */
 const ICON_EXTRA = 27;
 
 function useRespond(request: AgentRequest) {
   const [busy, setBusy] = useState<string | null>(null);
-  const respond = async (answer: Answer, which: string): Promise<boolean> => {
+  const respond = async (answer: RequestAnswer, which: string): Promise<boolean> => {
     if (busy) return false;
     setBusy(which);
     const done = await attempt(api.respond(request.id, answer).then(() => true));
@@ -98,7 +96,7 @@ function Detail({ request }: { request: AgentRequest }) {
 
 function Permission({ request, danger, room }: { request: AgentRequest; danger: boolean; room: number }) {
   const { busy, respond } = useRespond(request);
-  const words = wordsFor("permission");
+  const words = wordsFor("permission", request.dispatch);
   const approve = () => void respond({ action: "approve" }, "approve");
   const always = () => void respond({ action: "remember" }, "remember");
   return (
@@ -114,7 +112,10 @@ function Permission({ request, danger, room }: { request: AgentRequest; danger: 
                 : { label: words.main, render: (style) => <Button title={words.main} style={style} loading={busy === "approve"} disabled={!!busy} onPress={approve} /> }
             }
           />
-          {!!request.remember && !!words.remember && (
+          {request.dispatch && (
+            <Button title="Allow for today" variant="secondary" wide loading={busy === "today"} disabled={!!busy} onPress={() => void respond({ action: "today" }, "today")} />
+          )}
+          {(request.dispatch || !!request.remember) && !!words.remember && (
             <Button
               title={words.remember}
               variant="ghost"
@@ -131,7 +132,7 @@ function Permission({ request, danger, room }: { request: AgentRequest; danger: 
                       ])
                   : always
               }
-              accessibilityLabel={"Allow " + request.remember + " for this chat"}
+              accessibilityLabel={request.dispatch ? words.remember : "Allow " + request.remember + " for this chat"}
             />
           )}
         </View>
@@ -141,7 +142,7 @@ function Permission({ request, danger, room }: { request: AgentRequest; danger: 
       {!!request.preview && <Code danger={danger}>{shownText(request.preview, { lines: true })}</Code>}
       <Detail request={request} />
       {!!request.url && <LinkLine url={request.url} />}
-      {!!request.remember && (
+      {!!request.remember && !request.dispatch && (
         <T variant="footnote" color="muted">
           {rememberNote(request.remember)}
         </T>
@@ -371,7 +372,7 @@ export function RequestPanel({ request, bot, maxHeight, count }: { request: Agen
   // After a secret answer, one quiet line stands in until the bot moves on.
   const [sent, setSent] = useState<string | null>(null);
   const kind = request.kind;
-  const danger = kind === "permission" && looksDangerous(request);
+  const danger = kind === "permission" && !request.dispatch && looksDangerous(request);
   const secure = kind === "secure";
   const secureFields = secure ? secureFieldsOf(request) : [];
   const title = heading(kind, bot?.name, danger);

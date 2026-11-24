@@ -21,6 +21,7 @@ function chatSummary(chat) {
     id: chat.id,
     botId: chat.botId,
     ...(chat.botIds && { botIds: chat.botIds }),
+    ...(chat.hostDispatch && { hostDispatch: true }),
     ...(chat.createdBy && { createdBy: chat.createdBy }),
     title: chat.title,
     time: chat.time,

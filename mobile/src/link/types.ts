@@ -504,6 +504,7 @@ export type RoutineInput = {
 export type ChatContext = { current: number; limit: number; system?: number; tools?: number; conversation?: number; messages?: number; updatedAt?: number };
 /** A chat as lists show it. Its messages arrive in a ChatDetail when the chat is open. */
 export type ChatSummary = {
+  hostDispatch?: true;
   fastMode?: FastMode;
   id: string;
   botId: string;
@@ -572,6 +573,7 @@ export type TeamAsk = {
   id: string;
   botId: string;
   fromBotId: string;
+  remote?: { hostId: string; hostName: string; botName: string };
   message: string;
   status: "waiting" | "working" | "answered" | "failed" | "stopped";
   started: number;
@@ -718,7 +720,16 @@ export type SecureField = {
   hint?: string;
   optional?: true;
 };
+/** A cross-host permission is scoped to the source and target bots and hosts shown on the card. */
+export type DispatchAction = "approve" | "today" | "remember" | "deny";
+export type RequestAnswer = {
+  action: DispatchAction | "cancel" | "answer" | "accept";
+  /** A saved credential's reference instead of text: the computer puts the value in. */
+  value?: string | CredentialRef;
+  content?: Record<string, unknown>;
+};
 export type AgentRequest = {
+  dispatch?: true;
   id: string;
   chatId: string;
   botId: string;
@@ -1716,7 +1727,7 @@ export type Calls = {
   compact(chatId: string): void;
   sideQuestion(chatId: string, question: string): string;
   /** A value (or a form field's value) may be a CredentialRef: the computer fills the secret in. */
-  respond(requestId: string, answer: { action: string; value?: string | CredentialRef; content?: Record<string, unknown> }): void;
+  respond(requestId: string, answer: RequestAnswer): void;
   clearApprovals(chatId?: string): void;
   models(): ModelInfo[];
   /** "routines" is the Default routines model ("routine-models-v1"); null clears it. */

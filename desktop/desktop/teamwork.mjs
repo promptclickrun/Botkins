@@ -14,6 +14,7 @@
 import { randomUUID } from "node:crypto";
 import { defineTool } from "./providers/provider.mjs";
 import { isGroup } from "./groups.mjs";
+import { OutgoingDispatches, peerRoster, remoteReply, remoteTeamworkAllowed, requireRemoteTurn } from "./remote-teamwork.mjs";
 import { canUseProject } from "./access.mjs";
 import { recordActivity } from "./activity.mjs";
 import { recordCanvas } from "./canvas.mjs";
@@ -31,6 +32,8 @@ const line = (bot) => "- " + bot.name + ": " + bot.role + "." + (bot.summary ? "
 export class Teamwork {
   constructor(ws) {
     this.ws = ws;
+    this.outgoing = new OutgoingDispatches(ws, ws.state.outgoingDispatches);
+    delete ws.state.outgoingDispatches;
   }
   get enabled() {
     return this.ws.state.settings.teamwork !== false;
@@ -46,10 +49,12 @@ export class Teamwork {
   /** What a bot is told about its team. "" when it has none here. */
   brief(bot, chat) {
     const team = this.roster(bot, chat);
-    if (!team.length) return "";
+    const remote = remoteTeamworkAllowed(this.ws, bot, chat, this.ws.active.get(chat.id)?.run, this.ws.active.get(chat.id))
+      ? "\nUse list_host_teammates to find teammates on the owner’s other computers. Use their host and bot IDs with ask_teammate. Their computer handles approval." : "";
+    if (!team.length) return remote;
     return (
       "\n\n## Your team\nYou're " + bot.name + ". Your teammates:\n" + team.map(line).join("\n") +
-      "\nUse ask_teammate when a teammate fits a substantial part of the request. Split independent work across roles. Handle quick requests yourself or when the person asks for you. Say whom you're asking and why, share only the context they need, and combine their results into your reply."
+      "\nUse ask_teammate when a teammate fits a substantial part of the request. Split independent work across roles. Handle quick requests yourself or when the person asks for you. Say whom you're asking and why, share only the context they need, and combine their results into your reply." + remote
     );
   }
   /** What a teammate is told while it works on an ask. */
@@ -63,16 +68,30 @@ export class Teamwork {
   tools(bot, chat, run, task) {
     if (run?.panelId) return [];
     const team = this.roster(bot, chat);
-    if (!team.length) return [];
+    const remote = remoteTeamworkAllowed(this.ws, bot, chat, run, task);
+    if (!team.length && !remote) return [];
+    const localNames = team.map((b) => b.name).join(", ");
     return [
+      ...(remote ? [defineTool("list_host_teammates", {
+        description: "List the owner's other Botkins hosts. Pass a returned host ID to list its available bots.",
+        parameters: { type: "object", properties: { host: { type: "string", description: "A Botkins host ID." } }, additionalProperties: false },
+        handler: async ({ host } = {}) => {
+          requireRemoteTurn(this.ws, bot, chat, run, task);
+          const roster = await peerRoster(this.ws.teamworkPeers, host);
+          requireRemoteTurn(this.ws, bot, chat, run, task);
+          return JSON.stringify(host === undefined ? roster : { host: roster.host, bots: roster.bots });
+        },
+      })] : []),
       defineTool("ask_teammate", {
         description:
-          "Ask one of your teammates (" + team.map((b) => b.name).join(", ") + ") to do part of the work and wait for their reply. " +
+          "Ask a teammate to do part of the work and wait for their reply. " + (localNames ? "Local teammates: " + localNames + ". " : "") +
+          (remote ? "For a bot on another computer, use the host ID and bot ID from list_host_teammates. " : "") +
           "They see only your message, so include the goal, the facts they need and what to send back. To ask several teammates at once, call this tool once for each in the same step.",
         parameters: {
           type: "object",
           properties: {
-            teammate: { type: "string", description: "The teammate's name." },
+            teammate: { type: "string", description: remote ? "The local teammate’s name, or a remote bot ID when host is given." : "The teammate's name." },
+            ...(remote && { host: { type: "string", description: "The remote teammate’s host ID." } }),
             message: { type: "string", description: "What you need them to do, with the facts they need." },
             expecting: { type: "string", description: "What you need back, such as a short summary, a list or a decision." },
             constraints: { type: "string", description: "Limits their answer must respect." },
@@ -84,12 +103,23 @@ export class Teamwork {
       }),
     ];
   }
-  async ask(chat, bot, run, task, { teammate, message, expecting, constraints }) {
+  async ask(chat, bot, run, task, { host, teammate, message, expecting, constraints }) {
     if (!run || task.stopped || this.ws.closing || this.ws.active.get(chat.id) !== task)
       throw new Error("This turn is no longer active");
     const team = this.roster(bot, chat);
     const wanted = String(teammate ?? "").trim().replace(/^@/, "").toLowerCase();
-    const helper = team.find((b) => b.name.toLowerCase() === wanted) ?? team.find((b) => b.id === wanted);
+    let remote, helper, pin;
+    if (host !== undefined) {
+      requireRemoteTurn(this.ws, bot, chat, run, task);
+      const roster = await peerRoster(this.ws.teamworkPeers, host);
+      requireRemoteTurn(this.ws, bot, chat, run, task);
+      helper = roster.bots.find((b) => b.id === teammate);
+      if (!helper) throw new Error("Choose an available bot ID on " + roster.host.name + " from list_host_teammates.");
+      pin = roster.pin;
+      remote = { hostId: host, hostName: roster.host.name, botName: helper.name };
+    } else {
+      helper = team.find((b) => b.name.toLowerCase() === wanted) ?? team.find((b) => b.id === wanted);
+    }
     if (!helper)
       throw new Error("No teammate is named “" + String(teammate ?? "").slice(0, 60) + "”. Your teammates: " + (team.map((b) => b.name).join(", ") || "none") + ".");
     if (typeof message !== "string" || !message.trim()) throw new Error("Write the message for " + helper.name + ".");
@@ -97,30 +127,33 @@ export class Teamwork {
     const body = message.trim();
     const asks = (run.teamwork ??= []);
     if (asks.length >= MAX_ASKS) throw new Error("You can ask teammates up to " + MAX_ASKS + " times in one reply. Answer with what you have.");
-    if (asks.some((a) => a.botId === helper.id && a.message === body))
+    if (asks.some((a) => a.botId === helper.id && a.remote?.hostId === remote?.hostId && a.message === body))
       throw new Error("You already sent " + helper.name + " this exact message in this reply. Use the answer you got.");
     const optional = (value) => (typeof value === "string" && value.trim() ? value.trim().slice(0, 2000) : undefined);
     const entry = {
       id: randomUUID(),
       botId: helper.id,
       fromBotId: bot.id,
+      ...(remote && { remote }),
       message: body,
       ...(optional(expecting) && { expecting: optional(expecting) }),
       status: "waiting",
       started: Date.now(),
     };
+    const content = body +
+      (entry.expecting ? "\n\nWhat they need back: " + entry.expecting : "") +
+      (optional(constraints) ? "\n\nConstraints: " + optional(constraints) : "");
+    if (remote && content.length > MESSAGE_MAX) throw new Error("Keep the whole remote request within 16,000 characters.");
     asks.push(entry);
     this.ws.notify();
     // The teammate is told whose request this is, as the asker was (desktop/team-turn.mjs).
     const whose = this.ws.speakerLine(chat, run, task, { helping: true });
-    const prompt =
-      (whose ? whose + "\n" : "") +
-      "Message from " + bot.name + " (" + bot.role + "):\n" + body +
-      (entry.expecting ? "\n\nWhat they need back: " + entry.expecting : "") +
-      (optional(constraints) ? "\n\nConstraints: " + optional(constraints) : "");
+    const prompt = (whose ? whose + "\n" : "") + "Message from " + bot.name + " (" + bot.role + "):\n" + content;
     try {
       // One teammate works on one ask at a time; a second ask to it waits its turn.
-      const reply = await this.ws.locked(helperSessionId(chat, helper.id), () => this.helperTurn(chat, bot, helper, run, task, entry, prompt));
+      const reply = remote
+        ? await remoteReply(this.ws, bot, chat, run, task, entry, content, pin)
+        : await this.ws.locked(helperSessionId(chat, helper.id), () => this.helperTurn(chat, bot, helper, run, task, entry, prompt));
       entry.reply = reply.slice(0, REPLY_MAX);
       entry.status = "answered";
       return JSON.stringify({ teammate: helper.name, reply });

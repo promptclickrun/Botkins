@@ -114,6 +114,36 @@ legacy devices and future devices remain independent. Removing a team member rem
 membership and profile grant. Profile proofs and `statusKey` never appear in `status().devices`,
 paired events or client device lists.
 
+### Same-owner host teamwork
+
+Desktop and terminal installations advertise a random 16-byte base64url `teamworkBoot` in
+`hello` while the host transport is installed. Both installations need a signed-in profile,
+a listening Link host, and a local owner binding for that profile. For each operation they read
+the authenticated profile directory. Pending and working status polls can reuse this read
+for ten seconds. Both sides recheck ownership before releasing a terminal status or reply.
+Each host ID must have a single owner entry with its
+pinned X25519 host key. Members, disconnected hosts, and failed directory reads are refused.
+The destination resolves the displayed computer names from this directory and rechecks both
+host identities when approving the bot pair.
+
+The source posts `{ teamwork: 1, from, publicKey, box }` to `/botkins/v1/profile` over HTTP
+or relay route 6. Only the teamwork handler opens this envelope. The key is HKDF-SHA256 over
+the static host-to-host X25519 secret, salted with the UTF-8 JSON array
+`[profileId, sourceServerId, targetServerId]`, with info `botkins/teamwork-host/v1`.
+The request box uses Link's random-nonce ChaCha20-Poly1305 with AAD `teamwork/request` and
+contains `{ id, boot, at, operation, payload }`. The source generates a fresh 16-byte
+base64url ID per envelope. The destination checks its boot nonce, a timestamp within 60
+seconds, and the allowed operations `list`, `submit`, `status`, and `cancel`. It retains
+accepted IDs until expiry and refuses excess traffic when its 4096-ID or 24-in-flight
+capacity is full. The reply box uses AAD `teamwork/reply/<id>` and contains `{ value }`
+or `{ error }`. Application retries reuse the dispatch ID inside the payload and generate
+a new envelope. This exchange creates no Link device or RPC session. Existing relays carry
+it unchanged. Both endpoints must support the extension.
+
+A destination approval uses `kind: "permission", dispatch: true`. Show its title, label and full detail together. The title identifies the bots and their computers. The detail holds the exact message. Owner clients call `respond(id, {action})` with `approve` (Allow this time), `today` (Allow for today), `remember` (Always allow), or `deny` (Deny). These grants apply to the displayed direction. Notifications and Live Activities open the full decision in the app. A chat whose summary has `hostDispatch: true` stays private to the owner.
+
+After a human approves, B waits for an authenticated follow-up for that request before sending the message to its model. A journals the request ID and host identity before submission. If its waiting turn stops or its process restarts, A withdraws **that ID** on reconnection. Cancellation can overtake submission. A cancellation receipt contains only the resulting state.
+
 ### Light steps (`step-details-v1`)
 
 Most of a long turn's bytes are the inputs and outputs of its steps, and a chat shows them only when a step is opened. A client that sends `steps: "light"` in the `link.sync` argument gets `chat:<id>` and `run:<id>` with light steps: a step keeps its `input` and `output` only when each is at most 400 characters, when the step is a question the bot asked (`ask_user`, `ask`), or when it started a helper. Any other step comes without them and says `more: true`. `link.messages` answers in the form the session follows in.
@@ -149,6 +179,7 @@ A host with `text-chunks-v1` also accepts `text: "chunks"`, for a phone on the r
 With `client-message-id-v1`, a client may include a locally generated `clientMessageId` in the options for `send`. The host echoes it on the queued item and on the user message when delivered. A client can show the message immediately and replace its local row when either echo arrives. Each press of Send gets its own ID, even for identical text.
 
 With `chat-title-regeneration-v1`, `regenerateChatTitle(chatId)` asks the host's summarizer to generate and save a title and returns the title. Only the chat's starter or the owner can request it. It needs a message to summarize and does not change the automatic naming setting or add a turn.
+
 
 ## Devices: list, rename, remove (`devices-v1`)
 

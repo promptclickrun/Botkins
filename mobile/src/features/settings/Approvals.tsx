@@ -64,7 +64,7 @@ export default function Approvals() {
     void attempt(api.setPreferences({ clarify: next }));
   };
   const forget = () =>
-    Alert.alert("Forget remembered approvals?", "Bots will ask again.", [
+    Alert.alert("Forget remembered approvals?", "Bots will ask again for tool use and cross-host Teamwork.", [
       { text: "Cancel", style: "cancel" },
       { text: "Forget", style: "destructive", onPress: () => void attempt(api.clearApprovals(), "Forgotten") },
     ]);

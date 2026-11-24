@@ -51,6 +51,7 @@ import { DEFAULT_HARNESS, HARNESSES, Harness, harnessField } from "./harness/ind
 import { friendlyModel } from "./modelnames.mjs";
 import { meterLimit } from "./modeldetails.mjs";
 import { ToolBridge } from "./providers/toolbridge.mjs";
+import { HostDispatch } from "./host-dispatch.mjs";
 import { Interactions } from "./interactions.mjs";
 import { MAX_CONTINUATIONS, mergedPrompt, nextMove, openSteps, takeBatch } from "./keep-moving.mjs";
 import { recordActivity } from "./activity.mjs";
@@ -218,6 +219,8 @@ export class Workspace {
         // (desktop/agents.mjs importable) or the Create a bot form.
         { bots: [], chats: [], runs: [] }
       : readWorkspace(this.file);
+    this.hostDispatch = new HostDispatch(this, this.state.hostDispatch);
+    delete this.state.hostDispatch;
     // Queued messages share the atomic workspace write with the run that consumes them.
     this.queues = new Map(Object.entries(this.state.pendingMessages ?? {}));
     delete this.state.pendingMessages;
@@ -422,7 +425,8 @@ export class Workspace {
       this.queues.size || detachedQuestions.length
         ? { ...this.state, ...(this.queues.size && { pendingMessages: Object.fromEntries(this.queues) }), ...(detachedQuestions.length && { detachedQuestions }) }
         : this.state;
-    writeFileSync(this.file + ".tmp", JSON.stringify(persisted), {
+    const outgoing = this.teamwork?.outgoing.pending;
+    writeFileSync(this.file + ".tmp", JSON.stringify({ ...persisted, ...this.hostDispatch?.persisted(), ...(outgoing?.size && { outgoingDispatches: [...outgoing.values()] }) }), {
       mode: 0o600,
     });
     renameSync(this.file + ".tmp", this.file);
@@ -500,7 +504,7 @@ export class Workspace {
   }
   /** The turns working now that the apps are shown: a reaction's turn is hidden until it replies. */
   shownTurns() {
-    return [...this.active].filter(([, task]) => !hiddenRun(task.run));
+    return [...this.active, ...[...this.hostDispatch.live].map(([row, task]) => [row.chatId, task])].filter(([, task]) => !hiddenRun(task.run));
   }
   /** Every provider session id this workspace holds, for provider housekeeping. */
   sessionIds() {
@@ -657,6 +661,7 @@ export class Workspace {
   clearApprovals(chatId) {
     for (const chat of chatId ? [this.chat(chatId)] : this.state.chats)
       delete chat.approvals;
+    this.hostDispatch.clearGrants(chatId);
     this.save();
   }
   async sideQuestion(id, question) {
@@ -804,6 +809,7 @@ export class Workspace {
         ? rawQuote.trim().slice(0, 4000)
         : undefined;
     const chat = this.state.chats.find((c) => c.id === chatId);
+    if (chat?.hostDispatch) throw new Error("Start a new chat to send this teammate a message.");
     if (!chat || this.active.has(chatId))
       throw new Error("Chat unavailable or already working");
     // Reactions waiting for their turn are seen with this message's turn instead.
@@ -1647,7 +1653,7 @@ export class Workspace {
    */
   async prewarm(chatId) {
     const chat = this.state.chats.find((c) => c.id === chatId);
-    if (!chat || isGroup(chat) || this.closing || this.active.has(chatId)) return;
+    if (!chat || chat.hostDispatch || isGroup(chat) || this.closing || this.active.has(chatId)) return;
     const bot = this.state.bots.find((b) => b.id === chat.botId);
     if (!bot) return;
     // A new chat has no session to open yet, but everything around one can start now, while the
@@ -2498,6 +2504,7 @@ export class Workspace {
     }
   }
   async stop(chatId) {
+    this.hostDispatch.stop(chatId);
     const task = this.active.get(chatId);
     if (task) {
       task.stopped = true;

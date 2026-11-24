@@ -288,7 +288,16 @@ test("a gadget is the owner's: it sees a bot's request and answers it itself", a
   await until(() => gadget.gadget().phase === "idle" && !!gadget.gadget().reply, "the reply");
   assert.match(gadget.gadget().reply!.text, /deploy finished/);
   assert.equal(gadget.gadget().chat?.id, chatId);
-  // Anything else the owner may call, a gadget may call: nothing is cut from it.
+  const dispatch = { id: "dispatch-card", chatId, botId: "bot-mira", kind: "permission", dispatch: true, title: "Private decision" };
+  const state = link.backend.snapshot();
+  state.chats.find((chat: {id: string}) => chat.id === chatId)!.hostDispatch = true;
+  state.requests.push(dispatch);
+  for (const action of ["approve", "today", "remember", "deny"])
+    await assert.rejects(gadget.client.call("respond", dispatch.id, { action }), /owner/);
+  for (const id of [chatId, [chatId]])
+    await assert.rejects(gadget.client.call("link.messages", id, 0), /owner/);
+  await assert.rejects(gadget.client.call("link.gadget.set", { chatId }), /no longer exists/);
+  // Regular owner calls remain available.
   assert.ok(Array.isArray(await gadget.client.call("models")));
   for (const each of [gadget, phone]) each.client.stop();
   await link.stop();

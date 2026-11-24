@@ -453,6 +453,7 @@ export const OWNER = "owner";
 export const personOf = (principal) => (principal?.kind === "member" ? principal.memberId : OWNER);
 /** A chat's people ("team-people-v1"): who started it, and who was invited. Kept in the team, by chat id. */
 export function chatPeople(team, chat) {
+  if (chat?.hostDispatch) return { createdBy: OWNER, invited: [] };
   const invited = chat ? team?.chats?.[chat.id] : undefined;
   return { createdBy: chat?.createdBy || OWNER, invited: Array.isArray(invited) ? [...invited] : [] };
 }
@@ -958,6 +959,12 @@ function chatIdOf(method, args, lookups) {
 
 /** One member's refusal sentence, or "" when the call may proceed. */
 export function authorize(principal, team, method, args = [], lookups = {}) {
+  if (lookups.gadget) {
+    // The readers stringify the chat id. Check exactly the chat they would open.
+    const chatId = ["link.messages", "link.step", "link.push.activity"].includes(method) ? String(args[0]) : chatIdOf(method, args, lookups);
+    if ((method === "respond" && lookup("request", args[0], lookups)?.dispatch) || lookup("chat", chatId, lookups)?.hostDispatch)
+      return "Open the Teamwork request on the owner's computer or paired phone.";
+  }
   if (principal?.kind === "owner") return "";
   if (principal?.kind !== "member") return "Only a paired owner or team member can do that.";
   const role = roleFor(principal, team);
@@ -1026,6 +1033,7 @@ export function authorize(principal, team, method, args = [], lookups = {}) {
   const chatId = chatIdOf(method, args, lookups);
   if (chatId) {
     const chat = lookup("chat", chatId, lookups);
+    if (chat?.hostDispatch) return "That chat belongs to the owner.";
     const mine = !!chat && chat.createdBy === principal.memberId;
     const invited = !!chat && !mine && inChat(team, chat, principal.memberId);
     if (!mine && !invited) return "That chat belongs to the owner or another member.";

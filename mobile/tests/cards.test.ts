@@ -8,6 +8,13 @@ import { looksDangerous } from "../src/features/chat/request/logic";
 const NOW = 1_795_200_000_000;
 const MIN = 60_000;
 
+test("a dispatch opens the full request from a notification or Live Activity", () => {
+  const request = { id: "r", chatId: "c", kind: "permission", title: "Dispatch", dispatch: true, remember: "bot pair" };
+  assert.equal(askOf(request), "open");
+  assert.equal(askDetail(request).k, "open");
+  assert.equal(askDetail(request).rm, undefined);
+});
+
 /** A computer's state with one Botkin ("patch") and a few chats in different states. */
 function world() {
   return {

@@ -483,7 +483,7 @@ export function BehaviorSettings({ settings, change, fail }: Props) {
         </Row>
         <ValueRow
           label="Remembered approvals"
-          help="Requests you allowed for the rest of a chat."
+          help="Saved tool approvals and cross-host Teamwork permissions."
           value={
             <button
               type="button"
@@ -491,7 +491,7 @@ export function BehaviorSettings({ settings, change, fail }: Props) {
               onClick={() =>
                 window.botkins
                   .clearApprovals()
-                  .then(() => setMessage("Remembered chat approvals cleared."))
+                  .then(() => setMessage("Remembered approvals cleared."))
                   .catch(fail)
               }
             >

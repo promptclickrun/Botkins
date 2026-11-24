@@ -105,6 +105,7 @@ test("the folded line counts the requests and says what a tap does", () => {
 });
 
 test("the buttons use the desktop app's words", () => {
+  assert.deepEqual(wordsFor("permission", true), { quiet: "Deny", main: "Allow this time", remember: "Always allow" });
   assert.deepEqual(wordsFor("permission"), { quiet: "Deny", main: "Allow once", remember: "Allow for this chat" });
   assert.deepEqual(wordsFor("question"), { quiet: "Dismiss", main: "Send answer" });
   assert.deepEqual(wordsFor("form"), { quiet: "Dismiss", main: "Send answer" });
