@@ -524,8 +524,9 @@ export function chatTimeline(input: TimelineInput): Item[] {
     steps = [];
     thoughts = [];
     if (noted && !replies.length) pushText(rest, true);
-    if (!group) replies.forEach((i, n) => items.push(messageItem(i, { end: n === replies.length - 1 })));
+    // "Kept going" sits just before the reply the computer kept going for, so it reads as what happened next.
     items.push(...kept());
+    if (!group) replies.forEach((i, n) => items.push(messageItem(i, { end: n === replies.length - 1 })));
     if (run.steps?.length || run.agents?.length || run.todos?.length || run.teamwork?.length || run.summary ||
         (prefs.thinking !== "hide" && (run.reasoning?.length || inside.some((i) => messages[i].interim)))) {
       items.push({ kind: "activity", key: "activity:" + run.id, runId: run.id });
@@ -597,10 +598,10 @@ export function chatTimeline(input: TimelineInput): Item[] {
       const said = [...inside, ...replies].filter((i) => !messages[i].interim).sort((a, b) => a - b);
       for (const i of said) items.push(messageItem(i, { end: i === replies.at(-1) }));
     } else {
-      items.push(...shown);
+      items.push(...shown, ...kept());
       replies.forEach((i, n) => items.push(messageItem(i, { end: n === replies.length - 1 })));
     }
-    items.push(...kept());
+    if (group) items.push(...kept());
     const counted = own.length;
     if (fold.some((entry) => entry.kind !== "person") || run.agents?.length || run.todos?.length || run.teamwork?.length || run.summary) {
       const took = run.finished ? run.finished - run.time : run.usage?.durationMs;

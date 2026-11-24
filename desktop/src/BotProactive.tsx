@@ -132,10 +132,10 @@ export default function BotProactive({ state, bot, setUpNow }: { state: State; b
       {owner && (
         <label className="switch-row compact">
           <span>
-            <strong>Proactive agent</strong>
-            <small>{paused ? "Paused: the Proactive agent is off on this computer." : "For everyone " + bot.name + " looks out for."}</small>
+            <strong>{bot.name + " looks out"}</strong>
+            <small>{paused ? "Paused: Proactive is off on this computer." : "For everyone below."}</small>
           </span>
-          <input type="checkbox" role="switch" className="switch" aria-label="Proactive agent" checked={p.enabled} onChange={(e) => set({ enabled: e.target.checked })} />
+          <input type="checkbox" role="switch" className="switch" aria-label={bot.name + " looks out"} checked={p.enabled} onChange={(e) => set({ enabled: e.target.checked })} />
         </label>
       )}
       {!owner && (paused || standing === "off") && <p className="muted">Paused by the owner.</p>}
@@ -226,7 +226,7 @@ export default function BotProactive({ state, bot, setUpNow }: { state: State; b
           <label>
             Alerts go to
             <select value={p.deliver} onChange={(e) => set({ deliver: e.target.value as ProactiveBotSettings["deliver"] })}>
-              <option value="chat">{bot.name + "'s chat with each person"}</option>
+              <option value="chat">{"Chat with " + bot.name}</option>
               <option value="feed">Each person's Feed</option>
             </select>
             <small>{learning && p.deliver === "feed" ? "A shared Feed sends personal suggestions to private chat." : "Quiet hours in Notifications hold it back too."}</small>

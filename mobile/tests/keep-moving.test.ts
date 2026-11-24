@@ -38,7 +38,7 @@ test("the words: a plan that got more turns, the next step catch, and a stop wit
 test("a run that was kept going draws its earlier reply where it came, then the line, then the last reply", () => {
   const kept = run({ continued: { count: 1, limit: 8, reason: "plan", open: 2 }, plan: { open: 0, total: 3 } });
   const shown = chatTimeline(input({ messages: [ask, first, last], runs: { r1: kept } }));
-  assert.deepEqual(shape(shown), ["user:Do the thing", "assistant:I read the notes.", "assistant:All sent.", "kept:↻ Kept going: 2 plan steps were open"]);
+  assert.deepEqual(shape(shown), ["user:Do the thing", "assistant:I read the notes.", "kept:↻ Kept going: 2 plan steps were open", "assistant:All sent."]);
   const end = shown.filter((item) => item.kind === "message").at(-1);
   assert.ok(end?.kind === "message" && end.end && !(shown[1] as Extract<Item, { kind: "message" }>).end, "only the last reply ends the run (its cards go under it)");
   // Without the field, as from an older computer, both replies come at the end as before.

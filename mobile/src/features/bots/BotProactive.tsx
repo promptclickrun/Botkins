@@ -69,7 +69,7 @@ export default function BotProactive() {
       <Page title="Proactive">
         <T variant="footnote" color="muted">{description}</T>
         <Group>
-          <Row title="Proactive agent" subtitle={rules.shared ? WIZARD.waiting : "The owner hasn't set this up yet"} subtitleLines={2} disabled />
+          <Row title={bot.name + " looks out"} subtitle={rules.shared ? WIZARD.waiting : "The owner hasn't set this up yet"} subtitleLines={2} disabled />
         </Group>
         {rules.shared && <Button title={WIZARD.setUp} onPress={setUp} />}
         {rules.all && entry && <Button title="Forget settings" variant="secondary" onPress={forget} />}
@@ -94,8 +94,8 @@ export default function BotProactive() {
     <Page title="Proactive" keyboard>
       <T variant="footnote" color="muted">{description}</T>
       <Group>
-        {rules.all && <Row title="Proactive agent" subtitle={paused ? "Paused: the Proactive agent is off on this computer" : "For everyone " + bot.name + " looks out for"} subtitleLines={2} toggled={p.enabled} onToggle={(enabled) => set({ enabled })} />}
-        {!rules.all && (paused || standing === "off") && <Row title="Proactive agent" subtitle="Paused by the owner" disabled />}
+        {rules.all && <Row title={bot.name + " looks out"} subtitle={paused ? "Paused: Proactive is off on this computer" : "For everyone below"} subtitleLines={2} toggled={p.enabled} onToggle={(enabled) => set({ enabled })} />}
+        {!rules.all && (paused || standing === "off") && <Row title={bot.name + " looks out"} subtitle="Paused by the owner" disabled />}
         {rules.mine ? (
           <>
             <Row title="My alerts" subtitle={"What " + bot.name + " finds for you"} toggled={rules.mine.on} onToggle={(on) => set({ people: { [me]: { on } } })} />
@@ -129,7 +129,7 @@ export default function BotProactive() {
               title="Alerts go to"
               value={p.deliver}
               options={[
-                { value: "chat", label: bot.name + "'s chat with each person" },
+                { value: "chat", label: "Chat with " + bot.name },
                 { value: "feed", label: "Each person's Feed" },
               ]}
               onChange={(deliver) => set({ deliver })}

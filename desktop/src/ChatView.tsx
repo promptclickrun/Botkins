@@ -774,9 +774,9 @@ function ChatViewBody({
         {group ? groupTranscript : (live || !folded) ? events.map((event) => <Fragment key={event.key}>{event.body}</Fragment>) : personBody}
         {/* A finished one-bot turn folds above its answer: the work, then the reply. */}
         {!group && !live && (folded || hasActivity) && fold}
-        {!group && reply.map(({ message, index }) => timelineMessage(message, index))}
-        {/* Botkins gave the bot more turns in this run by itself. */}
+        {/* Botkins gave the bot more turns in this run by itself: said just before the reply it kept going for. */}
         {!group && keptLine(run) && <div className="timeline-kept">{keptLine(run)}</div>}
+        {!group && reply.map(({ message, index }) => timelineMessage(message, index))}
         {live && hasText && (
           <article className="assistant live">
             {group && currentBot && (

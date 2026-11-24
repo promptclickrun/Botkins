@@ -21,7 +21,7 @@ export const WIZARD = {
     often: "More often uses more of the bot's model plan.",
   },
   rules: "In your own words",
-  rulesPlaceholder: "Tell me the same day about anything from my manager.",
+  rulesPlaceholder: "Anything from my manager, the same day",
   lookAround: "Look around",
   lookAroundNote: "Reads this computer's own inbox, calendar and tools. Only for you.",
   every: "Check for changes",
