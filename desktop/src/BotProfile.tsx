@@ -163,7 +163,7 @@ export default function BotProfile({
       </button>
       <section className="profile-hero">
         <span className="profile-portrait">
-          <BotAvatar look={look} state={activity} size={132} />
+          <BotAvatar look={look} state={activity} size={132} animated />
         </span>
         <div className="profile-title">
           <h1>{bot.name}</h1>

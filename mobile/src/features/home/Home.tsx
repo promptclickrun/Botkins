@@ -14,8 +14,9 @@ import { useSpacesOn } from "@/features/spaces/data";
 import { HomePins } from "@/features/spaces/HomePins";
 import { makeSeenSignal, TodayContent } from "@/features/today/Today";
 import { addable } from "@/features/bots/agents";
+import { STARTERS } from "../../../link-host/starters.mjs";
 import type { AgentRequest, Bot, ChatSummary } from "@/link/types";
-import { activityLabel, isConversation, useBotActivity, useBots, useCan, useIsPrimaryBot, useChats, usePart, useCanArrange } from "@/state/hooks";
+import { activityLabel, isConversation, useBotActivity, useBots, useCan, useChats, usePart, useCanArrange } from "@/state/hooks";
 import { api, attempt } from "@/state/link";
 import { setPrefs, usePrefs } from "@/state/prefs";
 import { useApp } from "@/state/store";
@@ -34,13 +35,12 @@ function TopBot({ bot, size, width }: { bot: Bot; size: number; width?: `${numbe
   const state = useBotActivity(bot.id);
   const status = activityLabel(state);
   const canChat = useCan("agents", "chat");
-  // Only the primary bot moves on Home (battery); the others hold their state's pose.
-  const primary = useIsPrimaryBot(bot.id);
   return (
     <View style={width ? { width, alignItems: "center" } : { flex: 1, alignItems: "center" }}>
       <BotMenu bot={bot}>
         <Tap onPress={() => canChat ? void openBotChat(bot.id) : router.push({ pathname: "/bot/[id]", params: { id: bot.id } })} sink={0.94} accessibilityLabel={bot.name + (status ? ", " + status : "")} style={{ alignItems: "center", gap: 6, paddingHorizontal: space.xs }}>
-          <BotAvatar bot={bot} state={state} size={size} animated={primary} />
+          {/* Home holds still: the agent you're with moves, on its page and in its chat. */}
+          <BotAvatar bot={bot} state={state} size={size} />
           <T variant="footnote" weight="600" color="ink2" numberOfLines={1} center>
             {bot.name}
           </T>
@@ -83,7 +83,8 @@ function Placeholder() {
 
 /**
  * A computer with no bots yet. When the person already has agents in a provider's own tool, bringing
- * them in comes first, as in the app on the computer; otherwise, or if they prefer, a new bot.
+ * them in comes first, as in the app on the computer; otherwise the three starters
+ * (link-host/starters.mjs), each opening New bot filled in, or a bot of the person's own.
  */
 function FirstBot() {
   const online = useApp((state) => state.link === "online");
@@ -101,7 +102,7 @@ function FirstBot() {
     };
   }, [online, canCreate]);
   if (!canCreate) return <EmptyState art={<Mascot size={104} state="waiting" />} title="No bots are available yet" text="Your team role doesn't give you a bot to use." />;
-  if (!found) return <EmptyState art={<Mascot size={104} state="completed" />} title="Make your first bot" action="Create a bot" onAction={() => router.push("/bot/new")} />;
+  if (!found) return <Starters />;
   return (
     <View>
       <EmptyState
@@ -113,6 +114,29 @@ function FirstBot() {
         style={{ paddingBottom: space.sm }}
       />
       <Button title="Create a new bot instead" variant="ghost" onPress={() => router.push("/bot/new")} style={{ alignSelf: "center" }} />
+    </View>
+  );
+}
+
+/** The three starters: one opens New bot filled in, and the person changes what they like there. */
+function Starters() {
+  return (
+    <View>
+      <EmptyState art={<Mascot size={104} state="completed" />} title="Make your first bot" text="Start with one of these, or make your own." style={{ paddingBottom: space.sm }} />
+      <Group flat inset={space.lg + 40 + space.md}>
+        {STARTERS.map((starter) => (
+          <Row
+            key={starter.id}
+            title={starter.name}
+            subtitle={starter.summary}
+            subtitleLines={2}
+            chevron
+            leading={<BotAvatar look={{ ...starter.look }} size={40} badge={false} />}
+            onPress={() => router.push({ pathname: "/bot/new", params: { starter: starter.id } })}
+          />
+        ))}
+      </Group>
+      <Button title="Make your own" variant="ghost" onPress={() => router.push("/bot/new")} style={{ alignSelf: "center" }} />
     </View>
   );
 }

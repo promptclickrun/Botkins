@@ -25,7 +25,7 @@ test("only sheets above a page leave it in view", () => {
   const names = ["(tabs)", "chat/[id]", "chat/model"];
   assert.equal(onShow([home, stack(0, ...names)]), false);
   assert.equal(onShow([stack(1, ...names, "chat/model-info")]), true);
-  assert.equal(onShow([stack(1, "(tabs)", "chat/[id]", "bot/[id]")]), false);
+  assert.equal(onShow([stack(1, "(tabs)", "chat/[id]", "bot/[id]/index")]), false);
 });
 
 test("only the selected tab is on show", () => {
@@ -54,4 +54,14 @@ test("SHEETS matches the root stack's sheet routes", () => {
   const add = [...sheets].filter((name) => !SHEETS.has(name));
   const remove = [...SHEETS].filter((name) => !sheets.has(name));
   assert.deepEqual(SHEETS, sheets, `Update SHEETS in src/ui/onShow.ts. Add: ${add.join(", ") || "none"}. Remove: ${remove.join(", ") || "none"}.`);
+});
+
+test("the agent you're with stops moving when a page covers it, and keeps moving under a sheet", () => {
+  // A bot's page and its chat are where avatars move (avatarMotion.tsx); a list never moves at all.
+  assert.equal(onShow([stack(1, "(tabs)", "bot/[id]/index")]), true);
+  assert.equal(onShow([stack(1, "(tabs)", "bot/[id]/index", "chat/[id]")]), false, "its chat over its page");
+  assert.equal(onShow([stack(1, "(tabs)", "chat/[id]", "bot/[id]/index")]), false, "its page over its chat");
+  assert.equal(onShow([stack(1, "(tabs)", "bot/[id]/index", "bot/[id]/edit")]), true);
+  assert.equal(onShow([stack(1, "(tabs)", "chat/[id]", "chat/activity")]), true);
+  assert.equal(onShow([work, stack(0, "(tabs)")]), false, "a screen in a tab that is not selected");
 });

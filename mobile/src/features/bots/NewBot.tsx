@@ -16,8 +16,20 @@ import { LookEditor, useLookOptions } from "./LookEditor";
 import { LookStage } from "./LookStage";
 import { addable } from "./agents";
 import { counter, LIMITS } from "./limits";
+import { type Starter, starterById, STARTERS } from "../../../link-host/starters.mjs";
 
-type Start = { key: string; name: string; role: string; instructions: string; summary?: string; look?: BotkinLook; avatar?: BotInput["avatar"]; /** An agent the person already has: the bot is made from it. */ agent?: ImportableAgent };
+type Start = { key: string; name: string; role: string; instructions: string; summary?: string; look?: BotkinLook; avatar?: BotInput["avatar"]; /** An agent the person already has: the bot is made from it. */ agent?: ImportableAgent; /** One of the three starters (link-host/starters.mjs). */ starter?: string };
+
+/** One of the starters, the same three the computer offers. */
+const starterStart = (starter: Starter): Start => ({
+  key: "starter:" + starter.id,
+  name: starter.name,
+  role: starter.role,
+  instructions: starter.instructions,
+  summary: starter.summary,
+  look: { ...starter.look },
+  starter: starter.id,
+});
 
 const savedStart = (template: BotTemplate): Start => ({
   key: "saved:" + template.id,
@@ -90,7 +102,7 @@ function NewBotEditor() {
   }, []);
   const providers = [...new Set(agents.map((agent) => agent.providerName))];
   // Install on a template in Marketplace › Agents opens this sheet with its id. Until it arrives, the fields stay as they are.
-  const { template } = useLocalSearchParams<{ template?: string }>();
+  const { template, starter } = useLocalSearchParams<{ template?: string; /** A starter's id, from Home's first-run list. */ starter?: string }>();
   const [market, setMarket] = useState<MarketAgentTemplate>();
   useEffect(() => {
     if (!template) return;
@@ -104,6 +116,10 @@ function NewBotEditor() {
       live = false;
     };
   }, [template]);
+  useEffect(() => {
+    const chosen = starterById(starter);
+    if (chosen) pick(starterStart(chosen));
+  }, [starter]);
   const marketNote = market && start?.key === "market:" + market.id ? fromLine(market) : undefined;
 
   const pick = (next: Start) => {
@@ -149,7 +165,7 @@ function NewBotEditor() {
       if (fields.instructions !== agent.instructions.trim()) patch.instructions = fields.instructions;
       if (id && canManage && Object.keys(patch).length) await attempt(api.updateBot(id, patch));
     } else {
-      const bot: BotInput = { name: fields.name, role: fields.role, instructions: fields.instructions, face: "idle", ...(start?.avatar && { avatar: start.avatar }), ...(fields.summary && { summary: fields.summary }) };
+      const bot: BotInput = { name: fields.name, role: fields.role, instructions: fields.instructions, face: "idle", ...(start?.avatar && { avatar: start.avatar }), ...(fields.summary && { summary: fields.summary }), ...(start?.starter && { starter: start.starter }) };
       id = await attempt(api.addBot(bot));
     }
     if (id) {
@@ -163,6 +179,14 @@ function NewBotEditor() {
   if (picker === "templates") return (
     <Sheet title="Start from template" onClose={() => setPicker(undefined)}>
       {prompt.node}
+      <View>
+        <Label>Starters</Label>
+        <Group>
+          {STARTERS.map(starterStart).map((item) => (
+            <Row key={item.key} title={item.name} subtitle={item.summary} subtitleLines={2} onPress={() => pick(item)} leading={<BotAvatar look={item.look} size={40} />} />
+          ))}
+        </Group>
+      </View>
       <View>
         <Label>Marketplace</Label>
         <MarketTemplates pick={(template) => {
