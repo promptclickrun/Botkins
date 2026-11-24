@@ -18,7 +18,7 @@ import { type PanelPin, usePrefs } from "@/state/prefs";
 import { panelHeadline } from "@/state/widgetData";
 import { useApp } from "@/state/store";
 import { BotAvatar, Dot, EmptyState, HoldMenu, IconButton, IconTile, Label, LinkBanner, Loading, Page, space as gap, T, Tap, type TextPromptOptions, useShape, useTextPrompt, useTheme } from "@/ui";
-import { markSeen, openPanel, openShare, openSpace, setPanelPinned, setPinned, useArranging, useSpaceContent, useSpaces, useSpacesOn } from "./data";
+import { markSpacesRead, openPanel, openShare, openSpace, setPanelPinned, setPinned, useArranging, useSpaceContent, useSpaces, useSpacesOn } from "./data";
 import { spaceIcon } from "./icons";
 import { panelPinsHere, rowLine, spaceDropPlan, spaceItems, spaceTitle, type SpaceZone, withMove } from "./logic";
 import { SortArea, SortCell, SortHandle, useSorter } from "./sortable";
@@ -44,7 +44,7 @@ function SpaceRow({ space, spaces }: { space: SpaceSummary; spaces: SpaceSummary
     ...(down ? [{ name: "down", label: "Move down" }] : []),
   ];
   const run = (name: string) => {
-    if (name === "read") markSeen(space.id);
+    if (name === "read") void markSpacesRead([space.id]);
     else if (name === "pin") setPinned(spaces, space.id, !space.pinned);
     else if (name === "up" && up) void attempt(api["link.spaces.arrange"](up));
     else if (name === "down" && down) void attempt(api["link.spaces.arrange"](down));
@@ -273,9 +273,7 @@ export default function Spaces() {
           label="Mark all as read"
           variant="soft"
           size={44}
-          onPress={() => {
-            for (const space of unreadSpaces) markSeen(space.id);
-          }}
+          onPress={() => void markSpacesRead(unreadSpaces.map((space) => space.id))}
         />
       )}
       {canCreate && <IconButton icon={Plus} label="New space" variant="soft" size={44} onPress={ask} />}

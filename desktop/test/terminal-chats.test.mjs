@@ -417,6 +417,48 @@ test("sections: add, rename, order, set a chat, delete; read through the window'
   assert.equal(everything().includes("cs_undefined"), false);
 });
 
+test("chats read marks specific chats, a bot's chats, or all unread chats read in one batch", { skip }, async (t) => {
+  const { botkins, client, chatWith, changes, workspace } = await service(t);
+  await client.call("bots.add", { name: "Nova" });
+  await client.call("bots.add", { name: "Orbit" });
+  const a = await chatWith("Nova", "Alpha");
+  const b = await chatWith("Nova", "Beta");
+  const c = await chatWith("Orbit", "Gamma");
+  workspace.agents.setChatFlags(a, { unread: true });
+  workspace.agents.setChatFlags(b, { unread: true });
+  workspace.agents.setChatFlags(c, { unread: true });
+
+  // By explicit refs
+  const one = await botkins(["chats", "read", "Alpha", "--json"]);
+  assert.equal(one.exit, 0, one.err);
+  assert.deepEqual(one.json(), { ids: [a], count: 1 });
+  assert.equal(workspace.chat(a).unread, false);
+  assert.equal(workspace.chat(b).unread, true);
+
+  // By --bot
+  workspace.agents.setChatFlags(a, { unread: true });
+  const byBot = await botkins(["chats", "read", "--bot", "Nova", "--json"]);
+  assert.equal(byBot.exit, 0, byBot.err);
+  assert.equal(byBot.json().count, 2);
+  assert.equal(workspace.chat(a).unread, false);
+  assert.equal(workspace.chat(b).unread, false);
+  assert.equal(workspace.chat(c).unread, true);
+
+  // By --all
+  workspace.agents.setChatFlags(b, { unread: true });
+  const all = await botkins(["chats", "read", "--all", "--json"]);
+  assert.equal(all.exit, 0, all.err);
+  assert.equal(all.json().count, 2);
+  assert.equal(workspace.chat(b).unread, false);
+  assert.equal(workspace.chat(c).unread, false);
+
+  // Validation: missing target or combining modes
+  assert.equal((await botkins(["chats", "read"])).exit, 2);
+  assert.equal((await botkins(["chats", "read", "Alpha", "--all"])).exit, 2);
+  assert.equal((await botkins(["chats", "read", "--bot", "Nova", "--all"])).exit, 2);
+  assert.equal((await changes()).filter((line) => line.startsWith("chats.read")).length, 3);
+});
+
 test("help --json lists the chats commands with usage and options, and a command with a delete asks", { skip }, async () => {
   const out = [];
   const stdout = new Writable({ write: (chunk, _encoding, done) => (out.push(String(chunk)), done()) });

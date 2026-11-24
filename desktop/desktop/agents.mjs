@@ -261,6 +261,25 @@ export class Agents {
     Object.assign(chat, next);
     this.ws.save();
   }
+  markChatsRead(ids) {
+    if (!Array.isArray(ids)) throw new Error("Expected a list of chat ids");
+    const unique = new Set();
+    for (const id of ids) {
+      if (typeof id !== "string" || !id || id.length > 200 || id.includes("\0")) throw new Error("Invalid chat id");
+      unique.add(id);
+    }
+    if (!unique.size) return;
+    const byId = new Map(this.state.chats.map((chat) => [chat.id, chat]));
+    let changed = false;
+    for (const id of unique) {
+      const chat = byId.get(id);
+      if (chat && chat.unread) {
+        chat.unread = false;
+        changed = true;
+      }
+    }
+    if (changed) this.ws.save();
+  }
   /** A title the person gave. It stays: auto-summarize no longer renames the chat (desktop/summaries.mjs). */
   renameChat(id, title) {
     Object.assign(this.ws.chat(id), { title: textField(title, 120, "chat title"), titleSet: true });

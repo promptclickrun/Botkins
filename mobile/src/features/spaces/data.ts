@@ -8,6 +8,7 @@ import type { PanelView, SpaceContent, SpaceSummary } from "@/link/types";
 import { useCapability, useOnline, usePart } from "@/state/hooks";
 import { api, attempt } from "@/state/link";
 import { DRAG } from "@/features/home/drag";
+import { runMarkSpacesRead } from "@/features/chat/unread";
 import { onComputerChange, showToast, useApp } from "@/state/store";
 import type { FrameState } from "@/ui";
 import { type PanelPin, setPrefs, usePrefs } from "@/state/prefs";
@@ -84,6 +85,28 @@ export function markSeen(id: string) {
   const upTo = newest(useContents.getState()[id]?.content);
   if (upTo) useSeenMarks.setState((marks) => ({ spaces: { ...marks.spaces, [id]: Math.max(marks.spaces[id] ?? 0, upTo) } }));
   api["link.spaces.seen"](id).catch(() => {});
+}
+
+/** Explicit mark-as-read for one or more spaces: records seen marks that succeeded and surfaces one toast if any fail. */
+export async function markSpacesRead(ids: string[]) {
+  const result = await runMarkSpacesRead(ids, (id) => api["link.spaces.seen"](id));
+  if (result.succeeded.length > 0) {
+    useSeenMarks.setState((marks) => {
+      const next = { ...marks.spaces };
+      let changed = false;
+      for (const id of result.succeeded) {
+        const upTo = newest(useContents.getState()[id]?.content);
+        if (upTo && upTo > (next[id] ?? 0)) {
+          next[id] = upTo;
+          changed = true;
+        }
+      }
+      return changed ? { spaces: next } : marks;
+    });
+  }
+  if (result.failed > 0) {
+    showToast(result.error instanceof Error && result.error.message ? result.error.message : "Couldn't mark as read.", "error");
+  }
 }
 
 /**

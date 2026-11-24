@@ -698,6 +698,16 @@ export class RemoteHosts {
     name = LINK_NAMES[name] ?? name;
     if (!name.startsWith("link.") && !REMOTE_METHODS.has(name)) throw new Error("That can only be done on " + host.name + " itself.");
     if (this.state === "revoked") throw new Error(host.name + " no longer knows this computer. Pair again to use it.");
+    if (name === "markChatsRead" && !(this.parts.meta?.capabilities ?? []).includes("mark-chats-read-v1")) {
+      const ids = Array.isArray(args[0]) ? [...new Set(args[0].filter((id) => typeof id === "string" && id))] : [];
+      try {
+        for (const id of ids) await this.client.call("setChatFlags", id, { unread: false });
+        return null;
+      } catch (error) {
+        if (error?.code === "offline") throw new Error(host.name + " can't be reached right now.");
+        throw new Error(String(error?.message ?? error));
+      }
+    }
     try {
       return await this.client.call(name, ...args);
     } catch (error) {

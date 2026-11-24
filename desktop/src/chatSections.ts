@@ -2,6 +2,17 @@
 // is the list's order, the same as on the phone: Pinned, then each section in the person's order,
 // then the chats in no section by day. The link keeps the sections; this only arranges them.
 import type { Chat, Section, State } from "./types";
+/**
+ * Chats that count as unread on the Chats page (matches the Unread filter, count, and "Mark all as read").
+ * Unlike the side menu, the Chats page lists panel chats too, so its Unread count and bulk clear include them.
+ */
+export function isChatsPageUnread(chat: Pick<Chat, "archived" | "unread">): boolean {
+  return !chat.archived && Boolean(chat.unread);
+}
+
+export function chatsPageUnreadChats<T extends Pick<Chat, "archived" | "unread">>(chats: readonly T[]): T[] {
+  return chats.filter(isChatsPageUnread);
+}
 
 export type ChatFilter = "All" | "Unread" | "Archived";
 export type DayLabel = "Today" | "Yesterday" | "Earlier";
@@ -56,7 +67,7 @@ export function chatGroups(input: {
     .sort((a, b) => b.time - a.time)
     .filter(
       (chat) =>
-        (filter === "Archived" ? chat.archived : !chat.archived && (filter === "All" || chat.unread)) &&
+        (filter === "Archived" ? chat.archived : filter === "Unread" ? isChatsPageUnread(chat) : !chat.archived) &&
         (!q || (chat.title + " " + (botName(chat) ?? "")).toLowerCase().includes(q)),
     );
   if (filter === "Archived") return byDay(matches, today);

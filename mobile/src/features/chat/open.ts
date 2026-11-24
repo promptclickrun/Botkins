@@ -2,25 +2,36 @@ import { router } from "expo-router";
 import type { BoardItem } from "@/link/types";
 import { api, attempt } from "@/state/link";
 import { useChatPrefs } from "@/state/chatPrefs";
-import { useApp } from "@/state/store";
+import { showToast, useApp } from "@/state/store";
 import { boardMessage } from "./compose";
 import { chatForTap } from "./habits";
-import { allUnreadChats, botUnreadChats } from "./unread";
+import { allUnreadChats, botUnreadChats, MARK_CHATS_READ_CAPABILITY, runMarkChatsRead } from "./unread";
 
-/** Marks every unread chat that lights this bot's dot on Home as read. */
-export async function markBotRead(botId: string) {
-  const chats = useApp.getState().parts.chats ?? [];
-  const ids = botUnreadChats(chats, botId).map((chat) => chat.id);
+async function clearChats(ids: string[], { quiet = false }: { quiet?: boolean } = {}) {
   if (ids.length === 0) return;
-  await Promise.all(ids.map((id) => api.setChatFlags(id, { unread: false }).catch(() => {})));
+  const hasBatch = useApp.getState().parts.meta?.capabilities.includes(MARK_CHATS_READ_CAPABILITY) ?? false;
+  const result = await runMarkChatsRead(ids, {
+    hasBatch,
+    markChatsRead: (list) => api.markChatsRead(list),
+    setChatFlags: (id, flags) => api.setChatFlags(id, flags),
+  });
+  if (!result.ok && !quiet) {
+    showToast(result.error instanceof Error && result.error.message ? result.error.message : "Couldn't mark as read.", "error");
+  }
 }
 
-/** Marks every non-archived, non-panel, non-routine unread chat as read. */
+/** Marks every unread chat that lights this bot's dot on Home as read. */
+export async function markBotRead(botId: string, options?: { quiet?: boolean }) {
+  const chats = useApp.getState().parts.chats ?? [];
+  const ids = botUnreadChats(chats, botId).map((chat) => chat.id);
+  await clearChats(ids, options);
+}
+
+/** Marks every non-archived, non-panel unread chat as read. */
 export async function markAllChatsRead() {
   const chats = useApp.getState().parts.chats ?? [];
   const ids = allUnreadChats(chats).map((chat) => chat.id);
-  if (ids.length === 0) return;
-  await Promise.all(ids.map((id) => api.setChatFlags(id, { unread: false }).catch(() => {})));
+  await clearChats(ids);
 }
 
 /**
@@ -32,7 +43,7 @@ export async function openBotChat(botId: string) {
   const held = chatForTap(chats, botId, useChatPrefs.getState().botTap);
   // An empty chat that was archived when it was left is used again.
   if (held?.archived) api.setChatFlags(held.id, { archived: false }).catch(() => {});
-  void markBotRead(botId);
+  void markBotRead(botId, { quiet: true });
   const id = held?.id ?? (await attempt(api.createChat(botId)));
   if (id) router.push({ pathname: "/chat/[id]", params: { id } });
 }

@@ -55,6 +55,7 @@ import { applyAppearance, startAppearance } from "./appearance";
 import { memberTeam, teamCan } from "./teamAccess";
 import { leftEmpty, newChatToReuse } from "./emptyChat";
 import { allUnreadChats, botUnreadChats } from "./unread";
+import { chatsPageUnreadChats } from "./chatSections";
 import "./style.css";
 
 // The remembered colors go on before anything is drawn.
@@ -350,13 +351,13 @@ function App() {
       setChatId(id);
       setMessageTarget(Number.isInteger(messageIndex) ? { chatId: id, index: messageIndex! } : null);
       setModal("");
-      if (state?.chats.find((c) => c.id === id)?.unread && teamCan(state, "agents", "chat"))
+      if (state?.chats.find((c) => c.id === id)?.unread && teamCan(state, "agents"))
         void api.setChatFlags(id, { unread: false }).catch(fail);
     });
   }
   function markChatsRead(ids: string[]) {
-    if (!state || !teamCan(state, "agents", "chat") || ids.length === 0) return;
-    void Promise.all(ids.map((id) => api.setChatFlags(id, { unread: false }))).catch(fail);
+    if (!state || !teamCan(state, "agents") || ids.length === 0) return;
+    void api.markChatsRead(ids).catch(fail);
   }
   function markBotRead(botId: string, exceptId?: string) {
     if (!state) return;
@@ -763,7 +764,10 @@ function App() {
     open,
     botChat,
     markBotRead: (id) => markBotRead(id),
-    markAllRead: markAllChatsRead,
+    markAllRead: () => {
+      if (!state) return;
+      markChatsRead(chatsPageUnreadChats(state.chats).map((c) => c.id));
+    },
     addBot: () => setModal("bot"),
     newChat: () => setModal("chat"),
     showChats: () => nav("Chats"),
@@ -880,7 +884,7 @@ function App() {
             <div className="sidebarlabel">
               <span className="nav-label">Bots</span>
               <span className="sidebarlabel-actions">
-                {!collapsed && canChat && allUnreadChats(state.chats).length > 0 && (
+                {!collapsed && allUnreadChats(state.chats).length > 0 && (
                   <button aria-label="Mark all as read" title="Mark all as read" onClick={markAllChatsRead}>
                     <MailOpen size={15} />
                   </button>

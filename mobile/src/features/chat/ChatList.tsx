@@ -134,6 +134,7 @@ function ChatListScreen() {
   const synced = useApp((state) => state.synced);
   const [query, setQuery] = useState("");
   const [showArchived, setShowArchived] = useState(false);
+  const canView = useCan("agents", "view");
   const canChat = useCan("agents", "chat");
   // The person's own sections ("chat-sections-v1"). Without them the list is as it always was.
   const filing = useCapability("chat-sections-v1");
@@ -211,9 +212,9 @@ function ChatListScreen() {
         <Animated.View entering={FadeIn.duration(220)} style={{ gap: space.md }}>
           <View style={{ gap: space.md }}>
             <SearchField value={query} onChange={setQuery} />
-            {(archived.length > 0 || (sections && canChat) || (unreadCount > 0 && canChat)) && (
+            {(archived.length > 0 || (sections && canChat) || (unreadCount > 0 && canView)) && (
               <View style={{ flexDirection: "row", flexWrap: "wrap", gap: space.sm }}>
-                {unreadCount > 0 && canChat && <Chip label="Mark all as read" icon={MailOpen} onPress={() => void markAllChatsRead()} />}
+                {unreadCount > 0 && canView && <Chip label="Mark all as read" icon={MailOpen} onPress={() => void markAllChatsRead()} />}
                 {sections && canChat && <Chip label="New section" icon={FolderPlus} onPress={() => newSection(prompt.ask)} />}
                 {archived.length > 0 && <Chip label={showArchived ? "Hide archived" : "Show archived"} icon={Archive} selected={showArchived} onPress={() => setShowArchived(!showArchived)} />}
                 {prompt.node}

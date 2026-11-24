@@ -783,6 +783,7 @@ declare global {
         id: string,
         patch: Partial<Pick<Chat, "pinned" | "archived" | "unread">>,
       ): Promise<void>;
+      markChatsRead(ids: string[]): Promise<void>;
       renameChat(id: string, title: string): Promise<void>;
       regenerateChatTitle(id: string): Promise<string>;
       deleteChat(id: string): Promise<void>;

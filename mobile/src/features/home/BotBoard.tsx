@@ -37,6 +37,7 @@ export function BotMenu({ bot, children }: { bot: Bot; children: ReactNode }) {
   const chats = useChats();
   const sections = usePart("sections");
   const primary = bots[0]?.id === bot.id;
+  const canView = useCan("agents", "view");
   const canChat = useCan("agents", "chat");
   const canCreate = useCan("agents", "create");
   const canManage = useCan("agents", "manage");
@@ -51,7 +52,7 @@ export function BotMenu({ bot, children }: { bot: Bot; children: ReactNode }) {
       actions={[
         ...(canChat ? [{ id: "new", title: "New chat", image: "square.and.pencil" }] : []),
         { id: "page", title: "Bot page", image: "person.crop.circle" },
-        ...(canChat && hasUnread ? [{ id: "read", title: "Mark as read", image: "envelope.open" }] : []),
+        ...(canView && hasUnread ? [{ id: "read", title: "Mark as read", image: "envelope.open" }] : []),
         // Pinning and hiding are a person's own view; sections and the primary bot are the owner's arrangement.
         ...(canArrange ? [{ id: "pin", title: bot.pinned ? "Unpin" : "Pin", image: bot.pinned ? "pin.slash" : "pin" }] : []),
         ...(canManage && !member ? [moveToSection(bot, sections), { id: "primary", title: "Make primary", image: "star", attributes: { disabled: primary } }] : []),
@@ -89,11 +90,16 @@ type RowActions = { list: { name: string; label: string }[]; run: (name: string)
 /** One bot in the list: its face, its name, one line, and when it last spoke. */
 export function BotRow({ bot, chat, unread, actions }: { bot: Bot; chat?: ChatSummary; unread: boolean; actions?: RowActions }) {
   const state = useBotActivity(bot.id);
+  const canView = useCan("agents", "view");
   const canChat = useCan("agents", "chat");
   const status = activityLabel(state);
   const last = chat?.last ? plainPreview(chat.last.text) : undefined;
   const line = status || last || bot.role || "Bot";
   const busy = !!status;
+  const accessibilityActions = [
+    ...(canView && unread ? [{ name: "read", label: "Mark as read" }] : []),
+    ...(actions?.list ?? []),
+  ];
   return (
     <BotMenu bot={bot}>
       <Tap
@@ -102,8 +108,12 @@ export function BotRow({ bot, chat, unread, actions }: { bot: Bot; chat?: ChatSu
         sink={0.98}
         hitSlop={0}
         accessibilityLabel={bot.name + ", " + line + (unread ? ", unread" : "")}
-        accessibilityActions={actions?.list}
-        onAccessibilityAction={actions ? (event) => actions.run(event.nativeEvent.actionName) : undefined}
+        accessibilityActions={accessibilityActions.length > 0 ? accessibilityActions : undefined}
+        onAccessibilityAction={accessibilityActions.length > 0 ? (event) => {
+          const name = event.nativeEvent.actionName;
+          if (name === "read") void markBotRead(bot.id);
+          else actions?.run(name);
+        } : undefined}
         style={{ flexDirection: "row", alignItems: "center", gap: space.md, paddingHorizontal: space.lg, paddingVertical: 10 }}
       >
         <BotAvatar bot={bot} state={state} size={AVATAR} />
