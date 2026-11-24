@@ -7,6 +7,7 @@ It runs on Linux (x64 and ARM64, with systemd) and on macOS. A small virtual mac
 - [Install](#install)
 - [Sign a model provider in](#sign-a-model-provider-in)
 - [Make a bot and talk to it](#make-a-bot-and-talk-to-it)
+- [Use an optional profile](#use-an-optional-profile)
 - [Pair a phone](#pair-a-phone)
 - [Configure the host](#configure-the-host)
 - [Operate the service](#operate-the-service)
@@ -617,6 +618,34 @@ botkins team chat invite "Launch plan" Sam
 - **The socket's own call needs the mark.** `team.saveRole`, `team.saveGroup`, `team.moveMember`, `team.removeGroup` (when the move gives more), `team.approve`, `team.deny`, `team.revokeInvite`, `team.removeRole`, `team.removeMember` and `team.inviteToChat` refuse unless they carry `agreed: true`, which the commands give after the yes.
 - **The people in a chat.** `team chat list <chat>` shows who started a chat and who was invited. `team chat invite` and `team chat remove` change it. An invite makes the whole chat visible to one more person, so it shows who and which chat and asks (`--yes` with no terminal), and `team.inviteToChat` needs `agreed: true`. A person whose role cannot use the chat's bot cannot be invited: the link says so. The log names the chat's id and the person's id.
 - **The log has ids, never names.** A member's name is what a person typed when they asked to join, so a log line has the member's, role's, group's, invite's or request's id.
+
+## Use an optional profile
+
+A terminal host can use the same verified Botkins profile as the desktop app. The profile keeps only your public identity and the computers you choose in the hosted directory; bots, chats and memory remain on their hosts. The session and browser verifier stay sealed in the terminal host's protected data store.
+
+Start enrollment and copy the HTTPS address and six-digit code into a browser:
+
+```sh
+botkins profile start --label "Home server"
+```
+
+Finish once you return from the passkey, trusted-device or email step:
+
+```sh
+botkins profile finish
+botkins profile status
+botkins profile computers list
+```
+
+Use a listed computer from the terminal host with a newly enrolled Link key:
+
+```sh
+botkins profile computers connect <server-id>
+```
+
+Approve or revoke trusted devices with `botkins profile devices approve <device>` (the short code is read from standard input) and `botkins profile devices revoke <device> --yes`. To keep this host independent, use `botkins profile opt-out --yes`; this keeps local work here but gives up profile continuity until you sign in again. `botkins profile sign-out --yes` removes this host's account-bound session and profile-enrolled computer credentials while preserving the hosted directory for the account and other devices. If a computer is offline, `botkins profile refresh` retries it when it is reachable.
+
+The terminal host must have secure key storage for a profile session or profile-enrolled computer. If it cannot open its host key, profile setup remains session-only and no token or browser verifier is written to disk.
 
 ## Pair a phone
 

@@ -21,6 +21,7 @@ import {
   Sparkles,
   Users,
   UsersRound,
+  UserCircle,
   X,
   type LucideIcon,
 } from "lucide-react";
@@ -45,6 +46,7 @@ import BotMemory from "./BotMemory";
 import PluginsSettings from "./PluginsSettings";
 import TeamSettings, { type TeamView } from "./TeamSettings";
 import ExperimentalSettings from "./ExperimentalSettings";
+import ProfileSettings from "./ProfileSettings";
 import { memberTeam, teamCan } from "./teamAccess";
 import "./settings.css";
 
@@ -52,6 +54,7 @@ const api = window.botkins;
 
 export type SectionId =
   | "general"
+  | "profile"
   | "appearance"
   | "sidebar"
   | "chats"
@@ -75,6 +78,7 @@ export type SectionId =
 type BotView = "profile" | "model" | "capabilities" | "memory";
 const SECTIONS: { id: SectionId; label: string; icon: LucideIcon }[] = [
   { id: "general", label: "General", icon: Settings2 },
+  { id: "profile", label: "Profile", icon: UserCircle },
   { id: "appearance", label: "Appearance", icon: Palette },
   { id: "sidebar", label: "Side menu", icon: PanelLeft },
   { id: "chats", label: "Chat", icon: MessageSquareMore },
@@ -106,7 +110,11 @@ export function sectionFor(tab: string): { section: SectionId; view?: BotView; t
   const legacy: Record<string, { section: SectionId; view?: BotView }> = {
     bot: { section: "bots", view: "model" },
     "bot settings": { section: "bots", view: "model" },
-    profile: { section: "bots", view: "profile" },
+    profile: { section: "profile" },
+    "bot profile": { section: "bots", view: "profile" },
+    "user profile": { section: "profile" },
+    "account profile": { section: "profile" },
+    "botkins profile": { section: "profile" },
     capabilities: { section: "bots", view: "capabilities" },
     memory: { section: "bots", view: "memory" },
     "bot memory": { section: "bots", view: "memory" },
@@ -351,6 +359,7 @@ export default function Settings({
               <BackgroundSettings settings={preferences} change={changePreferences} fail={fail} />
             </>
           )}
+          {section === "profile" && <ProfileSettings state={state} />}
           {section === "appearance" && (
             <AppearanceSettings settings={preferences} change={changePreferences} fail={fail} />
           )}

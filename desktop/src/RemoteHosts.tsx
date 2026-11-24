@@ -5,7 +5,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { RefObject } from "react";
 import { Check, Monitor, MonitorSmartphone, MoreHorizontal, Pencil, Plus, Trash2, UserPlus, Users } from "lucide-react";
-import type { RemoteHost, State, TeamJoinState, TeamJoinTarget } from "./types";
+import type { ProfileHost, RemoteHost, State, TeamJoinState, TeamJoinTarget } from "./types";
 import { Group, errorText } from "./SettingsRows";
 import "./remotehosts.css";
 
@@ -522,6 +522,7 @@ function MoreMenu({ host, busy, rename, forget }: { host: RemoteHost; busy: bool
  */
 export function ComputersAndTeams({ state, initialJoin }: { state: State; initialJoin?: string }) {
   const hosts: RemoteHost[] = state.remote?.hosts ?? [];
+  const profileHosts: ProfileHost[] = state.profile?.hosts ?? [];
   const using = state.remote?.using ?? null;
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -611,6 +612,21 @@ export function ComputersAndTeams({ state, initialJoin }: { state: State; initia
       </div>
     </div>
   );
+  const profileRow = (host: ProfileHost) => (
+    <div className="set-row host-row" key={"profile-" + host.serverId}>
+      <span className={"host-row-glyph " + (host.member ? "team" : "computer")} aria-hidden="true">
+        {host.member ? <Users size={17} /> : <MonitorSmartphone size={17} />}
+      </span>
+      <div className="set-label">
+        <span className="set-name">{host.name}</span>
+        <small className="int-line">Profile directory · Offline{host.member ? " · Team member" : ""}</small>
+      </div>
+      <div className="set-control">
+        <button type="button" className="set-button" disabled={busy} onClick={() => void run(() => api.profileConnect(host.serverId), "Connected to " + host.name + ".")}>Connect</button>
+      </div>
+    </div>
+  );
+  const listedOnly = profileHosts.filter((host) => !hosts.some((paired) => paired.id === host.serverId));
   return (
     <>
       <p className="host-lede">Choose whose bots this window shows. Each one keeps its own bots and chats.</p>
@@ -635,6 +651,10 @@ export function ComputersAndTeams({ state, initialJoin }: { state: State; initia
         </div>
         {hosts.filter((host) => !host.member).map(row)}
         {hosts.filter((host) => host.member).map(row)}
+        {listedOnly.length > 0 && <>
+          <div className="set-subhead">Profile directory</div>
+          {listedOnly.map(profileRow)}
+        </>}
       </Group>
       {error && (
         <small className="host-error host-note" role="alert">

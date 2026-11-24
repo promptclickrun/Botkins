@@ -51,6 +51,19 @@ export const HERE = new Set([
   "useRemoteHost",
   "forgetRemoteHost",
   "renameRemoteHost",
+  // Account profile calls belong to this installation, even while another host is selected.
+  "profileStatus",
+  "profileStart",
+  "profileOpen",
+  "profileFinish",
+  "profileRefresh",
+  "profileHome",
+  "profileOptOut",
+  "profileSignOut",
+  "profileApprove",
+  "profileRevoke",
+  "profileConnect",
+  "profileMarkMigrationPrompted",
 ]);
 /** Window calls that are the link's own on another computer, by the name the link knows them. */
 const LINK_NAMES = { inviteToChat: "link.team.inviteToChat", removeFromChat: "link.team.removeFromChat", voiceOptions: "link.voice.options" };
@@ -165,7 +178,7 @@ export class RemoteHosts {
       const saved = JSON.parse(readFileSync(file, "utf8"));
       for (const entry of Array.isArray(saved?.hosts) ? saved.hosts : []) {
         const pairing = this.open(entry.pairing);
-        if (pairing?.serverId && pairing.secretKey) this.hosts.push({ id: pairing.serverId, name: text(entry.name) || text(pairing.name) || "Computer", team: text(entry.team), member: pairing.member === true, addedAt: Number(entry.addedAt) || Date.now(), pairing });
+        if (pairing?.serverId && pairing.secretKey) this.hosts.push({ id: pairing.serverId, name: text(entry.name) || text(pairing.name) || "Computer", team: text(entry.team), member: pairing.member === true, profileBound: entry.profileBound === true, addedAt: Number(entry.addedAt) || Date.now(), pairing });
       }
       for (const entry of Array.isArray(saved?.joins) ? saved.joins : []) {
         const attempt = this.open(entry.attempt);
@@ -210,6 +223,7 @@ export class RemoteHosts {
         name: host.name,
         addedAt: host.addedAt,
         ...(host.team && { team: host.team }),
+        ...(host.profileBound === true && { profileBound: true }),
         pairing: this.seal(host.pairing),
       })),
       joins: [...this.joins.values()].map((entry) => ({
@@ -255,6 +269,73 @@ export class RemoteHosts {
       };
     });
   }
+  /** Public descriptor used by the profile directory; no client secret is returned. */
+  profileDescriptor(id) {
+    const host = this.find(id);
+    return {
+      serverId: host.id,
+      serverKey: host.pairing.serverKey,
+      name: host.name,
+      hosts: Array.isArray(host.pairing.hosts) ? [...host.pairing.hosts] : [],
+      ...(host.member && { member: true }),
+    };
+  }
+  /** Binds an already paired host to the signed-in profile, even when it is not in use. */
+  async bindProfile(id, ticket) {
+    const host = this.find(id);
+    const client = new this.lib.LinkClient(host.pairing, { fetch: this.transport(), onParts() {}, onState() {} });
+    try {
+      const descriptor = await client.call("link.profile.bind", ticket);
+      host.profileBound = true;
+      this.save();
+      this.changed();
+      return descriptor;
+    } catch (error) {
+      if (error?.code === "offline") throw new Error(host.name + " can't be reached right now.");
+      throw new Error(String(error?.message ?? error));
+    } finally {
+      client.stop();
+    }
+  }
+  /** Stores a pairing returned by the profile directory's sealed connection flow. */
+  adoptPairing(pairing, { name, member = false, team } = {}) {
+    if (!this.protect?.wrap || !this.protect?.unwrap) throw new Error("Secure storage is unavailable for a profile computer connection.");
+    if (!pairing?.serverId || !pairing?.serverKey || !pairing?.secretKey) throw new Error("That profile computer returned an invalid pairing.");
+    const earlier = this.hosts.find((host) => host.id === pairing.serverId);
+    const host = {
+      id: pairing.serverId,
+      name: earlier?.name || text(name) || text(pairing.name) || "Computer",
+      ...(text(team) && { team: text(team) }),
+      ...(member === true && { member: true }),
+      profileBound: true,
+      addedAt: earlier?.addedAt || Date.now(),
+      pairing,
+    };
+    const inUse = this.current === host.id;
+    if (inUse) {
+      this.stop();
+      this.current = null;
+    }
+    this.hosts = [...this.hosts.filter((item) => item.id !== host.id), host];
+    this.save();
+    if (inUse) this.use(host.id);
+    this.changed();
+    return { id: host.id, name: host.name, ...(host.member && { member: true }) };
+  }
+  /** Drops credentials obtained through the profile directory on account loss. Manual pairings remain. */
+  dropProfileBound() {
+    const removed = this.hosts.filter((host) => host.profileBound === true);
+    if (!removed.length) return 0;
+    if (this.current && removed.some((host) => host.id === this.current)) {
+      this.stop();
+      this.current = null;
+    }
+    if (this.remembered && removed.some((host) => host.id === this.remembered)) this.remembered = null;
+    this.hosts = this.hosts.filter((host) => host.profileBound !== true);
+    this.save();
+    this.changed();
+    return removed.length;
+  }
   /** The host in use as the window names it, or null for this computer. */
   inUse() {
     if (!this.current) return null;
@@ -299,12 +380,12 @@ export class RemoteHosts {
       ...(entry.requestId && { requestId: entry.requestId }),
     }));
   }
-  async startTeamJoin(target) {
+  async startTeamJoin(target, deviceName) {
     const name = text(target?.name) || "the team";
     let outcome;
     try {
       outcome = await this.lib.startJoin(this.transport(), target, {
-        name: text(this.device?.name) || "Computer",
+        name: text(deviceName) || text(this.device?.name) || "Computer",
         platform: this.device?.platform ?? process.platform,
         kind: "desktop",
       });

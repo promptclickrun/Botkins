@@ -30,6 +30,7 @@ import { spacesApi } from "./control-spaces.mjs";
 import { sharingApi } from "./control-sharing.mjs";
 import { teamApi } from "./control-team.mjs";
 import { appsApi } from "./control-apps.mjs";
+import { profileApi } from "./control-profile.mjs";
 import { checkReach } from "./reach.mjs";
 import { normaliseConfig } from "../providers/keyed/config.mjs";
 
@@ -601,6 +602,10 @@ export function controlApi(service) {
       if (Object.hasOwn(api, name)) throw new Error("Two control calls have the name " + name + ".");
       api[name] = call;
     }
+  }
+  for (const [name, call] of Object.entries(profileApi({ profile: service.profile }))) {
+    if (Object.hasOwn(api, name)) throw new Error("Two control calls have the name " + name + ".");
+    api[name] = call;
   }
   // The other plugin calls go by their own names ("plugins.browse", …), as a phone makes them.
   for (const name of Object.keys(handlers)) if ((name.startsWith("plugins.") || name.startsWith("piPackages.") || name.startsWith("skillsCatalog.") || name === "skills.upload") && !Object.hasOwn(api, name)) api[name] = (args) => handlers[name](...args);
