@@ -78,7 +78,14 @@ export default function BotProactive() {
   const names = new Map((team?.people ?? []).map((person) => [person.id, person.name]));
   const nameOf = (person: string) => (person === me ? "You" : (names.get(person) ?? (person === "owner" ? "Owner" : "A member")));
   const others = Object.entries(p.people ?? {}).filter(([person]) => person !== me);
-  const choose = (person: string, value: string) => set({ people: { [person]: value === "remove" ? null : { on: value !== "off", ...(value !== "off" && { notify: value === "notified" }) } } });
+  const apply = (person: string, value: string) => set({ people: { [person]: value === "remove" ? null : { on: value !== "off", ...(value !== "off" && { notify: value === "notified" }) } } });
+  const choose = (person: string, value: string) => {
+    if (value !== "remove") return apply(person, value);
+    Alert.alert("Stop looking out for " + nameOf(person) + "?", "Their alerts stop, and what " + bot.name + " learned for them is removed.", [
+      { text: "Cancel", style: "cancel" },
+      { text: "Remove", style: "destructive", onPress: () => apply(person, value) },
+    ]);
+  };
   const routine = p.chatId ? chats.find((chat) => chat.id === p.chatId) : undefined;
   const log = recentLog(entry);
   const instructions = draft ?? p.instructions;
@@ -174,7 +181,18 @@ export default function BotProactive() {
           </Group>
         </View>
       )}
-      {rules.all ? <Button title="Forget settings" variant="secondary" onPress={forget} /> : rules.mine && <Button title="Stop looking out for me" variant="secondary" onPress={() => set(null)} />}
+      {rules.all ? <Button title="Forget settings" variant="secondary" onPress={forget} /> : rules.mine && (
+        <Button
+          title="Stop looking out for me"
+          variant="secondary"
+          onPress={() =>
+            Alert.alert("Stop " + bot.name + " looking out for you?", "Your alerts stop, and what it learned for you is removed.", [
+              { text: "Cancel", style: "cancel" },
+              { text: "Stop", style: "destructive", onPress: () => set(null) },
+            ])
+          }
+        />
+      )}
     </Page>
   );
 }

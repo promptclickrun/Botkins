@@ -78,7 +78,11 @@ function Entry({ entry }: { entry: McpCatalogEntry }) {
       startSignIn(result.serverId, () => setSigning(false));
     } else showToast(Object.keys(typed).length ? "Key saved" : entry.name + " added", "success");
   };
-  const add = () => (needsConfirm(entry) ? confirmStart(entry, () => void send(true)) : void send(false));
+  const add = () => {
+    if (entry.transport === "stdio" && !entry.command) return;
+    if (needsConfirm(entry)) confirmStart(entry, () => void send(true));
+    else void send(false);
+  };
 
   const toggle = async (on: boolean) => {
     if (!entry.serverId) return;

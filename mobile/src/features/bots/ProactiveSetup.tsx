@@ -4,14 +4,14 @@
 // apps read. Route `/bot/[id]/proactive-setup`: the bot's Proactive page opens it ("Set up"), and so may whatever
 // makes a new bot.
 import { router, useLocalSearchParams } from "expo-router";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { View } from "react-native";
 import { myself } from "@/features/chat/people";
 import { ChoiceMenu } from "@/features/settings/Chat";
 import type { ProactivePatch } from "@/link/types";
 import { useBot, useCan, useCapability, usePart } from "@/state/hooks";
 import { api, attempt } from "@/state/link";
-import { Button, EmptyState, Field, Group, Row, Sheet, space, T } from "@/ui";
+import { Button, EmptyState, Field, Group, Loading, Row, Sheet, space, T } from "@/ui";
 import { CAP, EVERY, minutes, proactiveRules, PROACTIVE_TEAM, SWEEP, WIZARD, WIZARD_STEPS, wizardPatch, wizardPeople, wizardReady, wizardStart, type WizardDraft } from "./proactive";
 
 const everyOptions = EVERY.map((m) => ({ value: String(m), label: "Every " + minutes(m) }));
@@ -30,9 +30,21 @@ export default function ProactiveSetup() {
   const [step, setStep] = useState(0);
   const [draft, setDraft] = useState<WizardDraft>();
   const [saving, setSaving] = useState(false);
+  // Opened right after a bot is made (a starter that suggests Proactive), the bot may still be on its way.
+  const [arriving, setArriving] = useState(true);
+  useEffect(() => {
+    const timer = setTimeout(() => setArriving(false), 4000);
+    return () => clearTimeout(timer);
+  }, []);
   const viewer = { id: myself(meta), name: meta?.you?.kind === "member" ? meta.you.name : undefined, manages };
   const entry = bot ? part?.bots?.[bot.id] : undefined;
   const rules = proactiveRules(entry, viewer, learning);
+  if (!bot && arriving)
+    return (
+      <Sheet title={WIZARD.setUp}>
+        <Loading />
+      </Sheet>
+    );
   if (!bot || !supported || !rules.shared)
     return (
       <Sheet title={WIZARD.setUp}>

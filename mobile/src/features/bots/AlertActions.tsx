@@ -25,7 +25,8 @@ export function AlertActions({ botId, alert, chatId }: { botId: string; alert?: 
     if (busy) return;
     setBusy(true);
     const answer = await attempt(api.proactiveAct(botId, alert.runId, action));
-    setBusy(false);
+    // On success the buttons stay off until the alert comes back marked chosen, so a second tap can't take it twice.
+    if (!answer) setBusy(false);
     if (action === "take" && answer?.chatId && answer.chatId !== chatId) router.push({ pathname: "/chat/[id]", params: { id: answer.chatId } });
   };
   return (

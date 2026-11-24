@@ -153,7 +153,7 @@ function BotDetail({ bot }: { bot: Bot }) {
             leading={<IconTile icon={Sparkles} color={colors.accent} />}
             title="Proactive"
             subtitle={standing === "paused" ? "Paused on this computer" : standing === "mine-off" ? "Your alerts are off" : standing === "out" ? "Doesn't look out for you" : undefined}
-            value={standing === "setup" ? "Set up" : standing === "on" || standing === "mine-off" || standing === "out" ? "On" : "Off"}
+            value={standing === "setup" ? "Set up" : standing === "on" ? "On" : standing === "out" ? undefined : "Off"}
             chevron
             onPress={() => router.push(("/bot/" + encodeURIComponent(bot.id) + "/proactive") as Href)}
           />

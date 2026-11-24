@@ -637,7 +637,9 @@ export async function startPush() {
         tellPresence();
       }
     }
+    // In the background (a push woke the app to sync) no foreground comes to run it: follow now.
     if (AppState.currentState === "active") activityPacer.schedule();
+    else activityPacer.flushNow();
   });
   AppState.addEventListener("change", (next) => {
     tellPresence();
