@@ -2010,7 +2010,9 @@ export class MockBackend {
     }
     let reply = REPLY;
     // A bot that uses the person's phone: the tool runs there (device.mjs) when the phone allows it.
-    const wanted = PHONE_ASKS.find((ask) => ask.when.test(prompt));
+    // The keep-moving demo prompts and the Continue button's message mention steps; they are not Health asks.
+    const keepMoving = /keep going|stopped with|waiting question|^continue with the open steps/i.test(prompt);
+    const wanted = keepMoving ? undefined : PHONE_ASKS.find((ask) => ask.when.test(prompt));
     if (live() && wanted && this.phone) {
       const step = { id: randomUUID(), name: wanted.tool, label: wanted.label, status: "Running", started: now(), input: JSON.stringify(wanted.args()) };
       run.steps = [...(run.steps ?? []), step];
