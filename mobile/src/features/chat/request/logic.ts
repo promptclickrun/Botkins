@@ -96,6 +96,9 @@ export function wordsFor(kind: AgentRequest["kind"]): { quiet: string; main: str
   return { quiet: "Dismiss", main: "Send answer" };
 }
 
+/** The line on a question whose turn went on without an answer (the desktop app says the same in src/RequestPanel.tsx). */
+export const DETACHED_LINE = "Waiting for your answer. Your reply starts a new turn.";
+
 /** The line under an approval that can be remembered. */
 export const rememberNote = (remember: string) => "Remembering this approval allows " + remember + " for this conversation.";
 

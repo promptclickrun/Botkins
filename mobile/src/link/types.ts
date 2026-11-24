@@ -584,6 +584,12 @@ export type Run = RunSummary & {
   teamwork?: TeamAsk[];
   /** How a turn ended without finishing ("turn-timeline-v1"). Missing: the phone reads it from `status` and `detail`. */
   ending?: "failed" | "timed-out" | "interrupted" | "stopped";
+  /** The turn's plan when it ended: how many steps are open, of how many. Older computers send none. */
+  plan?: { open: number; total: number };
+  /** The computer gave the bot more turns in this run by itself (it kept the work moving): how many so far (at most `limit`), why, and how many plan steps were open at the last one. */
+  continued?: { count: number; limit: number; reason: "plan" | "next-step"; open?: number };
+  /** The turn ended with plan steps open and nothing went on (the limit, the same steps again, Stop, a waiting message or request). */
+  stoppedOpen?: true;
 };
 /**
  * A tab in the side pane a bot opened beside a chat ("side-pane-v1"; the contract is the desktop
@@ -660,6 +666,8 @@ export type AgentRequest = {
   url?: string;
   /** A secure input's fields: 1 is a single value, 2 to 8 a multi-value. Answered with `{ action: "accept", content: { [key]: string | CredentialRef } }`. */
   fields?: SecureField[];
+  /** A question that waited ten minutes: its turn went on without an answer. It stays open as waiting, and an answer starts a new turn that quotes it. */
+  detached?: true;
 };
 export type QueuedMessage = { clientMessageId?: string; id: string; text: string };
 /** What is happening right now, per chat. */
