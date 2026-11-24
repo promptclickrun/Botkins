@@ -111,7 +111,7 @@ function Dock({ chatId, botId, computer, typing }: { chatId: string; botId: stri
   if (typing)
     return (
       <Tap onPress={() => setLiveTyping(false)} testID="voice-dock-row" accessibilityLabel={"Live voice with " + name + ". " + line + ". Show the call"} style={{ flexDirection: "row", alignItems: "center", gap: space.md, minHeight: 44, paddingHorizontal: space.md, paddingVertical: space.sm, borderRadius: radius.lg, backgroundColor: colors.surface }}>
-        <BotAvatar bot={bot} size={28} state={call.avatar} />
+        <BotAvatar bot={bot} size={28} state={call.avatar} animated />
         <T variant="subhead" color={call.failed ? "danger" : "muted"} numberOfLines={1} style={{ flex: 1 }}>
           {line}
         </T>
@@ -119,7 +119,8 @@ function Dock({ chatId, botId, computer, typing }: { chatId: string; botId: stri
       </Tap>
     );
 
-  const face = <BotAvatar bot={bot} size={AVATAR} state={call.avatar} />;
+  // Live voice is the agent you're with: its face moves.
+  const face = <BotAvatar bot={bot} size={AVATAR} state={call.avatar} animated />;
   const speaking = call.status === "talking";
   const open = call.live && !call.muted && call.status === "listening";
   return (

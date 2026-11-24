@@ -15,7 +15,7 @@ import { HomePins } from "@/features/spaces/HomePins";
 import { makeSeenSignal, TodayContent } from "@/features/today/Today";
 import { addable } from "@/features/bots/agents";
 import type { AgentRequest, Bot, ChatSummary } from "@/link/types";
-import { activityLabel, isConversation, useBotActivity, useBots, useCan, useIsPrimaryBot, useChats, usePart, useCanArrange } from "@/state/hooks";
+import { activityLabel, isConversation, useBotActivity, useBots, useCan, useChats, usePart, useCanArrange } from "@/state/hooks";
 import { api, attempt } from "@/state/link";
 import { setPrefs, usePrefs } from "@/state/prefs";
 import { useApp } from "@/state/store";
@@ -34,13 +34,12 @@ function TopBot({ bot, size, width }: { bot: Bot; size: number; width?: `${numbe
   const state = useBotActivity(bot.id);
   const status = activityLabel(state);
   const canChat = useCan("agents", "chat");
-  // Only the primary bot moves on Home (battery); the others hold their state's pose.
-  const primary = useIsPrimaryBot(bot.id);
   return (
     <View style={width ? { width, alignItems: "center" } : { flex: 1, alignItems: "center" }}>
       <BotMenu bot={bot}>
         <Tap onPress={() => canChat ? void openBotChat(bot.id) : router.push({ pathname: "/bot/[id]", params: { id: bot.id } })} sink={0.94} accessibilityLabel={bot.name + (status ? ", " + status : "")} style={{ alignItems: "center", gap: 6, paddingHorizontal: space.xs }}>
-          <BotAvatar bot={bot} state={state} size={size} animated={primary} />
+          {/* Home holds still: the agent you're with moves, on its page and in its chat. */}
+          <BotAvatar bot={bot} state={state} size={size} />
           <T variant="footnote" weight="600" color="ink2" numberOfLines={1} center>
             {bot.name}
           </T>

@@ -24,7 +24,12 @@ export type BotAvatarProps = {
   state?: AvatarState;
   /** Width and height in CSS pixels. */
   size?: number;
-  /** Moving or still. By default an avatar moves only when its bot is doing something. */
+  /**
+   * Moving or still; still unless asked. The agent you're with moves; lists hold still (the owner's
+   * rule, 2026-11-24, the phone's too): only its profile, its chat's header, its chat's details
+   * panel, the live line while a turn runs and live voice pass it. Everything else (Home, the side
+   * bar, Chats, routines, tasks, pickers, message rows) holds its state's pose, with its badge.
+   */
   animated?: boolean;
   /** The state's badge at the corner. On by default from 40 pixels up. */
   badge?: boolean;
@@ -35,7 +40,7 @@ export type BotAvatarProps = {
 /** The kit's still shell and expression move together around its pivot. The badge stays put. */
 export const BotAvatar = memo(function BotAvatar({ bot, look: given, state = "idle", size = 52, animated, badge, label }: BotAvatarProps) {
   const look = given ?? lookOf(bot ?? {});
-  const moving = useContext(AvatarAnimationSetting) && (animated ?? state !== "idle");
+  const moving = useContext(AvatarAnimationSetting) && animated === true;
   const showBadge = badge ?? size >= 40;
   const drawing = lookKey(look);
   const art = useMemo(() => botkinArt(look), [drawing]);

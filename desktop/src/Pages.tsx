@@ -522,7 +522,7 @@ function BotCard({
       onContextMenu={(e) => menu(e, b)}
     >
       <button className="botcard" onClick={() => actions.botChat(b)}>
-        <BotAvatar bot={b} state={activity} size={large ? 88 : 48} animated={large ? activity !== "idle" : undefined} />
+        <BotAvatar bot={b} state={activity} size={large ? 88 : 48} />
         <span className="botcard-text">
           <strong>{b.name}</strong>
           <small>
@@ -1127,7 +1127,7 @@ export function HomePage({ state, actions, composer }: { state: State; actions: 
           {composer}
         </div>
         <div className="heroface">
-          <BotAvatar bot={primary} state={primaryActivity} size={176} animated={primaryActivity !== "idle"} />
+          <BotAvatar bot={primary} state={primaryActivity} size={176} />
           <strong>{primary.name}</strong>
           <small>{primary.role}</small>
         </div>

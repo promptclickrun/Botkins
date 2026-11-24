@@ -144,7 +144,7 @@ export default function LiveVoice({ chatId, bot, botName, typing, setTyping }: {
   return (
     <div className="voice-dock" role="region" aria-label="Live voice">
       <button type="button" className="voice-dock-face" aria-label={"Interrupt " + name} disabled={!speaking || push} onClick={interruptLive}>
-        <BotAvatar bot={bot} state={face(state)} size={108} badge />
+        <BotAvatar bot={bot} state={face(state)} size={108} badge animated />
       </button>
       <div className="voice-dock-who">
         <strong role="status">{title(state, name)}</strong>

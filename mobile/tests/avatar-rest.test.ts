@@ -1,15 +1,13 @@
 import assert from "node:assert/strict";
+import { readdirSync, readFileSync, statSync } from "node:fs";
+import { join, relative } from "node:path";
 import { test } from "node:test";
 import { AVATAR_ANIMATIONS_WARNING, readAvatarAnimations } from "../src/state/avatarPrefs";
 import {
   avatarBeat,
   avatarCanMove,
   avatarMotion,
-  createAvatarLoopBudget,
-  isListWorkingState,
-  MAX_LIST_AVATAR_LOOPS,
   nextPass,
-  resolveAvatarMotion,
   REST_BEAT_MS,
   REST_LATE_MS,
   REST_SPREAD_MS,
@@ -109,63 +107,52 @@ test("a rest pass that starts a little late still plays", (t) => {
   stop();
 });
 
-test("list avatars hold pose when idle, never blink, and only loop when working with a budget slot", () => {
-  assert.equal(MAX_LIST_AVATAR_LOOPS, 3);
-  for (const state of ["thinking", "planning", "browsing", "coding", "working", "retrying"] as const) {
-    assert.equal(isListWorkingState(state), true, state);
-    assert.deepEqual(
-      resolveAvatarMotion({ enabled: true, reducedMotion: false, mode: "list", state, hasLoopSlot: true }),
-      { allowMotion: true, allowRest: false, allowBlink: false },
-      `${state} with slot`,
-    );
-    assert.deepEqual(
-      resolveAvatarMotion({ enabled: true, reducedMotion: false, mode: "list", state, hasLoopSlot: false }),
-      { allowMotion: false, allowRest: false, allowBlink: false },
-      `${state} without slot`,
-    );
-  }
-  for (const state of ["idle", "waiting", "needs-input", "pending", "sleeping", "completed", "error", "listening"] as const) {
-    assert.equal(isListWorkingState(state), false, state);
-    assert.deepEqual(
-      resolveAvatarMotion({ enabled: true, reducedMotion: false, mode: "list", state, hasLoopSlot: true }),
-      { allowMotion: false, allowRest: false, allowBlink: false },
-      `${state} holds pose in list`,
-    );
-  }
-});
-
-test("focal avatars keep full motion and Reduce Motion stills everything", () => {
-  assert.deepEqual(
-    resolveAvatarMotion({ enabled: true, reducedMotion: false, mode: "focal", state: "idle", hasLoopSlot: false }),
-    { allowMotion: true, allowRest: true, allowBlink: true },
-  );
-  assert.deepEqual(
-    resolveAvatarMotion({ enabled: true, reducedMotion: true, mode: "focal", state: "working", hasLoopSlot: true }),
-    { allowMotion: false, allowRest: false, allowBlink: false },
-  );
-  assert.deepEqual(
-    resolveAvatarMotion({ enabled: false, reducedMotion: false, mode: "focal", state: "working", hasLoopSlot: true }),
-    { allowMotion: false, allowRest: false, allowBlink: false },
-  );
-});
-
-test("list avatar loop budget caps concurrent loops at 3 and hands off on release", () => {
-  const budget = createAvatarLoopBudget(3);
-  let notifications = 0;
-  const unsub = budget.subscribe(() => {
-    notifications += 1;
+// The owner's rule (2026-11-24, after OpenBot): the agent you're with moves; lists hold still.
+// Only these places may ask for motion. Everything else (Home, the Chats list, Work, Spaces, Market,
+// pickers, message and reply rows) holds its state's pose. Add a place only with the owner's word.
+const MOVING_SCREENS = ["src/features/bots/BotPage.tsx"];
+const MOVING_FACES = [
+  "src/features/chat/ChatScreen.tsx", // the chat's header face (one bot, or a group's two)
+  "src/features/chat/StatusCapsule.tsx", // the face in the working capsule, shown while a turn runs
+  "src/features/voice/VoiceDock.tsx", // live voice
+];
+const root = new URL("..", import.meta.url).pathname;
+function sources(dir: string): string[] {
+  return readdirSync(dir).flatMap((name) => {
+    const path = join(dir, name);
+    if (statSync(path).isDirectory()) return sources(path);
+    return /\.tsx?$/.test(name) ? [relative(root, path)] : [];
   });
-  assert.equal(budget.acquire("row-1"), true);
-  assert.equal(budget.acquire("row-2"), true);
-  assert.equal(budget.acquire("row-3"), true);
-  assert.equal(budget.acquire("row-4"), false);
-  assert.equal(budget.activeCount(), 3);
-  assert.equal(budget.acquire("row-2"), true, "idempotent for current holder");
-  const beforeRelease = notifications;
-  budget.release("row-2");
-  assert.equal(budget.activeCount(), 2);
-  assert.equal(notifications, beforeRelease + 1);
-  assert.equal(budget.acquire("row-4"), true, "waiting row can now claim slot");
-  assert.equal(budget.activeCount(), 3);
-  unsub();
+}
+const screens = [...sources(join(root, "src/features")), ...sources(join(root, "src/app"))];
+
+test("only a bot's page wraps itself in AvatarMotion", () => {
+  const moving = screens.filter((file) => /<AvatarMotion(?![^>]*on=\{false\})[^>]*>/.test(readFileSync(join(root, file), "utf8")));
+  assert.deepEqual(moving, MOVING_SCREENS);
+});
+
+test("in a chat only the header face, the working capsule's face and live voice move", () => {
+  const asking = new Map<string, number>();
+  for (const file of screens) {
+    const text = readFileSync(join(root, file), "utf8");
+    // `animated` on its own, `animated={true}` or `animated={something}`: anything but `animated={false}`,
+    // or a face handing its caller's `animated={animated}` on (GroupFace).
+    const tags = text.match(/<(?:BotAvatar|GroupFace)\b[\s\S]*?\/>/g) ?? [];
+    const count = tags.filter((tag) => /\sanimated(?!=\{(?:false|animated)\})(?:=\{[^}]*\})?[\s/]/.test(tag)).length;
+    if (count) asking.set(file, count);
+  }
+  assert.deepEqual([...asking.keys()].sort(), [...MOVING_FACES].sort());
+  assert.equal(asking.get("src/features/chat/ChatScreen.tsx"), 2, "the header's group face and single face");
+  assert.equal(asking.get("src/features/chat/StatusCapsule.tsx"), 1);
+  assert.equal(asking.get("src/features/voice/VoiceDock.tsx"), 2, "the dock's face and its quiet row");
+});
+
+test("a moving avatar still yields to the phone's setting and Reduce Motion", () => {
+  for (const asked of [true, undefined]) {
+    const requested = asked ?? true;
+    assert.equal(avatarCanMove(true, false, requested), true);
+    assert.equal(avatarCanMove(true, true, requested), false, "Reduce Motion stills everything");
+    assert.equal(avatarCanMove(false, false, requested), false, "the phone's setting stills everything");
+  }
+  assert.equal(avatarCanMove(true, false, false), false, "a list or a row holds still");
 });

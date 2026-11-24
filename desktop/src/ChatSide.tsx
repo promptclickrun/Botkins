@@ -24,7 +24,7 @@ export default function ChatSide({
   return (
     <aside className="chat-side" aria-label="Details">
       <div className="chat-side-bot">
-        <BotAvatar bot={bot} state={face} size={112} animated={face !== "idle"} />
+        <BotAvatar bot={bot} state={face} size={112} animated />
         <strong className="chat-side-name">{bot.name}</strong>
         {bot.role && <small>{bot.role}</small>}
       </div>

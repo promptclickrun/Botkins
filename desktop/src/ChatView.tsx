@@ -730,8 +730,8 @@ function ChatViewBody({
       ? doingNow === "Needs you" ? who + " needs you" : who + " is " + doingNow[0].toLowerCase() + doingNow.slice(1)
       : elapsed === undefined ? endingLabel || "Turn activity" : `Worked for ${duration(elapsed)}`;
 
-    // Faces in the work log are still (the owner's battery rule): no state loop, no blinking.
-    const stillFace = (size: number) => <BotAvatar bot={currentBot ?? bot} state={live ? (group && currentBot ? botActivity(state, currentBot.id) : activity) : "idle"} size={size} animated={false} />;
+    // Faces in the work log hold still; only the live line's face moves while the turn runs.
+    const stillFace = (size: number, moving = false) => <BotAvatar bot={currentBot ?? bot} state={live ? (group && currentBot ? botActivity(state, currentBot.id) : activity) : "idle"} size={size} animated={moving} />;
     const groupFailure = group && run.failures?.length
       ? run.failures.map((failure) => `${state.bots.find((b) => b.id === failure.botId)?.name ?? "A bot"}: ${failure.detail}`).join(" · ")
       : "";
@@ -752,7 +752,7 @@ function ChatViewBody({
     return (
       <Fragment key={`timeline-${run.id}`}>
         {initial && timelineMessage(initial.message, initial.index)}
-        {live && <LiveLead avatar={stillFace(28)} label={doingNow} thought={thinkingMode === "open" ? state.intents[chat.id]?.trim() : undefined} shimmer={onIt && doingNow !== "Needs you" && !allSteps.some((step) => !step.agentId && step.status === "Running" && showStep(step))} />}
+        {live && <LiveLead avatar={stillFace(28, true)} label={doingNow} thought={thinkingMode === "open" ? state.intents[chat.id]?.trim() : undefined} shimmer={onIt && doingNow !== "Needs you" && !allSteps.some((step) => !step.agentId && step.status === "Running" && showStep(step))} />}
         {(live || !folded) && stepsMode === "open" && olderWork}
         {group ? groupTranscript : (live || !folded) ? events.map((event) => <Fragment key={event.key}>{event.body}</Fragment>) : personBody}
         {/* A finished one-bot turn folds above its answer: the work, then the reply. */}
@@ -811,11 +811,11 @@ function ChatViewBody({
         {group ? (
           <span className="group-avatars" aria-hidden="true">
             {members.map((m) => (
-              <BotAvatar key={m.id} bot={m} state={botActivity(state, m.id)} size={28} animated={false} />
+              <BotAvatar key={m.id} bot={m} state={botActivity(state, m.id)} size={28} animated />
             ))}
           </span>
         ) : (
-          <BotAvatar bot={bot} state={face} size={30} animated={false} />
+          <BotAvatar bot={bot} state={face} size={30} animated />
         )}
         <div className="chathead-title">
           <h2>{group ? chat.title : bot.name}</h2>
@@ -967,7 +967,7 @@ function ChatViewBody({
           )}
           {chat.messages.length === 0 && !timelineBusy && !pending.length && !group && (
             <div className="emptychat">
-              <BotAvatar bot={bot} state={face} size={136} animated={face !== "idle"} />
+              <BotAvatar bot={bot} state={face} size={136} />
               <h2>What can {bot.name} help with?</h2>
               <p>{bot.role}</p>
               <div className="starters">

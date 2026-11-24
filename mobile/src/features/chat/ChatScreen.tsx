@@ -68,9 +68,8 @@ function ChatTitle({ chat, bot, bots, state, model, room, docked }: { chat: Chat
   const status = activityLabel(state) || model;
   const body = (
     <View style={{ flexDirection: "row", alignItems: "center", gap: space.sm, maxWidth: width - room }}>
-      <AvatarMotion on={false}>
-        {group ? <GroupFace bots={chat.botIds!.slice(0, 2).map((id) => bots.get(id))} size={30} state={state} /> : docked ? null : <BotAvatar bot={bot} size={30} state={state} />}
-      </AvatarMotion>
+      {/* The face of the agent you're with moves (avatarMotion.tsx); the rest of the chat holds still. */}
+      {group ? <GroupFace bots={chat.botIds!.slice(0, 2).map((id) => bots.get(id))} size={30} state={state} animated /> : docked ? null : <BotAvatar bot={bot} size={30} state={state} animated />}
       <View style={{ flexShrink: 1 }}>
         <T variant="name" numberOfLines={1}>
           {name}
@@ -1067,7 +1066,7 @@ function Fade({ edge, cover }: { edge: "top" | "bottom"; cover: number }) {
   );
 }
 
-/** In a conversation the current status supplies the motion; the Botkins keep their state poses. */
+/** In a chat only the header face, the working capsule's face and the live voice dock move; message and reply rows hold still. */
 export default function ChatScreen(props: { pane?: string; onLeave?: () => void; onList?: () => void }) {
   return (
     <AvatarMotion on={false}>
