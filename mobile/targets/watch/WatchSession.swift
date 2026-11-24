@@ -13,6 +13,7 @@ final class WatchSession: NSObject, ObservableObject, WCSessionDelegate {
   @Published private(set) var audioPaused = false
   private var resuming: Task<Void, Never>?
   private var engine: WatchVoiceEngine?
+  private var interruptibleAttempt: UUID?
   private var inputSequence: UInt32 = 0
   private var outputSequence: UInt32 = 0
   private var activeSessionId: String?
@@ -143,7 +144,8 @@ final class WatchSession: NSObject, ObservableObject, WCSessionDelegate {
     outputSequence = 0
     var recovering = false
     while true {
-      let engine = makeEngine(sessionId: id)
+      let attempt = UUID()
+      let engine = makeEngine(sessionId: id, attempt: attempt)
       self.engine = engine
       var stage = "configuring audio"
       do {
@@ -153,6 +155,7 @@ final class WatchSession: NSObject, ObservableObject, WCSessionDelegate {
         guard self.engine === engine else { throw CancellationError() }
         stage = "starting the microphone"
         try engine.start(inputRate: inputRate, outputRate: outputRate, voiceProcessing: !recovering)
+        interruptibleAttempt = attempt
         localVoice = WatchVoice(
           status: snapshot.voice.sessionId == id ? snapshot.voice.status : "connecting",
           sessionId: id,
@@ -183,7 +186,7 @@ final class WatchSession: NSObject, ObservableObject, WCSessionDelegate {
     }
   }
 
-  private func makeEngine(sessionId id: String) -> WatchVoiceEngine {
+  private func makeEngine(sessionId id: String, attempt: UUID) -> WatchVoiceEngine {
     WatchVoiceEngine(
       sendFrame: { [weak self] pcm, rate in
         Task { @MainActor in self?.sendAudio(pcm, rate: rate, sessionId: id) }
@@ -192,12 +195,16 @@ final class WatchSession: NSObject, ObservableObject, WCSessionDelegate {
         Task { @MainActor in self?.sendOutputLevel(level, sessionId: id) }
       },
       interrupted: { [weak self] began, shouldResume in
-        Task { @MainActor in self?.audioInterrupted(began, shouldResume: shouldResume, sessionId: id) }
+        Task { @MainActor in
+          guard let self, self.interruptibleAttempt == attempt else { return }
+          self.audioInterrupted(began, shouldResume: shouldResume, sessionId: id)
+        }
       }
     )
   }
 
   private func stopAudio(_ reason: String?) {
+    interruptibleAttempt = nil
     resuming?.cancel()
     resuming = nil
     audioPaused = false
