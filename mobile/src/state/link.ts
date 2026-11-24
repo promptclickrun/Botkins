@@ -161,7 +161,10 @@ export async function boot() {
     if (state === "active") {
       nearbyPace.reset();
       client?.wake();
-    } else if (state === "background") client?.rest();
+    } else if (state === "background") {
+      client?.rest();
+      fetcher.rest();
+    }
   });
   // Leaving Wi-Fi, or coming back to it, changes how the computer is reached: look again at once.
   try {

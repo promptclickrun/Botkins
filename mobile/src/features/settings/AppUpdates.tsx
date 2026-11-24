@@ -10,6 +10,7 @@ import { Alert, View } from "react-native";
 import type { AppUpdate } from "@/link/types";
 import { markRestarting, useRestarting } from "@/state/appUpdate";
 import { useCapability, useOnline } from "@/state/hooks";
+import { trackResource } from "@/state/ledger";
 import { api, attempt } from "@/state/link";
 import { useAppActive } from "@/state/useAppActive";
 import { useApp } from "@/state/store";
@@ -37,14 +38,19 @@ export function AppUpdates({ name }: { name: string }) {
   useEffect(() => {
     if (!capable || !online || !visible) return;
     let live = true;
-    const read = () => api.appUpdateStatus().then((value) => live && setUpdate(value), () => {});
+    const entry = trackResource("timer", "AppUpdates", busy ? "update-busy" : "update-poll", serverId);
+    const read = () => {
+      entry.bump();
+      return api.appUpdateStatus().then((value) => live && setUpdate(value), () => {});
+    };
     void read();
     const timer = setInterval(read, busy ? 2000 : 30_000);
     return () => {
       live = false;
       clearInterval(timer);
+      entry.release();
     };
-  }, [capable, online, visible, busy]);
+  }, [capable, online, visible, busy, serverId]);
 
   if (!capable)
     return (

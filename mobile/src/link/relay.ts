@@ -6,6 +6,7 @@
 // A relay address is one more entry in the saved host list: `relay!<room>@<authority>`. The client
 // builds URLs from host entries as `http://<entry>/botkins/v1/<route>`, so `relayFetch` wraps a
 // fetch and carries every URL whose host is such an entry over the socket; the rest go untouched.
+import { type ResourceHandle, trackResource } from "../state/ledger";
 import type { FetchLike } from "./client";
 import { fromUtf8, utf8 } from "./crypto";
 
@@ -73,8 +74,8 @@ export type RelayOptions = {
   deadMs?: number;
 };
 
-/** The fetch `relayFetch` makes. `check` pings every open relay socket and ends those that stay silent for `ms` (3 s). */
-export type RelayFetch = FetchLike & { supportsPush: true; check(ms?: number): void };
+/** The fetch `relayFetch` makes. `check` pings every open relay socket and ends those that stay silent for `ms` (3 s). `rest` closes idle sockets immediately when the app goes to background. */
+export type RelayFetch = FetchLike & { supportsPush: true; check(ms?: number): void; rest(): void };
 
 const ROUTES: Record<string, number> = { hello: 1, pair: 2, session: 3, rpc: 4, join: 5 };
 const URL_SHAPE = /^https?:\/\/([^/?#]+)\/botkins\/v1\/(hello|pair|session|rpc|join)$/;
@@ -107,12 +108,15 @@ class Conn {
   pending = new Map<number, Pending>();
   nextId = 0;
   private timers: { connect?: Timer; idle?: Timer; ping?: ReturnType<typeof setInterval>; dead?: Timer } = {};
+  private socketLedger: ResourceHandle;
+  private pingLedger?: ResourceHandle;
 
   constructor(
     private room: RelayHost,
     private options: Required<Omit<RelayOptions, "WebSocket">> & { WebSocket: RelaySocketClass },
     private gone: (conn: Conn) => void,
   ) {
+    this.socketLedger = trackResource("socket", "relay", "room-socket", room.host);
     try {
       const socket = new options.WebSocket(room.url, [PHONE_PROTOCOL]);
       this.socket = socket;
@@ -225,17 +229,23 @@ class Conn {
     if (this.pending.size > 0) {
       clearTimeout(timers.idle);
       timers.idle = undefined;
-      timers.ping ??= setInterval(() => {
-        try {
-          this.socket?.send("ping");
-        } catch {
-          return this.finish(new Error("The relay connection failed"));
-        }
-        timers.dead ??= setTimeout(() => this.finish(new Error("The relay stopped answering")), options.deadMs);
-      }, options.pingMs);
+      if (!timers.ping) {
+        this.pingLedger = trackResource("timer", "relay:ping", "keepalive", this.room.host);
+        timers.ping = setInterval(() => {
+          this.pingLedger?.bump();
+          try {
+            this.socket?.send("ping");
+          } catch {
+            return this.finish(new Error("The relay connection failed"));
+          }
+          timers.dead ??= setTimeout(() => this.finish(new Error("The relay stopped answering")), options.deadMs);
+        }, options.pingMs);
+      }
     } else {
       clearInterval(timers.ping);
       timers.ping = undefined;
+      this.pingLedger?.release();
+      this.pingLedger = undefined;
       // A check keeps its deadline even with nothing waiting: the next request must not land on a dead socket.
       if (!this.checking) {
         clearTimeout(timers.dead);
@@ -271,6 +281,9 @@ class Conn {
     clearInterval(this.timers.ping);
     clearTimeout(this.timers.dead);
     this.timers = {};
+    this.pingLedger?.release();
+    this.pingLedger = undefined;
+    this.socketLedger.release();
     this.gone(this);
     const socket = this.socket;
     if (socket) {
@@ -352,6 +365,11 @@ export function relayFetch(fetcher: FetchLike, options: RelayOptions = {}): Rela
     supportsPush: true as const,
     check: (ms = 3000) => {
       for (const conn of [...conns.values()]) conn.check(ms);
+    },
+    rest: () => {
+      for (const conn of [...conns.values()]) {
+        if (conn.pending.size === 0) conn.finish(new Error("The app went to the background"));
+      }
     },
   });
 }

@@ -9,8 +9,10 @@ import { Alert, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import type { SpaceSummary } from "@/link/types";
 import { useBots, useCan, usePart } from "@/state/hooks";
+import { trackResource } from "@/state/ledger";
 import { api, attempt } from "@/state/link";
 import { useApp } from "@/state/store";
+import { useAppActive } from "@/state/useAppActive";
 import { BotAvatar, EmptyState, Glass, IconButton, Loading, Page, space as gap, T, Tap, type TextPromptOptions, useOnShow, useTextPrompt, useTheme } from "@/ui";
 import { lookingAt, openNewPanel, openShare, setPinned, useSpaces, useSpacesOn } from "./data";
 import { holds, NOTIFY, spaceTitle, whoCanOpen } from "./logic";
@@ -115,17 +117,23 @@ export default function SpacePage() {
   const space = spaces.find((one) => one.id === id);
   const projects = usePart("projects");
   const shown = useOnShow();
+  const active = useAppActive(shown);
   // The computer is told who is looking, so others see it and no alert is sent about what is on screen.
-  // It forgets after a while, so the page says it again.
+  // It forgets after a while, so the page says it again — only while visible and the app is active.
   useEffect(() => {
-    if (!on || !space?.id || !shown) return;
+    if (!on || !space?.id || !active) return;
+    const entry = trackResource("timer", "SpacePage", "presence");
     lookingAt(space.id);
-    const again = setInterval(() => lookingAt(space.id), 60_000);
+    const again = setInterval(() => {
+      entry.bump();
+      lookingAt(space.id);
+    }, 60_000);
     return () => {
       clearInterval(again);
+      entry.release();
       lookingAt(null);
     };
-  }, [on, space?.id, shown]);
+  }, [on, space?.id, active]);
 
   if (!on)
     return (

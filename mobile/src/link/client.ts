@@ -2,6 +2,7 @@
 // It pairs with a computer, opens encrypted sessions, makes calls, and follows the computer's
 // state by polling or receiving sealed relay updates. Nothing here depends on React Native, so the same
 // code runs in the tests.
+import { type ResourceHandle, trackResource } from "../state/ledger";
 import { agree, b64u, box, cleanCode, concat, fromUtf8, hkdf, INFO, newKeyPair, open, randomBytes, seal, pushNonce, seqBytes, seqNonce, unb64u, unbox, utf8 } from "./crypto";
 import type { PairTarget } from "./pairing";
 import { normalizeCode } from "./pairing";
@@ -442,6 +443,7 @@ export class LinkClient {
   /** Direct addresses that answered the hello and then failed to open a session, and until when to leave them be. */
   private distrusted = new Map<string, number>();
   private probeTimer: ReturnType<typeof setTimeout> | undefined;
+  private probeLedger: ResourceHandle | undefined;
   private probeDelay: number;
   private readonly probeMs: number;
   private readonly probeMaxMs: number;
@@ -482,6 +484,9 @@ export class LinkClient {
     this.opening = null;
     this.probing = null;
     clearTimeout(this.probeTimer);
+    this.probeTimer = undefined;
+    this.probeLedger?.release();
+    this.probeLedger = undefined;
     this.probeDelay = this.probeMs;
     this.poll?.abort();
     this.wakeUp?.();
@@ -519,7 +524,11 @@ export class LinkClient {
     this.resting = true;
     clearTimeout(this.probeTimer);
     this.probeTimer = undefined;
+    this.probeLedger?.release();
+    this.probeLedger = undefined;
     this.poll?.abort();
+    // Clear any pending reconnect backoff timer immediately so the follow loop parks at rest.
+    this.wakeUp?.();
   }
   /**
    * An address for this computer that was found another way (it announced itself on the network).
@@ -585,8 +594,16 @@ export class LinkClient {
   private scheduleProbe() {
     clearTimeout(this.probeTimer);
     this.probeTimer = undefined;
+    this.probeLedger?.release();
+    this.probeLedger = undefined;
     if (this.running && !this.resting && this.route === "relay" && this.probing !== this.session) {
-      this.probeTimer = setTimeout(() => void this.probeDirect(), this.probeDelay);
+      this.probeLedger = trackResource("timer", "LinkClient:probe", "relay-to-direct", this.pairing.serverId);
+      this.probeTimer = setTimeout(() => {
+        this.probeLedger?.bump();
+        this.probeLedger?.release();
+        this.probeLedger = undefined;
+        void this.probeDirect();
+      }, this.probeDelay);
     }
   }
 
@@ -601,6 +618,9 @@ export class LinkClient {
     if (!this.running || !seen || this.probing === seen || routeOf(seen) !== "relay") return false;
     this.probing = seen;
     clearTimeout(this.probeTimer);
+    this.probeTimer = undefined;
+    this.probeLedger?.release();
+    this.probeLedger = undefined;
     // Keep this wait if a direct hello answers but the next session still needs the relay.
     if (backOff) this.probeDelay = Math.min(this.probeDelay * 2, this.probeMaxMs);
     try {
@@ -983,8 +1003,14 @@ export class LinkClient {
         };
         const args = { epoch: this.epoch, have: this.have, watch: watching, ...appends, ...(requestReasoning && { reasoningWatch }), ...(text !== "live" && { text: text === "chunks" ? "chunks" : false }), ...(this.options.lightSteps && { steps: "light" }), ...(!push && { wait: quick ? 0 : 25_000 }) };
         if (push) this.pushSession = session;
-        const news = await this.request<SyncNews>(push ? "link.follow" : "link.sync", [args],
-          quick ? (this.options.wakeMs ?? 4000) : 40_000, poll.signal, session, push ? accept : undefined);
+        const pollLedger = trackResource("poll", "LinkClient:sync", push ? "link.follow" : "link.sync", this.pairing.serverId);
+        let news: SyncNews;
+        try {
+          news = await this.request<SyncNews>(push ? "link.follow" : "link.sync", [args],
+            quick ? (this.options.wakeMs ?? 4000) : 40_000, poll.signal, session, push ? accept : undefined);
+        } finally {
+          pollLedger.release();
+        }
         if (push && this.pushSession === session) this.pushSession = null;
         accept(news);
       } catch (error) {

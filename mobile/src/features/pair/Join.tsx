@@ -4,9 +4,11 @@ import { useEffect, useRef, useState } from "react";
 import { ActivityIndicator, Alert, AppState, BackHandler, View } from "react-native";
 import type { JoinAttempt, JoinTarget, Pairing } from "@/link/client";
 import { checkTeamJoin, findTeamInvite, joinWithPairing, startTeamJoin } from "@/state/link";
+import { trackResource } from "@/state/ledger";
 import { forget, keep, readKept } from "@/state/keep";
 import { askPersonName } from "./askName";
 import { useApp } from "@/state/store";
+import { useAppActive } from "@/state/useAppActive";
 import { Button, EmptyState, Field, haptic, IconTile, Sheet, space, T, useOnShow, useTheme } from "@/ui";
 import {
   JOIN_ATTEMPT_KEY,
@@ -47,6 +49,7 @@ export default function Join() {
   const params = useLocalSearchParams<Record<string, string>>();
   const pairings = useApp((state) => state.pairings);
   const visible = useOnShow();
+  const active = useAppActive(visible);
   const [view, setView] = useState<ScreenView>({ phase: "entry" });
   const [code, setCode] = useState("");
   const [serverKey, setServerKey] = useState<string>();
@@ -156,10 +159,17 @@ export default function Join() {
   }, [params, receive]);
 
   useEffect(() => {
-    if (!visible || view.phase !== "pending" || AppState.currentState !== "active" || !attempt) return;
-    const timer = setInterval(() => void poll(), 10_000);
-    return () => clearInterval(timer);
-  }, [visible, view.phase, attempt, poll]);
+    if (!active || view.phase !== "pending" || !attempt) return;
+    const entry = trackResource("timer", "Join", "join-poll");
+    const timer = setInterval(() => {
+      entry.bump();
+      void poll();
+    }, 10_000);
+    return () => {
+      clearInterval(timer);
+      entry.release();
+    };
+  }, [active, view.phase, attempt, poll]);
 
   useEffect(() => {
     if (!attempt || view.phase !== "pending") return;

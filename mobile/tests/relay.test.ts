@@ -11,6 +11,7 @@ import { MockBackend } from "../link-host/mock-backend.mjs";
 import { type FetchLike, LinkClient, pair } from "../src/link/client";
 import { parsePairingUrl } from "../src/link/pairing";
 import { isRelayHost, relayFetch } from "../src/link/relay";
+import { ledgerSnapshot, resetLedger, setLedgerEnabled } from "../src/state/ledger";
 import { FakeRelay } from "./fake-relay";
 
 const phone = { name: "Test phone", platform: "ios" };
@@ -404,4 +405,40 @@ test("a fetch transport without push support polls even when the host offers fol
   const [session] = link.sessions.values();
   assert.equal(session.follow, undefined);
   assert.equal(relay.passed.some(frame => frame[8] === 7), false);
+});
+
+test("resting on background stops polls, probe timer, and idle relay sockets with zero active ledger entries", async (t) => {
+  setLedgerEnabled(true);
+  resetLedger();
+  t.after(() => {
+    resetLedger();
+    setLedgerEnabled(undefined);
+  });
+  const { link, net, fetcher } = await setup();
+  t.after(() => link.stop());
+  net.direct = false;
+  const paired = await pair(fetcher, parsePairingUrl(link.startPairing().url)!, phone);
+  const { client, parts } = follow(paired, fetcher);
+  t.after(() => client.stop());
+  await until(() => !!parts.meta, "initial sync over relay");
+  await until(() => ledgerSnapshot().activeByKind.poll === 1, "active sync poll in ledger");
+
+  // Repeated wakes must never stack duplicate polls.
+  client.wake();
+  client.wake();
+  await until(() => ledgerSnapshot().activeByKind.poll === 1, "single poll after repeated wake");
+  assert.ok(ledgerSnapshot().activeByKind.poll <= 1, "no duplicate polls stacked on wake");
+
+  // Going to background: client.rest() + fetcher.rest() clears poll, probe timer, and idle relay socket.
+  client.rest();
+  await until(() => link.waiters.size === 0, "host to release follow on rest");
+  await tick(40);
+  fetcher.rest();
+  await until(() => ledgerSnapshot().totalActive === 0, "zero active ledger entries in background");
+  const bg = ledgerSnapshot();
+  assert.equal(bg.activeByKind.poll, 0);
+  assert.equal(bg.activeByKind.timer, 0);
+  assert.equal(bg.activeByKind.socket, 0);
+  assert.equal(bg.activeByKind.animation, 0);
+  assert.equal(bg.activeByKind.feed, 0);
 });
