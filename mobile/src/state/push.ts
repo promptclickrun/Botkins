@@ -19,6 +19,7 @@ import { lookOf } from "@/data/botLook";
 import { type Pairing, pushKeyOf } from "@/link/client";
 import type { ActivityState, PushPrefs, RunSummary } from "@/link/types";
 import { activityView, LINGER_MS } from "./activity";
+import { ACTIVITY_MIN_INTERVAL_MS, ACTIVITY_QUIET_MS, createCoalescedPacer } from "./activityPace";
 import { sendAnswers, startAnswers } from "./answers";
 import { ALL_CARD, cardOver } from "../../link-host/cards.mjs";
 import { botsWithWork, hasWork, MAX_CARDS, phoneCard } from "./cards";
@@ -570,6 +571,12 @@ export async function startPush() {
   Activities?.addListener("ended", ({ chatId }) => forgetActivity(chatId));
   void syncActivities();
 
+  const activityPacer = createCoalescedPacer({
+    quietMs: ACTIVITY_QUIET_MS,
+    minIntervalMs: ACTIVITY_MIN_INTERVAL_MS,
+    run: () => void followActivities(),
+  });
+
   let link = useApp.getState().link;
   let meta = useApp.getState().parts.meta;
   let pairings = useApp.getState().pairings;
@@ -597,18 +604,20 @@ export async function startPush() {
         tellPresence();
       }
     }
-    void followActivities();
+    if (AppState.currentState === "active") activityPacer.schedule();
   });
   AppState.addEventListener("change", (next) => {
     tellPresence();
     if (next === "active") {
       void syncActivities();
       void sendAnswers();
-    } else void followActivities();
+    } else {
+      activityPacer.flushNow();
+    }
   });
   onChatOnScreen(() => {
     tellPresence();
-    void followActivities();
+    activityPacer.flushNow();
   });
   void register();
 }

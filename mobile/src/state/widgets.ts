@@ -6,16 +6,15 @@ import { Activities } from "../../modules/botkins-activity";
 import { lookOf } from "@/data/botLook";
 import { readPanels, readSpaceOnce, watchSpaceContents } from "@/features/spaces/data";
 import { spaceTitle } from "@/features/spaces/logic";
+import { createCoalescedPacer, WIDGET_MIN_INTERVAL_MS, WIDGET_QUIET_MS } from "./activityPace";
 import { loadProviderUsage, providerUsageNow, watchProviderUsage } from "./providerUsage";
 import { useApp } from "./store";
 import { computerPart, panelParts, sameSnapshot, type WidgetSnapshot, withComputer } from "./widgetData";
 
-const QUIET_MS = 1500;
 /** Plans and limits older than this are asked for again when the app comes to the front and a usage widget is on show. */
 const USAGE_OLD_MS = 10 * 60_000;
 
 let saved: WidgetSnapshot | undefined;
-let timer: ReturnType<typeof setTimeout> | null = null;
 
 function snapshotNow(): WidgetSnapshot | undefined {
   const state = useApp.getState();
@@ -41,15 +40,15 @@ function snapshotNow(): WidgetSnapshot | undefined {
 }
 
 function write() {
-  if (timer) clearTimeout(timer);
-  timer = null;
   const next = snapshotNow();
   if (!next || !Activities?.setWidgetData || sameSnapshot(saved, next)) return;
   saved = next;
   void Activities.setWidgetData(JSON.stringify(next)).catch(() => {});
 }
+const pacer = createCoalescedPacer({ quietMs: WIDGET_QUIET_MS, minIntervalMs: WIDGET_MIN_INTERVAL_MS, run: write });
 const soon = () => {
-  if (!timer) timer = setTimeout(write, QUIET_MS);
+  if (AppState.currentState !== "active") return;
+  pacer.schedule();
 };
 
 /** Asks the computer for plans and limits when a usage widget is on show and the last answer is old. */
@@ -102,7 +101,7 @@ export async function startWidgets() {
     if (next === "active") {
       void freshUsage();
       void freshPanels();
-    } else write();
+    } else pacer.flushNow();
   });
   soon();
 }
