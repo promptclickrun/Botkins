@@ -270,6 +270,8 @@ export class Agents {
     const chat = this.ws.chat(id);
     this.assertIdle([chat], "chat");
     this.state.chats = this.state.chats.filter((c) => c !== chat);
+    // A question left waiting in the chat goes with it.
+    this.ws.interactions.cancel(id, { detached: true });
     this.ws.mcpApps?.removeChats([id]);
     this.state.runs = this.state.runs.filter((r) => r.chatId !== id);
     for (const panel of this.state.panels) if (panel.refreshChatId === id) delete panel.refreshChatId;

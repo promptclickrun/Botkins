@@ -199,6 +199,12 @@ export type PanePanel = {
 };
 export type Run = {
   ending?: "failed" | "timed-out" | "interrupted" | "stopped";
+  /** The turn's plan when it ended: how many steps are open, of how many. */
+  plan?: { open: number; total: number };
+  /** Botkins gave the bot more turns in this run by itself: how many so far (at most `limit`), why, and how many plan steps were open at the last one. */
+  continued?: { count: number; limit: number; reason: "plan" | "next-step"; open?: number };
+  /** The turn ended with plan steps open and nothing went on (the limit, the same steps again, Stop, a waiting message or request). */
+  stoppedOpen?: true;
   id: string;
   /** HTML apps the bot showed in this turn. */
   apps?: AppCard[];
@@ -1921,6 +1927,8 @@ export type AgentRequest = {
   url?: string;
   /** A request raised by a member's turn, shown and notified to the owner. */
   askedBy?: { memberId: string; name: string };
+  /** A question that waited ten minutes: its turn went on without an answer. It stays open as waiting, and an answer starts a new turn that quotes it. */
+  detached?: true;
 };
 
 export type BoardItem = {

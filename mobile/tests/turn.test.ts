@@ -48,6 +48,10 @@ function shape(items: Item[]): string[] {
         return "live:" + item.steps.map((s) => s.id).join(",") + "|" + item.text;
       case "fold":
         return "fold";
+      case "kept":
+        return "kept:" + item.line;
+      case "open":
+        return "open:" + item.line + (item.again ? " (continue)" : "");
     }
   });
 }

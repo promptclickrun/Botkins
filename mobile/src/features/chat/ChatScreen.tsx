@@ -43,7 +43,7 @@ import { latestTurn } from "./helpers";
 import { HelperRail } from "./HelperRail";
 import { LiveTurn, TurnText, WorkPart } from "./LiveTurn";
 import { CAPSULE, StatusCapsule } from "./StatusCapsule";
-import { EndedNote, type MessageActions, MessageRow, UserBubble, WorkLine } from "./Messages";
+import { EndedNote, KeptNote, OpenNote, type MessageActions, MessageRow, UserBubble, WorkLine } from "./Messages";
 import { type FoldHold, FoldRow } from "./FoldRow";
 import { Aside } from "./Aside";
 import { chatTimeline, createTimelineRunSelector, indexMessageOwnership, liveRowVisible, resolveLiveBody, type Item, reuseItems, TIMELINE_V1, underWay } from "./turn";
@@ -268,6 +268,10 @@ const TimelineRow = memo(function TimelineRow({ item, chatId, group, bot, bots, 
     <WorkLine chatId={chatId} runId={item.runId} label="Turn activity" />
   ) : item.kind === "ended" ? (
     <EndedNote run={item.run} ending={item.ending} retry={item.retry} />
+  ) : item.kind === "kept" ? (
+    <KeptNote line={item.line} />
+  ) : item.kind === "open" ? (
+    <OpenNote line={item.line} again={item.again} onSend={sendText} />
   ) : item.kind === "fold" ? (
     <FoldRow chatId={chatId} bot={group ? bots.get(item.run.speakers?.at(-1) ?? "") : bot} group={group} item={item} hold={holdFold} />
   ) : item.kind === "thought" ? (

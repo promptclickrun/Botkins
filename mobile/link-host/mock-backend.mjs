@@ -1969,6 +1969,24 @@ export class MockBackend {
       run.cards = [...(run.cards ?? []), { id: randomUUID(), title: "Open issues by repo", blocks: [{ type: "html", frame, height: 240 }, { type: "markdown", text: "Made-up numbers from the demo computer." }], replies: [] }];
       reply = "That's a bar chart of open issues by repo. Tap a bar to see when that repo was last pushed.";
       this.changed();
+    } else if (live() && /keep going|stopped with|waiting question/i.test(prompt) && !/^continue with the open steps/i.test(prompt)) {
+      // The computer keeping the work moving (desktop/keep-moving.mjs): "keep going" is a plan that got more turns until it was
+      // done, "stopped with" a plan that ended with steps open (the chat offers Continue), "waiting question" a question that
+      // waited ten minutes: its turn went on, and the card stays as waiting until it is answered.
+      const rows = (...status) => ["Read the notes", "Draft the summary", "Send it to the team"].map((title, i) => ({ id: "s" + (i + 1), title, status: status[i] }));
+      if (/waiting question/i.test(prompt)) {
+        void this.ask({ chatId: id, botId: chat.botId, kind: "question", title: "Which environment should I use?", choices: ["Staging", "Production"], freeform: true, detached: true });
+        reply = "I need one answer before I can go on. The question stays here until you answer it.";
+      } else if (/stopped with/i.test(prompt)) {
+        run.todos = chat.todos = rows("done", "in_progress", "pending");
+        Object.assign(run, { plan: { open: 2, total: 3 }, stoppedOpen: true, continued: { count: 8, limit: 8, reason: "plan", open: 2 } });
+        reply = "The notes are read and the summary is half written.";
+      } else {
+        run.todos = chat.todos = rows("done", "done", "done");
+        chat.messages.push({ role: "assistant", text: "I read the notes. Next I'll draft the summary and send it.", runId: run.id, time: now() });
+        Object.assign(run, { plan: { open: 0, total: 3 }, continued: { count: 2, limit: 8, reason: "plan", open: 2 } });
+        reply = "The summary is drafted and sent to the team.";
+      }
     } else if (live() && /approve/i.test(prompt)) {
       const bot = this.bot(chat.botId);
       const answer = await this.ask({ chatId: id, botId: bot.id, kind: "permission", title: "Run a command", label: "npm run deploy", preview: "npm run deploy -- --env production", detail: "Deploys the website to production.", remember: "npm run deploy" });
@@ -2337,7 +2355,7 @@ export class MockBackend {
       this.scheduled = null;
       const run = { id: "run-" + randomUUID().slice(0, 8), chatId: id, title: scheduled?.name ?? prompt.slice(0, 80), time: now(), status: "Working", detail: "", ...(options?.notify === false && { notify: false }), ...(scheduled?.deliver?.to === "none" && { noOutput: true }), ...(scheduled && { trigger: "scheduled", scheduleId: scheduled.id }) };
       this.state.runs.unshift(run);
-      addUserMessage(chat, { role: "user", text: prompt, ...tag, runId: run.id, time: now(), ...(options?.author && { author: options.author }) }, options?.voiceId);
+      addUserMessage(chat, { role: "user", text: prompt, ...tag, runId: run.id, time: now(), ...(options?.author && { author: options.author }), ...(typeof options?.quote === "string" && options.quote && { quote: options.quote }) }, options?.voiceId);
       const first = chat.title === "New chat";
       if (first) chat.title = prompt.slice(0, 40);
       chat.time = now();
@@ -2377,7 +2395,10 @@ export class MockBackend {
     compact() {},
     sideQuestion: async (_id, question) => "Short answer to “" + question + "”: yes, that fits the plan.",
     respond(requestId, answer) {
+      const asked = this.state.requests.find((r) => r.id === requestId);
       this.state.requests = this.state.requests.filter((r) => r.id !== requestId);
+      // A question that outlived its turn: the answer is the person's next message, quoting the question.
+      if (asked?.detached && answer.action === "answer" && typeof answer.value === "string") this.handlers.send.call(this, asked.chatId, answer.value, { quote: asked.title });
       this.waiting.get(requestId)?.(answer);
       this.waiting.delete(requestId);
     },

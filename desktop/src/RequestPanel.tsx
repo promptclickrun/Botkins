@@ -1,6 +1,7 @@
 import { useId, useState } from "react";
 import { MessageCircleQuestion, ShieldCheck } from "lucide-react";
 import { decisionText } from "./pluginStarts";
+import { DETACHED_LINE } from "./keep";
 import type { AgentRequest, FormField } from "./types";
 import { CredentialChoice, isSecretField, looksSecret, useSavedCredentials, type Picked } from "./CredentialPicker";
 
@@ -157,6 +158,7 @@ export default function RequestPanel({
         {count > 1 && <small>1 of {count}</small>}
       </div>
       {req.askedBy && <small className="request-member">Asked by {req.askedBy.name}'s turn</small>}
+      {req.detached && <small className="request-member">{DETACHED_LINE}</small>}
       <form
         onSubmit={(e) => {
           e.preventDefault();

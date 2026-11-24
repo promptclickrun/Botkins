@@ -490,7 +490,7 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
     // answer arrives here with its values already in (the link resolves it the same way).
     respond: async (...args) => {
       const [id, answer] = await savedCredentials.respondArgs(args);
-      return workspace.interactions.respond(id, answer);
+      return workspace.interactions.respond(id, answer, true, args[2]);
     },
     clearApprovals: (id) => workspace.clearApprovals(id),
     copyReply: (id) => {
@@ -1304,7 +1304,7 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
       // A routine's script stops with Botkins; its run is ended when Botkins opens again.
       routines.stopScripts();
       closeWorkspaceSocket?.();
-      workspace.interactions.cancel();
+      workspace.interactions.cancel(undefined, { detached: true });
       workspace.connects.close();
       workspace.mcpApps.close();
       clearInterval(timer);

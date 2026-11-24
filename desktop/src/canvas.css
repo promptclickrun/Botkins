@@ -122,6 +122,20 @@ article > .interim-update {
   font-size: calc(12px * var(--text-scale));
   white-space: pre-wrap;
 }
+/* Botkins kept the work moving: a quiet line, and "Stopped with N open steps" with Continue. */
+.timeline-kept,
+.timeline-open {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 4px 0 10px;
+  color: var(--muted);
+  font-size: calc(12px * var(--text-scale));
+}
+.timeline-open .secondary {
+  padding: 2px 10px;
+  font-size: inherit;
+}
 /* Live: the still face, what the bot is doing in ink, then its newest thought. */
 .work-lead {
   display: flex;
