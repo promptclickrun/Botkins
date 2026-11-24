@@ -21,7 +21,7 @@
 // was added; the comparison catches the rest within a moment.
 
 /** The top-level fields of the state that change with every word of a reply. */
-export const HOT_FIELDS = ["streams", "thinking", "intents", "speakers", "steerable", "queued", "requests"];
+export const HOT_FIELDS = ["streams", "thinking", "intents", "speakers", "steerable", "queued", "requests", "typing"];
 
 const text = JSON.stringify;
 const working = (run) => run.status === "Working";

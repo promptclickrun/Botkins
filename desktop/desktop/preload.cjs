@@ -108,6 +108,7 @@ for (const name of [
   "link.chats.deleteSection",
   "link.chats.orderSections",
   "link.chats.setSection",
+  "link.chat.typing",
   "artifacts.list",
   "artifacts.read",
   "artifacts.resolve",

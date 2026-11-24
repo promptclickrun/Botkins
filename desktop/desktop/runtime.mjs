@@ -754,6 +754,7 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
         },
       ]),
     ),
+    "link.chat.typing": (chatId, typing) => link?.setTyping?.("owner", "host", chatId, typing) ?? null,
     linkPreview: (url) => (workspace.state.settings.linkPreviews ? linkPreviews.preview(String(url)) : null),
     // Tasks board (desktop/tasks.mjs)
     saveTask: (data) => workspace.tasks.save(data),
@@ -884,6 +885,7 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
     createGroupChat: (botIds, title) => workspace.createGroupChat(botIds, title),
     recordVoiceLine: (chatId, id, text, final, author, options) => workspace.recordVoiceLine(chatId, id, text, final, author, options),
     send: (id, text, options) => {
+      link?.clearTyping?.(id, "owner");
       // The desktop steers by default. Queue is an explicit composer action.
       const turn = workspace.submit(id, text, {
         delivery: options?.delivery === "steer" ? "steer" : "queue",
@@ -1262,6 +1264,7 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
     phoneRevision++;
     push();
   });
+  link.on("typing", () => push());
   // A new network or a wake from sleep changes this computer's addresses, and the person may
   // have allowed the local network meanwhile: look again now and then.
   host.power.onResume(announce);

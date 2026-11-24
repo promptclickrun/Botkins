@@ -139,6 +139,7 @@ export function snapshotOf(parts, own = {}) {
     intents: live.intents ?? {},
     thinking: live.thinking ?? {},
     speakers: live.speakers ?? {},
+    typing: live.typing ?? {},
     queued: live.queued ?? {},
     requests: live.requests ?? [],
     panels: parts.panels ?? [],

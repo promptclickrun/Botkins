@@ -491,6 +491,8 @@ export type State = {
   queued: Record<string, QueuedMessage[]>;
   /** In a group chat, the member replying right now. */
   speakers?: Record<string, string>;
+  /** People currently typing in a chat, per chat ("chat-typing-v1"). */
+  typing?: Record<string, { id: string; name: string }[]>;
   /** The number this whole state was sent under (desktop/window-push.mjs); the small updates name the one they apply to. */
   seq?: number;
 };
@@ -736,6 +738,7 @@ declare global {
       "link.chats.deleteSection": (id: string) => Promise<null>;
       "link.chats.orderSections": (ids: string[]) => Promise<null>;
       "link.chats.setSection": (chatId: string, sectionId: string | null) => Promise<null>;
+      "link.chat.typing": (chatId: string, typing: boolean) => Promise<null>;
       "artifacts.thumbnail": (id: string, options?: { size?: number }) => Promise<{ data: string; mime: string } | null>;
       "artifacts.resolve": (input: { chatId: string; paths: string[] }) => Promise<{ items: (Artifact | null)[] }>;
       inspectChatPaths(paths: string[]): Promise<({ path: string; kind: ArtifactKind; name: string; mime: string; size: number | null } | null)[]>;

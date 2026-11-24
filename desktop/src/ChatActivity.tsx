@@ -164,7 +164,7 @@ function stepIcon(step: Step) {
  * muted with a band of ink sweeping across it (`Shimmer`, T3 Code's live row) while the bot is on
  * it (`live`; off while it waits for the person), a failed one has a faded danger icon and a small
  * X. A row opens to its input and output. */
-export function WorkSteps({ steps, live = false }: { steps: Step[]; live?: boolean }) {
+export function WorkSteps({ steps, live = false, follow = false }: { steps: Step[]; live?: boolean; follow?: boolean }) {
   if (!steps.length) return null;
   return (
     <ol className="work-steps">
@@ -184,8 +184,9 @@ export function WorkSteps({ steps, live = false }: { steps: Step[]; live?: boole
                 </Shimmer>
                 {failed && <X size={12} className="work-step-failed" aria-label="Failed" />}
               </summary>
-              {detail && (
+              {(detail || follow) && (
                 <div className="step-detail">
+                  {!detail && <p>{running ? "Waiting for progress…" : "No additional details."}</p>}
                   {s.input && (
                     <>
                       <b>Input</b>
@@ -396,14 +397,13 @@ function HelperItems({ agents, byAgent }: { agents: Subagent[]; byAgent?: Map<st
             <CircleAlert size={14} />
           )}
           <div className="helper-info">
-            <strong>{a.name}</strong>
-            {(a.detail || a.description) && <small>{a.detail || a.description}</small>}
-            {!!byAgent?.get(a.id)?.length && (
-              <details>
-                <summary>Tool calls</summary>
-                <WorkSteps steps={byAgent.get(a.id)!} />
-              </details>
-            )}
+            <details>
+              <summary><strong>{a.name}</strong></summary>
+              {a.description && <p>{a.description}</p>}
+              {a.detail && a.detail !== a.description && (a.status !== "Running" || a.detail !== a.intent) && <p>{a.detail}</p>}
+              {byAgent?.get(a.id)?.length ? <WorkSteps steps={byAgent.get(a.id)!} live={a.status === "Running"} follow /> : byAgent && <small>{a.status === "Running" ? "No steps yet." : "No steps recorded."}</small>}
+            </details>
+            {a.status === "Running" && (a.intent || a.detail) && <small>{a.intent || a.detail}</small>}
           </div>
           <em>
             {a.status === "Running" ? "Running" : a.status} · {duration((a.finished ?? now) - a.started)}
@@ -437,7 +437,7 @@ export function ActivitySections({ run, steps }: { run: Run; steps?: Step[] }) {
         <section className="run-lead" aria-label="Subagents">
           <h4>Subagents</h4>
           {!!run.agents?.length && <HelperItems agents={run.agents} byAgent={byAgent} />}
-          <WorkSteps steps={background} />
+          <WorkSteps steps={background} live follow />
         </section>
       )}
       {!!tools.length && (

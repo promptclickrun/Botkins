@@ -39,7 +39,7 @@ function Mono({ label, text }: { label: string; text: string }) {
  * that came without them (`more`, "step-details-v1") reads them from the computer when it opens,
  * and again when it finishes; `chatId` and `runId` say which step that is.
  */
-export function StepRow({ step, chatId, runId, startOpen = false, helperName }: { step: Step; chatId?: string; runId?: string; /** The step a person tapped in a chat's fold. */ startOpen?: boolean; helperName?: string }) {
+export function StepRow({ step, chatId, runId, startOpen = false, helperName, follow = false }: { step: Step; chatId?: string; runId?: string; /** The step a person tapped in a chat's fold. */ startOpen?: boolean; helperName?: string; follow?: boolean }) {
   const { colors } = useTheme();
   const [open, setOpen] = useState(startOpen);
   const [detail, setDetail] = useState<StepDetail | "failed">();
@@ -61,7 +61,7 @@ export function StepRow({ step, chatId, runId, startOpen = false, helperName }: 
   const read = typeof detail === "object" ? detail : undefined;
   const input = read?.input ?? step.input;
   const output = read?.output ?? step.output;
-  const more = !!step.input || !!step.output || !!step.more;
+  const more = follow || !!step.input || !!step.output || !!step.more;
   const took = step.finished ? duration(step.finished - step.started) : undefined;
   const head = (
     <View style={{ minHeight: 52, paddingHorizontal: space.lg, paddingVertical: 10, flexDirection: "row", alignItems: "center", gap: space.md }}>
@@ -70,7 +70,7 @@ export function StepRow({ step, chatId, runId, startOpen = false, helperName }: 
         <T variant="callout" weight="500" numberOfLines={open ? undefined : 2}>
           {helperName ? helperName + ": " + stepLabel(step) : stepLabel(step)}
         </T>
-        {!!step.progress && step.status === "Running" && (
+        {!open && !!step.progress && step.status === "Running" && (
           <T variant="footnote" color="muted" numberOfLines={1}>
             {step.progress}
           </T>
@@ -93,7 +93,9 @@ export function StepRow({ step, chatId, runId, startOpen = false, helperName }: 
       {open && (
         <View style={{ paddingHorizontal: space.lg, paddingBottom: space.lg, gap: space.md }}>
           {!!input && <Mono label="Input" text={input} />}
+          {!!step.progress && <Mono label="Progress" text={step.progress} />}
           {!!output && <Mono label="Output" text={output} />}
+          {follow && !input && !step.progress && !output && !fetches && <T variant="footnote" color="muted">{step.status === "Running" ? "Waiting for progress…" : "No additional details."}</T>}
           {fetches && !detail && <ActivityIndicator color={colors.muted} style={{ alignSelf: "flex-start" }} />}
           {fetches && detail === "failed" && (
             <T variant="footnote" color="muted">
@@ -222,7 +224,7 @@ export default function RunActivity() {
             ))}
             {selectedHelperStep && <StepRow step={selectedHelperStep} chatId={chatId} runId={runId} startOpen />}
             {background.map((step) => (
-              <StepRow key={step.id} step={step} chatId={chatId} runId={runId} startOpen={step.id === stepId} />
+              <StepRow key={step.id} step={step} chatId={chatId} runId={runId} startOpen={step.id === stepId} follow />
             ))}
           </Group>
         </View>

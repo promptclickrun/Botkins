@@ -262,6 +262,7 @@ const POLICY = {
   "link.push.unregister": ["settings", "view"],
   "link.push.presence": ["settings", "view"],
   "link.push.activity": ["settings", "view"],
+  "link.chat.typing": ["agents", "chat"],
   "link.push.test": "owner",
   "link.voice.set": "owner",
   "link.voice.key": "owner",
@@ -837,14 +838,17 @@ export function ownerParts(parts, team, extra = {}) {
   const live = parts.live;
   if (live) {
     const byChat = (value) => Object.fromEntries(Object.entries(value ?? {}).filter(([id]) => ids.has(id)));
+    const { typing: rawTyping, ...restLive } = live;
+    const filteredTyping = rawTyping ? byChat(rawTyping) : null;
     out.live = {
-      ...live,
+      ...restLive,
       streams: byChat(live.streams),
       intents: byChat(live.intents),
       thinking: byChat(live.thinking),
       speakers: byChat(live.speakers),
       queued: byChat(live.queued),
       ...(live.steerable && { steerable: byChat(live.steerable) }),
+      ...(filteredTyping && Object.keys(filteredTyping).length > 0 && { typing: filteredTyping }),
       requests: (live.requests ?? []).filter((request) => ids.has(request.chatId)),
       active: (live.active ?? []).filter((id) => ids.has(id)),
     };
@@ -964,6 +968,15 @@ export function authorize(principal, team, method, args = [], lookups = {}) {
     if (args[1] == null) return "";
     const chat = lookup("chat", args[0], lookups);
     return chat && inChat(team, chat, principal.memberId) ? "" : "That chat belongs to the owner or another member.";
+  }
+  // Typing state in a chat ("chat-typing-v1"): only people in the chat may advertise typing;
+  // clearing one's own typing indicator is always allowed (even right after leaving a chat).
+  if (method === "link.chat.typing") {
+    if (args[1] !== true) return "";
+    if (!hasAction(role.perms, "agents", "chat")) return "Your team role can't do that.";
+    const chat = lookup("chat", args[0], lookups);
+    if (!chat || !inChat(team, chat, principal.memberId)) return "That chat belongs to the owner or another member.";
+    return visible(role, chat.botId) ? "" : "That chat's bot isn't available to your team role.";
   }
   if (SELF_METHODS.has(method)) return "";
   const policy = TEAM_METHODS[method] ?? "owner";
@@ -1165,14 +1178,17 @@ export function filterParts(parts, principal, team, extra = {}) {
   if ("chatSections" in parts) out.chatSections = sections.list;
   const live = parts.live ?? {};
   const byChat = (value) => Object.fromEntries(Object.entries(value ?? {}).filter(([id]) => ownChats.has(id)));
+  const { typing: rawTyping, ...restLive } = live;
+  const filteredTyping = rawTyping ? byChat(rawTyping) : null;
   out.live = {
-    ...live,
+    ...restLive,
     streams: byChat(live.streams),
     intents: byChat(live.intents),
     thinking: byChat(live.thinking),
     speakers: byChat(live.speakers),
     queued: byChat(live.queued),
     ...(live.steerable && { steerable: byChat(live.steerable) }),
+    ...(filteredTyping && Object.keys(filteredTyping).length > 0 && { typing: filteredTyping }),
     // No approval and no secure input reaches a member's device: see `authorize` ("The owner needs to approve that request.").
     requests: (live.requests ?? []).filter((request) => ownChats.has(request.chatId) && request.kind !== "permission" && request.kind !== "secure"),
     active: (live.active ?? []).filter((id) => ownChats.has(id)),

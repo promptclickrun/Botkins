@@ -33,6 +33,7 @@ import { ChatSections } from "./chat-sections.mjs";
 import { SpaceLinks } from "./space-links.mjs";
 import { SpaceAlerts } from "./space-alerts.mjs";
 import { Spaces } from "./spaces.mjs";
+import { ChatTyping } from "./typing.mjs";
 import { headCapabilities, cleanLook, deviceKind, LinkStore, personName, SCREEN_MODES } from "./store.mjs";
 import { chatSectionsOf, withChatSections, authorize, chatPeople, cleanGroup, cleanRole, filterParts, ownerParts, inChat, panelOfFrame, panelView, spaceCan, inviteLink, inviteLookup, MAX_CHAT_PEOPLE, newInviteCode, normalizeCode, OWNER, personOf, sharedBotFlags, teamPeople, viewOf, visible, withBotFlags, withChatFlags, hasAction, roleOfMember, seenItemsOf, spacesViewOf } from "./team.mjs";
 import { ownerApprovalChats, privateProactiveChat, withoutProactiveAlerts } from "./team.mjs";
@@ -79,7 +80,7 @@ const PROFILE_REQUEST_TIMEOUT = 10_000;
 // "maintenance-v1": this copy lets a phone clear the cache and send the computer's own test notification.
 /** The link tells people of notes and changes in their spaces (space-alerts.mjs). Named only while the app has spaces. */
 const SPACE_ALERTS_CAPABILITY = "space-alerts-v1";
-const CAPABILITIES = ["sync-push-v1", "credentials-v1", "screen-v1", "prs-v1", "uploads-v1", "relay-v1", "push-v1", "device-v1", "voice-v1", "devices-v1", "device-person-v1", "maintenance-v1", "teams-v1", "stream-appends-v1", "reasoning-appends-v1", "text-streaming-off-v1", "text-chunks-v1", "step-details-v1", "team-people-v1", "chat-sections-v1", "activity-bots-v1", "activity-all-v1", "member-rename-v1", "profile-v1", GADGET_CAPABILITY, GADGET_SETTINGS_CAPABILITY, "pr-panel-v1"];
+const CAPABILITIES = ["sync-push-v1", "credentials-v1", "screen-v1", "prs-v1", "uploads-v1", "relay-v1", "push-v1", "device-v1", "voice-v1", "devices-v1", "device-person-v1", "maintenance-v1", "teams-v1", "stream-appends-v1", "reasoning-appends-v1", "text-streaming-off-v1", "text-chunks-v1", "step-details-v1", "team-people-v1", "chat-sections-v1", "chat-typing-v1", "activity-bots-v1", "activity-all-v1", "member-rename-v1", "profile-v1", GADGET_CAPABILITY, GADGET_SETTINGS_CAPABILITY, "pr-panel-v1"];
 /** A custom view (an html block): the page a bot wrote and its data, at the sizes the desktop app keeps them to. */
 /** Calls that make a chat and answer its id. */
 const MAKES_CHAT = new Set(["createChat", "createGroupChat", "forkChat", "startProjectChat"]);
@@ -420,7 +421,11 @@ export class LinkHost extends EventEmitter {
       "link.chats.deleteSection": async (session, a) => this.chatSections.remove(personOf(session.principal), a[0]),
       "link.chats.orderSections": async (session, a) => this.chatSections.order(personOf(session.principal), a[0]),
       "link.chats.setSection": async (session, a) => this.chatSections.set(personOf(session.principal), a[0], a[1]),
+      // Live typing state in a shared chat ("chat-typing-v1").
+      "link.chat.typing": async (session, a) => this.setTyping(personOf(session.principal), session.deviceId, a[0], a[1]),
     };
+    // Live typing state per (chatId, sourceId), purely in memory ("chat-typing-v1").
+    this.typing = new ChatTyping({ changed: () => { this.changed(); this.emit("typing"); } });
     // Each person's sections for their chats ("chat-sections-v1", chat-sections.mjs).
     this.chatSections = new ChatSections({ team: () => this.store.data.team, setTeam: (team) => this.setTeam(team), chats: () => this.backend.snapshot().chats });
     // Spaces ("spaces-v1"): how each is shared and each person's view of the list (spaces.mjs).
@@ -669,6 +674,7 @@ export class LinkHost extends EventEmitter {
     this.push.dispose();
     this.spaceAlerts.stop();
     this.spaces.dispose();
+    this.typing.dispose();
     this.spaceLinks.stop();
     for (const timer of this.inviteTimers.values()) clearTimeout(timer);
     this.inviteTimers.clear();
@@ -1561,6 +1567,7 @@ export class LinkHost extends EventEmitter {
     const chats = Object.fromEntries(Object.entries(team.chats ?? {}).map(([id, invited]) => [id, invited.filter((person) => person !== memberId)]).filter(([, invited]) => invited.length));
     const { [memberId]: _gone, ...views } = team.views ?? {};
     // Their grants on spaces go; the spaces they made pass to the owner and become private.
+    this.typing.forgetPerson(memberId);
     this.setTeam({ ...this.spaces.withoutMember(team, memberId), members: team.members.filter((item) => item.id !== memberId), chats, views });
     this.spaceLinks.sync();
     return this.team();
@@ -1702,6 +1709,30 @@ export class LinkHost extends EventEmitter {
   chatPeople(chatId) {
     return chatPeople(this.store.data.team, this.chatOf(chatId) ?? { id: chatId });
   }
+  /** Map of chatId -> invited person ids, for the local desktop window's snapshot. */
+  chatInvites() {
+    return Object.fromEntries(Object.entries(this.store.data.team.chats ?? {}).filter(([, list]) => Array.isArray(list) && list.length).map(([id, list]) => [id, [...list]]));
+  }
+  /** Current map of chatId -> people typing right now, with display names. */
+  typingSnapshot() {
+    const names = new Map(teamPeople(this.store.data.team, this.ownerName()).map((person) => [person.id, person.name]));
+    return this.typing.snapshot(names);
+  }
+  /** Update typing state for one person/source in a chat ("chat-typing-v1"). */
+  setTyping(person, sourceId, chatId, active) {
+    if (typeof chatId !== "string" || !chatId) return null;
+    if (active === true) {
+      const chat = this.chatOf(chatId);
+      if (!chat || !inChat(this.store.data.team, chat, person)) return null;
+    }
+    this.typing.set({ chatId, personId: person, sourceId: String(sourceId || person), typing: active === true });
+    return null;
+  }
+  /** Clear typing for one person in one chat (e.g. immediately after sending a message). */
+  clearTyping(chatId, person) {
+    if (typeof chatId !== "string" || !chatId) return;
+    this.typing.clearPerson(chatId, person);
+  }
   /** Whether a person ("owner" or a member's id) is in a chat. */
   inChat(chatId, person) {
     const chat = this.chatOf(chatId);
@@ -1731,6 +1762,7 @@ export class LinkHost extends EventEmitter {
     return chats[chatId];
   }
   removeFromChat(chatId, person) {
+    this.typing.clearPerson(chatId, person);
     const team = this.store.data.team;
     const invited = (team.chats?.[chatId] ?? []).filter((held) => held !== person);
     const { [chatId]: _was, ...rest } = team.chats ?? {};
@@ -1742,6 +1774,7 @@ export class LinkHost extends EventEmitter {
     return invited;
   }
   removeChatPeople(chatId) {
+    this.typing.clearChat(chatId);
     const team = this.store.data.team;
     const { [chatId]: _was, ...chats } = team.chats ?? {};
     const views = Object.fromEntries(Object.entries(team.views ?? {}).map(([memberId, held]) => {
@@ -1802,6 +1835,7 @@ export class LinkHost extends EventEmitter {
     this.device.forget(id);
     this.gadgets.forget(id);
     this.grants.forget(id);
+    this.typing.forgetSource(id);
     for (const [sid, session] of this.sessions) if (session.deviceId === id) this.sessions.delete(sid);
     for (const waiter of [...this.waiters]) if (waiter.session.deviceId === id) waiter.end();
     if (removed) this.emit("status");
@@ -2279,6 +2313,7 @@ export class LinkHost extends EventEmitter {
       if (method === "spaces.read") return this.spaceContent(principal, answer, state);
       // A chat that was deleted takes its invitations and everyone's marks on it along.
       if (method === "deleteChat") this.removeChatPeople(String(args[0]));
+      if (method === "send") this.typing.clearPerson(String(args[0]), personOf(principal));
       // A chat a member starts is read by them from the start: their unread is theirs, not the workspace's.
       else if (principal.kind === "member" && MAKES_CHAT.has(method) && typeof answer === "string" && answer) this.memberView(principal, "setChatFlags", [answer, { unread: false }], { chats: [{ id: answer, time: Date.now() }] });
       return answer;
@@ -2399,7 +2434,7 @@ export class LinkHost extends EventEmitter {
     if (!ownLooks) this.store.syncLooks((state.bots ?? []).map((bot) => bot.id));
     // A full live version must be newer than its indicators: an older phone's acknowledged
     // version then tells us whether it has already seen the latest non-text change.
-    const next = { quietLive: null, ...baseParts(state, this.meta(), ownLooks ? {} : this.store.data.looks, { credentials: this.credentials.list(), screen: this.store.data.screen, relay: !!this.relaySettings(), ...(this.headless() && { headless: true, display: this.display() }), screenSetBy: this.store.data.screenSetBy }) };
+    const next = { quietLive: null, ...baseParts(state, this.meta(), ownLooks ? {} : this.store.data.looks, { credentials: this.credentials.list(), screen: this.store.data.screen, relay: !!this.relaySettings(), typing: this.typingSnapshot(), ...(this.headless() && { headless: true, display: this.display() }), screenSetBy: this.store.data.screenSetBy }) };
     next.quietLive = quietLive(next.live);
     // These are the parts of an owner device with Admin mode on; one with it off gets a cut of them (viewParts).
     next.meta.you = { kind: "owner", admin: true };

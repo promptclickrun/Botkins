@@ -53,6 +53,7 @@ import { tokenOf, type DraftMention } from "./MentionMenu";
 import { composeSlashPrompt, type DraftCommand } from "./slashCommand";
 import { applyAppearance, startAppearance } from "./appearance";
 import { memberTeam, teamCan } from "./teamAccess";
+import { chatMentionPeople } from "./peopleView";
 import { leftEmpty, newChatToReuse } from "./emptyChat";
 import { allUnreadChats, botUnreadChats } from "./unread";
 import { chatsPageUnreadChats } from "./chatSections";
@@ -655,6 +656,11 @@ function App() {
   }
   function composer(key: string, placeholder: string) {
     const target = key === "home" ? state!.bots[0] : bot!;
+    const chatPeople = key !== "home" && chat ? chatMentionPeople(state!, chat) : [];
+    const canTyping =
+      key !== "home" &&
+      chatPeople.length > 0 &&
+      (!state?.remote?.using || state.remote.using.capabilities.includes("chat-typing-v1"));
     return (
       <Composer
         key={key}
@@ -692,6 +698,8 @@ function App() {
             ? chat!.botIds!.map((id) => state!.bots.find((b) => b.id === id)!).filter(Boolean)
             : undefined
         }
+        people={chatPeople.length ? chatPeople : undefined}
+        onTyping={canTyping ? (active) => void api["link.chat.typing"](key, active).catch(() => {}) : undefined}
       />
     );
   }

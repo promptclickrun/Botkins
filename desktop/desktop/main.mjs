@@ -88,6 +88,18 @@ const viewerGuests = new Set();
  * What the window shows: this computer's workspace, or the state of the other computer in use
  * (with this window's own look). `remote` says which, and lists the computers this app is paired to.
  */
+const withLocalHostMeta = (state) => {
+  if (!link) return state;
+  const invites = typeof link.chatInvites === "function" ? link.chatInvites() : null;
+  const chats = invites
+    ? (state.chats ?? []).map((chat) => (invites[chat.id]?.length ? { ...chat, invited: invites[chat.id] } : chat))
+    : state.chats;
+  return {
+    ...state,
+    chats,
+    ...(typeof link.typingSnapshot === "function" && { typing: link.typingSnapshot() }),
+  };
+};
 const appSnapshot = () => {
   const using = remote?.inUse() ?? null;
   return {
@@ -95,7 +107,7 @@ const appSnapshot = () => {
     // of the spaces, and with Admin mode off only what the owner is part of (desktop/admin-view.mjs).
     // The chats left come with the owner's own sections, which the link keeps ("chat-sections-v1").
     // Another computer's snapshot is already cut for this device by that computer's link.
-    ...(using ? remote.snapshot(workspace.state.settings) : withOwnerChatSections(ownerWindowView(workspace.snapshot(), link, adminMode?.get() === true), link)),
+    ...(using ? remote.snapshot(workspace.state.settings) : withOwnerChatSections(ownerWindowView(withLocalHostMeta(workspace.snapshot()), link, adminMode?.get() === true), link)),
     ...(!using && link ? { team: link.team() } : {}),
     phones: { revision: runtime.phoneRevision() },
     remote: { using, hosts: remote?.list() ?? [] },
