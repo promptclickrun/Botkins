@@ -35,6 +35,7 @@
 import { ALL_CARD, askDetail, botCard, CARD_AAD, cardOver } from "./cards.mjs";
 import { b64u, hkdf, random, seal } from "./crypto.mjs";
 import { proactiveSees } from "./proactive-rules.mjs";
+import { resolveRoutineTargets } from "./notify-targets.mjs";
 import { signWithRelayKey } from "./relay.mjs";
 import { Failure } from "./tools.mjs";
 
@@ -432,6 +433,9 @@ export class Push {
     if (run.panelId) return scheduled && failed ? "routines" : null;
     if (scheduled) {
       const entry = (chat.schedules ?? []).find((schedule) => schedule.id === run.scheduleId);
+      if (entry?.deliver?.to === "none") return null;
+      if (run.notifyTargets?.mode === "none") return null;
+      if (run.notifyTargets?.mode === "only") return "routines";
       // A routine the person made quiet says nothing, here or on the computer.
       return entry?.notify === false ? null : "routines";
     }
@@ -441,49 +445,82 @@ export class Push {
   onFinish(sends, targets, state, run, chats, bots) {
     const chat = chats.get(run.chatId);
     const kind = this.kindOf(run, chat);
+    const resolved =
+      kind === "routines" && !run.panelId
+        ? resolveRoutineTargets({
+            run,
+            chat,
+            team: this.store.data.team,
+            devices: this.store.data.devices,
+            botId: chat?.botId,
+          })
+        : null;
     // Text written on the way ("turn-timeline-v1": `interim`) is not the reply.
     const reply = [...(chat?.messages ?? [])].reverse().find((message) => message.runId === run.id && message.role !== "user" && !message.interim);
     const bot = bots.get(reply?.botId ?? chat?.botId);
     const name = bot?.name ?? "Botkins";
     const failed = run.status !== "Completed";
     const watching = this.attention?.();
+    const deliveryChat = run.delivery?.chatId ? chats.get(run.delivery.chatId) : null;
     for (const device of targets) {
       const person = device.memberId ?? "owner";
+      // A proactive alert is for the one person the bot looked out for, while they may still see that bot.
       if (run.proactive && (!chat || person !== (chat.createdBy ?? "owner") || !proactiveSees(this.store.data.team, person, chat.botId))) continue;
-      if (!this.maySeeChat(device, chat)) continue;
+      const canSeeChat = this.maySeeChat(device, chat);
       const record = this.store.push(device.id);
-      // The card is brought up to date whatever the notification choices are. It is not ended: it
-      // says "done" (or "stopped") with how long the turn took, stays for a while, and a new turn
-      // in the chat takes it over. Only after that while without one is it ended.
-      const key = device.id + ":" + run.chatId;
-      const activity = record.activities?.[run.chatId];
-      if (activity) {
-        const done = activityState(state, run.chatId, run, record.prefs.previews);
-        this.sent.set(key, { at: this.now(), text: JSON.stringify(done), over: true });
-        sends.push(this.activity(record, activity, "update", done, { urgent: true, staleIn: ACTIVITY_LINGER_MS / 1000 + 60 }));
-        this.stay(key, true, () => this.endActivity(device.id, run.chatId));
-      } else if (record.prefs.activities && this.started.has(key)) {
-        // A push started this chat's card, and the phone hasn't said where the card's updates go
-        // (the app was closed). The app is woken for a moment: it marks its card done itself and
-        // tells this computer the card's address for the next time.
-        this.started.delete(key);
-        sends.push({ token: record.token, env: record.env, type: "background", priority: 5, expiration: 600, payload: { aps: { "content-available": 1 }, w: 1 } });
+      if (canSeeChat) {
+        // The card is brought up to date whatever the notification choices are. It is not ended: it
+        // says "done" (or "stopped") with how long the turn took, stays for a while, and a new turn
+        // in the chat takes it over. Only after that while without one is it ended.
+        const key = device.id + ":" + run.chatId;
+        const activity = record.activities?.[run.chatId];
+        if (activity) {
+          const done = activityState(state, run.chatId, run, record.prefs.previews);
+          this.sent.set(key, { at: this.now(), text: JSON.stringify(done), over: true });
+          sends.push(this.activity(record, activity, "update", done, { urgent: true, staleIn: ACTIVITY_LINGER_MS / 1000 + 60 }));
+          this.stay(key, true, () => this.endActivity(device.id, run.chatId));
+        } else if (record.prefs.activities && this.started.has(key)) {
+          // A push started this chat's card, and the phone hasn't said where the card's updates go
+          // (the app was closed). The app is woken for a moment: it marks its card done itself and
+          // tells this computer the card's address for the next time.
+          this.started.delete(key);
+          sends.push({ token: record.token, env: record.env, type: "background", priority: 5, expiration: 600, payload: { aps: { "content-available": 1 }, w: 1 } });
+        }
       }
-      if (!kind || !this.wants(device, kind) || this.present(device.id, run.delivery?.chatId ?? run.chatId)) continue;
-      // An alert opens the chat a result was delivered to: it goes only to someone who is in that chat.
-      if (run.delivery?.chatId && run.delivery.chatId !== run.chatId && !this.maySeeChat(device, chats.get(run.delivery.chatId))) continue;
-      // The person is reading this chat on the computer itself: a reply there needs no second ping.
-      if (kind === "replies" && watching?.focused && (watching.chatId === undefined || watching.chatId === run.chatId)) continue;
+      if (!kind) continue;
+      const explicit = resolved?.explicit === true;
+      let openChatId;
+      if (explicit) {
+        if (resolved.silent || !resolved.deviceIds.has(device.id)) continue;
+        if (!this.wants(device, kind)) continue;
+        if (run.delivery?.chatId && this.maySeeChat(device, deliveryChat)) openChatId = run.delivery.chatId;
+        else if (canSeeChat) openChatId = run.chatId;
+        if (openChatId && this.present(device.id, openChatId)) continue;
+      } else {
+        if (!canSeeChat) continue;
+        if (!this.wants(device, kind) || this.present(device.id, run.delivery?.chatId ?? run.chatId)) continue;
+        // An alert opens the chat a result was delivered to: it goes only to someone who is in that chat.
+        if (run.delivery?.chatId && run.delivery.chatId !== run.chatId && !this.maySeeChat(device, deliveryChat)) continue;
+        // The person is reading this chat on the computer itself: a reply there needs no second ping.
+        if (kind === "replies" && watching?.focused && (watching.chatId === undefined || watching.chatId === run.chatId)) continue;
+        openChatId = run.delivery?.chatId ?? run.chatId;
+      }
       // A bot that looks out for the person speaks under its own name: never the name of the routine Botkins keeps for it.
       const title = run.proactive ? name : kind === "routines" ? run.title || name : chat?.title && !/^new chat$/i.test(chat.title) ? name + " · " + chat.title : name;
       // What the alert offers ("proactive-team-v1"): the phone's button asks the computer by these, and never holds the offer's words.
       const delivered = run.proactive && run.delivery?.chatId ? (chats.get(run.delivery.chatId)?.messages ?? []).find((message) => message.proactiveRunId === run.id) : run.proactive && run.delivery?.itemId ? (state.board ?? []).find((item) => item.id === run.delivery.itemId) : null;
       const offered = delivered?.alert?.offer && chat?.botId ? { a: { b: chat.botId, r: run.id } } : null;
-      const said = failed ? (run.status === "Failed" ? "Failed" : run.status) + (run.detail ? ": " + firstLine(run.detail) : "") : firstLine(reply?.text) || "Finished.";
+      const customMessage = !failed ? resolved?.message : null;
+      const said = failed ? (run.status === "Failed" ? "Failed" : run.status) + (run.detail ? ": " + firstLine(run.detail) : "") : firstLine(customMessage || reply?.text) || "Finished.";
       const text = record.prefs.previews ? said : failed ? "A run needs a look." : "New message";
       // A routine that sends its result to a chat is opened there, where the person reads it.
-      const alert = this.alert(device.id, record, { t: title.slice(0, 80), m: text, c: run.delivery?.chatId ?? run.chatId, k: kind === "routines" ? "routine" : "reply", ...offered }, { expiration: 900 });
-      if (!this.hold(device.id, record, run.chatId, alert, "finish")) sends.push(alert);
+      // When an explicit routine target cannot access either chat, omit `c` rather than leaking it.
+      const payload = { t: title.slice(0, 80), m: text, ...(openChatId && { c: openChatId }), k: kind === "routines" ? "routine" : "reply", ...offered };
+      const alert = this.alert(device.id, record, payload, {
+        expiration: 900,
+        ...(!openChatId && { group: "routine:" + (run.scheduleId ?? run.id) }),
+      });
+      if (!canSeeChat || !this.hold(device.id, record, run.chatId, alert, "finish")) sends.push(alert);
     }
   }
 

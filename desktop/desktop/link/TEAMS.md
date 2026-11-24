@@ -64,7 +64,7 @@ The host filters parts for each member session before sealing (`filterParts(part
 - `voice`: only with `agents.manage`, and then only the shared choices and what each provider has (`memberVoice`, no key and no address); it is for setting a bot's own voice (VOICE.md, "A voice of a bot's own"). `link.voice.options` needs `agents.manage` too.
 - `proactive`: the computer's switch and, for each bot their role sees, the settings its people share, the member's own entry in `people` and what their own check did (`memberProactive`). Never another person's entry, log or alerts. An owner device with Admin mode off is sent everyone's entry and no other person's activity (`ownerProactive`). See CONTRACT.md, "A bot's Proactive agent".
 - Never: `credentials`, `phones`, `asks` of the owner's chats, `voice` keys, `host` screen state, `projects`, `tasks`, wiki.
-- `team`: `{ me: { memberId, name, group: { id, name }, role: { name, perms, bots } }, team: { name } }`. Owner devices get the full team (below).
+- `team`: `{ me: { memberId, name, group: { id, name }, role: { name, perms, bots }, devices?: [{ id, name, kind, platform, connected, canNotify }] }, team: { name } }`. Owner devices get the full team (below).
 - `meta.you`: `{ kind: "member", memberId, name }` or `{ kind: "owner" }`.
 
 ## Bots and identity (decided by the owner: "trusted team")

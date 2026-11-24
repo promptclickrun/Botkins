@@ -178,7 +178,7 @@ test("routine tools are scoped to the calling bot and routine runs can't create 
   const pipChat = ws.createChat("pip");
   const a = activeTurn(ws, pipChat, {});
   const pip = toolMap(ws, "pip", pipChat, a.run, a.task);
-  assert.deepEqual(Object.keys(pip).sort(), ["routine_create", "routine_delete", "routine_list", "routine_pause", "routine_resume", "routine_update"]);
+  assert.deepEqual(Object.keys(pip).sort(), ["routine_create", "routine_delete", "routine_list", "routine_notify_targets", "routine_pause", "routine_resume", "routine_update"]);
   const created = JSON.parse(
     await pip.routine_create.handler({ name: "Inbox", instructions: "Remind the person to review their inbox.", cadence: "weekdays", time: "09:00", timezone: NY }),
   );
@@ -203,6 +203,8 @@ test("routine tools are scoped to the calling bot and routine runs can't create 
   const inRoutine = toolMap(ws, "pip", created.id, c.run, c.task);
   assert.equal(inRoutine.routine_create, undefined);
   assert.ok(inRoutine.routine_list);
+  assert.ok(inRoutine.routine_notify_targets);
+  assert.ok(inRoutine.routine_notify, "scheduled routine runs expose routine_notify");
   // A routine can't delete itself mid-run.
   await assert.rejects(async () => inRoutine.routine_delete.handler({ id: created.id }), /Stop the running reply/);
   ws.active.delete(created.id);
@@ -215,6 +217,191 @@ test("routine tools are scoped to the calling bot and routine runs can't create 
   await assert.rejects(async () => scout.routine_list.handler({}), /no longer active/);
   a.task.stopped = false;
   await pip.routine_delete.handler({ id: created.id }).catch(() => {});
+});
+
+test("routine notification targeting tools respect privacy, validate targets, and override runs cleanly", async (t) => {
+  const { ws } = setup(t);
+  const team = {
+    roles: [
+      { id: "r_member", name: "Member", bots: ["pip"] },
+      { id: "r_other", name: "Other", bots: ["scout"] },
+    ],
+    groups: [
+      { id: "g_pip", name: "Pip Team", roleId: "r_member" },
+      { id: "g_scout", name: "Scout Team", roleId: "r_other" },
+    ],
+    members: [
+      { id: "m_sarah", name: "Sarah", groupId: "g_pip", state: "active", devices: ["d_sarah_phone", "d_sarah_mac"] },
+      { id: "m_alex", name: "Alex", groupId: "g_pip", state: "active", devices: ["d_alex_phone"] },
+      { id: "m_other", name: "Outside", groupId: "g_scout", state: "active", devices: ["d_other_phone"] },
+    ],
+  };
+  const devices = [
+    { id: "d_owner_phone", name: "Owner iPhone", kind: "phone", platform: "ios" },
+    { id: "d_gadget", name: "Sensor", kind: "gadget", platform: "linux" },
+    { id: "d_sarah_phone", name: "Sarah iPhone", memberId: "m_sarah", kind: "phone", platform: "ios" },
+    { id: "d_sarah_mac", name: "Sarah Mac", memberId: "m_sarah", kind: "desktop", platform: "darwin" },
+    { id: "d_alex_phone", name: "Alex iPhone", memberId: "m_alex", kind: "phone", platform: "ios" },
+    { id: "d_other_phone", name: "Outside iPhone", memberId: "m_other", kind: "phone", platform: "ios" },
+  ];
+  const pushByDevice = {
+    d_owner_phone: { prefs: { routines: true } },
+    d_sarah_phone: { prefs: { routines: true } },
+    d_alex_phone: { prefs: { routines: false } },
+  };
+  ws.notifyTargetsOf = () => ({
+    host: { name: "Studio Mac", platform: "darwin", headless: false, canNotify: true },
+    team,
+    devices,
+    pushEnabled: (id) => pushByDevice[id]?.prefs?.routines === true,
+    ownerName: "Owner",
+  });
+
+  // Owner sees owner + members with access to pip (not m_other, not gadgets).
+  const ownerChat = ws.createChat("pip");
+  const ownerTurn = activeTurn(ws, ownerChat, {});
+  const ownerTools = toolMap(ws, "pip", ownerChat, ownerTurn.run, ownerTurn.task);
+  assert.equal(ownerTools.routine_notify, undefined, "normal chat turns do not get routine_notify");
+  const ownerTargets = JSON.parse(await ownerTools.routine_notify_targets.handler({}));
+  assert.deepEqual(
+    ownerTargets.people.map((p) => p.id),
+    ["owner", "m_sarah", "m_alex"],
+  );
+  assert.equal(
+    ownerTargets.people[0].devices.some((d) => d.id === "d_gadget"),
+    false,
+    "gadgets are excluded",
+  );
+  assert.equal(ownerTargets.people[0].devices.find((d) => d.id === "host").canNotify, true);
+  assert.equal(ownerTargets.people[2].devices.find((d) => d.id === "d_alex_phone").canNotify, false);
+
+  // Member caller sees eligible people by ID, plus ONLY their own devices (privacy).
+  const memberChat = ws.createChat("pip", "m_sarah");
+  const memberTurn = activeTurn(ws, memberChat, {});
+  memberTurn.task.author = { memberId: "m_sarah" };
+  const memberTools = toolMap(ws, "pip", memberChat, memberTurn.run, memberTurn.task);
+  const memberTargets = JSON.parse(await memberTools.routine_notify_targets.handler({}));
+  assert.deepEqual(
+    memberTargets.people.map((p) => p.id),
+    ["owner", "m_sarah", "m_alex"],
+  );
+  assert.equal(memberTargets.people.find((p) => p.id === "owner").devices, undefined, "member never sees owner devices or host");
+  assert.equal(memberTargets.people.find((p) => p.id === "m_alex").devices, undefined, "member never sees other members' devices");
+  assert.deepEqual(
+    memberTargets.people.find((p) => p.id === "m_sarah").devices.map((d) => d.id),
+    ["d_sarah_phone", "d_sarah_mac"],
+  );
+
+  // Owner creates a routine with notifyTargets (resolving by name + device id).
+  const created = JSON.parse(
+    await ownerTools.routine_create.handler({
+      name: "Standup",
+      instructions: "Send standup summary.",
+      cadence: "daily",
+      time: "09:00",
+      timezone: NY,
+      notifyTargets: { people: ["Sarah"], devices: ["host"] },
+    }),
+  );
+  assert.deepEqual(created.notifyTargets, { people: ["m_sarah"], devices: ["host"] });
+  assert.equal(created.notifySummary, "Sarah, Studio Mac");
+
+  // Contradictory notify: false + notifyTargets is rejected.
+  await assert.rejects(
+    async () =>
+      ownerTools.routine_update.handler({
+        id: created.id,
+        notify: false,
+        notifyTargets: { people: ["owner"] },
+      }),
+    /not both/,
+  );
+
+  // Member cannot target another person's device or host when creating a routine.
+  await assert.rejects(
+    async () =>
+      memberTools.routine_create.handler({
+        name: "Sneaky",
+        instructions: "Ping Alex's phone.",
+        cadence: "daily",
+        time: "10:00",
+        timezone: NY,
+        notifyTargets: { devices: ["d_alex_phone"] },
+      }),
+    /own devices|Unknown|ineligible/i,
+  );
+  await assert.rejects(
+    async () =>
+      memberTools.routine_create.handler({
+        name: "Sneaky Host",
+        instructions: "Ping host.",
+        cadence: "daily",
+        time: "10:00",
+        timezone: NY,
+        notifyTargets: { devices: ["host"] },
+      }),
+    /own devices|Unknown|ineligible/i,
+  );
+
+  // Duplicating a routine to another bot filters out targets ineligible for that bot.
+  const copiedId = ws.panels.routines.duplicate(created.id, "scout");
+  assert.deepEqual(
+    ws.panels.routines.find(copiedId).entry.notifyTargets,
+    { devices: ["host"] },
+    "Sarah has no access to scout, so only host survives",
+  );
+
+  // Destination note tells the agent about routine_notify_targets & routine_notify when multiple targets exist.
+  const note = ws.panels.routines.destinationNote(ws.chat(created.id), 1);
+  assert.match(note, /routine_notify_targets/);
+  assert.match(note, /routine_notify/);
+
+  // Routine run: routine_notify supports only (with warnings & custom message), last-call-wins, none, and default.
+  const runTurn = activeTurn(ws, created.id, { scheduleId: 1, trigger: "scheduled" });
+  const runTools = toolMap(ws, "pip", created.id, runTurn.run, runTurn.task);
+
+  const res1 = JSON.parse(
+    await runTools.routine_notify.handler({
+      mode: "only",
+      people: ["m_alex"],
+      message: "Deploy check needs Alex",
+    }),
+  );
+  assert.equal(res1.ok, true);
+  assert.equal(res1.mode, "only");
+  assert.equal(res1.warnings.length, 1, "Alex's phone has routines disabled");
+  assert.deepEqual(runTurn.run.notifyTargets, { mode: "only", people: ["m_alex"], message: "Deploy check needs Alex" });
+
+  // Last-call-wins replaces the previous override.
+  const res2 = JSON.parse(await runTools.routine_notify.handler({ mode: "none" }));
+  assert.equal(res2.mode, "none");
+  assert.deepEqual(res2.targets, { host: false, devices: [] });
+  assert.deepEqual(runTurn.run.notifyTargets, { mode: "none" });
+
+  // mode: "default" removes run.notifyTargets.
+  const res3 = JSON.parse(await runTools.routine_notify.handler({ mode: "default" }));
+  assert.equal(res3.mode, "default");
+  assert.equal(runTurn.run.notifyTargets, undefined);
+
+  // mode: "only" without targets is rejected; deliver.to === "none" hides routine_notify.
+  await assert.rejects(async () => runTools.routine_notify.handler({ mode: "only" }), /at least one/);
+  ws.active.delete(created.id);
+  const silent = JSON.parse(
+    await ownerTools.routine_create.handler({
+      name: "Background",
+      instructions: "Just run.",
+      cadence: "daily",
+      time: "08:00",
+      timezone: NY,
+      deliver: { to: "none" },
+    }),
+  );
+  const silentTurn = activeTurn(ws, silent.id, { scheduleId: 1, trigger: "scheduled" });
+  const silentTools = toolMap(ws, "pip", silent.id, silentTurn.run, silentTurn.task);
+  assert.equal(silentTools.routine_notify, undefined, "no-output routines do not expose routine_notify");
+  ws.active.delete(silent.id);
+  ws.active.delete(ownerChat);
+  ws.active.delete(memberChat);
 });
 
 test("quiet hours include the start, exclude the end and can cross midnight", () => {
@@ -253,6 +440,63 @@ test("notification decisions follow the toggles, focus, quiet hours and run kind
   assert.equal(decide(failed, ctx()).body, "Failed: Copilot is offline");
   const runNow = { ...reply, run: { ...reply.run, title: "Inbox", trigger: "manual", scheduleId: 1 } };
   assert.ok(decide(runNow, ctx({ focused: true })), "Run now counts as a routine run");
+
+  // Targeted routine host notifications: notifyTargets, run.notifyTargets, custom message, and failure fallback.
+  const hostRoutine = {
+    ...routine,
+    chat: {
+      ...chat,
+      schedules: [{ id: 1, routine: true, notify: true, notifyTargets: { people: ["m_sarah"] } }],
+    },
+  };
+  assert.equal(decide(hostRoutine, ctx()), null, "host skipped when routine targets only a team member");
+  const hostIncluded = {
+    ...routine,
+    chat: {
+      ...chat,
+      schedules: [{ id: 1, routine: true, notify: true, notifyTargets: { devices: ["host"] } }],
+    },
+  };
+  assert.deepEqual(decide(hostIncluded, ctx()), { title: "Pip · Inbox", body: "Here you go", chatId: "c1" });
+  const quietRoutineWithOverride = {
+    ...routine,
+    chat: { ...chat, schedules: [{ id: 1, routine: true, notify: false }] },
+    run: { ...routine.run, notifyTargets: { mode: "only", people: ["owner"], message: "Urgent: check deploy" } },
+  };
+  assert.deepEqual(
+    decide(quietRoutineWithOverride, ctx()),
+    { title: "Pip · Inbox", body: "Urgent: check deploy", chatId: "c1" },
+    "run.notifyTargets mode:only overrides quiet routine and supplies custom message",
+  );
+  const suppressedRun = {
+    ...hostIncluded,
+    run: { ...routine.run, notifyTargets: { mode: "none" } },
+  };
+  assert.equal(decide(suppressedRun, ctx()), null, "run.notifyTargets mode:none silences host");
+  const failedMemberOnly = {
+    ...hostRoutine,
+    run: { ...routine.run, status: "Needs you", detail: "Model crashed" },
+  };
+  assert.equal(decide(failedMemberOnly, ctx()), null, "member-only routine keeps host quiet even on failure");
+  const failedHostTargeted = {
+    ...hostIncluded,
+    run: {
+      ...routine.run,
+      status: "Needs you",
+      detail: "Model crashed",
+      notifyTargets: { mode: "only", devices: ["host"], message: "Custom message should not hide failure" },
+    },
+  };
+  assert.equal(
+    decide(failedHostTargeted, ctx())?.body,
+    "Failed: Model crashed",
+    "failed targeted run alerts host with failure detail instead of custom message",
+  );
+  const failedSuppressed = {
+    ...hostIncluded,
+    run: { ...routine.run, status: "Needs you", detail: "Model crashed", notifyTargets: { mode: "none" } },
+  };
+  assert.equal(decide(failedSuppressed, ctx()), null, "explicit mode:none suppresses even failure alerts");
 
   const panel = { ...reply, run: { ...reply.run, panelId: "p", trigger: "scheduled" } };
   assert.equal(decide(panel, ctx()), null, "successful panel refreshes stay quiet");

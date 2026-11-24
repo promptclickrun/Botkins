@@ -1045,7 +1045,7 @@ const emptySkills = { folders: [], plugins: [], disabled: [] };
 /** Everyone a chat can be shared with: the owner and each member, by id and name. */
 export const teamPeople = (team, ownerName = "") => [{ id: OWNER, name: ownerName || "Owner" }, ...(team?.members ?? []).map((member) => ({ id: member.id, name: member.name }))];
 
-export function teamPart(team, forOwner, principal = { kind: "owner" }, ownerName = "") {
+export function teamPart(team, forOwner, principal = { kind: "owner" }, ownerName = "", memberDevices) {
   if (forOwner) {
     return {
       people: teamPeople(team, ownerName),
@@ -1065,7 +1065,13 @@ export function teamPart(team, forOwner, principal = { kind: "owner" }, ownerNam
   const role = roleFor(principal, team);
   const group = team?.groups?.find((item) => item.id === principal?.groupId);
   return {
-    me: { memberId: principal.memberId, name: principal.name, group: { id: group?.id ?? principal.groupId, name: group?.name ?? "Everyone" }, role: { name: role?.name ?? "", perms: role?.perms ?? {}, bots: role?.bots ?? [] } },
+    me: {
+      memberId: principal.memberId,
+      name: principal.name,
+      group: { id: group?.id ?? principal.groupId, name: group?.name ?? "Everyone" },
+      role: { name: role?.name ?? "", perms: role?.perms ?? {}, bots: role?.bots ?? [] },
+      ...(Array.isArray(memberDevices) && { devices: memberDevices }),
+    },
     team: { name: team?.name ?? "" },
     people: teamPeople(team, ownerName),
     linkSharing: team?.linkSharing === true,
@@ -1195,7 +1201,7 @@ export function filterParts(parts, principal, team, extra = {}) {
   if (mayManage && parts.settings?.fastMode) out.settings.fastMode = parts.settings.fastMode;
   out.revs = {};
   // The owner's name as a person comes with the owner's own team part; else the computer's name stands in.
-  out.team = teamPart(team, false, principal, parts.team?.people?.find((person) => person.id === OWNER)?.name ?? parts.meta?.name);
+  out.team = teamPart(team, false, principal, parts.team?.people?.find((person) => person.id === OWNER)?.name ?? parts.meta?.name, extra.memberDevices);
   // Who is on the team is for someone who can start a chat and invite to it. Anyone else gets the
   // owner and the people of the chats they are in.
   if (!can("agents", "chat")) {

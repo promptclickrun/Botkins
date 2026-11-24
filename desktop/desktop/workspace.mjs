@@ -17,6 +17,7 @@ import { tmpdir } from "node:os";
 
 import { Panels, textField } from "./panels.mjs";
 import { isSilent, mayBeSilent, visibleStream } from "./link/silent-reply.mjs";
+import { resolveRoutineTargets as resolveRoutineNotifyTargets } from "./link/notify-targets.mjs";
 import { Providers } from "./providers/index.mjs";
 import { CopilotProvider } from "./providers/copilot/index.mjs";
 import { Integrations } from "./integrations.mjs";
@@ -173,6 +174,8 @@ export class Workspace {
     this.peopleOf = options?.people ?? null;
     // (chatId) => whether the computer's owner is one of a chat's people, when the link answers that itself.
     this.ownerIn = options?.notifiesOwner ?? null;
+    // () => { team, devices, host, profiles, ownerName }: context for granular routine alerts ("routine-notify-targets-v1").
+    this.notifyTargetsOf = options?.notifyTargets ?? null;
     // (space, person) => "own" | "edit" | "view" | null: what a person may do with a space, from
     // the link, which keeps who a space is shared with (desktop/spaces.mjs).
     this.spaceCanOf = options?.spaceCan ?? null;
@@ -1410,6 +1413,45 @@ export class Workspace {
       // The rule below is the same one without invites.
     }
     return this.inChat(chatId, "owner") || !this.state.chats.some((item) => item.id === chatId);
+  }
+  /** Context for routine notification targeting ("routine-notify-targets-v1"), safe when no link is attached. */
+  notifyTargetsContext(botId) {
+    let raw = null;
+    try {
+      raw = this.notifyTargetsOf?.() ?? null;
+    } catch {
+      raw = null;
+    }
+    const team = raw?.team ?? this.teamOf();
+    const devices = Array.isArray(raw?.devices) ? raw.devices : [];
+    const headless = raw?.host?.headless === true;
+    const hostCanNotify = !headless && this.state?.settings?.notifications?.routines !== false && raw?.host?.canNotify !== false;
+    return {
+      botId,
+      team,
+      devices,
+      host: {
+        name: raw?.host?.name || "This computer",
+        platform: raw?.host?.platform || process.platform,
+        headless,
+        canNotify: hostCanNotify,
+        ...(raw?.host?.profileLinked && { profileLinked: true }),
+      },
+      profiles: raw?.profiles ?? null,
+      ownerName: raw?.ownerName || team?.people?.find((person) => person.id === "owner")?.name || "",
+    };
+  }
+  /** Resolves the concrete host + device targets for a finished routine run. */
+  resolveRoutineTargets(chat, run) {
+    const entry = chat?.schedules?.find((item) => item.id === run?.scheduleId && item.routine);
+    if (!entry) return null;
+    const ctx = this.notifyTargetsContext(chat.botId);
+    return resolveRoutineNotifyTargets({
+      ...ctx,
+      entry,
+      run,
+      chatNotifiesOwner: this.notifiesOwner(chat.id),
+    });
   }
   accessForTurn(chat, task) {
     // Two people's limits apply to a turn: those of the chat's creator, whose chat it is, and

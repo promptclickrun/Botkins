@@ -118,6 +118,17 @@ export function snapshotOf(parts, own = {}) {
   return {
     settings,
     ...(parts.team && { team: parts.team }),
+    ...(parts.phones && typeof parts.phones === "object" && {
+      remotePhones: Object.entries(parts.phones)
+        .filter(([, phone]) => phone?.kind !== "gadget")
+        .map(([id, phone]) => ({
+          id,
+          name: phone.name,
+          kind: phone.kind,
+          platform: phone.platform,
+          canNotify: phone.push?.routines === true,
+        })),
+    }),
     bots: parts.bots ?? [],
     sections: parts.sections ?? [],
     // The paired person's own sections on the Chats page ("chat-sections-v1"); each chat says its own.

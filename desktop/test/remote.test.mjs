@@ -69,6 +69,21 @@ test("the host's parts become the state the window reads", () => {
   assert.equal(snapshotOf({ ...parts, meta: { ...parts.meta, you: { kind: "owner", admin: false } } }).adminMode, false);
   assert.equal(snapshotOf({ ...parts, meta: { ...parts.meta, you: { kind: "owner", admin: true } } }).adminMode, true);
   assert.equal("adminMode" in snapshotOf({ ...parts, meta: { ...parts.meta, you: { kind: "member", memberId: "m_avery" } } }), false);
+  // Paired phones from parts.phones are mapped to remotePhones (excluding gadgets) with canNotify.
+  const withPhones = snapshotOf({
+    ...parts,
+    phones: {
+      d_phone: { name: "Alex iPhone", kind: "phone", platform: "ios", push: { routines: true }, sources: {} },
+      d_muted: { name: "Quiet iPhone", kind: "phone", platform: "ios", push: { routines: false }, sources: {} },
+      d_mac: { name: "Desk Mac", kind: "desktop", platform: "darwin", sources: {} },
+      d_gadget: { name: "Sensor", kind: "gadget", platform: "linux", sources: {} },
+    },
+  });
+  assert.deepEqual(withPhones.remotePhones, [
+    { id: "d_phone", name: "Alex iPhone", kind: "phone", platform: "ios", canNotify: true },
+    { id: "d_muted", name: "Quiet iPhone", kind: "phone", platform: "ios", canNotify: false },
+    { id: "d_mac", name: "Desk Mac", kind: "desktop", platform: "darwin", canNotify: false },
+  ]);
   const empty = snapshotOf({});
   assert.deepEqual([empty.bots, empty.chats, empty.runs, empty.requests, empty.streams, empty.settings], [[], [], [], [], {}, {}], "a host that hasn't answered yet is an empty workspace, not a crash");
 });

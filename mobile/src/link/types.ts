@@ -272,7 +272,7 @@ export type Role = {
   bots: "all" | string[];
 };
 export type Group = { id: string; name: string; roleId: string };
-export type MemberDevice = { id: string; name: string; person?: string; kind: "phone" | "desktop"; platform: string; connected: boolean };
+export type MemberDevice = { id: string; name: string; person?: string; kind: "phone" | "desktop"; platform: string; connected: boolean; canNotify?: boolean };
 export type Member = { id: string; name: string; groupId: string; joinedAt: number; deviceIds: string[]; devices?: MemberDevice[] };
 export type Invite = {
   id: string;
@@ -294,7 +294,7 @@ export type TeamPart =
   | {
       people?: Person[];
       linkSharing?: boolean;
-      me: { memberId: string; name: string; group: { id: string; name: string }; role: { name: string; perms: Record<Scope, string[]>; bots: "all" | string[] } };
+      me: { memberId: string; name: string; group: { id: string; name: string }; role: { name: string; perms: Record<Scope, string[]>; bots: "all" | string[] }; devices?: MemberDevice[] };
       team: { name: string };
     };
 
@@ -462,6 +462,8 @@ export type ChatSchedule = {
   deliver?: RoutineDelivery;
   /** False when the routine sends no notification. */
   notify?: boolean;
+  /** Specific people ("owner" or member ids) and/or device ids ("host" or paired device ids) to notify ("routine-notify-targets-v1"). */
+  notifyTargets?: RoutineNotifyTargets;
   createdAt?: number;
   finishedAt?: number;
   /** A script routine's script: it runs on the computer with no model ("routine-scripts-v1"). */
@@ -469,6 +471,10 @@ export type ChatSchedule = {
   /** On a script routine: after the script, the bot follows `prompt` with the script's output. */
   followUp?: boolean;
 };
+/** Explicit routine notification targets ("routine-notify-targets-v1"). Absent means everyone allowed. */
+export type RoutineNotifyTargets = { people?: string[]; devices?: string[] };
+/** Per-run notification override set by an agent via `routine_notify` ("routine-notify-targets-v1"). */
+export type RunNotifyTargets = { mode: "only" | "none" | "default"; people?: string[]; devices?: string[]; message?: string };
 /**
  * Where a routine's result lands when a run finishes. "routine" (and nothing) keeps it in the
  * routine's own chat; "chat" also posts it as a message from the bot in the person's chat with it
@@ -487,6 +493,8 @@ export type RoutineInput = {
   timezone?: string;
   deliver?: RoutineDelivery;
   notify?: boolean;
+  /** Specific notification targets ("routine-notify-targets-v1"). null resets to everyone; omitted on an edit keeps the existing targets. */
+  notifyTargets?: RoutineNotifyTargets | null;
   /** A script that runs on the computer with no model ("routine-scripts-v1"; the owner's only). null on an edit takes it away. */
   script?: string | null;
   followUp?: boolean;
@@ -621,6 +629,7 @@ export type RunSummary = {
   summary?: string;
   panelId?: string;
   scheduleId?: number;
+  notifyTargets?: RunNotifyTargets;
   usage?: Usage;
 };
 export type Run = RunSummary & {
@@ -1489,6 +1498,7 @@ export type PairedDevice = {
   createdAt: number;
   lastSeenAt: number;
   connected: boolean;
+  canNotify?: boolean;
   current?: boolean;
 };
 /**
