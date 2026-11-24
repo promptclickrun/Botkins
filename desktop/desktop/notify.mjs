@@ -67,7 +67,7 @@ export function decide(event, { settings, focused, now = new Date(), timeZone, m
   if (!run || run.notify === false || run.status === "Stopped" || run.status === "Working" || chat?.temporary) return null;
   const failed = run.status !== "Completed";
   const routine = run.scheduleId != null || run.trigger === "scheduled";
-  if (routine && run.status === "Completed" && run.noOutput === true) return null;
+  if (run.status === "Completed" && (run.silent || (routine && run.noOutput === true))) return null;
   // A no-output routine is deliberately silent even when its saved notify flag is old or absent.
   if (run.scheduleId != null && chat?.schedules?.find((s) => s.id === run.scheduleId)?.deliver?.to === "none") return null;
   // A routine the person set to run quietly says nothing, whatever came of the run.

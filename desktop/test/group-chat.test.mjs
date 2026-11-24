@@ -97,6 +97,25 @@ test("two members answer in order, each from its own session, and the second see
   assert.equal(log.sent[2][1], "Scout: Scout here.\n\nPerson: Again\n\n(Reply as Pip.)");
 });
 
+test("a silent group member leaves the next member free to reply", async (t) => {
+  const { ws, log } = setup(t, async id => ({ data: { content: id.endsWith("-pip") ? "[SILENT]" : "Hello!" } }));
+  const chat = ws.createGroupChat(["pip", "scout"]);
+  await ws.send(chat, "Hello both");
+  assert.deepEqual(ws.chat(chat).messages.map(m => m.text), ["Hello both", "Hello!"]);
+  assert.ok(!log.sent[1][1].includes("[SILENT]"));
+});
+
+test("an entirely silent group turn completes without marking the chat unread", async (t) => {
+  const { ws } = setup(t, async () => ({ data: { content: " [SILENT] " } }));
+  const chat = ws.createGroupChat(["pip", "scout"]);
+  await ws.send(chat, "Hello both");
+  const run = ws.state.runs[0];
+  assert.equal(run.status, "Completed");
+  assert.equal(run.noOutput, true);
+  assert.ok(!ws.chat(chat).unread);
+  assert.deepEqual(ws.chat(chat).messages.map(m => m.role), ["user"]);
+});
+
 test("@mentions choose who answers", async (t) => {
   let ws;
   const ctx = setup(t, async (id) => ({ data: { content: named(ws)(id) + " ok" } }));

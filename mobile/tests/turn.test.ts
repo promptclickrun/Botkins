@@ -54,6 +54,17 @@ function shape(items: Item[]): string[] {
 
 const ask: Message = { role: "user", text: "Do the thing", runId: "r1", time: at(0) };
 
+test("saved silent replies leave no chat row and preserve later message indices", () => {
+  const messages: Message[] = [
+    { role: "user", text: "[SILENT]", runId: "r1" },
+    { role: "assistant", text: " [SILENT] ", runId: "r1" },
+    { role: "assistant", text: "[SILENT]" },
+    { role: "assistant", text: "[SILENT] means no reply." },
+  ];
+  const items = chatTimeline(input({ messages, from: 30 }));
+  assert.deepEqual(items.flatMap(item => item.kind === "message" ? [item.index] : []), [30, 33]);
+});
+
 test("a steer from a computer without the capability lands between the steps around it, while the turn runs and after", () => {
   const steer: Message = { role: "user", text: "Use staging", steeredRunId: "r1", time: at(5) };
   const steps = [step("a", 1), step("b", 3), step("c", 7, { status: "Running", finished: undefined })];

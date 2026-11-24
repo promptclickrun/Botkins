@@ -46,12 +46,6 @@ test("a routine that replies [SILENT] completes with no message, delivery or not
   await ws.panels.routines.run(routine);
   assert.equal(ws.state.runs[0].silent, undefined, "only the bare word is silent");
   assert.equal(ws.chat(target).messages.length, 1);
-
-  script.reply = "[SILENT]";
-  const chat = ws.createChat("pip");
-  await ws.send(chat, "Say it.");
-  await ws.active.get(chat)?.done;
-  assert.equal(ws.chat(chat).messages.findLast((m) => m.role === "assistant").text, "[SILENT]", "a person's chat shows it as written");
 });
 
 test("a no-output routine completes on idle without publishing or notifying its reply", async (t) => {
