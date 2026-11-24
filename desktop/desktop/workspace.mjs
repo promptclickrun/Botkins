@@ -62,6 +62,7 @@ import {
 } from "./canvas.mjs";
 import { Agents, instructionsField, migrateAgents, summaryField } from "./agents.mjs";
 import { linkLooks, lookField, migrateLooks, nextLook } from "./looks.mjs";
+import { starterById } from "./starters.mjs";
 import { botVoiceField } from "./link/voice.mjs";
 import { Board } from "./board.mjs";
 import { Projects } from "./projects.mjs";
@@ -689,6 +690,12 @@ export class Workspace {
     };
     // `avatar` (a silhouette from an earlier version, which a phone or a template may still send) is not kept.
     bot.look = data.look ? lookField(data.look) : nextLook(bot.id, this.state.bots.map((b) => b.look));
+    // Made from a starter (desktop/starters.mjs): kept so the Proactive setup can offer itself to it.
+    const starter = starterById(data.starter);
+    if (starter) {
+      bot.starter = starter.id;
+      if (starter.suggestProactive) bot.suggestProactive = true;
+    }
     // A voice of the bot's own (desktop/link/voice.mjs, botVoiceField): checked here, and kept only when something is set.
     const voice = data.voice === undefined ? null : botVoiceField(data.voice);
     if (voice) bot.voice = voice;

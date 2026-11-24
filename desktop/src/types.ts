@@ -34,6 +34,10 @@ export type Bot = {
   access?: BotAccessGrant;
   /** The existing agent this bot was made from (ImportableAgent). The bot is a copy of it. */
   origin?: { provider: string; agent: string; file?: string };
+  /** The starter this bot was made from (desktop/starters.mjs), kept after a rename. */
+  starter?: string;
+  /** Made from a starter that should be offered the Proactive agent (desktop/starters.mjs). */
+  suggestProactive?: boolean;
   /** A voice of this bot's own ("bot-voice-v1"). A field it leaves out is the same as Settings › Voice. */
   voice?: BotVoice;
 };
@@ -580,6 +584,8 @@ declare global {
           Partial<Pick<Bot, "look" | "summary">> & {
             /** The key of the existing agent the form started from. */
             agent?: string;
+            /** The starter the form started from (desktop/starters.mjs). */
+            starter?: string;
           },
       ): Promise<string>;
       /** The person's existing agents that can become bots. */

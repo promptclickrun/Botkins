@@ -14,6 +14,7 @@ import { useSpacesOn } from "@/features/spaces/data";
 import { HomePins } from "@/features/spaces/HomePins";
 import { makeSeenSignal, TodayContent } from "@/features/today/Today";
 import { addable } from "@/features/bots/agents";
+import { STARTERS } from "../../../link-host/starters.mjs";
 import type { AgentRequest, Bot, ChatSummary } from "@/link/types";
 import { activityLabel, isConversation, useBotActivity, useBots, useCan, useChats, usePart, useCanArrange } from "@/state/hooks";
 import { api, attempt } from "@/state/link";
@@ -82,7 +83,8 @@ function Placeholder() {
 
 /**
  * A computer with no bots yet. When the person already has agents in a provider's own tool, bringing
- * them in comes first, as in the app on the computer; otherwise, or if they prefer, a new bot.
+ * them in comes first, as in the app on the computer; otherwise the three starters
+ * (link-host/starters.mjs), each opening New bot filled in, or a bot of the person's own.
  */
 function FirstBot() {
   const online = useApp((state) => state.link === "online");
@@ -100,7 +102,7 @@ function FirstBot() {
     };
   }, [online, canCreate]);
   if (!canCreate) return <EmptyState art={<Mascot size={104} state="waiting" />} title="No bots are available yet" text="Your team role doesn't give you a bot to use." />;
-  if (!found) return <EmptyState art={<Mascot size={104} state="completed" />} title="Make your first bot" action="Create a bot" onAction={() => router.push("/bot/new")} />;
+  if (!found) return <Starters />;
   return (
     <View>
       <EmptyState
@@ -112,6 +114,29 @@ function FirstBot() {
         style={{ paddingBottom: space.sm }}
       />
       <Button title="Create a new bot instead" variant="ghost" onPress={() => router.push("/bot/new")} style={{ alignSelf: "center" }} />
+    </View>
+  );
+}
+
+/** The three starters: one opens New bot filled in, and the person changes what they like there. */
+function Starters() {
+  return (
+    <View>
+      <EmptyState art={<Mascot size={104} state="completed" />} title="Make your first bot" text="Start with one of these, or make your own." style={{ paddingBottom: space.sm }} />
+      <Group flat inset={space.lg + 40 + space.md}>
+        {STARTERS.map((starter) => (
+          <Row
+            key={starter.id}
+            title={starter.name}
+            subtitle={starter.summary}
+            subtitleLines={2}
+            chevron
+            leading={<BotAvatar look={{ ...starter.look }} size={40} badge={false} />}
+            onPress={() => router.push({ pathname: "/bot/new", params: { starter: starter.id } })}
+          />
+        ))}
+      </Group>
+      <Button title="Make your own" variant="ghost" onPress={() => router.push("/bot/new")} style={{ alignSelf: "center" }} />
     </View>
   );
 }

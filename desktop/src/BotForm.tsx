@@ -6,6 +6,7 @@ import { availableHeads, freshLook } from "./botkins";
 import type { BotLook, BotTemplate, ImportableAgent, MarketAgent, MarketAgentTemplate, State } from "./types";
 import { supportsAgentTemplates } from "./MarketAgents";
 import { errorText } from "./SettingsRows";
+import { type Starter, starterById, STARTERS } from "../desktop/starters.mjs";
 import "./agents.css";
 import "./settings.css";
 import "./botpage.css";
@@ -22,6 +23,7 @@ export default function BotForm({
   taken,
   remote,
   start,
+  starter: firstStarter,
 }: {
   created: (id: string) => void;
   fail: (e: unknown) => void;
@@ -36,6 +38,8 @@ export default function BotForm({
   remote?: State["remote"];
   /** An agent template from Marketplace › Agents to start from: the form opens filled in from it. */
   start?: MarketAgentTemplate;
+  /** A starter's id (desktop/starters.mjs) to start from, when there is no `start`. */
+  starter?: string;
 }) {
   const [found, setFound] = useState<ImportableAgent[]>([]);
   const agents = given ?? found;
@@ -52,19 +56,37 @@ export default function BotForm({
     if (!look) return freshLook(taken, characters);
     return characters.some((head) => head.id === look.head) ? look : { ...look, head: freshLook(taken, characters).head };
   };
-  const [look, setLook] = useState<BotLook>(() => formLook(start?.look));
+  const first = start ? undefined : starterById(firstStarter);
+  const filled = start ?? first;
+  const [look, setLook] = useState<BotLook>(() => formLook(filled?.look));
+  /** The starter the form was filled from, until another start is chosen. */
+  const [starterId, setStarterId] = useState(first?.id);
+  const starter = starterById(starterId);
   const [studio, setStudio] = useState(false);
   const [mine, setMine] = useState<string>();
   /** The marketplace template the form was filled from, until another start is chosen. */
   const [market, setMarket] = useState(start);
-  const [name, setName] = useState(start?.name ?? "");
-  const [role, setRole] = useState(start?.role ?? "");
-  const [summary, setSummary] = useState(start?.summary ?? "");
-  const [instructions, setInstructions] = useState(start?.instructions ?? "");
+  const [name, setName] = useState(filled?.name ?? "");
+  const [role, setRole] = useState(filled?.role ?? "");
+  const [summary, setSummary] = useState(filled?.summary ?? "");
+  const [instructions, setInstructions] = useState(filled?.instructions ?? "");
   const [busy, setBusy] = useState(false);
   const [picking, setPicking] = useState<Picker>();
   const chosen = saved.find((t) => t.id === mine);
+  function useStarter(s: Starter) {
+    setStarterId(s.id);
+    setMarket(undefined);
+    setMine(undefined);
+    setAgentKey(undefined);
+    setName(s.name);
+    setRole(s.role);
+    setSummary(s.summary);
+    setInstructions(s.instructions);
+    setLook(formLook(s.look));
+    setPicking(undefined);
+  }
   function useMarket(t: MarketAgentTemplate) {
+    setStarterId(undefined);
     setMarket(t);
     setMine(undefined);
     setAgentKey(undefined);
@@ -76,6 +98,7 @@ export default function BotForm({
     setPicking(undefined);
   }
   function useAgent(a: ImportableAgent) {
+    setStarterId(undefined);
     setMarket(undefined);
     setMine(undefined);
     setAgentKey(a.key);
@@ -86,6 +109,7 @@ export default function BotForm({
     setPicking(undefined);
   }
   function useMine(t: BotTemplate) {
+    setStarterId(undefined);
     setMarket(undefined);
     setMine(t.id);
     setAgentKey(undefined);
@@ -121,6 +145,7 @@ export default function BotForm({
             look,
             ...(summary.trim() && { summary: summary.trim() }),
             ...(agent && { agent: agent.key }),
+            ...(starter && { starter: starter.id }),
           });
           created(id);
         } catch (e) {
@@ -139,6 +164,8 @@ export default function BotForm({
           saved={saved}
           agents={agents}
           agentKey={agentKey}
+          starterId={starterId}
+          useStarter={useStarter}
           useMarket={useMarket}
           useMine={useMine}
           useAgent={useAgent}
@@ -226,7 +253,7 @@ export default function BotForm({
         <textarea
           name="instructions"
           placeholder="How should this bot help? What should it always or never do?"
-          rows={chosen || agent || market ? 6 : 5}
+          rows={chosen || agent || market || starter ? 6 : 5}
           required
           maxLength={30000}
           value={instructions}
@@ -267,6 +294,8 @@ function TemplateMenu({
   saved,
   agents,
   agentKey,
+  starterId,
+  useStarter,
   useMarket,
   useMine,
   useAgent,
@@ -281,6 +310,8 @@ function TemplateMenu({
   saved: BotTemplate[];
   agents: ImportableAgent[];
   agentKey?: string;
+  starterId?: string;
+  useStarter: (s: Starter) => void;
   useMarket: (t: MarketAgentTemplate) => void;
   useMine: (t: BotTemplate) => void;
   useAgent: (a: ImportableAgent) => void;
@@ -362,6 +393,18 @@ function TemplateMenu({
       )}
       {open === "templates" && (
         <div className="template-pop">
+          <div className="template-section" role="group" aria-label="Starters">
+            <span className="template-heading">Starters</span>
+            {STARTERS.map((s) => (
+              <button type="button" key={s.id} className="template-item" aria-label={s.name} aria-pressed={starterId === s.id} onClick={() => useStarter(s)}>
+                <BotAvatar look={s.look} size={32} />
+                <span>
+                  <strong>{s.name}</strong>
+                  <small>{s.summary}</small>
+                </span>
+              </button>
+            ))}
+          </div>
           <div className="template-section" role="group" aria-label="Marketplace templates">
             <span className="template-heading">Marketplace</span>
             {supportsAgentTemplates(remote) ? <MarketTemplates key={remote?.using?.id} pick={useMarket} /> : (

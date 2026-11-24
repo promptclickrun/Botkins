@@ -169,8 +169,13 @@ export type Bot = {
   sectionId?: string | null;
   access?: BotAccessGrant;
   origin?: { provider: string; agent: string; file?: string };
+  /** The starter this bot was made from (link-host/starters.mjs), kept after a rename. */
+  starter?: string;
+  /** Made from a starter that should be offered the Proactive agent (link-host/starters.mjs). */
+  suggestProactive?: boolean;
 };
-export type BotInput = Pick<Bot, "name" | "role" | "instructions" | "face"> & Partial<Pick<Bot, "avatar" | "summary">>;
+/** `starter` names the starter the bot was made from; an older computer leaves it out. */
+export type BotInput = Pick<Bot, "name" | "role" | "instructions" | "face"> & Partial<Pick<Bot, "avatar" | "summary" | "starter">>;
 /** An agent the person already has in a provider's own tool (a Copilot or Codex agent), which can become a bot. */
 export type ImportableAgent = {
   key: string;

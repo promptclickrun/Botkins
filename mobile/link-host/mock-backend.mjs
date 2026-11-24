@@ -10,6 +10,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { basename, join, posix } from "node:path";
 import { fileURLToPath } from "node:url";
 import { demoGitHub } from "./mock-prs.mjs";
+import { starterById } from "./starters.mjs";
 import { DemoSignIns } from "./mock-signin.mjs";
 import { DemoUpdates } from "./mock-update.mjs";
 import { uploadSkill } from "./skill-import.mjs";
@@ -2092,6 +2093,9 @@ export class MockBackend {
     // Bots
     addBot(data) {
       const bot = { id: "bot-" + randomUUID().slice(0, 8), name: text(data.name, 48, "name"), role: String(data.role ?? "").slice(0, 90), instructions: String(data.instructions ?? ""), face: data.face ?? "idle", ...(data.summary && { summary: data.summary }), avatar: data.avatar ?? { body: "bighelp.biggie" } };
+      // Made from a starter: kept as the computer keeps it (desktop/workspace.mjs addBot).
+      const starter = starterById(data.starter);
+      if (starter) Object.assign(bot, { starter: starter.id }, starter.suggestProactive && { suggestProactive: true });
       this.state.bots.push(bot);
       return bot.id;
     },
