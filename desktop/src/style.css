@@ -194,6 +194,11 @@ nav button i {
   border-radius: var(--radius-sm);
   color: var(--muted);
 }
+.sidebarlabel-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
 .botnav {
   overflow: auto;
   align-content: start;

@@ -3,13 +3,14 @@
 // the list too. Filters show pinned or hidden bots. Under "All" a bot can be dragged to another place
 // or group (BotBoard.tsx), into Pinned to pin it; a still hold opens its menu.
 import { type Href, router, useScrollToTop } from "expo-router";
-import { ChevronDown, ChevronUp, Plus, Settings, Sunrise } from "lucide-react-native";
+import { ChevronDown, ChevronUp, MailOpen, Plus, Settings, Sunrise } from "lucide-react-native";
 import { type ReactNode, useEffect, useMemo, useState } from "react";
 import { ScrollView, useWindowDimensions, View } from "react-native";
 import Animated, { FadeIn, useAnimatedRef, useAnimatedScrollHandler, useSharedValue } from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { scheduleOnRN } from "react-native-worklets";
-import { openBotChat } from "@/features/chat/open";
+import { markAllChatsRead, openBotChat } from "@/features/chat/open";
+import { allUnreadChats, isUnreadConversation } from "@/features/chat/unread";
 import { useSpacesOn } from "@/features/spaces/data";
 import { HomePins } from "@/features/spaces/HomePins";
 import { makeSeenSignal, TodayContent } from "@/features/today/Today";
@@ -273,6 +274,7 @@ export default function Home() {
   const requests = useApp((state) => state.parts.live?.requests);
   const board = usePart("board");
   const panels = usePart("panels");
+  const canChat = useCan("agents", "chat");
   const canCreate = useCan("agents", "create");
   const canArrange = useCanArrange();
   const canSeeToday = useCan("today", "view");
@@ -291,11 +293,12 @@ export default function Home() {
       if (chat.botIds || !isConversation(chat)) continue;
       const entry = out.get(chat.botId) ?? { unread: false };
       if (!entry.chat || chat.time > entry.chat.time) entry.chat = chat;
-      if (chat.unread) entry.unread = true;
+      if (isUnreadConversation(chat)) entry.unread = true;
       out.set(chat.botId, entry);
     }
     return out;
   }, [chats]);
+  const hasUnread = useMemo(() => allUnreadChats(chats).length > 0, [chats]);
   // The list: in the computer's order, or one filter's bots. Sections fold while the app is open.
   const sections = usePart("sections");
   const arranged = useMemo(() => arrangeBots(bots, sections), [bots, sections]);
@@ -350,6 +353,7 @@ export default function Home() {
           <ServerLinkStatus />
         </View>
         <View style={{ flexDirection: "row", alignItems: "center", gap: space.sm }}>
+          {canChat && hasUnread && <IconButton icon={MailOpen} label="Mark all as read" variant="soft" size={44} onPress={() => void markAllChatsRead()} />}
           {canCreate && <IconButton icon={Plus} label="New bot" variant="soft" size={44} onPress={() => router.push("/bot/new")} />}
           <SettingsButton />
         </View>

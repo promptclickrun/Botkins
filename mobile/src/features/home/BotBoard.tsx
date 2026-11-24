@@ -17,10 +17,11 @@ import { GestureDetector, GestureStateManager, usePanGesture } from "react-nativ
 import Animated, { type AnimatedRef, type FrameCallback, scrollTo, type SharedValue, useAnimatedReaction, useAnimatedStyle, useFrameCallback, useSharedValue, withTiming } from "react-native-reanimated";
 import { scheduleOnRN } from "react-native-worklets";
 import { plainPreview } from "@/features/chat/bits";
-import { newBotChat, openBotChat } from "@/features/chat/open";
+import { markBotRead, newBotChat, openBotChat } from "@/features/chat/open";
+import { botUnreadChats } from "@/features/chat/unread";
 import { hideAction, moveToSection, runSectionAction, runSectionChoice, SECTION_ACTIONS, toggleHidden } from "@/features/bots/menus";
 import type { Bot, ChatSummary, Section } from "@/link/types";
-import { activityLabel, useBotActivity, useBots, useCan, usePart, useCanArrange, useMember } from "@/state/hooks";
+import { activityLabel, useBotActivity, useBots, useCan, useChats, usePart, useCanArrange, useMember } from "@/state/hooks";
 import { api, attempt } from "@/state/link";
 import { ago } from "@/state/time";
 import { BotAvatar, Dot, haptic, HoldMenu, radius, space, T, Tap, useTextPrompt, useTheme } from "@/ui";
@@ -30,9 +31,10 @@ import { type BoardItem, boardItems, DRAG, pickSlot, restingTop, sectionIdOf, sh
 export const AVATAR = 48;
 const INSET = space.lg + AVATAR + space.md;
 
-/** Long-press on a bot: the desktop's bot menu (New chat, Bot page, Pin, Move to section, Make primary, Duplicate, Hide, Delete). */
+/** Long-press on a bot: the desktop's bot menu (New chat, Bot page, Mark as read, Pin, Move to section, Make primary, Duplicate, Hide, Delete). */
 export function BotMenu({ bot, children }: { bot: Bot; children: ReactNode }) {
   const bots = useBots();
+  const chats = useChats();
   const sections = usePart("sections");
   const primary = bots[0]?.id === bot.id;
   const canChat = useCan("agents", "chat");
@@ -41,6 +43,7 @@ export function BotMenu({ bot, children }: { bot: Bot; children: ReactNode }) {
   const canArrange = useCanArrange();
   const member = useMember();
   const canDelete = useCan("agents", "delete");
+  const hasUnread = botUnreadChats(chats, bot.id).length > 0;
   const prompt = useTextPrompt();
   return (
     <>
@@ -48,6 +51,7 @@ export function BotMenu({ bot, children }: { bot: Bot; children: ReactNode }) {
       actions={[
         ...(canChat ? [{ id: "new", title: "New chat", image: "square.and.pencil" }] : []),
         { id: "page", title: "Bot page", image: "person.crop.circle" },
+        ...(canChat && hasUnread ? [{ id: "read", title: "Mark as read", image: "envelope.open" }] : []),
         // Pinning and hiding are a person's own view; sections and the primary bot are the owner's arrangement.
         ...(canArrange ? [{ id: "pin", title: bot.pinned ? "Unpin" : "Pin", image: bot.pinned ? "pin.slash" : "pin" }] : []),
         ...(canManage && !member ? [moveToSection(bot, sections), { id: "primary", title: "Make primary", image: "star", attributes: { disabled: primary } }] : []),
@@ -60,6 +64,7 @@ export function BotMenu({ bot, children }: { bot: Bot; children: ReactNode }) {
         if (runSectionChoice(bot, event, prompt.ask)) return;
         if (event === "new") void newBotChat(bot.id);
         else if (event === "page") router.push({ pathname: "/bot/[id]", params: { id: bot.id } });
+        else if (event === "read") void markBotRead(bot.id);
         else if (event === "pin") void attempt(api.setBotFlags(bot.id, { pinned: !bot.pinned }));
         else if (event === "primary") void attempt(api.makePrimary(bot.id), bot.name + " is first now");
         else if (event === "duplicate") void attempt(api.duplicateBot(bot.id), "Bot duplicated");

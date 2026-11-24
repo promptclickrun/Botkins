@@ -1,5 +1,5 @@
 import { router, useIsFocused, useScrollToTop } from "expo-router";
-import { Archive, FolderPlus, Search, SquarePen, X } from "lucide-react-native";
+import { Archive, FolderPlus, MailOpen, Search, SquarePen, X } from "lucide-react-native";
 import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { StyleSheet, TextInput, useWindowDimensions, View } from "react-native";
 import Animated, { FadeIn, useAnimatedRef, useAnimatedScrollHandler, useSharedValue } from "react-native-reanimated";
@@ -11,8 +11,10 @@ import { useApp } from "@/state/store";
 import { Chip, EmptyState, foldGap, IconButton, LinkBanner, listWidth, Mascot, radius, space, T, Tap, useShape, useTextPrompt, useTheme } from "@/ui";
 import { ChatBoard } from "./ChatBoard";
 import { ChatPane } from "./ChatScreen";
+import { markAllChatsRead } from "./open";
 import { useChatSplit } from "./split";
 import { newSection } from "./sectionMenus";
+import { allUnreadChats } from "./unread";
 
 const isArchivedConversation = (chat: ChatSummary) => !!chat.archived && !chat.panelId && !chat.schedules?.some((schedule) => schedule.routine);
 
@@ -141,6 +143,7 @@ function ChatListScreen() {
   const bots = useMemo(() => new Map(allBots.map((bot) => [bot.id, bot])), [allBots]);
   const conversations = useMemo(() => chats.filter(isConversation), [chats]);
   const archived = useMemo(() => chats.filter(isArchivedConversation), [chats]);
+  const unreadCount = useMemo(() => allUnreadChats(chats).length, [chats]);
   const needle = query.trim().toLowerCase();
   const { shown, old } = useMemo(() => {
     const matches = (chat: ChatSummary) => {
@@ -208,8 +211,9 @@ function ChatListScreen() {
         <Animated.View entering={FadeIn.duration(220)} style={{ gap: space.md }}>
           <View style={{ gap: space.md }}>
             <SearchField value={query} onChange={setQuery} />
-            {(archived.length > 0 || (sections && canChat)) && (
-              <View style={{ flexDirection: "row", gap: space.sm }}>
+            {(archived.length > 0 || (sections && canChat) || (unreadCount > 0 && canChat)) && (
+              <View style={{ flexDirection: "row", flexWrap: "wrap", gap: space.sm }}>
+                {unreadCount > 0 && canChat && <Chip label="Mark all as read" icon={MailOpen} onPress={() => void markAllChatsRead()} />}
                 {sections && canChat && <Chip label="New section" icon={FolderPlus} onPress={() => newSection(prompt.ask)} />}
                 {archived.length > 0 && <Chip label={showArchived ? "Hide archived" : "Show archived"} icon={Archive} selected={showArchived} onPress={() => setShowArchived(!showArchived)} />}
                 {prompt.node}
