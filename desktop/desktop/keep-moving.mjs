@@ -42,12 +42,25 @@ export const STALL_NOTE =
 
 // ── Reading the end of a reply ───────────────────────────────────────────────────────────────────
 
+/** A line without its list marker, markdown emphasis or curly quotes. */
+const clean = (line) => line.replace(/^(?:[>\-*•+]\s+|\d+[.)]\s+)+/, "").replace(/[*_~]+/g, "").replace(/[‘’]/g, "'").replace(/[“”]/g, '"').trim();
+/** The cleaned, non-empty lines of a piece of text. */
+const linesOf = (text) => String(text ?? "").split(/\r?\n/).map((each) => clean(each.trim())).filter(Boolean);
 /** The reply's last non-empty line, without a list marker or markdown emphasis. */
-function lastLine(text) {
-  const line = String(text ?? "").split(/\r?\n/).map((each) => each.trim()).filter(Boolean).at(-1) ?? "";
-  return line.replace(/^(?:[>\-*•+]\s+|\d+[.)]\s+)+/, "").replace(/[*_~]+/g, "").replace(/[‘’]/g, "'").replace(/[“”]/g, '"').trim();
-}
+const lastLine = (text) => linesOf(text).at(-1) ?? "";
 const sentencesOf = (line) => line.split(/(?<=[.!?…])\s+/).map((each) => each.trim()).filter(Boolean);
+/** A closing paragraph this short is a sign-off ("I'll wait for your answer."), not what the reply was about. */
+const SIGN_OFF = 160;
+/**
+ * The sentences where a reply asks something of the person: its last paragraph, and, when that is only a short
+ * sign-off, the last sentence of the paragraph before it ("Which one?" ... "Thanks!").
+ */
+function closing(text) {
+  const paragraphs = String(text ?? "").split(/\r?\n[ \t]*\r?\n/).map(linesOf).filter((each) => each.length);
+  const sentences = (paragraphs.at(-1) ?? []).flatMap(sentencesOf);
+  const signOff = paragraphs.length > 1 && paragraphs.at(-1).join(" ").length <= SIGN_OFF && sentences.length <= 2;
+  return [...(signOff ? paragraphs.at(-2).flatMap(sentencesOf).slice(-1) : []), ...sentences];
+}
 const ending = /["')\]\s]+$/;
 const normal = (sentence) => sentence.toLowerCase().replace(ending, "");
 
@@ -70,10 +83,26 @@ const NAMES_STEP = new RegExp("^(?:.{0,120}?[,;:\\u2014\\u2013-]\\s*)?" + LEAD +
 const NOT_NEXT =
   /\b(?:if you(?:'d)? (?:need|want|like|prefer|wish)|if needed|if that helps|whenever|when you(?:'re)?|once you|should you|unless|feel free|let me know|happy to|glad to|here (?:if|to|for)|be here|on standby|at your service|check back|check in|later|tomorrow|next time|in the future|until)\b/;
 
-/** Whether the last line of a reply asks the person something other than whether to go on. */
+/** Saying that the reply is waiting for the person: "I'll wait for your answer", "let me know which...", "once you confirm...". */
+const WAITING = [
+  /\b(?:i'll|i will|i'm going to|i am going to|i shall)\s+(?:just\s+)?(?:wait|hold off|hold on|pause|stand by|sit tight)\b(?:\s+(?:here\s+)?(?:for|on|until|till)\s+(?:your|you|an? (?:answer|reply|response|go-ahead|confirmation|decision|approval)|confirmation|input|approval|the person|their)\b|\s*(?:here)?[.!]?$)/,
+  /\b(?:waiting|awaiting|await)\s+(?:for\s+|on\s+)?(?:your|you|the person's|their)\b/,
+  /\blet me know (?:which|what|how|whether|when|where|who)\b/,
+  /\b(?:once|after|when|until|till|as soon as) you(?:'ve)? (?:confirm|answer|reply|respond|tell|let me know|provide|approve|choose|decide|pick|share|send|give|specify|say)/,
+  /\bplease (?:confirm|choose|tell me|let me know|reply|answer|respond|provide|specify|clarify|advise|pick|decide|approve|share|send)\b/,
+  /\bi(?:'ll| will)? need (?:your|you to|a decision|a go-ahead|a confirmation|an answer)\b/,
+];
+
+/**
+ * Whether a reply ends with something for the person: a question other than whether to go on, or the words of
+ * one waiting for them. Looks at the closing paragraph (and the question before a short sign-off), not just
+ * the last line, so "Which one?" followed by "I'll wait for your answer." still counts.
+ */
 export function asksUser(text) {
-  const sentences = sentencesOf(lastLine(text));
-  return sentences.some((sentence) => sentence.replace(ending, "").endsWith("?") && !CONTINUE_ASK.test(normal(sentence)));
+  return closing(text).some((sentence) => {
+    const said = normal(sentence);
+    return (said.endsWith("?") && !CONTINUE_ASK.test(said)) || WAITING.some((waiting) => waiting.test(said));
+  });
 }
 
 /** Whether a reply ends having named the next step (or asked to go on) without doing it. */
