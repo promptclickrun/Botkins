@@ -5,7 +5,17 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { ArrowUp, Maximize2, Minimize2, X } from "lucide-react";
 import { BotAvatar } from "./Avatar";
-import { PANEL_FULLSCREEN_SUFFIX, openedPanelKeyAction, resolvePanelFullscreen, writePanelFullscreen } from "./panelOpen";
+import {
+  FRAME_KEY_EVENT,
+  PANEL_FULLSCREEN_SUFFIX,
+  frameKeyAction,
+  isPanelFullscreenShortcut,
+  panelCancelAction,
+  resolvePanelFullscreen,
+  shouldPersistPanelFullscreen,
+  writePanelFullscreen,
+  type PanelFullscreenSource,
+} from "./panelOpen";
 import { MOD } from "./places";
 import { storageKey } from "./storage";
 import type { Bot } from "./types";
@@ -43,41 +53,62 @@ export default function OpenedPanel({
   fullscreenRef.current = fullscreen;
   const closeRef = useRef(close);
   closeRef.current = close;
+  const closedRef = useRef(false);
 
-  const setRememberedFullscreen = (next: boolean) => {
+  const applyFullscreen = (next: boolean, source: PanelFullscreenSource) => {
     setFullscreen(next);
-    writePanelFullscreen(storageKey(PANEL_FULLSCREEN_SUFFIX), next);
+    if (shouldPersistPanelFullscreen(source)) writePanelFullscreen(storageKey(PANEL_FULLSCREEN_SUFFIX), next);
+  };
+
+  const finishClose = () => {
+    if (closedRef.current) return;
+    closedRef.current = true;
+    closeRef.current();
+  };
+
+  const requestClose = () => {
+    const dialog = ref.current;
+    if (dialog?.open) dialog.close();
+    else finishClose();
   };
 
   useEffect(() => {
-    // Opening explicitly in full screen (e.g. from the panel menu) also remembers that choice.
-    if (typeof initialFullscreen === "boolean") writePanelFullscreen(storageKey(PANEL_FULLSCREEN_SUFFIX), initialFullscreen);
-  }, [initialFullscreen]);
-
-  useEffect(() => {
-    ref.current?.showModal();
+    const dialog = ref.current;
+    if (dialog && !dialog.open) dialog.showModal();
   }, []);
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       const dialog = ref.current;
       if (!dialog?.open) return;
-      const openDialogs = document.querySelectorAll("dialog[open]");
-      if (openDialogs[openDialogs.length - 1] !== dialog) return;
-      const action = openedPanelKeyAction(e, fullscreenRef.current);
-      if (!action) return;
+      if (!isPanelFullscreenShortcut(e)) return;
+      if (dialog.querySelector("dialog[open]")) return;
+      const targetDialog = e.target instanceof Element ? e.target.closest("dialog[open]") : null;
+      if (targetDialog && targetDialog !== dialog) return;
+      const activeDialog = document.activeElement instanceof Element ? document.activeElement.closest("dialog[open]") : null;
+      if (activeDialog && activeDialog !== dialog) return;
       e.preventDefault();
-      if (action === "toggle") {
-        setRememberedFullscreen(!fullscreenRef.current);
-      } else if (action === "restore") {
-        // Esc exits full screen first without wiping the saved full-screen preference.
-        setFullscreen(false);
-      } else {
-        closeRef.current();
-      }
+      applyFullscreen(!fullscreenRef.current, "toggle");
     };
-    window.addEventListener("keydown", onKeyDown, true);
-    return () => window.removeEventListener("keydown", onKeyDown, true);
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
+
+  useEffect(() => {
+    const dialog = ref.current;
+    if (!dialog) return;
+    const onFrameKey = (e: Event) => {
+      if (!dialog.open) return;
+      if (dialog.querySelector("dialog[open]")) return;
+      const targetDialog = e.target instanceof Element ? e.target.closest("dialog[open]") : null;
+      if (targetDialog !== dialog) return;
+      const action = frameKeyAction((e as CustomEvent<{ key?: unknown }>).detail?.key, fullscreenRef.current);
+      if (action === "toggle") applyFullscreen(!fullscreenRef.current, "toggle");
+      else if (action === "restore") applyFullscreen(false, "escape");
+      else if (action === "close") dialog.close();
+    };
+    dialog.addEventListener(FRAME_KEY_EVENT, onFrameKey);
+    return () => dialog.removeEventListener(FRAME_KEY_EVENT, onFrameKey);
   }, []);
 
   const toggleLabel = fullscreen ? "Exit full screen" : "Full screen";
@@ -88,14 +119,16 @@ export default function OpenedPanel({
       className={"space-opened" + (fullscreen ? " fullscreen" : "")}
       aria-label={title}
       onCancel={(e) => {
-        if (fullscreenRef.current) {
+        const action = panelCancelAction(fullscreenRef.current, e.target === e.currentTarget);
+        if (action === "restore") {
           e.preventDefault();
-          setFullscreen(false);
-          return;
+          applyFullscreen(false, "escape");
         }
-        close();
       }}
-      onClose={close}
+      onClose={(e) => {
+        if (e.target !== e.currentTarget) return;
+        finishClose();
+      }}
     >
       <div className="space-opened-actions">
         <button
@@ -104,11 +137,11 @@ export default function OpenedPanel({
           aria-label={toggleLabel}
           aria-pressed={fullscreen}
           title={toggleLabel + " (" + FULLSCREEN_HINT + ")"}
-          onClick={() => setRememberedFullscreen(!fullscreen)}
+          onClick={() => applyFullscreen(!fullscreen, "toggle")}
         >
           {fullscreen ? <Minimize2 size={16} aria-hidden="true" /> : <Maximize2 size={16} aria-hidden="true" />}
         </button>
-        <button type="button" className="space-opened-close" aria-label="Close" title="Close" onClick={close}>
+        <button type="button" className="space-opened-close" aria-label="Close" title="Close" onClick={requestClose}>
           <X size={18} aria-hidden="true" />
         </button>
       </div>

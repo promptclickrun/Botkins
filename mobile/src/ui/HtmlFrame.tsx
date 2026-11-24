@@ -87,11 +87,13 @@ export type HtmlFrameProps = {
   onAnswer?: (text: string) => void;
   /** The whole screen: the page scrolls and zooms by itself. */
   fill?: boolean;
+  /** Adds horizontal padding in `fill` mode; false when hosted inside a padded Page. */
+  inset?: boolean;
   /** The view is a panel's: its saved state. Without it `botkins.state.get()` is {} and `set` is false. */
   state?: FrameState;
 };
 
-export function HtmlFrame({ frame, height, title, onAnswer, fill, state }: HtmlFrameProps) {
+export function HtmlFrame({ frame, height, title, onAnswer, fill, inset = true, state }: HtmlFrameProps) {
   const { colors, dark } = useTheme();
   const supported = usePart("meta")?.capabilities.includes("frames-v1");
   // (The package types its props as `WebViewProps & P` with P undefined by default, which is nothing: P is named here.)
@@ -234,8 +236,8 @@ export function HtmlFrame({ frame, height, title, onAnswer, fill, state }: HtmlF
 
   const view = (
     <View
-      // Full size: the app's own side margin, whatever padding the page gives itself.
-      style={fill ? { flex: 1, paddingHorizontal: space.lg } : { height: size, borderRadius: radius.md, overflow: "hidden" }}
+      // Full size: the app's own side margin on a full-bleed route, or rounded + minHeight inside a padded Page.
+      style={fill ? (inset ? { flex: 1, paddingHorizontal: space.lg } : { flex: 1, minHeight: 240, borderRadius: radius.md, overflow: "hidden" }) : { height: size, borderRadius: radius.md, overflow: "hidden" }}
       // Seen before the web view takes the touch: this is how the app knows the person is working in the view.
       onTouchStart={() => {
         touched.current = Date.now();
@@ -309,9 +311,9 @@ export function HtmlFrame({ frame, height, title, onAnswer, fill, state }: HtmlF
   );
   if (!broken) return view;
   return (
-    <View style={fill ? { flex: 1 } : { gap: space.sm }}>
+    <View style={fill ? { flex: 1, ...(inset ? {} : { minHeight: 240, gap: space.sm }) } : { gap: space.sm }}>
       {view}
-      <View style={[{ flexDirection: "row", alignItems: "center", gap: 6 }, fill && { padding: space.lg }]}>
+      <View style={[{ flexDirection: "row", alignItems: "center", gap: 6 }, fill && inset && { padding: space.lg }]}>
         <TriangleAlert size={13} color={colors.muted} strokeWidth={2.2} />
         <T variant="footnote" color="muted" style={{ flex: 1 }}>
           Part of this view didn't run on this phone.

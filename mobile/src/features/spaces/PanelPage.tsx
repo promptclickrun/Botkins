@@ -176,11 +176,12 @@ export default function PanelPage() {
   const caption = [bot?.name, "Updated " + ago(panel.updatedAt), routine ? (routine.enabled && routine.nextAt ? "Next " + upcoming(routine.nextAt) : "Routine paused") : undefined].filter(Boolean).join(" · ");
   const last = lastLine(panel.last, ago);
   const mayAsk = canChat && (space.can === "own" || space.can === "edit");
+  const hasHtml = panel.blocks.some((block) => block.type === "html");
   // Chips only where the field they fill is shown, and only the bot's own.
   const asks = mayAsk ? asksOf(panel) : [];
   return (
     <View style={{ flex: 1 }}>
-      <Page contentStyle={{ paddingBottom: asks.length ? 170 : 120 }} keyboard>
+      <Page contentStyle={[{ paddingBottom: asks.length ? 170 : 120 }, hasHtml && { flexGrow: 1 }]} keyboard>
         <Stack.Screen options={{ headerRight: () => <BarButtons panel={panel} space={space} first={index === 0} last={index === panels.length - 1} /> }} />
         <View style={{ flexDirection: "row", alignItems: "center", gap: gap.md }}>
           <BotAvatar bot={bot} size={40} badge={false} />
@@ -193,7 +194,7 @@ export default function PanelPage() {
             </T>
           </View>
         </View>
-        <Blocks blocks={panel.blocks} title={panel.title} state={panel.blocks.some((block) => block.type === "html") ? panelState(panel, space, canUse) : undefined} />
+        <Blocks blocks={panel.blocks} title={panel.title} fill={hasHtml} state={hasHtml ? panelState(panel, space, canUse) : undefined} />
         {!!last && (
           <T variant="footnote" color="faint">
             {last}
