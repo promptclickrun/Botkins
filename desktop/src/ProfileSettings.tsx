@@ -1293,4 +1293,3 @@ export function ProfileMigrationPrompt({ state, onDismiss }: { state: State; onD
     </WelcomeFrame>
   );
 }
-
