@@ -25,7 +25,7 @@
 // and the turns this run was given, so a test can tell from a reply alone exactly what the run
 // that wrote it was told.
 import { createHash } from "node:crypto";
-import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { createInterface } from "node:readline";
 
 const argv = process.argv.slice(2);
@@ -141,8 +141,10 @@ lines.on("close", async () => {
     const names = ["CLAUDE_CODE_ENTRYPOINT", "CLAUDE_CODE_DISABLE_ARTIFACT", "CLAUDE_CODE_MAX_RETRIES", "CLAUDE_CODE_EXTRA_BODY", "CLAUDE_CODE_EFFORT_LEVEL", "CLAUDE_CODE_MAX_OUTPUT_TOKENS"];
     const settingsFile = after("--settings");
     const settingsText = settingsFile && read(settingsFile);
+    // The harness treats the log appearing as the signal that this process is ready.
+    const pendingLog = process.env.FAKE_CLAUDE_LOG + "." + process.pid + ".tmp";
     writeFileSync(
-      process.env.FAKE_CLAUDE_LOG,
+      pendingLog,
       JSON.stringify({
         pid: process.pid,
         argv,
@@ -163,6 +165,7 @@ lines.on("close", async () => {
         ...probe,
       }),
     );
+    renameSync(pendingLog, process.env.FAKE_CLAUDE_LOG);
   }
 
   if (mode === "text") {
