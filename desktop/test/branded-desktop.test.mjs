@@ -106,6 +106,10 @@ test("the Docker workspace and the Azure display, which Botkins starts, run the 
   const xvfb = entrypoint.indexOf("Xvfb \"$DISPLAY\"");
   const desktop = entrypoint.indexOf("BOTKINS_DESKTOP_MANAGED=1 /usr/local/share/botkins-desktop/botkins-desktop");
   assert.ok(xvfb > 0 && desktop > xvfb, "the workspace starts its own Xvfb, then the Botkins desktop on it");
+  // It refuses a display that already answers, and brands only while its own Xvfb is alive.
+  const taken = entrypoint.indexOf("if xdpyinfo -display \"$DISPLAY\" >/dev/null 2>&1; then");
+  assert.ok(taken > 0 && taken < xvfb, "a display that already answers is refused before Xvfb starts");
+  assert.match(entrypoint.slice(xvfb, desktop), /kill -0 "\$xvfb_pid"[\s\S]*xdpyinfo[\s\S]*kill -0 "\$xvfb_pid"/, "readiness and branding both need this Xvfb alive");
   assert.doesNotMatch(entrypoint, /^\s*openbox\b/m, "Openbox starts only through the kit");
 
   const display = read(join(repo, "deploy/azure/systemd/botkins-display.service"));
