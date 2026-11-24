@@ -5,7 +5,7 @@
 // bot id. A bot's entry is its settings plus `person`: who its agent works for ("owner", or a team member's
 // id). It is set when the agent is first set up and never taken from a caller.
 
-export const WATCHES = ["runs", "tasks", "requests"];
+export const WATCHES = ["runs", "tasks", "requests", "context"];
 export const EVERY = [15, 30, 60, 120];
 export const SWEEP_HOURS = [0, 1, 2, 3, 6, 12];
 export const MAX_PER_DAY = [3, 6, 10, 20];

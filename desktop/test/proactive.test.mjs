@@ -2,7 +2,7 @@
 // settings and managed routine, the gate that wakes it, and who a bot's agent works for.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Workspace } from "./starter.mjs";
@@ -19,7 +19,7 @@ const NOW = Date.UTC(2026, 10, 22, 18);
 function setup(t, { team, dir = mkdtempSync(join(tmpdir(), "botkins-proactive-")), before } = {}) {
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   before?.(dir);
-  const seen = { prompts: [], reply: "[SILENT]" };
+  const seen = { prompts: [], options: [], reply: "[SILENT]" };
   const handlers = new Set();
   const session = {
     on: (h) => (handlers.add(h), () => handlers.delete(h)),
@@ -27,17 +27,22 @@ function setup(t, { team, dir = mkdtempSync(join(tmpdir(), "botkins-proactive-")
     abort: async () => {},
     send: async ({ prompt }) => {
       seen.prompts.push(prompt);
+      const answer = typeof seen.reply === "function" ? await seen.reply(prompt, seen.options.at(-1)) : seen.reply;
       const id = "m" + seen.prompts.length;
       for (const h of handlers) h({ type: "user.message", id, data: { messageId: id } });
-      for (const h of handlers) h({ type: "assistant.message", data: { originatingMessageId: id, content: seen.reply } });
+      for (const h of handlers) h({ type: "assistant.message", data: { originatingMessageId: id, content: answer } });
       for (const h of handlers) h({ type: "session.idle", data: { mode: "interactive" } });
       return id;
     },
   };
-  const client = async () => ({ createSession: async () => session, resumeSession: async () => session, deleteSession: async () => {} });
+  const client = async () => ({ createSession: async (options) => { seen.options.push(options); return session; }, resumeSession: async () => session, deleteSession: async () => {} });
   const ws = new Workspace(dir, client, () => {}, { team: () => team ?? null });
   return { ws, seen, dir };
 }
+
+const packet = (prompt) => JSON.parse(prompt.split("\n\n").at(-2));
+const candidate = (title, refs, method = "alert") => ({ title, refs, method, why: "This affects the next step.", next: "Check the details today." });
+const proposal = (title) => (prompt) => JSON.stringify({ candidates: [candidate(title, [packet(prompt)[0]?.id])] });
 
 /** The routine of a bot's agent, ticking as its clock does. */
 const tick = (ws, botId, trigger = "scheduled") => {
@@ -73,7 +78,7 @@ test("one bot is proactive and another is not: only its routine exists, runs and
 
   const chat = ws.createChat("scout");
   failedRun(ws, "bad", chat, "Bills");
-  seen.reply = "Bills routine is failing.";
+  seen.reply = proposal("Bills routine is failing.");
   await tick(ws, "pip");
   assert.equal(seen.prompts.length, 1);
   assert.match(seen.prompts[0], /Routine “Bills” needs the person/);
@@ -87,7 +92,7 @@ test("each proactive bot keeps its own seen signals, alerts a day, look-around c
   ws.setPreferences({ proactive: { enabled: true } });
   ws.proactive.setBot("pip", { enabled: true, sweepHours: 0, maxPerDay: 3 });
   ws.proactive.setBot("scout", { enabled: true, sweepHours: 0, maxPerDay: 3 });
-  seen.reply = "Something needs you.";
+  seen.reply = proposal("Something needs you.");
   failedRun(ws, "bad", ws.createChat("patch"), "Bills");
 
   await tick(ws, "pip");
@@ -98,6 +103,8 @@ test("each proactive bot keeps its own seen signals, alerts a day, look-around c
   assert.deepEqual(Object.keys(ws.state.proactive.bots.scout.seen), [], "and isn't written into scout's own list");
   assert.ok(Object.keys(ws.state.proactive.bots.pip.seen).length > 0);
 
+  ws.memory.save("scout", "The next review is tomorrow.");
+  seen.reply = proposal("Prepare for your review.");
   await tick(ws, "scout", "manual");
   assert.equal(seen.prompts.length, 2, "Check now wakes it whatever the other did");
   assert.equal(ws.state.proactive.bots.scout.pings, 1);
@@ -134,7 +141,8 @@ test("the gate wakes the bot once per signal, sweeps on its clock, and keeps qui
   await go("manual");
   assert.equal(seen.prompts.length, 2, "Check now always wakes it");
 
-  seen.reply = "Bills routine is failing: Gmail sign-in expired.";
+  ws.memory.save("pip", "The Bills routine depends on the Gmail sign-in.");
+  seen.reply = proposal("Bills routine is failing: Gmail sign-in expired.");
   ws.proactive.setBot("pip", { sweepHours: 1 });
   ws.state.proactive.bots.pip.lastSweepAt = 0;
   await go();
@@ -142,7 +150,7 @@ test("the gate wakes the bot once per signal, sweeps on its clock, and keeps qui
   assert.match(seen.prompts[2], /inbox, calendar/, "the owner's bot may look at the sources its tools reach");
   assert.equal(ws.state.proactive.bots.pip.log[0].outcome, "alerted");
   assert.equal(ws.state.proactive.bots.pip.pings, 1);
-  assert.match(ws.proactive.prompt("pip", "sweep", []), /already told the person[\s\S]*Gmail sign-in expired/);
+  assert.match(ws.proactive.prompt("pip", ws.proactive.wake("pip", "manual")), /already told the person[\s\S]*Gmail sign-in expired/);
 
   ws.state.proactive.bots.pip.pings = 3;
   ws.state.proactive.bots.pip.lastSweepAt = 0;
@@ -339,7 +347,7 @@ test("a member's agent hears only of what that member may see, and tells that me
     { id: "q2", kind: "question", title: "Owner question", chatId: ownerChat, time: Date.now() - HOUR },
     { id: "q3", kind: "question", title: "Avery question", chatId: averysChat, time: Date.now() - HOUR },
   ];
-  seen.reply = "Your report failed.";
+  seen.reply = proposal("Your report failed.");
   await tick(ws, "pip");
 
   assert.equal(seen.prompts.length, 1);
@@ -348,8 +356,8 @@ test("a member's agent hears only of what that member may see, and tells that me
   assert.doesNotMatch(seen.prompts[0], /Owner|payroll|Blake|roadmap/, "nothing of the owner's or of another member's");
   assert.doesNotMatch(seen.prompts[0], /inbox, calendar/, "and no look at the computer's own accounts");
   const said = ws.chat(averysChat).messages.findLast((m) => m.role === "assistant");
-  assert.equal(said?.text, "Your report failed.", "the alert is in the member's chat");
-  for (const id of [ownerChat, blakesChat]) assert.equal(ws.chat(id).messages.some((m) => m.text === "Your report failed."), false);
+  assert.match(said?.text, /^Your report failed\./, "the alert is in the member's chat");
+  for (const id of [ownerChat, blakesChat]) assert.equal(ws.chat(id).messages.some((m) => m.text?.startsWith("Your report failed.")), false);
   assert.equal(ws.notifiesOwner(ws.proactive.routine("pip").chat.id), false, "and not the owner's to be told of");
 
   // The owner's agent is the owner's: not Avery's or Blake's private runs.
@@ -402,4 +410,268 @@ test("a member is sent their own agent's state, not the owner's or another membe
   assert.deepEqual(blakes.bots.pip, { enabled: true, taken: true }, "another member's agent is only known to be there");
   assert.equal(JSON.stringify(blakes).includes("private rules"), false);
   assert.equal(JSON.stringify(sees("m_casey", "Casey").proactive.bots), "{}", "a role that doesn't manage bots is sent none");
+});
+
+test("a past conversation and a goal surface preparation without an inbox event, with no model call on the next quiet tick", async (t) => {
+  const { ws, seen } = setup(t);
+  const chat = ws.chat(ws.createChat("pip"));
+  chat.messages.push({ role: "user", text: "I have twenty minutes between trains in York.", time: Date.now() });
+  ws.memory.save("pip", "Interested in railway photography.");
+  ws.board.post("pip", { kind: "goal", title: "Build my station photo portfolio" });
+  ws.setPreferences({ proactive: { enabled: true } });
+  ws.proactive.setBot("pip", { enabled: true, sweepHours: 0 });
+  seen.reply = (prompt) => {
+    const facts = packet(prompt);
+    const from = (type) => facts.find((e) => e.id.startsWith(type + "-")).id;
+    return JSON.stringify({ candidates: [
+      candidate("Browse photography books", [from("memory")], "discover"),
+      { method: "prepare", refs: [from("goal"), from("chat"), from("memory")], title: "Use your York stop for one portfolio shot",
+        why: "Your train change gives you twenty minutes to work on the station portfolio.", next: "Pick one platform detail to photograph before you board." },
+      candidate("A festival is on this weekend", ["made-up-event"], "discover"),
+    ] });
+  };
+  await ws.panels.routines.run(ws.proactive.routine("pip").chat.id);
+  const alert = chat.messages.at(-1);
+  assert.match(alert.text, /^Use your York stop/);
+  assert.match(alert.text, /twenty minutes.*\n\nPick one platform detail/s);
+  assert.doesNotMatch(alert.text, /candidates|festival|books/);
+  const view = ws.proactive.view("pip");
+  assert.equal(view.log[0].score, 69);
+  assert.equal(view.pings, 1);
+  assert.equal(alert.proactiveRunId, view.log[0].runId);
+  assert.ok(!JSON.stringify(view).includes("memory-"));
+  await tick(ws, "pip");
+  assert.equal(seen.prompts.length, 1);
+  await tick(ws, "pip", "manual");
+  // The alternative grounded in different evidence can win once the first was said.
+  assert.match(chat.messages.at(-1).text, /photography books/);
+  await tick(ws, "pip", "manual");
+  assert.equal(ws.proactive.view("pip").log[0].outcome, "silent");
+  assert.equal(ws.proactive.view("pip").pings, 2);
+  ws.memory.save("pip", "Prefers morning light for photographs.");
+  seen.reply = "[SILENT]";
+  await tick(ws, "pip");
+  assert.equal(ws.proactive.view("pip").log[0].reason, "context");
+  assert.match(seen.prompts.at(-1), /morning light/);
+  assert.equal(ws.proactive.wake("pip", "scheduled", Date.now() + 15 * 24 * HOUR), null, "unchanged memory stays observed after operational signal receipts expire");
+  const routineText = ws.proactive.routine("pip").chat.messages.map((m) => m.text).join("\n");
+  assert.doesNotMatch(routineText, /"refs"|candidates|morning light/, "only the selected suggestion appears in a transcript");
+});
+
+test("chat and Feed feedback train only the recipient, survive restart, and curate the next wake", async (t) => {
+  const { ws, seen, dir } = setup(t);
+  ws.setPreferences({ proactive: { enabled: true } });
+  ws.proactive.setBot("pip", { enabled: true, sweepHours: 0, deliver: "feed" });
+  const addInterest = (workspace, text) => workspace.memory.save("pip", text);
+  const discover = (prompt) => {
+    const last = packet(prompt).filter((e) => e.id.startsWith("memory-")).at(-1);
+    return JSON.stringify({ candidates: [candidate("Try " + last.text, [last.id], "discover")] });
+  };
+  seen.reply = discover;
+  addInterest(ws, "Sketching with charcoal");
+  await tick(ws, "pip");
+  const card = ws.board.items[0];
+  assert.equal(card.proactiveRunId, ws.proactive.view("pip").log[0].runId);
+  ws.board.act(card.id, "read", undefined, "owner");
+  ws.board.act(card.id, "up", undefined, "m_blake");
+  assert.equal(ws.proactive.view("pip").learning.rated, 0);
+  ws.board.act(card.id, "down", "Not relevant", "owner");
+  assert.equal(ws.proactive.view("pip").learning.rated, 1);
+
+  ws.proactive.setBot("pip", { deliver: "chat" });
+  addInterest(ws, "Painting in watercolours");
+  await tick(ws, "pip");
+  const run = ws.state.runs.find((r) => r.id === ws.proactive.view("pip").log[0].runId);
+  const chat = ws.chat(run.delivery.chatId);
+  const index = chat.messages.length - 1;
+  const react = (workspace, emoji, actor) => workspace.reactToMessage(chat.id, index, chat.messages[index].time, emoji, actor);
+  react(ws, "👎", "bot:pip");
+  react(ws, "👎", "member:m_blake");
+  assert.equal(ws.proactive.view("pip").learning.rated, 1);
+  react(ws, "👎🏽", "owner");
+  react(ws, "👎", "owner");
+  assert.deepEqual(ws.proactive.view("pip").learning, { rated: 2, retired: ["Discovery from saved memory"], preferred: [] });
+
+  const restarted = setup(t, { dir });
+  addInterest(restarted.ws, "Drawing with pastels");
+  restarted.seen.reply = discover;
+  await tick(restarted.ws, "pip");
+  assert.match(restarted.seen.prompts[0], /retired: Discovery from saved memory/);
+  assert.equal(restarted.ws.proactive.view("pip").log[0].outcome, "silent");
+  react(restarted.ws, "👍", "owner");
+  restarted.ws.board.act(card.id, "up", undefined, "owner");
+  assert.deepEqual(restarted.ws.proactive.view("pip").learning, { rated: 2, preferred: ["Discovery from saved memory"], retired: [] });
+  await tick(restarted.ws, "pip", "manual");
+  assert.match(restarted.seen.prompts.at(-1), /preferred: Discovery from saved memory/);
+  assert.equal(restarted.ws.proactive.view("pip").log[0].outcome, "alerted");
+  react(restarted.ws, "🎨", "owner");
+  restarted.ws.board.act(card.id, "up", undefined, "owner");
+  assert.equal(restarted.ws.proactive.view("pip").learning.rated, 0, "neutral/retracted reactions undo both training labels");
+  restarted.ws.proactive.setBot("pip", null);
+  restarted.ws.proactive.setBot("pip", { enabled: true });
+  react(restarted.ws, "👍", "owner");
+  assert.equal(restarted.ws.proactive.view("pip").learning.rated, 0, "an old delivery never trains a new setup");
+});
+
+test("prior-session grounding and delivery stay inside the recipient and bot boundaries", async (t) => {
+  const { ws, seen } = setup(t, { team: team() });
+  const make = (creator, writer, text, fields = {}) => {
+    const chat = ws.chat(ws.createChat("pip"));
+    Object.assign(chat, { createdBy: creator, ...fields });
+    chat.messages.push({ role: "user", text, ...(writer && { author: { memberId: writer } }), time: Date.now() });
+    return chat;
+  };
+  ws.memory.save("pip", "PRIVATE owner profile");
+  make(undefined, undefined, "PRIVATE owner message");
+  make("m_blake", "m_blake", "PRIVATE Blake message");
+  const mine = make("m_avery", "m_avery", "My conference poster is due next week");
+  make("m_avery", undefined, "PRIVATE another speaker");
+  make("m_avery", "m_avery", "PRIVATE temporary note", { temporary: true });
+  const shared = make("m_avery", "m_avery", "PRIVATE planning with Blake", { time: Date.now() + HOUR });
+  ws.peopleOf = (id) => ({ invited: id === shared.id ? ["m_blake"] : [] });
+  ws.setPreferences({ proactive: { enabled: true } });
+  ws.proactive.setBot("pip", { enabled: true }, "m_avery");
+  seen.reply = proposal("Plan a poster rehearsal");
+  await tick(ws, "pip");
+  assert.match(seen.prompts[0], /conference poster/);
+  assert.doesNotMatch(seen.prompts[0], /PRIVATE/);
+  const options = seen.options.at(-1);
+  assert.doesNotMatch(JSON.stringify(options.systemMessage), /PRIVATE/);
+  assert.deepEqual(options.tools.availableTools, []);
+  assert.deepEqual(options.mcp.servers, {});
+  assert.equal(options.skills.enabled, false);
+  assert.equal(ws.state.runs[0].delivery.chatId === shared.id, false);
+  assert.equal(shared.messages.length, 1);
+  assert.equal(mine.messages[0].text, "My conference poster is due next week");
+});
+
+test("failed checks release their evidence, concurrent ticks reserve it and revoked evidence stays quiet", async (t) => {
+  const { ws, seen } = setup(t);
+  ws.setPreferences({ proactive: { enabled: true } });
+  ws.proactive.setBot("pip", { enabled: true, sweepHours: 0 });
+  ws.proactive.setBot("scout", { enabled: true, sweepHours: 0 });
+  failedRun(ws, "bad", ws.createChat("patch"), "Prepare agenda");
+  const started = Promise.withResolvers(), answer = Promise.withResolvers();
+  seen.reply = async () => { started.resolve(); return answer.promise; };
+  const working = tick(ws, "pip");
+  await started.promise;
+  assert.equal(await tick(ws, "scout"), null);
+  assert.equal(await tick(ws, "pip", "manual"), null);
+  answer.resolve("malformed response");
+  await working;
+  assert.equal(ws.proactive.view("pip").log[0].outcome, "failed");
+  assert.equal(ws.proactive.gate("pip").seen["run:bad"], undefined);
+  seen.reply = proposal("Check the agenda");
+  await ws.retry(ws.proactive.view("pip").log[0].runId);
+  assert.equal(ws.proactive.view("pip").pings, 1);
+  assert.equal(ws.proactive.gate("pip").learning.history.length, 1);
+  assert.equal(await tick(ws, "scout"), null);
+
+  ws.memory.save("pip", "Practice watercolour painting");
+  seen.reply = (prompt) => {
+    ws.memory.write("pip", "");
+    return JSON.stringify({ candidates: [candidate("Take a painting class", [packet(prompt)[0].id], "discover")] });
+  };
+  await tick(ws, "pip");
+  assert.equal(ws.proactive.view("pip").log[0].outcome, "silent");
+  assert.equal(ws.proactive.view("pip").pings, 1);
+});
+
+test("an enabled live read supplies an evidence ID, invented IDs cannot alert, and a shared Feed falls back to private chat", async (t) => {
+  const current = team();
+  const { ws, seen } = setup(t, { team: current });
+  ws.setPreferences({ proactive: { enabled: true } });
+  ws.proactive.setBot("pip", { enabled: true, deliver: "feed" });
+  const feed = ws.spaces.forCards("owner", "feed");
+  current.spaces = { [feed.id]: { access: "link" } };
+  const calls = [];
+  ws.phone.source = () => ({
+    tools: () => ["read", "change"].map((mode) => ({ name: "phone_" + mode, description: mode, readOnly: mode === "read", parameters: { type: "object" } })),
+    call: (name) => { calls.push(name); return "The next train departs 30 minutes early."; },
+  });
+  seen.reply = async (_prompt, options) => {
+    assert.deepEqual(options.tools.availableTools, ["custom:phone_read"]);
+    const result = await options.tools.definitions[0].handler({});
+    const ref = result.split(" ")[0];
+    return JSON.stringify({ candidates: [
+      { ...candidate("Check gate seven", ["live-unknown"]), timeSensitive: true },
+      { ...candidate("Leave for the train earlier", [ref]), timeSensitive: true },
+    ] });
+  };
+  await tick(ws, "pip");
+  assert.deepEqual(calls, ["phone_read"]);
+  assert.equal(ws.board.items.length, 0);
+  const run = ws.state.runs[0];
+  assert.equal(run.delivery?.to, "chat");
+  assert.match(ws.chat(run.delivery.chatId).messages.at(-1).text, /Leave for the train/);
+  assert.equal(ws.proactive.view("pip").pings, 1);
+});
+
+test("a quiet decision can schedule one grounded follow-up, which rechecks the underlying facts", async (t) => {
+  const { ws, seen, dir } = setup(t);
+  ws.setPreferences({ proactive: { enabled: true } });
+  ws.proactive.setBot("pip", { enabled: true, sweepHours: 0 });
+  ws.memory.save("pip", "I need a rehearsal before the poster session on Friday.");
+  const at = Date.now() + 2 * HOUR;
+  const defer = (prompt) => JSON.stringify({ candidates: [], revisit: { at: new Date(at).toISOString(), refs: [packet(prompt)[0].id] } });
+  seen.reply = defer;
+  await tick(ws, "pip");
+  assert.equal(ws.proactive.view("pip").nextReviewAt, at);
+  assert.equal(ws.proactive.view("pip").review, undefined);
+  assert.equal(ws.proactive.view("pip").pings, 0);
+  const restarted = setup(t, { dir }).ws;
+  assert.equal(restarted.proactive.wake("pip", "scheduled", at - 1), null);
+  const check = restarted.proactive.wake("pip", "scheduled", at);
+  assert.equal(check.reason, "review");
+  assert.equal(check.sweep, false);
+  assert.match(restarted.proactive.prompt("pip", check), /Reassess the facts/);
+  const routine = restarted.proactive.routine("pip");
+  await restarted.send(routine.chat.id, "Check for a helpful suggestion.", { proactive: true, proactiveCheck: check, scheduleId: routine.entry.id });
+  assert.equal(restarted.proactive.view("pip").nextReviewAt, undefined);
+  assert.equal(restarted.proactive.wake("pip", "scheduled", at + HOUR), null);
+  ws.memory.write("pip", "");
+  assert.equal(ws.proactive.wake("pip", "scheduled", at), null, "a forgotten fact cancels a pending review");
+});
+
+test("a persisted in-flight check resumes once after restart, and refuses a late result after reset", async (t) => {
+  const { ws, seen, dir } = setup(t);
+  ws.setPreferences({ proactive: { enabled: true } });
+  ws.proactive.setBot("pip", { enabled: true, sweepHours: 0 });
+  ws.memory.save("pip", "I want to practise French before my trip.");
+  const started = Promise.withResolvers(), finish = Promise.withResolvers();
+  seen.reply = async (prompt) => { started.resolve(); await finish.promise; return proposal("A French rehearsal")(prompt); };
+  const pending = tick(ws, "pip");
+  await started.promise;
+  const restarted = setup(t, { before: (other) => copyFileSync(join(dir, "workspace.json"), join(other, "workspace.json")) });
+  restarted.ws.memory.write("pip", ws.memory.read("pip"));
+  restarted.seen.reply = proposal("A French rehearsal");
+  await Promise.all(restarted.ws.resumeActive());
+  assert.deepEqual(restarted.ws.resumeActive(), []);
+  const gate = restarted.ws.proactive.gate("pip");
+  assert.equal(gate.log.length, 1);
+  assert.equal(gate.log[0].reason, "context");
+  assert.equal(gate.learning.history.length, 1);
+  assert.equal(gate.pings, 1);
+  assert.equal(await tick(restarted.ws, "pip"), null);
+  ws.proactive.setBot("pip", null);
+  ws.proactive.setBot("pip", { enabled: true });
+  finish.resolve();
+  await pending;
+  assert.deepEqual(ws.proactive.view("pip").log, []);
+  assert.equal(ws.state.runs.find((r) => r.proactive).silent, true);
+});
+
+test("selecting one suggestion leaves another distinct waiting request available for the next tick", async (t) => {
+  const { ws, seen } = setup(t);
+  ws.setPreferences({ proactive: { enabled: true } });
+  ws.proactive.setBot("pip", { enabled: true, sweepHours: 0 });
+  const chat = ws.createChat("patch");
+  failedRun(ws, "first", chat, "Reconcile invoices");
+  failedRun(ws, "second", chat, "Prepare the launch");
+  seen.reply = (prompt) => JSON.stringify({ candidates: packet(prompt).map((e) => candidate(e.text, [e.id])) });
+  await tick(ws, "pip");
+  await tick(ws, "pip");
+  assert.equal(ws.proactive.view("pip").pings, 2);
+  assert.notEqual(ws.proactive.view("pip").log[0].said, ws.proactive.view("pip").log[1].said);
+  assert.equal(await tick(ws, "pip"), null);
 });

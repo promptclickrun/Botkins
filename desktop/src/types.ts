@@ -1823,7 +1823,7 @@ export type Preferences = {
   /** Settings › Experimental › Proactive agent: the computer's switch (desktop/proactive.mjs). Each bot's own is `State.proactive`. Missing on an older computer. */
   proactive?: ProactiveSettings;
 };
-export type ProactiveWatch = "runs" | "tasks" | "requests";
+export type ProactiveWatch = "runs" | "tasks" | "requests" | "context";
 /** The computer's switch for the Proactive agent. Off pauses every bot's agent without forgetting its settings. */
 export type ProactiveSettings = { enabled: boolean };
 /** What a bot's Proactive agent is set to (desktop/proactive-settings.mjs). */
@@ -1853,10 +1853,14 @@ export type ProactiveBot = Partial<ProactiveBotSettings> & {
   pings?: number;
   day?: string;
   log?: ProactiveLog[];
+  nextReviewAt?: number;
+  learning?: { rated: number; preferred: string[]; retired: string[];
+    evaluation?: { trained: number; tested: number; baseline: number; previous: number; challenger: number; promoted: boolean };
+  };
 };
 export type ProactivePart = { enabled: boolean; bots: Record<string, ProactiveBot | undefined> };
 /** What the Proactive agent did at each wake (desktop/proactive.mjs), newest first. */
-export type ProactiveLog = { at: number; reason: "signals" | "sweep" | "check"; signals: number; outcome: "alerted" | "silent" | "failed"; runId: string; said?: string };
+export type ProactiveLog = { at: number; reason: "signals" | "sweep" | "check" | "context" | "review"; score?: number; signals: number; outcome: "alerted" | "silent" | "failed"; runId: string; said?: string };
 export type Step = {
   background?: boolean;
   agentId?: string;

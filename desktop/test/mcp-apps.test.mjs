@@ -274,3 +274,24 @@ test("a connection closed while it is still opening stops the server it started"
   await assert.rejects(upstream.open(), /disconnected/, "a closed connection never opens again");
   assert.equal(upstream.client, null);
 });
+
+test("a proactive look-around uses only annotated read tools, without publishing the tool's view", async (t) => {
+  const { ws, bot, requests } = setup(t);
+  ws.setPreferences({ proactive: { enabled: true } });
+  ws.proactive.setBot(bot.id, { enabled: true });
+  const { chat, entry } = ws.proactive.routine(bot.id);
+  const check = ws.proactive.wake(bot.id, "manual");
+  const run = { id: "reading", proactive: true, chatId: chat.id, scheduleId: entry.id };
+  const task = { run };
+  ws.active.set(chat.id, task);
+  const tools = await ws.proactive.sourceTools(bot, chat, run, task, check);
+  assert.deepEqual(tools.map((tool) => tool.name), ["clock__get_time"]);
+  const read = await tools[0].handler({ zone: "UTC" });
+  assert.match(read, /^live-\w+ \(clock__get_time\)\nIt is 12:01\./);
+  assert.equal(check.live[0].id, read.split(" ")[0]);
+  assert.equal(requests().some((r) => r.method === "resources/read"), false);
+  assert.equal(run.mcpApps, undefined);
+  bot.mcpOff = ["clock-id"];
+  await assert.rejects(tools[0].handler({}), /no longer enabled/);
+  assert.deepEqual(await ws.proactive.sourceTools(bot, chat, run, task, check), []);
+});

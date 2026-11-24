@@ -22,6 +22,7 @@
 //   temporary     True for a disposable session, such as the one behind the "/" menu of a new chat.
 //   folder        Working directory for file and shell tools.
 //   coding        True when the folder is a project folder (load its instruction files, git context).
+//   sourcesOnly   A proactive check. Offer only the supplied read tools in harnesses with a tool selector.
 //   model         { model, source?, reasoningEffort? } chosen for this conversation.
 //   approval      "ask" | "read" | "assisted" | "all".
 //   instructions  Text added to the system prompt.

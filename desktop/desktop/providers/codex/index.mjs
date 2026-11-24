@@ -210,7 +210,11 @@ class CodexSession extends ProviderSession {
       approvalPolicy: settings.approvalPolicy,
       approvalsReviewer: settings.approvalsReviewer,
       sandbox: settings.sandbox,
-      config: threadConfig(await serversWithTokens(spec), this.bridge),
+      config: {
+        ...threadConfig(await serversWithTokens(spec), this.bridge),
+        ...(spec.sourcesOnly && { "features.shell_tool": false, "features.unified_exec": false, "features.multi_agent": false,
+          "features.apps": false, "features.plugins": false, "features.computer_use": false, web_search: "disabled" }),
+      },
       developerInstructions: spec.instructions + this.skills.instructions + (spec.context ?? ""),
     };
     // What a loaded thread can't take in later. The model and the approval level ride with each

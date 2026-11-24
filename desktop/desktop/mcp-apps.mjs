@@ -348,7 +348,7 @@ export class McpApps {
         const tools = await upstream.tools();
         const views = tools.some((tool) => viewOf(tool));
         this.remember(server, views);
-        if (!views) {
+        if (!views && !upstream.usedForReads) {
           if (this.upstreams.get(server.id) === upstream) this.upstreams.delete(server.id);
           await upstream.close();
         }
@@ -366,18 +366,23 @@ export class McpApps {
    * The servers Botkins runs for this bot's turn instead of the harness: { name → { server, upstream, tools } }.
    * Only servers that answered within a few seconds are taken; any other goes to the harness as before.
    */
-  async prepare(bot) {
+  async prepare(bot, { readOnly = false } = {}) {
     const off = new Set(bot?.mcpOff ?? []);
     const servers = (this.ws.integrations?.servers ?? []).filter((server) => server.enabled && !off.has(server.id));
     const routed = new Map();
     const waits = [];
     for (const server of servers) {
-      const ready = this.ready(server);
+      const ready = this.ready(server, readOnly);
       if (!ready) continue;
       const { upstream, tools } = ready;
+      const add = (list) => {
+        if (!list) return;
+        const tools = readOnly ? list.filter((t) => t.annotations?.readOnlyHint === true && t.annotations.destructiveHint !== true) : list;
+        routed.set(server.name, { server, upstream, tools });
+      };
       // Connected and listed already (the usual case once warm): taken at once, with no wait.
-      if (upstream.list) routed.set(server.name, { server, upstream, tools: upstream.list });
-      else waits.push(tools.then((list) => list && routed.set(server.name, { server, upstream, tools: list })));
+      if (upstream.list) add(upstream.list);
+      else waits.push(tools.then(add));
     }
     if (waits.length) await Promise.race([Promise.all(waits), new Promise((resolve) => setTimeout(resolve, READY_MS).unref?.())]);
     return routed;
@@ -395,13 +400,14 @@ export class McpApps {
    * for a server Botkins doesn't run (it is looked at in the background instead) or one that
    * failed a moment ago (it goes to the harness, without a wait each turn).
    */
-  ready(server) {
-    if (!this.wanted(server)) {
+  ready(server, readOnly = false) {
+    if (!readOnly && !this.wanted(server)) {
       this.discover(server);
       return null;
     }
     if (Date.now() - (this.failed.get(server.id) ?? -Infinity) < RETRY_MS) return null;
     const upstream = this.upstream(server);
+    if (readOnly) upstream.usedForReads = true; // A concurrent view-discovery pass must leave this connection open.
     const tools = upstream.tools().catch(() => {
       this.failed.set(server.id, Date.now());
       if (this.upstreams.get(server.id) === upstream) this.upstreams.delete(server.id);
@@ -429,6 +435,7 @@ export class McpApps {
             skipPermission: true,
             handler: async (args = {}) => {
               if (task?.stopped || this.ws.closing || (chat && task && this.ws.active.get(chat.id) !== task)) throw new Error("This turn is no longer active");
+              if (run?.proactive && (!server.enabled || bot.mcpOff?.includes(server.id) || !this.ws.integrations.servers.includes(server))) throw new Error("This proactive source is no longer enabled.");
               return this.invoke({ bot, chat, run, task }, server, upstream, tool, args);
             },
           }),
@@ -450,13 +457,13 @@ export class McpApps {
       if (!decision.allow) throw new Error("The person didn't allow " + label + ".");
     }
     const result = await upstream.call(tool.name, args);
-    if (server === composioServer(this.ws.integrations?.servers) && tool.name === "COMPOSIO_MANAGE_CONNECTIONS" && chat && run) {
+    if (server === composioServer(this.ws.integrations?.servers) && tool.name === "COMPOSIO_MANAGE_CONNECTIONS" && chat && run && !run.proactive) {
       const told = await this.connectCards(bot, chat, run, result);
       if (told) return told;
     }
     const text = resultText(result);
     const uri = viewOf(tool);
-    if (uri && run && chat && !result?.isError) await this.card({ chat, run, server, upstream, tool, uri, args, result, text }).catch(() => {});
+    if (uri && run && !run.proactive && chat && !result?.isError) await this.card({ chat, run, server, upstream, tool, uri, args, result, text }).catch(() => {});
     if (result?.isError) throw new Error(text || "The tool failed.");
     return text || "Done.";
   }

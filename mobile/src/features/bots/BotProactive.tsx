@@ -23,6 +23,7 @@ export default function BotProactive() {
   const part = usePart("proactive");
   const chats = useChats();
   const synced = useApp((state) => state.synced);
+  const learning = useCapability("proactive-learning-v1");
   const supported = useCapability(PROACTIVE_CAPABILITY);
   const canManage = useCan("agents", "manage");
   const member = useMember();
@@ -38,7 +39,11 @@ export default function BotProactive() {
     );
   const entry = part?.bots?.[bot.id];
   const p = proactiveOf(entry);
-  const rules = proactiveRules(entry, member);
+  const rules = proactiveRules(entry, member, learning);
+  const watched = p.watch.filter((w) => learning || w !== "context");
+  const description = learning
+    ? bot.name + " uses your goals and previous conversations" + (rules.lookAround ? " and its saved memory" : "") + " to suggest what you could do next. Rate a suggestion in your Feed or react with 👍 or 👎 in chat to teach it what helps."
+    : bot.name + " checks for changes and tells you what needs your attention.";
   const set = (patch: Partial<ProactiveBotSettings> | null) => void attempt(api.setBotProactive(bot.id, patch));
   const turnOn = (enabled: boolean) =>
     enabled
@@ -48,7 +53,7 @@ export default function BotProactive() {
         ])
       : set({ enabled: false });
   const forget = () =>
-    Alert.alert("Forget " + bot.name + "'s Proactive settings?", "Its routine and what it already told you are removed too.", [
+    Alert.alert("Forget " + bot.name + "'s Proactive settings?", "This removes its proactive routine, planned follow-up and everything it learned from ratings.", [
       { text: "Cancel", style: "cancel" },
       { text: "Forget", style: "destructive", onPress: () => set(null) },
     ]);
@@ -65,9 +70,7 @@ export default function BotProactive() {
     );
   return (
     <Page title="Proactive" keyboard>
-      <T variant="footnote" color="muted">
-        {bot.name} tells you what you need to know before you ask. Botkins checks for changes with no model, and wakes {bot.name} only when something changed{rules.lookAround ? " or a look around is due" : ""}. It reads and drafts only: it never sends, posts, buys or deletes on its own.
-      </T>
+      <T variant="footnote" color="muted">{description}</T>
       <Group>
         <Row
           title="Proactive agent"
@@ -89,13 +92,13 @@ export default function BotProactive() {
         />
       </Group>
       <T variant="footnote" color="muted">
-        Quiet hours hold it back.
+        {learning && p.deliver === "feed" ? "A shared Feed sends personal suggestions to private chat." : "Quiet hours hold it back."}
       </T>
       <View>
         <Label>What Botkins watches</Label>
         <Group>
           {rules.watches.map((w) => (
-            <Row key={w.id} title={w.title} subtitle={w.subtitle} toggled={p.watch.includes(w.id)} onToggle={(on) => set({ watch: on ? [...p.watch, w.id] : p.watch.filter((x) => x !== w.id) })} />
+            <Row key={w.id} title={w.title} subtitle={w.subtitle} toggled={watched.includes(w.id)} onToggle={(on) => set({ watch: on ? [...watched, w.id] : watched.filter((x) => x !== w.id) })} />
           ))}
         </Group>
       </View>
@@ -103,11 +106,22 @@ export default function BotProactive() {
         <Field label="Your rules" hint="What is worth telling you, and what isn't." placeholder="Tell me about anything from my manager the same day. Skip newsletters." value={instructions} onChangeText={setDraft} maxLength={2000} area />
         <Button title="Save rules" variant="secondary" disabled={instructions.trim() === p.instructions} onPress={() => (set({ instructions }), setDraft(undefined))} />
       </View>
+      {!!p.nextReviewAt && <Row title="Planned follow-up" value={new Date(p.nextReviewAt).toLocaleString()} />}
+      {!!p.learning?.rated && (
+        <View>
+          <Label>What helped</Label>
+          <Group>
+            <Row title="Rated suggestions" value={String(p.learning.rated)} />
+            {!!p.learning.preferred.length && <Row title="Preferred approaches" subtitle={p.learning.preferred.join(", ")} />}
+            {!!p.learning.retired.length && <Row title="Set aside" subtitle={p.learning.retired.join(", ")} />}
+          </Group>
+        </View>
+      )}
       {routine && (
         <View>
           <Label>Recent</Label>
           <Group>
-            {log.length ? log.map((l) => <Row key={l.runId} title={REASON[l.reason]} subtitle={l.said ?? new Date(l.at).toLocaleString()} value={OUTCOME[l.outcome]} />) : <Row title="Nothing yet" />}
+            {log.length ? log.map((l) => <Row key={l.runId} title={REASON[l.reason]} subtitle={l.said ?? new Date(l.at).toLocaleString()} value={OUTCOME[l.outcome] + (l.score == null ? "" : " · Score " + l.score + "/100")} />) : <Row title="Nothing yet" />}
             <Row title="Check now" disabled={!p.enabled || isPaused(part, entry)} onPress={() => void attempt(api.runRoutine(routine.id))} />
           </Group>
         </View>

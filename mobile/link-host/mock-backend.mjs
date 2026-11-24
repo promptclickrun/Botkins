@@ -1254,7 +1254,7 @@ export class MockBackend {
     // What this stand-in app supports itself, beyond the link's own list.
     // "files-v1": a file out and in as text, without a dialog. "folders-v1": the folder browser.
     // "artifacts-v1": what the bots made or were given, from an index the app keeps (here: made up).
-    this.capabilities = ["message-reactions-v1", "client-message-id-v1", "voice-turns-v1", "voice-history-v1", "quiet-replies-v1", "routine-delivery-v1", ...(process.env.BOTKINS_DEV_NO_OUTPUT === "off" ? [] : ["routine-no-output-v1"]), "routine-scripts-v1", "routine-models-v1", "routine-silent-v1", "proactive-agent-v2", "models-v2", "fast-mode-v1", "side-pane-v1", "files-v1", "folders-v1", "project-artifacts-v1", "artifacts-v1", "secure-input-v1", "chat-title-regeneration-v1", ...(process.env.BOTKINS_DEV_USAGE === "off" ? [] : ["provider-usage-v1"])];
+    this.capabilities = ["message-reactions-v1", "client-message-id-v1", "voice-turns-v1", "voice-history-v1", "quiet-replies-v1", "routine-delivery-v1", ...(process.env.BOTKINS_DEV_NO_OUTPUT === "off" ? [] : ["routine-no-output-v1"]), "routine-scripts-v1", "routine-models-v1", "routine-silent-v1", "proactive-agent-v2", "proactive-learning-v1", "models-v2", "fast-mode-v1", "side-pane-v1", "files-v1", "folders-v1", "project-artifacts-v1", "artifacts-v1", "secure-input-v1", "chat-title-regeneration-v1", ...(process.env.BOTKINS_DEV_USAGE === "off" ? [] : ["provider-usage-v1"])];
     this.capabilities.push("project-folders-v1", "project-mode-v1", "project-clone-v1");
     if (this.timeline) this.capabilities.push("turn-timeline-v1");
     // "bot-voice-v1": a bot may have a voice of its own. BOTKINS_DEV_BOT_VOICE=off is an older computer.
@@ -2170,13 +2170,13 @@ export class MockBackend {
         delete this.state.proactive.bots[id];
         return null;
       }
-      const usual = { enabled: false, every: 30, sweepHours: 3, maxPerDay: 6, deliver: "chat", watch: ["runs", "tasks", "requests"], instructions: "" };
+      const usual = { enabled: false, every: 30, sweepHours: 3, maxPerDay: 6, deliver: "chat", watch: ["runs", "tasks", "requests", "context"], instructions: "" };
       if (!patch || typeof patch !== "object" || Array.isArray(patch)) throw new Error("Invalid Proactive agent setting");
       const unknown = Object.keys(patch).find((key) => !Object.hasOwn(usual, key));
       if (unknown) throw new Error("Unknown Proactive agent setting: " + unknown);
       const owner = (held?.person ?? person) === "owner";
       // A member's agent never looks around the computer's own accounts, and tasks are the owner's.
-      const next = { ...(held ?? { ...usual, ...(!owner && { sweepHours: 0, watch: ["runs", "requests"] }) }), ...patch, person: held?.person ?? person };
+      const next = { ...(held ?? { ...usual, ...(!owner && { sweepHours: 0, watch: ["runs", "requests", "context"] }) }), ...patch, person: held?.person ?? person };
       if (!owner && next.sweepHours !== 0) throw new Error("Only the owner can turn on look-around: it reads the computer's own tools and accounts.");
       if (!owner) next.watch = next.watch.filter((watch) => watch !== "tasks");
       this.state.proactive.bots[id] = next;

@@ -191,6 +191,7 @@ class ClaudeSession extends ProviderSession {
       settingSources: [],
       // The same goes for the skills in the person's own Claude Code: a bot has Botkins' (this.skills).
       skills: [],
+      ...(spec.sourcesOnly && { tools: [] }),
       strictMcpConfig: true,
       mcpServers: servers,
       // Server addresses and their secrets go to Claude Code over its input, not on its command line.

@@ -8,14 +8,15 @@ export const EVERY = [15, 30, 60, 120];
 export const SWEEP = [0, 1, 2, 3, 6, 12];
 export const CAP = [3, 6, 10, 20];
 export const WATCHES: { id: ProactiveWatch; title: string; subtitle: string }[] = [
+  { id: "context", title: "Personal context", subtitle: "Wake when goals, memories or your conversations with this bot change." },
   { id: "runs", title: "Failed routines and tasks", subtitle: "A run that ended needing you" },
   { id: "tasks", title: "Tasks waiting on you", subtitle: "In Review or Blocked over four hours" },
   { id: "requests", title: "Unanswered requests", subtitle: "Open for more than 15 minutes" },
 ];
 export const OUTCOME = { alerted: "Told you", silent: "Nothing to say", failed: "Failed" } as const;
-export const REASON = { signals: "Something changed", sweep: "Look around", check: "Check now" } as const;
+export const REASON = { review: "Planned follow-up", context: "Personal context changed", signals: "Something changed", sweep: "Look around", check: "Check now" } as const;
 
-export const USUAL: ProactiveBotSettings = { enabled: false, every: 30, sweepHours: 3, maxPerDay: 6, deliver: "chat", watch: ["runs", "tasks", "requests"], instructions: "" };
+export const USUAL: ProactiveBotSettings = { enabled: false, every: 30, sweepHours: 3, maxPerDay: 6, deliver: "chat", watch: ["runs", "tasks", "requests", "context"], instructions: "" };
 
 export const minutes = (m: number) => (m < 60 ? m + " minutes" : m / 60 + (m === 60 ? " hour" : " hours"));
 
@@ -37,11 +38,12 @@ export function proactiveOf(entry?: ProactiveBot): ProactiveBotSettings & Proact
 }
 
 /** What a person may change of an agent: not one another person set up, and as a member neither look-around nor tasks. */
-export function proactiveRules(entry: ProactiveBot | undefined, member: boolean) {
+export function proactiveRules(entry: ProactiveBot | undefined, member: boolean, learning = true) {
+  const memberAgent = member || (!!entry?.person && entry.person !== "owner");
   return {
     taken: entry?.taken === true,
-    lookAround: !member,
-    watches: WATCHES.filter((watch) => !member || watch.id !== "tasks"),
+    lookAround: !memberAgent,
+    watches: WATCHES.filter((watch) => (learning || watch.id !== "context") && (!memberAgent || watch.id !== "tasks")),
   };
 }
 
