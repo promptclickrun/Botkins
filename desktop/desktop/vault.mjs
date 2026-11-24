@@ -217,8 +217,14 @@ export class Vault {
   remove(ref) {
     const id = this.id(ref);
     if (this.locked || !id || !this.entries[id]) return false;
+    const entry = this.entries[id];
     delete this.entries[id];
-    this.save();
+    try {
+      this.save();
+    } catch (error) {
+      this.entries[id] = entry;
+      throw error;
+    }
     return true;
   }
   /** Removes every entry of an owner that `keep` (a set of references) doesn't name. */

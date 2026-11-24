@@ -671,12 +671,24 @@ export class CopilotProvider extends ModelProvider {
    * with no browser passes `device({ userCode, verificationUri, expiresIn })` instead: GitHub's
    * device sign-in, where the person types a one-time code on a page they open on any device.
    */
-  async signIn({ open, device }) {
-    const approved = await this.withAccounts(async (accounts, client) => {
+  async signIn(options) {
+    const flow = {};
+    this.signInFlow = flow;
+    try {
+      const approved = await this.authorizeAccount(options, flow);
+      if (this.signInFlow !== flow) throw new Error("Sign-in cancelled.");
+      if (approved) await this.resumeApprovedAccount(approved, flow);
+    } finally {
+      if (this.signInFlow === flow) this.signInFlow = null;
+    }
+  }
+  async authorizeAccount({ open, device }, flow) {
+    return this.withAccounts(async (accounts, client) => {
       const { flowId, step } = await accounts.login.begin({ kind: "githubDotCom", method: device ? "device-code" : "web" });
-      const flow = (this.signInFlow = { cancel: () => accounts.login.cancel({ flowId }).catch(() => {}) });
+      flow.cancel = () => accounts.login.cancel({ flowId }).catch(() => {});
       const cancelled = () => this.signInFlow !== flow;
       try {
+        if (cancelled()) throw new Error("Sign-in cancelled.");
         if (device) {
           if (step.kind !== "device-code" || new URL(step.verificationUri).origin !== "https://github.com")
             throw new Error("GitHub didn't offer a one-time code. Sign in with a GitHub token instead.");
@@ -721,15 +733,14 @@ export class CopilotProvider extends ModelProvider {
         }
         if (!(await client.getAuthStatus()).isAuthenticated) throw new Error("Copilot could not load the GitHub sign-in on this host. Try again.");
       } finally {
-        if (!cancelled()) this.signInFlow = null;
         await flow.cancel();
+        delete flow.cancel;
       }
     });
-    if (approved) await this.resumeApprovedAccount(approved);
   }
   // A runtime started with useLoggedInUser:false can save an approved device login but stays
   // anonymous. Status and chat must both wait for the replacement to verify the saved identity.
-  async resumeApprovedAccount(approved) {
+  async resumeApprovedAccount(approved, flow = this.signInFlow) {
     const stopped = this.stop();
     const ready = stopped.then(async () => {
       this.stopping = false;
@@ -740,7 +751,7 @@ export class CopilotProvider extends ModelProvider {
             (approved.host && auth.host !== approved.host)) {
           throw new Error("Copilot could not load the approved account on this host. Try signing in again.");
         }
-        if (this.connection !== ready) throw new Error("Sign-in cancelled.");
+        if (this.connection !== ready || this.signInFlow !== flow) throw new Error("Sign-in cancelled.");
         rmSync(this.signedOutFile, { force: true });
         return client;
       } catch (error) {
@@ -760,14 +771,21 @@ export class CopilotProvider extends ModelProvider {
     const flow = this.signInFlow;
     if (!flow) return;
     this.signInFlow = null;
-    await flow.cancel();
+    await flow.cancel?.();
   }
   // A shared keychain item can belong to another Copilot installation. If the OS protects it,
   // disconnect this host and start the SDK with automatic account loading disabled on every boot.
-  async disconnectAccount() {
+  async disconnectAccount(removeToken) {
     if (!this.signedOutFile) throw new Error("A Botkins data folder is required to disconnect this account.");
+    const alreadyDisconnected = existsSync(this.signedOutFile);
     mkdirSync(this.baseDirectory, { recursive: true });
     writeFileSync(this.signedOutFile, "", { mode: 0o600 });
+    try {
+      if (removeToken && !removeToken()) throw new Error("Could not remove the saved Copilot token.");
+    } catch (error) {
+      if (!alreadyDisconnected) rmSync(this.signedOutFile, { force: true });
+      throw error;
+    }
     await this.stop();
   }
   async signOut() {

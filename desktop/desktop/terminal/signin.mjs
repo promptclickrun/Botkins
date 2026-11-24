@@ -212,13 +212,13 @@ export class SignIns {
   /** Signs a provider out: the kept token goes, and the provider's own sign-in where it can remove one. */
   async signOut(id) {
     const provider = this.providers().require(id);
-    const had = this.forget(provider.id);
-    if (had && provider.id === "copilot") {
+    if (provider.id === "copilot" && this.hasToken(provider.id)) {
       // Removing our pasted token must not then log a different, shared keychain account out.
-      await provider.disconnectAccount();
+      await provider.disconnectAccount(() => this.vault().remove(vaultId(provider.id)));
       await this.changed(provider.id);
       return { connected: (await provider.auth()).connected };
     }
+    const had = this.forget(provider.id);
     let own = null;
     try {
       await provider.signOut();

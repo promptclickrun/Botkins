@@ -748,6 +748,8 @@ test("phone sign-in while Copilot is off and sign-out when the host keychain ref
   const baseDirectory = tempDir(t);
   let saved = false;
   let loadedAccount = "octo";
+  let verification;
+  let vaultReadOnly = false;
   let enabled = false;
   let rejectLogout = true;
   let approve = true;
@@ -763,6 +765,10 @@ test("phone sign-in while Copilot is off and sign-out when the host keychain ref
       async start() {}
       async stop() { this.connected = false; }
       async getAuthStatus() {
+        if (this.connected && verification) {
+          verification.started.resolve();
+          await verification.continue.promise;
+        }
         return { isAuthenticated: this.connected, authType: "user", host: "https://github.com", login: this.connected ? loadedAccount : undefined };
       }
       async createSession() {
@@ -797,8 +803,12 @@ test("phone sign-in while Copilot is off and sign-out when the host keychain ref
       providers: () => registry,
       vault: () => ({
         get: (id) => vault.get(id),
+        has: (id) => vault.has(id),
         put: (value, _meta, id) => vault.set(id, value),
-        remove: (id) => vault.delete(id),
+        remove: (id) => {
+          if (vaultReadOnly) throw new Error("Vault is read-only.");
+          return vault.delete(id);
+        },
       }),
       enable: async () => { enabled = true; },
       changed: async () => registry.invalidate(),
@@ -838,6 +848,15 @@ test("phone sign-in while Copilot is off and sign-out when the host keychain ref
   await login(third.signIns, /approved account/);
   assert.equal((await third.provider.auth()).connected, false);
   loadedAccount = "octo";
+  verification = { started: Promise.withResolvers(), continue: Promise.withResolvers() };
+  const { session } = await third.signIns.start("copilot");
+  await verification.started.promise;
+  await third.signIns.cancel(session);
+  verification.continue.resolve();
+  verification = null;
+  await third.signIns.sessions.get(session).over;
+  assert.match(third.signIns.sessions.get(session).error ?? "", /cancelled/i);
+  assert.equal((await third.provider.auth()).connected, false);
   await login(third.signIns);
   await third.provider.stop();
   const fourth = make();
@@ -857,6 +876,18 @@ test("phone sign-in while Copilot is off and sign-out when the host keychain ref
   assert.equal(enabled, true);
   await assert.rejects(pasted.signIns.useToken("copilot", "bad-token"), /didn.t accept/);
   assert.equal(pasted.signIns.token("copilot"), "good-token");
+  const marker = pasted.provider.signedOutFile;
+  pasted.provider.signedOutFile = join(marker, "unwritable");
+  await assert.rejects(pasted.signIns.signOut("copilot"), /ENOTDIR/);
+  assert.equal(pasted.signIns.token("copilot"), "good-token");
+  pasted.provider.signedOutFile = join(baseDirectory, "new-marker");
+  vaultReadOnly = true;
+  await assert.rejects(pasted.signIns.signOut("copilot"), /read-only/);
+  assert.equal(existsSync(pasted.provider.signedOutFile), false);
+  pasted.provider.signedOutFile = marker;
+  await assert.rejects(pasted.signIns.signOut("copilot"), /read-only/);
+  assert.equal(existsSync(marker), true);
+  vaultReadOnly = false;
   assert.deepEqual(await pasted.signIns.signOut("copilot"), { connected: false });
   assert.equal(logoutCalls, 2, "removing a pasted token leaves the shared credential alone");
   assert.equal(vault.size, 0);
