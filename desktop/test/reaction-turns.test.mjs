@@ -63,6 +63,20 @@ async function reactionRun(ws, chat) {
 const shows = (snapshot, chat, runId) =>
   snapshot.runs.some((r) => r.id === runId) || chat in snapshot.streams || chat in snapshot.intents;
 
+test("a standalone silent reply stays out of the live stream and the session transcript", async (t) => {
+  const { ws, script, seen } = setup(t);
+  const chat = ws.createChat("pip");
+  script.reply = [" [SIL", "ENT]", "\n"];
+  await ws.send(chat, "[SILENT]");
+  assert.deepEqual(ws.chat(chat).messages.map(m => [m.role, m.text]), [["user", "[SILENT]"]]);
+  assert.equal(ws.state.runs[0].status, "Completed");
+  assert.ok(seen.every(snapshot => !snapshot.streams[chat]));
+
+  script.reply.push(" is the marker.");
+  await ws.send(chat, "Explain it.");
+  assert.equal(ws.chat(chat).messages.at(-1).text, "[SILENT]\n is the marker.");
+});
+
 test("a reaction answered with [SILENT] leaves nothing: no message, typing, unread mark or notification", async (t) => {
   const { ws, script, seen } = setup(t);
   const { chat, index, time } = await greeted(ws);

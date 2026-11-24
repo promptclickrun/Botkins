@@ -1,3 +1,4 @@
+import { isSilentMessage } from "../desktop/link/silent-reply.mjs";
 import type { Message, Reasoning, Run, Step } from "./types";
 
 export type RunTimelineEvent =
@@ -21,7 +22,7 @@ export function orderedRunEvents(
   const events: RunTimelineEvent[] = [];
   messages.forEach((message, index) => {
     const belongs = message.runId === run.id || message.steeredRunId === run.id || message.answer?.runId === run.id;
-    if (!belongs) return;
+    if (!belongs || isSilentMessage(message)) return;
     if (message.interim) {
       events.push({ kind: "interim", at: message.time ?? Number.POSITIVE_INFINITY, order: 2, sequence: index, key: "interim-" + index, value: message });
       return;

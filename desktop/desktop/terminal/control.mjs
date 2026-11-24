@@ -11,6 +11,7 @@
 // Every value is plain JSON: `--json` prints it as it is.
 import { introduce, serialLines } from "../link/gadget-setup.mjs";
 import { Failure } from "../link/tools.mjs";
+import { isSilentMessage, visibleStream } from "../link/silent-reply.mjs";
 import { qrText } from "../link/qr.mjs";
 import { changed as changedSettings, read as readSetting, SETTINGS, validate, withSetting, parseValue } from "./config.mjs";
 import { ControlError } from "./socket.mjs";
@@ -187,12 +188,12 @@ export function controlApi(service) {
   const pairingView = (pairing) => (pairing ? { code: pairing.code, url: pairing.url, expiresAt: new Date(pairing.expiresAt).toISOString(), qr: qrText(pairing.url) } : null);
   const chatView = (chat, after = 0) => {
     const task = workspace.active.get(chat.id);
-    const messages = chat.messages.map((message, index) => ({ index, role: message.role, text: message.text ?? "", ...(message.interim && { interim: true }) })).filter((message) => message.index >= after && !message.interim);
+    const messages = chat.messages.map((message, index) => ({ index, role: message.role, text: message.text ?? "", ...(message.interim && { interim: true }) })).filter((message) => message.index >= after && !message.interim && !isSilentMessage(message));
     const request = workspace.interactions.snapshot().find((entry) => entry.chatId === chat.id);
     return {
       chatId: chat.id,
       working: !!task,
-      stream: task?.stream ?? "",
+      stream: visibleStream(task?.stream),
       ...(task?.intent && { intent: task.intent }),
       messages,
       count: chat.messages.length,

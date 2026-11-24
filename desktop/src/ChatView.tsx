@@ -32,6 +32,7 @@ import {
   Square,
 } from "lucide-react";
 import { type CompletionScroll, finalReplyIndex } from "./completionScroll";
+import { isSilentMessage } from "../desktop/link/silent-reply.mjs";
 import { pullRequestUrl } from "../desktop/link/pr-url.mjs";
 import { RichText } from "./RichText";
 import { StreamingText } from "./StreamingText";
@@ -570,7 +571,7 @@ function ChatViewBody({
   // With "Read replies aloud" on, each new final reply in the open chat is spoken. Interim
   // messages are activity markers, not replies, and must never be read aloud as a finished turn.
   let latestIndex = chat.messages.length - 1;
-  while (latestIndex >= 0 && !(chat.messages[latestIndex].role === "assistant" && !chat.messages[latestIndex].interim && chat.messages[latestIndex].text)) latestIndex--;
+  while (latestIndex >= 0 && !(chat.messages[latestIndex].role === "assistant" && !chat.messages[latestIndex].interim && chat.messages[latestIndex].text && !isSilentMessage(chat.messages[latestIndex]))) latestIndex--;
   const latestReply = chat.messages[latestIndex];
   useReadAloud(
     !!state.settings.readAloud,
@@ -661,7 +662,7 @@ function ChatViewBody({
       .map((message, index) => ({ message, index }))
       .filter(({ message }) => message.runId === run.id || message.steeredRunId === run.id || message.answer?.runId === run.id);
     const initial = related.find(({ message }) => message.role === "user" && message.runId === run.id && !message.steeredRunId && !message.answer);
-    const reply = related.filter(({ message }) => message.role === "assistant" && !message.interim);
+    const reply = related.filter(({ message }) => message.role === "assistant" && !message.interim && !isSilentMessage(message));
     const allSteps = run.steps ?? [];
     // The bot is on its work now: the turn runs and nothing waits for the person. Its live line
     // shimmers (T3 Code's look): the running step, or the lead while no step runs in view.
@@ -1006,7 +1007,7 @@ function ChatViewBody({
               <GitFork size={13} /> Forked from an earlier chat
             </p>
           )}
-          {historic && historic.messages.map((message, i) => historic.from + i < loadedFrom &&
+          {historic && historic.messages.map((message, i) => historic.from + i < loadedFrom && !isSilentMessage(message) &&
             (!message.interim || (thinkingMode === "open" && (!foldFinishedSteps || !message.runId || !runs.has(message.runId) || runs.get(message.runId)?.status === "Working"))) && (
             <article key={historic.from + i} id={`message-${chat.id}-${historic.from + i}`} className={messageClass(message)} onContextMenu={e => messageMenu(e, message, historic.from + i)}>
               {message.author && <b className="member-speaker">{authorName(state, message.author)}</b>}
@@ -1023,7 +1024,7 @@ function ChatViewBody({
               timelineRendered.add(run.id);
               return renderTimeline(run);
             }
-            if (m.interim && thinkingMode !== "open") return null;
+            if (isSilentMessage(m) || (m.interim && thinkingMode !== "open")) return null;
             return (
               <Fragment key={i}>
                 {(m.text || m.role !== "assistant") && (

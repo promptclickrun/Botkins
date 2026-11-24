@@ -16,7 +16,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 
 import { Panels, textField } from "./panels.mjs";
-import { isSilent } from "./routines.mjs";
+import { isSilent, mayBeSilent, visibleStream } from "./link/silent-reply.mjs";
 import { Providers } from "./providers/index.mjs";
 import { CopilotProvider } from "./providers/copilot/index.mjs";
 import { Integrations } from "./integrations.mjs";
@@ -79,7 +79,7 @@ import { createComposio } from "./composio.mjs";
 import { Connects } from "./connects.mjs";
 import { McpApps } from "./mcp-apps.mjs";
 import { reactionTool } from "./reactions.mjs";
-import { mayBeSilent, ReactionTurns } from "./reaction-turns.mjs";
+import { ReactionTurns } from "./reaction-turns.mjs";
 import { setReaction } from "./link/message-reactions.mjs";
 import { SidePane } from "./sidepane.mjs";
 import { Artifacts } from "./artifacts.mjs";
@@ -431,7 +431,7 @@ export class Workspace {
         this.shownTurns().map(([id, task]) => [id, task.intent || ""]),
       ),
       streams: Object.fromEntries(
-        this.shownTurns().map(([id, task]) => [id, task.stream]),
+        this.shownTurns().map(([id, task]) => [id, visibleStream(task.stream)]),
       ),
       // In a group chat, the member who is replying right now.
       speakers: Object.fromEntries(
@@ -1803,13 +1803,17 @@ export class Workspace {
     try {
       for (const bot of order) {
         if (task.stopped || this.closing) break;
+        if (run.recovery?.silentMembers?.includes(bot.id)) continue;
         if (chat.messages.some((m) => m.runId === run.id && m.role === "assistant" && !m.interim && m.botId === bot.id) || failures.some((f) => f.botId === bot.id)) continue;
         Object.assign(task, { speaker: bot.id, stream: "", streamTime: undefined, committedMessage: undefined, thinking: "", intent: "", streamMessage: undefined, streamBreak: false });
         this.notify();
         try {
           const text = await this.memberTurn(chat, bot, members, run, task);
           if (task.stopped || this.closing) break;
-          finishReply(chat, run, task, text);
+          if (isSilent(text || task.stream)) {
+            (run.recovery.silentMembers ??= []).push(bot.id);
+            task.stream = "";
+          } else finishReply(chat, run, task, text);
           markSeen(chat, bot.id);
           this.save();
         } catch (error) {
@@ -1827,6 +1831,10 @@ export class Workspace {
         run.detail = failures
           .map((f) => (bots.find((b) => b.id === f.botId)?.name ?? "A bot") + ": " + f.detail)
           .join(" · ");
+      }
+      if (order.length && run.recovery?.silentMembers?.length === order.length) {
+        run.silent = true;
+        run.noOutput = true;
       }
       run.status = failures.length === order.length ? "Needs you" : "Completed";
       if (run.status === "Needs you") run.ending = failureEnding;
@@ -1847,7 +1855,7 @@ export class Workspace {
       finishCanvas(run);
       run.finished = Date.now();
       chat.time = Date.now();
-      if (run.status !== "Stopped") chat.unread = true;
+      if (run.status !== "Stopped" && !run.silent) chat.unread = true;
       this.catalogs.delete(chat.id);
       this.active.delete(chat.id);
       this.events.emit("turn", { chat, run });
@@ -2070,7 +2078,7 @@ export class Workspace {
         );
         if (task.stopped || this.closing) return;
         const empty = typeof text !== "string" || !text.trim();
-        if ((routine || run.reaction) && isSilent(text || task.stream)) {
+        if (isSilent(text || task.stream)) {
           run.noOutput = true;
           run.silent = true;
           noOutput = true;
@@ -2161,7 +2169,7 @@ export class Workspace {
         const recovered = await this.recoverLost(session, chat, run);
         if (recovered != null) {
           task.stream = "";
-          if (routine && isSilent(recovered)) Object.assign(run, { noOutput: true, silent: true });
+          if (isSilent(recovered)) Object.assign(run, { noOutput: true, silent: true });
           else if (!noOutput) finishReply(chat, run, task, recovered);
           run.status = "Completed";
           run.detail = "";
@@ -2226,7 +2234,7 @@ export class Workspace {
         if (panel) this.spaces.touch(panel.spaceId);
       }
       // A finished reply marks its conversation unread until the person opens it. Panel refreshes stay quiet.
-      if (run.status !== "Stopped" && !run.panelId && !chat.temporary && !hiddenRun(run) && !(check && run.silent)) chat.unread = true;
+      if (run.status !== "Stopped" && !run.panelId && !chat.temporary && !hiddenRun(run) && !run.silent) chat.unread = true;
       this.catalogs.delete(chat.id);
       this.active.delete(chat.id);
       // Routine delivery may make a chat or Feed card and call save several times.

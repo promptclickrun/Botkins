@@ -227,9 +227,8 @@ export function notifyField(value) {
  * with no message, no delivery and no notification. A failed run still notifies. Bots are not told
  * of it by default, so a reminder never goes quiet; a routine's instructions opt in by asking for it.
  */
-export const SILENT = "[SILENT]";
+export { SILENT, isSilent } from "./link/silent-reply.mjs";
 export const ROUTINE_SILENT = "routine-silent-v1";
-export const isSilent = (text) => typeof text === "string" && text.trim() === SILENT;
 const MANAGED = "This is a Proactive agent's routine. Change it on the bot's profile, under Proactive.";
 
 const DESTINATION_NOTES = {

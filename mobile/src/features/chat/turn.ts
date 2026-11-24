@@ -12,6 +12,7 @@
 //
 // Steps and Thinking and updates independently select the live canvas rows. A turn’s rail keeps
 // its calls. Fold finished steps determines whether the work collapses once the turn ends.
+import { isSilentMessage } from "../../../link-host/silent-reply.mjs";
 import type { Message, PanePanel, Reasoning, Run, Step, Subagent } from "@/link/types";
 import { type FoldEntry, foldLine, foldParts, liveLine, type StepsChoice, stepCount } from "./fold";
 
@@ -105,7 +106,7 @@ export function indexMessageOwnership(messages: Message[]): MessageOwnership {
   messages.forEach((message, index) => {
     const owner = personOf(message) ?? message.runId;
     owners.push(owner);
-    if (!owner) return;
+    if (!owner || isSilentMessage(message)) return;
     const indices = byRun.get(owner);
     if (indices) indices.push(index);
     else byRun.set(owner, [index]);
@@ -595,6 +596,7 @@ export function chatTimeline(input: TimelineInput): Item[] {
   for (let i = 0; i < messages.length; i++) {
     const owner = owners[i];
     if (!owner) {
+      if (isSilentMessage(messages[i])) continue;
       if (messages[i].interim) {
         if (openUpdates && clean(messages[i].text)) items.push({ kind: "text", key: "i" + (from + i), text: clean(messages[i].text) });
       } else items.push(messageItem(i));
