@@ -3,15 +3,20 @@
 import { router } from "expo-router";
 import { useMemo } from "react";
 import type { Bot } from "@/link/types";
-import { useBots, useChats, usePart } from "@/state/hooks";
+import { useBots, useChats, usePart, useSettings } from "@/state/hooks";
 import { useApp } from "@/state/store";
 import { ago } from "@/state/time";
 import { Group, Loading, Page, Row, space, T } from "@/ui";
 import { RunIcon } from "./bits";
+import { buildNotifyTargetView, runNotifyChip } from "./notifyTargets";
 
 /** The latest 40 runs; a tap opens the run's chat. */
 export function ActivityList() {
   const runs = usePart("runs") ?? [];
+  const meta = usePart("meta");
+  const team = usePart("team");
+  const phones = usePart("phones");
+  const settings = useSettings();
   const chats = useChats();
   const allBots = useBots();
   const bots = useMemo(() => new Map<string, Bot>(allBots.map((bot) => [bot.id, bot])), [allBots]);
@@ -29,7 +34,10 @@ export function ActivityList() {
         const name = botId ? bots.get(botId)?.name : undefined;
         // The icon says how it went; the words say it too when it didn't simply finish.
         const status = run.status === "Completed" ? undefined : run.status === "Needs you" ? "Failed" : run.status;
-        const subtitle = [status, name, ago(run.time), run.trigger === "scheduled" ? "Scheduled" : undefined].filter(Boolean).join(" · ");
+        const notifyChip = run.notifyTargets
+          ? runNotifyChip(run.notifyTargets, buildNotifyTargetView({ meta, team, phones, settings, botId: botId ?? null }))
+          : null;
+        const subtitle = [status, name, ago(run.time), run.trigger === "scheduled" ? "Scheduled" : undefined, notifyChip].filter(Boolean).join(" · ");
         const summary = run.status !== "Working" && run.summary && run.summary.length <= 24 ? run.summary : undefined;
         return <Row key={run.id} leading={<RunIcon status={run.status} />} title={run.title || "Run"} subtitle={subtitle} value={summary} onPress={() => router.push({ pathname: "/chat/[id]", params: { id: run.chatId } })} />;
       })}

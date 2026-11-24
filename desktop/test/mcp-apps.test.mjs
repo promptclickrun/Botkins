@@ -278,7 +278,7 @@ test("a connection closed while it is still opening stops the server it started"
 test("a proactive look-around uses only annotated read tools, without publishing the tool's view", async (t) => {
   const { ws, bot, requests } = setup(t);
   ws.setPreferences({ proactive: { enabled: true } });
-  ws.proactive.setBot(bot.id, { enabled: true });
+  ws.proactive.setBot(bot.id, { enabled: true, setUp: true, people: { owner: { on: true } } });
   const { chat, entry } = ws.proactive.routine(bot.id);
   const check = ws.proactive.wake(bot.id, "manual");
   const run = { id: "reading", proactive: true, chatId: chat.id, scheduleId: entry.id };

@@ -211,6 +211,13 @@ test("a token is typed or piped, never an argument", async () => {
   assert.deepEqual([empty.exit, /Nothing was entered/.test(empty.err)], [EXIT.usage, true]);
 });
 
+test("profile setup prints only the HTTPS attempt and its short code", async () => {
+  const service = fakeService({ "profile.start": { id: "attempt", url: "https://profile.botkins.app/#attempt", code: "123456", label: "Mac", verifier: "must-not-print", token: "must-not-print" } });
+  const result = await botkins(["profile", "start", "--json"], { service });
+  assert.deepEqual(result.json(), { id: "attempt", url: "https://profile.botkins.app/#attempt", code: "123456", label: "Mac" });
+  assert.doesNotMatch(result.out + result.err, /must-not-print/);
+});
+
 test("a command that destroys a saved secret shows what is lost, needs a yes, and gives the mark", async () => {
   const service = fakeService({
     "providers.list": [{ id: "claude", name: "Claude Code", token: "kept by Botkins" }],

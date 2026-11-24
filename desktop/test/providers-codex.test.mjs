@@ -527,7 +527,7 @@ test("a chat on a ChatGPT model runs through the workspace with Botkins' tools o
   assert.ok(called.names.includes("memory_read") && called.names.includes("wiki_search"), "the bot's tools were offered over the bridge");
   // Botkins' skills come along: named in the instructions, read through a tool.
   assert.ok(called.names.includes("skill_read"));
-  assert.match(sent("thread/start")[0].developerInstructions, /Your skills:\n- today-panel: /);
+  assert.match(sent("thread/start")[0].developerInstructions, /Your skills:\n(?:- .+\n)*- today-panel: /);
   assert.equal(called.result.result.isError, undefined);
   assert.match(sent("thread/start")[0].developerInstructions, /Pip/);
   assert.equal(run.eventId, "turn-1");

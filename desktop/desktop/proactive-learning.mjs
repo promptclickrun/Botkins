@@ -132,6 +132,16 @@ export function reviewFrom(revisit, evidence, now) {
   return { at, refs: ids, key: "review:" + digest(ids.join("\n")) };
 }
 
+/**
+ * The one thing a candidate offers to do for the person: a short label for a button, and the request the
+ * bot is sent when the person takes it. Anything else is no offer; the suggestion itself still stands.
+ */
+export function offerFrom(offer) {
+  const label = shortText(offer?.label, 60);
+  const prompt = shortText(offer?.prompt, 1200);
+  return label && prompt && !label.includes("\n") ? { label, prompt } : null;
+}
+
 /** Select at most one grounded suggestion. The model supplies the ideas, never the score,
  * votes or source types. Unknown evidence, weak candidates and repeats cannot reach delivery. */
 export function selectSuggestion(proposals, evidence, learning, recent = []) {
@@ -165,7 +175,7 @@ export function selectSuggestion(proposals, evidence, learning, recent = []) {
     // One current source can justify a timely alert. A general idea needs a personal anchor.
     if (priority < .55 || (winner && priority <= winner.priority)) continue;
     winner = {
-      priority, text: [title, why, next].join("\n\n"), refs,
+      priority, text: [title, why, next].join("\n\n"), refs, offer: offerFrom(proposal.offer),
       example: { method, sources, steps, features, key, wording, score: Math.round(priority * 100) },
     };
   }

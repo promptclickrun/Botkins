@@ -44,6 +44,7 @@ export const WORKSPACE = {
   makePrimary: cmd("bots primary"),
   setBotFlags: cmd("bots flags"),
   setBotProactive: cmd("bots proactive"),
+  proactiveAct: cmd("bots alert"),
   ...each("botMemory setBotMemory", cmd("bots memory")),
   ...each("addSection", cmd("bots sections add")),
   renameSection: cmd("bots sections rename"),
@@ -114,6 +115,12 @@ export const WORKSPACE = {
   "skillsCatalog.search": cmd("skills search"),
   "skillsCatalog.preview": cmd("skills preview"),
   "skillsCatalog.install": cmd("skills install"),
+  // The featured shelf: upstream skills pinned to a commit, installed with `skills preview` and `skills install`.
+  "skillsCatalog.featured": cmd("skills featured"),
+  // ── The direct apps catalog (desktop/mcp-catalog.mjs) ──
+  "mcpCatalog.list": cmd("tools catalog"),
+  // A key comes from a hidden question or --secrets; a program's line is shown and needs a yes.
+  "mcpCatalog.add": cmd("tools connect"),
   "piPackages.browse": cmd("pi browse"),
   "piPackages.preview": cmd("pi show"),
   "piPackages.list": cmd("pi list"),
@@ -226,6 +233,9 @@ export const WORKSPACE = {
   // picker then hands over. (`passwordManagers` and `lockPasswordManager` have commands.)
   ...each("unlockPasswordManager passwordManagerVaults passwordManagerItems passwordManagerItem linkPasswordManagerField", no("person")),
   passwordManagers: cmd("password-managers list"),
+  ...each("protonPassInstallPlan protonPassInstall", cmd("password-managers install")),
+  ...each("protonPassSignInStart protonPassSignInRead protonPassSignInInput protonPassSignInCancel", cmd("password-managers sign-in")),
+  protonPassDisconnect: cmd("password-managers disconnect"),
   lockPasswordManager: cmd("password-managers lock"),
   usage: cmd("usage show"),
   exportUsageText: cmd("usage export"),
@@ -351,6 +361,9 @@ export const LINK = {
   "link.team.setAdminMode": no("phone's own"),
   // A phone's way to the computer's saved credentials and password managers. The owner at the terminal has the commands of the app's own calls for what a command covers; the rest needs a person at the app.
   ...each("link.credentials.check link.credentials.item link.credentials.items link.credentials.link link.credentials.lock link.credentials.managers link.credentials.remove link.credentials.save link.credentials.unlock link.credentials.vaults", no("phone's own")),
+  ...each("link.credentials.protonPassInstallPlan link.credentials.protonPassInstall", cmd("password-managers install")),
+  ...each("link.credentials.protonPassSignInStart link.credentials.protonPassSignInRead link.credentials.protonPassSignInInput link.credentials.protonPassSignInCancel", cmd("password-managers sign-in")),
+  "link.credentials.protonPassDisconnect": cmd("password-managers disconnect"),
   ...each("link.device.answer link.device.file link.device.sources link.upload link.pullRequests", no("phone's own")),
   ...each("link.push.activity link.push.prefs link.push.presence link.push.register link.push.test link.push.unregister", no("phone's own")),
   ...each("link.screen.frame link.screen.grant.begin link.screen.grant.confirm link.screen.info link.screen.input link.screen.revoke link.screen.stop", no("phone's own")),
@@ -398,6 +411,8 @@ export const CHANGES = {
   "plugins.removeMarketplace": 0,
   "skills.upload": (_, result) => result?.added?.join(", "),
   "skillsCatalog.install": (_, result) => result?.added?.[0],
+  // By the catalog entry's id, never a key.
+  "mcpCatalog.add": 0,
   "piPackages.install": 0,
   "piPackages.setEnabled": 0,
   "plugins.install": 0,
@@ -436,8 +451,10 @@ export const CHANGES = {
   "bots.order": null,
   "bots.primary": (args, value) => value?.name ?? args?.[0],
   "bots.flags.set": (args, value) => value?.name ?? args?.[0],
-  // The bot's name only: not its rules, and not who the agent works for.
+  // The bot's name only: not its rules, and not who it looks out for.
   "bots.proactive.set": (args, value) => value?.name ?? args?.[0],
+  // The bot's name only: not the alert's words, and not what was offered.
+  "bots.proactive.act": (args, value) => value?.name ?? args?.[0],
   "bots.memory.set": (args, value) => value?.name ?? args?.[0],
   "bots.sections.add": (args, value) => value?.name ?? args?.[0],
   "bots.sections.rename": (args, value) => value?.name ?? args?.[0],
@@ -534,6 +551,8 @@ export const CHANGES = {
   // The line says that the vault was reset, and only when it was: a refused reset is a "Tried" line that does not say so.
   "credentials.vaultReset": (args, value) => (value?.reset === true ? "the vault was reset" : null),
   "credentials.managerLock": (args, value) => value?.id ?? args?.[0],
+  "protonPass.install": () => "Proton Pass",
+  "protonPass.disconnect": () => "Proton Pass",
   // The provider as the caller named it; the command that runs is the provider's own and is never in the line.
   "providers.install": 0,
   // The provider and the model service: `opencode/anthropic`.
@@ -599,9 +618,24 @@ export const CHANGES = {
   // By the app's slug: never the page to sign in on, an account's id or its email.
   "apps.connect": (args, value) => (value?.chat ? value.slug + " (chat " + value.chat + ")" : (value?.slug ?? args?.[0])),
   "apps.remove": (args, value) => value?.slug ?? args?.[0],
+  // Profile state never includes the bearer token or browser verifier. These calls still log as
+  // account changes because finishing/binding can update the hosted computer directory.
+  "profile.start": null,
+  "profile.finish": null,
+  "profile.refresh": null,
+  "profile.optOut": null,
+  "profile.signOut": null,
+  "profile.approve": 0,
+  "profile.revoke": 0,
+  "profile.connect": 0,
+  "profile.update": null,
+  "profile.disconnect": null,
+  "profile.reconnect": null,
+  "profile.deleteAccount": null,
+  "profile.markMigrationPrompted": null,
 };
 /** The service's own calls that only read, wait or talk in a chat: no line. Every call is in this list, in CHANGES or in LOGS_ITSELF. */
-export const READS = ["skillsCatalog.search", "skillsCatalog.preview", "piPackages.browse", "piPackages.preview", "piPackages.list", "status", "logs.read", "doctor", "events.wait", "pair.status", "devices.list", "bots.list", "bots.get", "providers.list", "providers.services", "providers.login.read", "providers.login.input", "providers.login.cancel", "models", "chat.open", "chat.list", "chat.send", "chat.read", "chat.stop", "runs.list", "routines.list", "plugins.list", "plugins.marketplaces", "plugins.refresh", "plugins.browse", "plugins.preview", "config.get", "config.describe", "relay.status", "update.status", "update.check", "methods", "plugins.get", "tools.list", "tools.get", "tools.import.preview", "tools.signIn.read", "tools.signIn.input", "tools.signIn.cancel", "skills.list", "skills.get", "bots.tools", "bots.access", "bots.menu", "folders.list", "gadgets.get"];
+export const READS = ["skillsCatalog.search", "skillsCatalog.preview", "skillsCatalog.featured", "mcpCatalog.list", "piPackages.browse", "piPackages.preview", "piPackages.list", "status", "logs.read", "doctor", "events.wait", "pair.status", "devices.list", "bots.list", "bots.get", "providers.list", "providers.services", "providers.login.read", "providers.login.input", "providers.login.cancel", "models", "chat.open", "chat.list", "chat.send", "chat.read", "chat.stop", "runs.list", "routines.list", "plugins.list", "plugins.marketplaces", "plugins.refresh", "plugins.browse", "plugins.preview", "config.get", "config.describe", "relay.status", "update.status", "update.check", "methods", "plugins.get", "tools.list", "tools.get", "tools.import.preview", "tools.signIn.read", "tools.signIn.input", "tools.signIn.cancel", "skills.list", "skills.get", "bots.tools", "bots.access", "bots.menu", "folders.list", "gadgets.get", "profile.status", "profile.home"];
 // The reads of the rest of the workspace, one line for each area (each area's builder writes only its own line).
 export const MORE_READS = {
   bots: ["bots.flags", "bots.proactive", "bots.memory", "bots.sections", "bots.sections.get", "bots.importable", "bots.import.preview", "templates.list", "templates.get", "templates.import.preview", "templates.browse", "templates.market"],
@@ -610,7 +644,7 @@ export const MORE_READS = {
   projects: ["projects.list", "projects.get", "projects.artifacts", "projects.changes", "projects.diff", "todos.list", "todos.get", "tasks.list", "tasks.get", "artifacts.list", "artifacts.read", "artifacts.resolve"],
   wiki: ["wiki.tree", "wiki.find", "wiki.page", "wiki.search", "wiki.history", "wiki.version", "wiki.exportPlan"],
   prefs: ["preferences.get", "preferences.harnesses", "usage.report", "usage.export", "cache.info", "macTools.status"],
-  credentials: ["credentials.list", "credentials.vault", "credentials.managers", "providers.usage", "providers.installPlan", "providers.install.read", "providers.install.input", "providers.install.cancel"],
+  credentials: ["credentials.list", "credentials.vault", "credentials.managers", "protonPass.installPlan", "protonPass.signInRead", "providers.usage", "providers.installPlan", "providers.install.read", "providers.install.input", "providers.install.cancel"],
   voice: ["voice.get", "voice.options"], // (`voice.options` can make the service ask a provider for its lists, with the saved key, at the address that the app saved: the call cannot choose it.)
   // (Spaces and panels)
   spaces: ["space.list", "space.get", "panel.list", "panel.get", "panel.routine.review", "card.list", "card.get"],
@@ -630,7 +664,8 @@ READS.push(...Object.values(MORE_READS).flat());
  * "(signed in again)" when it replaces one. The name is the service's own record of the tool, never a word the caller typed
  * (so a code in the place of a name is nowhere in the log), and the page, the pasted address and its code are never there.
  */
-export const LOGS_ITSELF = ["tools.signIn", "tools.signIn.answer", "tools.signIn.end", "plugins.signIn", "plugins.signIn.answer", "plugins.signIn.end"];
+export const LOGS_ITSELF = ["tools.signIn", "tools.signIn.answer", "tools.signIn.end", "plugins.signIn", "plugins.signIn.answer", "plugins.signIn.end",
+  "protonPass.signInStart", "protonPass.signInInput", "protonPass.signInCancel"];
 
 /** A few names for one line of the log: the first ones, then how many more. */
 const some = (names) => (Array.isArray(names) && names.length ? names.slice(0, 4).join(", ").slice(0, 60) + (names.length > 4 ? " and " + (names.length - 4) + " more" : "") : null);

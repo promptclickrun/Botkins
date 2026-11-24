@@ -1,3 +1,4 @@
+import AlertActions, { hasProactiveTeam } from "./AlertActions";
 import {
   Fragment,
   useCallback,
@@ -32,6 +33,7 @@ import {
   Square,
 } from "lucide-react";
 import { type CompletionScroll, finalReplyIndex } from "./completionScroll";
+import { isSilentMessage } from "../desktop/link/silent-reply.mjs";
 import { pullRequestUrl } from "../desktop/link/pr-url.mjs";
 import { RichText } from "./RichText";
 import { StreamingText } from "./StreamingText";
@@ -70,6 +72,7 @@ import { PeopleDialog } from "./ChatPeople";
 import { authorName, chatPeopleView } from "./peopleView";
 import type { Bot, Chat, ChatMode, Message, State } from "./types";
 import { sessionTodos } from "../desktop/link/session-todos";
+import { CONTINUE_OPEN_STEPS, keptLine, openLine } from "./keep";
 import { orderedRunEvents, type RunTimelineEvent } from "./chatTimeline";
 import { teamCan } from "./teamAccess";
 import { regenerateTitleItem, useAsk, useMenu } from "./Pages";
@@ -132,7 +135,19 @@ function Attachments({ list }: { list: Message["attachments"] }) {
   );
 }
 
-function Reactions({ message, state }: { message: Message; state: State }) {
+/** A message's reactions and, under a proactive alert, what the person can do with it. */
+function Reactions({ message, state, botId }: { message: Message; state: State; botId: string }) {
+  const alert = message.alert && hasProactiveTeam(state) ? <AlertActions botId={message.botId ?? botId} alert={message.alert} /> : null;
+  if (!message.reactions?.length) return alert;
+  return (
+    <>
+      <ReactionList message={message} state={state} />
+      {alert}
+    </>
+  );
+}
+
+function ReactionList({ message, state }: { message: Message; state: State }) {
   if (!message.reactions?.length) return null;
   const me = state.team && "me" in state.team ? "member:" + state.team.me.memberId : "owner";
   return <div className="message-reactions">{message.reactions.map(({ actor, emoji }) => {
@@ -271,7 +286,9 @@ function ChatViewBody({
   const chatRuns = state.runs.filter((r) => r.chatId === chat.id);
   const runs = new Map(chatRuns.map((r) => [r.id, r]));
   const latest = chatRuns[0];
-  const requests = state.requests.filter((r) => r.chatId === chat.id);
+  // A question whose turn went on without an answer waits behind the ones a turn is waiting on, and is not "waiting" for the turn.
+  const requests = state.requests.filter((r) => r.chatId === chat.id).sort((a, b) => Number(!!a.detached) - Number(!!b.detached));
+  const turnWaits = requests.some((r) => !r.detached);
   const todos = sessionTodos(latest?.todos, chat.todos ?? chatRuns.find((run) => run.todos)?.todos) ?? [];
   const todoRail = todos.length > 0 && <TaskChip todos={todos} open={drawer === "tasks"} toggle={() => setDrawer(drawer === "tasks" ? "" : "tasks")} />;
   // The to-do chip rides beside the latest turn's fold whenever that fold is sure to be drawn.
@@ -570,7 +587,7 @@ function ChatViewBody({
   // With "Read replies aloud" on, each new final reply in the open chat is spoken. Interim
   // messages are activity markers, not replies, and must never be read aloud as a finished turn.
   let latestIndex = chat.messages.length - 1;
-  while (latestIndex >= 0 && !(chat.messages[latestIndex].role === "assistant" && !chat.messages[latestIndex].interim && chat.messages[latestIndex].text)) latestIndex--;
+  while (latestIndex >= 0 && !(chat.messages[latestIndex].role === "assistant" && !chat.messages[latestIndex].interim && chat.messages[latestIndex].text && !isSilentMessage(chat.messages[latestIndex]))) latestIndex--;
   const latestReply = chat.messages[latestIndex];
   useReadAloud(
     !!state.settings.readAloud,
@@ -650,7 +667,7 @@ function ChatViewBody({
         />
       )}
       {m.role === "assistant" && <LinkPreviewCard text={m.text} enabled={!!state.settings.linkPreviews} />}
-      <Reactions state={state} message={m} />
+      <Reactions state={state} message={m} botId={chat.botId} />
       {actions(m, index)}
     </article>
   );
@@ -661,11 +678,11 @@ function ChatViewBody({
       .map((message, index) => ({ message, index }))
       .filter(({ message }) => message.runId === run.id || message.steeredRunId === run.id || message.answer?.runId === run.id);
     const initial = related.find(({ message }) => message.role === "user" && message.runId === run.id && !message.steeredRunId && !message.answer);
-    const reply = related.filter(({ message }) => message.role === "assistant" && !message.interim);
+    const reply = related.filter(({ message }) => message.role === "assistant" && !message.interim && !isSilentMessage(message));
     const allSteps = run.steps ?? [];
     // The bot is on its work now: the turn runs and nothing waits for the person. Its live line
     // shimmers (T3 Code's look): the running step, or the lead while no step runs in view.
-    const onIt = run.status === "Working" && !requests.length;
+    const onIt = run.status === "Working" && !turnWaits;
     const showStep = (step: NonNullable<typeof run.steps>[number]) => stepsMode === "open" || (stepsMode === "failed" && step.status === "Failed");
     type Event = { kind: RunTimelineEvent["kind"]; at: number; order: number; key: string; body: ReactNode; fold: ReactNode; details: ReactNode };
     const events: Event[] = [];
@@ -730,8 +747,8 @@ function ChatViewBody({
       ? doingNow === "Needs you" ? who + " needs you" : who + " is " + doingNow[0].toLowerCase() + doingNow.slice(1)
       : elapsed === undefined ? endingLabel || "Turn activity" : `Worked for ${duration(elapsed)}`;
 
-    // Faces in the work log are still (the owner's battery rule): no state loop, no blinking.
-    const stillFace = (size: number) => <BotAvatar bot={currentBot ?? bot} state={live ? (group && currentBot ? botActivity(state, currentBot.id) : activity) : "idle"} size={size} animated={false} />;
+    // Faces in the work log hold still; only the live line's face moves while the turn runs.
+    const stillFace = (size: number, moving = false) => <BotAvatar bot={currentBot ?? bot} state={live ? (group && currentBot ? botActivity(state, currentBot.id) : activity) : "idle"} size={size} animated={moving} />;
     const groupFailure = group && run.failures?.length
       ? run.failures.map((failure) => `${state.bots.find((b) => b.id === failure.botId)?.name ?? "A bot"}: ${failure.detail}`).join(" · ")
       : "";
@@ -752,11 +769,13 @@ function ChatViewBody({
     return (
       <Fragment key={`timeline-${run.id}`}>
         {initial && timelineMessage(initial.message, initial.index)}
-        {live && <LiveLead avatar={stillFace(28)} label={doingNow} thought={thinkingMode === "open" ? state.intents[chat.id]?.trim() : undefined} shimmer={onIt && doingNow !== "Needs you" && !allSteps.some((step) => !step.agentId && step.status === "Running" && showStep(step))} />}
+        {live && <LiveLead avatar={stillFace(28, true)} label={doingNow} thought={thinkingMode === "open" ? state.intents[chat.id]?.trim() : undefined} shimmer={onIt && doingNow !== "Needs you" && !allSteps.some((step) => !step.agentId && step.status === "Running" && showStep(step))} />}
         {(live || !folded) && stepsMode === "open" && olderWork}
         {group ? groupTranscript : (live || !folded) ? events.map((event) => <Fragment key={event.key}>{event.body}</Fragment>) : personBody}
         {/* A finished one-bot turn folds above its answer: the work, then the reply. */}
         {!group && !live && (folded || hasActivity) && fold}
+        {/* Botkins gave the bot more turns in this run by itself: said just before the reply it kept going for. */}
+        {!group && keptLine(run) && <div className="timeline-kept">{keptLine(run)}</div>}
         {!group && reply.map(({ message, index }) => timelineMessage(message, index))}
         {live && hasText && (
           <article className="assistant live">
@@ -774,6 +793,13 @@ function ChatViewBody({
         <RunCards run={run} prefill={prefill} pickModel={canManageAgents ? pickModel : undefined} />
         {!live && (failed.includes(run.status) || !!groupFailure) && (
           <div className="error run-error"><span>{groupFailure || (run.ending === "timed-out" ? "Timed out" : run.status) + " · " + (run.detail || "Reply stopped.")}</span>{!groupFailure && run.id === lastUserRun && !busy && <button className="secondary" onClick={() => void window.botkins.retry(run.id).catch((e) => setNotice(e.message))}><RotateCcw size={13} />Try again</button>}</div>
+        )}
+        {/* The turn ended with plan steps open and nothing went on. */}
+        {!live && !group && openLine(run) && (
+          <div className="timeline-open" role="status">
+            <span>{openLine(run)}</span>
+            {run.id === lastUserRun && !busy && <button className="secondary" onClick={() => void window.botkins.send(chat.id, CONTINUE_OPEN_STEPS).catch((e) => setNotice(e.message))}>Continue</button>}
+          </div>
         )}
       </Fragment>
     );
@@ -811,11 +837,11 @@ function ChatViewBody({
         {group ? (
           <span className="group-avatars" aria-hidden="true">
             {members.map((m) => (
-              <BotAvatar key={m.id} bot={m} state={botActivity(state, m.id)} size={28} animated={false} />
+              <BotAvatar key={m.id} bot={m} state={botActivity(state, m.id)} size={28} animated />
             ))}
           </span>
         ) : (
-          <BotAvatar bot={bot} state={face} size={30} animated={false} />
+          <BotAvatar bot={bot} state={face} size={30} animated />
         )}
         <div className="chathead-title">
           <h2>{group ? chat.title : bot.name}</h2>
@@ -967,7 +993,7 @@ function ChatViewBody({
           )}
           {chat.messages.length === 0 && !timelineBusy && !pending.length && !group && (
             <div className="emptychat">
-              <BotAvatar bot={bot} state={face} size={136} animated={face !== "idle"} />
+              <BotAvatar bot={bot} state={face} size={136} />
               <h2>What can {bot.name} help with?</h2>
               <p>{bot.role}</p>
               <div className="starters">
@@ -1006,13 +1032,13 @@ function ChatViewBody({
               <GitFork size={13} /> Forked from an earlier chat
             </p>
           )}
-          {historic && historic.messages.map((message, i) => historic.from + i < loadedFrom &&
+          {historic && historic.messages.map((message, i) => historic.from + i < loadedFrom && !isSilentMessage(message) &&
             (!message.interim || (thinkingMode === "open" && (!foldFinishedSteps || !message.runId || !runs.has(message.runId) || runs.get(message.runId)?.status === "Working"))) && (
             <article key={historic.from + i} id={`message-${chat.id}-${historic.from + i}`} className={messageClass(message)} onContextMenu={e => messageMenu(e, message, historic.from + i)}>
               {message.author && <b className="member-speaker">{authorName(state, message.author)}</b>}
               <RichText text={message.text} files={files} />
               <Attachments list={message.attachments} />
-              <Reactions state={state} message={message} />
+              <Reactions state={state} message={message} botId={chat.botId} />
             </article>
           ))}
           {chat.messages.map((m, i) => {
@@ -1023,7 +1049,7 @@ function ChatViewBody({
               timelineRendered.add(run.id);
               return renderTimeline(run);
             }
-            if (m.interim && thinkingMode !== "open") return null;
+            if (isSilentMessage(m) || (m.interim && thinkingMode !== "open")) return null;
             return (
               <Fragment key={i}>
                 {(m.text || m.role !== "assistant") && (
@@ -1077,7 +1103,7 @@ function ChatViewBody({
                       />
                     )}
                       {m.role === "assistant" && <LinkPreviewCard text={m.text} enabled={!!state.settings.linkPreviews} />}
-                      <Reactions state={state} message={m} />
+                      <Reactions state={state} message={m} botId={chat.botId} />
                       {actions(m, i)}
                     </>}
                   </article>
@@ -1102,7 +1128,7 @@ function ChatViewBody({
                 <LiveReply updates={updates} files={files} follow={follow} />
               ) : (
                 <p className="typing" role="status">
-                  {requests.length ? "Waiting for your response…" : (speaker?.name ?? "The group") + " is typing…"}
+                  {turnWaits ? "Waiting for your response…" : (speaker?.name ?? "The group") + " is typing…"}
                 </p>
               )}
             </article>
@@ -1119,7 +1145,7 @@ function ChatViewBody({
                 <LiveReply updates={updates} files={files} follow={follow} />
               ) : (
                 <p className="typing" role="status">
-                  {requests.length ? "Waiting for your response…" : state.intents[chat.id] || "Working…"}
+                  {turnWaits ? "Waiting for your response…" : state.intents[chat.id] || "Working…"}
                 </p>
               )}
             </article>

@@ -16,7 +16,8 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 
 import { Panels, textField } from "./panels.mjs";
-import { isSilent } from "./routines.mjs";
+import { isSilent, mayBeSilent, visibleStream } from "./link/silent-reply.mjs";
+import { resolveRoutineTargets as resolveRoutineNotifyTargets } from "./link/notify-targets.mjs";
 import { Providers } from "./providers/index.mjs";
 import { CopilotProvider } from "./providers/copilot/index.mjs";
 import { Integrations } from "./integrations.mjs";
@@ -50,6 +51,7 @@ import { friendlyModel } from "./modelnames.mjs";
 import { meterLimit } from "./modeldetails.mjs";
 import { ToolBridge } from "./providers/toolbridge.mjs";
 import { Interactions } from "./interactions.mjs";
+import { MAX_CONTINUATIONS, mergedPrompt, nextMove, openSteps, takeBatch } from "./keep-moving.mjs";
 import { recordActivity } from "./activity.mjs";
 import {
   finishCanvas,
@@ -62,6 +64,7 @@ import {
 } from "./canvas.mjs";
 import { Agents, instructionsField, migrateAgents, summaryField } from "./agents.mjs";
 import { linkLooks, lookField, migrateLooks, nextLook } from "./looks.mjs";
+import { starterById } from "./starters.mjs";
 import { botVoiceField } from "./link/voice.mjs";
 import { Board } from "./board.mjs";
 import { Projects } from "./projects.mjs";
@@ -79,13 +82,14 @@ import { createComposio } from "./composio.mjs";
 import { Connects } from "./connects.mjs";
 import { McpApps } from "./mcp-apps.mjs";
 import { reactionTool } from "./reactions.mjs";
-import { mayBeSilent, ReactionTurns } from "./reaction-turns.mjs";
+import { ReactionTurns } from "./reaction-turns.mjs";
 import { setReaction } from "./link/message-reactions.mjs";
 import { SidePane } from "./sidepane.mjs";
 import { Artifacts } from "./artifacts.mjs";
 import { ArtifactEvents } from "./artifact-events.mjs";
 import { Tasks } from "./tasks.mjs";
 import { Proactive } from "./proactive.mjs";
+import { Reminders } from "./reminders.mjs";
 import { proposalsFrom } from "./proactive-learning.mjs";
 import { Templates } from "./templates.mjs";
 import { readWorkspace } from "./workspace-file.mjs";
@@ -134,6 +138,19 @@ const SAVE_SOON_MS = 750;
 const unsaved = new Set();
 let exitHooked = false;
 
+/** One message that holds a batch (`all`, the first message among them), prefixed so the model reads every one. */
+function mergeMessages(first, all) {
+  const attachments = [...new Map(all.flatMap((each) => each.attachments).map((a) => [a.path, a])).values()];
+  return {
+    ...first,
+    text: mergedPrompt(all.map((each) => quotedPrompt(each.text, each.quote))),
+    quote: undefined,
+    attachments,
+    mentions: all.flatMap((each) => each.refs.list),
+    context: all.map((each) => each.refs.context).filter(Boolean).join("") || undefined,
+  };
+}
+
 export class Workspace {
   /**
    * @param providers  The model providers (desktop/providers). Tests may pass a function that
@@ -157,6 +174,8 @@ export class Workspace {
     this.peopleOf = options?.people ?? null;
     // (chatId) => whether the computer's owner is one of a chat's people, when the link answers that itself.
     this.ownerIn = options?.notifiesOwner ?? null;
+    // () => { team, devices, host, profiles, ownerName }: context for granular routine alerts ("routine-notify-targets-v1").
+    this.notifyTargetsOf = options?.notifyTargets ?? null;
     // (space, person) => "own" | "edit" | "view" | null: what a person may do with a space, from
     // the link, which keeps who a space is shared with (desktop/spaces.mjs).
     this.spaceCanOf = options?.spaceCan ?? null;
@@ -201,6 +220,9 @@ export class Workspace {
     // Queued messages share the atomic workspace write with the run that consumes them.
     this.queues = new Map(Object.entries(this.state.pendingMessages ?? {}));
     delete this.state.pendingMessages;
+    // Detached questions are kept apart from the live waits of turns, which a restart ends.
+    this.interactions.restore(this.state.detachedQuestions);
+    delete this.state.detachedQuestions;
     this.state.panels ??= [];
     // Pages of html blocks in panels and cards (desktop/frames.mjs)
     this.frames = new Frames(this);
@@ -334,6 +356,8 @@ export class Workspace {
     }
     this.tasks = new Tasks(this);
     this.proactive = new Proactive(this);
+    // One plain nudge for what is left waiting on a person, with no model (desktop/reminders.mjs).
+    this.reminders = new Reminders(this);
     // A person's reaction to a bot's message gives the bot a quiet turn (desktop/reaction-turns.mjs).
     this.reactionTurns = new ReactionTurns(this);
     this.save();
@@ -345,7 +369,7 @@ export class Workspace {
     for (const run of this.state.runs) {
       if (run.status !== "Working" || this.active.has(run.chatId)) continue;
       const chat = this.chat(run.chatId);
-      const message = chat.messages.find((m) => m.role === "user" && m.runId === run.id);
+      const message = this.rejoined(chat, run, chat.messages.find((m) => m.role === "user" && m.runId === run.id));
       turns.push(this.startTurn(chat, this.bot(chat.botId), message, run, true));
     }
     for (const chatId of this.queues.keys()) {
@@ -390,7 +414,11 @@ export class Workspace {
     this.artifacts?.batch(() => {
       for (const chat of this.state.chats) this.artifactEvents.messages(chat);
     });
-    const persisted = this.queues.size ? { ...this.state, pendingMessages: Object.fromEntries(this.queues) } : this.state;
+    const detachedQuestions = this.interactions.detachedViews();
+    const persisted =
+      this.queues.size || detachedQuestions.length
+        ? { ...this.state, ...(this.queues.size && { pendingMessages: Object.fromEntries(this.queues) }), ...(detachedQuestions.length && { detachedQuestions }) }
+        : this.state;
     writeFileSync(this.file + ".tmp", JSON.stringify(persisted), {
       mode: 0o600,
     });
@@ -409,6 +437,8 @@ export class Workspace {
       projects: this.projects.listed(),
       // The Proactive agent: the computer's switch, and each proactive bot's settings and log, without the keys of what it raised.
       proactive: this.proactive.views(),
+      // The reminders sent in the last few minutes, for the link to pass to that person's phones (desktop/link/push.mjs). No app is sent this.
+      reminders: this.reminders.recent(),
       // Resolved provider inputs are private restart data and can contain large attachments.
       // A reaction's turn shows only once it really replies (desktop/reaction-turns.mjs).
       runs: this.state.runs.filter((run) => !hiddenRun(run)).map((run) => {
@@ -431,7 +461,7 @@ export class Workspace {
         this.shownTurns().map(([id, task]) => [id, task.intent || ""]),
       ),
       streams: Object.fromEntries(
-        this.shownTurns().map(([id, task]) => [id, task.stream]),
+        this.shownTurns().map(([id, task]) => [id, visibleStream(task.stream)]),
       ),
       // In a group chat, the member who is replying right now.
       speakers: Object.fromEntries(
@@ -689,6 +719,12 @@ export class Workspace {
     };
     // `avatar` (a silhouette from an earlier version, which a phone or a template may still send) is not kept.
     bot.look = data.look ? lookField(data.look) : nextLook(bot.id, this.state.bots.map((b) => b.look));
+    // Made from a starter (desktop/starters.mjs): kept so the Proactive setup can offer itself to it.
+    const starter = starterById(data.starter);
+    if (starter) {
+      bot.starter = starter.id;
+      if (starter.suggestProactive) bot.suggestProactive = true;
+    }
     // A voice of the bot's own (desktop/link/voice.mjs, botVoiceField): checked here, and kept only when something is set.
     const voice = data.voice === undefined ? null : botVoiceField(data.voice);
     if (voice) bot.voice = voice;
@@ -749,7 +785,7 @@ export class Workspace {
   }
   send(chatId, text, options = {}) {
     if (this.closing) throw new Error("Botkins is closing");
-    const { attachments: files, quote: rawQuote, mentions: rawMentions, voiceId, clientMessageId, author, also: rawAlso, proactiveCheck, ...context } = options;
+    const { attachments: files, quote: rawQuote, mentions: rawMentions, voiceId, clientMessageId, author, also: rawAlso, proactiveCheck, merged: rawMerged, ...context } = options;
     // People whose limits apply to this turn beside the chat's maker and the message's writer:
     // someone else wrote text that runs in it (a routine's prompt on a panel that another person
     // refreshes). Members only: the owner narrows nothing.
@@ -775,6 +811,13 @@ export class Workspace {
       throw new Error("Group chats take text only. Send files in a chat with one bot.");
     // "#" projects, wiki pages and files become text and attachments for the model (desktop/mentions.mjs).
     const refs = this.mentions.resolve(chat, rawMentions, author);
+    // Messages queued behind this one by the same person, read in the same turn (see `drain`). Checked now,
+    // before anything changes, so one that can't be sent is refused with the first and nothing is half done.
+    const joined = (Array.isArray(rawMerged) ? rawMerged : []).map((item) => ({
+      item,
+      attachments: validateAttachments(item.attachments),
+      refs: this.mentions.resolve(chat, item.mentions, item.author ?? author),
+    }));
     // What a routine posted into this chat since the bot's last turn here (desktop/routines.mjs).
     // The session behind the chat never saw those messages, so the bot is told of them once, with
     // this turn, or it would not know what the person is answering.
@@ -814,7 +857,48 @@ export class Workspace {
     run.recovery = { extra, ...(proactiveCheck && { proactiveCheck }), ...(message.voiceId && { voicePrompt: prompt }) };
     // With auto-summarize on, the first message is named while the bot replies (desktop/summaries.mjs).
     if (first && !context.panelId && context.scheduleId == null) this.summaries.started(chat);
-    return this.startTurn(chat, bot, message, run, false);
+    return this.startTurn(chat, bot, joined.length ? this.joinMessages(chat, run, message, refs, joined) : message, run, false);
+  }
+
+  /**
+   * The messages that wait behind a turn's first one, read together with it. Each is its own message in the
+   * chat, in its own bubble with its own attachments and mentions (like a steer, `steeredRunId`). The turn
+   * is started from one message that holds them all, prefixed so the model reads every one.
+   */
+  joinMessages(chat, run, first, firstRefs, joined) {
+    const all = [{ text: first.text, quote: first.quote, attachments: first.attachments ?? [], refs: firstRefs }];
+    for (const { item, attachments, refs } of joined) {
+      const added = { role: "user", text: textField(item.text, 32000, "message"), ...clientMessageTag(item.clientMessageId), steeredRunId: run.id, joined: true, time: Date.now(),
+        ...(item.author && { author: item.author }),
+        ...(typeof item.quote === "string" && item.quote.trim() && { quote: item.quote.trim().slice(0, 4000) }),
+        ...(attachments.length && { attachments }),
+        ...(refs.list.length && { mentions: refs.list, context: refs.context }) };
+      chat.messages.push(added);
+      all.push({ text: added.text, quote: added.quote, attachments, refs });
+    }
+    return mergeMessages(first, all);
+  }
+
+  /**
+   * The message a turn started from, again: the first bubble of a merged batch, joined with the bubbles
+   * saved behind it (`joined`). A turn that restarts before its provider input is checkpointed would
+   * otherwise read only the first one.
+   */
+  rejoined(chat, run, first) {
+    if (!first) return first;
+    const rest = chat.messages.filter((m) => m.role === "user" && m.joined && m.steeredRunId === run.id);
+    if (!rest.length) return first;
+    const each = (m) => ({ text: m.text, quote: m.quote, attachments: m.attachments ?? [], refs: { list: m.mentions ?? [], context: m.context } });
+    return mergeMessages(first, [each(first), ...rest.map(each)]);
+  }
+
+  /**
+   * A question that outlived its turn was answered: the answer is the person's next message, quoting the
+   * question, and starts a new turn (or waits its place in the queue). Throws when it can't be sent.
+   */
+  answerDetached(view, text, person = "owner") {
+    const author = person && person !== "owner" ? this.memberAuthor(person) : undefined;
+    this.submit(view.chatId, text, { quote: view.title, ...(author && { author }) })?.catch((error) => console.error("Answer to a waiting question:", error.message));
   }
 
   /**
@@ -973,7 +1057,9 @@ export class Workspace {
   drain(chatId) {
     if (this.closing || this.active.has(chatId)) return;
     const list = this.queues.get(chatId);
-    const next = list?.shift();
+    const chat = this.state.chats.find((c) => c.id === chatId);
+    // Messages from one person that wait together are read in one turn; someone else's keeps its own turn, in order.
+    const { first: next, rest } = list ? takeBatch(list, (item) => this.canSend(chat, item)) : {};
     if (!list?.length) this.queues.delete(chatId);
     if (!next) return;
     try {
@@ -985,11 +1071,14 @@ export class Workspace {
         ...(next.notify === false && { notify: false }),
         voiceId: next.voiceId,
         clientMessageId: next.clientMessageId,
+        ...(rest.length && { merged: rest }),
       }).catch((err) => console.error("Queued turn:", err.message));
     } catch (err) {
       // The message can't be sent as it is (a mentioned record is gone, or access changed).
       // It is kept in the chat as a failed turn, and the messages behind it still go out.
       console.error("Queued message:", err.message);
+      // The messages that were to be read with it still go out, after it.
+      if (rest.length) this.queues.set(chatId, [...rest, ...(this.queues.get(chatId) ?? [])]);
       try {
         const chat = this.state.chats.find((c) => c.id === chatId);
         if (chat && !this.closing) {
@@ -1017,13 +1106,24 @@ export class Workspace {
       if (this.queues.has(chatId)) setImmediate(() => this.drain(chatId));
     }
   }
+  /** Whether a queued message could be sent now: its mentioned records are there and its files too. */
+  canSend(chat, item) {
+    try {
+      if (!chat) return false;
+      this.mentions.resolve(chat, item.mentions, item.author);
+      validateAttachments(item.attachments);
+      return true;
+    } catch {
+      return false;
+    }
+  }
   /** Sends a failed or stopped turn's message again. */
   retry(runId) {
     const run = this.state.runs.find((r) => r.id === runId);
     if (!run) throw new Error("Unknown work item");
     const chat = this.chat(run.chatId);
     if (run.proactive) {
-      if (this.proactive.routine(chat.botId)?.chat.id !== chat.id) throw new Error("This proactive routine is no longer configured.");
+      if (!this.proactive.owns(chat)) throw new Error("This proactive routine is no longer configured.");
       return this.panels.routines.run(chat.id);
     }
     const message = chat.messages.find(
@@ -1046,10 +1146,16 @@ export class Workspace {
         return false;
       }
     });
+    // A turn that began with several messages begins with all of them again.
+    const merged = chat.messages
+      .filter((m) => m.role === "user" && m.steeredRunId === runId && m.joined)
+      .map(({ text, quote, attachments, mentions, author }) => ({ text, quote, attachments, mentions, author }))
+      .filter((item) => this.canSend(chat, item));
     return this.submit(chat.id, message.text, {
       attachments,
       quote: message.quote,
       author: message.author,
+      ...(merged.length && { merged }),
       ...(message.also?.length && { also: message.also }),
       ...(mentions.length && { mentions }),
       ...(run.panelId && { panelId: run.panelId }),
@@ -1307,6 +1413,46 @@ export class Workspace {
       // The rule below is the same one without invites.
     }
     return this.inChat(chatId, "owner") || !this.state.chats.some((item) => item.id === chatId);
+  }
+  /** Context for routine notification targeting ("routine-notify-targets-v1"), safe when no link is attached. */
+  notifyTargetsContext(botId) {
+    let raw = null;
+    try {
+      raw = this.notifyTargetsOf?.() ?? null;
+    } catch {
+      raw = null;
+    }
+    const team = raw?.team ?? this.teamOf();
+    const devices = Array.isArray(raw?.devices) ? raw.devices : [];
+    const headless = raw?.host?.headless === true;
+    const hostCanNotify = !headless && this.state?.settings?.notifications?.routines !== false && raw?.host?.canNotify !== false;
+    return {
+      botId,
+      team,
+      devices,
+      host: {
+        name: raw?.host?.name || "This computer",
+        platform: raw?.host?.platform || process.platform,
+        headless,
+        canNotify: hostCanNotify,
+        ...(raw?.host?.profileLinked && { profileLinked: true }),
+      },
+      profiles: raw?.profiles ?? null,
+      ownerName: raw?.ownerName || team?.people?.find((person) => person.id === "owner")?.name || "",
+    };
+  }
+  /** Resolves the concrete host + device targets for a finished routine run. */
+  resolveRoutineTargets(chat, run) {
+    const entry = chat?.schedules?.find((item) => item.id === run?.scheduleId && item.routine);
+    // A proactive check speaks to the one person it looked out for (proactive-rules): never to targets.
+    if (!entry || entry.proactive || run?.proactive) return null;
+    const ctx = this.notifyTargetsContext(chat.botId);
+    return resolveRoutineNotifyTargets({
+      ...ctx,
+      entry,
+      run,
+      chatNotifiesOwner: this.notifiesOwner(chat.id),
+    });
   }
   accessForTurn(chat, task) {
     // Two people's limits apply to a turn: those of the chat's creator, whose chat it is, and
@@ -1634,7 +1780,8 @@ export class Workspace {
         : this.executeTurn(chat, bot, prompt, run, task),
     );
     if (task.retry && !this.closing && !task.stopped) {
-      const message = chat.messages.find((m) => m.role === "user" && m.runId === run.id) ?? task.message;
+      const found = chat.messages.find((m) => m.role === "user" && m.runId === run.id);
+      const message = found ? this.rejoined(chat, run, found) : task.message;
       return this.startTurn(chat, bot, message, run, true);
     }
   }
@@ -1729,7 +1876,8 @@ export class Workspace {
       // (Botkins' own notes about a plugin are not the bot's work: the model is not told of them.)
       const progress = botSteps(run.steps).filter((step) => !step.botId || step.botId === bot.id)
         .slice(-12).map((step) => step.status + ": " + step.label + (step.output ? " — " + step.output.slice(-300) : ""));
-      const followups = this.chat(run.chatId).messages.filter(m => m.steeredRunId === run.id);
+      // (Messages that started the turn with its first one are already in the saved prompt.)
+      const followups = this.chat(run.chatId).messages.filter(m => m.steeredRunId === run.id && !m.joined);
       const context = [
         ...followups.map(m => "The person added during this turn: " + quotedPrompt(m.text, m.quote) + (m.context || "") +
           (m.attachments?.length ? "\nAttached: " + m.attachments.map(a => a.path).join(", ") : "")),
@@ -1758,9 +1906,11 @@ export class Workspace {
     delete checkpoint.eventId;
     this.save();
     const chat = this.chat(run.chatId);
-    const prompt = this.speakerPrompt(input.prompt, chat, run, task, { labelled: isGroup(chat) });
+    // Botkins' own note (a continuation) is not from the person, so no speaker is put in front of it.
+    const { note, ...sent } = input;
+    const prompt = note ? input.prompt : this.speakerPrompt(input.prompt, chat, run, task, { labelled: isGroup(chat) });
     // No time limit: the person stops a turn that runs too long, and a turn whose harness is gone ends by itself.
-    return session.send({ ...input, ...(prompt !== input.prompt && { prompt }) }, undefined, onReady);
+    return session.send({ ...sent, ...(prompt !== input.prompt && { prompt }) }, undefined, onReady);
   }
   /**
    * A coding chat in Plan mode runs in Copilot's plan mode: the agent plans and asks before it
@@ -1803,13 +1953,17 @@ export class Workspace {
     try {
       for (const bot of order) {
         if (task.stopped || this.closing) break;
+        if (run.recovery?.silentMembers?.includes(bot.id)) continue;
         if (chat.messages.some((m) => m.runId === run.id && m.role === "assistant" && !m.interim && m.botId === bot.id) || failures.some((f) => f.botId === bot.id)) continue;
         Object.assign(task, { speaker: bot.id, stream: "", streamTime: undefined, committedMessage: undefined, thinking: "", intent: "", streamMessage: undefined, streamBreak: false });
         this.notify();
         try {
           const text = await this.memberTurn(chat, bot, members, run, task);
           if (task.stopped || this.closing) break;
-          finishReply(chat, run, task, text);
+          if (isSilent(text || task.stream)) {
+            (run.recovery.silentMembers ??= []).push(bot.id);
+            task.stream = "";
+          } else finishReply(chat, run, task, text);
           markSeen(chat, bot.id);
           this.save();
         } catch (error) {
@@ -1827,6 +1981,10 @@ export class Workspace {
         run.detail = failures
           .map((f) => (bots.find((b) => b.id === f.botId)?.name ?? "A bot") + ": " + f.detail)
           .join(" · ");
+      }
+      if (order.length && run.recovery?.silentMembers?.length === order.length) {
+        run.silent = true;
+        run.noOutput = true;
       }
       run.status = failures.length === order.length ? "Needs you" : "Completed";
       if (run.status === "Needs you") run.ending = failureEnding;
@@ -1847,7 +2005,7 @@ export class Workspace {
       finishCanvas(run);
       run.finished = Date.now();
       chat.time = Date.now();
-      if (run.status !== "Stopped") chat.unread = true;
+      if (run.status !== "Stopped" && !run.silent) chat.unread = true;
       this.catalogs.delete(chat.id);
       this.active.delete(chat.id);
       this.events.emit("turn", { chat, run });
@@ -1864,6 +2022,68 @@ export class Workspace {
     // A late read still belongs in its turn's activity, but the latest turn owns the rail.
     if (this.state.runs.find((item) => item.chatId === chat.id)?.id === run.id) chat.todos = run.todos;
     this.notify();
+  }
+  /**
+   * What the turn's plan came to, for the apps and for alerts about stalled work: `plan` is how many
+   * steps are open of how many, and `stoppedOpen` says the turn ended with steps open and nothing went on
+   * (the cap, the same steps again, Stop, a waiting message or request, or an error stopped the chain).
+   */
+  settlePlan(run) {
+    delete run.stoppedOpen;
+    if (!run.todos?.length) return;
+    const open = openSteps(run.todos).length;
+    run.plan = { open, total: run.todos.length };
+    if (open && (run.status === "Completed" || run.status === "Stopped")) run.stoppedOpen = true;
+  }
+  /** Whether a turn is one that keeps the work moving: a person's turn in a one-bot chat, not a routine, a Proactive run or Plan mode. */
+  keepsMoving(chat, run, check, routine) {
+    return !check && !routine && run.panelId == null && run.taskId == null && !run.proactive && !run.reaction &&
+      !chat.helper && !chat.temporary && !isGroup(chat) && chat.mode !== "plan";
+  }
+  /**
+   * After a reply: gives the bot another turn in the same session and run while its plan has open steps
+   * (desktop/keep-moving.mjs: at most 8, and not when the same steps come back), or when it named its
+   * next step without doing it. Never past a question to the person, an open request, Stop or a waiting
+   * message. Returns true when the turn was stopped (or Botkins is closing) and must end now.
+   */
+  async keepMoving(session, chat, bot, run, task, said) {
+    // A run resumed after a restart picks its chain up where the last continuation left it (kept with the run's recovery record): the limits are for the whole turn.
+    const chain = { count: 0, stalls: 0, signature: undefined, ...run.recovery?.chain };
+    let text = said;
+    try {
+      for (;;) {
+        // The plan as it is now: the last change may still have been being read when the reply ended.
+        if (task.todoRead) await this.readSessionTodos(session, chat, run, task);
+        const blocked = task.stopped || this.closing || !!this.queues.get(chat.id)?.length || this.interactions.openFor(task).length > 0;
+        const move = nextMove({ text, todos: run.todos, chain, blocked });
+        if (move.move === "stop") return !!(task.stopped || this.closing);
+        chain.count++;
+        if (move.reason === "plan") chain.signature = move.signature;
+        else chain.stalls++;
+        run.continued = { count: chain.count, limit: MAX_CONTINUATIONS, reason: move.reason, open: move.open.length };
+        (run.recovery ??= {}).chain = { ...chain };
+        // The new reply stands apart from what came before it, and this is no recovery of the turn.
+        Object.assign(task, { recovering: false, showingDraft: false, stream: "", streamTime: undefined, sourceMessageId: undefined, sourceText: undefined,
+          streamMessage: undefined, streamBreak: false, thinking: "", replyFrom: chat.messages.length });
+        this.save();
+        let reply;
+        try {
+          reply = await this.sendTurn(session, run, task, bot, { prompt: move.input, note: true });
+        } catch (error) {
+          if (task.stopped || this.closing) return true;
+          // The person already has the reply before it; the open steps stay open for them to continue.
+          console.error("Continuation:", error.message);
+          await session.abort().catch(() => {});
+          return false;
+        }
+        if (task.stopped || this.closing) return true;
+        text = reply?.text || task.stream;
+        finishReply(chat, run, task, text);
+        this.save();
+      }
+    } finally {
+      delete task.replyFrom;
+    }
   }
   /** One member's reply inside a group turn. Returns its text. */
   async memberTurn(chat, bot, members, run, task) {
@@ -2070,7 +2290,7 @@ export class Workspace {
         );
         if (task.stopped || this.closing) return;
         const empty = typeof text !== "string" || !text.trim();
-        if ((routine || run.reaction) && isSilent(text || task.stream)) {
+        if (isSilent(text || task.stream)) {
           run.noOutput = true;
           run.silent = true;
           noOutput = true;
@@ -2089,7 +2309,10 @@ export class Workspace {
         }
         if (empty && !run.cards?.length && !botSteps(run.steps).length && !task.stream?.trim() && !routine && !run.reaction && task.reactedBy !== bot.id)
           throw new Error(bot.name + " finished without a reply.");
-        if (!noOutput) finishReply(chat, run, task, text || task.stream);
+        const said = text || task.stream;
+        if (!noOutput) finishReply(chat, run, task, said);
+        // A plan with open steps, or a reply that stopped short of its next step, gets another turn in this session (bounded).
+        if (!noOutput && this.keepsMoving(chat, run, check, routine) && (await this.keepMoving(session, chat, bot, run, task, said))) return;
       } else {
         let text;
         switch (effect.kind) {
@@ -2161,7 +2384,7 @@ export class Workspace {
         const recovered = await this.recoverLost(session, chat, run);
         if (recovered != null) {
           task.stream = "";
-          if (routine && isSilent(recovered)) Object.assign(run, { noOutput: true, silent: true });
+          if (isSilent(recovered)) Object.assign(run, { noOutput: true, silent: true });
           else if (!noOutput) finishReply(chat, run, task, recovered);
           run.status = "Completed";
           run.detail = "";
@@ -2195,6 +2418,7 @@ export class Workspace {
       delete run.stopRequested;
       if (task.stopped) { run.status = "Stopped"; run.ending = "stopped"; }
       if (run.status === "Needs you") run.ending ??= "failed";
+      if (this.keepsMoving(chat, run, check, routine) && !run.noOutput) this.settlePlan(run);
       if (check && proposals && run.status === "Working") {
         run.status = "Completed";
         const reply = this.proactive.decide(chat, check, proposals);
@@ -2226,7 +2450,7 @@ export class Workspace {
         if (panel) this.spaces.touch(panel.spaceId);
       }
       // A finished reply marks its conversation unread until the person opens it. Panel refreshes stay quiet.
-      if (run.status !== "Stopped" && !run.panelId && !chat.temporary && !hiddenRun(run) && !(check && run.silent)) chat.unread = true;
+      if (run.status !== "Stopped" && !run.panelId && !chat.temporary && !hiddenRun(run) && !run.silent) chat.unread = true;
       this.catalogs.delete(chat.id);
       this.active.delete(chat.id);
       // Routine delivery may make a chat or Feed card and call save several times.

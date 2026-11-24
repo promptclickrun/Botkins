@@ -8,7 +8,7 @@ import type { BoardScroll } from "@/features/home/BotBoard";
 import type { ChatSummary } from "@/link/types";
 import { isConversation, useBots, useCan, useCapability, useChats, usePart } from "@/state/hooks";
 import { useApp } from "@/state/store";
-import { AvatarMotion, Chip, EmptyState, foldGap, IconButton, LinkBanner, listWidth, Mascot, radius, space, T, Tap, useShape, useTextPrompt, useTheme } from "@/ui";
+import { Chip, EmptyState, foldGap, IconButton, LinkBanner, listWidth, Mascot, radius, space, T, Tap, useShape, useTextPrompt, useTheme } from "@/ui";
 import { ChatBoard } from "./ChatBoard";
 import { ChatPane } from "./ChatScreen";
 import { useChatSplit } from "./split";
@@ -258,11 +258,7 @@ function ChatListScreen() {
   );
 }
 
-/** Avatars move on this screen (see `AvatarMotion`). */
+/** The Chats list holds its avatars still, in their state's pose (see `AvatarMotion`). */
 export default function ChatList() {
-  return (
-    <AvatarMotion>
-      <ChatListScreen />
-    </AvatarMotion>
-  );
+  return <ChatListScreen />;
 }

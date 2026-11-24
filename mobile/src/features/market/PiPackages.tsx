@@ -1,5 +1,5 @@
 import * as WebBrowser from "expo-web-browser";
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useState } from "react";
 import { Alert, View } from "react-native";
 import type { InstalledPiPackage, PiPackageListing } from "@/link/types";
 import { useCan, useCapability, useOnline } from "@/state/hooks";
@@ -9,23 +9,22 @@ import { Button, Group, Label, Page, Row, space, T, useOnShow } from "@/ui";
 import { shownText } from "@/ui/shownText";
 import { SearchField } from "./parts";
 
-export function PiPage({ switcher }: { switcher: ReactNode }) {
+export function PiPage() {
   const pairing = useApp((state) => state.pairing);
   const supported = useCapability("pi-packages-v1");
   const online = useOnline();
   if (!online || !supported || !pairing)
     return (
-      <Page tab title="Marketplace">
-        {switcher}
+      <Page title="Pi packages">
         <T color="muted">
           {online ? "Update the app on your computer to manage Pi packages." : "Connect to your computer to manage Pi packages."}
         </T>
       </Page>
     );
-  return <Packages key={pairing.serverId} host={pairing.serverId} hostName={pairing.name} switcher={switcher} />;
+  return <Packages key={pairing.serverId} host={pairing.serverId} hostName={pairing.name} />;
 }
 
-function Packages({ host, hostName, switcher }: { host: string; hostName: string; switcher: ReactNode }) {
+function Packages({ host, hostName }: { host: string; hostName: string }) {
   const shown = useOnShow();
   const [refreshing, setRefreshing] = useState(false);
   const canInstall = useCan("plugins", "install");
@@ -114,15 +113,14 @@ function Packages({ host, hostName, switcher }: { host: string; hostName: string
   }
   return (
     <Page
-      tab
-      title="Marketplace"
+      title="Pi packages"
+      keyboard
       onRefresh={() => {
         setRefreshing(true);
         setRefresh((n) => n + 1);
       }}
       refreshing={refreshing}
     >
-      {switcher}
       <Label>Installed in Pi</Label>
       {installed?.length ? (
         <Group>

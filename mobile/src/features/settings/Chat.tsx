@@ -28,7 +28,7 @@ const SUMMARY_TURNS = [0, ...Array.from({ length: 26 }, (_, i) => i + 5)].map((t
 }));
 
 /** A row whose value opens a short list of choices. `stacked` puts a long choice under the title instead of beside it. */
-export function ChoiceMenu<V extends string>({ title, subtitle, value, options, onChange, stacked }: { title: string; subtitle?: string; value: V; options: { value: V; label: string; subtitle?: string }[]; onChange: (value: V) => void; stacked?: boolean }) {
+export function ChoiceMenu<V extends string>({ title, subtitle, value, options, onChange, stacked, subtitleLines = 2 }: { title: string; subtitle?: string; value: V; options: { value: V; label: string; subtitle?: string }[]; onChange: (value: V) => void; stacked?: boolean; /** Lines the subtitle may take before it is cut (default 2). */ subtitleLines?: number }) {
   const { colors } = useTheme();
   const current = options.find((option) => option.value === value) ?? options[0];
   return (
@@ -39,7 +39,7 @@ export function ChoiceMenu<V extends string>({ title, subtitle, value, options, 
       isAnchoredToRight
     >
       <View accessible accessibilityRole="button" accessibilityLabel={title + ", " + current.label} accessibilityHint="Opens the choices">
-        <Row title={title} subtitle={stacked ? current.label : subtitle} value={stacked ? undefined : current.label} trailing={<ChevronsUpDown size={16} color={colors.faint} strokeWidth={2.2} />} />
+        <Row title={title} subtitle={stacked ? current.label : subtitle} subtitleLines={subtitleLines} value={stacked ? undefined : current.label} trailing={<ChevronsUpDown size={16} color={colors.faint} strokeWidth={2.2} />} />
       </View>
     </MenuView>
   );

@@ -90,3 +90,28 @@ test("ordinary links and code may be cached without rereading completed tokens o
   assert.notEqual(after.tokens[0], before.tokens[0]);
   assert.deepEqual(after.tokens, lex(replaced));
 });
+
+test("inline ]: in TypeScript or code snippets does not defeat streaming cache", () => {
+  const calls: string[] = [];
+  const lex = (source: string) => {
+    calls.push(source);
+    return marked.lexer(source) as Token[];
+  };
+  const body = "```ts\ntype Dict = { [k: string]: number };\n```\n\n" + "Paragraph.\n\n".repeat(20) + "Tail";
+  const first = parseStreamingMarkdown(body, lex);
+  const nextText = body + " grows";
+  const next = parseStreamingMarkdown(nextText, lex, first.cache);
+  assert.equal(next.tokens[0], first.tokens[0], "sealed code block containing ]: is retained");
+  assert.ok(calls.at(-1)!.length < nextText.length / 2, "only tail is re-lexed");
+  assert.deepEqual(next.tokens, marked.lexer(nextText) as Token[]);
+});
+
+test("a reference definition inside a quote or a list forces a full lex, so earlier [a] becomes a link", () => {
+  const lex = (source: string) => marked.lexer(source) as Token[];
+  const body = "See [a] here.\n\nSecond paragraph.\n\nThird paragraph.\n\n";
+  for (const tail of ["> [a]: http://x", "- [a]: http://x", "  > [a]: http://x"]) {
+    const first = parseStreamingMarkdown(body + "Fourth", lex);
+    const next = parseStreamingMarkdown(body + tail, lex, first.cache);
+    assert.deepEqual(next.tokens, lex(body + tail), `cached parse should match a full lex for ${JSON.stringify(tail)}`);
+  }
+});

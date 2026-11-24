@@ -18,9 +18,22 @@ import { BotAvatar } from "./Avatar";
 import { useAsk, type PageActions } from "./Pages";
 import { Choices } from "./Preferences";
 import { categories as goalCategories } from "./Board";
-import type { Bot, Cadence, Chat, ChatSchedule, ModelChoice, Run, RoutineDelivery, State } from "./types";
+import type { Bot, Cadence, Chat, ChatSchedule, ModelChoice, PhoneLink, Run, RoutineDelivery, State } from "./types";
 import { WorkBar, type WorkNav } from "./WorkBar";
 import ModelPicker, { ModelBadge } from "./ModelPicker";
+import {
+  activeTargetsOnly,
+  buildNotifyTargetView,
+  countRemovedTargetIds,
+  isDeviceChecked,
+  normalizeTargets,
+  routineNotifyLabel,
+  runNotifyChip,
+  toggleDeviceTarget,
+  togglePersonTarget,
+  type NotifyMode,
+  type TargetPersonOption,
+} from "./notifyTargets";
 import "./routines.css";
 
 const api = window.botkins;
@@ -340,6 +353,27 @@ export default function RoutinesPage({
     initial?.create ? { mode: "edit", botId: initial.botId } : initial?.id ? { mode: "detail", id: initial.id } : { mode: "list" },
   );
   const [botFilter, setBotFilter] = useState(initial?.create ? "" : initial?.botId ?? "");
+  const [phoneLink, setPhoneLink] = useState<PhoneLink | null>(null);
+  const remoteId = state.remote?.using?.id ?? null;
+  const phonesRev = state.phones?.revision ?? 0;
+  useEffect(() => {
+    if (remoteId) {
+      setPhoneLink(null);
+      return;
+    }
+    let live = true;
+    api
+      .phoneLink()
+      .then((link) => {
+        if (live) setPhoneLink(link);
+      })
+      .catch(() => {
+        if (live) setPhoneLink(null);
+      });
+    return () => {
+      live = false;
+    };
+  }, [remoteId, phonesRev]);
   const items = routineItems(state);
   if (view.mode === "edit") {
     const item = view.id ? items.find((i) => i.chat.id === view.id) : undefined;
@@ -347,6 +381,7 @@ export default function RoutinesPage({
       <RoutineEditor
         state={state}
         item={item}
+        phoneLink={phoneLink}
         botId={view.botId ?? (botFilter || state.bots[0].id)}
         fail={actions.fail}
         done={(id) => setView(id ? { mode: "detail", id } : item ? { mode: "detail", id: item.chat.id } : { mode: "list" })}
@@ -360,6 +395,7 @@ export default function RoutinesPage({
         <RoutineDetail
           state={state}
           item={item}
+          phoneLink={phoneLink}
           actions={actions}
           back={() => setView({ mode: "list" })}
           edit={() => setView({ mode: "edit", id: item.chat.id })}
@@ -416,7 +452,12 @@ export default function RoutinesPage({
               <h2>
                 {g.name} <small>{g.rows.length}</small>
               </h2>
-              {g.rows.map((i) => (
+              {g.rows.map((i) => {
+                const notifyNote =
+                  i.entry.deliver?.to !== "none" && (i.entry.notify === false || i.entry.notifyTargets)
+                    ? routineNotifyLabel(i.entry, buildNotifyTargetView(state, i.chat.botId, phoneLink))
+                    : null;
+                return (
                 <div className="routine-row" key={i.chat.id}>
                   <button className="routine-open" onClick={() => setView({ mode: "detail", id: i.chat.id })}>
                     {i.bot && <BotAvatar bot={i.bot} size={38} />}
@@ -425,7 +466,7 @@ export default function RoutinesPage({
                       <small>
                         {cadenceSummary(i.entry.cadence)} · {i.bot?.name}
                         {deliveryLabel(i.entry.deliver) && " · " + deliveryLabel(i.entry.deliver)}
-                        {i.entry.notify === false && " · Quiet"}
+                        {notifyNote && " · " + notifyNote}
                       </small>
                     </span>
                     <span className="routine-when">
@@ -449,7 +490,8 @@ export default function RoutinesPage({
                     onChange={(v) => act(api.setRoutineEnabled(i.chat.id, v))}
                   />
                 </div>
-              ))}
+                );
+              })}
             </section>
           ),
       )}
@@ -538,6 +580,7 @@ export default function RoutinesPage({
 function RoutineDetail({
   state,
   item,
+  phoneLink,
   actions,
   back,
   edit,
@@ -545,6 +588,7 @@ function RoutineDetail({
 }: {
   state: State;
   item: RoutineItem;
+  phoneLink: PhoneLink | null;
   actions: PageActions;
   back: () => void;
   edit: () => void;
@@ -555,6 +599,11 @@ function RoutineDetail({
   const [copyTo, setCopyTo] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const runs = state.runs.filter((r) => r.chatId === chat.id && r.scheduleId === entry.id);
+  const targetView = useMemo(() => buildNotifyTargetView(state, chat.botId, phoneLink), [state, chat.botId, phoneLink]);
+  const notifyNote =
+    entry.deliver?.to !== "none" && (entry.notify === false || entry.notifyTargets)
+      ? routineNotifyLabel(entry, targetView)
+      : null;
   const paused = entry.enabled === false,
     finished = entry.nextAt == null;
   const others = state.bots.filter((b) => b.id !== chat.botId);
@@ -584,7 +633,7 @@ function RoutineDetail({
           <p className="muted">
             {cadenceSummary(entry.cadence)} · {entry.timezone}
             {deliveryLabel(entry.deliver) && " · " + deliveryLabel(entry.deliver)}
-            {entry.notify === false && " · Quiet"}
+            {notifyNote && " · " + notifyNote}
           </p>
           <p className="routine-next">
             {item.running
@@ -692,6 +741,7 @@ function RoutineDetail({
         {runs.length ? (
           runs.map((r) => {
             const Icon = r.status === "Working" ? LoaderCircle : r.status === "Completed" ? CircleCheck : CircleAlert;
+            const notifyChip = runNotifyChip(r, targetView);
             return (
               <button className="row" key={r.id} onClick={() => actions.open(chat.id)}>
                 <Icon size={19} className={r.status === "Needs you" || r.status === "Interrupted" ? "danger" : undefined} />
@@ -700,6 +750,7 @@ function RoutineDetail({
                   <small>
                     {r.status === "Needs you" ? "Failed" : r.status}
                     {r.trigger === "manual" ? " · Run now" : " · Scheduled"}
+                    {notifyChip ? " · " + notifyChip : ""}
                     {r.detail ? " · " + r.detail : ""}
                   </small>
                 </span>
@@ -723,12 +774,14 @@ function RoutineDetail({
 function RoutineEditor({
   state,
   item,
+  phoneLink,
   botId,
   fail,
   done,
 }: {
   state: State;
   item?: RoutineItem;
+  phoneLink: PhoneLink | null;
   botId: string;
   fail: (e: unknown) => void;
   done: (id?: string) => void;
@@ -762,8 +815,16 @@ function RoutineEditor({
   // A chat chosen earlier that has since gone falls back to the latest chat.
   const [chatId, setChatId] = useState(item?.entry.deliver?.chatId ?? "");
   const [category, setCategory] = useState(item?.entry.deliver?.category ?? "other");
-  // A routine notifies when a run finishes unless it was told to run quietly.
-  const [notify, setNotify] = useState(item?.entry.notify !== false);
+  // Routine notifications: Everyone, Specific people/devices ("routine-notify-targets-v1"), or Quiet.
+  const targetView = useMemo(() => buildNotifyTargetView(state, bot, phoneLink), [state, bot, phoneLink]);
+  const [notifyMode, setNotifyMode] = useState<NotifyMode>(() =>
+    item?.entry.notify === false ? "quiet" : item?.entry.notifyTargets ? "specific" : "everyone",
+  );
+  const [targets, setTargets] = useState<{ people: string[]; devices: string[] }>(() => normalizeTargets(item?.entry.notifyTargets));
+  const effectiveNotifyMode: NotifyMode = to === "none" ? "quiet" : notifyMode;
+  const activeTargets = useMemo(() => activeTargetsOnly(targets, targetView), [targets, targetView]);
+  const removedTargetCount = useMemo(() => countRemovedTargetIds(targets, targetView), [targets, targetView]);
+  const specificEmpty = targetView.canTarget && effectiveNotifyMode === "specific" && activeTargets.people.length === 0 && activeTargets.devices.length === 0;
   const chats = deliveryChats(state, bot);
   const picked = chats.some((c) => c.id === chatId) ? chatId : "";
   const [preview, setPreview] = useState<{ text: string; error?: boolean }>({ text: "" });
@@ -787,19 +848,24 @@ function RoutineEditor({
       className="routines routine-editor"
       onSubmit={async (e) => {
         e.preventDefault();
+        if (specificEmpty) return;
         setSaving(true);
         try {
           const deliver: RoutineDelivery | null =
             to === "routine" ? null : to === "chat" ? { to, ...(picked && { chatId: picked }) } : to === "goal" ? { to, category } : { to };
           // A model is sent only when it changed, so an edit never waits on the model list for nothing.
           const modelChanged = JSON.stringify(model ?? null) !== JSON.stringify(item?.chat.model ?? null);
+          const notify = effectiveNotifyMode !== "quiet";
           const data = {
             name: name.trim(),
             prompt: prompt.trim(),
             cadence,
             timezone: zone.trim(),
             deliver,
-            notify: to === "none" ? false : notify,
+            notify,
+            ...(targetView.canTarget
+              ? { notifyTargets: effectiveNotifyMode === "specific" ? activeTargets : null }
+              : {}),
             ...(scripted ? { script, followUp } : item?.entry.script ? { script: null } : {}),
             ...(modelsAllowed && modelChanged && { model: model ?? null }),
           };
@@ -952,13 +1018,60 @@ function RoutineEditor({
           )}
           <small className="muted">{destinations.find((d) => d.id === to)?.note}</small>
         </fieldset>
-        <label className="routine-notify">
-          <input type="checkbox" role="switch" checked={to === "none" ? false : notify} disabled={to === "none"} onChange={(e) => setNotify(e.target.checked)} />
-          <span>
-            Notify me when a run finishes
-            <small className="muted">{to === "none" ? "No-output routines never publish or notify." : notify ? "On this computer and on your phone, where notifications are on." : "This routine runs quietly. Its result still goes where you chose."}</small>
-          </span>
-        </label>
+        {targetView.canTarget ? (
+          <fieldset className="cadence routine-notify-fieldset" disabled={to === "none"}>
+            <legend>Notifications</legend>
+            <Choices
+              label="Notifications"
+              value={effectiveNotifyMode}
+              options={[
+                { id: "everyone", name: "Everyone" },
+                { id: "specific", name: "Specific" },
+                { id: "quiet", name: "Quiet" },
+              ]}
+              onChange={(mode) => setNotifyMode(mode)}
+            />
+            <small className="muted">
+              {to === "none"
+                ? "No-output routines never publish or notify."
+                : effectiveNotifyMode === "everyone"
+                  ? "Alerts everyone who can see the routine, wherever notifications are on."
+                  : effectiveNotifyMode === "quiet"
+                    ? "This routine runs quietly. Its result still goes where you chose."
+                    : "Choose which people or individual devices receive alerts when a run finishes."}
+            </small>
+            {to !== "none" && effectiveNotifyMode === "specific" && (
+              <NotifyTargetPicker
+                people={targetView.people}
+                targets={targets}
+                removedCount={removedTargetCount}
+                empty={specificEmpty}
+                onTogglePerson={(person) => setTargets((prev) => togglePersonTarget(prev, person))}
+                onToggleDevice={(person, deviceId) => setTargets((prev) => toggleDeviceTarget(prev, person, deviceId))}
+              />
+            )}
+          </fieldset>
+        ) : (
+          <label className="routine-notify">
+            <input
+              type="checkbox"
+              role="switch"
+              checked={effectiveNotifyMode !== "quiet"}
+              disabled={to === "none"}
+              onChange={(e) => setNotifyMode(e.target.checked ? "everyone" : "quiet")}
+            />
+            <span>
+              Notify me when a run finishes
+              <small className="muted">
+                {to === "none"
+                  ? "No-output routines never publish or notify."
+                  : effectiveNotifyMode !== "quiet"
+                    ? "On this computer and on your phone, where notifications are on."
+                    : "This routine runs quietly. Its result still goes where you chose."}
+              </small>
+            </span>
+          </label>
+        )}
         <p className={"routine-preview" + (preview.error ? " danger" : "")} role="status">
           <CalendarClock size={15} />
           {cadenceSummary(cadence)}
@@ -968,7 +1081,7 @@ function RoutineEditor({
           {scripted ? (followUp ? "The script runs without a model. The follow-up uses one model turn." : "The script runs without a model.") : "Each run uses one model turn."} Botkins keeps running when you close its window.
         </p>
         <div className="profile-save">
-          <button className="primary" disabled={saving || !name.trim() || (needsPrompt && !prompt.trim()) || (scripted && !script.trim())}>
+          <button className="primary" disabled={saving || specificEmpty || !name.trim() || (needsPrompt && !prompt.trim()) || (scripted && !script.trim())}>
             {saving ? "Saving…" : item ? "Save routine" : "Create routine"}
           </button>
           <button type="button" className="secondary" onClick={() => done()}>
@@ -977,6 +1090,84 @@ function RoutineEditor({
         </div>
       </div>
     </form>
+  );
+}
+
+function NotifyTargetPicker({
+  people,
+  targets,
+  removedCount,
+  empty,
+  onTogglePerson,
+  onToggleDevice,
+}: {
+  people: TargetPersonOption[];
+  targets: { people: string[]; devices: string[] };
+  removedCount: number;
+  empty: boolean;
+  onTogglePerson: (person: TargetPersonOption) => void;
+  onToggleDevice: (person: TargetPersonOption, deviceId: string) => void;
+}) {
+  return (
+    <div className="routine-target-picker" role="group" aria-label="Notification recipients">
+      {removedCount > 0 && (
+        <p className="routine-target-note" role="status">
+          {removedCount === 1
+            ? "1 removed person or device is skipped. Saving cleans it up."
+            : `${removedCount} removed people or devices are skipped. Saving cleans them up.`}
+        </p>
+      )}
+      {people.map((person) => {
+        const allChecked = targets.people.includes(person.id);
+        const someDevicesChecked = !allChecked && person.devices.some((d) => targets.devices.includes(d.id));
+        return (
+          <div className="routine-target-group" key={person.id}>
+            <label className="routine-target-row routine-target-person">
+              <input
+                type="checkbox"
+                checked={allChecked}
+                ref={(el) => {
+                  if (el) el.indeterminate = someDevicesChecked;
+                }}
+                onChange={() => onTogglePerson(person)}
+              />
+              <span className="routine-target-label">
+                <strong>{person.name}</strong>
+                {person.isMe && <span className="routine-target-tag">You</span>}
+                {!person.isMe && person.isOwner && <span className="routine-target-tag">Owner</span>}
+                {person.devices.length > 0 && <small className="muted">All devices</small>}
+              </span>
+            </label>
+            {person.devices.length > 0 && (
+              <div className="routine-target-devices">
+                {person.devices.map((device) => (
+                  <label className="routine-target-row routine-target-device" key={device.id}>
+                    <input
+                      type="checkbox"
+                      checked={isDeviceChecked(targets, person, device.id)}
+                      onChange={() => onToggleDevice(person, device.id)}
+                    />
+                    <span className="routine-target-label">
+                      <span>{device.name}</span>
+                      {!device.canNotify && (
+                        <span className="routine-target-pill">
+                          {device.kind === "host" ? "Alerts off" : "Push off"}
+                        </span>
+                      )}
+                    </span>
+                  </label>
+                ))}
+              </div>
+            )}
+          </div>
+        );
+      })}
+      {empty && (
+        <p className="routine-target-error" role="alert">
+          Choose at least one person or device, or switch to Quiet.
+        </p>
+      )}
+    </div>
   );
 }
 

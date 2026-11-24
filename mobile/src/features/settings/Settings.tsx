@@ -1,5 +1,5 @@
 import { type Href, router } from "expo-router";
-import { AudioLines, Bell, BookOpen, ChartColumn, Cpu, FlaskConical, FolderLock, Info, KeyRound, LibraryBig, MessagesSquare, Monitor, MonitorSmartphone, ScreenShare, ShieldCheck, SunMoon, Users, Wrench } from "lucide-react-native";
+import { AudioLines, Bell, BookOpen, ChartColumn, Cpu, FlaskConical, FolderLock, Info, KeyRound, LibraryBig, MessagesSquare, Monitor, MonitorSmartphone, ScreenShare, ShieldCheck, SunMoon, UserRound, Users, Wrench } from "lucide-react-native";
 import { Alert, View } from "react-native";
 import { describeChoice, useDefaultProvider } from "@/features/models/shared";
 import type { Preferences } from "@/link/types";
@@ -7,6 +7,7 @@ import { useModels, usePart, useSettings, useSkills } from "@/state/hooks";
 import { api, attempt, unpair } from "@/state/link";
 import { usePrefs } from "@/state/prefs";
 import { useApp } from "@/state/store";
+import { useProfile, useProfileHosts } from "@/state/profile";
 import { can } from "@/state/team";
 import { Badge, brand, Group, IconTile, Label, Page, ProviderIcon, Row, useTheme } from "@/ui";
 import { harnessName } from "./Harness";
@@ -20,7 +21,7 @@ export default function Settings() {
   const name = useApp((state) => state.pairing?.name) ?? "Your computer";
   const link = useApp((state) => state.link);
   const route = useApp((state) => state.route);
-  const computers = useApp((state) => state.pairings.length);
+  const localComputers = useApp((state) => state.pairings);
   const settings = useSettings();
   const models = useModels();
   const defaultProvider = useDefaultProvider();
@@ -31,6 +32,9 @@ export default function Settings() {
   const team = usePart("team");
   const mode = usePrefs((prefs) => prefs.mode);
   const member = meta?.you?.kind === "member" && team && "me" in team ? team : undefined;
+  const profile = useProfile((state) => state.session);
+  const profileHosts = useProfileHosts();
+  const computers = localComputers.length + profileHosts.filter((host) => !localComputers.some((pairing) => pairing.serverId === host.serverId)).length;
   const permission = (scope: Parameters<typeof can>[1], action: string) => can({ meta, team }, scope, action);
   const owner = meta?.you?.kind !== "member";
 
@@ -45,6 +49,7 @@ export default function Settings() {
       <Group>
         <Row leading={<IconTile icon={Monitor} color={brand.tide} size={36} />} title={name} subtitle={linkLabel(link, route)} chevron onPress={() => router.push("/settings/desktop")} />
         <Row leading={<IconTile icon={MonitorSmartphone} color={brand.tide} />} title="Computers and teams" value={computers > 1 ? String(computers) : undefined} chevron onPress={() => router.push("/settings/computers")} />
+        <Row leading={<IconTile icon={UserRound} color={brand.tide} />} title="Botkins profile" subtitle={profile ? profile.email || profile.name : "Optional · use your identity on other devices"} chevron onPress={() => router.push("/profile")} />
         {owner && <Row leading={<IconTile icon={ScreenShare} color={brand.tide} />} title="Screen" subtitle="See and control your computer" chevron onPress={() => router.push("/remote")} />}
         {owner && meta?.capabilities.includes("teams-v1") && (
           <Row

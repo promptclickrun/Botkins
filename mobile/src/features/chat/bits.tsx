@@ -61,13 +61,13 @@ export function StepMark({ status, size = 16 }: { status: Step["status"]; size?:
 }
 
 /** Two bots, the second just behind the first: a group chat's face. Bare figures, no tiles. */
-export function GroupFace({ bots, size, state = "idle" }: { bots: (Bot | undefined)[]; size: number; state?: AvatarState }) {
+export function GroupFace({ bots, size, state = "idle", animated }: { bots: (Bot | undefined)[]; size: number; state?: AvatarState; /** Only a chat's header passes it. */ animated?: boolean }) {
   const small = Math.round(size * 0.7);
   const [first, second] = bots;
   return (
     <View style={{ width: size, height: size }}>
-      <BotAvatar bot={second} size={small} style={{ position: "absolute", right: 0, top: 0 }} />
-      <BotAvatar bot={first} size={small} state={state} style={{ position: "absolute", left: 0, bottom: 0 }} />
+      <BotAvatar bot={second} size={small} animated={animated} style={{ position: "absolute", right: 0, top: 0 }} />
+      <BotAvatar bot={first} size={small} state={state} animated={animated} style={{ position: "absolute", left: 0, bottom: 0 }} />
     </View>
   );
 }

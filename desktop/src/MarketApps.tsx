@@ -3,10 +3,13 @@ import { AlertCircle, ArrowLeft, Bot, Check, CheckCircle2, ChevronRight, LayoutG
 import { useAsk } from "./Pages";
 import { Group, errorText } from "./SettingsRows";
 import type { ComposioAccount, ComposioCatalog, ComposioToolkit, McpServer, State } from "./types";
+import MacTools from "./MacTools";
+import { CatalogBrowser, CatalogEntryPage, reloadMcpCatalog, useMcpCatalog } from "./McpCatalog";
 import "./plugins.css";
 import "./marketapps.css";
 
-// Marketplace › Apps: the apps of the person's own Composio account, as the phone shows them
+// Marketplace › Apps: the direct apps catalog first (McpCatalog.tsx), then "More apps through
+// Composio": the apps of the person's own Composio account, as the phone shows them
 // (mobile/src/features/market). The computer does the work (desktop/composio.mjs) through its own
 // Composio tool and that tool's sign-in, so signing in here also gives the bots the apps.
 
@@ -172,6 +175,8 @@ async function refreshConnected() {
  * what changed), then the person's apps. Throws when the list couldn't be read; the one shown stays.
  */
 export async function refreshApps() {
+  reloadMcpCatalog();
+  if (typeof api["composio.catalog"] !== "function") return;
   const catalog = await api["composio.catalog"]({ fresh: true });
   set({ catalog, catalogStatus: "ready" });
   await refreshConnected();
@@ -393,27 +398,79 @@ const CatalogFailed = () => <Empty icon={<LayoutGrid size={20} />} title="The ap
 
 // ── The view ────────────────────────────────────────────────────────────────────────────────
 
-type Place = { kind: "home" } | { kind: "category"; id: string } | { kind: "app"; slug: string; from: Exclude<Place, { kind: "app" }> };
+type Place =
+  | { kind: "home" }
+  | { kind: "entry"; id: string }
+  | { kind: "composio" }
+  | { kind: "category"; id: string }
+  | { kind: "app"; slug: string; from: Exclude<Place, { kind: "app" }> };
 
-/** Marketplace › Apps: the person's Composio apps, as the phone shows them. */
+/**
+ * Marketplace › Apps: on a Mac, Mail and Messages first; then the direct apps catalog
+ * (McpCatalog.tsx), which needs no sign-in to browse; then one way to the long tail through Composio,
+ * the person's own Composio apps as the phone shows them.
+ */
 export default function MarketApps({ state }: { state: State }) {
   const using = state.remote?.using;
-  const supported = (!using || using.capabilities.includes(COMPOSIO_APPS)) && typeof api["composio.catalog"] === "function";
+  const composio = (!using || using.capabilities.includes(COMPOSIO_APPS)) && typeof api["composio.catalog"] === "function";
   const member = !!using?.member;
+  const direct = useMcpCatalog(state);
+  const [place, setPlace] = useState<Place>({ kind: "home" });
+
+  if (!composio && !direct.supported) return <Empty icon={<ShieldAlert size={20} />} title="Apps need an update" text="Update the app on your computer to use apps here." />;
+  if (place.kind === "entry") return <CatalogEntryPage state={state} catalog={direct.catalog} id={place.id} back={() => setPlace({ kind: "home" })} reload={direct.reload} />;
+  if (place.kind !== "home")
+    return member ? (
+      <div className="plugin-detail">
+        <button type="button" className="set-link plugin-back" onClick={() => setPlace({ kind: "home" })}>
+          <ArrowLeft size={14} /> Back to apps
+        </button>
+        <Empty icon={<ShieldAlert size={20} />} title="Apps are the owner's" text="Only the person who runs this computer connects its apps." />
+      </div>
+    ) : (
+      <ComposioApps state={state} place={place} setPlace={setPlace} />
+    );
+
+  const more = composio && (
+    <Group>
+      <button type="button" className="plugin-listing app-more" onClick={() => setPlace({ kind: "composio" })}>
+        <span className="plugin-listing-icon" aria-hidden="true">
+          <LayoutGrid size={18} />
+        </span>
+        <span className="plugin-listing-copy">
+          <strong>More apps through Composio</strong>
+          <small>Gmail, Google Workspace, Slack and more</small>
+        </span>
+        <ChevronRight size={16} aria-hidden="true" />
+      </button>
+    </Group>
+  );
+  return (
+    <div className="market-apps">
+      <MacTools state={state} />
+      {direct.supported ? <CatalogBrowser catalog={direct.catalog} error={direct.error} retry={direct.reload} open={(id) => setPlace({ kind: "entry", id })} after={more} /> : more}
+    </div>
+  );
+}
+
+type ComposioPlace = Exclude<Place, { kind: "home" } | { kind: "entry" }>;
+
+/** More apps through Composio: the person's Composio apps, behind its sign-in. */
+function ComposioApps({ state, place, setPlace }: { state: State; place: ComposioPlace; setPlace: (next: Place | ((now: Place) => Place)) => void }) {
+  const using = state.remote?.using;
   const access = accessOf(state.mcpServers);
   const server = findServer(state.mcpServers);
   const signedIn = access === "ready" || access === "off";
   const s = useStore();
-  const [place, setPlace] = useState<Place>({ kind: "home" });
   const [query, setQuery] = useState("");
   const dialogs = useAsk();
 
   useEffect(() => {
-    if (supported && !member) void loadCatalog();
-  }, [supported, member, using?.id]);
+    void loadCatalog();
+  }, [using?.id]);
 
   // The accounts belong to one sign-in on one computer: another one starts them over.
-  const key = supported && !member && signedIn && server ? (using?.id ?? "here") + " " + server.id : "";
+  const key = signedIn && server ? (using?.id ?? "here") + " " + server.id : "";
   useEffect(() => {
     if (key === owner) return;
     owner = key;
@@ -426,18 +483,15 @@ export default function MarketApps({ state }: { state: State }) {
   const popular = useMemo(() => s.catalog?.toolkits.slice(0, 12) ?? [], [s.catalog]);
 
   // The accounts of the apps on screen, a moment after the list settles.
-  const onScreen = place.kind === "home" ? (searching ? results : popular).map((kit) => kit.slug).join(",") : "";
+  const onScreen = place.kind === "composio" ? (searching ? results : popular).map((kit) => kit.slug).join(",") : "";
   useEffect(() => {
     if (!key || !onScreen) return;
     const timer = window.setTimeout(() => void loadStatus(onScreen.split(",")), 450);
     return () => window.clearTimeout(timer);
   }, [onScreen, key]);
 
-  if (!supported) return <Empty icon={<ShieldAlert size={20} />} title="Apps need an update" text="Update the app on your computer to use apps here." />;
-  if (member) return <Empty icon={<ShieldAlert size={20} />} title="Apps are the owner's" text="Only the person who runs this computer connects its apps." />;
-
-  const open = (slug: string) => setPlace((now) => ({ kind: "app", slug, from: now.kind === "app" ? now.from : now }));
-  const back = () => setPlace((now) => (now.kind === "app" ? now.from : { kind: "home" }));
+  const open = (slug: string) => setPlace((now) => ({ kind: "app", slug, from: now.kind === "app" ? now.from : now.kind === "home" || now.kind === "entry" ? { kind: "composio" } : now }));
+  const back = () => setPlace((now) => (now.kind === "app" ? now.from : now.kind === "category" ? { kind: "composio" } : { kind: "home" }));
   const doSignIn = () => void signIn(state.mcpServers);
 
   if (place.kind === "app") return <AppPage slug={place.slug} s={s} access={access} back={back} signIn={() => signIn(state.mcpServers)} ask={dialogs} />;
@@ -445,8 +499,11 @@ export default function MarketApps({ state }: { state: State }) {
 
   const failed = !s.catalog && s.catalogStatus === "error";
   return (
-    <div className="market-apps">
-      <SearchBox value={query} onChange={setQuery} />
+    <div className="plugin-detail market-apps">
+      <button type="button" className="set-link plugin-back" onClick={() => setPlace({ kind: "home" })}>
+        <ArrowLeft size={14} /> Back to apps
+      </button>
+      <SearchBox value={query} onChange={setQuery} label="Search Composio apps" />
       {searching ? (
         !s.catalog ? (
           failed ? <CatalogFailed /> : <p className="set-status">Loading apps…</p>

@@ -150,7 +150,9 @@ export function applyParts(incoming: Record<string, unknown>) {
         const id = name.slice(5);
         chats = { ...chats, [id]: value ? mergeChat(chats[id], value as ChatDetail) : undefined };
       } else if (name.startsWith("run:")) {
-        running = { ...running, [name.slice(4)]: (value as Run | null) ?? null };
+        const id = name.slice(4);
+        const nextRun = (value as Run | null) ?? null;
+        if (!sameValue(running[id], nextRun)) running = { ...running, [id]: nextRun };
       } else if (name.startsWith("reasoning:")) {
         const id = name.slice(10);
         const held = running[id];

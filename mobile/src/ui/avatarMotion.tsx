@@ -1,6 +1,9 @@
-// On Home the primary bot may move, as may the bots on the Chats list, in a live voice call and on
-// a bot's own page (the owner's rule, 2026-11-21, for battery). In a chat the faces hold their poses
-// (2026-11-22). Everywhere else an avatar holds its state's pose, with its badge.
+// The agent you're with moves; lists hold still (the owner's rule, 2026-11-24, after OpenBot).
+// Moving: a bot's own page (this wrapper), and in its chat the header face, the face in the working
+// status capsule and the live voice dock (each passes `animated`). Holding still, with the state's
+// pose and badge: Home, the Chats list, Work, Spaces, Market, pickers and every message or reply row.
+// A moving avatar still holds still under another page, in a tab that isn't selected, while the app
+// isn't active, and under Reduce Motion or the phone's own setting (BotAvatar).
 import { createContext, type ReactNode, useContext } from "react";
 
 const Motion = createContext(false);

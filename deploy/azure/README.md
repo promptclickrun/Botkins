@@ -45,6 +45,7 @@ On the VM, without Docker:
 | `botkins-relay` | The relay that phones connect through. It listens only on the VM itself. |
 | `caddy` | HTTPS for the relay. It gets a certificate from Let's Encrypt, or from ZeroSSL if you gave a certificate email. |
 | `botkins-display` | With Screen access only: the virtual screen (Xvfb, 1440×900). |
+| `botkins-desktop` | With Screen access only: the Botkins desktop on that screen. The kit's dark background with the Botkins mark, and Openbox with the Botkins theme. Right-click the background for Botkins, Terminal and Files. |
 
 The port of the phone link is not open to the internet. Phones reach the server only through its relay.
 
@@ -88,7 +89,7 @@ In the portal, open the VM, then **Run command › RunShellScript**.
 | `botkins-server pair` | Opens a new pairing code and prints its link. A code works once and lasts an hour. |
 | `botkins-server link` | Prints the link of the open code, if there is one. |
 | `botkins-server status` | Shows the services and the status of Botkins. |
-| `botkins-server logs [service]` | Follows a log: `botkins` (the default), `relay`, `caddy` or `display`. |
+| `botkins-server logs [service]` | Follows a log: `botkins` (the default), `relay`, `caddy`, `display` or `desktop`. |
 | `botkins-server screen on` / `off` | Turns Screen access on or off. |
 | `botkins-server update [ref]` | Updates this setup, the relay, Node.js and Botkins, then restarts them. |
 

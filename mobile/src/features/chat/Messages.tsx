@@ -17,7 +17,9 @@ import { ArtifactChips, InlineMedia } from "@/features/artifacts/ArtifactBits";
 import { useMessageLinks } from "@/features/artifacts/data";
 import type { MessagePart } from "@/features/artifacts/logic";
 import { workWidth } from "./bits";
+import { CONTINUE_OPEN_STEPS } from "./keep";
 import { boardKindLabel, splitBoardQuote } from "./compose";
+import { AlertActions } from "@/features/bots/AlertActions";
 import { ConnectCard } from "./ConnectCard";
 import { McpAppCard } from "./McpAppCard";
 import { myself, speakerLabel } from "./people";
@@ -370,6 +372,8 @@ export const MessageRow = memo(function MessageRow({ item, chatId, group, bots, 
         <Reply message={message} index={item.index} id={chatId + ":" + item.key} botId={speaker} markdown={markdown} actions={actions} paths={links.paths} parts={links.parts} />
       )}
       <Reactions message={message} />
+      {/* A proactive alert: what the bot offers to do, and "Not now". */}
+      {!!message.alert && !!speaker && <AlertActions botId={speaker} alert={message.alert} chatId={chatId} />}
       {!!message.text.trim() && (
         <View style={{ flexDirection: "row", alignItems: "center", gap: space.sm }}>
           <ReadAloud id={chatId + ":" + item.key} text={message.text} botId={speaker} />
@@ -381,6 +385,31 @@ export const MessageRow = memo(function MessageRow({ item, chatId, group, bots, 
     </View>
   );
 });
+
+/** The quiet line in a run the computer gave more turns by itself: "↻ Kept going: 3 plan steps were open". */
+export function KeptNote({ line }: { line: string }) {
+  return (
+    <View style={{ minHeight: 28, justifyContent: "center" }} accessibilityLabel={line}>
+      <T variant="footnote" color="faint" numberOfLines={2}>
+        {line}
+      </T>
+    </View>
+  );
+}
+
+/** A turn that ended with plan steps open: "Stopped with 2 open steps". The newest one offers Continue, which writes to the chat. */
+export function OpenNote({ line, again, onSend }: { line: string; again: boolean; onSend: (text: string) => void }) {
+  const { colors } = useTheme();
+  return (
+    <View style={{ flexDirection: "row", alignItems: "center", gap: space.sm, minHeight: 32 }} accessibilityLabel={line}>
+      <CirclePause size={14} color={colors.faint} strokeWidth={2.3} />
+      <T variant="footnote" color="faint" numberOfLines={2} style={{ flexShrink: 1 }}>
+        {line}
+      </T>
+      {again && <Button title="Continue" size="sm" variant="ghost" onPress={() => onSend(CONTINUE_OPEN_STEPS)} />}
+    </View>
+  );
+}
 
 /**
  * A turn that ended without finishing, in one line: how it ended and why, in the desktop app's

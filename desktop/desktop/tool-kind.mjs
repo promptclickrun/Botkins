@@ -14,7 +14,7 @@ const kinds = [
   [/^(web_fetch|webfetch|fetch|fetch_url|browse|browser_navigate)$/, "web-page"],
   [/^(ask_user|ask)$/, "ask"],
   [/^(task|subagent|run_subagent|delegate)$/, "helper"],
-  [/^(sql|update_todo|todo|todo_write|todowrite|manage_todo_list)$/, "plan"],
+  [/^(sql|update_todo|todo|todo_write|todowrite|manage_todo_list|update_plan)$/, "plan"],
   [/^(skill|read_skill|use_skill)$/, "skill"],
   [/^render_card$/, "card"],
   [/^today_/, "panel"],

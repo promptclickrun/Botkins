@@ -9,6 +9,7 @@
 import { Image } from "expo-image";
 import { memo, type ReactNode, useEffect, useLayoutEffect, useMemo, useState } from "react";
 import { AccessibilityInfo, Animated, Easing, type StyleProp, useAnimatedValue, View, type ViewStyle } from "react-native";
+import { trackResource } from "@/state/ledger";
 import { useAppActive } from "@/state/useAppActive";
 import Svg, { Circle, Ellipse, G, Path } from "react-native-svg";
 import { BADGE_ICONS, type BotkinClip, type BotkinState, CLIPS, FILLED_BADGES, MOUTHS } from "@/data/botkinMotion";
@@ -77,9 +78,10 @@ export type BotAvatarProps = {
   /** Kept so older callers compile. Avatars are always drawn bare, with nothing behind them. */
   tile?: boolean;
   /**
-   * Left out, an avatar moves only inside an `AvatarMotion` screen (Home's primary bot passes true,
-   * Home's other bots false). The phone-wide setting and Reduce Motion still them all, and an avatar
-   * whose screen can't be seen holds still by itself.
+   * Left out, an avatar moves only inside an `AvatarMotion` screen (a bot's page). In a chat the
+   * header face, the working capsule's face and the live voice dock pass true; nothing else does
+   * (avatarMotion.tsx). The phone-wide setting and Reduce Motion still them all, and an avatar whose
+   * screen can't be seen, or whose app isn't active, holds still by itself.
    */
   animated?: boolean;
   /** The state's badge at the corner. On by default from 40 points up. */
@@ -108,7 +110,6 @@ function Head({ look, size }: { look: ResolvedLook; size: number }) {
 
 export const BotAvatar = memo(function BotAvatar({ bot, look: given, state = "idle", size = 52, animated: asked, badge, style }: BotAvatarProps) {
   const screenMoves = useAvatarMotion();
-  const animated = asked ?? screenMoves;
   const animations = usePrefs((prefs) => prefs.avatarAnimations);
   const spec = given ?? lookOf(bot ?? {});
   const colorKey = spec.colors?.join(",");
@@ -119,11 +120,11 @@ export const BotAvatar = memo(function BotAvatar({ bot, look: given, state = "id
   const inner = size;
   const unit = inner / 256;
   const reducedMotion = useReducedMotion();
-  const still = !avatarCanMove(animations, reducedMotion, animated);
+  const moves = avatarCanMove(animations, reducedMotion, asked ?? screenMoves);
   // Under another page, or in a tab that isn't selected, the head holds the pose it has: nothing
   // jumps while the next screen slides over it, and it starts its clip again when it is seen.
-  const visible = useOnShow(!still);
-  const seen = useAppActive(visible && !still);
+  const visible = useOnShow(moves);
+  const seen = useAppActive(visible && moves);
 
   // The head moves through the clip's poses; `step` runs from 0 to the last pose.
   const step = useAnimatedValue(0);
@@ -133,8 +134,8 @@ export const BotAvatar = memo(function BotAvatar({ bot, look: given, state = "id
   const motion = avatarMotion[state];
   const { blinkMs, firstBlinkMs } = avatarBeat(head.name);
   useLayoutEffect(() => {
-    if (still) step.setValue(0);
-    if (!seen || last < 1) return;
+    if (!moves) step.setValue(0);
+    if (!moves || !seen || last < 1) return;
     step.setValue(0);
     // Ease each equal-length segment within one timing so a working loop repeats entirely natively.
     const pass = Animated.timing(step, {
@@ -148,35 +149,47 @@ export const BotAvatar = memo(function BotAvatar({ bot, look: given, state = "id
       },
     });
     if (motion === "rest") {
+      const entry = trackResource("animation", "BotAvatar:rest", state);
       const stop = scheduleRestPasses(head.name, () => {
+        entry.bump();
         step.setValue(0);
         pass.start();
       });
       return () => {
         stop();
         pass.stop();
+        entry.release();
       };
     }
+    const entry = trackResource("animation", "BotAvatar:" + motion, state);
     const animation = motion === "loop" ? Animated.loop(pass) : pass;
     animation.start();
-    return () => animation.stop();
-  }, [clip, motion, still, seen, step, last, head.name]);
+    return () => {
+      animation.stop();
+      entry.release();
+    };
+  }, [clip, motion, moves, seen, step, last, head.name, state]);
 
   const blinks = eyes !== "smile" && eyes !== "sleepy";
   useLayoutEffect(() => {
     lids.setValue(1);
-    if (!seen || !blinks) return;
+    if (!moves || !seen || !blinks) return;
+    const entry = trackResource("animation", "BotAvatar:blink", state);
     const blink = Animated.sequence([
       Animated.timing(lids, { ...nativeTiming, toValue: 0.09, duration: blinkMs * 0.02, easing: ease }),
       Animated.timing(lids, { ...nativeTiming, toValue: 0.09, duration: blinkMs * 0.006 }),
       Animated.timing(lids, { ...nativeTiming, toValue: 1, duration: blinkMs * 0.024, easing: ease }),
     ]);
-    const stop = schedulePasses(firstBlinkMs, blinkMs, () => blink.start());
+    const stop = schedulePasses(firstBlinkMs, blinkMs, () => {
+      entry.bump();
+      blink.start();
+    });
     return () => {
       stop();
       blink.stop();
+      entry.release();
     };
-  }, [still, seen, blinks, blinkMs, firstBlinkMs, lids]);
+  }, [moves, seen, blinks, blinkMs, firstBlinkMs, lids, state]);
 
   const pose = useMemo(() => {
     if (poses.length < 2) return undefined;

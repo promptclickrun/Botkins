@@ -1,10 +1,59 @@
 // The desktop's data, as the phone sees it. These mirror the desktop app's own types
 // (desktop/src/types.ts); a chat arrives as a summary and its messages come separately.
+import type { ProtonCalls, ProtonStatusFields } from "./proton-pass";
+type LinkProtonCall<K extends keyof ProtonCalls> = (...args: Parameters<ProtonCalls[K]>) => Awaited<ReturnType<ProtonCalls[K]>>;
 
 export type SkillUpload = { filename: string; data: string; replace?: string[] };
 export type SkillImportResult = { added: string[]; conflicts: string[] };
 export type CatalogSkill = { id: string; source: string; skillId: string; name: string; installs: number; available: boolean; installed?: string };
-export type CatalogPreview = { name: string; description: string; text: string; token: string; installed?: string };
+/** Where a featured skill comes from: its repository at a pinned commit, its license and who wrote it. */
+export type SkillSource = { author: string; license: string; repo: string; commit: string; path: string; url: string; pack?: string };
+export type CatalogPreview = { name: string; description: string; text: string; token: string; installed?: string; /** A featured skill's source. */ source?: SkillSource; /** A featured skill's files, the license among them. */ files?: string[] };
+/** A skill on the featured shelf ("skills-featured-v1"). Its id is `owner/repo/skill@commit7`: preview and install it as a catalog skill. */
+export type FeaturedSkill = SkillSource & { id: string; name: string; summary: string; group: string; installed?: string };
+
+/** How an app of the direct apps catalog signs in ("mcp-catalog-v1"). */
+export type McpCatalogAuth = "none" | "oauth" | "key";
+/** An app of the direct apps catalog, with where it stands on the computer. No value of a key is ever in it. */
+export type McpCatalogEntry = {
+  id: string;
+  name: string;
+  category: string;
+  categoryName: string;
+  /** One line, in Botkins' words. */
+  description: string;
+  transport: "http" | "stdio";
+  auth: McpCatalogAuth;
+  /** http: the server's address. */
+  url?: string;
+  /** stdio: the npm package, its exact version and license, the line that runs, and the names of the values it gets. */
+  package?: string;
+  version?: string;
+  license?: string;
+  command?: string;
+  env?: string[];
+  /** The fields a key entry asks for, by label only. */
+  keys: { id: string; label: string; hint?: string }[];
+  docs: string;
+  /** A letter tile: the app has no picture Botkins may show. */
+  icon: { letter: string };
+  /** A server on the computer that another app runs, and what it needs. */
+  local?: string;
+  added: boolean;
+  serverId?: string;
+  serverName?: string;
+  enabled?: boolean;
+  /** OAuth entries: signed in and not expired. */
+  signedIn?: boolean;
+  signingIn?: boolean;
+  /** Key entries: every key is in the vault. */
+  keysSet?: boolean;
+  /** A program that holds this entry's keys but runs an older command: moving it to the catalog's version needs every key typed again. */
+  commandChanged?: true;
+};
+export type McpCatalog = { entries: McpCatalogEntry[]; categories: { id: string; name: string; count: number }[] };
+/** What adding an app answers: its tool server, and whether the browser sign-in (signInMcpServer) comes next. */
+export type McpCatalogAdded = { serverId: string; next: "sign-in" | "done" };
 
 export type ModelChoice = { model: string; provider?: string; source?: string; reasoningEffort?: string };
 export type FastMode = "off" | "fast" | "ultrafast";
@@ -169,8 +218,13 @@ export type Bot = {
   sectionId?: string | null;
   access?: BotAccessGrant;
   origin?: { provider: string; agent: string; file?: string };
+  /** The starter this bot was made from (link-host/starters.mjs), kept after a rename. */
+  starter?: string;
+  /** Made from a starter that should be offered the Proactive agent (link-host/starters.mjs). */
+  suggestProactive?: boolean;
 };
-export type BotInput = Pick<Bot, "name" | "role" | "instructions" | "face"> & Partial<Pick<Bot, "avatar" | "summary">>;
+/** `starter` names the starter the bot was made from; an older computer leaves it out. */
+export type BotInput = Pick<Bot, "name" | "role" | "instructions" | "face"> & Partial<Pick<Bot, "avatar" | "summary" | "starter">>;
 /** An agent the person already has in a provider's own tool (a Copilot or Codex agent), which can become a bot. */
 export type ImportableAgent = {
   key: string;
@@ -218,7 +272,7 @@ export type Role = {
   bots: "all" | string[];
 };
 export type Group = { id: string; name: string; roleId: string };
-export type MemberDevice = { id: string; name: string; person?: string; kind: "phone" | "desktop"; platform: string; connected: boolean };
+export type MemberDevice = { id: string; name: string; person?: string; kind: "phone" | "desktop"; platform: string; connected: boolean; canNotify?: boolean };
 export type Member = { id: string; name: string; groupId: string; joinedAt: number; deviceIds: string[]; devices?: MemberDevice[] };
 export type Invite = {
   id: string;
@@ -240,7 +294,7 @@ export type TeamPart =
   | {
       people?: Person[];
       linkSharing?: boolean;
-      me: { memberId: string; name: string; group: { id: string; name: string }; role: { name: string; perms: Record<Scope, string[]>; bots: "all" | string[] } };
+      me: { memberId: string; name: string; group: { id: string; name: string }; role: { name: string; perms: Record<Scope, string[]>; bots: "all" | string[] }; devices?: MemberDevice[] };
       team: { name: string };
     };
 
@@ -275,6 +329,10 @@ export type Message = {
   author?: { memberId: string; name: string };
   /** A person's message delivered into a turn that was under way (a steer): that turn's run. The desktop app records it today. */
   steeredRunId?: string;
+  /** A proactive alert the bot sent on its own: the run that made it (a 👍 or 👎 on it teaches the bot). */
+  proactiveRunId?: string;
+  /** That alert's actions ("proactive-team-v1"): what the bot offers to do, and what the person chose. */
+  alert?: ProactiveAlert;
   /**
    * Text a bot wrote during a turn before a step, a steer or a request, or before the turn ended
    * without a reply ("turn-timeline-v1", docs/turn-timeline.md). `time` is when its first words came.
@@ -330,11 +388,11 @@ export type Credential = {
 /** `value: null` keeps the saved value. */
 export type CredentialInput = { id?: string; name: string; kind?: CredentialKind; username?: string; website?: string; notes?: string; value?: string | null };
 export type PasswordManagerId = Exclude<CredentialSource, "vault">;
-export type PasswordManagerStatus = {
+export type PasswordManagerStatus = ProtonStatusFields & {
   id: PasswordManagerId;
   name: string;
   /** ready: signed in and readable. locked: needs unlocking. signed-out: needs a sign-in on the computer. missing: its command-line tool isn't installed. */
-  state: "ready" | "locked" | "signed-out" | "missing" | "error";
+  state: "ready" | "locked" | "signed-out" | "missing" | "error" | "installing" | "signing-in" | "expiring" | "expired";
   version?: string;
   account?: string;
   /** One line about what to do next. */
@@ -404,6 +462,8 @@ export type ChatSchedule = {
   deliver?: RoutineDelivery;
   /** False when the routine sends no notification. */
   notify?: boolean;
+  /** Specific people ("owner" or member ids) and/or device ids ("host" or paired device ids) to notify ("routine-notify-targets-v1"). */
+  notifyTargets?: RoutineNotifyTargets;
   createdAt?: number;
   finishedAt?: number;
   /** A script routine's script: it runs on the computer with no model ("routine-scripts-v1"). */
@@ -411,6 +471,10 @@ export type ChatSchedule = {
   /** On a script routine: after the script, the bot follows `prompt` with the script's output. */
   followUp?: boolean;
 };
+/** Explicit routine notification targets ("routine-notify-targets-v1"). Absent means everyone allowed. */
+export type RoutineNotifyTargets = { people?: string[]; devices?: string[] };
+/** Per-run notification override set by an agent via `routine_notify` ("routine-notify-targets-v1"). */
+export type RunNotifyTargets = { mode: "only" | "none" | "default"; people?: string[]; devices?: string[]; message?: string };
 /**
  * Where a routine's result lands when a run finishes. "routine" (and nothing) keeps it in the
  * routine's own chat; "chat" also posts it as a message from the bot in the person's chat with it
@@ -429,6 +493,8 @@ export type RoutineInput = {
   timezone?: string;
   deliver?: RoutineDelivery;
   notify?: boolean;
+  /** Specific notification targets ("routine-notify-targets-v1"). null resets to everyone; omitted on an edit keeps the existing targets. */
+  notifyTargets?: RoutineNotifyTargets | null;
   /** A script that runs on the computer with no model ("routine-scripts-v1"; the owner's only). null on an edit takes it away. */
   script?: string | null;
   followUp?: boolean;
@@ -563,6 +629,7 @@ export type RunSummary = {
   summary?: string;
   panelId?: string;
   scheduleId?: number;
+  notifyTargets?: RunNotifyTargets;
   usage?: Usage;
 };
 export type Run = RunSummary & {
@@ -584,6 +651,12 @@ export type Run = RunSummary & {
   teamwork?: TeamAsk[];
   /** How a turn ended without finishing ("turn-timeline-v1"). Missing: the phone reads it from `status` and `detail`. */
   ending?: "failed" | "timed-out" | "interrupted" | "stopped";
+  /** The turn's plan when it ended: how many steps are open, of how many. Older computers send none. */
+  plan?: { open: number; total: number };
+  /** The computer gave the bot more turns in this run by itself (it kept the work moving): how many so far (at most `limit`), why, and how many plan steps were open at the last one. */
+  continued?: { count: number; limit: number; reason: "plan" | "next-step"; open?: number };
+  /** The turn ended with plan steps open and nothing went on (the limit, the same steps again, Stop, a waiting message or request). */
+  stoppedOpen?: true;
 };
 /**
  * A tab in the side pane a bot opened beside a chat ("side-pane-v1"; the contract is the desktop
@@ -660,6 +733,10 @@ export type AgentRequest = {
   url?: string;
   /** A secure input's fields: 1 is a single value, 2 to 8 a multi-value. Answered with `{ action: "accept", content: { [key]: string | CredentialRef } }`. */
   fields?: SecureField[];
+  /** When the computer raised it (milliseconds). */
+  time?: number;
+  /** A question that waited ten minutes: its turn went on without an answer. It stays open as waiting, and an answer starts a new turn that quotes it. */
+  detached?: true;
 };
 export type QueuedMessage = { clientMessageId?: string; id: string; text: string };
 /** What is happening right now, per chat. */
@@ -776,6 +853,9 @@ export type BoardItem = {
   read: boolean;
   rating?: "up" | "down";
   snoozedUntil?: number;
+  /** A proactive alert's run and its actions ("proactive-team-v1"), as on a chat message. */
+  proactiveRunId?: string;
+  alert?: ProactiveAlert;
   createdAt: number;
   updatedAt: number;
 };
@@ -876,7 +956,14 @@ export type Appearance = {
   /** Missing on older computers means the desktop's usual default: on. */
   avatarAnimations?: boolean;
 };
-export type NotificationSettings = { replies: boolean; routines: boolean; requests: boolean; quietHours: { enabled: boolean; from: string; to: string } };
+export type NotificationSettings = {
+  replies: boolean;
+  routines: boolean;
+  requests: boolean;
+  /** One plain reminder when something is left waiting on a person, with no model. On from the start. Missing on a computer without "proactive-team-v1". */
+  reminders?: boolean;
+  quietHours: { enabled: boolean; from: string; to: string };
+};
 export type Preferences = {
   fastMode?: FastMode;
   model: ModelChoice;
@@ -1071,12 +1158,23 @@ export type Meta = {
 export type ProactiveWatch = "runs" | "tasks" | "requests" | "context";
 /** The computer's switch for the Proactive agent. Off pauses every bot's agent without forgetting its settings. */
 export type ProactiveSettings = { enabled: boolean };
-/** What a bot's Proactive agent is set to. */
-export type ProactiveBotSettings = { enabled: boolean; every: number; sweepHours: number; maxPerDay: number; deliver: "chat" | "feed"; watch: ProactiveWatch[]; instructions: string };
+/** One person a bot looks out for ("proactive-team-v1"): `on` is their own check, `notify: false` delivers their alerts with no notification. */
+export type ProactivePerson = { on: boolean; notify: boolean };
+/** What a delivered proactive alert carries: its run, the label of what the bot offers to do, and what the person chose. Never the offer's own request. */
+export type ProactiveAlert = { runId: string; offer?: string; chosen?: "take" | "later" };
 /**
- * One bot's agent as this phone is sent it. The owner is sent `person` ("owner", or the member it works for). A member is sent
- * `mine` for their own agents and, for another person's, only `{ enabled, taken }`: every other field may be missing, and a
- * computer may add more.
+ * What a bot's Proactive agent is set to. Everything but `people` is shared by everyone the bot looks out for. With
+ * "proactive-team-v1": `setUp` says its setup steps were finished (until then it never wakes), and `people` holds each
+ * person's own entry, by "owner" or a member's id.
+ */
+export type ProactiveBotSettings = { enabled: boolean; pausedBy?: "owner"; setUp?: boolean; every: number; sweepHours: number; maxPerDay: number; deliver: "chat" | "feed"; watch: ProactiveWatch[]; instructions: string; people?: Record<string, ProactivePerson> };
+/** A change to a bot's agent: only what it names. In `people` an entry changes what it names, and null takes that person out. */
+export type ProactivePatch = Partial<Omit<ProactiveBotSettings, "people" | "pausedBy">> & { people?: Record<string, Partial<ProactivePerson> | null> };
+/**
+ * One bot's agent as this phone is sent it. The owner is sent everyone in `people` and their own activity (`log`, `pings`…).
+ * A member is sent the shared settings, only their own entry in `people`, and their own activity: never another person's.
+ * Every field may be missing, and a computer may add more. `person` and `taken` are from a computer without
+ * "proactive-team-v1", where a bot's agent worked for one person.
  */
 export type ProactiveBot = Partial<ProactiveBotSettings> & {
   enabled: boolean;
@@ -1186,6 +1284,16 @@ export type MarketAgent = {
   version?: string;
   author?: string;
   keywords?: string[];
+  /** Botkins' own templates: the named deliverable, how it is useful on day one, what it asks before, and a suggested pairing. */
+  deliverable?: string;
+  dayOne?: string;
+  approval?: string;
+  group?: "everyday" | "builder";
+  pairing?: { kind: "routine" | "proactive"; cadence?: string; note: string };
+  /** Catalog ids of apps that help it (mcpCatalog). */
+  apps?: string[];
+  /** A Home starter: shown before every other template. */
+  starter?: boolean;
 };
 /** A category's chip: how many templates the other filters leave in it. */
 export type MarketAgentCategory = { id: string; name: string; count: number };
@@ -1390,6 +1498,7 @@ export type PairedDevice = {
   createdAt: number;
   lastSeenAt: number;
   connected: boolean;
+  canNotify?: boolean;
   current?: boolean;
 };
 /**
@@ -1555,10 +1664,19 @@ export type Calls = {
   setBotAccess(botId: string, grant: BotAccessGrant): void;
   setBotIntegrations(botId: string, off: { skillsOff?: string[]; mcpOff?: string[] }): void;
   /**
-   * Changes what a bot's Proactive agent is set to (only what `patch` names), or with null forgets it. Needs "proactive-agent-v2".
-   * A role that manages the bot may; the agent works for the person who set it up, and is theirs alone to change (the owner may change any).
+   * Changes what a bot's Proactive agent is set to (only what `patch` names), or with null forgets it. Needs "proactive-agent-v2";
+   * `setUp` and `people` need "proactive-team-v1". The computer checks who calls: the owner changes anything and adds or takes out
+   * anyone whose role sees the bot; a member changes only their own entry in `people`, and adds themselves or changes what the
+   * people share only when their role manages the bot (never look-around, the tasks watch or the bot's switch to off). A member's
+   * null takes only that member out.
    */
-  setBotProactive(botId: string, patch: Partial<ProactiveBotSettings> | null): void;
+  setBotProactive(botId: string, patch: ProactivePatch | null): void;
+  /**
+   * What a person does with a proactive alert they were sent ("proactive-team-v1"). "take" starts a normal turn in their chat with
+   * the bot, with what the bot offered as their message (its tools ask for approval as usual), and answers that chat. "later" holds
+   * what the alert was about back for a day. Only the person the alert was for has it; anyone else is told it is gone.
+   */
+  proactiveAct(botId: string, runId: string, action: "take" | "later"): { chatId?: string; until?: number };
   botMemory(botId: string): string;
   setBotMemory(botId: string, text: string): void;
   saveTemplate(botId: string, name?: string): string;
@@ -1766,6 +1884,12 @@ export type Calls = {
   "skillsCatalog.search"(query: string): CatalogSkill[];
   "skillsCatalog.preview"(id: string): CatalogPreview;
   "skillsCatalog.install"(token: string, replace?: string[]): SkillImportResult;
+  /** The featured shelf ("skills-featured-v1"): upstream skills pinned to a commit. Preview and install them by id. */
+  "skillsCatalog.featured"(): FeaturedSkill[];
+  /** The direct apps catalog ("mcp-catalog-v1"). */
+  "mcpCatalog.list"(): McpCatalog;
+  /** Adds an app as a tool server, or sets its keys again. A stdio app needs `confirm`: its exact `command`. Owner only. */
+  "mcpCatalog.add"(id: string, options?: { keys?: Record<string, string>; confirm?: string }): McpCatalogAdded;
   "piPackages.browse"(query?: { query?: string; page?: number }): { packages: PiPackageListing[]; nextPage?: number };
   "piPackages.preview"(name: string): PiPackageVersion;
   "piPackages.list"(): InstalledPiPackage[];
@@ -1882,6 +2006,13 @@ export type Calls = {
   /** Whether a credential can be read right now. Never returns the value. */
   "link.credentials.check"(id: string): { ok: boolean; message?: string };
   "link.credentials.managers"(refresh?: boolean): PasswordManagerStatus[];
+  "link.credentials.protonPassInstallPlan": () => Awaited<ReturnType<ProtonCalls["plan"]>>;
+  "link.credentials.protonPassInstall": LinkProtonCall<"install">;
+  "link.credentials.protonPassSignInStart": LinkProtonCall<"start">;
+  "link.credentials.protonPassSignInRead": LinkProtonCall<"read">;
+  "link.credentials.protonPassSignInInput": LinkProtonCall<"input">;
+  "link.credentials.protonPassSignInCancel": LinkProtonCall<"cancel">;
+  "link.credentials.protonPassDisconnect": LinkProtonCall<"disconnect">;
   "link.credentials.unlock"(manager: PasswordManagerId, secret: { password: string }): PasswordManagerStatus;
   "link.credentials.lock"(manager: PasswordManagerId): PasswordManagerStatus;
   "link.credentials.vaults"(manager: PasswordManagerId): PasswordManagerVault[];

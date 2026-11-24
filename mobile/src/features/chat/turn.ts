@@ -12,8 +12,10 @@
 //
 // Steps and Thinking and updates independently select the live canvas rows. A turn’s rail keeps
 // its calls. Fold finished steps determines whether the work collapses once the turn ends.
+import { isSilentMessage } from "../../../link-host/silent-reply.mjs";
 import type { Message, PanePanel, Reasoning, Run, Step, Subagent } from "@/link/types";
 import { type FoldEntry, foldLine, foldParts, liveLine, type StepsChoice, stepCount } from "./fold";
+import { keptLine, openLine } from "./keep";
 
 export const TIMELINE_V1 = "turn-timeline-v1";
 
@@ -47,6 +49,10 @@ export type Item =
   /** The computer's screen, where a bot showed it (a side pane tab of kind "screen"). */
   | { kind: "screen"; key: string; panel: PanePanel }
   | { kind: "ended"; key: string; run: Run; ending: Ending; /** The newest turn, and nothing under way: Try again is offered. */ retry: boolean }
+  /** The computer gave the bot more turns in this run by itself: "↻ Kept going: 3 plan steps were open" (keep.ts). */
+  | { kind: "kept"; key: string; run: Run; line: string }
+  /** A turn that ended with plan steps open and nothing went on: "Stopped with 2 open steps", with Continue on the newest turn. */
+  | { kind: "open"; key: string; run: Run; line: string; /** The newest turn, and nothing under way: Continue is offered. */ again: boolean }
   /** The end of the turn under way: its latest steps and thinking, and the text being written. */
   | { kind: "live"; key: "live"; run?: Run; steps: Step[]; thinking: string; text: string; /** IDs of reasoning bodies in this active segment, after its last structural boundary. */ reasoningIds?: string[]; /** The body offset already represented by legacy text rows. */ liveFrom?: number; /** A group/fallback body is raw; a single-turn body starts after its cut and trims its leading separator. */ bodyMode?: "raw" | "segment"; /** Room under the text for the reply's row, so it stays put when it becomes the reply. */ reserve?: true }
   /**
@@ -105,7 +111,7 @@ export function indexMessageOwnership(messages: Message[]): MessageOwnership {
   messages.forEach((message, index) => {
     const owner = personOf(message) ?? message.runId;
     owners.push(owner);
-    if (!owner) return;
+    if (!owner || isSilentMessage(message)) return;
     const indices = byRun.get(owner);
     if (indices) indices.push(index);
     else byRun.set(owner, [index]);
@@ -214,7 +220,7 @@ const KINDS: [RegExp, string][] = [
   [/^(web_fetch|webfetch|fetch|fetch_url|browse|browser_navigate)$/, "web-page"],
   [/^(ask_user|ask)$/, "ask"],
   [/^(task|subagent|run_subagent|delegate)$/, "helper"],
-  [/^(sql|update_todo|todo|todo_write|todowrite|manage_todo_list)$/, "plan"],
+  [/^(sql|update_todo|todo|todo_write|todowrite|manage_todo_list|update_plan)$/, "plan"],
   [/^(skill|read_skill|use_skill)$/, "skill"],
   [/^render_card$/, "card"],
   [/^today_/, "panel"],
@@ -387,14 +393,23 @@ export function chatTimeline(input: TimelineInput): Item[] {
     const starts = mine.filter((i) => messages[i].role === "user" && messages[i].runId === runId && personOf(messages[i]) === undefined);
     const start = starts[0];
     if (start !== undefined) items.push(messageItem(start));
-    const replies = mine.filter((i) => i !== start && personOf(messages[i]) === undefined && !messages[i].interim);
+    const allReplies = mine.filter((i) => i !== start && personOf(messages[i]) === undefined && !messages[i].interim);
+    // A run the computer kept going has a reply for each turn. Those before the last are drawn where they came
+    // (all of them while it runs: the live text is the next one), and the last is the run's reply.
+    const early = run?.continued && !group ? (isLive ? allReplies : allReplies.slice(0, -1)) : [];
+    const replies = allReplies.filter((i) => !early.includes(i));
     const inside = mine.filter((i) => i !== start && !replies.includes(i));
     const ending = run && !isLive && run.id !== current?.id ? endingOf(run) : null;
-    const note = (): Item[] => (run && ending ? [{ kind: "ended", key: "e" + run.id, run, ending, retry: run.id === lastAsked && !working }] : []);
+    const newest = !!run && run.id === lastAsked && !working;
+    const note = (): Item[] => [
+      ...(run && ending ? [{ kind: "ended" as const, key: "e" + run.id, run, ending, retry: newest }] : []),
+      ...(run && !isLive && openLine(run) ? [{ kind: "open" as const, key: "o" + run.id, run, line: openLine(run) as string, again: newest }] : []),
+    ];
+    const kept = (): Item[] => (run && keptLine(run) ? [{ kind: "kept", key: "k" + run.id, run, line: keptLine(run) as string }] : []);
 
     // A turn that folds is drawn in order while it runs, and folded once it ended. This is
     // independent from the live Steps filter: Failed only still expands to every completed call.
-    if (run && foldFinished && !isLive) return foldTurn(run, replies, inside, note);
+    if (run && foldFinished && !isLive) return foldTurn(run, replies, inside, early, kept, note);
 
     if (!run) {
       for (const i of mine) {
@@ -500,7 +515,7 @@ export function chatTimeline(input: TimelineInput): Item[] {
     if (isLive) {
       // The newest part goes with the text being written, at the bottom.
       const thinking = prefs.thinking === "show" ? thoughts.map((thought) => thought.text.trim()).filter(Boolean).join("\n\n") || (!run.reasoning?.length ? (input.live?.thinking ?? "") : "") : "";
-      items.push(...live(run, steps, thinking, group ? rest : rest.replace(/^\s+/, ""), offset, run.reasoning?.length ? thoughts.map((thought) => thought.id) : undefined, group ? "raw" : "segment"));
+      items.push(...kept(), ...live(run, steps, thinking, group ? rest : rest.replace(/^\s+/, ""), offset, run.reasoning?.length ? thoughts.map((thought) => thought.id) : undefined, group ? "raw" : "segment"));
       items.push(statusLine(run));
       return;
     }
@@ -509,6 +524,8 @@ export function chatTimeline(input: TimelineInput): Item[] {
     steps = [];
     thoughts = [];
     if (noted && !replies.length) pushText(rest, true);
+    // "Kept going" sits just before the reply the computer kept going for, so it reads as what happened next.
+    items.push(...kept());
     if (!group) replies.forEach((i, n) => items.push(messageItem(i, { end: n === replies.length - 1 })));
     if (run.steps?.length || run.agents?.length || run.todos?.length || run.teamwork?.length || run.summary ||
         (prefs.thinking !== "hide" && (run.reasoning?.length || inside.some((i) => messages[i].interim)))) {
@@ -522,7 +539,7 @@ export function chatTimeline(input: TimelineInput): Item[] {
    * person said and the reply stay in the chat, everything else goes into the fold, in the order it
    * happened. A group chat keeps its members' replies in turn.
    */
-  const foldTurn = (run: Run, replies: number[], inside: number[], note: () => Item[]) => {
+  const foldTurn = (run: Run, replies: number[], inside: number[], early: number[], kept: () => Item[], note: () => Item[]) => {
     const asides = prefs.thinking !== "hide";
     const own = run.steps ?? [];
     const entries: Entry[] = [];
@@ -569,6 +586,8 @@ export function chatTimeline(input: TimelineInput): Item[] {
         }
         textUpTo(personKey(message));
         if (!group) shown.push(messageItem(entry.index));
+        // An earlier turn's reply is drawn where it came, and is no person's line in the fold.
+        if (early.includes(entry.index)) continue;
         const title = message.answer?.title;
         fold.push({ kind: "person", key: "p" + (from + entry.index), text: (title ? title + ": " : "") + answerText(message) });
       }
@@ -579,9 +598,10 @@ export function chatTimeline(input: TimelineInput): Item[] {
       const said = [...inside, ...replies].filter((i) => !messages[i].interim).sort((a, b) => a - b);
       for (const i of said) items.push(messageItem(i, { end: i === replies.at(-1) }));
     } else {
-      items.push(...shown);
+      items.push(...shown, ...kept());
       replies.forEach((i, n) => items.push(messageItem(i, { end: n === replies.length - 1 })));
     }
+    if (group) items.push(...kept());
     const counted = own.length;
     if (fold.some((entry) => entry.kind !== "person") || run.agents?.length || run.todos?.length || run.teamwork?.length || run.summary) {
       const took = run.finished ? run.finished - run.time : run.usage?.durationMs;
@@ -595,6 +615,7 @@ export function chatTimeline(input: TimelineInput): Item[] {
   for (let i = 0; i < messages.length; i++) {
     const owner = owners[i];
     if (!owner) {
+      if (isSilentMessage(messages[i])) continue;
       if (messages[i].interim) {
         if (openUpdates && clean(messages[i].text)) items.push({ kind: "text", key: "i" + (from + i), text: clean(messages[i].text) });
       } else items.push(messageItem(i));

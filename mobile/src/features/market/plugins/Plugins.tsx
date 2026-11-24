@@ -16,19 +16,18 @@ import { Notice, PluginRow } from "./parts";
 /** One search of one marketplace, page by page. */
 type Listing = { key: string; plugins: PluginListing[]; cursor?: string; error?: string; more?: boolean };
 
-export function PluginsPage({ switcher }: { switcher: ReactNode }) {
+export function PluginsPage() {
   const can = usePluginsReady();
   const allowed = useCan("plugins", "view");
-  if (can && allowed) return <Plugins switcher={switcher} />;
+  if (can && allowed) return <Plugins />;
   return (
-    <Page tab title="Marketplace">
-      {switcher}
+    <Page title="Plugins">
       <EmptyState icon={Puzzle} title={allowed ? "Update the app on your computer" : "Your team role can't view plugins"} />
     </Page>
   );
 }
 
-function Plugins({ switcher }: { switcher: ReactNode }) {
+function Plugins() {
   const online = useOnline();
   const member = useMember();
   const folders = !member && useCapability("folders-v1");
@@ -160,8 +159,7 @@ function Plugins({ switcher }: { switcher: ReactNode }) {
   }
 
   return (
-    <Page tab title="Marketplace" onRefresh={reload} refreshing={refreshing}>
-      {switcher}
+    <Page title="Plugins" keyboard onRefresh={reload} refreshing={refreshing}>
       {!!notice && (
         <Notice
           title={notice.title}

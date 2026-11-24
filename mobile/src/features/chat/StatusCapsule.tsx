@@ -48,7 +48,7 @@ export function StatusCapsule({ chatId, bot, group, bots, run }: { chatId: strin
         {/* The glass only draws: the press belongs to the button around it. */}
         <View pointerEvents="none">
           <Glass style={{ height: CAPSULE, borderRadius: CAPSULE / 2, flexDirection: "row", alignItems: "center", gap: 8, paddingLeft: 8, paddingRight: 16 }}>
-            <BotAvatar bot={face} size={28} state={state === "idle" ? "thinking" : state} animated={false} />
+            <BotAvatar bot={face} size={28} state={state === "idle" ? "thinking" : state} animated />
             <T variant="footnote" weight="600" numberOfLines={1} style={{ flexShrink: 1 }}>
               {doing}
             </T>

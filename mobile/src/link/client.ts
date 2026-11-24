@@ -2,8 +2,10 @@
 // It pairs with a computer, opens encrypted sessions, makes calls, and follows the computer's
 // state by polling or receiving sealed relay updates. Nothing here depends on React Native, so the same
 // code runs in the tests.
+import { type ResourceHandle, trackResource } from "../state/ledger";
 import { agree, b64u, box, cleanCode, concat, fromUtf8, hkdf, INFO, newKeyPair, open, randomBytes, seal, pushNonce, seqBytes, seqNonce, unb64u, unbox, utf8 } from "./crypto";
 import type { PairTarget } from "./pairing";
+import type { ProfileHost } from "./profile";
 import { normalizeCode } from "./pairing";
 import { isRelayHost } from "./relay";
 import { sha256 } from "@noble/hashes/sha2.js";
@@ -205,6 +207,76 @@ export async function pair(fetcher: FetchLike, target: PairTarget, device: PairD
   }
   const hosts = mergeHosts(host, reply.hosts, target.hosts, Infinity);
   return { serverId: reply.serverId, serverKey, deviceId: reply.device, secretKey: b64u(keys.secretKey), hosts, name: reply.name };
+}
+
+/**
+ * Enrolls a profile device with a host already bound to that profile. The generated X25519 key is
+ * deliberately fresh for this enrollment and is kept only in the returned Pairing. The ticket and
+ * device details are sealed to the pinned host key before they cross either LAN or relay.
+ */
+export async function profileConnect(
+  fetcher: FetchLike,
+  target: ProfileHost,
+  device: PairDevice,
+  issueTicket: (publicKey: string) => Promise<string>,
+): Promise<Pairing> {
+  if (!target || typeof target.serverId !== "string" || typeof target.serverKey !== "string" || !Array.isArray(target.hosts) || !target.hosts.length) {
+    throw new LinkError("protocol", "That profile computer is incomplete.");
+  }
+  let { host, hello: found } = await findHost(fetcher, target.hosts, { serverId: target.serverId, serverKey: target.serverKey });
+  if (found.botkins !== PROTOCOL) throw new LinkError("protocol", "Update Botkins and your computer's app to the same version.");
+  const keys = newKeyPair();
+  const publicKey = b64u(keys.publicKey);
+  let ticket: string;
+  try {
+    ticket = await issueTicket(publicKey);
+  } catch {
+    throw new LinkError("offline", "The profile service couldn't issue a device ticket.");
+  }
+  if (typeof ticket !== "string" || !ticket || ticket.length > 1024) throw new LinkError("protocol", "The profile service returned an invalid device ticket.");
+  const key = hkdf(agree(keys.secretKey, unb64u(target.serverKey)), utf8(target.serverId), "botkins/profile/v1");
+  const request = (at: string) => timed(10_000, undefined, (signal) => fetcher("http://" + at + PREFIX + "profile", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ publicKey, box: box(key, { ticket, publicKey, device }, "profile:" + target.serverId) }),
+    signal,
+  }));
+  let response: FetchResponse;
+  try {
+    response = await request(host);
+  } catch {
+    const relays = target.hosts.filter(isRelayHost);
+    if (isRelayHost(host) || !relays.length) throw new LinkError("offline", "That profile computer can't be reached right now.");
+    try {
+      ({ host, hello: found } = await findHost(fetcher, relays, { serverId: target.serverId, serverKey: target.serverKey }));
+      response = await request(host);
+    } catch {
+      throw new LinkError("offline", "That profile computer can't be reached right now.");
+    }
+  }
+  const body = (await response.json().catch(() => ({}))) as { box?: string; error?: string };
+  if (!response.ok || typeof body.box !== "string") {
+    if (body.error === "profile_revoked" || body.error === "profile_denied") throw new LinkError("revoked", "That profile is no longer allowed on this computer.");
+    throw new LinkError("protocol", "The profile computer refused this device.");
+  }
+  let reply: { serverId: string; serverKey: string; device: string; name: string; hosts: string[]; member?: boolean };
+  try {
+    reply = unbox(key, body.box, "profile-ok:" + target.serverId);
+  } catch {
+    throw new LinkError("protocol", "The profile computer returned an invalid answer.");
+  }
+  if (reply.serverId !== target.serverId || reply.serverKey !== target.serverKey || typeof reply.device !== "string" || typeof reply.name !== "string" || !Array.isArray(reply.hosts)) {
+    throw new LinkError("protocol", "The profile computer returned an incomplete answer.");
+  }
+  return {
+    serverId: reply.serverId,
+    serverKey: target.serverKey,
+    deviceId: reply.device,
+    secretKey: b64u(keys.secretKey),
+    hosts: mergeHosts(host, reply.hosts, target.hosts, Infinity),
+    name: reply.name,
+    ...(reply.member === true && { member: true }),
+  };
 }
 
 export type JoinTarget = {
@@ -442,6 +514,7 @@ export class LinkClient {
   /** Direct addresses that answered the hello and then failed to open a session, and until when to leave them be. */
   private distrusted = new Map<string, number>();
   private probeTimer: ReturnType<typeof setTimeout> | undefined;
+  private probeLedger: ResourceHandle | undefined;
   private probeDelay: number;
   private readonly probeMs: number;
   private readonly probeMaxMs: number;
@@ -482,6 +555,9 @@ export class LinkClient {
     this.opening = null;
     this.probing = null;
     clearTimeout(this.probeTimer);
+    this.probeTimer = undefined;
+    this.probeLedger?.release();
+    this.probeLedger = undefined;
     this.probeDelay = this.probeMs;
     this.poll?.abort();
     this.wakeUp?.();
@@ -489,17 +565,20 @@ export class LinkClient {
     this.setRoute(null);
   }
   /**
-   * Try again now: the app came to the front, or the network changed. The path in use is not
-   * trusted after that. The next sync asks for an answer at once and gives it a few seconds; when
-   * none comes the session is dropped and the computer is looked for afresh, on every address. So a
-   * phone that was away comes back in seconds, not when a 40-second wait runs out.
+   * Try again now: the app came to the front, the network changed, or the user tapped refresh. The
+   * path in use is not trusted after that. The next sync asks for an answer at once and gives it a
+   * few seconds; when none comes the session is dropped and the computer is looked for afresh, on
+   * every address. So a phone that was away comes back in seconds, not when a 40-second wait runs
+   * out.
    */
-  wake(reason?: "network") {
+  wake(reason?: "network" | "retry") {
     if (!this.lifetime) return;
     this.resting = false;
     this.probeDelay = this.probeMs;
-    // On another network, an address that failed on the last one gets a fresh try.
-    if (reason === "network") this.distrusted.clear();
+    // On another network, or a manual retry, an address that failed gets a fresh try.
+    if (reason === "network" || reason === "retry") this.distrusted.clear();
+    // A manual retry while offline shows as connecting again until the next attempt settles.
+    if (reason === "retry" && this.state === "offline") this.setState("connecting");
     this.suspect = true;
     // A socket can look open long after the system closed it under a suspended app.
     this.options.check?.();
@@ -519,7 +598,11 @@ export class LinkClient {
     this.resting = true;
     clearTimeout(this.probeTimer);
     this.probeTimer = undefined;
+    this.probeLedger?.release();
+    this.probeLedger = undefined;
     this.poll?.abort();
+    // Clear any pending reconnect backoff timer immediately so the follow loop parks at rest.
+    this.wakeUp?.();
   }
   /**
    * An address for this computer that was found another way (it announced itself on the network).
@@ -585,8 +668,16 @@ export class LinkClient {
   private scheduleProbe() {
     clearTimeout(this.probeTimer);
     this.probeTimer = undefined;
+    this.probeLedger?.release();
+    this.probeLedger = undefined;
     if (this.running && !this.resting && this.route === "relay" && this.probing !== this.session) {
-      this.probeTimer = setTimeout(() => void this.probeDirect(), this.probeDelay);
+      this.probeLedger = trackResource("timer", "LinkClient:probe", "relay-to-direct", this.pairing.serverId);
+      this.probeTimer = setTimeout(() => {
+        this.probeLedger?.bump();
+        this.probeLedger?.release();
+        this.probeLedger = undefined;
+        void this.probeDirect();
+      }, this.probeDelay);
     }
   }
 
@@ -601,6 +692,9 @@ export class LinkClient {
     if (!this.running || !seen || this.probing === seen || routeOf(seen) !== "relay") return false;
     this.probing = seen;
     clearTimeout(this.probeTimer);
+    this.probeTimer = undefined;
+    this.probeLedger?.release();
+    this.probeLedger = undefined;
     // Keep this wait if a direct hello answers but the next session still needs the relay.
     if (backOff) this.probeDelay = Math.min(this.probeDelay * 2, this.probeMaxMs);
     try {
@@ -686,6 +780,7 @@ export class LinkClient {
       );
       const body = (await response.json()) as { box?: string; error?: string };
       if (response.status === 403 && body.error === "unknown_device") throw new LinkError("revoked", "This phone was removed from " + pairing.name + ".");
+      if (response.status === 403 && body.error === "profile_revoked") throw new LinkError("revoked", "This profile device is no longer active on " + pairing.name + ".");
       if (!response.ok || !body.box) throw new LinkError("protocol", "Your computer refused the connection.");
       const reply = unbox<{ session: string; eph: string; nonce: string; epoch: string; hosts?: string[] }>(this.deviceKey, body.box, "session-ok:" + pairing.serverId);
       if (this.lifetime === lifetime && Array.isArray(reply.hosts) && reply.hosts.length) {
@@ -749,6 +844,10 @@ export class LinkClient {
         // The computer forgot the session (its app restarted, or the phone was away for long).
         if (this.session === session) this.useSession(null);
         throw new Retry();
+      }
+      if (response.status === 403) {
+        const denial = await response.json().catch(() => ({})) as { error?: string };
+        if (denial.error === "profile_revoked") throw new LinkError("revoked", "This profile device is no longer active.");
       }
       if (!response.ok) throw new LinkError("protocol", "Your computer couldn't read that (" + response.status + ").");
       // fetch can resolve at headers; the viewer still owns the download until the last byte.
@@ -983,8 +1082,14 @@ export class LinkClient {
         };
         const args = { epoch: this.epoch, have: this.have, watch: watching, ...appends, ...(requestReasoning && { reasoningWatch }), ...(text !== "live" && { text: text === "chunks" ? "chunks" : false }), ...(this.options.lightSteps && { steps: "light" }), ...(!push && { wait: quick ? 0 : 25_000 }) };
         if (push) this.pushSession = session;
-        const news = await this.request<SyncNews>(push ? "link.follow" : "link.sync", [args],
-          quick ? (this.options.wakeMs ?? 4000) : 40_000, poll.signal, session, push ? accept : undefined);
+        const pollLedger = trackResource("poll", "LinkClient:sync", push ? "link.follow" : "link.sync", this.pairing.serverId);
+        let news: SyncNews;
+        try {
+          news = await this.request<SyncNews>(push ? "link.follow" : "link.sync", [args],
+            quick ? (this.options.wakeMs ?? 4000) : 40_000, poll.signal, session, push ? accept : undefined);
+        } finally {
+          pollLedger.release();
+        }
         if (push && this.pushSession === session) this.pushSession = null;
         accept(news);
       } catch (error) {

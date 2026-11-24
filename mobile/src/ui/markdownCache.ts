@@ -11,11 +11,18 @@ function canSeal(token: Token) {
     (token.type === "code" && /^ {0,3}(?:`{3,}|~{3,})/.test(token.raw));
 }
 
+// A real reference link definition begins at the start of a line (optional 0-3 spaces).
+// Checking `text.includes("]:")` would falsely disable caching for TypeScript index signatures
+// or JSON/code snippets containing `]:`.
+// A link reference definition, also inside block quotes and list items ("> [a]: url", "- [a]: url").
+// Over-matching only costs a full lex; missing one leaves an earlier [a] as plain text.
+const REF_DEF = /^[ \t]*(?:>[ \t]*)*(?:(?:[-*+]|\d{1,9}[.)])[ \t]+)*\[[^\]\n]+\]:/m;
+
 /** Reuse marked's actual tokens up to a proven block boundary. The next pass starts with the
  * blank separator so the lexer retains the same top-level context. */
 export function parseStreamingMarkdown(text: string, lex: MarkdownLex, previous?: MarkdownStreamCache, hasFootnotes = false): { tokens: Token[]; cache?: MarkdownStreamCache } {
   // A late reference definition may change links in any earlier paragraph. Marked normalizes CRLF.
-  if (hasFootnotes || text.includes("]:") || text.includes("\r")) return { tokens: lex(text) };
+  if (hasFootnotes || REF_DEF.test(text) || text.includes("\r")) return { tokens: lex(text) };
   const prefix = previous && text.startsWith(previous.sourcePrefix) ? previous : undefined;
   const start = prefix?.sourcePrefix.length ?? 0;
   const tail = text.slice(start);

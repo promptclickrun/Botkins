@@ -35,6 +35,8 @@ import type {
 } from "./types";
 import { useAsk } from "./Pages";
 import { Group, Sheet, errorText } from "./SettingsRows";
+import { ProtonManagerRow, ProtonPassSheet, protonCalls } from "./ProtonPassSetup";
+import { isUnsharedProtonVault, useProtonSetup } from "./proton-pass";
 import "./savedcredentials.css";
 
 const api = window.botkins;
@@ -114,6 +116,10 @@ export default function SavedCredentials() {
     void loadManagers();
   }, []);
   const put = (status: PasswordManagerStatus) => setManagers((now) => now?.map((m) => (m.id === status.id ? status : m)) ?? [status]);
+  const proton = useProtonSetup(protonCalls, (status) => {
+    put(status);
+    setChecks({});
+  });
   async function check(c: SavedCredential) {
     setChecks((now) => ({ ...now, [c.id]: "checking" }));
     try {
@@ -169,7 +175,9 @@ export default function SavedCredentials() {
           ? (["onepassword", "bitwarden", "protonpass"] as PasswordManagerId[]).map((id) => (
               <ManagerRow key={id} id={id} />
             ))
-          : managers.map((m) => (
+          : managers.map((m) => m.id === "protonpass" && m.setup ? (
+              <ProtonManagerRow key={m.id} status={m} setup={proton} browse={() => setBrowsing(m)} locked={locked} />
+            ) : (
               <ManagerRow
                 key={m.id}
                 id={m.id}
@@ -246,6 +254,9 @@ export default function SavedCredentials() {
                   )}
                 </div>
                 <div className="set-control int-trailing">
+                  {state && state !== "checking" && !state.ok && c.source === "protonpass" && isUnsharedProtonVault(state.message) && (
+                    <button type="button" className="set-button scred-small" disabled={locked} onClick={() => proton.begin("sign-in", true)}>Share more vaults</button>
+                  )}
                   <button type="button" className="set-button scred-small" aria-label={"Check " + c.name} disabled={state === "checking"} onClick={() => void check(c)}>
                     Check
                   </button>
@@ -286,6 +297,7 @@ export default function SavedCredentials() {
         />
       )}
       {dialogs.node}
+      {proton.view && <ProtonPassSheet setup={proton} />}
     </>
   );
 }

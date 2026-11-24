@@ -1,170 +1,134 @@
-// Marketplace › Agents: agent templates from the computer's marketplaces, with search and a chip per
-// category. The computer reads the catalogs; the phone never fetches them. A tap opens the template.
-import { router } from "expo-router";
+// Market › Bots: the computer's agent templates, with a search, a chip for each group and category,
+// the Starters in a carousel of tall cards, and every other group as a grid of cards. The computer
+// reads the catalogs; the phone never fetches them. A tap opens the template; Add starts a bot from it.
 import { Bot } from "lucide-react-native";
-import { memo, type ReactNode, useEffect, useMemo, useState } from "react";
+import { type ReactNode, useMemo, useState } from "react";
 import { ScrollView, View } from "react-native";
-import type { MarketAgent, MarketAgentCategory } from "@/link/types";
-import { useCan, useCapability, useOnline } from "@/state/hooks";
-import { api, attempt } from "@/state/link";
-import { BotAvatar, Chip, EmptyState, Group, Page, space, T, Tap, useTheme } from "@/ui";
+import type { MarketAgent } from "@/link/types";
+import { useCan, useCapability } from "@/state/hooks";
+import { attempt } from "@/state/link";
+import { Button, Chip, EmptyState, Page, radius, space, T, useTheme } from "@/ui";
+import { botChips, botSections } from "../catalog";
+import { BotCard, SectionHead, Shelf, StarterCard } from "../catalogParts";
+import { useTemplates } from "../data";
 import { SearchField } from "../parts";
 import { refreshCatalogs, useCanRefresh } from "../plugins/calls";
-import { AGENTS_CAPABILITY, agentChips, agentHref, listLine } from "./logic";
+import { AGENTS_CAPABILITY } from "./logic";
 
-const AVATAR = 48;
+/** Cards of a grid per row. */
+const COLUMNS = 2;
+/** The gap between cards, in a grid and in a carousel. */
+const GAP = space.md;
 
-/** One search of one category. */
-type Listing = { key: string; agents: MarketAgent[]; categories: MarketAgentCategory[]; error?: string };
-
-export function AgentsPage({ switcher }: { switcher: ReactNode }) {
+export function AgentsPage() {
   const ready = useCapability(AGENTS_CAPABILITY);
   const allowed = useCan("agents", "create");
-  if (ready && allowed) return <Agents switcher={switcher} />;
+  if (ready && allowed) return <Agents />;
   return (
-    <Page tab title="Marketplace">
-      {switcher}
+    <Page title="Bots">
       <EmptyState icon={Bot} title={allowed ? "Update the app on your computer" : "Your team role can't create bots"} />
     </Page>
   );
 }
 
-/** A template in the list: its Botkin, its name, two lines of what it does, and where it is from. */
-const AgentRow = memo(function AgentRow({ agent }: { agent: MarketAgent }) {
-  const { control } = useTheme();
-  const line = listLine(agent);
-  return (
-    <Tap onPress={() => router.push(agentHref(agent.id))} sink={1} feel="select" hitSlop={0} accessibilityLabel={[agent.name, agent.summary, line].filter(Boolean).join(", ")}>
-      <View style={{ minHeight: control.row, paddingHorizontal: space.lg, paddingVertical: 10, flexDirection: "row", alignItems: "center", gap: space.md }}>
-        <BotAvatar bot={{ id: agent.id, look: agent.look }} size={AVATAR} />
-        <View style={{ flex: 1, minWidth: 0, gap: 1 }}>
-          <T variant="callout" weight="600" numberOfLines={1}>
-            {agent.name}
-          </T>
-          {!!agent.summary && (
-            <T variant="subhead" color="ink2" numberOfLines={2}>
-              {agent.summary}
-            </T>
-          )}
-          {!!line && (
-            <T variant="footnote" color="muted" numberOfLines={1}>
-              {line}
-            </T>
-          )}
-        </View>
-      </View>
-    </Tap>
-  );
-});
-
-/** Grey stand-ins for templates while the list loads. */
+/** Grey stand-ins for the cards while the list loads. */
 function Skeleton() {
   const { colors } = useTheme();
   return (
-    <View style={{ gap: space.lg, paddingVertical: space.sm }} accessibilityLabel="Loading agents">
-      {[0, 1, 2, 3].map((row) => (
-        <View key={row} style={{ flexDirection: "row", alignItems: "center", gap: space.md }}>
-          <View style={{ width: AVATAR, height: AVATAR, borderRadius: AVATAR / 2, backgroundColor: colors.sunken }} />
-          <View style={{ flex: 1, gap: 8 }}>
-            <View style={{ width: "40%", height: 12, borderRadius: 6, backgroundColor: colors.sunken }} />
-            <View style={{ width: "85%", height: 10, borderRadius: 5, backgroundColor: colors.sunken }} />
-            <View style={{ width: "30%", height: 10, borderRadius: 5, backgroundColor: colors.sunken }} />
-          </View>
+    <View style={{ gap: GAP }} accessibilityLabel="Loading bots">
+      <View style={{ height: 300, borderRadius: radius.xl, backgroundColor: colors.surface }} />
+      <View style={{ flexDirection: "row", gap: GAP }}>
+        {[0, 1].map((card) => (
+          <View key={card} style={{ flex: 1, height: 220, borderRadius: radius.lg, backgroundColor: colors.surface }} />
+        ))}
+      </View>
+    </View>
+  );
+}
+
+/** Cards two to a row; a short last row leaves its second place empty so cards keep one width. */
+function Grid({ agents }: { agents: MarketAgent[] }) {
+  const rows: MarketAgent[][] = [];
+  for (let index = 0; index < agents.length; index += COLUMNS) rows.push(agents.slice(index, index + COLUMNS));
+  return (
+    <View style={{ gap: GAP }}>
+      {rows.map((row) => (
+        <View key={row[0].id} style={{ flexDirection: "row", gap: GAP, alignItems: "stretch" }}>
+          {row.map((agent) => (
+            <BotCard key={agent.id} agent={agent} />
+          ))}
+          {Array.from({ length: COLUMNS - row.length }, (_, index) => (
+            <View key={"gap" + index} style={{ flex: 1 }} />
+          ))}
         </View>
       ))}
     </View>
   );
 }
 
-function Agents({ switcher }: { switcher: ReactNode }) {
-  const online = useOnline();
+function Agents() {
   // The templates are in the plugin catalogs, so a refresh reads those again (with the plugins' permission).
   const canCatalogs = useCan("plugins", "view");
   const canRefresh = useCanRefresh();
-  const [chosen, setChosen] = useState<{ id: string; name: string }>();
-  const category = chosen?.id;
+  const templates = useTemplates();
   const [query, setQuery] = useState("");
-  const [asked, setAsked] = useState("");
-  const [tries, setTries] = useState(0);
-  const [listing, setListing] = useState<Listing>();
+  const [picked, setPicked] = useState("all");
   const [refreshing, setRefreshing] = useState(false);
 
-  // A search is asked a moment after the typing stops.
-  useEffect(() => {
-    const timer = setTimeout(() => setAsked(query.trim()), 300);
-    return () => clearTimeout(timer);
-  }, [query]);
+  const agents = useMemo(() => templates.value ?? [], [templates.value]);
+  const chips = useMemo(() => botChips(agents), [agents]);
+  // A chosen chip that the list no longer has (after a refresh) is All again.
+  const chip = chips.some((item) => item.key === picked) ? picked : "all";
+  const sections = useMemo(() => botSections(agents, { query, chip }), [agents, query, chip]);
+  const narrowed = !!query.trim() || chip !== "all";
 
-  const key = (category ?? "") + "|" + asked + "|" + tries;
-  useEffect(() => {
-    if (!online) return;
-    let live = true;
-    api["agents.browse"]({ ...(asked && { query: asked }), ...(category && { category }) }).then(
-      (page) => {
-        if (live) setListing({ key, agents: page.agents, categories: page.categories });
-      },
-      (error: unknown) => {
-        if (live) setListing((was) => ({ key, agents: [], categories: was?.categories ?? [], error: error instanceof Error ? error.message : "The agents didn't load." }));
-      },
-    );
-    return () => {
-      live = false;
-    };
-  }, [online, asked, category, key]);
-
-  const shown = listing?.key === key ? listing : undefined;
-
-  // A pull down: the computer reads the catalogs again, then this list. The old list stays until
-  // the new one comes, and stays when it fails.
   const reload = async () => {
-    if (!online) return;
     setRefreshing(true);
-    const at = key;
-    await attempt(
-      (async () => {
-        let failed: unknown;
-        if (canCatalogs) await refreshCatalogs(canRefresh).catch((error: unknown) => (failed = error));
-        const page = await api["agents.browse"]({ ...(asked && { query: asked }), ...(category && { category }) });
-        setListing((now) => (now?.key === at ? { key: at, agents: page.agents, categories: page.categories } : now));
-        if (failed) throw failed;
-      })(),
-    );
+    if (canCatalogs) await attempt(refreshCatalogs(canRefresh));
+    templates.reload();
     setRefreshing(false);
   };
-  // The chips keep the last categories while the next list loads, so they don't jump.
-  const chips = useMemo(() => agentChips(listing?.categories ?? [], chosen), [listing?.categories, chosen]);
+  const clear = () => {
+    setQuery("");
+    setPicked("all");
+  };
 
   let body: ReactNode;
-  if (!shown) body = <Skeleton />;
-  else if (shown.error) body = <EmptyState icon={Bot} title="The agents didn't load" text={shown.error} action="Try again" onAction={() => setTries((n) => n + 1)} />;
-  else if (!shown.agents.length)
+  if (!templates.value) {
+    body = templates.error ? <EmptyState icon={Bot} title="The bots didn't load" text={templates.error} action="Try again" onAction={templates.reload} /> : <Skeleton />;
+  } else if (!sections.length) {
     body = (
-      <T variant="subhead" color="muted" center style={{ paddingVertical: space.huge }}>
-        {asked || category ? "No agents match" : "No agents here yet"}
-      </T>
+      <View style={{ alignItems: "center", gap: space.md, paddingVertical: space.huge }}>
+        <T variant="subhead" color="muted" center>
+          {narrowed ? "No bots match" : "No bots here yet"}
+        </T>
+        {narrowed && <Button title="Clear" variant="secondary" size="sm" onPress={clear} />}
+      </View>
     );
-  else
-    body = (
-      <Group flat inset={space.lg + AVATAR + space.md}>
-        {shown.agents.map((agent) => (
-          <AgentRow key={agent.id} agent={agent} />
-        ))}
-      </Group>
-    );
+  } else {
+    body = sections.map((section) => (
+      <View key={section.key}>
+        <SectionHead title={section.title} />
+        {section.key === "starters" ? (
+          <Shelf gap={GAP}>
+            {section.agents.map((agent) => (
+              <StarterCard key={agent.id} agent={agent} />
+            ))}
+          </Shelf>
+        ) : (
+          <Grid agents={section.agents} />
+        )}
+      </View>
+    ));
+  }
 
   return (
-    <Page
-      tab
-      title="Marketplace"
-      refreshing={refreshing}
-      onRefresh={reload}
-    >
-      {switcher}
-      <SearchField value={query} onChange={setQuery} label="Search agents" />
+    <Page title="Bots" keyboard refreshing={refreshing} onRefresh={reload}>
+      <SearchField value={query} onChange={(text) => setQuery(text.slice(0, 200))} label="Search bots" />
       {chips.length > 1 && (
         <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginHorizontal: -space.xl, marginTop: -space.sm }} contentContainerStyle={{ paddingHorizontal: space.xl, paddingVertical: 2, gap: space.sm }}>
           {chips.map((item) => (
-            <Chip key={item.key} label={item.label} selected={item.category === category} onPress={() => setChosen(item.category ? { id: item.category, name: item.name ?? item.label } : undefined)} />
+            <Chip key={item.key} label={item.label} selected={item.key === chip} onPress={() => setPicked(item.key)} />
           ))}
         </ScrollView>
       )}

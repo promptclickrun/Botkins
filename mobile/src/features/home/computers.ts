@@ -3,13 +3,14 @@
 import { router } from "expo-router";
 import { computerChoice } from "@/state/computers";
 import { switchComputer } from "@/state/link";
+import { selectProfileHost, useProfile } from "@/state/profile";
 import { showToast, useApp } from "@/state/store";
 
 /** Starts using another paired computer and says so. */
 export function switchTo(serverId: string) {
   const state = useApp.getState();
   const next = state.pairings.find((pairing) => pairing.serverId === serverId);
-  if (!next || state.pairing?.serverId === serverId) return;
+  if (!next) return;
   void switchComputer(serverId);
   showToast("Now using " + (next.name || "that computer"), "success");
 }
@@ -25,5 +26,17 @@ const MENU_CLOSES_MS = 450;
 export function runComputerChoice(event: string) {
   const choice = computerChoice(event);
   if (!choice) return;
-  setTimeout(() => (choice === "add" ? addComputer() : switchTo(choice.use)), MENU_CLOSES_MS);
+  setTimeout(() => {
+    if (choice === "add") return addComputer();
+    if (choice.profile) {
+      const host = useProfile.getState().home?.hosts.find((item) => item.serverId === choice.use);
+      if (host && host.hosts.length === 0) {
+        showToast("Waiting for that computer to come online", "info");
+        return;
+      }
+      if (host) void selectProfileHost(host).then((pairing) => pairing ? showToast("Now using " + (pairing.name || "that computer"), "success") : showToast(useProfile.getState().error || "That computer could not be enrolled right now.", "error"));
+      return;
+    }
+    switchTo(choice.use);
+  }, MENU_CLOSES_MS);
 }

@@ -4,28 +4,61 @@
 // how the install ended (`last`), wherever the person is in the app, and if it never does, it says
 // that. Kept in memory only: a restart outlasts no app launch. The decisions are `restartStep` and
 // `afterRestart` in src/features/settings/updates.ts (tested).
+import { AppState } from "react-native";
 import { create } from "zustand";
 import { afterRestart, gaveUpLine, type PendingRestart, type RestartStage, restartStep } from "@/features/settings/updates";
+import { type ResourceHandle, trackResource } from "./ledger";
 import { api } from "./link";
 import { showToast, useApp } from "./store";
 
 export const useUpdateRestart = create<{ pending: PendingRestart | null; stage: RestartStage }>(() => ({ pending: null, stage: "restarting" }));
 
 let timer: ReturnType<typeof setInterval> | undefined;
+let ledgerEntry: ResourceHandle | undefined;
+let appActive = AppState.currentState === "active";
+
+function stopTimer() {
+  clearInterval(timer);
+  timer = undefined;
+  ledgerEntry?.release();
+  ledgerEntry = undefined;
+}
+
+function startTimer() {
+  if (timer || !appActive || !useUpdateRestart.getState().pending) return;
+  const pending = useUpdateRestart.getState().pending;
+  ledgerEntry = trackResource("timer", "appUpdate", "restart-poll", pending?.serverId);
+  timer = setInterval(() => {
+    ledgerEntry?.bump();
+    void settle();
+  }, 5000);
+}
+
 /**
  * Called once the computer took the install: it restarts now. `before` is the `last.at` it showed
- * before. Until it has said how it ended, the phone looks every few seconds.
+ * before. Until it has said how it ended, the phone looks every few seconds (paused in background).
  */
 export function markRestarting(serverId: string, from: string, to?: string, before?: string) {
   useUpdateRestart.setState({ pending: { serverId, since: Date.now(), from, ...(to && { to }), ...(before && { before }) }, stage: "restarting" });
-  clearInterval(timer);
-  timer = setInterval(() => void settle(), 5000);
+  stopTimer();
+  startTimer();
 }
 function done() {
-  clearInterval(timer);
-  timer = undefined;
+  stopTimer();
   useUpdateRestart.setState({ pending: null, stage: "restarting" });
 }
+
+AppState.addEventListener("change", (next) => {
+  appActive = next === "active";
+  if (appActive) {
+    if (useUpdateRestart.getState().pending) {
+      startTimer();
+      void settle();
+    }
+  } else {
+    stopTimer();
+  }
+});
 
 /** The restart under way on the computer in use, if this phone started one, with what the banner says. */
 export function useRestarting(): (PendingRestart & { stage: RestartStage }) | null {

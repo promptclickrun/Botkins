@@ -16,6 +16,15 @@ const run = {
   ],
 };
 
+test("saved silent replies are omitted without moving later message indices", () => {
+  const messages = [
+    { role: "assistant", runId: run.id, text: " [SILENT] " },
+    { role: "assistant", runId: run.id, text: "[SILENT] means no reply." },
+  ];
+  const replies = orderedRunEvents(run, messages, { includeReplies: true }).filter(event => event.kind === "reply");
+  assert.deepEqual(replies.map(event => event.index), [1]);
+});
+
 test("timeline renderer orders thinking, interim text, steer and steps", () => {
   const messages = [
     { role: "user", text: "Start", runId: "run-1", time: 100 },

@@ -15,6 +15,7 @@ import { SecretField } from "@/features/credentials/shared";
 import { Choice } from "@/features/voice/settings/shared";
 import type { Bot, GadgetSettings, PairedDevice } from "@/link/types";
 import { useBots, useCapability, useOnline } from "@/state/hooks";
+import { trackResource } from "@/state/ledger";
 import { api, attempt } from "@/state/link";
 import { useAppActive } from "@/state/useAppActive";
 import { ago } from "@/state/time";
@@ -67,16 +68,20 @@ export default function GadgetPage() {
   useEffect(() => {
     if (!active || !supported || !online) return;
     let live = true;
-    const look = () =>
+    const entry = trackResource("timer", "GadgetPage", "gadget-poll");
+    const look = () => {
+      entry.bump();
       void api["link.devices.list"]().then(
         (list) => live && setDevices(list),
         () => {},
       );
+    };
     look();
     const timer = setInterval(look, wait);
     return () => {
       live = false;
       clearInterval(timer);
+      entry.release();
     };
   }, [active, supported, online, wait, id]);
 

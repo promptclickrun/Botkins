@@ -22,7 +22,7 @@ export default function Experimental() {
   const set = (enabled: boolean) => void attempt(api.setPreferences({ proactive: { enabled } }));
   const turnOn = (enabled: boolean) =>
     enabled
-      ? Alert.alert("Turn on the Proactive agent?", "Every bot that has its own Proactive agent switched on wakes on its own, reads what its tools reach (such as your inbox and calendar) and messages you, with nobody watching. Each wake uses the model.", [
+      ? Alert.alert("Turn on the Proactive agent?", "Every bot that was set up to look out for someone wakes on its own, reads what its tools reach (such as your inbox and calendar) and messages them, with nobody watching. Each wake uses the model.", [
           { text: "Cancel", style: "cancel" },
           { text: "Turn on", onPress: () => set(true) },
         ])
@@ -39,7 +39,7 @@ export default function Experimental() {
           <Row title="Proactive agent" subtitle="Turns the feature on for this computer. Team members can't change it" toggled={on} onToggle={turnOn} />
         </Group>
         <T variant="footnote" color="muted">
-          A bot that tells you what you need to know before you ask. Off pauses every bot's agent and keeps what each was set to. The bot reads and drafts only: it never sends, posts, buys or deletes on its own. Each bot's own switch and settings are on its page.
+          A bot that looks around, tells you what matters and offers to take care of it. It is on from the start, and a bot does nothing until you set it up on its page. Off pauses every bot's agent and keeps what each was set to. A check reads and drafts only: it never sends, posts, buys or deletes until you take its offer.
         </T>
       </View>
       <View>
@@ -50,14 +50,14 @@ export default function Experimental() {
               <Row
                 key={bot.id}
                 title={bot.name}
-                subtitle={proactiveSummary(p) + (p.person && p.person !== "owner" ? " · works for a team member" : "")}
+                subtitle={p.setUp ? proactiveSummary(p) + (Object.keys(p.people ?? {}).length > 1 ? " · " + Object.keys(p.people ?? {}).length + " people" : "") : "Not set up yet"}
                 value={on ? undefined : "Paused"}
                 chevron
                 onPress={() => router.push(("/bot/" + encodeURIComponent(bot.id) + "/proactive") as Href)}
               />
             ))
           ) : (
-            <Row title="No bot yet" subtitle="Turn on Proactive on a bot's page" />
+            <Row title="No bot yet" subtitle="Set up Proactive on a bot's page" />
           )}
         </Group>
       </View>

@@ -4,17 +4,19 @@ import * as Clipboard from "expo-clipboard";
 import { router, useLocalSearchParams } from "expo-router";
 import * as WebBrowser from "expo-web-browser";
 import { ChevronLeft, Copy, ExternalLink, Lock, RefreshCw, Search, X } from "lucide-react-native";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ActivityIndicator, StyleSheet, View } from "react-native";
 import Animated, { FadeIn } from "react-native-reanimated";
 import type { PasswordManagerId, PasswordManagerItem, PasswordManagerStatus, PasswordManagerVault } from "@/link/types";
+import { useProtonSetup } from "@/link/proton-pass";
 import { api, attempt } from "@/state/link";
 import { showToast } from "@/state/store";
 import { Badge, Button, EmptyState, Field, Group, IconButton, IconTile, Label, lift, Loading, Page, radius, Row, space, T, Tap, useTheme } from "@/ui";
-import { GateView, isManagerId, KeptNote, loadManagers, ManagerMark, managerBadge, managerName, putManager, SecretField, useGate, useManagers } from "./shared";
+import { GateView, isManagerId, KeptNote, loadManagers, ManagerMark, managerBadge, managerName, putManager, SecretField, useGate, useManagers, useProtonSupport } from "./shared";
+import { ProtonManagerActions, ProtonPassSheet, protonCalls } from "./ProtonPassSetup";
 
 export default function ManagerPage() {
-  const { id } = useLocalSearchParams<{ id: string }>();
+  const { id, share } = useLocalSearchParams<{ id: string; share?: string }>();
   const gate = useGate();
   if (gate !== "open")
     return (
@@ -28,10 +30,10 @@ export default function ManagerPage() {
         <EmptyState title="This password manager isn't known" />
       </Page>
     );
-  return <Manager key={id} id={id} />;
+  return <Manager key={id} id={id} share={share === "1"} />;
 }
 
-function Manager({ id }: { id: PasswordManagerId }) {
+function Manager({ id, share }: { id: PasswordManagerId; share: boolean }) {
   const { colors } = useTheme();
   const status = useManagers((state) => state.managers?.find((manager) => manager.id === id));
   const loaded = useManagers((state) => state.managers !== undefined);
@@ -39,6 +41,20 @@ function Manager({ id }: { id: PasswordManagerId }) {
   const [checking, setChecking] = useState(false);
   const [password, setPassword] = useState("");
   const [unlocking, setUnlocking] = useState(false);
+  const [protonBrowsing, setProtonBrowsing] = useState(false);
+  const protonSupported = useProtonSupport() && id === "protonpass";
+  const proton = useProtonSetup(protonCalls, (next) => {
+    putManager(next, false);
+    setProtonBrowsing(false);
+  });
+  const opened = useRef(false);
+
+  useEffect(() => {
+    if (protonSupported && status && share && !opened.current) {
+      opened.current = true;
+      proton.begin("sign-in", true);
+    }
+  }, [protonSupported, status, share, proton]);
 
   useEffect(() => {
     void loadManagers();
@@ -69,7 +85,7 @@ function Manager({ id }: { id: PasswordManagerId }) {
   };
 
   const name = status?.name ?? managerName(id);
-  const badge = managerBadge(status);
+  const badge = managerBadge(status, protonSupported);
   const facts = [status?.account, status?.version && "Version " + status.version].filter(Boolean).join(" · ");
   const card = { gap: space.md, padding: space.lg, borderRadius: radius.lg, backgroundColor: colors.surface, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.line } as const;
 
@@ -83,7 +99,7 @@ function Manager({ id }: { id: PasswordManagerId }) {
           </T>
           <View style={{ flexDirection: "row", alignItems: "center", gap: space.sm }} accessible accessibilityLabel={"Status: " + badge.label}>
             <Badge label={badge.label} tone={badge.tone} />
-            {!!facts && status?.state === "ready" && (
+            {!!facts && (protonSupported || status?.state === "ready") && (
               <T variant="footnote" color="muted" numberOfLines={1} style={{ flexShrink: 1 }}>
                 {facts}
               </T>
@@ -96,6 +112,12 @@ function Manager({ id }: { id: PasswordManagerId }) {
         <Loading />
       ) : !status ? (
         <Button title="Check again" icon={RefreshCw} size="lg" wide loading={checking} onPress={() => void checkAgain()} />
+      ) : protonSupported ? (
+        <>
+          <ProtonManagerActions status={status} setup={proton} browse={() => setProtonBrowsing(true)} />
+          {protonBrowsing && (status.state === "ready" || status.state === "expiring") && <Browser status={status} />}
+          {proton.view && <ProtonPassSheet setup={proton} />}
+        </>
       ) : status.state === "missing" ? (
         <View style={card}>
           <T variant="callout" weight="600">

@@ -10,13 +10,109 @@ import { existsSync, readFileSync } from "node:fs";
 import { basename, join, posix } from "node:path";
 import { fileURLToPath } from "node:url";
 import { demoGitHub } from "./mock-prs.mjs";
+import { STARTERS, starterById } from "./starters.mjs";
 import { DemoSignIns } from "./mock-signin.mjs";
 import { DemoUpdates } from "./mock-update.mjs";
+import { DEMO_FEATURED, demoCatalogAdd, demoCatalogList } from "./mock-catalog.mjs";
 import { uploadSkill } from "./skill-import.mjs";
 import { parseSkill } from "./skill-format.mjs";
 import { botVoiceField } from "./voice.mjs";
+import { proactiveChats, proactivePatch, proactiveSees, proactiveStart } from "./proactive-rules.mjs";
+import { chatPeople } from "./team.mjs";
+import { Failure } from "./tools.mjs";
+import { PROTON_DOWNLOADS, PROTON_GUIDE } from "./proton-install.mjs";
+import { PINS, VERSION } from "./proton-pins.mjs";
 
 const now = () => Date.now();
+
+class DemoProtonPass {
+  state = "missing";
+  jobs = new Map();
+  vaults = [{ id: "demo-personal", name: "Personal", suggested: true }, { id: "demo-work", name: "Work", suggested: false }];
+
+  status() {
+    return { id: "protonpass", name: "Proton Pass", state: this.state, setup: true, install: { url: PROTON_GUIDE },
+      ...(this.state !== "missing" && { version: VERSION, source: "managed" }),
+      ...(this.expiresAt && { account: "demo@example.test", sharedVaults: this.shared.map((vault) => vault.name), expiresAt: this.expiresAt }) };
+  }
+
+  record() { return undefined; }
+
+  run(args, vaultId) {
+    const [command, action] = args;
+    if (!this.shared || (vaultId && !this.shared.some((vault) => vault.id === vaultId))) throw new Failure("Not shared with Botkins. Share more vaults to use this credential.");
+    if (command === "vault") return JSON.stringify(this.shared);
+    const item = { id: "demo-login", title: "Example service", username: "demo" };
+    if (action === "list") return JSON.stringify({ items: [item], folders: [] });
+    if (args.some((arg) => arg.startsWith("--field="))) return "demo-value";
+    return JSON.stringify({ ...item, password: "demo-value" });
+  }
+
+  start(kind) {
+    if (this.active) throw new Failure("Proton Pass setup is already in progress.");
+    const session = randomUUID();
+    const job = { kind, session, events: [], previous: this.state };
+    this.jobs.set(session, job);
+    this.active = job;
+    this.state = kind === "install" ? "installing" : "signing-in";
+    if (kind !== "install") job.events.push({ type: "step", name: "page" }, { type: "open", url: "https://account.proton.me/" });
+    return { session };
+  }
+
+  done(job, state) {
+    this.state = state;
+    this.active = undefined;
+    job.result = this.status();
+  }
+
+  call(method, input = {}) {
+    const pin = PINS["darwin-arm64"];
+    if (method === "protonPassInstallPlan") return { version: VERSION, url: `${PROTON_DOWNLOADS}/${VERSION}/${pin.asset}`,
+      sha256: pin.sha256, sizeBytes: pin.sizeBytes, destination: `/demo/botkins/proton-pass/${VERSION}` };
+    if (method === "protonPassInstall") {
+      if (input.sha256 !== pin.sha256) throw new Failure("Review the install plan before installing Proton Pass.");
+      return this.start("install");
+    }
+    if (method === "protonPassSignInStart") {
+      if (this.state === "missing") throw new Failure("Install Proton Pass before signing in.");
+      return this.start("sign-in");
+    }
+    if (method === "protonPassDisconnect") return this.expiresAt ? { ...this.start("disconnect"), ...this.status() } : this.status();
+    const job = this.jobs.get(input.session);
+    if (!job) throw new Failure("That Proton Pass setup session no longer exists.");
+    if (method === "protonPassSignInRead") {
+      if (!job.result) {
+        if (job.kind === "install" && job.read) this.done(job, "signed-out");
+        if (job.kind === "sign-in" && !job.picking && job.read) {
+          job.picking = true;
+          job.events.push({ type: "step", name: "choose-vaults" }, { type: "choose-vaults", vaults: this.vaults });
+        }
+        if (job.kind === "disconnect" && job.read) {
+          this.expiresAt = undefined;
+          this.shared = undefined;
+          this.done(job, "signed-out");
+        }
+        job.read = true;
+      }
+      return { events: job.events.slice(input.after ?? 0), done: !!job.result, next: job.events.length, result: job.result };
+    }
+    if (method === "protonPassSignInCancel") {
+      if (!job.result) this.done(job, job.previous);
+      return {};
+    }
+    if (method !== "protonPassSignInInput" || job.result || !job.picking) throw new Failure("Proton Pass isn't waiting for an answer.");
+    const ids = input.vaultIds;
+    if (!Array.isArray(ids) || ids.some((id) => !this.vaults.some((vault) => vault.id === id))) throw new Failure("Choose vaults from the list Proton Pass returned.");
+    if (!ids.length && !input.createDedicated) throw new Failure("Choose at least one vault to share.");
+    const dedicated = { id: "demo-botkins", name: "Botkins" };
+    if (input.createDedicated && !this.vaults.some((vault) => vault.id === dedicated.id)) this.vaults.push(dedicated);
+    this.shared = this.vaults.filter((vault) => ids.includes(vault.id) || (input.createDedicated && vault.id === dedicated.id));
+    this.expiresAt = now() + 365 * 86400_000;
+    job.events.push({ type: "step", name: "setting-up" });
+    this.done(job, "ready");
+    return {};
+  }
+}
 /** The demo computer's owner, as a person. */
 const OWNER_NAME = "Alex";
 const DESIGN_SKILL = "---\nname: design-review\ndescription: Review a design.\n---\nCheck readability and contrast.";
@@ -300,8 +396,8 @@ export function seed() {
     skills: { folders: [{ id: "folder-team", path: "/Users/demo/team-skills" }], plugins: [{ id: "plugin-review", path: "/Users/demo/.plugins/code-review" }], disabled: [] },
     wiki: { revision: 1 },
     providers: { revision: 1 },
-    // The Proactive agent: the computer's switch, and each bot's agent by bot id (the desktop's desktop/proactive.mjs).
-    proactive: { enabled: false, bots: {} },
+    // The Proactive agent: the computer's switch (on from the start), and each bot's agent by bot id (the desktop's desktop/proactive.mjs).
+    proactive: { enabled: true, bots: {} },
     settings: {
       model: { model: "auto" },
       appearance: { theme: "system", lightBackground: "cream", darkBackground: "charcoal", bubble: "theme", colorTheme: "ink", themePicked: false, font: "system", fontPicked: false, textSize: "default", avatarAnimations: true },
@@ -313,14 +409,14 @@ export function seed() {
       approval: "ask",
       clarify: ["missing"],
       clarificationInstructions: "",
-      notifications: { replies: true, routines: true, requests: true, quietHours: { enabled: false, from: "22:00", to: "07:00" } },
+      notifications: { replies: true, routines: true, requests: true, reminders: true, quietHours: { enabled: false, from: "22:00", to: "07:00" } },
       access: { allBots: true },
       background: { keepRunning: true, runAtStartup: false },
       sidebar: { order: ["Home", "Today", "Chats", "Work", "Wiki"], collapsed: true },
       teamwork: true,
       // Turns between a chat's summaries into a new title: 5 to 30, or 0 for off (the desktop's desktop/summaries.mjs).
       autoSummarize: 10,
-      proactive: { enabled: false },
+      proactive: { enabled: true },
       harness: "copilot",
       providers: { copilot: { enabled: true }, codex: { enabled: true }, claude: { enabled: true }, opencode: { enabled: false }, openrouter: { enabled: false }, foundry: { enabled: false }, "openai-api": { enabled: false }, grok: { enabled: false } },
     },
@@ -1164,17 +1260,43 @@ function pluginWarnings(entry, old = false) {
 
 // ── Agent templates ("agent-templates-v1", docs/agent-templates.md) ─────────────────────────────────
 // Made-up templates from two marketplaces, read from nowhere: the built-in "Botkins" and a team's own
-// ("Team picks", not built in). The order is the catalogs' own, Botkins first. BOTKINS_DEV_AGENTS=off
-// leaves the capability out, as an older computer would.
+// ("Team picks", not built in). The order is the catalogs' own: the three Home starters, then Botkins'
+// own, then the team's. Every look is one of the ten newer characters, one to a template, so a list
+// of them is as varied as a real computer's. BOTKINS_DEV_AGENTS=off leaves the capability out, as an
+// older computer would.
 const AGENT_CATEGORIES = { writing: "Writing", research: "Research", productivity: "Productivity", work: "Work", dev: "Development", learning: "Learning", health: "Health", finance: "Finance", home: "Home", media: "Media", life: "Life", other: "Other" };
 const agentTemplate = (marketplace, marketplaceName, builtIn, name, entry) => ({ id: name + "@" + marketplace, marketplace, marketplaceName, builtIn, ...entry, ...(entry.category && { categoryName: AGENT_CATEGORIES[entry.category] ?? "Other" }) });
+// What the real computer lists beside each Home starter (desktop/agent-templates-first-party.mjs).
+const STARTER_FACTS = {
+  "chief-of-staff": { category: "productivity", group: "everyday", deliverable: "a short plan for the day and one running list of what is open", dayOne: "Tell it what is on your plate today, or connect your calendar and mail.", approval: "Asks before it sends, books or deletes anything.", keywords: ["planning", "follow-up", "today"], pairing: { kind: "proactive", note: "Looks out for what is late or waiting on you, and drafts the follow-up." } },
+  "coding-partner": { category: "dev", group: "builder", deliverable: "a tested change on a new branch and a pull request that says what changed and why", dayOne: "Point it at a project folder on your computer.", approval: "Never pushes to main, force-pushes or deletes a branch without asking.", keywords: ["code", "tests", "pull request"] },
+  "money-manager": { category: "finance", group: "everyday", deliverable: "a monthly budget by category, the bills coming up, and anything unusual flagged", dayOne: "Paste a statement or a list of bills, or connect a money app.", approval: "Never moves money or makes payments: it tells you what to check.", keywords: ["budget", "bills", "spending"], pairing: { kind: "proactive", note: "Speaks up for a bill that went up, a late payment or a charge you may not recognize." } },
+};
+const DEMO_STARTERS = STARTERS.map((starter) =>
+  agentTemplate("botkins", "Botkins", true, starter.id, {
+    name: starter.name,
+    role: starter.role,
+    summary: starter.summary,
+    look: { ...starter.look },
+    version: "1.0.0",
+    author: "Botkins",
+    starter: true,
+    instructions: starter.instructions,
+    ...STARTER_FACTS[starter.id],
+  }),
+);
 const DEMO_AGENTS = [
+  ...DEMO_STARTERS,
   agentTemplate("botkins", "Botkins", true, "inbox-triage", {
     name: "Inbox Triage",
     role: "Email sorter",
     summary: "Reads your new mail, sorts what matters from what can wait, and drafts short replies for you to check.",
-    look: { head: "beacon", palette: "tidepool" },
+    look: { head: "brim", palette: "tidepool" },
     category: "productivity",
+    group: "everyday",
+    deliverable: "a sorted inbox and a short draft for each mail that needs a reply",
+    dayOne: "Connect your mail, or paste a few messages.",
+    approval: "Never sends a reply: it shows the drafts and waits.",
     version: "1.0.0",
     author: "Botkins",
     keywords: ["email", "inbox", "mail"],
@@ -1184,8 +1306,11 @@ const DEMO_AGENTS = [
     name: "Meeting Prep",
     role: "Briefing writer",
     summary: "Before each meeting, gathers who is coming, what was said last time and what to decide, on one page.",
-    look: { head: "spool", palette: "honey" },
+    look: { head: "clover", palette: "honey" },
     category: "productivity",
+    group: "everyday",
+    deliverable: "a one-page brief before each meeting",
+    dayOne: "Connect your calendar.",
     version: "1.2.0",
     author: "Botkins",
     keywords: ["calendar", "meetings", "notes"],
@@ -1195,8 +1320,11 @@ const DEMO_AGENTS = [
     name: "Plain Editor",
     role: "Editor",
     summary: "Makes your writing shorter and clearer without changing what you mean.",
-    look: { head: "muse", palette: "fig" },
+    look: { head: "dune", palette: "fig" },
     category: "writing",
+    group: "everyday",
+    deliverable: "your text, shorter and clearer, with a list of what changed",
+    dayOne: "Paste any text.",
     version: "1.0.0",
     author: "Botkins",
     keywords: ["editing", "clarity", "style"],
@@ -1206,8 +1334,11 @@ const DEMO_AGENTS = [
     name: "Story Spark",
     role: "Writing partner",
     summary: "Helps you start a story: a premise, a few characters and the first scene, then follows your lead.",
-    look: { head: "luna", palette: "bluebell" },
+    look: { head: "gloop", palette: "bluebell" },
     category: "writing",
+    group: "everyday",
+    deliverable: "three premises, then characters and a first scene",
+    dayOne: "Say what kind of story you like.",
     version: "0.9.1",
     author: "Botkins",
     keywords: ["fiction", "stories", "ideas"],
@@ -1217,19 +1348,40 @@ const DEMO_AGENTS = [
     name: "Habit Coach",
     role: "Coach",
     summary: "Checks in each day on the habits you chose, keeps count, and helps you plan around a missed day.",
-    look: { head: "sprig", palette: "fern" },
+    look: { head: "ripple", palette: "fern" },
     category: "health",
+    group: "everyday",
+    deliverable: "a daily check-in and a running count for each habit",
+    dayOne: "Tell it the habits you chose.",
     version: "1.0.0",
     author: "Botkins",
     keywords: ["habits", "fitness", "routine"],
     instructions: "Help the person keep the habits they chose.\n\n- Ask once a day how each habit went.\n- Keep a running count, and say it plainly.\n- When a day is missed, help plan the next one. No guilt.\n- You are not a doctor: for anything medical, suggest they ask one.",
   }),
+  agentTemplate("botkins", "Botkins", true, "code-reviewer", {
+    name: "Code Reviewer",
+    role: "Reviewer",
+    summary: "Reads a pull request the way a careful teammate would, and says what to fix first.",
+    look: { head: "orbit", palette: "tidepool" },
+    category: "dev",
+    group: "builder",
+    deliverable: "a review: what is wrong, what is risky, and what is fine, in that order",
+    dayOne: "Point it at a pull request or a branch.",
+    approval: "Never approves or merges: it only comments.",
+    version: "1.0.0",
+    author: "Botkins",
+    keywords: ["review", "pull request", "quality"],
+    instructions: "Review the change you are given.\n\n- Start with what is wrong or risky, most serious first.\n- Point to the line and say why.\n- Then note what is good, in one line.\n- Never approve or merge.",
+  }),
   agentTemplate("team-picks", "Team picks", false, "release-notes", {
     name: "Release Notes",
     role: "Changelog writer",
     summary: "Turns a list of merged pull requests into release notes people want to read.",
-    look: { head: "tinker", palette: "terracotta" },
+    look: { head: "wisp", palette: "terracotta" },
     category: "dev",
+    deliverable: "release notes grouped as New, Better and Fixed",
+    dayOne: "Give it the merged pull requests.",
+    approval: "Asks before it publishes anything.",
     version: "2.0.0",
     author: "Acme platform team",
     keywords: ["github", "changelog", "releases"],
@@ -1240,7 +1392,7 @@ const marketAgentOf = ({ instructions: _instructions, ...listing }) => listing;
 const agentMatches = (agent, words) => words.every((word) => [agent.name, agent.role, agent.summary, agent.category ?? "", agent.categoryName ?? "", ...(agent.keywords ?? [])].some((part) => part.toLowerCase().includes(word)));
 
 export class MockBackend {
-  constructor({ state = seed(), speed = 1, appends = process.env.BOTKINS_DEV_APPENDS !== "off", timeline = process.env.BOTKINS_DEV_TIMELINE !== "off", pluginPage = PLUGIN_PAGE } = {}) {
+  constructor({ state = seed(), speed = 1, appends = process.env.BOTKINS_DEV_APPENDS !== "off", timeline = process.env.BOTKINS_DEV_TIMELINE !== "off", pluginPage = PLUGIN_PAGE, proton = process.env.BOTKINS_DEV_PROTON !== "off" } = {}) {
     // "turn-timeline-v1" (docs/turn-timeline.md). BOTKINS_DEV_TIMELINE=off is an older computer.
     if (process.env.BOTKINS_DEV_PRS === "1") this.runGitHub = demoGitHub;
     this.streamAppends = appends;
@@ -1254,7 +1406,7 @@ export class MockBackend {
     // What this stand-in app supports itself, beyond the link's own list.
     // "files-v1": a file out and in as text, without a dialog. "folders-v1": the folder browser.
     // "artifacts-v1": what the bots made or were given, from an index the app keeps (here: made up).
-    this.capabilities = ["message-reactions-v1", "client-message-id-v1", "voice-turns-v1", "voice-history-v1", "quiet-replies-v1", "routine-delivery-v1", ...(process.env.BOTKINS_DEV_NO_OUTPUT === "off" ? [] : ["routine-no-output-v1"]), "routine-scripts-v1", "routine-models-v1", "routine-silent-v1", "proactive-agent-v2", "proactive-learning-v1", "models-v2", "fast-mode-v1", "side-pane-v1", "files-v1", "folders-v1", "project-artifacts-v1", "artifacts-v1", "secure-input-v1", "chat-title-regeneration-v1", ...(process.env.BOTKINS_DEV_USAGE === "off" ? [] : ["provider-usage-v1"])];
+    this.capabilities = ["message-reactions-v1", "client-message-id-v1", "voice-turns-v1", "voice-history-v1", "quiet-replies-v1", "routine-delivery-v1", ...(process.env.BOTKINS_DEV_NO_OUTPUT === "off" ? [] : ["routine-no-output-v1"]), "routine-scripts-v1", "routine-models-v1", "routine-silent-v1", "routine-notify-targets-v1", "proactive-agent-v2", "proactive-learning-v1", "proactive-team-v1", "models-v2", "fast-mode-v1", "side-pane-v1", "files-v1", "folders-v1", "project-artifacts-v1", "artifacts-v1", "secure-input-v1", "chat-title-regeneration-v1", ...(process.env.BOTKINS_DEV_USAGE === "off" ? [] : ["provider-usage-v1"])];
     this.capabilities.push("project-folders-v1", "project-mode-v1", "project-clone-v1");
     if (this.timeline) this.capabilities.push("turn-timeline-v1");
     // "bot-voice-v1": a bot may have a voice of its own. BOTKINS_DEV_BOT_VOICE=off is an older computer.
@@ -1262,6 +1414,8 @@ export class MockBackend {
     if (this.botVoice) this.capabilities.push("bot-voice-v1");
     // "provider-signin-v1": signing a model provider in, and installing one, from a phone (mock-signin.mjs).
     this.signIns = new DemoSignIns(this);
+    this.protonSetup = proton;
+    if (proton) this.protonDemo = new DemoProtonPass();
     if (process.env.BOTKINS_DEV_SIGNIN !== "off") this.capabilities.push("provider-signin-v1");
     // "keyed-providers-v1": OpenRouter, Azure Foundry and an OpenAI endpoint, on a key and settings.
     if (process.env.BOTKINS_DEV_KEYED !== "off") this.capabilities.push("keyed-providers-v1");
@@ -1285,7 +1439,7 @@ export class MockBackend {
     // "agent-templates-v1" (docs/agent-templates.md): made-up templates. Left out with BOTKINS_DEV_AGENTS=off.
     if (process.env.BOTKINS_DEV_AGENTS !== "off") this.capabilities.push("agent-templates-v1");
     // "plugins-v1" (docs/plugins.md): made-up catalogs and installs. One plugin starts installed.
-    this.capabilities.push("pi-packages-v1", "skill-upload-v1", "skills-catalog-v1");
+    this.capabilities.push("pi-packages-v1", "skill-upload-v1", "skills-catalog-v1", "skills-featured-v1", "mcp-catalog-v1");
     this.catalogToken = "";
     this.demoSkill = {id:"demo/skills/design-review", source:"demo/skills", skillId:"design-review", name:"design-review", installs:240, available:true};
 
@@ -1305,6 +1459,10 @@ export class MockBackend {
     }
     this.cache = { bytes: 48_340_992, catalogs: 6 };
     this.callContexts = [];
+    // The demo's made-up proactive alerts, by run id: whose each is, where it is, and the request its offer sends (never sent to a phone).
+    this.proactiveAlerts = new Map();
+    /** The team, when the link gives it (dev-host.mjs, tests): who may change a bot's Proactive agent is checked with it. */
+    this.teamOf = null;
     state.artifacts = { revision: 1 };
     this.artifacts = demoArtifacts(state);
     // A server with no window of its own: a phone may set what phones do with its screen (grant.mjs).
@@ -1512,6 +1670,22 @@ export class MockBackend {
   }
   changed() {
     for (const fn of this.listeners) fn();
+  }
+  /** A made-up proactive alert in a person's own chat with a bot, with one offer ("proactive-team-v1"). The offer's prompt stays here. */
+  demoAlert(bot, person) {
+    const team = this.teamOf?.();
+    const mine = (chat) => chat.botId === bot.id && !chat.schedules?.length && !chat.botIds && !chat.panelId && (chat.createdBy ?? "owner") === person && !chatPeople(team, chat).invited.length;
+    let chat = this.state.chats.find(mine);
+    if (!chat) {
+      chat = { id: "chat-" + randomUUID().slice(0, 8), botId: bot.id, title: "New chat", time: now(), messages: [], ...(person !== "owner" && { createdBy: person }) };
+      this.state.chats.unshift(chat);
+    }
+    const runId = "run-look-" + randomUUID().slice(0, 8);
+    const text = "The launch checklist has three items with no owner.\n\nThe launch is in four days and nobody has picked up the press kit, the status page or the support macros.\n\nI can draft who takes what for you to send.";
+    chat.messages.push({ role: "assistant", text, time: now(), proactiveRunId: runId, alert: { runId, offer: "Draft who takes what" } });
+    chat.time = now();
+    chat.unread = true;
+    this.proactiveAlerts.set(runId, { botId: bot.id, person, chatId: chat.id, label: "Draft who takes what", prompt: "Draft who should take the press kit, the status page and the support macros, and show it to me before anything is sent." });
   }
   async call(method, args, context = {}) {
     this.callContexts.push({ method, principal: context.principal ? structuredClone(context.principal) : null });
@@ -1892,7 +2066,9 @@ export class MockBackend {
     }
     let reply = REPLY;
     // A bot that uses the person's phone: the tool runs there (device.mjs) when the phone allows it.
-    const wanted = PHONE_ASKS.find((ask) => ask.when.test(prompt));
+    // The keep-moving demo prompts and the Continue button's message mention steps; they are not Health asks.
+    const keepMoving = /keep going|stopped with|waiting question|^continue with the open steps/i.test(prompt);
+    const wanted = keepMoving ? undefined : PHONE_ASKS.find((ask) => ask.when.test(prompt));
     if (live() && wanted && this.phone) {
       const step = { id: randomUUID(), name: wanted.tool, label: wanted.label, status: "Running", started: now(), input: JSON.stringify(wanted.args()) };
       run.steps = [...(run.steps ?? []), step];
@@ -1968,6 +2144,24 @@ export class MockBackend {
       run.cards = [...(run.cards ?? []), { id: randomUUID(), title: "Open issues by repo", blocks: [{ type: "html", frame, height: 240 }, { type: "markdown", text: "Made-up numbers from the demo computer." }], replies: [] }];
       reply = "That's a bar chart of open issues by repo. Tap a bar to see when that repo was last pushed.";
       this.changed();
+    } else if (live() && /keep going|stopped with|waiting question/i.test(prompt) && !/^continue with the open steps/i.test(prompt)) {
+      // The computer keeping the work moving (desktop/keep-moving.mjs): "keep going" is a plan that got more turns until it was
+      // done, "stopped with" a plan that ended with steps open (the chat offers Continue), "waiting question" a question that
+      // waited ten minutes: its turn went on, and the card stays as waiting until it is answered.
+      const rows = (...status) => ["Read the notes", "Draft the summary", "Send it to the team"].map((title, i) => ({ id: "s" + (i + 1), title, status: status[i] }));
+      if (/waiting question/i.test(prompt)) {
+        void this.ask({ chatId: id, botId: chat.botId, kind: "question", title: "Which environment should I use?", choices: ["Staging", "Production"], freeform: true, detached: true });
+        reply = "I need one answer before I can go on. The question stays here until you answer it.";
+      } else if (/stopped with/i.test(prompt)) {
+        run.todos = chat.todos = rows("done", "in_progress", "pending");
+        Object.assign(run, { plan: { open: 2, total: 3 }, stoppedOpen: true, continued: { count: 8, limit: 8, reason: "plan", open: 2 } });
+        reply = "The notes are read and the summary is half written.";
+      } else {
+        run.todos = chat.todos = rows("done", "done", "done");
+        chat.messages.push({ role: "assistant", text: "I read the notes. Next I'll draft the summary and send it.", runId: run.id, time: now() });
+        Object.assign(run, { plan: { open: 0, total: 3 }, continued: { count: 2, limit: 8, reason: "plan", open: 2 } });
+        reply = "The summary is drafted and sent to the team.";
+      }
     } else if (live() && /approve/i.test(prompt)) {
       const bot = this.bot(chat.botId);
       const answer = await this.ask({ chatId: id, botId: bot.id, kind: "permission", title: "Run a command", label: "npm run deploy", preview: "npm run deploy -- --env production", detail: "Deploys the website to production.", remember: "npm run deploy" });
@@ -2092,6 +2286,9 @@ export class MockBackend {
     // Bots
     addBot(data) {
       const bot = { id: "bot-" + randomUUID().slice(0, 8), name: text(data.name, 48, "name"), role: String(data.role ?? "").slice(0, 90), instructions: String(data.instructions ?? ""), face: data.face ?? "idle", ...(data.summary && { summary: data.summary }), avatar: data.avatar ?? { body: "bighelp.biggie" } };
+      // Made from a starter: kept as the computer keeps it (desktop/workspace.mjs addBot).
+      const starter = starterById(data.starter);
+      if (starter) Object.assign(bot, { starter: starter.id }, starter.suggestProactive && { suggestProactive: true });
       this.state.bots.push(bot);
       return bot.id;
     },
@@ -2160,27 +2357,70 @@ export class MockBackend {
       if (skillsOff) bot.skillsOff = skillsOff;
       if (mcpOff) bot.mcpOff = mcpOff;
     },
-    // A bot's Proactive agent, for the person who calls: the one who first sets it up is the one it works for (the desktop's desktop/proactive.mjs).
+    // A bot's Proactive agent ("proactive-team-v1"), changed as the person who calls. Who may change what is the same
+    // rule the app on a computer uses (proactive-rules.mjs); the desktop's desktop/proactive.mjs is the real thing.
     setBotProactive(id, patch) {
-      this.bot(id);
+      const bot = this.bot(id);
       const person = this.caller.id;
-      const held = this.state.proactive.bots[id];
-      if (person !== "owner" && held && held.person !== person) throw new Error("This bot's Proactive agent is set up for someone else.");
+      const team = this.teamOf?.() ?? null;
+      const bots = this.state.proactive.bots;
+      const held = bots[id];
+      if (person !== "owner" && team && !proactiveSees(team, person, id)) throw new Error("Your team role can't see this bot.");
       if (patch === null) {
-        delete this.state.proactive.bots[id];
+        // The owner forgets everything; a member takes only themselves out.
+        if (person === "owner") delete bots[id];
+        else if (held?.people?.[person]) delete held.people[person];
         return null;
       }
-      const usual = { enabled: false, every: 30, sweepHours: 3, maxPerDay: 6, deliver: "chat", watch: ["runs", "tasks", "requests", "context"], instructions: "" };
+      const usual = { enabled: false, setUp: false, every: 30, sweepHours: 3, maxPerDay: 6, deliver: "chat", watch: ["runs", "tasks", "requests", "context"], instructions: "", people: {} };
       if (!patch || typeof patch !== "object" || Array.isArray(patch)) throw new Error("Invalid Proactive agent setting");
       const unknown = Object.keys(patch).find((key) => !Object.hasOwn(usual, key));
       if (unknown) throw new Error("Unknown Proactive agent setting: " + unknown);
-      const owner = (held?.person ?? person) === "owner";
-      // A member's agent never looks around the computer's own accounts, and tasks are the owner's.
-      const next = { ...(held ?? { ...usual, ...(!owner && { sweepHours: 0, watch: ["runs", "requests", "context"] }) }), ...patch, person: held?.person ?? person };
-      if (!owner && next.sweepHours !== 0) throw new Error("Only the owner can turn on look-around: it reads the computer's own tools and accounts.");
-      if (!owner) next.watch = next.watch.filter((watch) => watch !== "tasks");
-      this.state.proactive.bots[id] = next;
+      const start = held ?? proactiveStart(usual, person);
+      const checked = proactivePatch({ patch, start, by: person, team, botId: id });
+      const { people: named, ...shared } = checked;
+      for (const key of ["enabled", "setUp"]) if (shared[key] !== undefined && typeof shared[key] !== "boolean") throw new Error("Choose on or off");
+      const people = { ...start.people };
+      for (const [who, own] of Object.entries(named ?? {})) {
+        if (own === null) delete people[who];
+        else {
+          const unknownField = Object.keys(own ?? {}).find((key) => key !== "on" && key !== "notify");
+          if (!own || typeof own !== "object" || unknownField) throw new Error(unknownField ? "Unknown setting for a person: " + unknownField : "Choose on or off for each person.");
+          people[who] = { on: true, notify: true, ...people[who], ...own };
+        }
+      }
+      const next = (bots[id] = { ...start, ...shared, people });
+      if (next.enabled) delete next.pausedBy;
+      // So that the demo has something to show: a person the bot now looks out for gets one made-up alert, with an offer.
+      if (this.state.proactive.enabled && next.enabled && next.setUp && next.people[person]?.on && ![...this.proactiveAlerts.values()].some((alert) => alert.botId === id && alert.person === person)) this.demoAlert(bot, person);
       return null;
+    },
+    // What a person does with an alert they were sent: only the person it was for has it.
+    proactiveAct(id, runId, action) {
+      this.bot(id);
+      if (action !== "take" && action !== "later") throw new Error("Choose take or later.");
+      const alert = this.proactiveAlerts.get(runId);
+      if (!alert || alert.botId !== id || alert.person !== this.caller.id) throw new Error("This alert is no longer available.");
+      if (alert.chosen) throw new Error("You already chose what to do with this alert.");
+      const mark = () => {
+        alert.chosen = action;
+        const message = this.chat(alert.chatId).messages.find((item) => item.proactiveRunId === runId);
+        if (message) message.alert = { ...message.alert, chosen: action };
+      };
+      if (action === "later") {
+        mark();
+        return { until: now() + 24 * HOUR };
+      }
+      // Taking it starts a turn with the bot, as sending a message does.
+      if (this.teamOf?.() && !proactiveChats(this.teamOf(), this.caller.id)) throw new Error("Your team role can't chat with this bot.");
+      const chatId = this.handlers.createChat.call(this, id);
+      const chat = this.chat(chatId);
+      Object.assign(chat, { title: alert.label, titleSet: true, ...(this.caller.id !== "owner" && { createdBy: this.caller.id }) });
+      // A normal turn, as the person's own message: the demo bot answers it as it answers any message.
+      this.handlers.send.call(this, chatId, alert.prompt, this.caller.id === "owner" ? undefined : { author: { memberId: this.caller.id, name: this.caller.name } });
+      // Marked once the turn has started: a start that fails leaves the alert to try again.
+      mark();
+      return { chatId };
     },
     botMemory(id) {
       return this.memory.get(id) ?? (id === "bot-mira" ? "- Prefers short lists\n- Launch is on the 24th\n- Weekly review happens on Fridays" : "");
@@ -2333,7 +2573,7 @@ export class MockBackend {
       this.scheduled = null;
       const run = { id: "run-" + randomUUID().slice(0, 8), chatId: id, title: scheduled?.name ?? prompt.slice(0, 80), time: now(), status: "Working", detail: "", ...(options?.notify === false && { notify: false }), ...(scheduled?.deliver?.to === "none" && { noOutput: true }), ...(scheduled && { trigger: "scheduled", scheduleId: scheduled.id }) };
       this.state.runs.unshift(run);
-      addUserMessage(chat, { role: "user", text: prompt, ...tag, runId: run.id, time: now(), ...(options?.author && { author: options.author }) }, options?.voiceId);
+      addUserMessage(chat, { role: "user", text: prompt, ...tag, runId: run.id, time: now(), ...(options?.author && { author: options.author }), ...(typeof options?.quote === "string" && options.quote && { quote: options.quote }) }, options?.voiceId);
       const first = chat.title === "New chat";
       if (first) chat.title = prompt.slice(0, 40);
       chat.time = now();
@@ -2373,7 +2613,10 @@ export class MockBackend {
     compact() {},
     sideQuestion: async (_id, question) => "Short answer to “" + question + "”: yes, that fits the plan.",
     respond(requestId, answer) {
+      const asked = this.state.requests.find((r) => r.id === requestId);
       this.state.requests = this.state.requests.filter((r) => r.id !== requestId);
+      // A question that outlived its turn: the answer is the person's next message, quoting the question.
+      if (asked?.detached && answer.action === "answer" && typeof answer.value === "string") this.handlers.send.call(this, asked.chatId, answer.value, { quote: asked.title });
       this.waiting.get(requestId)?.(answer);
       this.waiting.delete(requestId);
     },
@@ -2641,15 +2884,18 @@ export class MockBackend {
       // A script routine's prompt is its follow-up action's, needed only when that is on.
       const script = data.script ? text(data.script, 20000, "script") : undefined;
       const prompt = script && !data.followUp ? String(data.prompt ?? "").trim() : text(data.prompt, 4000, "prompt");
-      chat.schedules = [{ id: 1, routine: true, enabled: true, name: data.name, prompt, cadence: data.cadence, timezone: data.timezone || "America/Chicago", recurring: data.cadence.kind !== "once", nextAt: now() + 20 * HOUR, createdAt: now(), ...(data.deliver && { deliver: delivery(data.deliver) }), ...(data.notify === false && { notify: false }), ...(script && { script, followUp: data.followUp === true }) }];
+      chat.schedules = [{ id: 1, routine: true, enabled: true, name: data.name, prompt, cadence: data.cadence, timezone: data.timezone || "America/Chicago", recurring: data.cadence.kind !== "once", nextAt: now() + 20 * HOUR, createdAt: now(), ...(data.deliver && { deliver: delivery(data.deliver) }), ...(data.notify === false && { notify: false }), ...(data.notifyTargets && { notifyTargets: data.notifyTargets }), ...(script && { script, followUp: data.followUp === true }) }];
       if (data.model) chat.model = data.model;
       return chatId;
     },
     updateRoutine(id, patch) {
       const chat = this.chat(id);
       const entry = chat.schedules.find((s) => s.routine);
-      const { deliver, model, script, ...rest } = patch;
+      const { deliver, model, script, notifyTargets, ...rest } = patch;
       Object.assign(entry, rest);
+      if (notifyTargets === null) delete entry.notifyTargets;
+      else if (notifyTargets !== undefined) entry.notifyTargets = notifyTargets;
+      if (entry.notify === false) delete entry.notifyTargets;
       if (deliver) entry.deliver = delivery(deliver);
       if (script === null) {
         delete entry.script;
@@ -3351,15 +3597,35 @@ export class MockBackend {
       const installed = this.demoInstalled && this.skillList.some(s => s.name === this.demoSkill.name);
       return this.demoSkill.name.includes(query.trim().toLowerCase()) ? [{...this.demoSkill, installed: installed ? this.demoSkill.name : undefined}] : [];
     },
+    "skillsCatalog.featured"() {
+      return DEMO_FEATURED.map((item) => ({ ...item, ...(this.skillList.some((s) => s.name === item.name) && { installed: item.name }) }));
+    },
+    // The direct apps catalog (mock-catalog.mjs): the demo's own tool servers say where each entry stands.
+    "mcpCatalog.list"() {
+      return demoCatalogList(this.state.mcpServers);
+    },
+    "mcpCatalog.add"(id, options) {
+      return demoCatalogAdd(this, id, options);
+    },
     "skillsCatalog.preview"(id) {
+      const item = DEMO_FEATURED.find((f) => f.id === id);
+      if (item) {
+        this.catalogToken = randomUUID();
+        this.catalogFeatured = item;
+        const { id: _id, name, summary, group, installed, ...source } = item;
+        return { name, description: summary, text: "---\nname: " + name + "\ndescription: " + JSON.stringify(summary) + "\n---\n\nA demo copy of " + name + " from " + item.repo + ".\n", token: this.catalogToken, source, files: ["SKILL.md", "LICENSE"] };
+      }
       if (id !== this.demoSkill.id) throw new Error("Unknown demo skill.");
+      this.catalogFeatured = null;
       this.catalogToken = randomUUID();
       return {name: this.demoSkill.name, description: "Review a design.", text: DESIGN_SKILL, token: this.catalogToken};
     },
     async "skillsCatalog.install"(token, replace) {
       if (!token || token !== this.catalogToken) throw new Error("Open the preview again.");
-      const data = Buffer.from(DESIGN_SKILL).toString("base64");
-      const result = await this.handlers["skills.upload"].call(this, {filename: "design-review.md", data, replace});
+      const item = this.catalogFeatured;
+      const text = item ? "---\nname: " + item.name + "\ndescription: " + JSON.stringify(item.summary) + "\n---\n\nA demo copy.\n" : DESIGN_SKILL;
+      const data = Buffer.from(text).toString("base64");
+      const result = await this.handlers["skills.upload"].call(this, {filename: (item?.name ?? "design-review") + ".md", data, replace});
       if (result.added.length) this.demoInstalled = true;
       return result;
     },

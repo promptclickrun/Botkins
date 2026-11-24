@@ -1,0 +1,36 @@
+<!doctype html>
+<!--
+  The source of botkins-mark.png, the mark in the middle of a managed Botkins display.
+  The display's color is the kit's dark canvas (#251E1A); hsetroot paints it and centers this
+  transparent picture on any size. To render it again, from desktop/docker/desktop:
+
+    "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --headless=new \
+      --default-background-color=00000000 --window-size=440,160 \
+      --screenshot="$PWD/botkins-mark.png" "file://$PWD/wallpaper.html"
+
+  Add ?preview to the address to see it on the canvas color.
+-->
+<html>
+<head>
+<meta charset="utf-8">
+<title>Botkins mark</title>
+<style>
+  html, body { margin: 0; width: 440px; height: 160px; overflow: hidden; background: transparent; }
+  body.preview { background: #251E1A; }
+  .mark { display: flex; align-items: center; justify-content: center; gap: 14px; width: 440px; height: 160px; opacity: 0.92; }
+  /* Orbit, one of the newer Botkins, from the kit. */
+  .botkin { width: 96px; height: 96px; }
+  /* The lettering of the wordmark for dark backgrounds (its own two characters cropped away). */
+  .word { width: 260px; height: 68px; background: url("../../assets/brand/wordmark-dark.png") no-repeat; background-size: 370px 111px; background-position: -110px -32px; }
+</style>
+</head>
+<body>
+  <div class="mark">
+    <img class="botkin" src="../../design/botkins-kit/avatars/orbit.svg" alt="">
+    <div class="word" role="img" aria-label="Botkins"></div>
+  </div>
+  <script>
+    if (location.search.includes("preview")) document.body.classList.add("preview");
+  </script>
+</body>
+</html>

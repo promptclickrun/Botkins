@@ -299,3 +299,18 @@
 .linkbutton:hover {
   background: none;
 }
+/* A proactive alert's actions, under the alert in a chat and on its Feed card. */
+.alert-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+.alert-actions strong,
+.alert-actions .field-error {
+  flex-basis: 100%;
+}
+.alert-chosen {
+  margin-top: 8px;
+}

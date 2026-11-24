@@ -11,7 +11,7 @@ export function LookStage({ look, size = 132, children }: { look: BotkinLook; si
   return (
     <View style={{ paddingTop: space.sm, alignItems: "center", gap: space.lg }}>
       <Tap onPress={() => setAct((act + 1) % ACTS.length)} feel="select" sink={0.95} accessibilityLabel="Preview" accessibilityHint="Plays the next mood">
-        <BotAvatar look={look} state={ACTS[act]} size={size} />
+        <BotAvatar look={look} state={ACTS[act]} size={size} animated />
       </Tap>
       {children}
     </View>

@@ -18,6 +18,9 @@ import { loadConfig, saveConfig } from "./config.mjs";
 import { changeCounter, ownFolder, startControl } from "./control-start.mjs";
 import { createLog } from "./logs.mjs";
 import { prepareReach } from "./reach.mjs";
+import { ProfileManager } from "../profile.mjs";
+import { RemoteHosts } from "../remotehosts.mjs";
+import * as profileLib from "../remote/link-client.mjs";
 
 /**
  * Starts the service.
@@ -51,6 +54,8 @@ export async function startService({ paths, version, trial = false, reach = !tri
   let keys = null;
   let signIns = null;
   let runtime;
+  let remote;
+  let profile;
   let closeSocket = async () => {};
   let stopping;
   const service = {
@@ -92,6 +97,35 @@ export async function startService({ paths, version, trial = false, reach = !tri
       // one the container publishes (a phone uses the link's own port at every address).
       link: { port: /^\d{1,5}$/.test(env.BOTKINS_LINK_PORT ?? "") ? Number(env.BOTKINS_LINK_PORT) : config.link.port, extraHosts: [...config.link.addresses, ...(env.BOTKINS_PAIR_ADDRESS ? [env.BOTKINS_PAIR_ADDRESS.replace(/:\d+$/, "")] : [])], announce: trial ? false : config.link.announce, relayOwn: config.relay.own },
     });
+    remote = new RemoteHosts({
+      file: `${paths.dataDir}/remote-hosts.json`,
+      protect: runtime.secretStore,
+      lib: profileLib,
+      fetch: host.fetch,
+      device: { name: config.name || "Terminal host", platform: process.platform, kind: "terminal" },
+      changed: bump,
+      log: (line) => log.info(line),
+    });
+    profile = new ProfileManager({
+      file: paths.profile ?? `${paths.dataDir}/profile.json`,
+      protect: runtime.secretStore,
+      lib: profileLib,
+      local: () => runtime.link,
+      remote: () => remote,
+      workspace: () => !!runtime.workspace.state.bots.length || !!runtime.workspace.state.chats.length,
+      fetch: host.fetch,
+      device: { name: config.name || "Terminal host", platform: process.platform, kind: "terminal" },
+      changed: bump,
+      log: (line) => log.info(line),
+    });
+    const originalAddBot = runtime.handlers.addBot;
+    runtime.handlers.addBot = (data) => {
+      const result = originalAddBot(data);
+      if (profile.token()) void profile.ensureLocalHost({ existing: true }).catch((error) => log.error("Profile local host: " + error.message));
+      return result;
+    };
+    void profile.bindAll().catch((error) => log.error("Profile bind: " + error.message));
+    service.profile = profile;
     service.runtime = runtime;
     runtime.subscribe(bump);
     // The runtime's own: a phone signs providers in and installs them through the same sessions (desktop/runtime.mjs).
@@ -118,13 +152,19 @@ export async function startService({ paths, version, trial = false, reach = !tri
       }
     };
     service.setConfig = async (next) => {
+      const prior = config;
       config = saveConfig(paths.config, next);
       await apply(config);
+      if (prior.link.enabled !== config.link.enabled) profile.noteLocalLinkSetting(config.link.enabled === true);
+      if (config.link.enabled === true && profile.token()) void profile.ensureLocalHost({ existing: !!runtime.workspace.state.bots.length || !!runtime.workspace.state.chats.length }).catch((error) => log.error("Profile local host: " + error.message));
+      if (profile.token()) void profile.bindAll().catch((error) => log.error("Profile bind: " + error.message));
       bump();
     };
     // The link's own start comes first: two starts at once would both try to take the port.
     await runtime.listening;
     await apply(config);
+    if (profile.token()) void profile.ensureLocalHost({ existing: !!runtime.workspace.state.bots.length || !!runtime.workspace.state.chats.length }).catch((error) => log.error("Profile local host: " + error.message));
+    if (profile.token()) void profile.bindAll().catch((error) => log.error("Profile bind: " + error.message));
     service.stop = stop;
     const control = await startControl({ service, socket: paths.socket, log });
     const { api } = control;

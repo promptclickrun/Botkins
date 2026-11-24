@@ -96,6 +96,8 @@ export type PageActions = {
   newChatWith: (botId: string) => void;
   /** Opens the bot page. */
   botPage: (botId: string) => void;
+  /** Opens the bot page on the setup steps of its Proactive agent ("Who should <Bot> look out for?"), for right after a bot is made. */
+  proactiveSetup: (botId: string) => void;
   /** Opens Settings on its Capabilities tab for this bot. */
   capabilities: (botId: string) => void;
   fail: (e: unknown) => void;
@@ -522,7 +524,7 @@ function BotCard({
       onContextMenu={(e) => menu(e, b)}
     >
       <button className="botcard" onClick={() => actions.botChat(b)}>
-        <BotAvatar bot={b} state={activity} size={large ? 88 : 48} animated={large ? activity !== "idle" : undefined} />
+        <BotAvatar bot={b} state={activity} size={large ? 88 : 48} />
         <span className="botcard-text">
           <strong>{b.name}</strong>
           <small>
@@ -1127,7 +1129,7 @@ export function HomePage({ state, actions, composer }: { state: State; actions: 
           {composer}
         </div>
         <div className="heroface">
-          <BotAvatar bot={primary} state={primaryActivity} size={176} animated={primaryActivity !== "idle"} />
+          <BotAvatar bot={primary} state={primaryActivity} size={176} />
           <strong>{primary.name}</strong>
           <small>{primary.role}</small>
         </div>

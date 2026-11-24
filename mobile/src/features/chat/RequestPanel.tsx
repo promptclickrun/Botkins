@@ -22,6 +22,7 @@ import {
   answerOf,
   choicesOf,
   countLabel,
+  DETACHED_LINE,
   detailMode,
   foldHint,
   formReady,
@@ -199,6 +200,11 @@ function Question({ request, room, onPrivate }: { request: AgentRequest; room: n
       }
     >
       <Head request={request} />
+      {!!request.detached && (
+        <T variant="footnote" color="muted">
+          {DETACHED_LINE}
+        </T>
+      )}
       <Detail request={request} />
       {!!request.url && <LinkLine url={request.url} />}
       {choices.length > 0 && (

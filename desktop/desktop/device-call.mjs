@@ -20,8 +20,8 @@ const FOR_A_PERSON = {
   "spaces.read": 1, "spaces.create": 1, "spaces.rename": 2, "spaces.remove": 1, "spaces.setProject": 2, "spaces.setPanelProject": 2,
   "spaces.newPanel": 1, "spaces.ask": 1, "spaces.movePanel": 2, "spaces.patchState": 3, "spaces.note": 2, "spaces.removeNote": 2,
   changePanel: 2, routine: 2, refreshPanel: 1, boardAct: 3,
-  // A bot's Proactive agent works for the person who sets it up.
-  setBotProactive: 2, reactToMessage: 4,
+  // A bot's Proactive agent is changed, and its alerts are acted on, as the person who calls.
+  setBotProactive: 2, proactiveAct: 3, reactToMessage: 4,
 };
 
 export function deviceCall({ workspace, handlers, folders }) {
@@ -34,12 +34,14 @@ export function deviceCall({ workspace, handlers, folders }) {
     const answeredIn = member && name === "respond" ? workspace.interactions.snapshot().find((item) => item.id === args[0])?.chatId : null;
     // A member's message carries their name with it, wherever `send` puts it: in the chat now, in
     // the queue, or into the turn under way.
-    const callArgs = member && name === "send" ? [checked[0], checked[1], { ...(checked[2] ?? {}), author: member }] : checked;
+    // An answer to a question that outlived its turn becomes the answerer's next message, so it says who they are.
+    const callArgs = member && name === "send" ? [checked[0], checked[1], { ...(checked[2] ?? {}), author: member }] : name === "respond" ? [checked[0], checked[1], member?.memberId ?? "owner"] : checked;
     if (name === "recordVoiceLine") return handlers[name](checked[0], checked[1], checked[2], checked[3], member, checked[4]);
     if (member) {
-      // These three take the member's id beside what the device sent; a handler never reads it from the device.
+      // These four take the member's id beside what the device sent; a handler never reads it from the device.
       if (name === "mentionables") return workspace.mentions.candidates(checked[0], checked[1], member.memberId);
       if (name === "createRoutine") return workspace.panels.routines.createWithModel(checked[0] ?? {}, undefined, member.memberId);
+      if (name === "updateRoutine") return workspace.panels.routines.updateWithModel(checked[0], checked[1] ?? {}, undefined, member.memberId);
       if (name === "duplicateRoutine") return workspace.panels.routines.duplicate(checked[0], checked[1], undefined, member.memberId);
     }
     if (Object.hasOwn(FOR_A_PERSON, name)) return handlers[name](...Array.from({ length: FOR_A_PERSON[name] }, (_, at) => checked[at]), member ? member.memberId : "owner");

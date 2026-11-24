@@ -12,7 +12,7 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, 
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Readable, Writable } from "node:stream";
+import { PassThrough, Readable, Writable } from "node:stream";
 import { main } from "../cli/main.mjs";
 import { terminalPaths } from "../desktop/terminal/paths.mjs";
 import { startService } from "../desktop/terminal/serve.mjs";
@@ -35,6 +35,66 @@ const NEWER = "sk-NEWER-value-that-must-not-show";
 const KEY = "sk-KEY-of-a-tool-that-must-not-show";
 const EXTRA = "sk-ON-THE-LINE-that-must-not-show";
 const ALL = [PIPED, TYPED, NEWER, KEY, EXTRA];
+
+test("Proton Pass install previews the URL, exact hash and destination even without --yes", async () => {
+  const plan = { version: "2.7.1", url: "https://proton.me/download/pass-cli/fake", sha256: "a".repeat(64), destination: "/proton-pass/test" };
+  const seen = [];
+  let stderr = "";
+  const io = {
+    stdin: Readable.from([]), stdout: { write() {} }, stderr: { write(text) { stderr += text; } }, env: {},
+    client: { async call(method, input) {
+      seen.push([method, input]);
+      if (method === "protonPass.installPlan") return plan;
+      if (method === "protonPass.install") return { session: "fake" };
+      if (method === "protonPass.signInRead") return { events: [], done: true, result: { state: "signed-out" } };
+      assert.fail(method);
+    } },
+  };
+  assert.equal(await main(["password-managers", "install", "proton-pass", "--json"], io), 2);
+  assert.deepEqual(seen.map(([method]) => method), ["protonPass.installPlan"]);
+  for (const text of [plan.url, plan.sha256, plan.destination, "--yes"]) assert.ok(stderr.includes(text));
+  assert.equal(await main(["password-managers", "install", "proton-pass", "--yes", "--json"], io), 0);
+  assert.deepEqual(seen[2], ["protonPass.install", { sha256: plan.sha256, agreed: true }]);
+});
+
+test("Proton Pass sign-in accepts stdin and a hidden prompt; neither prints the password", async () => {
+  const page = "https://account.proton.me/pass/cli?challenge=fake";
+  const events = [[{ type: "open", url: page }, { type: "extra-password", attempt: 1 }],
+    [{ type: "choose-vaults", vaults: [{ id: "vault-id", name: "Team" }] }], []];
+  for (const tty of [false, true]) {
+    let out = "", err = "";
+    const seen = [];
+    const password = tty ? TYPED : PIPED;
+    const stdin = tty ? new PassThrough() : Readable.from([password + "\n"]);
+    stdin.isTTY = tty;
+    let typed = false;
+    const stderr = new Writable({ write(chunk, _encoding, done) {
+      const text = String(chunk);
+      err += text;
+      if (tty && !typed && text.includes("Proton Pass extra password:")) {
+        typed = true;
+        setImmediate(() => stdin.end(password + "\r"));
+      }
+      done();
+    } });
+    const io = {
+      stdin, stdout: { write(text) { out += text; } }, stderr, env: {},
+      client: { async call(method, input) {
+        if (method === "protonPass.signInStart") return { session: "fake" };
+        if (method === "protonPass.signInRead") return { events: events[input.after], next: input.after + 1, done: input.after === 2, result: { state: "ready" } };
+        if (method === "protonPass.signInInput") {
+          seen.push({ ...input });
+          return {};
+        }
+        assert.fail(method);
+      } },
+    };
+    assert.equal(await main(["password-managers", "sign-in", "proton-pass", "--vaults", "Team", "--json"], io), 0, err);
+    assert.deepEqual(seen, [{ session: "fake", extraPassword: password }, { session: "fake", vaultIds: ["vault-id"], createDedicated: false }]);
+    assert.ok(err.includes(page));
+    assert.doesNotMatch(out + err, /sk-(?:PIPED|TYPED)-value/);
+  }
+});
 
 let world;
 before(async () => {

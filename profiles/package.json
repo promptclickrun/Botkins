@@ -1,0 +1,24 @@
+{
+  "name": "botkins-profiles",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test test/*.test.mjs",
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "build": "esbuild src/browser.mjs --bundle --format=esm --target=es2022 --outfile=public/enroll.js",
+    "test:link": "node --test test/link.integration.mjs",
+    "test:browser": "npm run build && node --test test/browser.integration.mjs",
+    "test:desktop": "node --test test/desktop.integration.mjs"
+  },
+  "dependencies": {
+    "@simplewebauthn/browser": "14.0.0",
+    "@simplewebauthn/server": "14.1.0"
+  },
+  "devDependencies": {
+    "@levischuck/tiny-cbor": "0.2.11",
+    "esbuild": "0.28.2",
+    "wrangler": "4.167.0"
+  }
+}

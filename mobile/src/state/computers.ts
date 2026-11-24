@@ -2,6 +2,7 @@
 // computer at a time; the others stay paired and are a tap away. This is the plain logic, with no
 // React Native imports, so the tests run it. src/state/link.ts keeps the list and acts on it.
 import type { Pairing } from "@/link/client";
+import type { ProfileHost } from "@/link/profile";
 
 /** What the phone keeps: every pairing, in the order they were made, and the id of the computer in use. */
 export type Kept = { current: string | null; list: Pairing[] };
@@ -88,11 +89,14 @@ export function savedIds(index: string | null): string[] {
 export const indexOf = (kept: Kept) => JSON.stringify({ current: kept.current, ids: kept.list.map((pairing) => pairing.serverId) });
 
 /** The switcher's menu: each paired computer (the one in use is ticked), then a way to pair one more. */
-export function computerActions(list: Pairing[], current: string | null | undefined): { id: string; title: string; state?: "on" | "off"; image?: string }[] {
-  return [...list.map((pairing) => ({ id: "use:" + pairing.serverId, title: pairing.name || "Computer", state: pairing.serverId === current ? ("on" as const) : ("off" as const) })), { id: "add", title: "Connect a computer…", image: "plus" }];
+export function computerActions(list: Pairing[], current: string | null | undefined, directory: ReadonlyArray<ProfileHost> = []): { id: string; title: string; state?: "on" | "off"; image?: string }[] {
+  const local = new Set(list.map((pairing) => pairing.serverId));
+  const profile = directory.filter((host) => !local.has(host.serverId)).map((host) => ({ id: "profile:" + host.serverId, title: host.name || (host.member ? "Team" : "Computer"), state: host.serverId === current ? ("on" as const) : ("off" as const) }));
+  return [...list.map((pairing) => ({ id: "use:" + pairing.serverId, title: pairing.name || "Computer", state: pairing.serverId === current ? ("on" as const) : ("off" as const) })), ...profile, { id: "add", title: "Connect a computer…", image: "plus" }];
 }
 /** What a tap in that menu asks for: use a computer, add one, or nothing. */
-export function computerChoice(event: string): { use: string } | "add" | null {
+export function computerChoice(event: string): { use: string; profile?: boolean } | "add" | null {
   if (event === "add") return "add";
+  if (event.startsWith("profile:") && event.length > 8) return { use: event.slice(8), profile: true };
   return event.startsWith("use:") && event.length > 4 ? { use: event.slice(4) } : null;
 }

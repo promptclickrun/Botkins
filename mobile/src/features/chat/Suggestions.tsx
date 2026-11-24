@@ -7,11 +7,11 @@ import { BookOpen, Cpu, FileText, FolderKanban, GitMerge, GitPullRequest, GitPul
 import { type ReactNode, useEffect, useRef, useState } from "react";
 import { ActivityIndicator, ScrollView, StyleSheet, View } from "react-native";
 import type { Bot, Capability, Mentionables, PullRequest } from "@/link/types";
-import type { DraftMention } from "./compose";
+import type { DraftCommand, DraftMention } from "./compose";
 import { api } from "@/state/link";
 import { BotAvatar, radius, space, T, Tap, useTheme } from "@/ui";
 
-export { type DraftMention, findTrigger, MAX_MENTIONS, mentionKey, type Sigil, type Trigger, tokenOf } from "./compose";
+export { type DraftCommand, type DraftMention, findTrigger, MAX_MENTIONS, mentionKey, type Sigil, type Trigger, tokenOf } from "./compose";
 
 export type Option = {
   key: string;
@@ -22,6 +22,8 @@ export type Option = {
   /** The text put in place of the trigger, without the trailing space. */
   insert?: string;
   mention?: DraftMention;
+  /** A slash command or skill attached to the composer rail instead of inserted as text. */
+  command?: DraftCommand;
   /** A local command that does something instead of inserting text. */
   action?: "model" | "compact";
 };
@@ -74,14 +76,24 @@ export function slashOptions(query: string, items: Capability[] | undefined, ico
     nameOf,
     q,
   );
-  const toOption = (item: Capability, group: string, icon: ReactNode): Option => ({
-    key: item.kind + ":" + item.name + ":" + item.source,
-    group,
-    title: item.name.startsWith("/") ? item.name : "/" + item.name,
-    subtitle: item.description || item.hint,
-    leading: icon,
-    insert: item.command,
-  });
+  const toOption = (item: Capability, group: string, icon: ReactNode): Option => {
+    const cleanName = item.name.replace(/^\//, "");
+    const cleanCommand = item.command.replace(/^\//, "");
+    return {
+      key: item.kind + ":" + item.name + ":" + item.source,
+      group,
+      title: "/" + cleanName,
+      subtitle: item.description || item.hint,
+      leading: icon,
+      command: {
+        name: cleanName,
+        command: cleanCommand,
+        kind: item.kind,
+        ...(item.description ? { description: item.description } : {}),
+        ...(item.hint ? { hint: item.hint } : {}),
+      },
+    };
+  };
   return [
     ...local.filter((option) => has(q, option.title.slice(1), option.subtitle)),
     ...commands.map((item) => toOption(item, "Commands", <SquareSlash size={18} color={iconColor} strokeWidth={2.2} />)),

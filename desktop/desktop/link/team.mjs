@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { random } from "./crypto.mjs";
+import { SILENT } from "./silent-reply.mjs";
 
 export const SCOPE_ACTIONS = Object.freeze({
   agents: Object.freeze(["view", "chat", "create", "manage", "delete"]),
@@ -38,9 +39,13 @@ const POLICY = {
   duplicateBot: ["agents", "create"],
   importableAgents: ["agents", "create"],
   importAgents: ["agents", "create"],
-  // A bot's Proactive agent: the person who may manage the bot sets it, for themselves (the app checks whose it is).
+  // A bot's Proactive agent ("proactive-team-v1"): anyone whose role sees the bot may reach it, because a person
+  // the owner added turns their own alerts on and off. The app checks the rest, by who calls: a member changes
+  // only their own entry, and only a role that manages the bot adds itself or changes what the people share.
   // The computer's own switch for it is a preference, which a member never changes (setPreferences below).
-  setBotProactive: ["agents", "manage"],
+  setBotProactive: ["agents", "view"],
+  // What a person does with an alert they were sent ("Take care of it", "Not now"): the app has it only for the person it was for.
+  proactiveAct: ["agents", "view"],
   setBotAccess: "owner",
   setBotIntegrations: "owner",
   botMemory: "owner",
@@ -149,6 +154,11 @@ const POLICY = {
   "skillsCatalog.search": ["skills", "read"],
   "skillsCatalog.preview": ["skills", "read"],
   "skillsCatalog.install": ["skills", "create"],
+  "skillsCatalog.featured": ["skills", "read"],
+  // The direct apps catalog: anyone who sees tools may read it. Adding one can start a program on
+  // the computer and stores keys in its vault, so it is the owner's, as a sign-in is.
+  "mcpCatalog.list": ["mcp", "view"],
+  "mcpCatalog.add": "owner",
   saveSkill: ["skills", "create"],
   removeSkill: ["skills", "delete"],
   setSkillEnabled: ["skills", "manage"],
@@ -294,6 +304,13 @@ const POLICY = {
   "link.credentials.items": "owner",
   "link.credentials.item": "owner",
   "link.credentials.link": "owner",
+  "link.credentials.protonPassInstallPlan": "owner",
+  "link.credentials.protonPassInstall": "owner",
+  "link.credentials.protonPassSignInStart": "owner",
+  "link.credentials.protonPassSignInRead": "owner",
+  "link.credentials.protonPassSignInInput": "owner",
+  "link.credentials.protonPassSignInCancel": "owner",
+  "link.credentials.protonPassDisconnect": "owner",
   "link.screen.info": "owner",
   "link.screen.frame": "owner",
   "link.screen.input": "owner",
@@ -413,11 +430,15 @@ const SELF_METHODS = new Set([
   "link.push.unregister",
   "link.push.presence",
   "link.push.activity",
+  // A legacy owner/member connection may bind only its own existing profile principal.
+  "link.profile.bind",
+  // Explicitly unbinds only that principal's host grant and its profile-backed devices.
+  "link.profile.unbind",
   "link.sync",
   // A member may always leave: it removes only their own device.
   "link.unpair",
 ]);
-const BOT_METHODS = new Set(["updateBot", "setBotProactive", "setBotFlags", "makePrimary", "reorderBots", "deleteBot", "duplicateBot", "setBotAccess", "setBotIntegrations", "botMemory", "setBotMemory", "saveTemplate", "exportTemplateText", "link.setLook"]);
+const BOT_METHODS = new Set(["updateBot", "setBotProactive", "proactiveAct", "setBotFlags", "makePrimary", "reorderBots", "deleteBot", "duplicateBot", "setBotAccess", "setBotIntegrations", "botMemory", "setBotMemory", "saveTemplate", "exportTemplateText", "link.setLook"]);
 const CHAT_METHODS = new Set(["setChatFlags", "renameChat", "regenerateChatTitle", "deleteChat", "forkChat", "reactToMessage", "warmChat", "setChatProject", "recordVoiceLine", "send", "stop", "unqueue", "sendNow", "compact", "sideQuestion", "clearApprovals", "mentionables", "link.messages", "link.step", "sidePane", "changeSchedule", "link.voice.live", "link.voice.endLive", "link.team.inviteToChat", "link.team.removeFromChat", "link.chats.setSection", "mcpApps.view", "mcpApps.callTool", "mcpApps.readResource"]);
 /** What only the person who started a chat (or the owner) may do to it; someone invited may not. */
 const CREATOR_METHODS = new Set(["renameChat", "regenerateChatTitle", "deleteChat", "setChatProject", "changeSchedule", "setModel", "clearApprovals", "compact", "link.team.inviteToChat"]);
@@ -767,6 +788,26 @@ export function sharedBotFlags(flags) {
 }
 const READ_REQUEST_METHODS = new Set(["respond"]);
 
+const isProactiveAlert = (message) => !!(message?.alert || message?.proactiveRunId);
+const isProactiveRoutine = (chat) => chat?.schedules?.some((entry) => entry.proactive);
+
+/** Alert history is for the person the chat looks out for, not for invitees. */
+export function privateProactiveChat(chat) {
+  return !!(isProactiveRoutine(chat) || chat?.messages?.some(isProactiveAlert));
+}
+
+export function withoutProactiveAlerts(chat, routine = isProactiveRoutine(chat)) {
+  if (!Array.isArray(chat?.messages)) return chat;
+  const { posted: _posted, ...rest } = chat;
+  const redact = (message) => isProactiveAlert(message) || (routine && message.role === "assistant");
+  // Keep message positions for pagination and chat actions, using the clients' invisible reply marker.
+  return { ...rest, messages: chat.messages.map((message) => redact(message) ? { role: "assistant", text: SILENT } : message) };
+}
+
+export function ownerApprovalChats(live) {
+  return new Set((live?.requests ?? []).filter((request) => request.kind === "permission" || request.kind === "secure").map((request) => request.chatId));
+}
+
 /**
  * What an owner device is sent with Admin mode off: what the person "owner" is part of, not every
  * member's chats, spaces and bots. It changes what the owner is shown, never what the owner may do:
@@ -781,8 +822,15 @@ const READ_REQUEST_METHODS = new Set(["respond"]);
  */
 export function ownerParts(parts, team, extra = {}) {
   const out = { ...parts };
-  const waiting = new Set((parts.live?.requests ?? []).filter((request) => request.kind === "permission" || request.kind === "secure").map((request) => request.chatId));
-  const listed = (parts.chats ?? []).filter((chat) => inChat(team, chat, OWNER) || waiting.has(chat.id));
+  const waiting = ownerApprovalChats(parts.live);
+  const limited = new Map();
+  const listed = (parts.chats ?? []).flatMap((chat) => {
+    if (inChat(team, chat, OWNER)) return [chat];
+    if (!waiting.has(chat.id)) return [];
+    limited.set(chat.id, isProactiveRoutine(chat));
+    const { last: _preview, ...rest } = chat;
+    return [withoutProactiveAlerts(rest)];
+  });
   const ids = new Set(listed.map((chat) => chat.id));
   out.chats = listed;
   const live = parts.live;
@@ -804,6 +852,7 @@ export function ownerParts(parts, team, extra = {}) {
   for (const name of Object.keys(parts)) {
     const about = /^(?:chat|run):(.+)$/.exec(name);
     if (about && !ids.has(about[1])) out[name] = null;
+    else if (about && name.startsWith("chat:") && limited.has(about[1])) out[name] = withoutProactiveAlerts(parts[name], limited.get(about[1]));
   }
   const used = new Set(listed.flatMap((chat) => [chat.botId, ...(chat.botIds ?? [])]));
   const records = Array.isArray(extra.spaces) ? extra.spaces : null;
@@ -816,6 +865,8 @@ export function ownerParts(parts, team, extra = {}) {
     for (const space of records) if (mine.has(space.id)) for (const item of space.items ?? []) used.add(item.botId);
   }
   out.bots = (parts.bots ?? []).filter((bot) => !bot.createdBy || used.has(bot.id));
+  // What a bot told another person is that person's: the owner is shown who it looks out for, not what it said to them.
+  if ("proactive" in parts) out.proactive = ownerProactive(parts.proactive);
   out.meta = { ...(parts.meta ?? {}), you: { kind: "owner", admin: false } };
   return out;
 }
@@ -914,6 +965,8 @@ export function authorize(principal, team, method, args = [], lookups = {}) {
   if (policy === "owner") return "Only the owner can do that.";
   if (method === "boardAct" && args[1] === "delete") action = "delete";
   else if (method === "boardAct" && (args[1] === "yes" || args[1] === "goal")) action = "create";
+  // Taking an alert's offer starts a turn with the bot, as sending a message does.
+  else if (method === "proactiveAct" && args[2] === "take") action = "chat";
   else if (method === "changePanel" && args[1] === "delete") action = "delete";
   else if (method === "routine" && args[1]?.action === "remove") action = "delete";
   else if (method === "saveSkill" && args[0]?.original) action = "manage";
@@ -992,7 +1045,7 @@ const emptySkills = { folders: [], plugins: [], disabled: [] };
 /** Everyone a chat can be shared with: the owner and each member, by id and name. */
 export const teamPeople = (team, ownerName = "") => [{ id: OWNER, name: ownerName || "Owner" }, ...(team?.members ?? []).map((member) => ({ id: member.id, name: member.name }))];
 
-export function teamPart(team, forOwner, principal = { kind: "owner" }, ownerName = "") {
+export function teamPart(team, forOwner, principal = { kind: "owner" }, ownerName = "", memberDevices) {
   if (forOwner) {
     return {
       people: teamPeople(team, ownerName),
@@ -1012,28 +1065,44 @@ export function teamPart(team, forOwner, principal = { kind: "owner" }, ownerNam
   const role = roleFor(principal, team);
   const group = team?.groups?.find((item) => item.id === principal?.groupId);
   return {
-    me: { memberId: principal.memberId, name: principal.name, group: { id: group?.id ?? principal.groupId, name: group?.name ?? "Everyone" }, role: { name: role?.name ?? "", perms: role?.perms ?? {}, bots: role?.bots ?? [] } },
+    me: {
+      memberId: principal.memberId,
+      name: principal.name,
+      group: { id: group?.id ?? principal.groupId, name: group?.name ?? "Everyone" },
+      role: { name: role?.name ?? "", perms: role?.perms ?? {}, bots: role?.bots ?? [] },
+      ...(Array.isArray(memberDevices) && { devices: memberDevices }),
+    },
     team: { name: team?.name ?? "" },
     people: teamPeople(team, ownerName),
     linkSharing: team?.linkSharing === true,
   };
 }
 
+/** What one person's check did, as the app keeps it beside a bot's settings: the owner's at the top of the entry, each member's under `activity`. */
+const PROACTIVE_ACTIVITY = ["chatId", "lastSweepAt", "day", "pings", "log", "nextReviewAt", "learning"];
+
 /**
- * The `proactive` part as a member is sent it: the computer's switch, and for each bot their role manages the settings and
- * log of the agent they set up (`mine`), or only that another person's is there (`taken`). Never `person`, and nothing of the
- * owner's agents or another member's.
+ * The `proactive` part as a member is sent it ("proactive-team-v1"): the computer's switch, and for each bot their role
+ * sees the settings its people share, the member's own entry in `people` (nobody else's), and what their own check did.
+ * Nothing of the owner's activity or another member's: an alert is its recipient's alone. `mine` says the member is one
+ * of the bot's people, for an app from before `people`.
  */
 export function memberProactive(part, me, botIds) {
   const bots = {};
   for (const [id, entry] of Object.entries(part?.bots ?? {})) {
     if (!botIds.has(id) || !entry || typeof entry !== "object") continue;
-    if (entry.person === me) {
-      const { person: _person, ...rest } = entry;
-      bots[id] = { ...rest, mine: true };
-    } else bots[id] = { enabled: entry.enabled === true, taken: true };
+    const { activity, people, person: _person, ...rest } = entry;
+    for (const field of PROACTIVE_ACTIVITY) delete rest[field];
+    const own = people && typeof people === "object" && Object.hasOwn(people, me) ? people[me] : undefined;
+    const did = activity && typeof activity === "object" && Object.hasOwn(activity, me) ? activity[me] : undefined;
+    bots[id] = { ...rest, people: own ? { [me]: own } : {}, ...(did && typeof did === "object" ? did : {}), ...(own && { mine: true }) };
   }
   return { enabled: part?.enabled === true, bots };
+}
+/** The `proactive` part for an owner device with Admin mode off: everyone's entry, and no other person's activity. */
+export function ownerProactive(part) {
+  if (!part || typeof part !== "object") return part;
+  return { ...part, bots: Object.fromEntries(Object.entries(part.bots ?? {}).map(([id, entry]) => [id, entry && typeof entry === "object" ? (({ activity: _activity, ...rest }) => rest)(entry) : entry])) };
 }
 
 /** A copy of the named parts with everything outside a member's role and ownership removed. */
@@ -1071,8 +1140,8 @@ export function filterParts(parts, principal, team, extra = {}) {
   const visibleBots = can("agents") ? (parts.bots ?? []).filter((bot) => visible(role, bot.id)) : [];
   out.bots = visibleBots.map(seen).sort((a, b) => (place.get(a.id) ?? Infinity) - (place.get(b.id) ?? Infinity));
   const botIds = new Set(visibleBots.map((bot) => bot.id));
-  // The Proactive agent as this member may see it: their own bots' agents, and only whether another person's is there.
-  if ("proactive" in parts) out.proactive = memberProactive(parts.proactive, me, mayManage ? botIds : new Set());
+  // The Proactive agent as this member may see it: for each bot their role sees, the shared settings and their own entry and activity.
+  if ("proactive" in parts) out.proactive = memberProactive(parts.proactive, me, botIds);
   // A chat's flags are the member's own. Unread is theirs too: since they last marked it read; a
   // chat they never marked follows the workspace when they started it, and is new to them otherwise.
   out.chats = shared.map((chat) => {
@@ -1132,7 +1201,7 @@ export function filterParts(parts, principal, team, extra = {}) {
   if (mayManage && parts.settings?.fastMode) out.settings.fastMode = parts.settings.fastMode;
   out.revs = {};
   // The owner's name as a person comes with the owner's own team part; else the computer's name stands in.
-  out.team = teamPart(team, false, principal, parts.team?.people?.find((person) => person.id === OWNER)?.name ?? parts.meta?.name);
+  out.team = teamPart(team, false, principal, parts.team?.people?.find((person) => person.id === OWNER)?.name ?? parts.meta?.name, extra.memberDevices);
   // Who is on the team is for someone who can start a chat and invite to it. Anyone else gets the
   // owner and the people of the chats they are in.
   if (!can("agents", "chat")) {

@@ -11,6 +11,7 @@ import { useKeyboardState } from "react-native-keyboard-controller";
 import { useSharedValue } from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useAppActive } from "@/state/useAppActive";
+import { trackResource } from "@/state/ledger";
 import type { Meta, ScreenInfo, ScreenInput } from "@/link/types";
 import { useOnline, usePart } from "@/state/hooks";
 import { api, screenInputSender } from "@/state/link";
@@ -126,6 +127,10 @@ function CloseCorner({ themed }: { themed?: boolean }) {
 
 function KeepScreenAwake() {
   useKeepAwake(undefined, { suppressDeactivateWarnings: true });
+  useEffect(() => {
+    const handle = trackResource("keep-awake", "Remote", "healthy-screen-feed");
+    return () => handle.release();
+  }, []);
   return null;
 }
 

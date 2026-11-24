@@ -24,6 +24,13 @@ wm_pid=
 app_pid=
 trap cleanup INT TERM EXIT
 
+# The display must be this container's own: if something already answers on $DISPLAY, stop
+# rather than draw on (or brand) a display Botkins did not start.
+if xdpyinfo -display "$DISPLAY" >/dev/null 2>&1; then
+  echo "Display $DISPLAY is already in use. The workspace starts its own; set DISPLAY to a free one." >&2
+  exit 70
+fi
+
 # TCP is disabled and the display is confined to this container. The host sees the
 # workspace only through BOTKINS_WORKSPACE_SOCKET on the shared runtime volume.
 Xvfb "$DISPLAY" \
@@ -31,8 +38,14 @@ Xvfb "$DISPLAY" \
   -nolisten tcp -ac -noreset >/tmp/botkins-xvfb.log 2>&1 &
 xvfb_pid=$!
 
+# Ready means this Xvfb is still running and answering: another server that came up on the
+# same display would answer too, so a dead Xvfb is a failure even if the display answers.
 i=0
-while ! xdpyinfo -display "$DISPLAY" >/dev/null 2>&1; do
+while ! { kill -0 "$xvfb_pid" 2>/dev/null && xdpyinfo -display "$DISPLAY" >/dev/null 2>&1; }; do
+  if ! kill -0 "$xvfb_pid" 2>/dev/null; then
+    echo "Xvfb stopped before the display was ready" >&2
+    exit 70
+  fi
   i=$((i + 1))
   if [ "$i" -gt 100 ]; then
     echo "Xvfb did not become ready" >&2
@@ -41,7 +54,14 @@ while ! xdpyinfo -display "$DISPLAY" >/dev/null 2>&1; do
   sleep 0.1
 done
 
-openbox --sm-disable >/tmp/botkins-openbox.log 2>&1 &
+if ! kill -0 "$xvfb_pid" 2>/dev/null; then
+  echo "Xvfb stopped before the desktop could start" >&2
+  exit 70
+fi
+
+# This container started the display above, so it gets the Botkins desktop: the kit's background,
+# and Openbox with the Botkins theme and menu (restarted if it stops). See docker/desktop.
+BOTKINS_DESKTOP_MANAGED=1 /usr/local/share/botkins-desktop/botkins-desktop >/tmp/botkins-openbox.log 2>&1 &
 wm_pid=$!
 
 # Use the normal Electron entry point with a virtual display. This intentionally does

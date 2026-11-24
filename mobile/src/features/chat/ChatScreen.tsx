@@ -29,7 +29,7 @@ import { useChatScreenState } from "./useChatScreenState";
 import { createChatViewport, HIDE_AT, showsAt } from "./scroll";
 import { ScrollToLatest } from "./ScrollToLatest";
 import { GroupFace, workWidth } from "./bits";
-import { arrived, type DraftMention, MAX_MENTIONS, waitingCopies, withBoardQuote } from "./compose";
+import { arrived, composeSlashPrompt, type DraftMention, MAX_MENTIONS, waitingCopies, withBoardQuote } from "./compose";
 import { archivesWhenLeft } from "./habits";
 import { myPlace, myself } from "./people";
 import { regenerateTitle, regenerateTitleAction, useCanRegenerateTitle } from "./titleActions";
@@ -43,7 +43,7 @@ import { latestTurn } from "./helpers";
 import { HelperRail } from "./HelperRail";
 import { LiveTurn, TurnText, WorkPart } from "./LiveTurn";
 import { CAPSULE, StatusCapsule } from "./StatusCapsule";
-import { EndedNote, type MessageActions, MessageRow, UserBubble, WorkLine } from "./Messages";
+import { EndedNote, KeptNote, OpenNote, type MessageActions, MessageRow, UserBubble, WorkLine } from "./Messages";
 import { type FoldHold, FoldRow } from "./FoldRow";
 import { Aside } from "./Aside";
 import { chatTimeline, createTimelineRunSelector, indexMessageOwnership, liveRowVisible, resolveLiveBody, type Item, reuseItems, TIMELINE_V1, underWay } from "./turn";
@@ -68,9 +68,8 @@ function ChatTitle({ chat, bot, bots, state, model, room, docked }: { chat: Chat
   const status = activityLabel(state) || model;
   const body = (
     <View style={{ flexDirection: "row", alignItems: "center", gap: space.sm, maxWidth: width - room }}>
-      <AvatarMotion on={false}>
-        {group ? <GroupFace bots={chat.botIds!.slice(0, 2).map((id) => bots.get(id))} size={30} state={state} /> : docked ? null : <BotAvatar bot={bot} size={30} state={state} />}
-      </AvatarMotion>
+      {/* The face of the agent you're with moves (avatarMotion.tsx); the rest of the chat holds still. */}
+      {group ? <GroupFace bots={chat.botIds!.slice(0, 2).map((id) => bots.get(id))} size={30} state={state} animated /> : docked ? null : <BotAvatar bot={bot} size={30} state={state} animated />}
       <View style={{ flexShrink: 1 }}>
         <T variant="name" numberOfLines={1}>
           {name}
@@ -269,6 +268,10 @@ const TimelineRow = memo(function TimelineRow({ item, chatId, group, bot, bots, 
     <WorkLine chatId={chatId} runId={item.runId} label="Turn activity" />
   ) : item.kind === "ended" ? (
     <EndedNote run={item.run} ending={item.ending} retry={item.retry} />
+  ) : item.kind === "kept" ? (
+    <KeptNote line={item.line} />
+  ) : item.kind === "open" ? (
+    <OpenNote line={item.line} again={item.again} onSend={sendText} />
   ) : item.kind === "fold" ? (
     <FoldRow chatId={chatId} bot={group ? bots.get(item.run.speakers?.at(-1) ?? "") : bot} group={group} item={item} hold={holdFold} />
   ) : item.kind === "thought" ? (
@@ -714,23 +717,31 @@ function ChatScreenScreen({ pane: paneId, onLeave: leavePane, onList }: { pane?:
   };
   /** `fromComposer`: what the person wrote, so a pinned card and a quote go with it. A reply's own buttons send plain text. */
   const send = (value: string, options?: SendOptions, fromComposer = true, mentions: DraftMention[] = []): Promise<boolean> => {
+    const command = fromComposer ? options?.command : undefined;
+    const typed = value.trim();
+    const composed = command ? composeSlashPrompt(value, command) : typed;
     // "/btw" and "/ask" are answered beside the chat, also while the bot works.
-    const asked = fromComposer && chatId ? sideQuestionOf(value) : null;
+    const asked = fromComposer && chatId ? sideQuestionOf(composed) : null;
     if (asked) return Promise.resolve(askSide(asked.command, asked.question));
     const card = fromComposer ? pinned : undefined;
     const quoted = fromComposer ? quote : "";
-    const typed = value.trim();
     const files = options?.attachments?.length ?? 0;
-    if ((!typed && !files && !card) || !chatId) return Promise.resolve(false);
+    if ((!composed && !files && !card) || !chatId) return Promise.resolve(false);
     // The computer wants some words with a file, so files sent alone get a plain line.
-    let message = typed || (files === 1 ? "See the attached file." : files ? "See the attached files." : "");
-    let sent = options;
+    let message = composed || (files === 1 ? "See the attached file." : files ? "See the attached files." : "");
+    let sent: Omit<SendOptions, "command"> | undefined = options
+      ? {
+          ...(options.mentions ? { mentions: options.mentions } : {}),
+          ...(options.attachments ? { attachments: options.attachments } : {}),
+          ...(options.quote ? { quote: options.quote } : {}),
+        }
+      : undefined;
     // A pinned Today card goes with the first message: as a mention where the computer takes one,
     // else as a quote at the top of the text, so the bot always gets it and the chat shows it.
     if (card) {
       if (boardMentions) {
         message ||= "Let's talk about this.";
-        sent = { ...options, mentions: [{ kind: "board" as const, id: card.id }, ...(options?.mentions ?? [])].slice(0, MAX_MENTIONS) };
+        sent = { ...sent, mentions: [{ kind: "board" as const, id: card.id }, ...(sent?.mentions ?? [])].slice(0, MAX_MENTIONS) };
       } else message = withBoardQuote(card, message);
       unpin();
     }
@@ -1067,7 +1078,7 @@ function Fade({ edge, cover }: { edge: "top" | "bottom"; cover: number }) {
   );
 }
 
-/** In a conversation the current status supplies the motion; the Botkins keep their state poses. */
+/** In a chat only the header face, the working capsule's face and the live voice dock move; message and reply rows hold still. */
 export default function ChatScreen(props: { pane?: string; onLeave?: () => void; onList?: () => void }) {
   return (
     <AvatarMotion on={false}>

@@ -1,0 +1,33 @@
+# Screen access: the Botkins desktop on the virtual display that botkins-display.service starts
+# (:20). It paints the Botkins background and runs Openbox with the Botkins theme and menu
+# (desktop/docker/desktop, installed in /usr/local/share/botkins-desktop). It runs only on that
+# display, which Botkins started itself, as the `botkins` user.
+[Unit]
+Description=Botkins desktop on the virtual display (Screen access)
+BindsTo=botkins-display.service
+After=botkins-display.service
+PartOf=botkins-display.service
+
+[Service]
+Type=simple
+User=botkins
+Group=botkins
+Environment=DISPLAY=:20
+Environment=XAUTHORITY=/var/lib/botkins/display/Xauthority
+Environment=BOTKINS_DESKTOP_MANAGED=1
+# The menu's terminal and file manager open here. They can't write Botkins' data.
+Environment=HOME=/var/lib/botkins/display/home
+ExecStart=/usr/local/share/botkins-desktop/botkins-desktop
+Restart=on-failure
+RestartSec=5
+
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/botkins/display /tmp
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+
+[Install]
+WantedBy=botkins-display.service

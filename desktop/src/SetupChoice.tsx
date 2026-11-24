@@ -9,6 +9,8 @@ import { PairForm, TeamJoin } from "./RemoteHosts";
 import { errorText } from "./SettingsRows";
 import "./settings.css";
 import "./remotehosts.css";
+import type { State } from "./types";
+import { ProfileSetupInline } from "./ProfileSettings";
 
 const api = window.botkins;
 
@@ -32,7 +34,7 @@ function SetupBack({ back }: { back: () => void }) {
 }
 
 /** The three ways to use Botkins here, as three large buttons. */
-export default function SetupChoice({ choose }: { choose: (path: SetupPath) => void }) {
+export default function SetupChoice({ choose, state }: { choose: (path: SetupPath) => void; state: State }) {
   const title = useRef<HTMLHeadingElement>(null);
   // Focus rests on the title, so no choice is picked ahead.
   useEffect(() => title.current?.focus(), []);
@@ -42,6 +44,7 @@ export default function SetupChoice({ choose }: { choose: (path: SetupPath) => v
         <h1 id="setup-title" ref={title} tabIndex={-1}>
           Welcome to Botkins
         </h1>
+        <ProfileSetupInline state={state} />
         <p className="welcome-lede">How do you want to use Botkins here?</p>
         <ul className="setup-choices" aria-label="Ways to use Botkins">
           {CHOICES.map((c) => (

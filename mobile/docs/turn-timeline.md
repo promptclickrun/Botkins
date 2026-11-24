@@ -111,6 +111,28 @@ Set when a turn ends without finishing. "timed-out" is a deadline that a caller 
 "didn't finish in time") or a request that got no answer (`ETIMEDOUT`). A turn is never failed for being quiet:
 a harness that is gone (its process exited, its connection closed, its session no longer exists) ends as "failed". The text written so far is kept as an interim message (section 1).
 
+### Keeping the work moving (new, optional fields)
+
+```ts
+Run += {
+  plan?: { open: number; total: number };                 // the turn's plan when it ended
+  continued?: { count: number; limit: number; reason: "plan" | "next-step"; open?: number };
+  stoppedOpen?: true;                                     // it ended with plan steps open and nothing went on
+}
+AgentRequest += { detached?: true }                       // a question whose turn went on without an answer
+AgentRequest += { time?: number }                         // when the computer raised it
+```
+
+The computer gives a bot more turns in the **same run** while its plan has open steps (`reason: "plan"`; at
+most 8 in a chain, and not when the same open steps come back) or when its reply named the next step without
+doing it (`"next-step"`; at most 2). Each turn's reply is its own assistant message with the run's `runId`, so a
+continued run has several: all but the last are drawn where they came. Botkins' note to the bot is no message of
+the chat. A routine, a Proactive run, Plan mode and a group chat are never continued. `stoppedOpen` is set when a
+turn ends with open steps and nothing went on (the limit, the same steps again, Stop, a waiting message or request,
+or an error in a continuation). A question unanswered for ten minutes is `detached`: the turn goes on, the request
+stays in `live.requests`, and `respond` with an answer sends it as the person's next message, quoting the question.
+An older phone ignores every one of these fields; a phone that finds none of them draws a run as before.
+
 ## 6. In the link (changed in this checkout; copy to `desktop/link/`)
 
 - `link-host/parts.mjs`: `live.steerable` is sent when the snapshot has it. `runPart` does not count

@@ -11,6 +11,8 @@
 // Every value is plain JSON: `--json` prints it as it is.
 import { introduce, serialLines } from "../link/gadget-setup.mjs";
 import { Failure } from "../link/tools.mjs";
+import { isSilentMessage, visibleStream } from "../link/silent-reply.mjs";
+import { withoutProactiveAlerts } from "../link/team.mjs";
 import { qrText } from "../link/qr.mjs";
 import { changed as changedSettings, read as readSetting, SETTINGS, validate, withSetting, parseValue } from "./config.mjs";
 import { ControlError } from "./socket.mjs";
@@ -30,6 +32,7 @@ import { spacesApi } from "./control-spaces.mjs";
 import { sharingApi } from "./control-sharing.mjs";
 import { teamApi } from "./control-team.mjs";
 import { appsApi } from "./control-apps.mjs";
+import { profileApi } from "./control-profile.mjs";
 import { checkReach } from "./reach.mjs";
 import { normaliseConfig } from "../providers/keyed/config.mjs";
 
@@ -187,12 +190,13 @@ export function controlApi(service) {
   const pairingView = (pairing) => (pairing ? { code: pairing.code, url: pairing.url, expiresAt: new Date(pairing.expiresAt).toISOString(), qr: qrText(pairing.url) } : null);
   const chatView = (chat, after = 0) => {
     const task = workspace.active.get(chat.id);
-    const messages = chat.messages.map((message, index) => ({ index, role: message.role, text: message.text ?? "", ...(message.interim && { interim: true }) })).filter((message) => message.index >= after && !message.interim);
+    if (!workspace.inChat(chat.id, "owner")) chat = withoutProactiveAlerts(chat);
+    const messages = chat.messages.map((message, index) => ({ index, role: message.role, text: message.text ?? "", ...(message.interim && { interim: true }) })).filter((message) => message.index >= after && !message.interim && !isSilentMessage(message));
     const request = workspace.interactions.snapshot().find((entry) => entry.chatId === chat.id);
     return {
       chatId: chat.id,
       working: !!task,
-      stream: task?.stream ?? "",
+      stream: visibleStream(task?.stream),
       ...(task?.intent && { intent: task.intent }),
       messages,
       count: chat.messages.length,
@@ -602,8 +606,12 @@ export function controlApi(service) {
       api[name] = call;
     }
   }
+  for (const [name, call] of Object.entries(profileApi({ profile: service.profile }))) {
+    if (Object.hasOwn(api, name)) throw new Error("Two control calls have the name " + name + ".");
+    api[name] = call;
+  }
   // The other plugin calls go by their own names ("plugins.browse", …), as a phone makes them.
-  for (const name of Object.keys(handlers)) if ((name.startsWith("plugins.") || name.startsWith("piPackages.") || name.startsWith("skillsCatalog.") || name === "skills.upload") && !Object.hasOwn(api, name)) api[name] = (args) => handlers[name](...args);
+  for (const name of Object.keys(handlers)) if ((name.startsWith("plugins.") || name.startsWith("piPackages.") || name.startsWith("skillsCatalog.") || name.startsWith("mcpCatalog.") || name === "skills.upload") && !Object.hasOwn(api, name)) api[name] = (args) => handlers[name](...args);
   // A reference to a saved credential is refused by the named call too, before its own work starts.
   for (const name of WITHOUT_REFERENCES) {
     if (!Object.hasOwn(api, name)) continue;

@@ -24,7 +24,7 @@ import { openProviderSettings } from "./providers";
 import { ChatRow, deleteBot, useAsk, type PageActions } from "./Pages";
 import { BotRoutines } from "./Routines";
 import BotAccess from "./BotAccess";
-import BotProactive, { hasProactive } from "./BotProactive";
+import BotProactive, { showsProactive } from "./BotProactive";
 import BotVoiceCard from "./BotVoiceCard";
 import { teamCan } from "./teamAccess";
 import { openBotViewNext } from "./Settings";
@@ -93,12 +93,15 @@ export default function BotProfile({
   bot,
   actions,
   back,
+  proactiveSetup,
   routines,
 }: {
   state: State;
   bot: Bot;
   actions: PageActions;
   back: () => void;
+  /** Opens the setup steps of the bot's Proactive agent as the page appears (the shell's `actions.proactiveSetup`). */
+  proactiveSetup?: boolean;
   /** Opens the Routines page on a routine, a bot's routines or a new routine. */
   routines?: (target: { id?: string; botId?: string; create?: boolean }) => void;
 }) {
@@ -163,7 +166,7 @@ export default function BotProfile({
       </button>
       <section className="profile-hero">
         <span className="profile-portrait">
-          <BotAvatar look={look} state={activity} size={132} />
+          <BotAvatar look={look} state={activity} size={132} animated />
         </span>
         <div className="profile-title">
           <h1>{bot.name}</h1>
@@ -363,8 +366,8 @@ export default function BotProfile({
           </section>
           {/* A bot's voice is for a role that manages bots: the host sends it the shared choices, never a key. */}
           {teamCan(state, "agents", "manage") && <BotVoiceCard bot={bot} />}
-          {/* A Proactive agent is set by a role that manages bots; the computer says whose it is, and a member's is theirs. */}
-          {teamCan(state, "agents", "manage") && hasProactive(state) && <BotProactive state={state} bot={bot} />}
+          {/* A role that manages bots sets a bot's Proactive agent up; anyone it looks out for has their own alerts there. */}
+          {showsProactive(state, bot) && <BotProactive state={state} bot={bot} setUpNow={proactiveSetup} />}
           <MemoryCard state={state} bot={bot} actions={actions} />
           <section className="profile-card">
             <h2>Today</h2>

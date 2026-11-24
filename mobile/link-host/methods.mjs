@@ -35,6 +35,11 @@ export const PLUGIN_METHODS = [
 
 /** Pi packages installed on the computer running the harness ("pi-packages-v1"). */
 export const PI_PACKAGE_METHODS = ["piPackages.browse", "piPackages.preview", "piPackages.list", "piPackages.install", "piPackages.setEnabled"];
+/**
+ * The direct apps catalog ("mcp-catalog-v1", the desktop app's desktop/mcp-catalog.mjs): the list, and
+ * adding an entry as a tool server with its keys. A stdio entry needs `confirm`, its exact command line.
+ */
+export const MCP_CATALOG_METHODS = ["mcpCatalog.list", "mcpCatalog.add"];
 /** Agent templates in a marketplace ("agent-templates-v1", docs/agent-templates.md): reads only. */
 export const AGENT_METHODS = ["agents.browse", "agents.template"];
 
@@ -70,7 +75,7 @@ export const REMOTE_METHODS = new Set([
   // no call takes a version, an address or a channel (appUpdateArgs).
   "appUpdateStatus", "checkAppUpdate", "installAppUpdate", "setAppUpdateAuto",
   // Bots
-  "addBot", "updateBot", "setBotProactive", "setBotFlags", "makePrimary", "reorderBots", "deleteBot", "duplicateBot",
+  "addBot", "updateBot", "setBotProactive", "proactiveAct", "setBotFlags", "makePrimary", "reorderBots", "deleteBot", "duplicateBot",
   "importableAgents", "importAgents", "setBotAccess", "setBotIntegrations", "botMemory", "setBotMemory",
   "addSection", "renameSection", "deleteSection",
   "saveTemplate", "renameTemplate", "deleteTemplate", "exportTemplateText", "importTemplateText",
@@ -119,7 +124,8 @@ export const REMOTE_METHODS = new Set([
   ...PLUGIN_METHODS,
   // Agent templates ("agent-templates-v1") and the computer's Composio apps
   ...AGENT_METHODS,
-  "skills.upload", "skillsCatalog.search", "skillsCatalog.preview", "skillsCatalog.install",
+  "skills.upload", "skillsCatalog.search", "skillsCatalog.preview", "skillsCatalog.install", "skillsCatalog.featured",
+  ...MCP_CATALOG_METHODS,
   ...PI_PACKAGE_METHODS,
   ...COMPOSIO_METHODS,
   // The views of MCP Apps in chats ("mcp-apps-v1")
@@ -427,6 +433,32 @@ function pluginArgs(method, args) {
 }
 
 /**
+ * The arguments of a direct apps catalog call, cut to its shape, or null when `method` is not one. A
+ * key is a string a person typed; a saved credential's reference is refused here.
+ */
+function catalogArgs(method, args) {
+  if (method === "skillsCatalog.featured" || method === "mcpCatalog.list") return [];
+  if (method !== "mcpCatalog.add") return null;
+  const [id, options] = args;
+  if (typeof id !== "string" || !/^[a-z0-9][a-z0-9-]{0,47}$/.test(id)) refuse("Choose an app from the catalog.");
+  const given = plain(options) ? options : {};
+  const out = {};
+  if (given.keys !== undefined) {
+    if (!plain(given.keys) || Object.keys(given.keys).length > 8) refuse("Invalid keys.");
+    for (const [name, value] of Object.entries(given.keys)) {
+      if (!/^[a-z0-9_-]{1,40}$/.test(name)) refuse("Invalid keys.");
+      if (typeof value !== "string" || value.length > 8000) refuse("Type the key itself: a saved credential can't be used there.");
+    }
+    out.keys = { ...given.keys };
+  }
+  if (given.confirm !== undefined) {
+    if (typeof given.confirm !== "string" || given.confirm.length > 400) refuse("Confirm the command again.");
+    out.confirm = given.confirm;
+  }
+  return [id, out];
+}
+
+/**
  * Arguments as a phone may send them. A call that stands in for a file or folder dialog is cut to
  * the shape above and refused with a sentence when it has another. A message can attach only files this phone uploaded itself
  * (`context.uploads`, for `context.deviceId`); any other attachment is dropped without a word, and the
@@ -456,7 +488,7 @@ export function remoteArgs(method, args, { deviceId, uploads } = {}) {
     next[at] = { ...data, voice: botVoiceField(data.voice) };
     return next;
   }
-  return fileArgs(method, args) ?? pluginArgs(method, args) ?? marketArgs(method, args) ?? mcpAppArgs(method, args) ?? providerArgs(method, args) ?? appUpdateArgs(method, args) ?? projectArtifactArgs(method, args) ?? spaceArgs(method, args) ?? args;
+  return fileArgs(method, args) ?? pluginArgs(method, args) ?? marketArgs(method, args) ?? catalogArgs(method, args) ?? mcpAppArgs(method, args) ?? providerArgs(method, args) ?? appUpdateArgs(method, args) ?? projectArtifactArgs(method, args) ?? spaceArgs(method, args) ?? args;
 }
 
 /**

@@ -13,19 +13,15 @@
 //   - none while the chat model's plan has a limit at USAGE_CEILING percent or more used, as the
 //     provider itself reports it (desktop/providerusage.mjs); the bot is told how much is used.
 import { isGroup } from "./groups.mjs";
-import { SILENT } from "./routines.mjs";
+import { SILENT } from "./link/silent-reply.mjs";
+
+export { mayBeSilent } from "./link/silent-reply.mjs";
 
 export const DEBOUNCE_MS = 4000;
 export const PER_DAY = 24;
 export const USAGE_CEILING = 90;
 /** How long the turn waits for the plan's numbers before going on without them. */
 export const USAGE_WAIT_MS = 3000;
-
-/** Whether streamed text may still become a [SILENT] reply, so it isn't shown yet. */
-export const mayBeSilent = (text) => {
-  const start = String(text ?? "").trimStart();
-  return start.length === 0 || SILENT.startsWith(start) || start.trimEnd() === SILENT;
-};
 
 /** The most used of a plan's limits, from one providerUsage entry: { percent, label } or null. */
 export function mostUsed(entry) {

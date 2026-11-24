@@ -47,6 +47,7 @@ import { validateAttachments } from "./canvas.mjs";
 import { wikiPath } from "./wiki.mjs";
 import { pickedSkill, uploadSkill } from "./link/skill-import.mjs";
 import { skillsCatalog } from "./skills-catalog.mjs";
+import { MCP_CATALOG_CAPABILITY, MCP_CATALOG_METHODS, mcpCatalog } from "./mcp-catalog.mjs";
 import { zip } from "./zip.mjs";
 import { LinkPreviews } from "./linkpreview.mjs";
 // Phone access: the Botkins link, copied unchanged from the Botkins repo (desktop/link/README.md).
@@ -55,8 +56,8 @@ import { DEFAULT_RELAY_URL } from "./link/relay.mjs";
 import { env } from "./home.mjs";
 import { phonePage } from "./phonepage.mjs";
 import { headCapabilities, LOOKS_CAPABILITY } from "./looks.mjs";
-import { ROUTINE_DELIVERY, ROUTINE_MODELS, ROUTINE_OWNER, ROUTINE_SCRIPTS, ROUTINE_SILENT } from "./routines.mjs";
-import { PROACTIVE, PROACTIVE_LEARNING } from "./proactive.mjs";
+import { ROUTINE_DELIVERY, ROUTINE_MODELS, ROUTINE_NOTIFY_TARGETS, ROUTINE_OWNER, ROUTINE_SCRIPTS, ROUTINE_SILENT } from "./routines.mjs";
+import { PROACTIVE, PROACTIVE_LEARNING, PROACTIVE_TEAM } from "./proactive.mjs";
 import { SPACES } from "./spaces.mjs";
 import { HeldCut, teamFromCut } from "./headless/team-cut.mjs";
 import { LoginLookups } from "./headless/login-lookups.mjs";
@@ -117,13 +118,13 @@ export const KEYED_PROVIDERS = "keyed-providers-v1";
 /** A bot may have a voice of its own (`bot.voice`): reading aloud and live voice, over Settings › Voice. */
 export const BOT_VOICE = "bot-voice-v1";
 const CHAT_TITLE_REGENERATION = "chat-title-regeneration-v1";
-export const CAPABILITIES = ["message-reactions-v1", "client-message-id-v1", "voice-turns-v1", "voice-history-v1", "quiet-replies-v1", "models-v2", "fast-mode-v1", LOOKS_CAPABILITY, ...headCapabilities, BOT_VOICE, ROUTINE_DELIVERY, "routine-no-output-v1", ROUTINE_OWNER, ROUTINE_SCRIPTS, ROUTINE_MODELS, ROUTINE_SILENT, PROACTIVE, PROACTIVE_LEARNING, BOARD_MENTIONS, PROVIDER_USAGE, SIDE_PANE, REMOTE_HOSTS, FILES, FOLDERS, ARTIFACTS, PROJECT_ARTIFACTS, "project-folders-v1", "project-mode-v1", "project-clone-v1", "secure-input-v1", "turn-timeline-v1", PLUGINS, PLUGIN_STARTS, PROVIDER_SIGNIN, SPACES, AGENT_TEMPLATES, COMPOSIO_APPS, MARKET_REFRESH, MCP_APPS, "pi-packages-v1", "skill-upload-v1", "skills-catalog-v1", CHAT_TITLE_REGENERATION, KEYED_PROVIDERS];
+export const CAPABILITIES = ["message-reactions-v1", "client-message-id-v1", "voice-turns-v1", "voice-history-v1", "quiet-replies-v1", "models-v2", "fast-mode-v1", LOOKS_CAPABILITY, ...headCapabilities, BOT_VOICE, ROUTINE_DELIVERY, "routine-no-output-v1", ROUTINE_OWNER, ROUTINE_SCRIPTS, ROUTINE_MODELS, ROUTINE_SILENT, ROUTINE_NOTIFY_TARGETS, PROACTIVE, PROACTIVE_LEARNING, PROACTIVE_TEAM, BOARD_MENTIONS, PROVIDER_USAGE, SIDE_PANE, REMOTE_HOSTS, FILES, FOLDERS, ARTIFACTS, PROJECT_ARTIFACTS, "project-folders-v1", "project-mode-v1", "project-clone-v1", "secure-input-v1", "turn-timeline-v1", PLUGINS, PLUGIN_STARTS, PROVIDER_SIGNIN, SPACES, AGENT_TEMPLATES, COMPOSIO_APPS, MARKET_REFRESH, MCP_APPS, "pi-packages-v1", "skill-upload-v1", "skills-catalog-v1", "skills-featured-v1", MCP_CATALOG_CAPABILITY, CHAT_TITLE_REGENERATION, KEYED_PROVIDERS];
 /**
  * What a paired device is told this app supports. A feature whose calls the link does not carry
  * (desktop/link/methods.mjs) is left out, so a device never asks for what it cannot reach.
  */
 export const linkCapabilities = (methods = REMOTE_METHODS) =>
-  CAPABILITIES.filter((name) => (name !== "message-reactions-v1" || methods.has("reactToMessage")) && (!["voice-history-v1", "voice-turns-v1"].includes(name) || methods.has("recordVoiceLine")) && (name !== "project-folders-v1" || (methods.has("editProjectFolder") && methods.has("setChatFolder") && methods.has("chatProjectFolder"))) && (name !== "project-clone-v1" || methods.has("cloneProjectRepository")) && (name !== "project-mode-v1" || methods.has("updateProject")) && (name !== PROJECT_ARTIFACTS || PROJECT_ARTIFACT_CALLS.every((call) => methods.has(call))) && (name !== SPACES || SPACE_CALLS.every((call) => methods.has(call))) && (name !== MARKET_REFRESH || methods.has("plugins.refresh")) && (name !== "pi-packages-v1" || PI_PACKAGE_METHODS.every((call) => methods.has(call))) && (name !== "skill-upload-v1" || methods.has("skills.upload")) && (name !== "skills-catalog-v1" || ["search", "preview", "install"].every(key => methods.has("skillsCatalog." + key))) && (name !== MCP_APPS || MCP_APP_METHODS.every((call) => methods.has(call))) && (name !== CHAT_TITLE_REGENERATION || methods.has("regenerateChatTitle")));
+  CAPABILITIES.filter((name) => (name !== "message-reactions-v1" || methods.has("reactToMessage")) && (!["voice-history-v1", "voice-turns-v1"].includes(name) || methods.has("recordVoiceLine")) && (name !== "project-folders-v1" || (methods.has("editProjectFolder") && methods.has("setChatFolder") && methods.has("chatProjectFolder"))) && (name !== "project-clone-v1" || methods.has("cloneProjectRepository")) && (name !== "project-mode-v1" || methods.has("updateProject")) && (name !== PROJECT_ARTIFACTS || PROJECT_ARTIFACT_CALLS.every((call) => methods.has(call))) && (name !== SPACES || SPACE_CALLS.every((call) => methods.has(call))) && (name !== MARKET_REFRESH || methods.has("plugins.refresh")) && (name !== "pi-packages-v1" || PI_PACKAGE_METHODS.every((call) => methods.has(call))) && (name !== "skill-upload-v1" || methods.has("skills.upload")) && (name !== "skills-catalog-v1" || ["search", "preview", "install"].every(key => methods.has("skillsCatalog." + key))) && (name !== "skills-featured-v1" || methods.has("skillsCatalog.featured")) && (name !== MCP_CATALOG_CAPABILITY || MCP_CATALOG_METHODS.every((call) => methods.has(call))) && (name !== MCP_APPS || MCP_APP_METHODS.every((call) => methods.has(call))) && (name !== CHAT_TITLE_REGENERATION || methods.has("regenerateChatTitle")));
 /** The calls of spaces (docs/spaces.md). The capability is named to a device only when the link carries them all. */
 export const SPACE_CALLS = ["read", "create", "rename", "remove", "setProject", "setPanelProject", "newPanel", "ask", "movePanel", "patchState", "note", "removeNote"].map((name) => "spaces." + name);
 
@@ -313,6 +314,17 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
     // On the two-container host the link is in the other container: the event waits for its next look (headless/space-events.mjs).
     spaceEvent: spaceEvents ? spaceEvents.add : (event) => link?.spaceEvent?.(event),
     notifiesOwner: told ? told.notifiesOwner : (chatId) => link?.notifiesOwner?.(chatId),
+    notifyTargets: told
+      ? () => {
+          const team = told.team();
+          return {
+            team,
+            devices: [],
+            host: { name: "This computer", platform: process.platform, headless: true, canNotify: false },
+            ownerName: team?.people?.find((person) => person.id === "owner")?.name ?? "",
+          };
+        }
+      : () => link?.notifyTargetsContext?.(),
     formBrowser,
     savedLogins: (chatId, origin) => loginLookups ? loginLookups.find(chatId, origin) : link.loginNames(chatId, origin),
     ...(host.headless && !formBrowser && { pageUnavailable: "Browser form filling needs the desktop viewer or a Linux host with Chromium and an X11 display. See A screen without Docker in the terminal guide." }),
@@ -347,6 +359,12 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
     focused: () => host.window.focused(),
     open: (chatId) => host.window.openChat(chatId),
     openSettings: (tab) => host.window.openSettings(tab),
+    // A proactive alert's buttons on the computer's own notification: the computer's notifications are the owner's.
+    act: ({ botId, runId }, action) => {
+      const { turn, ...result } = workspace.proactive.act(botId, runId, action, "owner");
+      turn?.catch((error) => console.error("Workspace turn:", error.message));
+      return result;
+    },
   });
   // A sign-in page a provider asks for opens in the person's browser, and only a web page does.
   signIns = new SignIns({
@@ -380,6 +398,7 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
     }
   };
   const catalog = skillsCatalog(() => workspace.integrations);
+  const apps = mcpCatalog(() => workspace.integrations);
   const handlers = {
     pickSkillUpload: async () => {
       const paths = await host.dialogs.open({title: "Upload skill", properties: ["openFile"], filters: [{ name: "Skills", extensions: ["md", "zip"] }]});
@@ -389,6 +408,10 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
     "skillsCatalog.search": catalog.search,
     "skillsCatalog.preview": catalog.preview,
     "skillsCatalog.install": catalog.install,
+    "skillsCatalog.featured": catalog.featured,
+    // The direct apps catalog (desktop/mcp-catalog.mjs): a tool server added with a tap, a sign-in or a key.
+    "mcpCatalog.list": apps.list,
+    "mcpCatalog.add": apps.add,
     ...pluginHandlers(workspace.plugins, savedCredentials),
     "piPackages.browse": (query) => pi.packages.browse(query),
     "piPackages.preview": (name) => pi.packages.preview(name),
@@ -490,7 +513,7 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
     // answer arrives here with its values already in (the link resolves it the same way).
     respond: async (...args) => {
       const [id, answer] = await savedCredentials.respondArgs(args);
-      return workspace.interactions.respond(id, answer);
+      return workspace.interactions.respond(id, answer, true, args[2]);
     },
     clearApprovals: (id) => workspace.clearApprovals(id),
     copyReply: (id) => {
@@ -556,6 +579,13 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
     updateBot: (id, data) => workspace.updateBot(id, data),
     // A bot's Proactive agent, for the person who calls: the window and the command line are the owner's (desktop/device-call.mjs names a member).
     setBotProactive: (id, patch, person = "owner") => workspace.proactive.setBot(id, patch, person),
+    // What a person does with an alert they were sent: "take" starts a normal turn with the bot's offer in their chat
+    // and answers that chat's id, "later" holds what it was about back for a day. Only the person it was for has it.
+    proactiveAct: (id, runId, action, person = "owner") => {
+      const { turn, ...answer } = workspace.proactive.act(id, runId, action, person);
+      turn?.catch((error) => console.error("Workspace turn:", error.message));
+      return answer;
+    },
     // Skills and MCP servers for every bot (desktop/integrations.mjs)
     saveMcpServer: (data) => workspace.integrations.saveServer(data),
     setMcpServerEnabled: (id, enabled) => workspace.integrations.setServerEnabled(id, enabled),
@@ -575,6 +605,13 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
     removeSavedCredential: (id) => savedCredentials.remove(id),
     checkSavedCredential: (id) => savedCredentials.check(id),
     passwordManagers: (refresh) => savedCredentials.managers(refresh === true),
+    protonPassInstallPlan: () => savedCredentials.protonPass("protonPassInstallPlan"),
+    protonPassInstall: (input) => savedCredentials.protonPass("protonPassInstall", input),
+    protonPassSignInStart: (input) => savedCredentials.protonPass("protonPassSignInStart", input),
+    protonPassSignInRead: (input) => savedCredentials.protonPass("protonPassSignInRead", input),
+    protonPassSignInInput: (input) => savedCredentials.protonPass("protonPassSignInInput", input),
+    protonPassSignInCancel: (input) => savedCredentials.protonPass("protonPassSignInCancel", input),
+    protonPassDisconnect: (input) => savedCredentials.protonPass("protonPassDisconnect", input),
     unlockPasswordManager: (manager, password) => savedCredentials.unlock(manager, password),
     lockPasswordManager: (manager) => savedCredentials.lock(manager),
     passwordManagerVaults: (manager) => savedCredentials.vaults(manager),
@@ -1242,8 +1279,24 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
   // line, which show everything, as an owner with Admin mode on. The desktop app's window gets
   // its snapshot from desktop/main.mjs, cut by the window's own Admin mode: desktop/admin-view.mjs.)
   const snapshot = () => ({ ...withOwnerChatSections(workspace.snapshot(), link), spaces: link?.spacesFor?.("owner"), ...(link ? { team: link.team() } : {}), phones: { revision: phoneRevision } });
+  // Reminders are about things that have waited 15 minutes: a look twice a minute is often enough.
+  let remindedAt = 0;
   const tick = () => {
     tickChatSchedules(workspace);
+    if (Date.now() - remindedAt >= 30_000) {
+      remindedAt = Date.now();
+      try {
+        // A role, the team or a bot's name may have changed since the routines were last brought in step.
+        if (!workspace.proactive.inStep()) workspace.proactive.sync();
+      } catch (error) {
+        console.error("Proactive routines:", error.message);
+      }
+      try {
+        workspace.reminders.tick();
+      } catch (error) {
+        console.error("Reminders:", error.message);
+      }
+    }
     try {
       workspace.tasks.tick();
     } catch (error) {
@@ -1256,6 +1309,9 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
   let checking = [];
   return {
     workspace,
+    // Used only by the desktop/service profile manager to protect its hosted session and browser
+    // verifier.  It never enters a renderer snapshot or the phone link.
+    secretStore: keys,
     providers,
     signIns,
     providerUsage,
@@ -1304,7 +1360,7 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
       // A routine's script stops with Botkins; its run is ended when Botkins opens again.
       routines.stopScripts();
       closeWorkspaceSocket?.();
-      workspace.interactions.cancel();
+      workspace.interactions.cancel(undefined, { detached: true, keep: true });
       workspace.connects.close();
       workspace.mcpApps.close();
       clearInterval(timer);

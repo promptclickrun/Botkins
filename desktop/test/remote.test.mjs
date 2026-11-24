@@ -69,6 +69,21 @@ test("the host's parts become the state the window reads", () => {
   assert.equal(snapshotOf({ ...parts, meta: { ...parts.meta, you: { kind: "owner", admin: false } } }).adminMode, false);
   assert.equal(snapshotOf({ ...parts, meta: { ...parts.meta, you: { kind: "owner", admin: true } } }).adminMode, true);
   assert.equal("adminMode" in snapshotOf({ ...parts, meta: { ...parts.meta, you: { kind: "member", memberId: "m_avery" } } }), false);
+  // Paired phones from parts.phones are mapped to remotePhones (excluding gadgets) with canNotify.
+  const withPhones = snapshotOf({
+    ...parts,
+    phones: {
+      d_phone: { name: "Alex iPhone", kind: "phone", platform: "ios", push: { routines: true }, sources: {} },
+      d_muted: { name: "Quiet iPhone", kind: "phone", platform: "ios", push: { routines: false }, sources: {} },
+      d_mac: { name: "Desk Mac", kind: "desktop", platform: "darwin", sources: {} },
+      d_gadget: { name: "Sensor", kind: "gadget", platform: "linux", sources: {} },
+    },
+  });
+  assert.deepEqual(withPhones.remotePhones, [
+    { id: "d_phone", name: "Alex iPhone", kind: "phone", platform: "ios", canNotify: true },
+    { id: "d_muted", name: "Quiet iPhone", kind: "phone", platform: "ios", canNotify: false },
+    { id: "d_mac", name: "Desk Mac", kind: "desktop", platform: "darwin", canNotify: false },
+  ]);
   const empty = snapshotOf({});
   assert.deepEqual([empty.bots, empty.chats, empty.runs, empty.requests, empty.streams, empty.settings], [[], [], [], [], {}, {}], "a host that hasn't answered yet is an empty workspace, not a crash");
 });
@@ -233,6 +248,17 @@ test("pairing with a code makes this app a desktop device of the host, and the c
   assert.equal(again.id, paired.id);
   assert.equal(b.remote.list().length, 1);
   assert.equal(a.link.status().devices.length, 1);
+});
+
+test("a profile computer without a vault stays in memory and never writes its private key", (t) => {
+  const root = tempDir(t);
+  const file = join(root, "remote-hosts.json");
+  const lib = { LinkClient: class {} };
+  const remote = new RemoteHosts({ file, protect: null, lib });
+  remote.adoptPairing({ serverId: "profile-server", serverKey: "public-key", secretKey: "profile-private-key", hosts: ["127.0.0.1:1"] }, { name: "Profile computer" });
+  assert.equal(remote.list()[0].id, "profile-server");
+  assert.equal(readFileSync(file, "utf8").includes("profile-private-key"), false);
+  assert.equal(new RemoteHosts({ file, protect: null, lib }).list().length, 0);
 });
 
 test("using a host shows its bots and chats, sends the window's calls there, and follows a chat", async (t) => {

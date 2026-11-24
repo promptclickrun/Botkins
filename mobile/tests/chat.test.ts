@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import { createChatViewport, HIDE_AT, SHOW_AT, showsAt } from "../src/features/chat/scroll";
 import { test } from "node:test";
 import type { BoardItem, Bot, ModelInfo, RunSummary } from "../src/link/types";
-import { boardMessage, boardQuote, findTrigger, joinDictation, mentionKey, teammates, tokenOf, toInput, withBoardQuote, arrived, waitingCopies } from "../src/features/chat/compose";
+import { arrived, boardMessage, boardQuote, composeSlashPrompt, findTrigger, joinDictation, mentionKey, stripTrigger, teammates, tokenOf, toInput, waitingCopies, withBoardQuote } from "../src/features/chat/compose";
 import { chatRuns, contextParts, contextPercent, contextTone, tokens, usageSummary } from "../src/features/chat/contextMath";
 import { contextFact, effortRows, modelFacts } from "../src/features/models/facts";
 import { completeUpTo } from "../link-host/parts.mjs";
@@ -35,6 +35,20 @@ test("a trigger is the sigil word that ends at the caret", () => {
   assert.equal(findTrigger("#web ", 5), null);
   // Only what is before the caret counts.
   assert.deepEqual(findTrigger("#web and more", 4), { sigil: "#", query: "web", start: 0, end: 4 });
+});
+
+test("attached slash commands strip their trigger and compose into outgoing slash prompts", () => {
+  assert.deepEqual(stripTrigger("/sum", 0, 4), { text: "", caret: 0 });
+  assert.deepEqual(stripTrigger("/sum the notes", 0, 4), { text: "the notes", caret: 0 });
+  assert.deepEqual(stripTrigger("please /sum", 7, 11), { text: "please", caret: 6 });
+  assert.deepEqual(stripTrigger("please /sum this", 7, 11), { text: "please this", caret: 7 });
+
+  const skill = { name: "summarize", command: "summarize", kind: "Skill" as const };
+  assert.equal(composeSlashPrompt("", skill), "/summarize");
+  assert.equal(composeSlashPrompt("  the notes  ", skill), "/summarize the notes");
+  assert.equal(composeSlashPrompt("hello", null), "hello");
+  // Leading slash in stored command is normalized rather than doubled.
+  assert.equal(composeSlashPrompt("why?", { name: "btw", command: "/btw", kind: "Command" }), "/btw why?");
 });
 
 test("a record reads #label in the text, as on the desktop, and is sent without its label", () => {

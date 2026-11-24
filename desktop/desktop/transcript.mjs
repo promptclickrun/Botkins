@@ -1,9 +1,11 @@
+import { isSilent } from "./link/silent-reply.mjs";
+
 // Each boundary consumes the live tail exactly once. Keep source message IDs separate
 // from chat indexes: a steer or an answer can split one provider message into two.
 export function commitInterim(chat, run, task) {
   const text = task.stream?.trim();
   if (!run || run.noOutput || !text) return;
-  chat.messages.push({ role: "assistant", text, interim: true, runId: run.id,
+  if (!isSilent(text)) chat.messages.push({ role: "assistant", text, interim: true, runId: run.id,
     time: task.streamTime ?? Date.now(), ...(task.speaker && { botId: task.speaker }) });
   task.stream = "";
   delete task.streamTime;
@@ -12,7 +14,9 @@ export function commitInterim(chat, run, task) {
 
 export function finishReply(chat, run, task, final) {
   if (run.noOutput) return;
-  const segments = chat.messages.filter(m => !m.voiceId && m.interim && m.runId === run.id && m.botId === task.speaker);
+  // A continuation of the turn (desktop/keep-moving.mjs) is its own reply: it is not made of the text before it.
+  const from = task.replyFrom ?? 0;
+  const segments = chat.messages.filter((m, i) => i >= from && !m.voiceId && m.interim && m.runId === run.id && m.botId === task.speaker);
   const last = segments.at(-1);
   let text = final?.trim() || "";
   if (last) {
@@ -24,7 +28,7 @@ export function finishReply(chat, run, task, final) {
       return;
     }
   }
-  if (text) chat.messages.push({ role:"assistant", text, runId:run.id, time:task.streamTime ?? Date.now(),
+  if (text && !isSilent(text)) chat.messages.push({ role:"assistant", text, runId:run.id, time:task.streamTime ?? Date.now(),
     ...(task.speaker && {botId:task.speaker}) });
   task.stream = "";
 }

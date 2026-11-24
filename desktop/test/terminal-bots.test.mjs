@@ -250,11 +250,28 @@ test("a bot's Proactive agent is shown, turned on after a yes, set, and forgotte
   assert.equal(on.exit, 0, on.err);
   assert.match(on.err, /Turning on a bot's Proactive agent/);
   const view = on.json();
-  assert.deepEqual([view.enabled, view.every, view.sweepHours, view.deliver, view.watch, view.instructions, view.person], [true, 15, 0, "feed", ["runs"], "Skip newsletters.", "owner"]);
-  assert.equal(view.computerOn, false, "the computer's switch is its own");
+  assert.deepEqual([view.enabled, view.setUp, view.every, view.sweepHours, view.deliver, view.watch, view.instructions], [true, true, 15, 0, "feed", ["runs"], "Skip newsletters."]);
+  assert.deepEqual(view.people, [{ id: "owner", name: "owner", on: true, notify: true, running: true }], "on finishes the setup and looks out for the owner");
+  assert.equal(view.computerOn, true, "the computer's switch is on from the start");
+  assert.equal((await botkins(["preferences", "set", "proactive.enabled", "off"])).exit, 0);
   assert.match((await botkins(["bots", "proactive", "Nova"])).out, /on but paused \(the computer's switch is off/);
   assert.equal((await botkins(["preferences", "set", "proactive.enabled", "on", "--yes"])).exit, 0);
   assert.equal((await botkins(["bots", "proactive", "Nova", "--json"])).json().running, true);
+  assert.match((await botkins(["bots", "proactive", "Nova"])).out, /Looks out for: owner\./);
+  // One person's own check and whether they are notified.
+  const quiet = (await botkins(["bots", "proactive", "Nova", "--notify", "off", "--json"])).json();
+  assert.deepEqual(quiet.people, [{ id: "owner", name: "owner", on: true, notify: false, running: true }]);
+  assert.equal((await botkins(["bots", "proactive", "Nova", "--alerts", "off", "--json"])).json().running, false);
+  assert.equal((await botkins(["bots", "proactive", "Nova", "--alerts", "on", "--notify", "on", "--json"])).json().running, true);
+  assert.match((await botkins(["bots", "proactive", "Nova", "--add", "Nobody"])).err, /No team member is named Nobody/);
+  assert.match((await botkins(["bots", "proactive", "Nova", "--person", "owner"])).err, /--alerts or --notify/);
+  // Its alerts: none yet, and one that isn't there is refused.
+  assert.match((await botkins(["bots", "alert", "Nova"])).out, /has sent you no alert lately/);
+  assert.deepEqual((await botkins(["bots", "alert", "Nova", "--json"])).json(), []);
+  const gone = await botkins(["bots", "alert", "Nova", "run-x", "take"]);
+  assert.equal(gone.exit, 1);
+  assert.match(gone.err, /no longer available/);
+  assert.equal((await botkins(["bots", "alert", "Nova", "run-x", "sing"])).exit, 2);
   assert.equal((await botkins(["bots", "proactive", "Orbit", "--json"])).json().enabled, false, "another bot is untouched");
 
   // Off needs no yes, a value that doesn't fit is refused, and --reset forgets the settings.

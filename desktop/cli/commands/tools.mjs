@@ -128,6 +128,35 @@ async function secrets(context, { env = [], headers = [], clientSecret = false }
 /** A program as a person must see it before it starts: its line, its folder, and the names of the environment values it gets. */
 const programLines = ({ name, runs: line, cwd, env = [] }) => ["  " + safe(name) + ": " + shown(line), ...(cwd ? ["      in the folder " + JSON.stringify(safe(cwd))] : []), ...(env.length ? ["      with the environment values " + env.map(safe).join(", ")] : [])];
 const WHERE = "The program is found on the PATH of the service, which may not be this terminal's. A folder that does not exist is left out.";
+/** How an entry of the apps catalog signs in, in a word. */
+const CATALOG_AUTH = { none: "none", oauth: "browser", key: "key" };
+/** Where an entry of the apps catalog stands on this computer. */
+const catalogState = (entry) => (!entry.added ? "-" : !entry.enabled ? "off" : entry.signedIn === false ? "needs sign-in" : entry.keysSet === false ? "needs a key" : "on");
+/**
+ * The keys an entry of the apps catalog takes, by the id of each: from --secrets (a JSON file, or "-"
+ * for standard input, holding { "key": "value" }), or a hidden question for each at a terminal.
+ */
+async function catalogKeys(context, entry) {
+  if (context.options.secrets !== undefined) {
+    let given;
+    try {
+      given = JSON.parse(await textFrom(context, context.options.secrets, "secrets file"));
+    } catch (error) {
+      if (error instanceof CliError) throw error;
+    }
+    if (!given || typeof given !== "object" || Array.isArray(given) || Object.values(given).some((value) => typeof value !== "string"))
+      throw usage("The secrets are not in the form { " + entry.keys.map((key) => JSON.stringify(key.id) + ": \"value\"").join(", ") + " }.");
+    return given;
+  }
+  if (!context.stdin.isTTY || context.json) throw usage(entry.name + " needs its " + entry.keys.map((key) => key.label).join(" and ") + ". Give them in a JSON file with --secrets <path>, or --secrets - to read it from standard input. A key is never a word on the command line.");
+  const out = {};
+  for (const key of entry.keys) {
+    const typed = await ask(context, key.label + " for " + safe(entry.name) + (key.hint ? " (" + safe(key.hint) + ")" : "") + " (not shown): ", { hidden: true });
+    if (!typed) throw usage("Nothing was entered for the " + key.label + ".");
+    out[key.id] = typed;
+  }
+  return out;
+}
 /** Shows what a tool will start and asks. It is shown even with --yes and with --json, so it is in the caller's own record. */
 async function mayRun(context, tool) {
   show(context, "This starts a program on this computer, as the user that runs Botkins:\n" + programLines(tool).join("\n") + "\n" + WHERE);
@@ -289,6 +318,41 @@ export const tools = {
         usage: "botkins tools list",
         async run(context) {
           context.print(await context.client.call("tools.list"), (list) => (list.length ? table(["NAME", "KIND", "STATE", "STARTS OR REACHES", "ID"], list.map((tool) => [tool.name, tool.kind, tool.enabled ? (tool.needs?.length ? "needs a value" : "on") : "off", toolLine(tool), tool.id])) : "No tools yet. Add one with `botkins tools add`."));
+        },
+      },
+      catalog: {
+        summary: "List the apps you can add without typing an address: sign in, a key, or one tap",
+        usage: "botkins tools catalog [--category <id>]",
+        options: { category: { type: "string", value: "id", about: "Only this category (research, notes, work, mail, money, code, data, design)" } },
+        async run(context) {
+          if (context.args.length) throw usage("This command takes no words, only --category <id>.");
+          const { entries } = await context.client.call("mcpCatalog.list");
+          const rows = context.options.category ? entries.filter((entry) => entry.category === context.options.category) : entries;
+          context.print(rows, (list) => table(["ID", "NAME", "SIGN-IN", "RUNS", "STATE"], list.map((entry) => [entry.id, safe(entry.name), CATALOG_AUTH[entry.auth], entry.transport === "stdio" ? entry.command : entry.local ? "on this computer" : "web", catalogState(entry)])) + "\nAdd one with `botkins tools connect <id>`.");
+        },
+      },
+      connect: {
+        summary: "Add an app from the catalog, or give it a new key",
+        usage: "botkins tools connect <id> [--secrets <path>] [--yes]",
+        options: { ...YES, secrets: { type: "string", value: "path", about: "The keys as JSON, { \"key\": \"value\" }, from a file or - for standard input" } },
+        details: "An app that signs in with a browser is added, then signed in with `botkins tools sign-in`. A key is asked for without showing it, or read with --secrets; it goes to the vault and is never printed. An app that is a program shows the exact line that will run and needs your yes (--yes with no terminal).",
+        async run(context) {
+          const id = one(context, "Name the app by its id from `botkins tools catalog`.");
+          const { entries } = await context.client.call("mcpCatalog.list");
+          const entry = entries.find((item) => item.id === id);
+          if (!entry) throw usage("No app in the catalog has the id " + safe(id) + ". See `botkins tools catalog`.");
+          const options = {};
+          if (entry.transport === "stdio") {
+            if (!(await mayRun(context, { name: entry.name, runs: entry.command.split(" "), env: entry.env }))) {
+              context.note("Not added.");
+              return EXIT.failed;
+            }
+            options.confirm = entry.command;
+          }
+          if (entry.commandChanged) context.note(safe(entry.name) + " is moving to a newer version. A saved key only goes to the command it was saved for, so it needs its key again.");
+          if (entry.keys.length && (!entry.added || entry.keysSet === false || entry.commandChanged || context.options.secrets !== undefined)) options.keys = await catalogKeys(context, entry);
+          const result = await context.client.call("mcpCatalog.add", id, options);
+          context.print(result, (done) => (done.next === "sign-in" ? safe(entry.name) + " is added. Sign it in next: botkins tools sign-in " + shellWord(done.serverId, "<its id>") : safe(entry.name) + " is added and on."));
         },
       },
       show: {
@@ -511,6 +575,15 @@ export const tools = {
     summary: "Add, change and remove skills: instructions a bot reads when a task needs them",
     details: "A skill is a folder with a SKILL.md: a name, one line that says when to use it, and instructions. Botkins keeps the ones you add here. A linked folder of skills stays where it is and is read from there.",
     commands: {
+      featured: {
+        summary: "List the featured skills: upstream skills pinned to a commit, with their license",
+        usage: "botkins skills featured",
+        async run(context) {
+          if (context.args.length) throw usage("This command takes no words.");
+          const rows = await context.client.call("skillsCatalog.featured");
+          context.print(rows, (list) => table(["ID", "LICENSE", "AUTHOR", "STATE"], list.map((row) => [safe(row.id), row.license, safe(row.author), row.installed ? "installed" : "-"])) + "\nRead one with `botkins skills preview <id>`, then install it with `botkins skills install <token>`.");
+        },
+      },
       search: {
         summary: "Search skills.sh", usage: "botkins skills search <query>",
         async run(context) {

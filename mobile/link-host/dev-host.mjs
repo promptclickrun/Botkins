@@ -103,6 +103,8 @@ const host = new LinkHost({
 // The demo bot can use a paired phone: a message with "calendar", "contact", "where am I", "photo",
 // "steps" or "email" in it calls the matching phone tool.
 backend.phone = { call: (name, args, options) => host.callDeviceTool(name, args, options) };
+// The team, for the rules that go by a person's role (who a bot may look out for: proactive-rules.mjs).
+backend.teamOf = () => host.store.data.team;
 // Its made-up updates (BOTKINS_DEV_UPDATE): a newer version tells the phones, and an install
 // "restarts" the link for a few seconds, as a real update restarts the app.
 backend.updates.onAvailable = (version) => host.push.updateAvailable(version);

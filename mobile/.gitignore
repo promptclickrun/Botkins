@@ -2,6 +2,8 @@
 
 # dependencies
 node_modules/
+# A symlink to another checkout's dependencies is a file, which node_modules/ does not match.
+node_modules
 
 # Expo
 .expo/

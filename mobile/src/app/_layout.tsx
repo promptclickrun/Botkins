@@ -10,6 +10,7 @@ import { listenForShortcuts } from "@/features/shortcuts/bridge";
 import { forget, readKept } from "@/state/keep";
 import { usePrefs } from "@/state/prefs";
 import { useApp } from "@/state/store";
+import { loadProfile, useProfile } from "@/state/profile";
 import { JOIN_ATTEMPT_KEY, resumeDecision } from "@/features/pair/joinLogic";
 import { ToastHost, useShape, useTheme } from "@/ui";
 
@@ -21,6 +22,9 @@ export default function RootLayout() {
   const { colors } = theme;
   const booted = useApp((state) => state.booted);
   const paired = useApp((state) => !!state.pairing);
+  const pairings = useApp((state) => state.pairings);
+  const profileLoaded = useProfile((state) => state.loaded);
+  const profilePrompt = useProfile((state) => state.prompt);
   const pathname = usePathname();
   const resumeChecked = useRef(false);
 
@@ -56,6 +60,15 @@ export default function RootLayout() {
   useEffect(() => {
     if (booted) return listenForShortcuts(true);
   }, [booted]);
+  useEffect(() => {
+    if (booted) void loadProfile(pairings.length);
+  }, [booted, pairings.length]);
+  useEffect(() => {
+    const inSetupFlow = pathname === "/profile" || pathname.startsWith("/pair") || pathname === "/join" || pathname === "/setup";
+    if (!booted || !profileLoaded || !profilePrompt || inSetupFlow) return;
+    const timer = setTimeout(() => router.push({ pathname: "/profile", params: { prompt: profilePrompt } }), 0);
+    return () => clearTimeout(timer);
+  }, [booted, profileLoaded, profilePrompt, pathname]);
   if (!booted) return null;
 
   const base = theme.dark ? DarkTheme : DefaultTheme;
@@ -118,6 +131,7 @@ export default function RootLayout() {
               <Stack.Screen name="bot/[id]/voice" options={tall} />
               <Stack.Screen name="bot/[id]/capabilities" />
               <Stack.Screen name="bot/[id]/proactive" />
+              <Stack.Screen name="bot/[id]/proactive-setup" options={tall} />
               <Stack.Screen name="bot/access" />
               <Stack.Screen name="today" />
               <Stack.Screen name="today/new" options={half} />
@@ -149,6 +163,13 @@ export default function RootLayout() {
               <Stack.Screen name="market/plugin-install" options={tall} />
               <Stack.Screen name="market/plugin-update" options={tall} />
               <Stack.Screen name="market/add-marketplace" options={half} />
+              <Stack.Screen name="market/apps" />
+              <Stack.Screen name="market/skills" />
+              <Stack.Screen name="market/agents" />
+              <Stack.Screen name="market/plugins" />
+              <Stack.Screen name="market/pi" />
+              <Stack.Screen name="market/composio" />
+              <Stack.Screen name="market/tool" options={tall} />
               <Stack.Screen name="settings/index" />
               <Stack.Screen name="settings/desktop" />
               <Stack.Screen name="settings/computers" />
@@ -185,6 +206,7 @@ export default function RootLayout() {
               <Stack.Screen name="artifacts/index" />
               <Stack.Screen name="artifacts/view" />
             </Stack.Protected>
+            <Stack.Screen name="profile" />
             <Stack.Screen name="pair/index" options={{ ...sheet, sheetAllowedDetents: [0.5] }} />
             <Stack.Screen name="pair/scan" options={{ presentation: "fullScreenModal", headerShown: false, animation: "slide_from_bottom" }} />
             <Stack.Screen name="pair/manual" options={{ ...sheet, sheetAllowedDetents: [0.62, 1] }} />

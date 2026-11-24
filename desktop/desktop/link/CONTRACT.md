@@ -75,6 +75,45 @@ client.watch([chatId]);                                       // at most 4 chats
 - `LinkClient` reconnects by itself. Call `client.wake()` when the app comes to the front or the network changes.
 - `state === "revoked"` means the host no longer knows this device. Delete the stored `Pairing` and show the pairing screen. Do not retry.
 
+## Profile-bound Link enrollment (`profile-v1`)
+
+A signed-in Botkins profile may bind a host to one existing Link principal, then enroll more
+devices without a QR code. The host returns the public descriptor
+`{ serverId, serverKey, name, hosts, member?: true }`. `serverKey` is the host's X25519 public
+key; it is pinned for every enrollment and is never replaced by a name match.
+
+The local owner/CLI calls `await link.bindOwnerProfile(ticket)`. An existing sealed Link session
+may call `link.profile.bind(ticket)`, but only for its own owner or existing team-member
+principal. Gadget principals are refused. A member binding keeps the existing `memberId`, chats,
+views and role; the verified profile name updates that member's host display. An account-free QR
+or team pairing remains a normal legacy-trusted device until it explicitly binds itself.
+
+`profileConnect(fetch, target, device, issueTicket)` makes a fresh X25519 device key, asks the
+profile service for an opaque connect ticket, and seals `{ ticket, publicKey, device }` to the
+pinned host. It tries the host's LAN address and its `relay!…` address; the relay carries route
+`profile` (6) and never sees the ticket or Link private key. The host redeems the ticket with
+`POST https://profile.botkins.app/v1/proofs/redeem` and JSON
+`{ ticket, purpose: "bind" | "connect", serverId, serverKey, publicKey? }`. Bind omits
+`publicKey`; connect includes the exact fresh public key. The response is
+`{ profileId, deviceId, name, statusKey }`. The host then checks
+`POST /v1/devices/status` with `{ statusKey }`.
+
+The bind device is checked only while binding. Later enrollments use the same `profileId`, so
+revoking or replacing that original device does not lock out another active profile device. A
+positive status result is reused for 60 seconds on active traffic, with at most 64 cached keys and
+coalesced checks; idle devices are not polled. A failed status check denies the operation. Existing
+profile sessions recheck on session open and calls, and are removed when their device becomes
+inactive. A profile device cannot become a gadget or gain `presenceKey`/person privileges, and it
+cannot replace a legacy device.
+
+Explicit local `link.unbindOwnerProfile(expectedProfileId)` or sealed
+`link.profile.unbind(expectedProfileId)` clears only that principal's host grant and its
+profile-backed devices/sessions; sign-out on a client does not unbind the host. Removing one
+profile device tombstones only its cloud `deviceId` for that profile/role. Other profile devices,
+legacy devices and future devices remain independent. Removing a team member removes their
+membership and profile grant. Profile proofs and `statusKey` never appear in `status().devices`,
+paired events or client device lists.
+
 ### Light steps (`step-details-v1`)
 
 Most of a long turn's bytes are the inputs and outputs of its steps, and a chat shows them only when a step is opened. A client that sends `steps: "light"` in the `link.sync` argument gets `chat:<id>` and `run:<id>` with light steps: a step keeps its `input` and `output` only when each is at most 400 characters, when the step is a question the bot asked (`ask_user`, `ask`), or when it started a helper. Any other step comes without them and says `more: true`. `link.messages` answers in the form the session follows in.
@@ -204,6 +243,12 @@ A **person** is the owner (id `"owner"`) or a member (their member id). The owne
 - For the app on the host: `link.chatPeople(chatId)` → `{ createdBy, invited }` (never throws), `link.inChat(chatId, personId)`, `link.notifiesOwner(chatId)`, `link.inviteToChat`, `link.removeFromChat`, `link.removeChatPeople(chatId)`.
 
 **Who is notified.** A chat's alerts (reply finished, routine result, Live Activity, a bot's question) go to its people only. An owner device does not hear of a member's chat unless the owner was invited. One exception: a request only the owner can answer (`permission`, `secure`) goes to the owner's devices whoever's chat it is.
+
+**Granular routine notification targeting (`routine-notify-targets-v1`).** When the host advertises `routine-notify-targets-v1` in `meta.capabilities`:
+- A routine (`chat.schedules[]` entry with `routine: true`) may store `notifyTargets?: { people?: string[], devices?: string[] }` as its default recipients (mutually exclusive with `notify: false`; absent means everyone who sees the routine).
+- A routine run (`runs[]` summary) may carry `notifyTargets?: { mode: "only" | "none", people?: string[], devices?: string[], message?: string }` set dynamically by the bot via `routine_notify`.
+- Explicit targets (`run.notifyTargets` or `entry.notifyTargets`) expand person IDs (`"owner"`, `"m_…"`) to all of that person's eligible devices plus direct device IDs (`"host"`, non-gadget paired `device.id`), gated on the recipient's role being allowed to see the routine's bot. Push alerts to recipients who do not have access to the routine's chat omit the chat tap-target (`c`) and use a per-routine collapse group (`routine:<chatId>`). Live Activities stay scoped to devices that can see the chat.
+- `devices()`, `status().devices`, `team.members[].devices[]`, and `team.me.devices[]` include `canNotify: boolean` (`device.kind !== "gadget" && push.view(device.id)?.routines === true`). Member sync snapshots include `team.me.devices` (that member's own non-gadget paired devices only).
 
 **Each member's own view.** A member's `setBotFlags` (`hidden`, `pinned`), `reorderBots` and `setChatFlags` (`pinned`, `archived`, `unread`) are kept in the link's store (`team.views`, by member id) and never reach the app. So the owner's hidden bot is not hidden for a member, and a member's read mark is their own. Arranging one's view needs only `agents.view`. Other flags of `setBotFlags` (`teamwork`) still reach the app and need `agents.manage`; a `sectionId` from a member is dropped. A member's unread: since they last marked the chat read; before that, as the workspace says for a chat they started, and unread for one they were invited to.
 
@@ -341,6 +386,24 @@ The bot returns up to four proposals with evidence references. The host chooses 
 
 Existing `reactToMessage` and `boardAct` calls handle feedback at the delivery site. The host links the delivery to its run and uses only the intended recipient's thumbs. A changed rating replaces the previous label. A neutral chat reaction or a removed Feed vote clears it. A shared Feed receives personal suggestions through a private chat instead. Forgetting the bot's proactive settings clears its learning state.
 
+### Several people, setup and offers (`proactive-team-v1`)
+
+A bot looks out for several people. What they share is the bot's: `enabled`, `every`, `sweepHours`, `maxPerDay`, `deliver`, `watch`, `instructions`, and `setUp`. Each person has an entry of their own in `people: { [personId | "owner"]: { on, notify } }`. Each person gets their own check with only what they may see, their own managed routine ("<Bot> looks out for <person>"), their own gate state and their own delivery.
+
+- **Privacy.** An alert built from one person's evidence goes only to that person. A member needs `agents.view` and the bot in their role's allowlist at check time and at delivery. `notify: false` still delivers it to their chat or Feed, with no notification on the computer or on a phone. Alert chats cannot be shared, and if the owner sees a chat only to answer a request, its Proactive alerts are left out.
+- **On from the start, but set up first.** The computer's switch (`settings.proactive.enabled`) is on by default. A bot's agent never wakes until `setUp` is true, which the setup steps save together with `enabled: true` and the people they turned on. A host that had the one-person shape brings it over once: the person becomes `people`, the computer's switch becomes on, and only a bot that was really running counts as set up.
+- **`setBotProactive(botId, patch)`** takes `setUp` and `people` too. In `people` an entry changes only what it names, a new person starts on and notified, and `null` takes a person out. The host checks who calls (`link-host/proactive-rules.mjs`, the same rule in the app and in the demo computer):
+  - The owner changes anything, and adds or takes out anyone whose role sees the bot. `null` as the patch forgets the bot's settings, everyone's state and every routine.
+  - A member reaches the call when their role sees the bot. They change only their own entry, and add themselves only when their role manages the bot. Such a role may also save the setup steps and change what the people share, but never look-around (`sweepHours`), the tasks watch, or the owner's pause. Turning the bot off sets `pausedBy: "owner"` in the shared settings; only the owner can turn it on again. A member can still save setup choices without resuming it. A member's `null` takes only that member out.
+- **The `proactive` part.** An owner device is sent every entry of `people`, the owner's own activity (`chatId`, `pings`, `day`, `lastSweepAt`, `log`, `nextReviewAt`, `learning`) beside the settings, and, with Admin mode on, each other person's under `activity: { [personId]: … }`. A member is sent, for each bot their role sees, the shared settings, only their own entry in `people`, and their own activity in the same place the owner's is. `person` and `taken` are gone.
+- **An alert's actions.** A delivered alert carries `alert: { runId, offer?, chosen? }` on its chat message or its Feed card (`BoardItem`), beside `proactiveRunId`. `offer` is a short label of the one thing the bot offers to do; the request behind it stays on the host. `proactiveAct(botId, runId, "take" | "later")`:
+  - `"take"` starts a normal turn in a new private chat titled with the offer's label, with only the offer's request as the person's message, and answers `{ chatId }`. The turn has the chat's usual tools and approvals: an alert never approves anything ahead of time. The check itself stays read-and-draft. Starting a turn is chatting, so a member's role needs `agents.chat` for it (`"later"` needs only to see the bot). The alert is marked once the turn has started, so a start that fails can be tried again.
+  - `"later"` holds what the alert was about back across all the recipient's bots for 24 hours and answers `{ until }`.
+  - Only the person the alert was for has it: anyone else is told "This alert is no longer available." An alert is acted on once (`chosen`).
+- **More signals**, with no model: a routine or task run that failed in the last 24 hours, and a turn that stopped with steps of its plan left (`run.stoppedOpen === true` and `run.plan.open`, both optional), while it is the last thing that happened in its chat.
+- **Notifications.** An alert's notification is titled with the bot's name alone, and its text is the alert's first line. The managed routine's name is never a title. A sealed alert that offers something also carries `a: { b: botId, r: runId }`, and the phone shows one button, "Take care of it"; a tap opens the alert. A check that failed sends nothing.
+- **Reminders** need no Proactive agent and no model. When a question or approval stays open for 15 minutes, a routine or task run ends needing the person, or a turn stops with steps left, the person it waits on gets one plain notification: "Patch is waiting on your answer", "Patch stopped with 2 steps left". Once for each thing, held during quiet hours, at most six a day for each person, and never for a thing one of their own bots already alerted them about (a bot that watches for it gets its turn first). The app lists what it sent in the last few minutes in its snapshot (`reminders`, never a part), and the link sends each to that person's own phones that have "A bot needs me" on, sealed, with `k: "reminder"`. One switch: `settings.notifications.reminders` (on by default), shown under Notifications in both apps.
+
 ## What differs for a desktop client
 
 - **Notifications.** A desktop client does not register for push (`link.push.register` is for phones). It should call `link.push.presence(active, chatId?)` when its window comes to the front, goes away, or shows another chat. While a desktop client is in front, the host treats it like its own window: a reply in the chat on that screen sends no notification to a phone.
@@ -400,6 +463,15 @@ With `skills-catalog-v1`, the computer makes these calls available:
 - `skillsCatalog.search(query)` takes 2–200 characters and returns up to 40 rows sorted by installs. Each row has `id, source, skillId, name, installs, available` and an optional installed skill name in `installed`. The computer caches successful searches for two minutes.
 - `skillsCatalog.preview(id)` reads a GitHub skill and returns `{name, description, text, token, installed?}`. Domain sources open at `https://skills.sh/<id>`.
 - `skillsCatalog.install(token, replace?)` imports the files pinned by the preview and returns the upload result. The preview token expires after ten minutes.
+
+With `skills-featured-v1`, `skillsCatalog.featured()` returns the featured shelf: upstream skills pinned to a commit (`desktop/skills-featured.mjs`), each `{id, name, summary, group, author, license, repo, commit, path, url, pack?, installed?}`. The id is `owner/repo/skill@commit7`; preview and install it with `skillsCatalog.preview` and `skillsCatalog.install` like a skills.sh one. Its preview reads the tree at `commit`, never HEAD, and also returns `source` (the fields above) and `files`. The skill's license file goes with it: one that sits outside the skill's folder (pstack's) is installed as `LICENSE`, and a skill whose license is missing at that commit is not installed.
+
+With `mcp-catalog-v1`, the direct apps catalog (`desktop/mcp-catalog.mjs`):
+
+- `mcpCatalog.list()` returns `{entries, categories}`. An entry has `id, name, category, categoryName, description, transport ("http" | "stdio"), auth ("none" | "oauth" | "key"), keys: [{id, label, hint?}], docs, icon: {letter}`, then `url` for http, or `package, version, license, command, env` for stdio (`command` is the exact line, `env` the names of the values it gets), and `local` for a server another app runs on the computer. Its state: `added`, and when added `serverId, serverName, enabled`, `signedIn, signingIn` (oauth) and `keysSet` (key), and `commandChanged: true` when a program that holds keys runs an older command than the catalog's. Adding it then needs every key typed again (the answer says "Enter the … again" and nothing changes), because a saved key only goes to the command it was saved for. An entry never holds a key's value, or where a key goes beyond the names in `env`.
+- `mcpCatalog.add(id, {keys?, confirm?})` adds the entry as a tool server, or, when it is already added, sets the keys given again (a key left out is kept). `keys` maps each key's `id` to the value typed; values go to the vault through `saveMcpServer`'s path and are never sent back. A stdio entry needs `confirm` equal to its `command`, which the client has shown and the person said yes to. It returns `{serverId, next}`: `"sign-in"` when the browser sign-in is next (`signInMcpServer(serverId)`), else `"done"`. The link refuses a saved credential's reference in `keys`. A server the person added by hand at the same address, or with the same npm package, counts as the entry.
+
+The list needs the team's Tools view permission. Adding is the owner's.
 
 Search and preview need the team's Skills read permission. Upload and install need create permission, and confirming replacement also needs manage permission. Phones use the link for every file and catalog operation.
 

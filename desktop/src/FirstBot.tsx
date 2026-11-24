@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { ArrowLeft, ArrowRight, CircleAlert, LoaderCircle } from "lucide-react";
 import BotForm from "./BotForm";
+import { BotAvatar } from "./Avatar";
+import { STARTERS } from "../desktop/starters.mjs";
 import { WelcomeFrame } from "./Welcome";
 import ProviderIcon from "./ProviderIcon";
 import type { BotTemplate, ImportableAgent, State } from "./types";
@@ -11,7 +13,8 @@ const api = window.botkins;
 /**
  * The full-window first-run step, shown while the workspace has no bots. It offers the agents the
  * person already has (for GitHub Copilot, the ones in ~/.copilot/agents) as bots. With none, or
- * when the person prefers to start fresh, it shows the Create a bot form.
+ * when the person prefers to start fresh, it shows the three starters (desktop/starters.mjs) over
+ * the Create a bot form: one fills the form in, and the person can change anything before Create.
  */
 export default function FirstBot({
   saved,
@@ -22,11 +25,12 @@ export default function FirstBot({
   saved?: BotTemplate[];
   remote?: State["remote"];
   /** The workspace has bots now. */
-  created: () => Promise<void> | void;
+  created: (id?: string, after?: { setUp: boolean }) => Promise<void> | void;
 }) {
   const [agents, setAgents] = useState<ImportableAgent[]>();
   const [picked, setPicked] = useState<string[]>([]);
   const [creating, setCreating] = useState(false);
+  const [starter, setStarter] = useState<string>();
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState("");
   const heading = useRef<HTMLHeadingElement>(null);
@@ -65,7 +69,16 @@ export default function FirstBot({
           <h1 id="firstbot-title" ref={heading} tabIndex={-1}>
             Create your first bot
           </h1>
-          <p className="welcome-lede">Give it a name, a role and instructions. You can add more later.</p>
+          <p className="welcome-lede">Start with one of these, or write your own. You can add more later.</p>
+          <div className="firstbot-starters" role="group" aria-label="Starters">
+            {STARTERS.map((s) => (
+              <button key={s.id} type="button" className="firstbot-starter" aria-pressed={starter === s.id} onClick={() => setStarter(starter === s.id ? undefined : s.id)}>
+                <BotAvatar look={s.look} size={56} badge={false} />
+                <strong>{s.name}</strong>
+                <small>{s.summary}</small>
+              </button>
+            ))}
+          </div>
           {problem && (
             <div className="welcome-problem" role="alert">
               <CircleAlert size={16} />
@@ -74,13 +87,15 @@ export default function FirstBot({
           )}
           <div className="firstbot-form">
             <BotForm
+              key={starter ?? "own"}
+              starter={starter}
               remote={remote}
               saved={saved}
               agents={agents}
               fail={fail}
-              created={async () => {
+              created={async (id, after) => {
                 setProblem("");
-                await created();
+                await created(id, after);
               }}
             />
           </div>

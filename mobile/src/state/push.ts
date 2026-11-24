@@ -19,11 +19,12 @@ import { lookOf } from "@/data/botLook";
 import { type Pairing, pushKeyOf } from "@/link/client";
 import type { ActivityState, PushPrefs, RunSummary } from "@/link/types";
 import { activityView, LINGER_MS } from "./activity";
+import { ACTIVITY_MIN_INTERVAL_MS, ACTIVITY_QUIET_MS, createCoalescedPacer } from "./activityPace";
 import { sendAnswers, startAnswers } from "./answers";
 import { ALL_CARD, cardOver } from "../../link-host/cards.mjs";
 import { botsWithWork, hasWork, MAX_CARDS, phoneCard } from "./cards";
 import { answerPendingAsks } from "./device";
-import { api, chatOnScreen, freshSync, onChatOnScreen, restIfAway, switchComputer, tellOthers } from "./link";
+import { api, attempt, chatOnScreen, freshSync, onChatOnScreen, restIfAway, switchComputer, tellOthers } from "./link";
 import { useApp } from "./store";
 
 const KEY = "botkins.push.v1";
@@ -213,6 +214,35 @@ function kindOf(response: import("expo-notifications").NotificationResponse): st
   if (typeof kind === "string" && kind) return kind;
   return request.content.categoryIdentifier === "botkins_team" ? "team" : undefined;
 }
+/** A proactive alert that offers something ("proactive-team-v1"): the bot and the run its notification names, for "Take care of it". */
+function alertOf(response: import("expo-notifications").NotificationResponse): { bot: string; run: string } | undefined {
+  const request = response.notification.request;
+  const payload = request.trigger && "payload" in request.trigger ? (request.trigger.payload as Record<string, unknown> | undefined) : undefined;
+  const data = request.content.data as Record<string, unknown> | undefined;
+  const bot = payload?.alertBot ?? data?.alertBot;
+  const run = payload?.alertRun ?? data?.alertRun;
+  return typeof bot === "string" && bot && typeof run === "string" && run ? { bot, run } : undefined;
+}
+/**
+ * "Take care of it" on an alert's notification: the computer is asked once the link is up. The chat opens
+ * meanwhile, and the new work chat opens when the computer accepts.
+ */
+function takeAlert(alert: { bot: string; run: string }, serverId?: string) {
+  const send = async () => {
+    const answer = await attempt(api.proactiveAct(alert.bot, alert.run, "take"));
+    if (answer?.chatId && serverId === useApp.getState().pairing?.serverId && chatOnScreen() !== answer.chatId)
+      router.push({ pathname: "/chat/[id]", params: { id: answer.chatId } });
+  };
+  const ready = (state: ReturnType<typeof useApp.getState>) => state.link === "online" && state.pairing?.serverId === serverId;
+  if (ready(useApp.getState())) return void send();
+  const timer = setTimeout(() => stop(), 20_000);
+  const stop = useApp.subscribe((state) => {
+    if (!ready(state)) return;
+    stop();
+    clearTimeout(timer);
+    void send();
+  });
+}
 /** A notification's actions that answer a bot where they are (the native side queues them; src/state/answers.ts sends them). */
 const ANSWERED_THERE = /^(approve|remember|deny|reply|choice\.\d)$/;
 function openFrom(response: import("expo-notifications").NotificationResponse | null) {
@@ -251,6 +281,9 @@ function openFrom(response: import("expo-notifications").NotificationResponse | 
       return;
     }
     if (!chatId) return;
+    // The button on a proactive alert: the bot starts on what it offered, in the chat that opens.
+    const offered = response.actionIdentifier === "alert.take" ? alertOf(response) : undefined;
+    if (offered) takeAlert(offered, other ? host : state.pairing?.serverId);
     if (chatOnScreen() === chatId) return;
     router.push({ pathname: "/chat/[id]", params: { id: chatId } });
   };
@@ -494,6 +527,9 @@ async function setCategories() {
       ]),
       Notifications.setNotificationCategoryAsync("botkins_question", [reply, { identifier: "open", buttonTitle: "Open chat", options: open }]),
       Notifications.setNotificationCategoryAsync("botkins_open", [{ identifier: "open", buttonTitle: "Open to answer", options: open }]),
+      // A proactive alert that offers to take care of something ("proactive-team-v1"). The button opens the app, which asks the
+      // computer; "Not now" is on the alert itself. A tap on the notification opens the alert.
+      Notifications.setNotificationCategoryAsync("botkins_alert", [{ identifier: "alert.take", buttonTitle: "Take care of it", options: { ...open, isAuthenticationRequired: true } }]),
     ]);
   } catch {
     // Notifications still arrive; they only open the app.
@@ -570,6 +606,15 @@ export async function startPush() {
   Activities?.addListener("ended", ({ chatId }) => forgetActivity(chatId));
   void syncActivities();
 
+  const activityPacer = createCoalescedPacer({
+    quietMs: ACTIVITY_QUIET_MS,
+    minIntervalMs: ACTIVITY_MIN_INTERVAL_MS,
+    // The first change after a quiet spell (a turn starting) goes at once, so the card starts
+    // before the person can lock the phone; the updates that follow are paced.
+    leading: true,
+    run: () => void followActivities(),
+  });
+
   let link = useApp.getState().link;
   let meta = useApp.getState().parts.meta;
   let pairings = useApp.getState().pairings;
@@ -597,18 +642,22 @@ export async function startPush() {
         tellPresence();
       }
     }
-    void followActivities();
+    // In the background (a push woke the app to sync) no foreground comes to run it: follow now.
+    if (AppState.currentState === "active") activityPacer.schedule();
+    else activityPacer.flushNow();
   });
   AppState.addEventListener("change", (next) => {
     tellPresence();
     if (next === "active") {
       void syncActivities();
       void sendAnswers();
-    } else void followActivities();
+    } else {
+      activityPacer.flushNow();
+    }
   });
   onChatOnScreen(() => {
     tellPresence();
-    void followActivities();
+    activityPacer.flushNow();
   });
   void register();
 }
