@@ -30,7 +30,7 @@
 //   approval change is applied to the open session, and nothing here opens a session only to
 //   close it again.
 import { createHash, randomUUID } from "node:crypto";
-import { cpSync, existsSync, mkdirSync, renameSync, rmSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { CopilotClient, RuntimeConnection, defineTool as sdkTool } from "@microsoft/copilot-sdk";
 import { ModelProvider, ProviderSession } from "../provider.mjs";
@@ -538,6 +538,7 @@ export class CopilotProvider extends ModelProvider {
     this.teardowns = new Set();
     this.connection = null;
     this.signInFlow = null;
+    this.signedOutFile = baseDirectory && join(baseDirectory, "botkins-signed-out");
   }
   /**
    * The runtime keeps a folder of files for each session: `<baseDirectory>/session-state/<id>/files`.
@@ -550,7 +551,9 @@ export class CopilotProvider extends ModelProvider {
 
   /** The connected SDK client. The runtime starts on first use. */
   client() {
+    if (this.shutdown) return this.shutdown.then(() => this.client());
     if (this.connect) return this.connect();
+    this.stopping = false;
     this.connection ??= this.start().catch((error) => {
       this.connection = null;
       throw error;
@@ -577,7 +580,7 @@ export class CopilotProvider extends ModelProvider {
     // tools, skills and MCP servers (see sessionOptions).
     // BOTKINS_COPILOT_LOG=debug writes the runtime's detailed log under <baseDirectory>/logs.
     const logLevel = env("COPILOT_LOG");
-    const github = this.github?.();
+    const github = this.github?.() ?? (this.signedOutFile && existsSync(this.signedOutFile) ? { useLoggedInUser: false } : undefined);
     const make = (runtime) =>
       new Client({ mode: "coding-agent", runtime, ...(logLevel && { observability: { logLevel } }), ...(github && { github }) });
     const inProcess = this.inProcess();
@@ -593,7 +596,6 @@ export class CopilotProvider extends ModelProvider {
       client = make(spawned());
       await client.start();
     }
-    this.sdkClient = client;
     return client;
   }
   /** Starts the runtime ahead of the first turn (Workspace.warmUp and warmRoute). */
@@ -601,13 +603,17 @@ export class CopilotProvider extends ModelProvider {
     if (!this.stopping) await this.client();
   }
   async stop() {
+    if (this.shutdown) return this.shutdown;
     this.stopping = true;
     for (const entry of this.pool.values()) clearTimeout(entry.timer);
     this.pool.clear();
-    const client = this.sdkClient;
+    const connection = this.connection;
     this.connection = null;
-    this.sdkClient = null;
-    if (client) await client.stop();
+    if (connection) {
+      // A status check may still be starting the old runtime when the credential changes.
+      this.shutdown = connection.then((client) => client.stop(), () => {}).finally(() => { this.shutdown = null; });
+      await this.shutdown;
+    }
   }
 
   // Account
@@ -710,6 +716,7 @@ export class CopilotProvider extends ModelProvider {
         if (status !== undefined && status !== "completed") throw new Error("Sign-in incomplete: GitHub Copilot didn't keep it (" + status + "). Sign in with a GitHub token instead.");
         if (next.kind !== "completed" || !(await client.getAuthStatus()).isAuthenticated)
           throw new Error(next.message || "Sign-in incomplete. Open Copilot CLI and run /login.");
+        if (this.signedOutFile) rmSync(this.signedOutFile, { force: true });
       } finally {
         if (!cancelled()) this.signInFlow = null;
         await flow.cancel();
@@ -722,6 +729,14 @@ export class CopilotProvider extends ModelProvider {
     this.signInFlow = null;
     await flow.cancel();
   }
+  // A shared keychain item can belong to another Copilot installation. If the OS protects it,
+  // disconnect this host and start the SDK with automatic account loading disabled on every boot.
+  async disconnectAccount() {
+    if (!this.signedOutFile) throw new Error("A Botkins data folder is required to disconnect this account.");
+    mkdirSync(this.baseDirectory, { recursive: true });
+    writeFileSync(this.signedOutFile, "", { mode: 0o600 });
+    await this.stop();
+  }
   async signOut() {
     const { type } = await this.auth();
     // Botkins can only remove a sign-in the Copilot runtime owns.
@@ -729,8 +744,15 @@ export class CopilotProvider extends ModelProvider {
       throw new Error("This computer is signed in through GitHub CLI. Run “gh auth logout” in a terminal to sign out.");
     if (type === "env" || type === "token")
       throw new Error("This computer signs in with a GitHub token from its environment. Remove that token to sign out.");
-    const result = await this.withAccounts((accounts) => accounts.set({ command: { kind: "logout" } }));
-    if (!result?.ok) throw new Error("GitHub Copilot didn't sign out. Try again.");
+    try {
+      const result = await this.withAccounts((accounts) => accounts.set({ command: { kind: "logout" } }));
+      if (!result?.ok) throw new Error("GitHub Copilot didn't sign out. Try again.");
+    } catch (error) {
+      if (!this.signedOutFile || !/Failed to remove token: Keychain error: Couldn't access platform storage/i.test(error.message)) throw error;
+      await this.disconnectAccount();
+      if ((await this.auth()).connected) throw new Error("Copilot still has an active account on this host.");
+      return;
+    }
     await this.releaseSessions();
   }
 

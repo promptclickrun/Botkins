@@ -138,6 +138,25 @@ export class SignIns {
     const secret = String(token ?? "").trim();
     if (!secret || secret.length > 8000 || /\s/.test(secret)) throw new Error("That isn't a token or key: it is one word with no spaces.");
     if (KEYED_IDS.includes(provider.id)) return this.useKey(provider, secret);
+    if (provider.id === "copilot") {
+      previous = this.token(provider.id);
+      this.keep(provider, secret);
+      let status;
+      try {
+        await provider.stop();
+        status = await provider.status();
+        if (!status.connected) throw new Error(provider.name + " didn't accept that token.");
+      } catch (error) {
+        if (previous) this.keep(provider, previous);
+        else this.forget(provider.id);
+        await provider.stop();
+        await this.changed(provider.id);
+        throw error;
+      }
+      await this.enable(provider.id);
+      await this.changed(provider.id);
+      return { connected: true, account: status.account ?? null, plan: status.plan ?? null };
+    }
     if (provider.id === "codex") {
       const file = await provider.locate();
       if (!file) throw new Error("The Codex CLI isn't installed on this host.");
@@ -145,12 +164,10 @@ export class SignIns {
       const flag = /^sk-/.test(secret) ? "--with-api-key" : "--with-access-token";
       const result = await this.runTool(file, ["login", flag], { input: secret + "\n", env: await cliEnv(), timeoutMs: 60_000 });
       if (result.code !== 0) throw new Error("Codex didn't take that " + (flag === "--with-api-key" ? "API key" : "access token") + ".");
-    } else if (provider.id === "claude" || provider.id === "copilot") {
+    } else if (provider.id === "claude") {
       // The old token is kept until the new one is accepted (below).
       previous = this.token(provider.id);
       this.keep(provider, secret);
-      // The Copilot runtime reads its sign-in when it starts: it starts again with the new one.
-      if (provider.id === "copilot") await provider.stop().catch(() => {});
     } else if (provider.id === "opencode") {
       if (!service) throw new Error("Name the model service the key is for, with --service (see `botkins providers services opencode`).");
       await provider.connectService(String(service), { key: secret });
@@ -159,10 +176,9 @@ export class SignIns {
     const status = await this.providers().status(provider.id);
     if (!status?.connected) {
       // A token the provider turned down is not kept, and the one it replaced comes back as it was.
-      if (provider.id === "claude" || provider.id === "copilot") {
+      if (provider.id === "claude") {
         if (previous) {
           this.keep(provider, previous);
-          if (provider.id === "copilot") await provider.stop().catch(() => {});
           await this.changed(provider.id);
         } else this.forget(provider.id);
       }
@@ -197,7 +213,12 @@ export class SignIns {
   async signOut(id) {
     const provider = this.providers().require(id);
     const had = this.forget(provider.id);
-    if (had && provider.id === "copilot") await provider.stop().catch(() => {});
+    if (had && provider.id === "copilot") {
+      // Removing our pasted token must not then log a different, shared keychain account out.
+      await provider.disconnectAccount();
+      await this.changed(provider.id);
+      return { connected: (await provider.auth()).connected };
+    }
     let own = null;
     try {
       await provider.signOut();
@@ -522,7 +543,10 @@ export class SignIns {
     const open = async (url) => session.emit({ type: "open", url: String(url) });
     if (provider.id === "copilot") {
       session.cancel = () => provider.cancelSignIn();
-      return provider.signIn({ device: async ({ userCode, verificationUri }) => session.emit({ type: "code", url: verificationUri, code: userCode }) });
+      await provider.signIn({ device: async ({ userCode, verificationUri }) => session.emit({ type: "code", url: verificationUri, code: userCode }) });
+      // Off providers have a synthetic signed-out status in the catalog. GitHub has now approved this one.
+      await this.enable(provider.id);
+      return;
     }
     if (provider.id === "codex") return this.tool(session, await this.located(provider), ["login", "--device-auth"]);
     if (provider.id === "claude") return this.tool(session, await this.located(provider), ["auth", "login", "--claudeai"]);

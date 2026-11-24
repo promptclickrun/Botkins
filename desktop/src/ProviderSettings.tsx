@@ -28,7 +28,7 @@ const VIA: Record<string, string> = {
 
 /** What signing out also does on this computer, per provider. */
 const SIGN_OUT_NOTE: Record<string, string> = {
-  copilot: "Copilot CLI on this computer is signed out too.",
+  copilot: "Copilot CLI may also sign out if it shares this account.",
   codex: "The Codex CLI on this computer is signed out too.",
   claude: "Claude Code on this computer is signed out too.",
 };

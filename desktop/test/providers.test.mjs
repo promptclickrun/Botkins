@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { Workspace } from "./starter.mjs";
 import { Providers, ModelProvider, ProviderSession, defineTool } from "../desktop/providers/index.mjs";
 import { CopilotProvider, loginAnswer, sessionOptions, spoken, typedSchema } from "../desktop/providers/copilot/index.mjs";
+import { SignIns } from "../desktop/terminal/signin.mjs";
 import { fakeClient, tempDir, tick } from "./fake-copilot.mjs";
 import { pass, settle, watching } from "./quiet-turns.mjs";
 
@@ -741,6 +742,118 @@ test("sign-out removes a Copilot sign-in and explains the ones Botkins can't rem
   assert.deepEqual(gh.calls, []);
   const env = accountsFixture(t, { first: {}, next: [] }, () => ({ isAuthenticated: true, authType: "env" }));
   await assert.rejects(env.copilot.signOut(), /token from its environment/);
+});
+
+test("phone sign-in while Copilot is off and sign-out when the host keychain refuses removal", async (t) => {
+  const baseDirectory = tempDir(t);
+  let saved = false;
+  let enabled = false;
+  let rejectLogout = true;
+  let approve = true;
+  let logoutCalls = 0;
+  const vault = new Map();
+  const sdk = {
+    RuntimeConnection: runtimeSdk().sdk.RuntimeConnection,
+    CopilotClient: class {
+      constructor({ github }) {
+        this.connected = github?.token ? github.token === "good-token" : saved && github?.useLoggedInUser !== false;
+      }
+      async start() {}
+      async stop() { this.connected = false; }
+      async getAuthStatus() {
+        return { isAuthenticated: this.connected, authType: "user", login: this.connected ? "octo" : undefined };
+      }
+      async createSession() {
+        const accounts = {
+          login: {
+            begin: async () => ({ flowId: "login", step: { kind: "device-code", userCode: "TEST", verificationUri: "https://github.com/login/device" } }),
+            advance: async () => {
+              if (!approve) return { kind: "error", message: "Approval declined" };
+              saved = this.connected = true;
+              return { kind: "completed", result: { status: "completed" } };
+            },
+            cancel: async () => {},
+          },
+          set: async () => {
+            logoutCalls++;
+            if (rejectLogout) throw new Error("Request session.accounts.set failed with message: Failed to remove token: Keychain error: Couldn't access platform storage: Invalid attempt to change the owner of this item.");
+            saved = this.connected = false;
+            return { ok: true };
+          },
+        };
+        return { rpc: { accounts }, sessionId: "account", disconnect: async () => {} };
+      }
+      async deleteSession() {}
+    },
+  };
+  const make = () => {
+    const provider = new CopilotProvider({ baseDirectory, sdk, github: () => signIns.copilotGitHub() });
+    const registry = new Providers([provider]);
+    registry.configure({ enabled: () => enabled });
+    const signIns = new SignIns({
+      providers: () => registry,
+      vault: () => ({
+        get: (id) => vault.get(id),
+        put: (value, _meta, id) => vault.set(id, value),
+        remove: (id) => vault.delete(id),
+      }),
+      enable: async () => { enabled = true; },
+      changed: async () => registry.invalidate(),
+    });
+    return { signIns, provider };
+  };
+  async function login(signIns, refused = false) {
+    const { session } = await signIns.start("copilot");
+    let view;
+    let after = 0;
+    do {
+      view = await signIns.read(session, { after });
+      after = view.next;
+    } while (!view.done);
+    if (refused) assert.match(view.error, /Approval declined/);
+    else {
+      assert.equal(view.error, undefined);
+      assert.equal(view.result.account, "octo");
+    }
+  }
+  const first = make();
+  await login(first.signIns);
+  assert.equal(enabled, true);
+  await first.provider.stop();
+  const second = make();
+  assert.equal((await second.provider.auth()).connected, true);
+  assert.deepEqual(await second.signIns.signOut("copilot"), { connected: false });
+  assert.equal(saved, true, "the keychain still owns its item");
+  await second.provider.stop();
+  const third = make();
+  assert.equal((await third.provider.auth()).connected, false);
+  approve = false;
+  await login(third.signIns, true);
+  assert.equal((await third.provider.auth()).connected, false);
+  approve = true;
+  await login(third.signIns);
+  await third.provider.stop();
+  const fourth = make();
+  assert.equal((await fourth.provider.auth()).connected, true);
+  rejectLogout = false;
+  assert.deepEqual(await fourth.signIns.signOut("copilot"), { connected: false });
+  assert.equal(saved, false);
+  await fourth.provider.stop();
+
+  saved = true;
+  enabled = false;
+  const pasted = make();
+  await assert.rejects(pasted.signIns.useToken("copilot", "bad-token"), /didn.t accept/);
+  assert.equal(vault.size, 0);
+  assert.equal(enabled, false);
+  assert.equal((await pasted.signIns.useToken("copilot", "good-token")).connected, true);
+  assert.equal(enabled, true);
+  await assert.rejects(pasted.signIns.useToken("copilot", "bad-token"), /didn.t accept/);
+  assert.equal(pasted.signIns.token("copilot"), "good-token");
+  assert.deepEqual(await pasted.signIns.signOut("copilot"), { connected: false });
+  assert.equal(logoutCalls, 2, "removing a pasted token leaves the shared credential alone");
+  assert.equal(vault.size, 0);
+  await pasted.provider.stop();
 });
 
 test("the Copilot model list names its provider and each model's source", async (t) => {

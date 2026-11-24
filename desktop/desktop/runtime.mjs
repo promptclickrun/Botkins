@@ -890,6 +890,7 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
       const provider = providers.get(providerId);
       try {
         await provider.signIn({ open: openSignIn });
+        if (provider.id === "copilot") await signIns.enable(provider.id);
       } finally {
         // Also after a failure: a sign-in the person finished elsewhere still counts.
         await workspace.providerChanged(provider.id);

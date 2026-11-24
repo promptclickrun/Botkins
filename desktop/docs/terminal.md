@@ -163,7 +163,7 @@ botkins providers set openai-api --base-url http://localhost:11434/v1 --model ll
 - **`providers login <provider>` takes the key** from a hidden question or standard input (it is `--token` for these without saying so). `providers logout` removes the key and keeps the settings. `providers list` says what is still missing. `providers list --json` has `keyed` with the settings, whether a key is kept and what is missing; never the key.
 - **A scratch copy** (a data folder of its own, `botkins --data-dir <folder>` or `BOTKINS_DATA_DIR`) keeps the settings in `<folder>/data/keyed/<provider>.json` and the key in that folder's own vault, apart from any other Botkins.
 
-To sign a provider out, run `botkins providers logout <provider>`. It removes the token that Botkins keeps and the provider's own sign-in, so it asks first; with no terminal it needs `--yes`. To see the models, run `botkins models`.
+To sign a provider out, run `botkins providers logout <provider>`. It removes the token that Botkins keeps and the provider's own sign-in, so it asks first; with no terminal it needs `--yes`. If the system keychain refuses to remove a shared Copilot login, Botkins disconnects from it locally. That choice survives a host restart. Other apps can still use the shared login. To see the models, run `botkins models`.
 
 `botkins models --speed fast` sets the global speed. Add `--bot <bot>` or `--chat <id>` to override it. Choose `off`, `fast`, or `ultrafast`, or use `inherit` to clear a bot or chat override. A chat’s explicit choice wins over its bot’s choice, including Off. Fast and Ultrafast use your plan allowance much faster. Models that cannot use the requested speed run at standard speed.
 
