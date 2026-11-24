@@ -70,6 +70,7 @@ import { PeopleDialog } from "./ChatPeople";
 import { authorName, chatPeopleView } from "./peopleView";
 import type { Bot, Chat, ChatMode, Message, State } from "./types";
 import { sessionTodos } from "../desktop/link/session-todos";
+import { CONTINUE_OPEN_STEPS, keptLine, openLine } from "./keep";
 import { orderedRunEvents, type RunTimelineEvent } from "./chatTimeline";
 import { teamCan } from "./teamAccess";
 import { regenerateTitleItem, useAsk, useMenu } from "./Pages";
@@ -271,7 +272,9 @@ function ChatViewBody({
   const chatRuns = state.runs.filter((r) => r.chatId === chat.id);
   const runs = new Map(chatRuns.map((r) => [r.id, r]));
   const latest = chatRuns[0];
-  const requests = state.requests.filter((r) => r.chatId === chat.id);
+  // A question whose turn went on without an answer waits behind the ones a turn is waiting on, and is not "waiting" for the turn.
+  const requests = state.requests.filter((r) => r.chatId === chat.id).sort((a, b) => Number(!!a.detached) - Number(!!b.detached));
+  const turnWaits = requests.some((r) => !r.detached);
   const todos = sessionTodos(latest?.todos, chat.todos ?? chatRuns.find((run) => run.todos)?.todos) ?? [];
   const todoRail = todos.length > 0 && <TaskChip todos={todos} open={drawer === "tasks"} toggle={() => setDrawer(drawer === "tasks" ? "" : "tasks")} />;
   // The to-do chip rides beside the latest turn's fold whenever that fold is sure to be drawn.
@@ -665,7 +668,7 @@ function ChatViewBody({
     const allSteps = run.steps ?? [];
     // The bot is on its work now: the turn runs and nothing waits for the person. Its live line
     // shimmers (T3 Code's look): the running step, or the lead while no step runs in view.
-    const onIt = run.status === "Working" && !requests.length;
+    const onIt = run.status === "Working" && !turnWaits;
     const showStep = (step: NonNullable<typeof run.steps>[number]) => stepsMode === "open" || (stepsMode === "failed" && step.status === "Failed");
     type Event = { kind: RunTimelineEvent["kind"]; at: number; order: number; key: string; body: ReactNode; fold: ReactNode; details: ReactNode };
     const events: Event[] = [];
@@ -758,6 +761,8 @@ function ChatViewBody({
         {/* A finished one-bot turn folds above its answer: the work, then the reply. */}
         {!group && !live && (folded || hasActivity) && fold}
         {!group && reply.map(({ message, index }) => timelineMessage(message, index))}
+        {/* Botkins gave the bot more turns in this run by itself. */}
+        {!group && keptLine(run) && <div className="timeline-kept">{keptLine(run)}</div>}
         {live && hasText && (
           <article className="assistant live">
             {group && currentBot && (
@@ -774,6 +779,13 @@ function ChatViewBody({
         <RunCards run={run} prefill={prefill} pickModel={canManageAgents ? pickModel : undefined} />
         {!live && (failed.includes(run.status) || !!groupFailure) && (
           <div className="error run-error"><span>{groupFailure || (run.ending === "timed-out" ? "Timed out" : run.status) + " · " + (run.detail || "Reply stopped.")}</span>{!groupFailure && run.id === lastUserRun && !busy && <button className="secondary" onClick={() => void window.botkins.retry(run.id).catch((e) => setNotice(e.message))}><RotateCcw size={13} />Try again</button>}</div>
+        )}
+        {/* The turn ended with plan steps open and nothing went on. */}
+        {!live && !group && openLine(run) && (
+          <div className="timeline-open" role="status">
+            <span>{openLine(run)}</span>
+            {run.id === lastUserRun && !busy && <button className="secondary" onClick={() => void window.botkins.send(chat.id, CONTINUE_OPEN_STEPS).catch((e) => setNotice(e.message))}>Continue</button>}
+          </div>
         )}
       </Fragment>
     );
@@ -1102,7 +1114,7 @@ function ChatViewBody({
                 <LiveReply updates={updates} files={files} follow={follow} />
               ) : (
                 <p className="typing" role="status">
-                  {requests.length ? "Waiting for your response…" : (speaker?.name ?? "The group") + " is typing…"}
+                  {turnWaits ? "Waiting for your response…" : (speaker?.name ?? "The group") + " is typing…"}
                 </p>
               )}
             </article>
@@ -1119,7 +1131,7 @@ function ChatViewBody({
                 <LiveReply updates={updates} files={files} follow={follow} />
               ) : (
                 <p className="typing" role="status">
-                  {requests.length ? "Waiting for your response…" : state.intents[chat.id] || "Working…"}
+                  {turnWaits ? "Waiting for your response…" : state.intents[chat.id] || "Working…"}
                 </p>
               )}
             </article>

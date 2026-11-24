@@ -70,6 +70,8 @@ const tick = () => new Promise((r) => setImmediate(r));
 test("reasoning, usage, context, subagents and todos are recorded for the main agent", async (t) => {
   let live;
   const session = fakeSession(async (emit) => {
+    // The plan below ends with steps open, so Botkins gives the bot a second turn (desktop/keep-moving.mjs); it has nothing to add.
+    if (session.sent.length > 1) return { data: { content: "Done" } };
     emit({ type: "assistant.reasoning_delta", data: { reasoningId: "r1", deltaContent: "Let me " } });
     emit({ type: "assistant.reasoning_delta", data: { reasoningId: "r1", deltaContent: "think." } });
     emit({ type: "assistant.reasoning_delta", agentId: "sub", data: { reasoningId: "x", deltaContent: "helper" } });
@@ -150,7 +152,7 @@ test("reasoning is capped per run", async (t) => {
   assert.ok(total <= REASONING_CAP, String(total));
 });
 
-test("messages sent while a chat works are queued, removable and sent in order", async (t) => {
+test("messages sent while a chat works are queued, removable and read together in order", async (t) => {
   const releases = [];
   const session = fakeSession(
     () => new Promise((resolve) => releases.push(() => resolve({ data: { content: "reply" } }))),
@@ -170,18 +172,20 @@ test("messages sent while a chat works are queued, removable and sent in order",
   await first;
   await tick();
   await tick();
+  // What is left in the queue is one person's: it is one turn, started with both messages (desktop/keep-moving.mjs).
   assert.equal(ws.active.has(id), true);
+  assert.equal(ws.snapshot().queued[id], undefined);
   releases.shift()();
   await ws.active.get(id).done;
   await tick();
-  await tick();
-  releases.shift()();
-  await ws.active.get(id).done;
-  await tick();
+  assert.equal(session.sent.length, 2);
+  assert.equal(session.sent[0].prompt, "One");
+  assert.match(session.sent[1].prompt, /^\[Botkins\] The person sent 2 messages while you were busy\. Here they are in order; read them all before you reply\.\n\nMessage 1:\nTwo\n\nMessage 2:\nFour$/);
   assert.deepEqual(
     ws.chat(id).messages.filter((m) => m.role === "user").map((m) => m.text),
     ["One", "Two", "Four"],
   );
+  assert.equal(ws.state.runs.length, 2);
   assert.equal(ws.snapshot().queued[id], undefined);
 });
 
