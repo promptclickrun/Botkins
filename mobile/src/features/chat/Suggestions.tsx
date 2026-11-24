@@ -3,7 +3,7 @@ import { pullReference } from "@/link/pr-reference";
 // (projects, wiki pages, files and artifacts) and then the chat's pull requests, "@" for bots (a
 // group chat's members and "everyone", or a one-bot chat's teammates) and then the records too, so
 // either key finds everything. The trigger is the word that ends at the caret (compose.ts).
-import { BookOpen, Cpu, FileText, FolderKanban, GitMerge, GitPullRequest, GitPullRequestClosed, GitPullRequestDraft, Shrink, Sparkles, SquareSlash, Users } from "lucide-react-native";
+import { BookOpen, Cpu, FileText, FolderKanban, GitMerge, GitPullRequest, GitPullRequestClosed, GitPullRequestDraft, Shrink, Sparkles, SquareSlash, User, Users } from "lucide-react-native";
 import { type ReactNode, useEffect, useRef, useState } from "react";
 import { ActivityIndicator, ScrollView, StyleSheet, View } from "react-native";
 import type { Bot, Capability, Mentionables, PullRequest } from "@/link/types";
@@ -130,6 +130,23 @@ export function useMentionables(active: boolean, chatId: string, botId: string |
     };
   }, [active, chatId, botId]);
   return { data, error, loading: active && !data && !error };
+}
+
+/** Other people in this chat that "@" can notify with a mention. */
+export function personOptions(query: string, people: { id: string; name: string; subtitle?: string }[], iconColor: string): Option[] {
+  const q = query.toLowerCase();
+  return ranked(
+    people.filter((person) => has(q, person.name, person.subtitle)),
+    (p) => p.name,
+    q,
+  ).map((person) => ({
+    key: "person:" + person.id,
+    group: "People",
+    title: person.name,
+    subtitle: person.subtitle || undefined,
+    leading: <User size={18} color={iconColor} strokeWidth={2.2} />,
+    insert: "@" + person.name,
+  }));
 }
 
 /** The bots "@" can address: a group chat's members and "everyone", or a one-bot chat's teammates. */

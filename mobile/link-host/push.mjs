@@ -315,6 +315,9 @@ export class Push {
     // The reminders the app sent in the last few minutes (its desktop/reminders.mjs): each goes once, to the person it is for.
     const reminders = (Array.isArray(state.reminders) ? state.reminders : []).filter((reminder) => reminder && typeof reminder.key === "string" && typeof reminder.person === "string");
     const reminderId = (reminder) => reminder.person + " " + reminder.key;
+    // Human @mentions recorded in the last few minutes (desktop/human-mentions.mjs): each goes once to the mentioned person.
+    const mentions = (Array.isArray(state.mentions) ? state.mentions : []).filter((mention) => mention && typeof mention.id === "string" && typeof mention.person === "string");
+    const mentionedRuns = new Set(mentions.filter((mention) => typeof mention.runId === "string" && mention.runId).map((mention) => mention.runId + ":" + mention.person));
     const sends = [];
     // The chats whose turn ended at this look, for the card for all Botkins: it makes its sound for
     // these. A turn the person stopped themselves ends quietly.
@@ -325,12 +328,13 @@ export class Push {
       const bots = new Map((state.bots ?? []).map((bot) => [bot.id, bot]));
       for (const request of requests) if (!this.asked.has(request.id)) this.onRequest(sends, targets, request, chats, bots);
       for (const reminder of reminders) if (!this.reminded?.has(reminderId(reminder))) this.onReminder(sends, targets, reminder, chats);
+      for (const mention of mentions) if (!this.mentioned?.has(mention.id)) this.onMention(sends, targets, mention, chats);
       for (const run of runs) {
         const working = run.status === "Working";
         const was = before.get(run.id);
         if (working && was === undefined) this.onStart(sends, targets, state, run, chats, bots);
         else if (!working && was !== false) {
-          this.onFinish(sends, targets, state, run, chats, bots);
+          this.onFinish(sends, targets, state, run, chats, bots, mentionedRuns);
           if (run.status !== "Stopped" && run.notify !== false) ended.add(run.chatId);
         }
         // Turns still under way: their Live Activities follow along.
@@ -343,6 +347,7 @@ export class Push {
     this.working = known;
     this.asked = new Set(requests.map((request) => request.id));
     this.reminded = new Set(reminders.map(reminderId));
+    this.mentioned = new Set(mentions.map((mention) => mention.id));
     if (sends.length) void this.send(sends);
   }
 
@@ -419,6 +424,27 @@ export class Push {
     }
   }
 
+  /**
+   * A direct @mention of a person in a shared chat (from another person or a bot). Sent to that
+   * person's devices when they have reply notifications on and aren't actively viewing that chat.
+   */
+  onMention(sends, targets, mention, chats) {
+    const chat = chats.get(mention.chatId);
+    const watching = this.attention?.();
+    const who = typeof mention.by === "string" && mention.by.trim() ? mention.by.trim() : "Someone";
+    const title = (who + " mentioned you in a chat").slice(0, 80);
+    for (const device of targets) {
+      const person = device.memberId ?? "owner";
+      if (person !== mention.person) continue;
+      if (!this.maySeeChat(device, chat)) continue;
+      if (!this.wants(device, "replies") || this.present(device.id, mention.chatId)) continue;
+      if (person === "owner" && watching?.focused && (watching.chatId === undefined || watching.chatId === mention.chatId)) continue;
+      const record = this.store.push(device.id);
+      const text = record.prefs.previews ? firstLine(mention.preview) || "Open Botkins to see it." : "Open Botkins to see it.";
+      sends.push(this.alert(device.id, record, { t: title, m: text, c: mention.chatId, k: "mention" }, { expiration: 900 }));
+    }
+  }
+
   /** Whether a run that finished is worth a notification, and of which kind (the desktop's own rules). */
   kindOf(run, chat) {
     if (!chat || chat.temporary || run.status === "Stopped" || run.notify === false) return null;
@@ -442,7 +468,7 @@ export class Push {
     return "replies";
   }
 
-  onFinish(sends, targets, state, run, chats, bots) {
+  onFinish(sends, targets, state, run, chats, bots, mentionedRuns = null) {
     const chat = chats.get(run.chatId);
     const kind = this.kindOf(run, chat);
     const resolved =
@@ -488,6 +514,8 @@ export class Push {
         }
       }
       if (!kind) continue;
+      // If a bot @mentioned this person in this run, they already get "{Bot} mentioned you in a chat".
+      if (kind === "replies" && mentionedRuns?.has(run.id + ":" + person)) continue;
       const explicit = resolved?.explicit === true;
       let openChatId;
       if (explicit) {

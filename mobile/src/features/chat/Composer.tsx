@@ -11,7 +11,7 @@ import Svg, { Circle } from "react-native-svg";
 import type { BoardItem, Bot, MentionInput } from "@/link/types";
 import { useChatPrefs } from "@/state/chatPrefs";
 import { useCan, useChat, usePart, useSettings } from "@/state/hooks";
-import { myPlace, myself } from "./people";
+import { chatMentionPeople, myPlace, myself } from "./people";
 import { drafts, keepDraft } from "./split";
 import { api, attempt } from "@/state/link";
 import { showToast } from "@/state/store";
@@ -29,6 +29,7 @@ import {
   MAX_MENTIONS,
   mentionKey,
   type Option,
+  personOptions,
   pullOptions,
   recordOptions,
   slashOptions,
@@ -201,9 +202,13 @@ export function Composer({
   const { colors, dark, type } = useTheme();
   const enterSends = useChatPrefs((prefs) => prefs.enterSends);
   const meta = usePart("meta");
+  const team = usePart("team");
   const capabilities = meta?.capabilities;
   const here = useChat(chatId);
-  const mine = !here || myPlace(here, myself(meta)) === "manages";
+  const me = myself(meta);
+  const mine = !here || myPlace(here, me) === "manages";
+  const chatPeople = chatMentionPeople(team?.people, here, me);
+  const canTyping = chatPeople.length > 0 && !!capabilities?.includes("chat-typing-v1");
   const canUpload = !!capabilities?.includes("uploads-v1");
   const canListPulls = !!here?.projectId && meta?.you?.kind !== "member" && !!capabilities?.includes("prs-v1");
   // One voice button. Live voice takes it when it is on (Settings › Voice); otherwise it talks by
@@ -225,6 +230,41 @@ export function Composer({
   }, [chatId, mentions, files]);
   const removed = useRef(new Set<string>());
   const placeCaret = useRef<number | null>(null);
+  const typingRef = useRef({ active: false, lastSent: 0 });
+  const typingTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const canTypingRef = useRef(canTyping);
+  canTypingRef.current = canTyping;
+  const sendTyping = (active: boolean) => {
+    void api["link.chat.typing"](chatId, active).catch(() => {});
+  };
+  const stopTyping = () => {
+    if (typingTimer.current) {
+      clearTimeout(typingTimer.current);
+      typingTimer.current = null;
+    }
+    if (!typingRef.current.active) return;
+    typingRef.current.active = false;
+    typingRef.current.lastSent = 0;
+    sendTyping(false);
+  };
+  const pulseTyping = () => {
+    if (!canTypingRef.current) return;
+    if (typingTimer.current) clearTimeout(typingTimer.current);
+    typingTimer.current = setTimeout(() => {
+      typingTimer.current = null;
+      stopTyping();
+    }, 3000);
+    const now = Date.now();
+    if (!typingRef.current.active || now - typingRef.current.lastSent >= 2000) {
+      typingRef.current.active = true;
+      typingRef.current.lastSent = now;
+      sendTyping(true);
+    }
+  };
+  useEffect(() => () => stopTyping(), [chatId]);
+  useEffect(() => {
+    if (!canTyping) stopTyping();
+  }, [canTyping]);
 
   // --- Suggestions
   const trigger = focused ? findTrigger(value, Math.min(caret, value.length)) : null;
@@ -243,9 +283,9 @@ export function Composer({
     loading = catalog.loading;
     note = catalog.error || undefined;
   } else if (sigil === "@") {
-    // Bots first: a group chat's members and "everyone", or the teammates a one-bot chat's bot can ask.
+    // People in this chat first, then bots, then records.
     const roster = group ? (members ?? []).flatMap((id) => bots.get(id) ?? []) : teammates([...bots.values()], botId, teamworkOn);
-    options = [...botOptions(query, roster, group, colors.muted), ...recordOptions(query, records.data, colors.muted)];
+    options = [...personOptions(query, chatPeople, colors.muted), ...botOptions(query, roster, group, colors.muted), ...recordOptions(query, records.data, colors.muted)];
     loading = records.loading;
     note = records.error || undefined;
   } else if (sigil === "#") {
@@ -447,6 +487,7 @@ export function Composer({
   };
   const submit = async () => {
     if (empty || uploading) return;
+    stopTyping();
     const sentCommand = command;
     const sentMentions = liveMentions;
     const sentFiles = files;
@@ -483,7 +524,7 @@ export function Composer({
           onPick={pick}
           loading={loading}
           note={note}
-          label={sigil === "/" ? "Commands and skills" : sigil === "@" ? "Mention a bot, project, page or file" : "Mention a project, page, file or pull request"}
+          label={sigil === "/" ? "Commands and skills" : sigil === "@" ? "Mention a person, bot, project, page or file" : "Mention a project, page, file or pull request"}
         />
       )}
       {/* The message box floats over the chat on glass (T3 Code's look): the chat scrolls under it. */}
@@ -535,10 +576,15 @@ export function Composer({
             // Typing at the end keeps the caret at the end until the field reports where it is.
             if (caret >= value.length) setCaret(text.length);
             onChange(text);
+            if (text.trim()) pulseTyping();
+            else stopTyping();
           }}
           onSelectionChange={(event) => setCaret(event.nativeEvent.selection.end)}
           onFocus={() => setFocused(true)}
-          onBlur={() => setFocused(false)}
+          onBlur={() => {
+            setFocused(false);
+            stopTyping();
+          }}
           placeholder={command?.hint || placeholder}
           placeholderTextColor={colors.faint}
           keyboardAppearance={dark ? "dark" : "light"}
