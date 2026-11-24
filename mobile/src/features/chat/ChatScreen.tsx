@@ -7,7 +7,7 @@ import { ChevronRight, Ellipsis, PanelLeft, Repeat, X } from "lucide-react-nativ
 import { type ComponentRef, type ReactNode, type RefObject, memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { ActivityIndicator, Alert, FlatList, Platform, ScrollView, type TextInput, useWindowDimensions, View } from "react-native";
 import { useKeyboardState, useReanimatedKeyboardAnimation } from "react-native-keyboard-controller";
-import Animated, { FadeIn, useAnimatedStyle, useReducedMotion } from "react-native-reanimated";
+import Animated, { FadeIn, useAnimatedStyle, useReducedMotion, useSharedValue, withDelay, withRepeat, withSequence, withTiming } from "react-native-reanimated";
 import { useStore } from "zustand";
 import { ScrollViewMarker } from "react-native-screens/experimental";
 import { useShallow } from "zustand/react/shallow";
@@ -31,7 +31,7 @@ import { ScrollToLatest } from "./ScrollToLatest";
 import { GroupFace, workWidth } from "./bits";
 import { arrived, composeSlashPrompt, type DraftMention, MAX_MENTIONS, waitingCopies, withBoardQuote } from "./compose";
 import { archivesWhenLeft } from "./habits";
-import { myPlace, myself } from "./people";
+import { formatTypingLabel, myPlace, myself } from "./people";
 import { regenerateTitle, regenerateTitleAction, useCanRegenerateTitle } from "./titleActions";
 import { Composer, type ModelPill, type SendOptions } from "./Composer";
 import { ChangesView } from "./Changes";
@@ -60,6 +60,54 @@ import { RequestPanel } from "./RequestPanel";
 
 const EMPTY_CHAT: ChatView = { from: 0, total: 0, messages: [], runs: {} };
 const STARTERS = ["What can you do?", "Plan my day", "Summarize my week"];
+
+function TypingDot({ delay, color, reduced }: { delay: number; color: string; reduced: boolean }) {
+  const pulse = useSharedValue(reduced ? 0.65 : 0.4);
+  useEffect(() => {
+    if (reduced) {
+      pulse.value = 0.65;
+      return;
+    }
+    pulse.value = withDelay(
+      delay,
+      withSequence(
+        withRepeat(
+          withSequence(withTiming(1, { duration: 420 }), withTiming(0.4, { duration: 420 })),
+          3,
+          false,
+        ),
+        withTiming(0.65, { duration: 240 }),
+      ),
+    );
+  }, [delay, pulse, reduced]);
+  const style = useAnimatedStyle(() => ({
+    opacity: pulse.value,
+    transform: [{ translateY: reduced ? 0 : (pulse.value - 0.4) * -3 }],
+  }));
+  return <Animated.View style={[{ width: 5, height: 5, borderRadius: 2.5, backgroundColor: color }, style]} />;
+}
+
+function TypingRow({ label }: { label: string }) {
+  const { colors } = useTheme();
+  const reduced = useReducedMotion();
+  return (
+    <View
+      accessibilityRole="text"
+      accessibilityLiveRegion="polite"
+      accessibilityLabel={label}
+      style={{ flexDirection: "row", alignItems: "center", gap: space.sm, paddingHorizontal: space.sm }}
+    >
+      <View style={{ flexDirection: "row", alignItems: "center", gap: 3 }}>
+        <TypingDot delay={0} color={colors.muted} reduced={reduced} />
+        <TypingDot delay={150} color={colors.muted} reduced={reduced} />
+        <TypingDot delay={300} color={colors.muted} reduced={reduced} />
+      </View>
+      <T variant="caption" color="muted" numberOfLines={1} style={{ flexShrink: 1 }}>
+        {label}…
+      </T>
+    </View>
+  );
+}
 
 function ChatTitle({ chat, bot, bots, state, model, room, docked }: { chat: ChatSummary; bot?: Bot; bots: Map<string, Bot>; state: AvatarState; model: string; room: number; /** The bot is on the voice dock: the title leaves its face out, so it shows once. */ docked?: boolean }) {
   const { width } = useWindowDimensions();
@@ -622,6 +670,8 @@ function ChatScreenScreen({ pane: paneId, onLeave: leavePane, onList }: { pane?:
   const [pinnedId, setPinnedId] = useState(board);
   const pinned = usePart("board")?.find((item) => item.id === pinnedId);
   const meta = usePart("meta");
+  const liveTyping = useApp((state) => (chatId ? state.parts.live?.typing?.[chatId] : undefined));
+  const typingLabel = formatTypingLabel(liveTyping, myself(meta));
   const boardMentions = !!meta?.capabilities.includes("board-mentions-v1");
   const unpin = () => {
     setPinnedId(undefined);
@@ -995,6 +1045,7 @@ function ChatScreenScreen({ pane: paneId, onLeave: leavePane, onList }: { pane?:
             <View style={{ paddingHorizontal: space.md, gap: space.sm }}>
               <TalkBar chatId={chatId} />
               <VoiceDock chatId={chatId} />
+              {!docked && !!typingLabel && <TypingRow label={typingLabel} />}
               {!docked && <Composer
                 chatId={chatId}
                 botId={chat.botId}

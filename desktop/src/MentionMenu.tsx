@@ -1,7 +1,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import type { Calls, PullRequest } from "../desktop/remote/client/types";
 import { pullReference } from "../desktop/remote/client/pr-reference";
-import { GitPullRequest, BookOpen, FileText, FolderKanban, Newspaper, Users, X } from "lucide-react";
+import { GitPullRequest, BookOpen, FileText, FolderKanban, Newspaper, User, Users, X } from "lucide-react";
 import { BotAvatar } from "./Avatar";
 import type { Bot, Mention, MentionInput, Mentionables } from "./types";
 import "./mentions.css";
@@ -85,14 +85,14 @@ export function useProjectPulls(chatId: string | undefined, query: string) {
 
 export type MentionOption = {
   key: string;
-  group: "Bots" | "Projects" | "Wiki" | "Files" | "Pull requests";
+  group: "People" | "Bots" | "Projects" | "Wiki" | "Files" | "Pull requests";
   name: string;
   hint?: string;
   tag?: string;
   icon: ReactNode;
   /** The text inserted, without the trailing space. */
   token: string;
-  /** Recorded with the message; bots are plain-text addressing and have none. */
+  /** Recorded with the message; bots and people are plain-text addressing and have none. */
   mention?: DraftMention;
 };
 
@@ -105,6 +105,7 @@ export function mentionOptions(
   data: Mentionables | undefined,
   members: Bot[] | undefined,
   pulls: PullRequest[] = [],
+  people: { id: string; name: string; hint?: string }[] = [],
 ): MentionOption[] {
   const q = query.toLowerCase();
   const hit = (...texts: (string | undefined)[]) => texts.some((t) => t?.toLowerCase().includes(q));
@@ -116,6 +117,17 @@ export function mentionOptions(
       .slice(0, LIMIT);
   const out: MentionOption[] = [];
   if (sigil === "@") {
+    if (people.length) {
+      for (const p of ranked(people.filter((person) => hit(person.name, person.hint))))
+        out.push({
+          key: "person:" + p.id,
+          group: "People",
+          name: "@" + p.name,
+          hint: p.hint,
+          icon: <User size={15} aria-hidden="true" />,
+          token: "@" + p.name,
+        });
+    }
     if (members?.length) {
       const bots = [
         ...members.map((b) => ({ id: b.id, name: b.name, hint: b.role, bot: b as Bot | undefined })),
@@ -195,15 +207,15 @@ export function MentionMenu({
   filtered: boolean;
   pick: (i: number) => void;
 }) {
-  const label = sigil === "#" ? "Mention a project, wiki page or file" : "Mention a bot";
+  const label = sigil === "#" ? "Mention a project, wiki page or file" : "Mention a person or bot";
   const empty =
     sigil === "#"
       ? filtered
         ? "No matching projects, pages or files"
         : "No projects, pages or files yet"
       : filtered
-        ? "No matching bots"
-        : "No bots to mention";
+        ? "No matching people or bots"
+        : "No people or bots to mention";
   const groups: { name: MentionOption["group"]; items: { o: MentionOption; i: number }[] }[] = [];
   options.forEach((o, i) => {
     const last = groups.at(-1);

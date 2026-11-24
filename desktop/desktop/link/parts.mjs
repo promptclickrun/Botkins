@@ -108,6 +108,8 @@ export function baseParts(state, info, looks = {}, link = {}) {
       active,
       // Whether a message sent now steers the turn under way (the desktop app's "Steer now") or waits ("Send next").
       ...(state.steerable && typeof state.steerable === "object" && { steerable: state.steerable }),
+      // People currently typing in each shared chat ("chat-typing-v1"): only ids and display names, never draft text.
+      ...(link.typing && typeof link.typing === "object" && Object.keys(link.typing).length > 0 && { typing: link.typing }),
     },
     runs: (state.runs ?? []).slice(0, RUN_LIST).map(runSummary),
     panels: state.panels ?? [],

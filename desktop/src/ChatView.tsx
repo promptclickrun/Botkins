@@ -69,7 +69,7 @@ import ProjectChanges, { ProjectPicker, modeLabels } from "./ProjectChanges";
 import { blockedBots } from "./access";
 import { FolderKanban, ShieldAlert, UserPlus } from "lucide-react";
 import { PeopleDialog } from "./ChatPeople";
-import { authorName, chatPeopleView } from "./peopleView";
+import { authorName, chatPeopleView, formatTypingLabel } from "./peopleView";
 import type { Bot, Chat, ChatMode, Message, State } from "./types";
 import { sessionTodos } from "../desktop/link/session-todos";
 import { CONTINUE_OPEN_STEPS, keptLine, openLine } from "./keep";
@@ -1340,6 +1340,20 @@ function ChatViewBody({
             <RichText text={side.answer || side.error || "Asking the model…"} />
           </section>
         )}
+        {(() => {
+          const typingLabel = formatTypingLabel(state.typing?.[chat.id], peopleView?.me ?? "owner");
+          if (!typingLabel) return null;
+          return (
+            <div className="chat-typing-bar" role="status" aria-live="polite">
+              <span className="chat-typing-dots" aria-hidden="true">
+                <span />
+                <span />
+                <span />
+              </span>
+              <span>{typingLabel}…</span>
+            </div>
+          );
+        })()}
         <QuoteContext.Provider value={{ quote, setQuote }}>{composer}</QuoteContext.Provider>
       </div>
       </div>

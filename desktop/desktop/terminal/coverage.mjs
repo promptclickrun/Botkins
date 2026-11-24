@@ -270,7 +270,7 @@ export const WORKSPACE = {
   "link.spaces.newLink": cmd("sharing link"),
   "link.spaces.arrange": cmd("sharing order"), // and `sharing pin`
   "link.spaces.notify": cmd("sharing notify"),
-  ...each("link.spaces.seen link.spaces.here", no("window's own")),
+  ...each("link.spaces.seen link.spaces.here link.chat.typing", no("window's own")),
   "link.team.setLinkSharing": cmd("sharing links"),
   // The team (control-team.mjs): kept by the phone link, reached through the app's own calls.
   team: cmd("team show"),
@@ -349,7 +349,7 @@ export const LINK = {
   "link.spaces.newLink": cmd("sharing link"),
   "link.spaces.arrange": cmd("sharing order"),
   "link.spaces.notify": cmd("sharing notify"),
-  ...each("link.spaces.seen link.spaces.here", no("phone's own")),
+  ...each("link.spaces.seen link.spaces.here link.chat.typing", no("phone's own")),
   "link.team.setLinkSharing": cmd("sharing links"),
   // Sections on the Chats screen ("chat-sections-v1"): a person's own way to group their chats.
   "link.chats.addSection": cmd("chats sections add"),

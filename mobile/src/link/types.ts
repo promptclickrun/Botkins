@@ -749,6 +749,8 @@ export type Live = {
   intents: Record<string, string>;
   thinking: Record<string, string>;
   speakers: Record<string, string>;
+  /** People currently typing in a chat, per chat ("chat-typing-v1"). */
+  typing?: Record<string, { id: string; name: string }[]>;
   queued: Record<string, QueuedMessage[]>;
   requests: AgentRequest[];
   active: string[];
@@ -1941,6 +1943,8 @@ export type Calls = {
   "link.chats.orderSections"(ids: string[]): null;
   /** Puts one of the caller's chats in a section, or in none (`null`). */
   "link.chats.setSection"(chatId: string, sectionId: string | null): null;
+  /** Whether the caller is typing in this chat ("chat-typing-v1"). Ephemeral, in memory only. */
+  "link.chat.typing"(chatId: string, typing: boolean): null;
   "link.spaces.share"(id: string, input: SpaceShareInput): { link?: string };
   /** A fresh link; the old one stops working. */
   "link.spaces.newLink"(id: string): { link: string };

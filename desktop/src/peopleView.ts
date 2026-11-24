@@ -30,3 +30,38 @@ export function authorName(state: State, author: { memberId: string; name: strin
 
 /** Whether whoever is looking may leave the chat: they were invited into it, and did not start it. */
 export const canLeave = (view: { me: string; createdBy: string }, invited: string[]) => view.me !== view.createdBy && invited.includes(view.me);
+
+export type ChatMentionPerson = { id: string; name: string; hint?: string };
+
+/** Other people participating in this chat who can be @mentioned, excluding whoever is looking. */
+export function chatMentionPeople(state: State, chat: Chat): ChatMentionPerson[] {
+  const view = chatPeopleView(state, chat);
+  if (!view) return [];
+  const ids = [...new Set([view.createdBy, ...(chat.invited ?? [])])].filter((id) => id !== view.me);
+  const out: ChatMentionPerson[] = [];
+  for (const id of ids) {
+    const person = view.people.find((item) => item.id === id);
+    if (!person?.name) continue;
+    out.push({ id, name: person.name, hint: id === OWNER ? "Owner" : "Member" });
+  }
+  return out;
+}
+
+/** Formats the human typing indicator for one chat, excluding `me` and deduplicating by person id. */
+export function formatTypingLabel(typers: { id: string; name: string }[] | undefined, me?: string): string | null {
+  if (!typers?.length) return null;
+  const seen = new Set<string>();
+  const names: string[] = [];
+  for (const person of typers) {
+    if (!person?.id || person.id === me || seen.has(person.id)) continue;
+    const name = person.name?.trim();
+    if (!name) continue;
+    seen.add(person.id);
+    names.push(name);
+  }
+  if (!names.length) return null;
+  if (names.length === 1) return names[0] + " is typing";
+  if (names.length === 2) return names[0] + " and " + names[1] + " are typing";
+  const rest = names.length - 2;
+  return names[0] + ", " + names[1] + ", and " + rest + (rest === 1 ? " other" : " others") + " are typing";
+}

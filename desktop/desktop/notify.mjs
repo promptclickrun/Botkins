@@ -2,6 +2,7 @@
 // `Notifier` connects it to workspace events and a Notification class supplied by main.mjs.
 import { resolveRoutineTargets } from "./link/notify-targets.mjs";
 import { defaultSettings } from "./preferences.mjs";
+import { mentionTitle } from "./human-mentions.mjs";
 
 const minutes = (text) => {
   const [h, m] = text.split(":").map(Number);
@@ -75,6 +76,14 @@ export function decide(event, { settings, focused, now = new Date(), timeZone, m
     if (!mine || prefs.reminders === false) return null;
     return { title: event.reminder.title, body: event.reminder.body, chatId: event.reminder.chatId };
   }
+  if (event.type === "mention") {
+    if (!mine || !prefs.replies || focused || !event.mention?.chatId) return null;
+    return {
+      title: mentionTitle(event.mention.by),
+      body: firstLine(event.mention.preview) || "Open Botkins to see it.",
+      chatId: event.mention.chatId,
+    };
+  }
   if (event.type !== "turn") return null;
   const { chat, run } = event;
   if (!run || run.notify === false || run.status === "Stopped" || run.status === "Working" || chat?.temporary) return null;
@@ -138,11 +147,22 @@ export class Notifier {
     this.openSettings = openSettings;
     // Electron drops click handlers on notifications that are garbage-collected.
     this.live = new Set();
-    workspace.events.on("turn", ({ chat, run }) =>
-      this.consider({ type: "turn", chat, run, bot: this.bot(chat?.botId), ...(run?.proactive && { alert: this.alertOf(run) }) }),
-    );
+    // Runs that already notified the owner via an explicit @mention skip the duplicate generic reply alert.
+    this.mentionedRuns = new Set();
+    workspace.events.on("turn", ({ chat, run }) => {
+      if (run?.id && this.mentionedRuns.delete(run.id)) return;
+      this.consider({ type: "turn", chat, run, bot: this.bot(chat?.botId), ...(run?.proactive && { alert: this.alertOf(run) }) });
+    });
     // A plain reminder is for one person. The computer's own notification is the owner's.
     workspace.events.on("reminder", (reminder) => reminder.person === "owner" && this.consider({ type: "reminder", reminder, bot: this.bot(reminder.botId) }));
+    workspace.events.on("mention", (mention) => {
+      if (mention?.person !== "owner") return;
+      if (mention.runId) {
+        this.mentionedRuns.add(mention.runId);
+        if (this.mentionedRuns.size > 100) this.mentionedRuns.delete(this.mentionedRuns.values().next().value);
+      }
+      this.consider({ type: "mention", mention });
+    });
     workspace.events.on("request", (request) =>
       this.consider({ type: "request", request, bot: this.bot(request.botId) }),
     );
@@ -164,7 +184,14 @@ export class Notifier {
         if (!chat || !this.ws.proactive.eligible(person, chat.botId) || person !== "owner") return;
       }
       // A chat's alerts go to its people only: the computer's own are for its owner.
-      const chatId = event.type === "turn" ? (event.chat?.id ?? event.run?.chatId) : event.type === "reminder" ? undefined : event.request?.chatId;
+      const chatId =
+        event.type === "turn"
+          ? (event.chat?.id ?? event.run?.chatId)
+          : event.type === "reminder"
+            ? undefined
+            : event.type === "mention"
+              ? event.mention?.chatId
+              : event.request?.chatId;
       const mine = !chatId || typeof this.ws.notifiesOwner !== "function" || this.ws.notifiesOwner(chatId);
       const resolved =
         event.type === "turn" && typeof this.ws.resolveRoutineTargets === "function"

@@ -29,7 +29,7 @@ export function adminModeStore(file) {
 /** Whether the link copy has Admin mode at all. Without it the window shows everything, and no switch. */
 export const hasAdminMode = (link) => typeof link?.ownerParts === "function";
 
-const LIVE = ["streams", "intents", "thinking", "speakers", "queued", "steerable"];
+const LIVE = ["streams", "intents", "thinking", "speakers", "queued", "steerable", "typing"];
 
 /**
  * The app's own snapshot as the owner's window is shown it: `spaces` is the owner's view of them
@@ -40,14 +40,15 @@ const LIVE = ["streams", "intents", "thinking", "speakers", "queued", "steerable
  * none of it is written here.
  */
 export function ownerWindowView(state, link, admin) {
-  if (!hasAdminMode(link)) return { ...state, spaces: link?.spacesFor?.("owner") };
-  if (admin) return { ...state, spaces: link.spacesFor("owner", { admin: true }), adminMode: true };
+  const { mentions: _mentions, ...visible } = state;
+  if (!hasAdminMode(link)) return { ...visible, spaces: link?.spacesFor?.("owner") };
+  if (admin) return { ...visible, spaces: link.spacesFor("owner", { admin: true }), adminMode: true };
   // The link names the live lists as one part; the window's snapshot has them side by side.
-  const live = { ...Object.fromEntries(LIVE.filter((name) => state[name] && typeof state[name] === "object").map((name) => [name, state[name]])), requests: state.requests ?? [], active: Object.keys(state.streams ?? {}) };
+  const live = { ...Object.fromEntries(LIVE.filter((name) => visible[name] && typeof visible[name] === "object").map((name) => [name, visible[name]])), requests: visible.requests ?? [], active: Object.keys(visible.streams ?? {}) };
   // What a bot told another person is that person's: the Proactive part goes through the same cut as a phone's.
-  const cut = link.ownerParts({ chats: state.chats ?? [], runs: state.runs ?? [], bots: state.bots ?? [], panels: state.panels ?? [], board: state.board ?? [], live, ...(state.proactive && { proactive: state.proactive }) });
+  const cut = link.ownerParts({ chats: visible.chats ?? [], runs: visible.runs ?? [], bots: visible.bots ?? [], panels: visible.panels ?? [], board: visible.board ?? [], live, ...(visible.proactive && { proactive: visible.proactive }) });
   return {
-    ...state,
+    ...visible,
     chats: cut.chats,
     runs: cut.runs,
     bots: cut.bots,
@@ -55,9 +56,9 @@ export function ownerWindowView(state, link, admin) {
     board: cut.board,
     ...Object.fromEntries(LIVE.filter((name) => Object.hasOwn(live, name)).map((name) => [name, cut.live[name]])),
     requests: cut.live.requests,
-    ...(state.proactive && { proactive: cut.proactive }),
+    ...(visible.proactive && { proactive: cut.proactive }),
     // The reminders in the snapshot are for the link to pass on: the window is shown only the owner's own.
-    ...(Array.isArray(state.reminders) && { reminders: state.reminders.filter((reminder) => reminder?.person === "owner") }),
+    ...(Array.isArray(visible.reminders) && { reminders: visible.reminders.filter((reminder) => reminder?.person === "owner") }),
     spaces: link.spacesFor("owner", { admin: false }),
     adminMode: false,
   };

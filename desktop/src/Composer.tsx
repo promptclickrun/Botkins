@@ -50,6 +50,10 @@ type Props = {
   pickModel?: () => void;
   /** Group chat members: typing @ offers them and "everyone". Group chats are text only. */
   members?: Bot[];
+  /** Other people in this chat: typing @ offers them to notify with a mention. */
+  people?: { id: string; name: string; hint?: string }[];
+  /** Called when the user starts or stops typing in a multi-person chat. */
+  onTyping?: (active: boolean) => void;
   /** Records picked with "@" and "#", kept with the draft. */
   mentions?: DraftMention[];
   setMentions?: (list: DraftMention[]) => void;
@@ -89,6 +93,8 @@ export default function Composer({
   modelProvider,
   pickModel,
   members,
+  people,
+  onTyping,
   mentions = NO_MENTIONS,
   setMentions = () => {},
   command = null,
@@ -107,8 +113,42 @@ export default function Composer({
   const [index, setIndex] = useState(0);
   const input = useRef<HTMLTextAreaElement>(null);
   const listId = useId();
-  // "@" and "#" at the caret open the mention menu: bots (in a group chat), or projects, wiki pages and files. In a one-bot chat "@" has nothing to offer, so it opens no menu.
+  // "@" and "#" at the caret open the mention menu: people/bots in the chat, or projects, wiki pages and files.
   const [caret, setCaret] = useState(0);
+  const onTypingRef = useRef(onTyping);
+  onTypingRef.current = onTyping;
+  const typingRef = useRef<{ clear: (() => void) | null; lastSent: number }>({ clear: null, lastSent: 0 });
+  const idleTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  function stopTyping() {
+    if (idleTimer.current) {
+      clearTimeout(idleTimer.current);
+      idleTimer.current = undefined;
+    }
+    const clear = typingRef.current.clear;
+    if (!clear) return;
+    typingRef.current.clear = null;
+    typingRef.current.lastSent = 0;
+    clear();
+  }
+  function pulseTyping() {
+    const fn = onTypingRef.current;
+    if (!fn) return;
+    if (idleTimer.current) clearTimeout(idleTimer.current);
+    idleTimer.current = setTimeout(() => {
+      idleTimer.current = undefined;
+      stopTyping();
+    }, 3000);
+    const now = Date.now();
+    if (!typingRef.current.clear || now - typingRef.current.lastSent >= 2000) {
+      typingRef.current.clear = () => fn(false);
+      typingRef.current.lastSent = now;
+      fn(true);
+    }
+  }
+  useEffect(() => () => stopTyping(), [chatId]);
+  useEffect(() => {
+    if (!onTyping) stopTyping();
+  }, [onTyping]);
   const slash = parseSlashInput(draft, caret);
   const showCatalog = focused && !dismissed && !!slash;
   const attachedOptionMode = focused && !dismissed && !slash && !!command?.options?.length && /^\S*$/.test(draft);
@@ -125,11 +165,11 @@ export default function Composer({
     focused &&
     !dismissed &&
     !!trigger &&
-    (trigger.sigil === "#" || !!members?.length) &&
+    (trigger.sigil === "#" || !!members?.length || !!people?.length) &&
     !picked.some((t) => (trigger.sigil + trigger.query).startsWith(t));
-  const found = useMentionables(triggerOpen, chatId, botId);
+  const found = useMentionables(triggerOpen && trigger?.sigil === "#", chatId, botId);
   const pulls = useProjectPulls(listPulls && triggerOpen && trigger?.sigil === "#" ? chatId : undefined, trigger?.query ?? "");
-  const mentionChoices = trigger ? mentionOptions(trigger.sigil, trigger.query, found.data, members, pulls.value?.items) : [];
+  const mentionChoices = trigger ? mentionOptions(trigger.sigil, trigger.query, found.data, members, pulls.value?.items, people) : [];
   // Spaces are allowed while the text still matches something.
   const mentioning = triggerOpen && (!/\s/.test(trigger!.query) || mentionChoices.length > 0 || pulls.loading);
   const mentionAt = Math.min(index, Math.max(0, mentionChoices.length - 1));
@@ -203,6 +243,7 @@ export default function Composer({
     return found.length + skipped > 0;
   }
   async function submit(queue = false) {
+    stopTyping();
     let dispatched = false;
     const sent = await send({
       delivery: queue ? "queue" : "steer",
@@ -471,12 +512,18 @@ export default function Composer({
             if (e.clipboardData.files.length && fromFiles(e.clipboardData.files)) e.preventDefault();
           }}
           onFocus={() => focus(true)}
-          onBlur={() => focus(false)}
+          onBlur={() => {
+            focus(false);
+            stopTyping();
+          }}
           onChange={(e) => {
-            change(e.target.value);
-            setCaret(e.target.selectionStart ?? e.target.value.length);
+            const value = e.target.value;
+            change(value);
+            setCaret(e.target.selectionStart ?? value.length);
             dismiss(false);
             setIndex(0);
+            if (value.trim()) pulseTyping();
+            else stopTyping();
           }}
           onSelect={(e) => setCaret(e.currentTarget.selectionStart ?? 0)}
           onKeyDown={(e) => {

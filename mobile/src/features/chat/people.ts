@@ -74,3 +74,41 @@ export function speakerLabel(
   const named = typeof message.author?.name === "string" ? message.author.name.trim() : "";
   return named || people?.find((person) => person.id === id)?.name || (id === OWNER ? "Owner" : "");
 }
+
+export type ChatMentionPerson = { id: string; name: string; subtitle?: string };
+
+/** Other people participating in this chat who can be @mentioned, excluding `me`. */
+export function chatMentionPeople(
+  people: Person[] | undefined,
+  chat: Pick<ChatSummary, "createdBy" | "invited"> | undefined,
+  me: string,
+): ChatMentionPerson[] {
+  if (!chat || !people || people.length < 2) return [];
+  const ids = [...new Set([starterOf(chat), ...(chat.invited ?? [])])].filter((id) => id !== me);
+  const out: ChatMentionPerson[] = [];
+  for (const id of ids) {
+    const person = people.find((item) => item.id === id);
+    if (!person?.name) continue;
+    out.push({ id, name: person.name, subtitle: id === OWNER ? "Owner" : "Member" });
+  }
+  return out;
+}
+
+/** Formats the human typing indicator for one chat, excluding `me` and deduplicating by person id. */
+export function formatTypingLabel(typers: { id: string; name: string }[] | undefined, me?: string): string | null {
+  if (!typers?.length) return null;
+  const seen = new Set<string>();
+  const names: string[] = [];
+  for (const person of typers) {
+    if (!person?.id || person.id === me || seen.has(person.id)) continue;
+    const name = person.name?.trim();
+    if (!name) continue;
+    seen.add(person.id);
+    names.push(name);
+  }
+  if (!names.length) return null;
+  if (names.length === 1) return names[0] + " is typing";
+  if (names.length === 2) return names[0] + " and " + names[1] + " are typing";
+  const rest = names.length - 2;
+  return names[0] + ", " + names[1] + ", and " + rest + (rest === 1 ? " other" : " others") + " are typing";
+}
