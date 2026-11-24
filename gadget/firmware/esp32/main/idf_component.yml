@@ -1,2 +1,5 @@
 dependencies:
   idf: ">=6.0"
+  # The WebSocket client under main/websocket.cpp (the relay, live voice). Pinned: 1.7.0 is the last
+  # release the registry lists as Apache-2.0 (1.8.0 is labelled "Custom").
+  espressif/esp_websocket_client: "==1.7.0"

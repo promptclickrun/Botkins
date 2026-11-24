@@ -6,7 +6,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { Workspace } from "./starter.mjs";
 import { Providers, ModelProvider, ProviderSession, defineTool } from "../desktop/providers/index.mjs";
-import { CopilotProvider, sessionOptions, spoken } from "../desktop/providers/copilot/index.mjs";
+import { CopilotProvider, loginAnswer, sessionOptions, spoken, typedSchema } from "../desktop/providers/copilot/index.mjs";
 import { fakeClient, tempDir, tick } from "./fake-copilot.mjs";
 import { pass, settle, watching } from "./quiet-turns.mjs";
 
@@ -534,8 +534,8 @@ function accountsFixture(t, steps, auth) {
       accounts: {
         login: {
           begin: async (params) => (calls.push(["begin", params]), { flowId: "f1", step: steps.first }),
-          advance: async () => {
-            calls.push(["advance"]);
+          advance: async (params) => {
+            calls.push(["advance", params]);
             const step = steps.next[Math.min(advance++, steps.next.length - 1)];
             if (step instanceof Error) throw step;
             if (typeof step === "function") return step();
@@ -571,6 +571,115 @@ test("sign-in opens GitHub in the browser, waits, and cleans up its session", as
   assert.deepEqual(log.disconnected, log.created);
   assert.deepEqual(log.deleted, log.created);
   assert.deepEqual(await copilot.auth(), { connected: true, login: "octo", type: "user", host: undefined });
+});
+
+test("a sign-in GitHub finished is kept: the runtime's question about a computer with no keychain is answered", async (t) => {
+  // What the runtime does on a Linux server (seen with a real sign-in): GitHub says yes, then the
+  // runtime asks before it keeps the sign-in in a file, and only the answer finishes the sign-in.
+  let signedIn = false;
+  const { copilot, calls } = accountsFixture(
+    t,
+    {
+      first: { kind: "device-code", userCode: "ABCD-1234", verificationUri: "https://github.com/login/device", expiresIn: 900, interval: 5 },
+      next: [
+        { kind: "awaiting" },
+        { kind: "completed", result: { status: "needs-plaintext-consent" } },
+        () => ((signedIn = true), { kind: "completed", result: { status: "completed", host: "https://github.com", login: "octo" } }),
+      ],
+    },
+    () => ({ isAuthenticated: signedIn, login: "octo", authType: "user" }),
+  );
+  await copilot.signIn({ device: async () => {} });
+  assert.deepEqual(calls.map((c) => c[0]), ["begin", "advance", "advance", "advance", "cancel"]);
+  assert.deepEqual(calls[3][1], { flowId: "f1", input: "allow" });
+  assert.equal(calls[2][1].input, undefined, "only the question is answered");
+  assert.deepEqual(await copilot.auth(), { connected: true, login: "octo", type: "user", host: undefined });
+});
+
+test("a sign-in is not reported done while the runtime still waits, even when another sign-in is there", async (t) => {
+  // A computer signed in through the GitHub CLI is authenticated all along: that is no sign that this one was kept.
+  const declined = accountsFixture(
+    t,
+    { first: { kind: "device-code", userCode: "ABCD-1234", verificationUri: "https://github.com/login/device", expiresIn: 900 }, next: [{ kind: "completed", result: { status: "needs-plaintext-consent" } }, { kind: "completed", result: { status: "declined" } }] },
+    () => ({ isAuthenticated: true, login: "octo", authType: "gh-cli" }),
+  );
+  await assert.rejects(declined.copilot.signIn({ device: async () => {} }), /wasn't saved on this computer/);
+  // The same question again means the answer wasn't taken: it is not asked for ever.
+  const again = accountsFixture(
+    t,
+    { first: { kind: "device-code", userCode: "ABCD-1234", verificationUri: "https://github.com/login/device", expiresIn: 900 }, next: [{ kind: "completed", result: { status: "needs-account-selection", accounts: [] } }] },
+    () => ({ isAuthenticated: true, login: "octo", authType: "gh-cli" }),
+  );
+  await assert.rejects(again.copilot.signIn({ device: async () => {} }), /which account to use/);
+  assert.deepEqual(again.calls.map((c) => c[0]), ["begin", "advance", "cancel"]);
+  const twice = accountsFixture(
+    t,
+    { first: { kind: "device-code", userCode: "ABCD-1234", verificationUri: "https://github.com/login/device", expiresIn: 900 }, next: [{ kind: "completed", result: { status: "needs-plaintext-consent" } }] },
+    () => ({ isAuthenticated: true, login: "octo", authType: "gh-cli" }),
+  );
+  await assert.rejects(twice.copilot.signIn({ device: async () => {} }), /Sign-in incomplete|wasn't saved/);
+  assert.deepEqual(twice.calls.map((c) => c[0]), ["begin", "advance", "advance", "cancel"]);
+});
+
+test("the account GitHub signed in is the one chosen when the runtime asks", () => {
+  const accounts = [
+    { selectionId: "s1", login: "other", host: "https://github.com", kind: "user" },
+    { selectionId: "s2", login: "octo", host: "https://github.com", kind: "user" },
+  ];
+  assert.equal(loginAnswer({ status: "needs-account-selection", login: "octo", accounts }), "s2");
+  assert.equal(loginAnswer({ status: "needs-account-selection", accounts: [accounts[0]] }), "s1", "the only one");
+  assert.equal(loginAnswer({ status: "needs-account-selection", accounts }), undefined, "never a guess among several");
+  assert.equal(loginAnswer({ status: "completed" }), undefined);
+  assert.equal(loginAnswer(undefined), undefined);
+});
+
+test("every tool's enum and const has a type, which Gemini models need", () => {
+  // Gemini turned down a whole turn (400 invalid request body) for one untyped enum inside the
+  // items of an anyOf choice: the badges block of render_card and today_publish.
+  const badges = {
+    type: "object",
+    properties: {
+      blocks: {
+        type: "array",
+        items: { anyOf: [{ type: "object", properties: { type: { const: "badges" }, items: { type: "array", items: { type: "object", properties: { tone: { enum: ["neutral", "positive"] } } } } } }] },
+      },
+      const: { type: "string" },
+      level: { enum: [1, 2, 3] },
+      ratio: { enum: [0.5, 1] },
+      mixed: { enum: ["a", 1] },
+      on: { const: true },
+    },
+  };
+  const before = JSON.stringify(badges);
+  const typed = typedSchema(badges);
+  assert.equal(JSON.stringify(badges), before, "the schema given is not changed");
+  const choice = typed.properties.blocks.items.anyOf[0];
+  assert.deepEqual(choice.properties.type, { const: "badges", type: "string" });
+  assert.deepEqual(choice.properties.items.items.properties.tone, { enum: ["neutral", "positive"], type: "string" });
+  assert.deepEqual(typed.properties.const, { type: "string" }, "a property may be called const");
+  assert.equal(typed.properties.level.type, "integer");
+  assert.equal(typed.properties.ratio.type, "number");
+  assert.equal(typed.properties.mixed.type, undefined, "no type is made up for values of several kinds");
+  assert.equal(typed.properties.on.type, "boolean");
+  assert.equal(typedSchema(undefined), undefined);
+});
+
+test("Botkins' own tools type their enums, so every harness gets schemas Gemini takes", (t) => {
+  const ws = new Workspace(tempDir(t), fakeClient().client, () => {});
+  const chat = ws.chat(ws.createChat("pip"));
+  const task = { stopped: false };
+  ws.active.set(chat.id, task);
+  const run = { id: "run-1", chatId: chat.id, status: "Working" };
+  ws.state.runs.push(run);
+  const untyped = [];
+  const walk = (node, where) => {
+    if (Array.isArray(node)) return node.forEach((entry) => walk(entry, where));
+    if (!node || typeof node !== "object") return;
+    if (Array.isArray(node.enum) && !node.type) untyped.push(where);
+    for (const [key, value] of Object.entries(node)) if (key !== "enum" && key !== "const") walk(value, where + "." + key);
+  };
+  for (const tool of ws.sessionTools(ws.bot("pip"), chat, run, task)) walk(tool.parameters, tool.name);
+  assert.deepEqual(untyped, []);
 });
 
 test("a host with no browser signs in with GitHub's one-time code, and only on GitHub's own page", async (t) => {

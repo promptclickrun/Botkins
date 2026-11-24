@@ -5,7 +5,7 @@
 // The gadget's lines are found among its boot log by their mark. Nothing here keeps or prints a
 // Wi-Fi password: it goes to the gadget and nowhere else.
 import { execFileSync } from "node:child_process";
-import { createReadStream, createWriteStream } from "node:fs";
+import { constants, createReadStream, createWriteStream } from "node:fs";
 import { Failure } from "./tools.mjs";
 
 const MARK = "@botkins ";
@@ -103,8 +103,11 @@ export function serialLines(path) {
   } catch {
     throw new Failure("That serial port can't be opened. Check the cable, and that nothing else is using the port.");
   }
-  const input = createReadStream(path, { encoding: "utf8" });
-  const output = createWriteStream(path);
+  // O_NOCTTY: never this process's terminal. A service runs in a session with no terminal, and on Linux a
+  // terminal it opens without the flag becomes its controlling one: the port's hangup (the gadget
+  // unplugged, a bridge closed) would then send the whole service SIGHUP, which ends it.
+  const input = createReadStream(path, { encoding: "utf8", flags: constants.O_RDONLY | constants.O_NOCTTY });
+  const output = createWriteStream(path, { flags: constants.O_WRONLY | constants.O_NOCTTY });
   const listeners = new Set();
   let held = "";
   input.on("data", (chunk) => {

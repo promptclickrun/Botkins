@@ -3,6 +3,12 @@
 import AVFoundation
 import Foundation
 
+extension NSError {
+  var watchAudioServiceDied: Bool {
+    domain == "com.apple.coreaudio.avfaudio" && code == Int(MIG_SERVER_DIED)
+  }
+}
+
 final class WatchVoiceEngine {
   private let queue = DispatchQueue(label: "app.botkins.watch.voice")
   private let sendFrame: (Data, UInt32) -> Void
@@ -37,12 +43,17 @@ final class WatchVoiceEngine {
     }
   }
 
-  func start(inputRate: Int, outputRate: Int) throws {
+  func start(inputRate: Int, outputRate: Int, voiceProcessing: Bool) throws {
     try queue.sync {
       let engine = AVAudioEngine()
       let player = AVAudioPlayerNode()
-      // Some Watch audio routes provide ordinary input without voice processing.
-      try? engine.inputNode.setVoiceProcessingEnabled(true)
+      if voiceProcessing {
+        do { try engine.inputNode.setVoiceProcessingEnabled(true) }
+        catch let error as NSError {
+          // Ordinary input works on routes without voice processing. A lost service needs a fresh graph.
+          if error.watchAudioServiceDied { throw error }
+        }
+      }
       engine.attach(player)
       guard
         let wire = AVAudioFormat(commonFormat: .pcmFormatInt16, sampleRate: Double(inputRate), channels: 1, interleaved: true),

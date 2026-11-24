@@ -26,6 +26,7 @@
 
 #include "botkins/hal.hpp"
 #include "botkins/link.hpp"
+#include "botkins/relay.hpp"
 
 namespace botkins {
 
@@ -50,6 +51,32 @@ struct Board {
   bool screen_round = false;
   /** Restarts the board, when the owner asks for it from the Botkins app. Null: a restart is refused. */
   std::function<void()> restart;
+  /**
+   * Makes a WebSocket (hal.hpp), for reaching the computer through its relay when none of its own
+   * addresses answers. Null on a board without one: the relay's entry is skipped.
+   */
+  std::function<std::unique_ptr<Socket>()> socket;
+  /** While on the relay, how soon the computer's own addresses are asked again; it doubles each time, to 10 minutes. */
+  int relay_probe_ms = 30000;
+  /** A live voice session closes after this long with no press and no sound (botkins/live.hpp). */
+  int live_idle_ms = 180000;
+  /**
+   * How loud speech is at this board's microphone: the RMS of 20 ms of samples, 0 to 1 of full scale.
+   * Live voice sends a press to its provider only once three frames in a row reach it, so a tap or a
+   * quiet press sends nothing. On the StopWatch a quiet room measured 0.001-0.005, sound elsewhere in
+   * the room up to 0.017, and speech from a speaker across the desk peaked at 0.035. 0.01 keeps the
+   * quiet room out and lets soft speech in: a turn of room sound costs less than speech ignored.
+   */
+  double speech_level = 0.01;
+  /** Lines for the port's own log (what a press heard, for instance). A person never sees them. Null: none. */
+  std::function<void(const std::string&)> log;
+  /**
+   * Starts one of the core's threads that come and go: "live", the live voice's, which runs while a
+   * session is open, and "hold", which holds the talk button for the console's `listen`. Null: a plain
+   * std::thread. A port may give each a stack of its own size, or log how much of it was used. It must
+   * start `run` and return the thread; the core joins it.
+   */
+  std::function<std::thread(const char* name, std::function<void()> run)> thread;
 };
 
 /** The poses a gadget's Botkin takes. The computer draws each from the bot's own look. */
@@ -77,6 +104,8 @@ struct View {
   bool listening = false;
   bool sending = false;
   bool speaking = false;
+  /** A live voice session is open: the talk button talks with the bot's live voice (botkins/live.hpp). */
+  bool live = false;
   bool can_hear = false, can_speak = false;
   struct Request {
     std::string id, kind, title, preview;
@@ -115,6 +144,9 @@ inline const char* pose_for(const View& view) {
   if (view.sending || view.phase == "working" || view.phase == "writing") return "working";
   return "ready";
 }
+
+class LiveVoice;
+struct LivePart;
 
 class Gadget {
  public:
@@ -179,9 +211,12 @@ class Gadget {
   void save_networks();
   Json wifi_report();
   void read_aloud(Link& link, const std::string& reply, int parts, uint32_t quiet);
+  void live_failed();
   bool wait(int ms);
 
   Board board_;
+  /** The board's transport with the relay in front of it, when the board can open a WebSocket. Outlives every Link. */
+  std::unique_ptr<RelayTransport> relay_;
   KeyPair keys_{};
   std::atomic<bool> running_{false};
   std::thread sync_thread_, work_thread_;
@@ -212,16 +247,20 @@ class Gadget {
   std::chrono::steady_clock::time_point switched_at_{};  // when another saved network was last tried
   std::vector<std::pair<std::string, std::string>> bots_;
   std::string bot_id_;
+  bool saves_history_ = false, saves_turns_ = false;  // the computer keeps spoken lines in the chat (meta.capabilities)
 
   // The recording being sent. Guarded by audio_.
   std::mutex audio_;
   std::vector<int16_t> pending_;
   std::string take_, failed_take_;
   bool recording_ = false, uploading_ = false;
+  bool live_take_ = false;  // this press went to live voice; given back when its session couldn't open
   uint32_t takes_ = 0;
   /** Goes up each time the person asks for quiet: a reply being read, or waiting to be, stops when it has moved on. */
   std::atomic<uint32_t> quiet_{0};
   std::thread hold_thread_;  // the console's "listen": a finger on the button for a while
+  /** Live voice, on a board with a socket and a speaker. Last, so it goes first: it uses the board and the hooks above. */
+  std::unique_ptr<LiveVoice> live_;
 };
 
 }  // namespace botkins

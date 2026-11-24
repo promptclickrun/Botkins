@@ -76,6 +76,7 @@ import { createComposio } from "./composio.mjs";
 import { Connects } from "./connects.mjs";
 import { McpApps } from "./mcp-apps.mjs";
 import { reactionTool } from "./reactions.mjs";
+import { mayBeSilent, ReactionTurns } from "./reaction-turns.mjs";
 import { setReaction } from "./link/message-reactions.mjs";
 import { SidePane } from "./sidepane.mjs";
 import { Artifacts } from "./artifacts.mjs";
@@ -313,7 +314,7 @@ export class Workspace {
         if (chat) commitInterim(chat, run, { stream: run.recovery?.draft, speaker: isGroup(chat) ? run.recovery?.botId : undefined });
         run.ending = run.stopRequested ? "stopped" : "interrupted";
         run.status = run.stopRequested ? "Stopped" : "Interrupted";
-        run.detail = run.stopRequested ? "" : run.scriptRunning ? "Botkins closed while the script ran." : "The original message or bot is missing.";
+        run.detail = run.stopRequested ? "" : run.scriptRunning ? "Botkins closed while the script ran." : run.reaction ? "Botkins closed during this answer to a reaction." : "The original message or bot is missing.";
         delete run.stopRequested;
         delete run.scriptRunning;
         delete run.recovery;
@@ -329,6 +330,8 @@ export class Workspace {
     }
     this.tasks = new Tasks(this);
     this.proactive = new Proactive(this);
+    // A person's reaction to a bot's message gives the bot a quiet turn (desktop/reaction-turns.mjs).
+    this.reactionTurns = new ReactionTurns(this);
     this.save();
   }
 
@@ -402,7 +405,8 @@ export class Workspace {
       // The Proactive agent: the computer's switch, and each proactive bot's settings and log, without the keys of what it raised.
       proactive: this.proactive.views(),
       // Resolved provider inputs are private restart data and can contain large attachments.
-      runs: this.state.runs.map((run) => {
+      // A reaction's turn shows only once it really replies (desktop/reaction-turns.mjs).
+      runs: this.state.runs.filter((run) => !hiddenRun(run)).map((run) => {
         if (!run.recovery) return run;
         const { recovery, ...summary } = run;
         return summary;
@@ -419,23 +423,23 @@ export class Workspace {
       macTools: this.mac.summary(),
       requests: this.interactions.snapshot(),
       intents: Object.fromEntries(
-        [...this.active].map(([id, task]) => [id, task.intent || ""]),
+        this.shownTurns().map(([id, task]) => [id, task.intent || ""]),
       ),
       streams: Object.fromEntries(
-        [...this.active].map(([id, task]) => [id, task.stream]),
+        this.shownTurns().map(([id, task]) => [id, task.stream]),
       ),
       // In a group chat, the member who is replying right now.
       speakers: Object.fromEntries(
-        [...this.active]
+        this.shownTurns()
           .filter(([, task]) => task.speaker)
           .map(([id, task]) => [id, task.speaker]),
       ),
       thinking: Object.fromEntries(
-        [...this.active]
+        this.shownTurns()
           .filter(([, task]) => task.thinking)
           .map(([id, task]) => [id, task.thinking]),
       ),
-      steerable: Object.fromEntries([...this.active].map(([id, task]) => [id, !!task.deliverSteer])),
+      steerable: Object.fromEntries(this.shownTurns().map(([id, task]) => [id, !!task.deliverSteer])),
       queued: Object.fromEntries(
         [...this.queues]
           .filter(([, list]) => list.length)
@@ -453,6 +457,10 @@ export class Workspace {
           ]),
       ),
     };
+  }
+  /** The turns working now that the apps are shown: a reaction's turn is hidden until it replies. */
+  shownTurns() {
+    return [...this.active].filter(([, task]) => !hiddenRun(task.run));
   }
   /** Every provider session id this workspace holds, for provider housekeeping. */
   sessionIds() {
@@ -752,6 +760,8 @@ export class Workspace {
     const chat = this.state.chats.find((c) => c.id === chatId);
     if (!chat || this.active.has(chatId))
       throw new Error("Chat unavailable or already working");
+    // Reactions waiting for their turn are seen with this message's turn instead.
+    this.reactionTurns?.forget(chatId);
     const bot = this.state.bots.find((b) => b.id === chat.botId);
     // A chat in a project refuses new turns when one of its bots lost access (desktop/access.mjs).
     this.access.assertChat(chat, this.projects.botsOf(chat));
@@ -802,6 +812,24 @@ export class Workspace {
     return this.startTurn(chat, bot, message, run, false);
   }
 
+  /**
+   * A bot's turn for the person's reactions to its messages (desktop/reaction-turns.mjs). No
+   * message from the person is added: the prompt is for the bot only. The turn stays hidden from
+   * the apps until it really replies, and a [SILENT] answer leaves nothing at all.
+   */
+  reactionTurn(chatId, prompt, { emoji } = {}) {
+    if (this.closing) throw new Error("Botkins is closing");
+    const chat = this.state.chats.find((c) => c.id === chatId);
+    if (!chat || this.active.has(chatId)) throw new Error("Chat unavailable or already working");
+    const bot = this.state.bots.find((b) => b.id === chat.botId);
+    this.access.assertChat(chat, this.projects.botsOf(chat));
+    const time = Date.now();
+    // It notifies only once it replies (revealReaction): an unseen turn that fails is nobody's to fix.
+    const run = { id: randomUUID(), chatId, title: "Reaction" + (emoji ? " " + emoji : ""), time, status: "Working", detail: "", reaction: true, notify: false };
+    this.state.runs.unshift(run);
+    return this.startTurn(chat, bot, { role: "user", text: prompt, runId: run.id, time }, run, false);
+  }
+
   startTurn(chat, bot, message, run, recovering) {
     const { attachments = [], quote } = message;
     const prompt = run.recovery?.voicePrompt ?? message.text;
@@ -828,6 +856,8 @@ export class Workspace {
       author: message.author,
       also: message.also,
       context: extra ? (message.context || "") + "\n\n" + extra : message.context,
+      // A reaction's prompt is in no message of the chat: a retry takes it from here.
+      ...(run.reaction && { message }),
     };
     // A group chat names its first speaker at once, so the UI never shows a nameless typing row.
     if (isGroup(chat)) task.speaker = responders(chat, this.state.bots, prompt)[0]?.id;
@@ -869,7 +899,9 @@ export class Workspace {
     list.push(item);
     this.queues.set(chat.id, list);
     this.save();
-    if (item.steer) void this.flushSteering(chat);
+    // A reaction's turn that hasn't replied gives way to the person: their message goes next.
+    if (hiddenRun(this.active.get(chat.id)?.run)) void this.stop(chat.id);
+    else if (item.steer) void this.flushSteering(chat);
     return null;
   }
   unqueue(chatId, itemId) {
@@ -1027,6 +1059,7 @@ export class Workspace {
       throw new Error("The message changed. Choose it again.");
     setReaction(message, emoji, actor);
     this.save();
+    this.reactionTurns?.reacted(this.chat(chatId), index, emoji, actor);
     return message.reactions;
   }
   /**
@@ -1111,9 +1144,9 @@ export class Workspace {
     const interactive = !chat.helper && !run?.panelId && !run?.scheduleId && !run?.taskId;
     return (
       "You are " + bot.name + ", " + bot.role + ". You are working in Botkins." +
-      (chat.helper ? "" : "\nUse today_* for persistent dashboard panels and today_routine for recurring updates. Confirm actions after the tool succeeds." + clarificationMessage(this.state.settings)) +
+      (chat.helper ? "" : "\nUse today_* for persistent dashboard panels and today_routine for recurring updates. Confirm actions after the tool succeeds." + ROUTINE_CONFIRM + clarificationMessage(this.state.settings)) +
       (interactive
-        ? "\nUse react with one emoji on the latest person message in this turn when a simple acknowledgment is enough, such as thanks or an FYI. After it succeeds you can end the turn without text. Answer questions, requests for action, and anything needing clarification in chat. Use chat by default. Use render_card for inline charts, tables or interactive HTML blocks; show_app for a self-contained HTML app launched from chat. Open the side pane only when keeping something beside the conversation is more useful than showing it in chat. Use side_pane_show (rich_ui or table) for that content, and side_pane_web for a website." +
+        ? REACTION_GUIDANCE + "\nUse react with one emoji on the latest person message in this turn when a simple acknowledgment is enough, such as thanks or an FYI. After it succeeds you can end the turn without text. Answer questions, requests for action, and anything needing clarification in chat. Use chat by default. Use render_card for inline charts, tables or interactive HTML blocks; show_app for a self-contained HTML app launched from chat. Open the side pane only when keeping something beside the conversation is more useful than showing it in chat. Use side_pane_show (rich_ui or table) for that content, and side_pane_web for a website." +
           "\nUse the Botkins vault for passwords, tokens and sign-in fields. When offered, find_saved_credentials finds names saved for a site. The person selects the saved value in request_secure_input. For browser forms use browser_form if offered, otherwise the desktop chat’s side_pane_web viewer. Apply the one-time handles with use_secure_input. Never ask for a secret in chat, read a password field back, or send a credential through shell commands or the clipboard." +
           (this.connects.serverFor(bot, chat) ? "\nWhen a Composio app needs connecting or authorization, call request_app_connection with its toolkit slug instead of sharing a connection link." : "") +
           "\nWrite reusable deliverables, including complete HTML files, to the workspace. Link their absolute paths in chat; use MEDIA: for images, audio or video. Files appear in Artifacts." +
@@ -1570,7 +1603,7 @@ export class Workspace {
         : this.executeTurn(chat, bot, prompt, run, task),
     );
     if (task.retry && !this.closing && !task.stopped) {
-      const message = chat.messages.find((m) => m.role === "user" && m.runId === run.id);
+      const message = chat.messages.find((m) => m.role === "user" && m.runId === run.id) ?? task.message;
       return this.startTurn(chat, bot, message, run, true);
     }
   }
@@ -1611,11 +1644,24 @@ export class Workspace {
     }
     if (data?.deltaContent?.trim()) task.streamTime ??= Date.now();
     appendStream(task, data);
+    if (!this.revealReaction(run, task)) return;
     if (run.recovery) run.recovery.draft = task.stream;
     if (run.recovery && Date.now() >= (task.nextCheckpoint ?? 0)) {
       task.nextCheckpoint = Date.now() + 2000;
       this.saveSoon();
     } else this.notify();
+  }
+
+  /**
+   * Whether a reaction's turn may be shown now: once its text can no longer be a [SILENT] answer.
+   * Every other turn is always shown.
+   */
+  revealReaction(run, task) {
+    if (!run.reaction || run.revealed) return true;
+    if (mayBeSilent(task.stream)) return false;
+    run.revealed = true;
+    delete run.notify;
+    return true;
   }
 
   async sendTurn(session, run, task, bot, input) {
@@ -1912,11 +1958,15 @@ export class Workspace {
       else if (current) run.model = { ...current, ...(chat.sessionProvider && { provider: chat.sessionProvider }) };
       unsubscribe = session.on((event) => {
         if (!event.agentId && !event.data?.parentToolCallId) {
-          if (event.type === "tool.execution_start") commitInterim(chat, run, task);
+          if (event.type === "tool.execution_start") {
+            // Text that may still be a [SILENT] answer to a reaction is not kept as a message.
+            if (this.revealReaction(run, task)) commitInterim(chat, run, task);
+            else task.stream = "";
+          }
           if (event.type === "assistant.message" && !run.noOutput) {
             wholeMessage(task, event.data);
             if (run.recovery) run.recovery.draft = task.stream;
-            this.notify();
+            if (this.revealReaction(run, task)) this.notify();
           }
         }
         this.artifactEvents.tool(chat, bot.id, run, event);
@@ -1966,15 +2016,24 @@ export class Workspace {
         );
         if (task.stopped || this.closing) return;
         const empty = typeof text !== "string" || !text.trim();
-        if (routine && isSilent(text || task.stream)) {
+        if ((routine || run.reaction) && isSilent(text || task.stream)) {
           run.noOutput = true;
           run.silent = true;
           noOutput = true;
-        } else if (empty && !run.cards?.length && routine) {
+        } else if (empty && !run.cards?.length && (routine || run.reaction)) {
           run.noOutput = true;
           noOutput = true;
         }
-        if (empty && !run.cards?.length && !botSteps(run.steps).length && !task.stream?.trim() && !routine && task.reactedBy !== bot.id)
+        // A reaction answered with nothing is told to nobody: no message, notification or unread mark.
+        if (run.reaction && noOutput) {
+          run.notify = false;
+          task.stream = "";
+        } else if (run.reaction && !run.revealed) {
+          // Only a card or other result came of it: that is a reply, and it is shown.
+          run.revealed = true;
+          delete run.notify;
+        }
+        if (empty && !run.cards?.length && !botSteps(run.steps).length && !task.stream?.trim() && !routine && !run.reaction && task.reactedBy !== bot.id)
           throw new Error(bot.name + " finished without a reply.");
         if (!noOutput) finishReply(chat, run, task, text || task.stream);
       } else {
@@ -2078,6 +2137,8 @@ export class Workspace {
       delete run.stopRequested;
       if (task.stopped) { run.status = "Stopped"; run.ending = "stopped"; }
       if (run.status === "Needs you") run.ending ??= "failed";
+      // A reaction's turn that never replied leaves no half-written text either.
+      if (hiddenRun(run)) task.stream = "";
       if (run.ending) commitInterim(chat, run, task);
       for (const step of run.steps ?? [])
         if (step.status === "Running") step.status = "Interrupted";
@@ -2101,7 +2162,7 @@ export class Workspace {
         if (panel) this.spaces.touch(panel.spaceId);
       }
       // A finished reply marks its conversation unread until the person opens it. Panel refreshes stay quiet.
-      if (run.status !== "Stopped" && !run.panelId && !chat.temporary) chat.unread = true;
+      if (run.status !== "Stopped" && !run.panelId && !chat.temporary && !hiddenRun(run)) chat.unread = true;
       this.catalogs.delete(chat.id);
       this.active.delete(chat.id);
       this.events.emit("turn", { chat, run });
@@ -2123,6 +2184,15 @@ export class Workspace {
     }
   }
 }
+
+// What every bot is told about routines it makes, and about the person's reactions (desktop/reaction-turns.mjs).
+const ROUTINE_CONFIRM =
+  "\nBefore you create a routine (routine_create) or set a panel's refresh (today_routine), confirm with the person how often it runs, where its result goes, and whether they want a notification, unless they already said. A routine's result goes to this chat, another of your chats with them, Today's Feed, Ideas or Goals, or its own routine chat, and it can notify each time it runs or run quietly. A panel's refresh updates that panel and notifies only when it fails. A routine that runs often and notifies every time gets noisy: suggest a quiet one, or one place to look, when that fits. Say what you set once it's done.";
+const REACTION_GUIDANCE =
+  "\nThe person can react to your messages with an emoji. Botkins then gives you a turn that says so; it is not a message from them. Use your judgment, as a thoughtful friend would: judge from what the reaction means in the conversation, not from the emoji alone. It may need nothing back, a reaction of your own (react), or a short, warm reply; don't echo their reaction back by habit. Answer with text only when it adds something they would want. When you send no text, reply with exactly [SILENT], which shows nothing. Never reply just because a reaction came in: each reply is a model turn on the person's plan.";
+
+/** A reaction's turn that hasn't replied: the apps aren't shown it (desktop/reaction-turns.mjs). */
+const hiddenRun = (run) => !!run?.reaction && !run.revealed;
 
 function turnEnding(error) {
   return ["BOTKINS_TURN_TIMEOUT", "ETIMEDOUT"].includes(error?.code) || error?.name === "TimeoutError" ? "timed-out" : "failed";

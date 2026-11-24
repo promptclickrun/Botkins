@@ -5,6 +5,8 @@
 #include <cstdio>
 #include <cstring>
 
+#include "botkins/live.hpp"
+
 namespace botkins {
 
 namespace {
@@ -29,7 +31,18 @@ std::string reply_line(const Json& json) { return std::string(kMark) + json.dump
 Json args(Json one) { return Json::array().push(std::move(one)); }
 }  // namespace
 
-Gadget::Gadget(Board board) : board_(std::move(board)) {}
+Gadget::Gadget(Board board) : board_(std::move(board)) {
+  if (board_.socket) relay_.reset(new RelayTransport(*board_.transport, board_.socket));
+  // Live voice needs the provider's socket and a speaker for its voice.
+  if (board_.socket && board_.speaker) {
+    LiveVoice::Hooks hooks;
+    hooks.link = [this] { return link(); };
+    hooks.post = [this](std::function<void(Link&)> job) { post(std::move(job)); };
+    hooks.change = [this](const std::function<void(View&)>& edit) { change(edit); };
+    hooks.failed = [this] { live_failed(); };
+    live_.reset(new LiveVoice(board_, std::move(hooks)));
+  }
+}
 Gadget::~Gadget() { stop(); }
 
 void Gadget::begin() {
@@ -61,6 +74,7 @@ void Gadget::stop() {
     std::lock_guard<std::mutex> lock(mutex_);
     wake_.notify_all();
   }
+  if (live_) live_->stop();
   if (sync_thread_.joinable()) sync_thread_.join();
   if (work_thread_.joinable()) work_thread_.join();
   if (hold_thread_.joinable()) hold_thread_.join();
@@ -101,7 +115,8 @@ std::shared_ptr<Link> Gadget::link(uint32_t* generation) {
   if (generation) *generation = generation_;
   if (!intro_.valid()) return nullptr;
   if (!link_) {
-    link_ = std::make_shared<Link>(*board_.transport, keys_, intro_);
+    link_ = std::make_shared<Link>(relay_ ? *relay_ : *board_.transport, keys_, intro_);
+    link_->probe_ms = board_.relay_probe_ms;
     // The computer's addresses as it gives them are kept: this is how a computer that moved is found again.
     // A link from before another setup says nothing about the computer held now.
     const uint32_t mine = generation_;
@@ -183,6 +198,8 @@ void Gadget::sync_loop() {
         bots_.clear();
         bot_id_.clear();
       }
+      saves_history_ = saves_turns_ = false;
+      if (live_) live_->end();
       change([link](View& view) { clear_view(view, link ? View::Stage::Connecting : View::Stage::Setup); });
     }
     if (!link) {
@@ -221,7 +238,12 @@ void Gadget::sync_loop() {
       if (result.ok()) greeted_ = true;
     }
     if (greeted_) {
-      Json request = Json::object().set("epoch", epoch_).set("have", have_).set("wait", 25000);
+      // Through the relay, now and then: is the computer's own address back? This thread waits for news
+      // anyway, so a look that finds nobody costs no one.
+      link->probe();
+      // After a look that failed, the next one doesn't wait for news: the screen says the computer is back
+      // as soon as it answers, not up to 25 s later.
+      Json request = Json::object().set("epoch", epoch_).set("have", have_).set("wait", failures > 0 ? 0 : 25000);
       if (!chat_id_.empty()) {
         request.set("watch", Json::array().push(chat_id_));
         Json cursors = Json::object();
@@ -258,11 +280,14 @@ void Gadget::sync_loop() {
       // means its Botkins is closed, or it is on another network.
       if (result.error == Link::Error::Offline && failures == kTriesBeforeTelling) {
         std::string computer;
+        bool relay = false;
         {
           std::lock_guard<std::mutex> lock(mutex_);
           computer = intro_.name.empty() ? "your computer" : intro_.name;
+          for (const auto& host : intro_.hosts) relay = relay || (relay_ && host.compare(0, 6, "relay!") == 0);
         }
-        unreachable_ = "Can't reach " + computer + ". Check that Botkins is open there, on the same Wi-Fi.";
+        // Through its relay a computer is reached from any network: "the same Wi-Fi" is then not what to check.
+        unreachable_ = "Can't reach " + computer + (relay ? ". Check that Botkins is open there." : ". Check that Botkins is open there, on the same Wi-Fi.");
         notice(unreachable_);
       }
       if (!wait(ms)) break;
@@ -343,6 +368,29 @@ void Gadget::apply(Json& parts) {
   const Json& part = parts["gadget"];
   std::string speak_reply;
   int speak_parts = 0;
+  if (meta.is_object()) {
+    // Whether the computer keeps spoken lines in the chat, for live voice.
+    saves_history_ = saves_turns_ = false;
+    for (const Json& capability : meta["capabilities"].items()) {
+      saves_history_ = saves_history_ || capability.str() == "voice-history-v1";
+      saves_turns_ = saves_turns_ || capability.str() == "voice-turns-v1";
+    }
+  }
+  if (part.is_object() && live_) {
+    LivePart now;
+    now.provider = part["voice"]["live"].str();
+    now.bot_id = part["bot"]["id"].str();
+    now.chat_id = part["chat"]["id"].str();
+    now.phase = part["phase"].str();
+    now.queued = (int)part["queued"].num();
+    now.reply_id = part["reply"]["id"].str();
+    now.reply_text = part["reply"]["text"].str();
+    now.history = saves_history_;
+    now.turns = saves_turns_;
+    live_->part(now);
+  }
+  // While live voice is open its voice speaks the replies (ask_bot hands them over): none is read aloud too.
+  const bool live = live_ && live_->active();
   if (part.is_object()) {
     const std::string chat = part["chat"]["id"].str();
     if (chat != chat_id_) {
@@ -360,7 +408,7 @@ void Gadget::apply(Json& parts) {
     }
     const std::string reply = part["reply"]["id"].str();
     // A reply that is new since the gadget came online is read aloud. The one that was there at the start is not.
-    if (!reply.empty() && reply != last_reply_ && !first_part_ && board_.speaker && part["voice"]["speak"].truthy()) {
+    if (!reply.empty() && reply != last_reply_ && !first_part_ && board_.speaker && part["voice"]["speak"].truthy() && !live) {
       speak_reply = reply;
       speak_parts = (int)part["reply"]["parts"].num();
       if (speak_parts > 64) speak_parts = 64;
@@ -430,8 +478,10 @@ void Gadget::apply(Json& parts) {
         view.request.remember = request["remember"].truthy();
         for (const Json& choice : request["choices"].items()) view.request.choices.push_back(choice.str());
       }
-      if (part["reply"].is_object()) view.text = part["reply"]["text"].str();
-      else if (view.phase == "working" || view.phase == "writing") view.text = stream_;
+      // Live, the screen shows what the voice says rather than the reply it was handed.
+      if (part["reply"].is_object()) {
+        if (!live) view.text = part["reply"]["text"].str();
+      } else if (view.phase == "working" || view.phase == "writing") view.text = stream_;
       // A turn that started clears what was said about the one before.
       if (view.phase != "idle") view.notice.clear();
     } else if (texted && (view.phase == "working" || view.phase == "writing")) view.text = stream_;
@@ -671,6 +721,8 @@ void Gadget::start_listening() {
     return;
   }
   stop_speaking();
+  // Live voice when the computer has one this gadget speaks; else the turn path, a recording sent to the computer.
+  const bool live = live_ && live_->usable();
   {
     std::lock_guard<std::mutex> lock(audio_);
     if (recording_) return;
@@ -680,6 +732,8 @@ void Gadget::start_listening() {
     pending_.clear();
     recording_ = true;
     uploading_ = false;
+    live_take_ = live;
+    if (live) live_->press();
   }
   change([](View& view) { view.listening = true; view.notice.clear(); view.heard.clear(); });
 }
@@ -690,6 +744,10 @@ void Gadget::feed(const int16_t* samples, size_t count) {
   {
     std::lock_guard<std::mutex> lock(audio_);
     if (!recording_ || take_ == failed_take_) return;
+    if (live_take_) {
+      live_->feed(samples, count);
+      return;
+    }
     // A link that stalled must not grow this without end on a board with little memory: the recording is given up.
     if (pending_.size() + count > (size_t)board_.mic_rate * kAheadSeconds) {
       failed_take_ = take_;
@@ -710,16 +768,58 @@ void Gadget::stop_listening(bool send) {
   // again before this was sent starts another recording and must not change this one.
   std::vector<int16_t> rest;
   std::string take;
+  bool live;
   {
     std::lock_guard<std::mutex> lock(audio_);
     if (!recording_) return;
     recording_ = false;
+    live = live_take_;
     rest.swap(pending_);
     take = take_;
+  }
+  if (live) {
+    // The turn ends on the provider (a live turn can't be given up: what was said is heard). It shows as
+    // sending until the turn's end went, which the live thread says after this.
+    change([](View& view) { view.listening = false; view.sending = true; });
+    std::lock_guard<std::mutex> lock(audio_);
+    // Unless the session couldn't open meanwhile: then the sound already went the turn path.
+    if (live_take_) live_->release(send);
+    return;
   }
   change([send](View& view) { view.listening = false; view.sending = send; });
   auto shared = std::make_shared<std::vector<int16_t>>(std::move(rest));
   post([this, take, shared, send](Link& link) { upload(link, take, std::move(*shared), true, !send); });
+}
+
+/**
+ * Live voice couldn't open a session for this press: its sound goes the turn path, as a recording, so
+ * nothing the person said is lost. From the live thread.
+ */
+void Gadget::live_failed() {
+  std::vector<int16_t> audio;
+  std::string take;
+  bool last = false, piece = false;
+  {
+    std::lock_guard<std::mutex> lock(audio_);
+    audio = live_->surrender();
+    if (!live_take_) return;
+    live_take_ = false;
+    take = take_;
+    if (recording_) {
+      // Still held: the recording goes on from what was said so far.
+      pending_ = std::move(audio);
+      if (!uploading_ && pending_.size() >= (size_t)(board_.mic_rate * kPieceSeconds)) piece = uploading_ = true;
+    } else last = true;
+  }
+  if (last && audio.empty()) {
+    // A press with no speech in it: nothing to send down the turn path either.
+    change([](View& view) { view.sending = false; });
+    return;
+  }
+  if (last) {
+    auto shared = std::make_shared<std::vector<int16_t>>(std::move(audio));
+    post([this, take, shared](Link& link) { upload(link, take, std::move(*shared), true, false); });
+  } else if (piece) post([this, take](Link& link) { upload(link, take, {}, false, false); });
 }
 
 /**
@@ -766,6 +866,7 @@ void Gadget::upload(Link& link, const std::string& take, std::vector<int16_t> re
 
 void Gadget::stop_speaking() {
   quiet_++;
+  if (live_) live_->quiet();
   bool speaking;
   {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -839,6 +940,8 @@ void Gadget::stop_turn() {
 
 void Gadget::new_chat() {
   stop_speaking();
+  // A live session talks in the chat it was opened for: the next press opens one for the new chat.
+  if (live_) live_->end();
   post([this](Link& link) { fail(link.call("link.gadget.set", args(Json::object().set("newChat", true)))); });
 }
 
@@ -853,6 +956,7 @@ void Gadget::next_bot() {
     next = bots_[(at + 1) % bots_.size()].first;
   }
   stop_speaking();
+  if (live_) live_->end();
   post([this, next](Link& link) { fail(link.call("link.gadget.set", args(Json::object().set("botId", next)))); });
 }
 
@@ -937,7 +1041,7 @@ std::string Gadget::console(const std::string& line) {
     View now = view();
     static const char* stages[] = {"setup", "joining", "no-network", "connecting", "online", "removed"};
     Json json = Json::object().set("stage", stages[(int)now.stage]).set("phase", now.phase).set("bot", now.bot).set("text", now.text).set("heard", now.heard).set("notice", now.notice);
-    json.set("listening", now.listening).set("sending", now.sending).set("speaking", now.speaking).set("hear", now.can_hear).set("speak", now.can_speak);
+    json.set("listening", now.listening).set("sending", now.sending).set("speaking", now.speaking).set("live", now.live).set("hear", now.can_hear).set("speak", now.can_speak);
     if (!now.request.id.empty()) json.set("request", Json::object().set("kind", now.request.kind).set("title", now.request.title));
     const auto& s = now.settings;
     json.set("settings", Json::object().set("volume", s.volume).set("mic", s.mic).set("mute", s.mute).set("brightness", s.brightness).set("dimAfter", s.dim_after).set("offAfter", s.off_after));
@@ -962,10 +1066,11 @@ std::string Gadget::console(const std::string& line) {
     ms = ms < 300 ? 300 : ms > 10000 ? 10000 : ms;
     if (hold_thread_.joinable()) hold_thread_.join();
     start_listening();
-    hold_thread_ = std::thread([this, ms] {
+    auto hold = [this, ms] {
       for (int waited = 0; waited < ms && running_; waited += 50) std::this_thread::sleep_for(std::chrono::milliseconds(50));
       stop_listening();
-    });
+    };
+    hold_thread_ = board_.thread ? board_.thread("hold", hold) : std::thread(hold);
     return reply_line(Json::object().set("ok", true));
   }
   if (what == "answer") {

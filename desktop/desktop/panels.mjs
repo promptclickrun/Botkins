@@ -57,7 +57,7 @@ const blockSchema = {
         type: { const: "badges" },
         items: {
           type: "array",
-          items: object({ label: string, tone: { enum: ["neutral", "positive", "warning", "negative", "accent"] } }, ["label"]),
+          items: object({ label: string, tone: { type: "string", enum: ["neutral", "positive", "warning", "negative", "accent"] } }, ["label"]),
         },
       },
       ["type", "items"],
@@ -654,11 +654,11 @@ export class Panels {
         ),
         tool(
           "today_routine",
-          "Manage a panel's recurring Copilot refresh. Set a five-field cron expression and instructions when a recurring update is requested. Cadence uses the supplied IANA timezone or the computer's timezone.",
+          "Manage a panel's recurring Copilot refresh. Set a five-field cron expression and instructions when a recurring update is requested. Cadence uses the supplied IANA timezone or the computer's timezone. Before you set one, confirm with the person how often it refreshes and which panel and space it updates, unless they already said. A refresh doesn't notify the person; only a failed one does. A space's Notify me covers people's edits and notes, not refreshes. If they want to hear of each update, a routine (routine_create) with notify on does that.",
           {
             key: string,
             space: string,
-            action: { enum: ["set", "pause", "resume", "remove"] },
+            action: { type: "string", enum: ["set", "pause", "resume", "remove"] },
             cron: string,
             timezone: string,
             prompt: string,

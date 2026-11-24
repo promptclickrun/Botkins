@@ -60,7 +60,61 @@ const timed = env("TIMING")
     }
   : (_label, action) => action();
 const sdkTools = (tools) =>
-  (tools ?? []).map(({ name, description, parameters, handler, skipPermission, defer }) => sdkTool(name, { description, parameters, handler: spoken(name, handler), skipPermission, defer }));
+  (tools ?? []).map(({ name, description, parameters, handler, skipPermission, defer }) =>
+    sdkTool(name, { description, parameters: typedSchema(parameters), handler: spoken(name, handler), skipPermission, defer }),
+  );
+/**
+ * A tool's schema with a `type` on every `enum` and `const` that has none, taken from its values.
+ * Gemini models turn a whole request down ("400 invalid request body") when one tool has an
+ * untyped enum in some places, such as inside the items of one of an anyOf's choices. The other
+ * models don't mind the type. A schema from an MCP app is passed on as its server wrote it, so
+ * this is done here for every tool rather than in each tool's source. The schema given is not changed.
+ */
+export function typedSchema(schema) {
+  if (Array.isArray(schema)) return schema.map(typedSchema);
+  if (!schema || typeof schema !== "object") return schema;
+  const out = {};
+  for (const [key, value] of Object.entries(schema)) {
+    // `enum`, `const`, `default` and `examples` hold values, not schemas.
+    if (SCHEMA_VALUES.has(key)) out[key] = value;
+    // `properties` and the like are maps of schemas, whose keys are names (a property may be called "const").
+    else if (SCHEMA_MAPS.has(key) && value && typeof value === "object" && !Array.isArray(value))
+      out[key] = Object.fromEntries(Object.entries(value).map(([name, entry]) => [name, typedSchema(entry)]));
+    else out[key] = typedSchema(value);
+  }
+  if (out.type === undefined) {
+    const values = Array.isArray(out.enum) ? out.enum : Object.hasOwn(out, "const") ? [out.const] : null;
+    const type = values?.length ? valueType(values) : null;
+    if (type) out.type = type;
+  }
+  return out;
+}
+/**
+ * The answer to a sign-in that GitHub finished but the runtime hasn't kept yet, or undefined.
+ * - "needs-plaintext-consent": the computer has no keychain (a Linux server, a container), so the
+ *   runtime asks before it keeps the sign-in in a file in its own folder, as the GitHub CLI does.
+ *   Without the answer the person signs in at GitHub and Copilot still isn't signed in.
+ * - "needs-account-selection": the account GitHub signed in, when it is among those offered.
+ */
+export function loginAnswer(result) {
+  if (result?.status === "needs-plaintext-consent") return "allow";
+  if (result?.status === "needs-account-selection") {
+    const github = (result.accounts ?? []).filter((account) => account?.selectionId);
+    const chosen = github.find((account) => result.login && account.login === result.login) ?? (github.length === 1 ? github[0] : null);
+    return chosen?.selectionId;
+  }
+  return undefined;
+}
+const SCHEMA_VALUES = new Set(["enum", "const", "default", "examples"]);
+const SCHEMA_MAPS = new Set(["properties", "patternProperties", "$defs", "definitions", "dependentSchemas"]);
+/** The one JSON Schema type of all these values, or null when they differ or are null. */
+function valueType(values) {
+  const types = new Set(values.map((v) => (Number.isInteger(v) ? "integer" : typeof v === "number" ? "number" : typeof v)));
+  // Whole numbers among fractions are numbers.
+  if (types.size === 2 && types.has("integer") && types.has("number")) return "number";
+  const [only] = types;
+  return types.size === 1 && ["string", "integer", "number", "boolean"].includes(only) ? only : null;
+}
 /**
  * A Botkins tool's handler as the runtime gets it. When a tool throws, the runtime tells the
  * model only "Tool execution failed": the sentence the tool threw, which says what to do instead
@@ -627,14 +681,33 @@ export class CopilotProvider extends ModelProvider {
           await open(step.url);
         }
         let next;
-        do {
+        let input;
+        const answered = new Set();
+        for (;;) {
           try {
-            next = await accounts.login.advance({ flowId });
+            next = await accounts.login.advance({ flowId, ...(input !== undefined && { input }) });
           } catch (error) {
             throw cancelled() ? new Error("Sign-in cancelled.") : error;
           }
-        } while (next.kind === "awaiting" && !cancelled());
+          if (cancelled() || next.kind !== "completed") {
+            input = undefined;
+            if (next.kind === "awaiting" && !cancelled()) continue;
+            break;
+          }
+          // GitHub said yes, but the runtime may still need an answer before it keeps the sign-in.
+          // Each question is answered once: asked again, the answer wasn't taken.
+          const question = next.result?.status;
+          input = answered.has(question) ? undefined : loginAnswer(next.result);
+          if (input === undefined) break;
+          answered.add(question);
+        }
         if (cancelled()) throw new Error("Sign-in cancelled.");
+        const status = next.kind === "completed" ? next.result?.status : undefined;
+        if (status === "declined") throw new Error("GitHub Copilot's sign-in wasn't saved on this computer. Sign in with a GitHub token instead.");
+        if (status === "needs-account-selection") throw new Error("GitHub Copilot asked which account to use. Sign in with a GitHub token instead.");
+        // Any other answer that isn't "completed" left the sign-in unkept. Another sign-in on the
+        // computer (the GitHub CLI's) would still make the check below pass, so it is not asked.
+        if (status !== undefined && status !== "completed") throw new Error("Sign-in incomplete: GitHub Copilot didn't keep it (" + status + "). Sign in with a GitHub token instead.");
         if (next.kind !== "completed" || !(await client.getAuthStatus()).isAuthenticated)
           throw new Error(next.message || "Sign-in incomplete. Open Copilot CLI and run /login.");
       } finally {

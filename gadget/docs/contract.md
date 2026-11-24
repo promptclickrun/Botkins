@@ -129,15 +129,41 @@ The computer keeps each gadget's settings, and the part carries them whole. The 
 - **Restart.** `link.gadgets.restart(id)` puts `restart: id` in the part; the gadget says `link.gadget.set({ restarting: id })`, then restarts.
 - **The device list** shows a gadget's `settings`, its `wifi` report, `wifiWaiting` (the names of changes not taken yet) and `restarting`.
 
-### Live voice
+## Live voice
 
-A gadget starts a live session as a phone does: `link.voice.live({ chatId, botId })` answers what it needs to connect to the provider, and the sound then goes between the gadget and the provider (`mobile/link-host/VOICE.md`, "Live sessions"). The gadget runs the one tool, `ask_bot`, by calling `link.gadget.say` and waiting for `gadget.reply`. A gadget asks without an `sdp`, so it gets a socket session: `openai-ws`, `gemini-ws` or `elevenlabs-ws`. Codex is WebRTC only and is not offered to a gadget yet.
+With a live voice the person talks with the bot's voice itself, as in the phone app's Live voice: the gadget opens a session with the computer's live provider and streams sound both ways, and the voice hands real work to the bot through its one tool, `ask_bot`. It is push to talk: the talk button marks each of the person's turns. `firmware/core/src/live.cpp` does all of it (`include/botkins/live.hpp`); a port gives a `Socket` (`Board::socket`) and a `Speaker`, nothing more. The phone's version is `mobile/src/features/voice/live/` (`gemini.ts`, `askBot.ts`), and the computer's side is `mobile/link-host/VOICE.md`, "Live sessions".
+
+- **When.** A press goes live when the part names a live voice the gadget speaks (`voice.live`; the core speaks `"gemini"`) and the board has a socket and a speaker. Otherwise it goes the turn path, as a recording (`link.gadget.hear`). Muted (`settings.mute`), holding talk still says so and sends nothing.
+- **Opening, at the first press.** With no chat yet, the gadget starts one with its bot (the app's `createChat(botId)`) and makes it its own (`link.gadget.set({ chatId })`). Then it asks `link.voice.live({ chatId, botId })`. Without an `sdp` that is a socket session: `{ id, kind: "gemini-ws", url, setup, input: { sampleRate }, output: { sampleRate }, expiresAt, tools }`. Its token only starts a session for about two minutes, so the gadget asks only as it opens one. It opens `url` as given, with no subprotocol, sends `setup` first with Gemini's own activity detection off (`setup.realtimeInputConfig.automaticActivityDetection.disabled: true`), and waits for `setupComplete`. What the microphone hears from the press on is kept meanwhile and sent once the turn starts, so the first words are not lost.
+- **Only speech goes.** A speech model given silence or a tap doesn't answer with nothing: it makes up a short word, often in another language ("¿Qué?"), and the voice answers in that language. So a press reaches the provider only once the microphone hears speech, three 20 ms frames in a row whose RMS is at least `Board::speech_level` (0 to 1 of full scale; 0.01 by default), and only after the press has lasted 300 ms. Until then the gadget keeps just the last second of sound, and sends that second first so a soft first word is whole. A press that ends without speech, or a tap the board gives up (`stop_listening(false)`), sends the provider nothing, nor the turn path when its session couldn't open, and the gadget is ready again at once. Each press leaves one line in the port's log (`Board::log`): its length, its loudest and quietest frames, and whether it held speech.
+- **A held press with speech**, in order:
+  1. `{ realtimeInput: { activityStart: {} } }`
+  2. `{ realtimeInput: { audio: { data, mimeType: "audio/pcm;rate=16000" } } }` for each 100 ms: 16-bit samples at `input.sampleRate` (resampled from the microphone's rate) as base64 with padding.
+  3. `{ realtimeInput: { activityEnd: {} } }` once the button is up and the rest of the sound went.
+- **The voice.** `serverContent.modelTurn.parts[].inlineData.data` is played as it comes, resampled from `output.sampleRate` to the speaker's rate, through `Speaker::write`, which paces it. At most 4 s of it waits to be played; past that the socket waits, and the provider with it. `interrupted` drops what was not played yet. On show: `inputTranscription.text` is what was heard (`View::heard`), `outputTranscription.text` what the voice says (`View::text`); `View::listening` while the button is held, `View::speaking` while the voice plays, and `View::live` while a session is open.
+- **Interrupting.** A press while the voice speaks stops the speaker at once (`Speaker::cut`), drops the rest of that turn, and starts the person's turn, which stops the voice on the provider's side too.
+- **`ask_bot`.** A `toolCall.functionCalls[]` entry named `ask_bot` sends `args.message` to the gadget's chat and waits for the bot as the phone does (`askBot.ts`), with the gadget part as what it knows of the chat. The screen shows the bot working meanwhile, from the part. The answer is `{ toolResponse: { functionResponses: [{ id, name, response: { result } }] } }`, the calls of one `toolCall` answered together, where `result` is:
+  - the part's new `reply.text`, once the phase is back to `idle` and nothing changed for 0.8 s; " (The reply was cut here. The rest is in the chat.)" is added when the computer cut it at 2,000 characters;
+  - "The bot needs the person to answer something first. It is on the gadget's screen: ask them to answer it there, then ask again." when a request shows (a gadget answers requests itself);
+  - "The bot finished without a written reply.", or after 10 minutes "The bot is still working on it. Tell the person the answer will be in the chat.";
+  - "The message didn't reach the bot: …", "Say what to ask the bot.", or "There is no tool named …" for another tool.
+
+  A call named in `toolCallCancellation.ids` is not answered. The voice speaks the reply, so it is not also read aloud with `link.gadget.speak`: while a session is open no reply is.
+- **History.** When `meta.capabilities` names `voice-turns-v1`, both sides go into the chat as the phone records them (VOICE.md, "Spoken messages in chat history"), so the apps show the conversation:
+  - the person's words: `recordVoiceLine(chatId, "<session id>:input-you-<n>", text, final)`;
+  - `ask_bot`'s message: the app's `send(chatId, message, { voiceId })`, with the person's line as `voiceId`, so the request runs on that line (`link.gadget.say` takes no voice id);
+  - the voice's words: `recordVoiceLine(chatId, "<session id>:output-bot-<n>", text, final, { role: "assistant", sessionId, afterVoiceId })`. The link takes these only from the device and the chat the session was made for. When the bot's written reply is already there, the spoken words caption its row.
+
+  With `voice-history-v1` alone only the person's words are recorded, and `send` carries the voice id only when the request is the same words. With neither, `ask_bot` uses `link.gadget.say`. Lines are written one at a time on the gadget's worker, the newest text of each, and a final line is tried twice.
+- **Closing.** A session closes after 3 minutes with no press, no sound and no tool call waiting (`Board::live_idle_ms`), on Gemini's `goAway` once nothing is under way, when its socket closes, and when the gadget's chat, bot or live voice changes. The gadget then calls `link.voice.endLive(id)`. The next press opens a new session.
+- **The fallback.** A session that isn't open within 6 s (the computer doesn't answer, the provider has no key, the provider is down) hands the press to the turn path with all the sound it kept: sent at once with `link.gadget.hear` when the button is already up, or carried on as a recording while it is held. For 30 s after that, presses go the turn path straight away. Nothing is said on the screen unless the turn path fails too.
+- **Not yet.** `openai-ws` and `elevenlabs-ws` (each will be a `LiveProtocol` in `live.cpp`; until then the gadget uses the turn path), and Codex, which is WebRTC only.
 
 ## The link's bytes
 
 All of it is in `mobile/link-host/server.mjs` and `crypto.mjs`. This is the part a gadget needs.
 
-- **Transport**: HTTP/1.1 to `http://<host>:<port>/botkins/v1/…`. The default port is 47610. No TLS: every message is sealed by the link. Away from the computer's network, the same requests go over the relay's socket (`mobile/relay/README.md`, "Wire format"; the gadget uses the phone's side, `botkins.phone.v1`, which does need TLS).
+- **Transport**: HTTP/1.1 to `http://<host>:<port>/botkins/v1/…`. The default port is 47610. No TLS: every message is sealed by the link. Away from the computer's network, the same requests go over the relay's socket ("Through the relay" below; the gadget uses the phone's side, `botkins.phone.v1`, which does need TLS).
 - **Text forms**: keys, nonces and boxes are base64url without padding. JSON is UTF-8.
 - **Primitives**: X25519; HKDF-SHA256 with 32 bytes out; ChaCha20-Poly1305 (IETF, 12-byte nonce, 16-byte tag after the ciphertext).
 - **A box** is `base64url(nonce(12, random) + seal(key, nonce, JSON, aad))`.
@@ -166,8 +192,8 @@ toPhone = HKDF(master, salt, "botkins/s2c/v1")
 
 - `403 { "error": "unknown_device" }`: the gadget was removed. Say so ("This gadget was removed. Set it up again to use it."), keep the introduction, and ask again every half minute. Do not erase anything: this answer is not sealed, so any device on the network could give it, and it must not be able to make a gadget forget its computer. Setup replaces the introduction.
 - `403 { "error": "bad_session" }`, `429`: wait and try again; do not forget anything.
-- Nobody answering at any address: wait and try again, 0.4 s growing to 15 s. After the second try, tell the person what to check ("Can't reach Demo Mac. Check that Botkins is open there, on the same Wi-Fi."), and take that sentence away once the computer answers.
-- `hosts` are the computer's addresses now, best first, with a `relay!<room>@<host>` entry when the relay is on. Keep them in flash: this is how a gadget finds a computer whose address changed.
+- Nobody answering at any address: wait and try again, 0.4 s growing to 15 s. After the second try, tell the person what to check ("Can't reach Demo Mac. Check that Botkins is open there, on the same Wi-Fi.", without "on the same Wi-Fi" when the gadget can use a relay entry), and take that sentence away once the computer answers.
+- `hosts` are the computer's addresses now, best first, with a `relay!<room>@<host>` entry when the relay is on. Keep them in flash: this is how a gadget finds a computer whose address changed. Keep at most 8, and never cut the relay entry to make room; the computer's current relay entry replaces older ones.
 - A new `epoch` means the computer's app restarted: forget the versions held (`have`) and every text cursor.
 
 **A call.** Calls are numbered from 1 in each session, and each number is used once:
@@ -192,9 +218,35 @@ answer     { "epoch": epoch, "v": versions | null, "parts": { name: value, … }
 ```
 
 - `have` is the `v` of the answer before (`{}` at first). `v: null` means nothing changed: ask again with the same `have`.
-- `wait` is how long the computer may hold the call for news, in milliseconds (30,000 at most). Give the request itself 15 seconds more.
+- `wait` is how long the computer may hold the call for news, in milliseconds (30,000 at most). Give the request itself 15 seconds more. After a call that failed, ask once with `wait: 0`, so the gadget shows it is online again as soon as the computer answers.
 - `appends` is `{ [chatId]: { id, stream, thinking } }`: the text id held and how many UTF-16 units of each body. `{}` asks from the start. A part `text:<chatId>` is `{ id, stream: { from, add }, thinking: { from, add } }`, or `null` when there is no text. Append `add` at `from`; an `id` or `from` that does not fit what is held means start over from `{}`.
 - One `link.sync` waits at a time. Other calls go beside it on the same session, on a second connection.
+
+**Through the relay.** A computer with its relay on names it in `hosts`: `relay!<room>@<relay host[:port]>`, a 43-character room. An introduction may hold nothing else (a computer that is reachable only through its relay, such as a server in the cloud). The gadget speaks the phone's side of the relay, exactly as `mobile/src/link/relay.ts` does (`mobile/relay/README.md`, "Wire format", has the whole protocol):
+
+- **Which address.** The computer's own addresses first, each given 1.5 s for its `hello` when there is a relay to fall back on (3 s when there is not); the relay only when none of them answered, with 8 s for its `hello` (its socket may have to open first). The session stays where it was opened. While it goes through the relay, the gadget asks the computer's own addresses again before a `link.sync` now and then (after 30 s, doubling to 10 minutes): when one answers as this computer, the next call opens a session there.
+- **The socket.** `wss://<relay host[:port]>/v1/room/<room>` (`ws://` only for `127.0.0.1`, `localhost` and `[::1]`), subprotocol `botkins.phone.v1`, which the relay must choose. One socket carries every request, the waiting `link.sync` and the other calls side by side. 8 s to open it. After it failed to open, requests fail at once for 1 s, doubling to 15 s, so a relay that is down is not hammered.
+- **A request** is one binary message: `[0x01][id u32][route u8][n u8][session: n bytes][body…]`. `route` stands for the method and the path: 1 `hello` (GET), 2 `pair`, 3 `session`, 4 `rpc`, 5 `join` (POST). `session` is the `x-botkins-session` header of an `rpc` call (empty otherwise, at most 255 printable ASCII bytes); no other header goes along. `body` is the HTTP body. Numbers are big-endian. Each id is used once on a socket (the relay remembers answered ones): count up from 0, skipping one still waiting.
+- **What comes back.** `[0x02][id u32][status u16][body…]` is the HTTP answer. `[0x03][id u32]`: no computer is connected, the request was not passed on: as an address that didn't answer. `[0x05]`: the computer left the relay: everything waiting fails as unanswered (the socket stays). `[0x07][id u32]…` is a follow part, sent only for a call that asked to be followed: a gadget asks for none and drops it. An answer for an id given up on is dropped.
+- **Keeping it alive.** While a request waits, send the text `ping` every 25 s; the relay answers `pong`. A socket that has heard nothing 10 s after a ping is dead: what waited on it fails, and the next request opens a new one. A socket with nothing waiting for 30 s is not trusted again: the next request opens a new one. A socket the relay closes (it restarted, or 4008: a ninth socket from the same network took this one's place) fails what waited on it, the same way.
+- **Limits.** The relay closes a phone socket that sends more than 6 MiB + 64 KiB (1009), and a computer's answer may be up to 8 MiB; a gadget takes answers up to its own limit (1 MiB on the host, the transport's `max_answer`), and a longer message closes its socket. A held `link.sync` is well inside the relay's five-minute request lifetime. Over the relay the computer gathers a sync's news every 250 ms.
+
+**What a board needs for it** (`firmware/core/include/botkins/hal.hpp`): a `Socket`, made by `Board::socket`. A board without one skips the relay entry. Live voice uses the same `Socket` for the provider's own socket.
+
+```cpp
+struct Socket {
+  struct Events {
+    std::function<void(const uint8_t* data, size_t size, bool binary)> message;  // whole messages, from the socket's thread
+    std::function<void(int code)> closed;  // ended without close(): the close code, or 0
+  };
+  // `protocol` "" offers none (a live provider's socket); the server must choose the one offered.
+  virtual bool open(const std::string& url, const std::string& protocol, int timeout_ms, size_t max_message, Events events) = 0;
+  virtual bool send(const uint8_t* data, size_t size, bool binary) = 0;  // any thread, also two at once
+  virtual void close() = 0;  // not from inside an event; no event after it returns
+};
+```
+
+The core's `RelayTransport` (`firmware/core/src/relay.cpp`) does the rest: it wraps the board's own `Transport`, so a port changes nothing else. It starts no thread: the requests that wait take turns at the keep-alive. Memory: a copy of each request while it is sent (7 bytes and its session more than the body), and each answer once; the socket's own buffers are the board's.
 
 ## Setup over USB
 
@@ -217,7 +269,7 @@ A gadget with no introduction waits for setup on its USB serial port (115200 bau
 
 | Line | What it does |
 | --- | --- |
-| `@botkins {"do":"view"}` | answers `{"view":{ stage, phase, bot, text, heard, notice, listening, sending, speaking, hear, speak, request? }}`: what the screen shows now |
+| `@botkins {"do":"view"}` | answers `{"view":{ stage, phase, bot, text, heard, notice, listening, sending, speaking, live, hear, speak, request? }}`: what the screen shows now |
 | `@botkins {"do":"say","text":"…"}` | sends typed words, as `link.gadget.say` |
 | `@botkins {"do":"listen","ms":3000}` | holds the talk button for that long (300 to 10,000 ms), then sends the recording |
 | `@botkins {"do":"answer","action":"approve"}` | answers the request on show (`value` for an `answer`) |
@@ -237,4 +289,6 @@ Setup over Bluetooth carries the same objects. It is not built yet.
 ## What was checked, and what was not
 
 - `mobile/tests/gadget.test.ts` runs a gadget's key through the phone's own link client against the demo computer: introduction, the two parts, a typed turn, a recording in pieces, samples back at another rate, a request answered on the gadget, and each refusal.
+- `gadget/tests/relay.test.mjs` runs the compiled core through the real relay (`mobile/relay/node/server.mjs`, over `ws://` on the same computer) with an introduction that names only the relay: a typed turn, its reply read aloud, the faces, a setting from the owner, the relay restarting, the computer's link turned off and on, and the move to the direct address once it answers. The relay over `wss://` on a board was tried on the M5Stack StopWatch, through the public relay with a demo computer reached only through it: online, a typed turn read aloud, a setting from the owner, the computer stopped for 30 s and back (`firmware/esp32/README.md`, "The WebSocket").
+- `gadget/tests/live.test.mjs` runs the compiled core's live voice against a stand-in for Gemini Live (a local `ws://` server that speaks its messages) and the real link with the demo backend. The link builds the session as for Gemini; only its token request and the socket's address are replaced on that LinkHost's `Voice`. It checks the setup (activity detection off, the `ask_bot` tool), a held press (its turn's start, every 100 ms of it at 16 kHz kept while the session opened, its end), `ask_bot` answered with the demo bot's real reply, the voice played at the speaker's rate and nothing read aloud, both sides recorded in the chat, a press that interrupts, the session closing when idle and opening again, and the turn path when Gemini is down. Real Gemini (the token, its messages and timing, its transcriptions) was not tried here: the message shapes are the phone's (`gemini.ts`). On the StopWatch only the socket was: its TLS handshake and upgrade with Gemini's address succeed, and a setup with no valid token is closed with 1007.
 - Speech providers: asking each provider for samples (`samples: true` in `voice.mjs`: OpenAI and Azure OpenAI `response_format: "wav"`, Azure Speech `riff-24khz-16bit-mono-pcm`, ElevenLabs `output_format=pcm_24000`) was not tried with a real key. The local model and Gemini already answer with WAV.

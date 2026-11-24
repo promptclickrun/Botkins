@@ -1,5 +1,5 @@
 // The Botkins gadget on an ESP32 board: the shared core (gadget/firmware/core) with the chip's
-// random numbers, NVS, Wi-Fi and the USB console, and one board from boards/<name>.
+// random numbers, NVS, Wi-Fi, the USB console and a WebSocket, and one board from boards/<name>.
 // gadget/docs/contract.md has every rule; gadget/firmware/host/main.cpp is the same port for a computer.
 #include <cstdio>
 
@@ -17,10 +17,14 @@
 #include "gadget_port/board.hpp"
 #include "nvs_flash.h"
 #include "port.hpp"
+#include "websocket.hpp"
 
 namespace {
 const char* TAG = "botkins";
 const char* kWifi = "wifi";  // the core's name for the saved network (core/src/gadget.cpp)
+// The stacks of the threads the core makes as it needs them (Board::thread, below). On the StopWatch
+// the live voice's used 4.1 KB through a session with ask_bot; the console's `listen` hold, little.
+int thread_stack(const std::string& name) { return name == "live" ? 10 * 1024 : 6 * 1024; }
 
 // esp_fill_random gives true random numbers once the radio is on (WifiNetwork::begin runs first).
 void fill_random(uint8_t* out, size_t size) { esp_fill_random(out, size); }
@@ -83,8 +87,36 @@ extern "C" void app_main(void) {
   config.network = &g_wifi;
   config.firmware = version;
   config.slice_bytes = 32000;
+  // The relay's socket and live voice's (websocket.cpp): wss:// checked against the certificate bundle.
+  config.socket = [] { return std::unique_ptr<botkins::Socket>(new port::EspSocket()); };
   // The owner's restart (the part's `restart`): the core says it is restarting, then calls this.
   config.restart = [] { esp_restart(); };
+  // The core's own lines (what a live press heard, for instance).
+  config.log = [](const std::string& line) { ESP_LOGI("botkins.core", "%s", line.c_str()); };
+  // The threads the core makes as it needs them: the live voice's, made while a session is open beside
+  // the relay's socket and the live one, and the console's `listen` hold. Each gets a stack of its own
+  // size, not the 16 KB of the core's long-lived threads. Stacks stay in internal RAM: a call on the
+  // live thread may open a link session and save the computer's addresses to flash, which a task with
+  // its stack in PSRAM must not do. As a thread ends, the log says how much of its stack it never used.
+  config.thread = [](const char* name, std::function<void()> run) {
+    esp_pthread_cfg_t before = esp_pthread_get_default_config();
+    if (esp_pthread_get_cfg(&before) != ESP_OK) before = esp_pthread_get_default_config();
+    const std::string label = name;
+    const int stack = thread_stack(label);
+    esp_pthread_cfg_t own = esp_pthread_get_default_config();
+    own.stack_size = stack;
+    own.prio = 5;
+    own.inherit_cfg = false;
+    own.thread_name = name;
+    esp_pthread_set_cfg(&own);
+    std::thread thread([run = std::move(run), label, stack] {
+      run();
+      ESP_LOGI(TAG, "%s thread ended; its stack had at least %u of %d bytes left", label.c_str(), (unsigned)uxTaskGetStackHighWaterMark(nullptr), stack);
+    });
+    // Only this one: the calling task's own threads are made as before.
+    esp_pthread_set_cfg(&before);
+    return thread;
+  };
   uint8_t mac[6] = {0};
   esp_read_mac(mac, ESP_MAC_WIFI_STA);
   char text[18];
