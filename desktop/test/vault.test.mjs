@@ -39,6 +39,16 @@ test("a secret goes in and comes out, and the file never holds it as text", (t) 
   assert.equal(vault.get("not-a-ref"), null);
 });
 
+test("a failed removal keeps the encrypted entry in memory and on disk", (t) => {
+  const dir = tempDir(t);
+  const vault = new Vault(dir);
+  const ref = vault.put("fixture-token", {});
+  t.mock.method(vault, "save", () => { throw new Error("Storage unavailable"); });
+  assert.throws(() => vault.remove(ref), /Storage unavailable/);
+  assert.equal(vault.get(ref), "fixture-token");
+  assert.equal(new Vault(dir).get(ref), "fixture-token");
+});
+
 test("one entry's ciphertext can't stand in for another's, and a changed one doesn't open", (t) => {
   const dir = tempDir(t);
   const vault = new Vault(dir);

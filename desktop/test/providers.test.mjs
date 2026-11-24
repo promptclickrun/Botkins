@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { Workspace } from "./starter.mjs";
 import { Providers, ModelProvider, ProviderSession, defineTool } from "../desktop/providers/index.mjs";
 import { CopilotProvider, loginAnswer, sessionOptions, spoken, typedSchema } from "../desktop/providers/copilot/index.mjs";
+import { SignIns } from "../desktop/terminal/signin.mjs";
 import { fakeClient, tempDir, tick } from "./fake-copilot.mjs";
 import { pass, settle, watching } from "./quiet-turns.mjs";
 
@@ -741,6 +742,170 @@ test("sign-out removes a Copilot sign-in and explains the ones Botkins can't rem
   assert.deepEqual(gh.calls, []);
   const env = accountsFixture(t, { first: {}, next: [] }, () => ({ isAuthenticated: true, authType: "env" }));
   await assert.rejects(env.copilot.signOut(), /token from its environment/);
+});
+
+test("phone sign-in while Copilot is off and sign-out when the host keychain refuses removal", async (t) => {
+  const baseDirectory = tempDir(t);
+  let saved = false;
+  let loadedAccount = "octo";
+  let verification;
+  let retryApproval;
+  let vaultReadOnly = false;
+  let enabled = false;
+  let rejectLogout = true;
+  let approve = true;
+  let logoutCalls = 0;
+  const vault = new Map();
+  const sdk = {
+    RuntimeConnection: runtimeSdk().sdk.RuntimeConnection,
+    CopilotClient: class {
+      constructor({ github }) {
+        this.loadSaved = github?.useLoggedInUser !== false;
+        this.connected = github?.token ? github.token === "good-token" : saved && github?.useLoggedInUser !== false;
+      }
+      async start() {}
+      async stop() { this.connected = false; }
+      async getAuthStatus() {
+        if (this.connected && verification) {
+          verification.started.resolve();
+          await verification.continue.promise;
+        }
+        return { isAuthenticated: this.connected, authType: "user", host: "https://github.com", login: this.connected ? loadedAccount : undefined };
+      }
+      async createSession() {
+        const accounts = {
+          login: {
+            begin: async () => ({ flowId: "login", step: { kind: "device-code", userCode: "TEST", verificationUri: "https://github.com/login/device" } }),
+            advance: async () => {
+              if (retryApproval) await retryApproval.promise;
+              if (!approve) return { kind: "error", message: "Approval declined" };
+              saved = true;
+              this.connected = this.loadSaved;
+              return { kind: "completed", result: { status: "completed", login: "octo", host: "https://github.com" } };
+            },
+            cancel: async () => {},
+          },
+          set: async () => {
+            logoutCalls++;
+            if (rejectLogout) throw new Error("Request session.accounts.set failed with message: Failed to remove token: Keychain error: Couldn't access platform storage: Invalid attempt to change the owner of this item.");
+            saved = this.connected = false;
+            return { ok: true };
+          },
+        };
+        return { rpc: { accounts }, sessionId: "account", disconnect: async () => {} };
+      }
+      async deleteSession() {}
+    },
+  };
+  const make = () => {
+    const provider = new CopilotProvider({ baseDirectory, sdk, github: () => signIns.copilotGitHub() });
+    const registry = new Providers([provider]);
+    registry.configure({ enabled: () => enabled });
+    const signIns = new SignIns({
+      providers: () => registry,
+      vault: () => ({
+        get: (id) => vault.get(id),
+        has: (id) => vault.has(id),
+        put: (value, _meta, id) => vault.set(id, value),
+        remove: (id) => {
+          if (vaultReadOnly) throw new Error("Vault is read-only.");
+          return vault.delete(id);
+        },
+      }),
+      enable: async () => { enabled = true; },
+      changed: async () => registry.invalidate(),
+    });
+    return { signIns, provider };
+  };
+  async function login(signIns, expectedError) {
+    const { session } = await signIns.start("copilot");
+    let view;
+    let after = 0;
+    do {
+      view = await signIns.read(session, { after });
+      after = view.next;
+    } while (!view.done);
+    if (expectedError) assert.match(view.error, expectedError);
+    else {
+      assert.equal(view.error, undefined);
+      assert.equal(view.result.account, "octo");
+    }
+  }
+  const first = make();
+  await login(first.signIns);
+  assert.equal(enabled, true);
+  await first.provider.stop();
+  const second = make();
+  assert.equal((await second.provider.auth()).connected, true);
+  assert.deepEqual(await second.signIns.signOut("copilot"), { connected: false });
+  assert.equal(saved, true, "the keychain still owns its item");
+  await second.provider.stop();
+  const third = make();
+  assert.equal((await third.provider.auth()).connected, false);
+  approve = false;
+  await login(third.signIns, /Approval declined/);
+  assert.equal((await third.provider.auth()).connected, false);
+  approve = true;
+  loadedAccount = "someone-else";
+  await login(third.signIns, /approved account/);
+  assert.equal((await third.provider.auth()).connected, false);
+  loadedAccount = "octo";
+  verification = { started: Promise.withResolvers(), continue: Promise.withResolvers() };
+  const { session } = await third.signIns.start("copilot");
+  await verification.started.promise;
+  const overlap = third.provider.signIn({ device: async () => {} });
+  const refused = assert.rejects(overlap, /already in progress/);
+  await third.signIns.cancel(session);
+  retryApproval = Promise.withResolvers();
+  const { session: retry } = await third.signIns.start("copilot");
+  await third.signIns.cancel(session); // A delayed repeat from the first phone session.
+  await third.provider.cancelSignIn(); // The overlapping desktop never owned this login.
+  verification.continue.resolve();
+  verification = null;
+  await refused;
+  await third.signIns.sessions.get(session).over;
+  assert.match(third.signIns.sessions.get(session).error ?? "", /cancelled/i);
+  const view = await third.signIns.read(retry, { after: 0 });
+  assert.ok(view.events.some(event => event.type === "code"));
+  assert.equal((await third.provider.auth()).connected, false);
+  retryApproval.resolve();
+  await third.signIns.sessions.get(retry).over;
+  assert.equal(third.signIns.sessions.get(retry).error, null);
+  assert.equal((await third.provider.auth()).connected, true);
+  await third.provider.stop();
+  const fourth = make();
+  assert.equal((await fourth.provider.auth()).connected, true);
+  rejectLogout = false;
+  assert.deepEqual(await fourth.signIns.signOut("copilot"), { connected: false });
+  assert.equal(saved, false);
+  await fourth.provider.stop();
+
+  saved = true;
+  enabled = false;
+  const pasted = make();
+  await assert.rejects(pasted.signIns.useToken("copilot", "bad-token"), /didn.t accept/);
+  assert.equal(vault.size, 0);
+  assert.equal(enabled, false);
+  assert.equal((await pasted.signIns.useToken("copilot", "good-token")).connected, true);
+  assert.equal(enabled, true);
+  await assert.rejects(pasted.signIns.useToken("copilot", "bad-token"), /didn.t accept/);
+  assert.equal(pasted.signIns.token("copilot"), "good-token");
+  const marker = pasted.provider.signedOutFile;
+  pasted.provider.signedOutFile = join(marker, "unwritable");
+  await assert.rejects(pasted.signIns.signOut("copilot"), /ENOTDIR/);
+  assert.equal(pasted.signIns.token("copilot"), "good-token");
+  pasted.provider.signedOutFile = join(baseDirectory, "new-marker");
+  vaultReadOnly = true;
+  await assert.rejects(pasted.signIns.signOut("copilot"), /read-only/);
+  assert.equal(existsSync(pasted.provider.signedOutFile), false);
+  pasted.provider.signedOutFile = marker;
+  await assert.rejects(pasted.signIns.signOut("copilot"), /read-only/);
+  assert.equal(existsSync(marker), true);
+  vaultReadOnly = false;
+  assert.deepEqual(await pasted.signIns.signOut("copilot"), { connected: false });
+  assert.equal(logoutCalls, 2, "removing a pasted token leaves the shared credential alone");
+  assert.equal(vault.size, 0);
+  await pasted.provider.stop();
 });
 
 test("the Copilot model list names its provider and each model's source", async (t) => {

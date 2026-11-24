@@ -504,12 +504,18 @@ test("conversations that go on at the same time, some of their requests cancelle
       { ...BODY, first: "the second chat" },
       { ...BODY, first: "the first chat", system: [{ type: "text", text: "Be long." }] },
     ];
+    // Let the first chat reach a tool call with a prepared continuation before the three
+    // chats race. Even a slow runner must exercise reuse during the concurrent requests.
+    const firstChat = chats[0];
+    await run.turn({ ...BODY, messages: talk(0, firstChat.first) });
+    await run.turn({ ...BODY, messages: talk(1, firstChat.first) });
+    await run.ready();
     let answered = 0;
     let cancelled = 0;
     await Promise.all(
       chats.map(async ({ first, ...chat }, which) => {
         for (let rounds = 0; rounds < 7; rounds++) {
-          const body = { ...chat, messages: talk(rounds, first) };
+          const body = { ...chat, messages: talk(rounds + (which === 0 ? 2 : 0), first) };
           for (let attempt = 0; ; attempt++) {
             const events = [];
             // Every third request is given up once, at a moment of its own, and sent again.

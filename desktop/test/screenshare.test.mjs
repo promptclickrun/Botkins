@@ -147,7 +147,7 @@ test("stopping during a capture cancels that viewer's wait even when the same ph
       return { jpeg: Buffer.from([0xff, 0xd8, 0xff, 0xd9]), width: 100, height: 100 };
     },
   };
-  const screen = new Screen({ adapter: () => adapter, mode: () => "view" });
+  const screen = new Screen({ dirs: [], adapter: () => adapter, mode: () => "view" });
   t.after(() => screen.dispose());
   const first = await screen.frame("phone", {});
   const old = screen.frame("phone", { after: first.seq });
@@ -165,7 +165,7 @@ test("leaving while a drag is being posted releases its button and discards queu
   const finish = Promise.withResolvers();
   const events = [];
   const adapter = { displays: async () => [{ id: "1" }] };
-  const screen = new Screen({ adapter: () => adapter, mode: () => "control", inject: async job => {
+  const screen = new Screen({ dirs: [], adapter: () => adapter, mode: () => "control", inject: async job => {
     events.push(...job.events);
     if (job.events[0].type === "down") {
       started.resolve();
@@ -191,7 +191,7 @@ test("a pane and a full viewer on the same display keep independent unchanged-fr
       jpeg: Buffer.from([0xff, 0xd8, maxWidth >> 8, maxWidth & 255, 0xff, 0xd9]), width: maxWidth, height: 400,
     }),
   };
-  const screen = new Screen({ adapter: () => adapter, mode: () => "view" });
+  const screen = new Screen({ dirs: [], adapter: () => adapter, mode: () => "view" });
   t.after(() => screen.dispose());
   const pane = await screen.frame("one", { maxWidth: 640 });
   const full = await screen.frame("two", { maxWidth: 1280 });
