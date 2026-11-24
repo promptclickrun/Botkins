@@ -1,6 +1,7 @@
 # Screen access: a virtual display (Xvfb) that the Botkins service shows to a paired phone and lets
 # the phone control (desktop/desktop/host/x11screen.mjs). It runs as the `botkins` user. Only a
 # program with the cookie in /var/lib/botkins/display/Xauthority can open it, and it takes no TCP.
+# Botkins starts this display, so botkins-desktop.service gives it the Botkins desktop.
 [Unit]
 Description=Botkins virtual display (Screen access)
 Before=botkins.service

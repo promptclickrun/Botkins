@@ -20,6 +20,9 @@ RUN apt-get update \
     chromium \
     xvfb \
     openbox \
+    hsetroot \
+    xterm \
+    mc \
     xdotool \
     x11-utils \
     xauth \
@@ -74,7 +77,13 @@ RUN groupadd --system --gid 10001 botkins \
 
 COPY docker/host-entrypoint.sh /usr/local/bin/botkins-headless-host
 COPY docker/workspace-entrypoint.sh /usr/local/bin/botkins-display-workspace
-RUN chmod 0755 /usr/local/bin/botkins-headless-host /usr/local/bin/botkins-display-workspace
+# The Botkins desktop of the workspace's display (background, Openbox theme and menu), and the
+# kit's body font for its title bars and menus.
+COPY docker/desktop /usr/local/share/botkins-desktop
+RUN chmod 0755 /usr/local/bin/botkins-headless-host /usr/local/bin/botkins-display-workspace \
+       /usr/local/share/botkins-desktop/botkins-desktop /usr/local/share/botkins-desktop/botkins-desktop-open \
+  && install -D -m 0644 design/botkins-kit/fonts/OpenSans-Regular.ttf /usr/local/share/fonts/botkins/OpenSans-Regular.ttf \
+  && if command -v fc-cache >/dev/null; then fc-cache -f /usr/local/share/fonts; fi
 
 ENV NODE_ENV=production \
     BOTKINS_HEADLESS=1 \

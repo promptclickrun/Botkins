@@ -8,6 +8,7 @@
 #   botkins-relay    the self-hosted relay (mobile/relay/node), on the loopback only
 #   caddy            HTTPS on the VM's DNS name, in front of the relay
 #   botkins-display  with Screen access only: a virtual display a paired phone can see and control
+#   botkins-desktop  with it: the Botkins desktop on that display (background, Openbox theme and menu)
 #
 # A deployment gives its settings in the environment, base64-encoded so no value needs quoting:
 #   BK_FQDN          the VM's public DNS name (required)
@@ -232,7 +233,9 @@ install -d -m 0755 /etc/systemd/system/botkins.service.d
 install -m 0644 "$SRC/deploy/azure/systemd/botkins.service.d/50-azure.conf" /etc/systemd/system/botkins.service.d/
 if [ "$MODE" = screen ]; then
   say "Installing the virtual display and Google Chrome"
-  apt install xvfb xauth xdotool ffmpeg
+  # x11-utils: xdpyinfo and xprop. openbox, hsetroot, xterm and mc: the Botkins desktop and the
+  # programs its menu opens.
+  apt install xvfb xauth xdotool ffmpeg x11-utils openbox hsetroot xterm mc fonts-dejavu-core
   if [ "$ARCH" = amd64 ] && [ ! -x /usr/bin/google-chrome ]; then
     # Chrome's package also adds Google's repository, so it gets updates.
     curl -fsSL https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb -o /tmp/google-chrome.deb
@@ -240,13 +243,26 @@ if [ "$MODE" = screen ]; then
     rm -f /tmp/google-chrome.deb
   fi
   install -d -o botkins -g botkins -m 0700 /var/lib/botkins/display
+  install -d -o botkins -g botkins -m 0700 /var/lib/botkins/display/home
+  # The Botkins desktop kit, and the kit's body font for its title bars and menus. Only this
+  # display, which Botkins starts, gets it.
+  rm -rf /usr/local/share/botkins-desktop
+  cp -R "$SRC/desktop/docker/desktop" /usr/local/share/botkins-desktop
+  chown -R root:root /usr/local/share/botkins-desktop
+  chmod -R u=rwX,go=rX /usr/local/share/botkins-desktop
+  chmod 0755 /usr/local/share/botkins-desktop/botkins-desktop /usr/local/share/botkins-desktop/botkins-desktop-open
+  install -D -m 0644 "$SRC/desktop/design/botkins-kit/fonts/OpenSans-Regular.ttf" /usr/local/share/fonts/botkins/OpenSans-Regular.ttf
+  if command -v fc-cache >/dev/null; then fc-cache -f /usr/local/share/fonts || true; fi
   install -m 0644 "$SRC/deploy/azure/systemd/botkins-display.service" /etc/systemd/system/
+  install -m 0644 "$SRC/deploy/azure/systemd/botkins-desktop.service" /etc/systemd/system/
   install -m 0644 "$SRC/deploy/azure/systemd/botkins.service.d/60-screen.conf" /etc/systemd/system/botkins.service.d/
   systemctl daemon-reload
-  systemctl enable botkins-display.service
+  systemctl enable botkins-display.service botkins-desktop.service
   systemctl restart botkins-display.service
+  systemctl restart botkins-desktop.service
 else
   rm -f /etc/systemd/system/botkins.service.d/60-screen.conf
+  if [ -f /etc/systemd/system/botkins-desktop.service ]; then systemctl disable --now botkins-desktop.service || true; fi
   if [ -f /etc/systemd/system/botkins-display.service ]; then systemctl disable --now botkins-display.service || true; fi
   systemctl daemon-reload
 fi

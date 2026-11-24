@@ -1,0 +1,109 @@
+# Botkins: the Openbox theme of a display Botkins starts (desktop/docker/desktop).
+# Colors are the dark semantic tokens of the Botkins kit (mobile/design/botkins-kit/theme/tokens.json):
+#   canvas #251E1A  surface #332820  ink #FFF0D6  muted #D3BDA3
+#   action #EF9E78  onAction #392117  border #695447
+# The fonts are set in botkins-rc.xml.
+
+# Frame
+border.width: 1
+padding.width: 6
+padding.height: 4
+window.handle.width: 0
+window.client.padding.width: 0
+window.client.padding.height: 0
+menu.overlap.x: -1
+menu.overlap.y: 0
+menu.separator.width: 1
+menu.separator.padding.width: 8
+menu.separator.padding.height: 4
+
+window.active.border.color: #695447
+window.inactive.border.color: #3D3028
+window.active.client.color: #332820
+window.inactive.client.color: #251E1A
+window.active.title.separator.color: #695447
+window.inactive.title.separator.color: #3D3028
+
+# Title bars
+window.active.title.bg: flat solid
+window.active.title.bg.color: #332820
+window.inactive.title.bg: flat solid
+window.inactive.title.bg.color: #251E1A
+window.active.label.bg: parentrelative
+window.inactive.label.bg: parentrelative
+window.label.text.justify: left
+window.active.label.text.color: #FFF0D6
+window.inactive.label.text.color: #A8937E
+
+window.active.handle.bg: flat solid
+window.active.handle.bg.color: #332820
+window.inactive.handle.bg: flat solid
+window.inactive.handle.bg.color: #251E1A
+window.active.grip.bg: flat solid
+window.active.grip.bg.color: #332820
+window.inactive.grip.bg: flat solid
+window.inactive.grip.bg.color: #251E1A
+
+# Buttons: no box, a glyph in the text color, the action color on hover
+window.active.button.unpressed.bg: parentrelative
+window.active.button.unpressed.image.color: #D3BDA3
+window.active.button.hover.bg: parentrelative
+window.active.button.hover.image.color: #EF9E78
+window.active.button.pressed.bg: flat solid
+window.active.button.pressed.bg.color: #695447
+window.active.button.pressed.image.color: #FFF0D6
+window.active.button.disabled.bg: parentrelative
+window.active.button.disabled.image.color: #695447
+window.active.button.toggled.unpressed.bg: parentrelative
+window.active.button.toggled.unpressed.image.color: #EF9E78
+window.active.button.toggled.hover.bg: parentrelative
+window.active.button.toggled.hover.image.color: #FFF0D6
+window.active.button.toggled.pressed.bg: flat solid
+window.active.button.toggled.pressed.bg.color: #695447
+window.active.button.toggled.pressed.image.color: #FFF0D6
+
+window.inactive.button.unpressed.bg: parentrelative
+window.inactive.button.unpressed.image.color: #7D6858
+window.inactive.button.hover.bg: parentrelative
+window.inactive.button.hover.image.color: #EF9E78
+window.inactive.button.pressed.bg: flat solid
+window.inactive.button.pressed.bg.color: #695447
+window.inactive.button.pressed.image.color: #FFF0D6
+window.inactive.button.disabled.bg: parentrelative
+window.inactive.button.disabled.image.color: #3D3028
+window.inactive.button.toggled.unpressed.bg: parentrelative
+window.inactive.button.toggled.unpressed.image.color: #A8937E
+window.inactive.button.toggled.hover.bg: parentrelative
+window.inactive.button.toggled.hover.image.color: #EF9E78
+window.inactive.button.toggled.pressed.bg: flat solid
+window.inactive.button.toggled.pressed.bg.color: #695447
+window.inactive.button.toggled.pressed.image.color: #FFF0D6
+
+# Menus
+menu.border.width: 1
+menu.border.color: #695447
+menu.title.bg: flat solid
+menu.title.bg.color: #251E1A
+menu.title.text.color: #D3BDA3
+menu.title.text.justify: left
+menu.items.bg: flat solid
+menu.items.bg.color: #332820
+menu.items.text.color: #FFF0D6
+menu.items.disabled.text.color: #7D6858
+menu.items.active.bg: flat solid
+menu.items.active.bg.color: #EF9E78
+menu.items.active.text.color: #392117
+menu.items.active.disabled.text.color: #695447
+menu.separator.color: #4A3A30
+
+# On-screen messages (window cycling, moving and resizing)
+osd.border.width: 1
+osd.border.color: #695447
+osd.bg: flat solid
+osd.bg.color: #332820
+osd.label.bg: parentrelative
+osd.label.text.color: #FFF0D6
+osd.hilight.bg: flat solid
+osd.hilight.bg.color: #EF9E78
+osd.unhilight.bg: flat solid
+osd.unhilight.bg.color: #4A3A30

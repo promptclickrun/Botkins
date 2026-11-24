@@ -1,0 +1,81 @@
+#!/bin/sh
+# The Botkins desktop on a display that Botkins started itself: the kit's dark canvas with the
+# Botkins mark in the middle, and Openbox with the Botkins theme and menu.
+#
+# Only two places run it, each right after it starts its own Xvfb:
+#   desktop/docker/workspace-entrypoint.sh            the Docker display workspace
+#   deploy/azure/systemd/botkins-desktop.service      the Azure server's display, :20
+#
+# It never touches a display that a person owns. It does nothing unless the caller says the
+# display is Botkins' own (BOTKINS_DESKTOP_MANAGED=1), and it leaves the display alone when a
+# window manager already runs there, before it changes the background.
+set -u
+
+kit=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+say() { echo "botkins-desktop: $*" >&2; }
+
+if [ "${BOTKINS_DESKTOP_MANAGED:-}" != 1 ]; then
+  say "this display was not started by Botkins (BOTKINS_DESKTOP_MANAGED is not 1). Nothing changed."
+  exit 0
+fi
+if [ -z "${DISPLAY:-}" ]; then
+  say "DISPLAY is not set. Nothing changed."
+  exit 0
+fi
+
+# The display was just started. Wait for it, up to 10 seconds.
+i=0
+until xdpyinfo >/dev/null 2>&1; do
+  i=$((i + 1))
+  if [ "$i" -gt 100 ]; then say "the display $DISPLAY did not answer."; exit 70; fi
+  sleep 0.1
+done
+
+# A window manager that is already running owns this display. Its id is on the root window, and
+# the window it names is alive while the manager runs.
+wm_running() {
+  id=$(xprop -root -notype _NET_SUPPORTING_WM_CHECK 2>/dev/null | sed -n 's/.*window id # \(0x[0-9a-fA-F]*\).*/\1/p')
+  [ -n "$id" ] && xprop -id "$id" -notype _NET_WM_NAME >/dev/null 2>&1
+}
+if ! command -v xprop >/dev/null; then
+  say "xprop is missing, so the display's window manager can't be checked. Nothing changed."
+  exit 0
+fi
+if wm_running; then
+  say "a window manager already runs on $DISPLAY. Nothing changed."
+  exit 0
+fi
+
+# The background: the kit's dark canvas, the mark centered, at any size of the display.
+if command -v hsetroot >/dev/null; then
+  hsetroot -solid '#251E1A' -center "$kit/botkins-mark.png" >/dev/null 2>&1 || hsetroot -solid '#251E1A' >/dev/null 2>&1 || true
+else
+  xsetroot -solid '#251E1A' 2>/dev/null || true
+fi
+
+# Openbox finds the Botkins theme in $kit/share and the menu in $kit/config. The menu's entries
+# run botkins-desktop-open from $kit.
+export BOTKINS_DESKTOP_KIT="$kit"
+export PATH="$kit:$PATH"
+export XDG_DATA_DIRS="$kit/share:${XDG_DATA_DIRS:-/usr/local/share:/usr/share}"
+export XDG_CONFIG_DIRS="$kit/config:${XDG_CONFIG_DIRS:-/etc/xdg}"
+
+# Openbox runs at a lower priority than the app. If it stops with an error, it starts again, at
+# most 5 times; then the display stays up without it.
+wm=
+trap '[ -n "$wm" ] && kill "$wm" 2>/dev/null; exit 0' INT TERM
+restarts=0
+while :; do
+  nice -n 10 openbox --sm-disable --config-file "$kit/config/openbox/botkins-rc.xml" &
+  wm=$!
+  wait "$wm"
+  status=$?
+  wm=
+  [ "$status" -eq 0 ] && exit 0
+  restarts=$((restarts + 1))
+  if [ "$restarts" -gt 5 ]; then say "Openbox kept stopping (last status $status)."; exit 1; fi
+  say "Openbox stopped (status $status). Starting it again ($restarts of 5)."
+  sleep 1
+  # Another window manager may have taken the display meanwhile. Leave it be.
+  if wm_running; then say "another window manager runs on $DISPLAY now. Leaving it."; exit 0; fi
+done
