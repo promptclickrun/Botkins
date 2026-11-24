@@ -10,7 +10,7 @@ export const PLAN_STATUSES = ["pending", "in_progress", "completed"];
 
 /** What the model is told about the tool, after Pi's own instructions. */
 export const PLAN_INSTRUCTIONS =
-  "For work that takes several steps, keep a plan with the update_plan tool: list the steps, mark the one you are working on in_progress, and mark each completed as soon as it is done. Send the whole list every time. Skip the plan for a simple question or a one-step task. Don't end your turn while steps are open unless you need the person's input or approval; then say so.";
+  "For work that takes several steps, keep an in-chat progress checklist with update_plan (this tracks progress in the current chat only and does not create or start Task Board jobs; use task_create for board tasks): list the steps, mark the one you are working on in_progress, and mark each completed as soon as it is done. Send the whole list every time. Skip the plan for a simple question or a one-step task. Don't end your turn while steps are open unless you need the person's input or approval; then say so.";
 
 /** The checked steps of a plan, as the rows the workspace reads (`mapTodos`), or an Error that says what to fix. */
 export function checkedPlan(input) {
@@ -34,7 +34,7 @@ export function checkedPlan(input) {
 export function updatePlanTool(session) {
   return defineTool("update_plan", {
     description:
-      "Keeps your plan for multi-step work. Send the whole list of steps each time (up to " + PLAN_LIMIT + "), with each step's status: pending, in_progress or completed. Update it as you finish steps. An empty list clears the plan.",
+      "Update this chat's in-turn progress checklist only; does not create, queue, or start Task Board jobs (use task_create for board tasks). Send the whole list of steps each time (up to " + PLAN_LIMIT + "), with each step's status: pending, in_progress or completed. Update it as you finish steps. An empty list clears the plan.",
     parameters: {
       type: "object",
       properties: {

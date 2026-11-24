@@ -805,10 +805,10 @@ export class Routines {
       tools.push(
         tool(
           "routine_create",
-          "Create a routine when the person asks you to do something on a schedule or to remind them later. " +
-            "The routine runs `instructions` as a new turn in its own chat at each time, and `deliver` can send the result to your chat with the person, their Feed, Ideas or Goals. Write instructions as what you should do then, e.g. \"Remind the person to review their inbox.\" " +
-            "Before you create it, confirm with the person how often it runs, where the result goes (`deliver`), and whether they want a notification each run (`notify` or `notifyTargets`), unless they already said. " +
-            "Today is " + new Date().toISOString().slice(0, 10) + ".",
+          "Create a scheduled routine that runs `instructions` in its own chat, sends results to `deliver` (routine chat, this/another chat, Feed, Ideas, Goals, or none), and notifies unless `notify: false` or `notifyTargets` is set (use today_routine instead to silently refresh one fixed Today/space panel with failure-only alerts). " +
+            "Write instructions as what you should do then, e.g. \"Remind the person to review their inbox.\" " +
+            "Confirm only relevant settings the person has not already specified (cadence/timezone, delivery destination, notification preference). " +
+            "Resolve relative dates from the current runtime date and the person's or routine's timezone.",
           { name: str, instructions: str, ...cadenceProps, ...deliverProp, ...notifyProp },
           ["name", "instructions", "cadence"],
           (a) => {
