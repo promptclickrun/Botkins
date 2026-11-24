@@ -5,6 +5,7 @@
 import { type ResourceHandle, trackResource } from "../state/ledger";
 import { agree, b64u, box, cleanCode, concat, fromUtf8, hkdf, INFO, newKeyPair, open, randomBytes, seal, pushNonce, seqBytes, seqNonce, unb64u, unbox, utf8 } from "./crypto";
 import type { PairTarget } from "./pairing";
+import type { ProfileHost } from "./profile";
 import { normalizeCode } from "./pairing";
 import { isRelayHost } from "./relay";
 import { sha256 } from "@noble/hashes/sha2.js";
@@ -206,6 +207,76 @@ export async function pair(fetcher: FetchLike, target: PairTarget, device: PairD
   }
   const hosts = mergeHosts(host, reply.hosts, target.hosts, Infinity);
   return { serverId: reply.serverId, serverKey, deviceId: reply.device, secretKey: b64u(keys.secretKey), hosts, name: reply.name };
+}
+
+/**
+ * Enrolls a profile device with a host already bound to that profile. The generated X25519 key is
+ * deliberately fresh for this enrollment and is kept only in the returned Pairing. The ticket and
+ * device details are sealed to the pinned host key before they cross either LAN or relay.
+ */
+export async function profileConnect(
+  fetcher: FetchLike,
+  target: ProfileHost,
+  device: PairDevice,
+  issueTicket: (publicKey: string) => Promise<string>,
+): Promise<Pairing> {
+  if (!target || typeof target.serverId !== "string" || typeof target.serverKey !== "string" || !Array.isArray(target.hosts) || !target.hosts.length) {
+    throw new LinkError("protocol", "That profile computer is incomplete.");
+  }
+  let { host, hello: found } = await findHost(fetcher, target.hosts, { serverId: target.serverId, serverKey: target.serverKey });
+  if (found.botkins !== PROTOCOL) throw new LinkError("protocol", "Update Botkins and your computer's app to the same version.");
+  const keys = newKeyPair();
+  const publicKey = b64u(keys.publicKey);
+  let ticket: string;
+  try {
+    ticket = await issueTicket(publicKey);
+  } catch {
+    throw new LinkError("offline", "The profile service couldn't issue a device ticket.");
+  }
+  if (typeof ticket !== "string" || !ticket || ticket.length > 1024) throw new LinkError("protocol", "The profile service returned an invalid device ticket.");
+  const key = hkdf(agree(keys.secretKey, unb64u(target.serverKey)), utf8(target.serverId), "botkins/profile/v1");
+  const request = (at: string) => timed(10_000, undefined, (signal) => fetcher("http://" + at + PREFIX + "profile", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ publicKey, box: box(key, { ticket, publicKey, device }, "profile:" + target.serverId) }),
+    signal,
+  }));
+  let response: FetchResponse;
+  try {
+    response = await request(host);
+  } catch {
+    const relays = target.hosts.filter(isRelayHost);
+    if (isRelayHost(host) || !relays.length) throw new LinkError("offline", "That profile computer can't be reached right now.");
+    try {
+      ({ host, hello: found } = await findHost(fetcher, relays, { serverId: target.serverId, serverKey: target.serverKey }));
+      response = await request(host);
+    } catch {
+      throw new LinkError("offline", "That profile computer can't be reached right now.");
+    }
+  }
+  const body = (await response.json().catch(() => ({}))) as { box?: string; error?: string };
+  if (!response.ok || typeof body.box !== "string") {
+    if (body.error === "profile_revoked" || body.error === "profile_denied") throw new LinkError("revoked", "That profile is no longer allowed on this computer.");
+    throw new LinkError("protocol", "The profile computer refused this device.");
+  }
+  let reply: { serverId: string; serverKey: string; device: string; name: string; hosts: string[]; member?: boolean };
+  try {
+    reply = unbox(key, body.box, "profile-ok:" + target.serverId);
+  } catch {
+    throw new LinkError("protocol", "The profile computer returned an invalid answer.");
+  }
+  if (reply.serverId !== target.serverId || reply.serverKey !== target.serverKey || typeof reply.device !== "string" || typeof reply.name !== "string" || !Array.isArray(reply.hosts)) {
+    throw new LinkError("protocol", "The profile computer returned an incomplete answer.");
+  }
+  return {
+    serverId: reply.serverId,
+    serverKey: target.serverKey,
+    deviceId: reply.device,
+    secretKey: b64u(keys.secretKey),
+    hosts: mergeHosts(host, reply.hosts, target.hosts, Infinity),
+    name: reply.name,
+    ...(reply.member === true && { member: true }),
+  };
 }
 
 export type JoinTarget = {
@@ -706,6 +777,7 @@ export class LinkClient {
       );
       const body = (await response.json()) as { box?: string; error?: string };
       if (response.status === 403 && body.error === "unknown_device") throw new LinkError("revoked", "This phone was removed from " + pairing.name + ".");
+      if (response.status === 403 && body.error === "profile_revoked") throw new LinkError("revoked", "This profile device is no longer active on " + pairing.name + ".");
       if (!response.ok || !body.box) throw new LinkError("protocol", "Your computer refused the connection.");
       const reply = unbox<{ session: string; eph: string; nonce: string; epoch: string; hosts?: string[] }>(this.deviceKey, body.box, "session-ok:" + pairing.serverId);
       if (this.lifetime === lifetime && Array.isArray(reply.hosts) && reply.hosts.length) {
@@ -769,6 +841,10 @@ export class LinkClient {
         // The computer forgot the session (its app restarted, or the phone was away for long).
         if (this.session === session) this.useSession(null);
         throw new Retry();
+      }
+      if (response.status === 403) {
+        const denial = await response.json().catch(() => ({})) as { error?: string };
+        if (denial.error === "profile_revoked") throw new LinkError("revoked", "This profile device is no longer active.");
       }
       if (!response.ok) throw new LinkError("protocol", "Your computer couldn't read that (" + response.status + ").");
       // fetch can resolve at headers; the viewer still owns the download until the last byte.

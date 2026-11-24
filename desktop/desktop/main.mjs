@@ -31,6 +31,7 @@ import { createRuntime, isSplitHost } from "./runtime.mjs";
 import { withOwnerChatSections } from "./chat-sections-ipc.mjs";
 import { electronHost } from "./host/electron.mjs";
 import { createWindowPush } from "./window-push.mjs";
+import { ProfileManager } from "./profile.mjs";
 
 // Use the Botkins path for an existing installation. A development run never changes it.
 if (app.isPackaged && !env("DATA_DIR")) adoptFolder({ appData: app.getPath("appData") });
@@ -55,6 +56,8 @@ let win,
   remote,
   // Phone access (desktop/link): the runtime's LinkHost.
   link,
+  // Hosted profile identity and the profile directory (main process only).
+  profile,
   quitting = false;
 // "Run at startup" is asked of the system only by the installed app on its own data. A trial run
 // (a test, a development build on a folder of its own) writes its entry inside that folder instead,
@@ -96,6 +99,7 @@ const appSnapshot = () => {
     ...(!using && link ? { team: link.team() } : {}),
     phones: { revision: runtime.phoneRevision() },
     remote: { using, hosts: remote?.list() ?? [] },
+    ...(profile && { profile: profile.status({ existing: !!workspace?.state?.bots?.length || !!workspace?.state?.chats?.length || !!remote?.list?.().length }) }),
   };
 };
 /** Whether a frame may load this address: an html block's page or an MCP App's view, from botkins-app://. */
@@ -287,9 +291,11 @@ else
     });
     // Other computers this app is paired to. Each credential is wrapped like the vault's key: by the
     // system keychain's key in the installed app, and kept in a trial run's own folder otherwise.
+    const profileProtection = host.protect({ trial, profile: true });
     remote = new RemoteHosts({
       file: join(dataDir, "remote-hosts.json"),
       protect: host.protect({ trial }),
+      persistProfileKeys: !!profileProtection,
       lib: await import("./remote/link-client.mjs"),
       device: { name: computerName(), platform: process.platform },
       changed: () => push(),
@@ -301,6 +307,40 @@ else
     adminMode = adminModeStore(join(dataDir, "window.json"));
     runtime = await createRuntime({ host, dataDir, trial, pushed: () => (push(), control?.changed()) });
     ({ workspace, link } = runtime);
+    profile = new ProfileManager({
+      file: join(dataDir, "profile.json"),
+      protect: profileProtection,
+      lib: remote.lib,
+      local: () => link,
+      remote: () => remote,
+      workspace: () => !!workspace.state.bots.length || !!workspace.state.chats.length,
+      fetch: host.fetch,
+      device: { name: computerName(), platform: process.platform, kind: "desktop" },
+      changed: () => push(),
+      log: (line) => console.error(line),
+    });
+    // The first real local bot is the point at which a signed-in installation becomes a host.
+    // Keep the automatic LAN enable one-shot and remember an explicit phone-link disable.
+    const originalAddBot = runtime.handlers.addBot;
+    runtime.handlers.addBot = (data) => {
+      const result = originalAddBot(data);
+      if (profile.token()) void profile.ensureLocalHost({ existing: true }).catch((error) => console.error("Profile local host:", error.message));
+      return result;
+    };
+    const originalSetPhoneLink = runtime.handlers.setPhoneLink;
+    runtime.handlers.setPhoneLink = async (enabled) => {
+      const result = await originalSetPhoneLink(enabled);
+      profile.noteLocalLinkSetting(enabled === true);
+      if (enabled === true && profile.token()) void profile.ensureLocalHost({ existing: true }).catch((error) => console.error("Profile local host:", error.message));
+      return result;
+    };
+    // Load the hosted directory once on boot, then retry profile bindings for hosts that were
+    // offline. This is an explicit startup attempt, never an idle poll.
+    void profile.refresh({ retry: true }).catch((error) => console.error("Profile refresh:", error.message));
+    link.on?.("status", () => {
+      if (profile?.token()) void profile.bindAll().catch((error) => console.error("Profile bind:", error.message));
+      push();
+    });
     // An app's answer goes into its chat's message box for the person to review and send.
     appWindows = new AppWindows(workspace.apps, {
       onAnswer: (appInfo, text) => {
@@ -397,8 +437,12 @@ else
         return url;
       },
       findTeamInvite: (input) => remote.findTeamInvite(input),
-      startTeamJoin: (target) => remote.startTeamJoin(target),
-      checkTeamJoin: (id) => remote.checkTeamJoin(id),
+      startTeamJoin: (target) => remote.startTeamJoin(target, profile.status().profile?.name),
+      checkTeamJoin: async (id) => {
+        const result = await remote.checkTeamJoin(id);
+        if (result?.status === "approved") void profile.bindRemote(result.id).catch((error) => console.error("Profile bind:", error.message));
+        return result;
+      },
       teamJoins: () => remote.teamJoins(),
       cancelTeamJoin: (id) => remote.cancelTeamJoin(id),
       // The page says which chat is open in the window (or none), so a phone isn't pinged for a
@@ -412,7 +456,11 @@ else
       },
       // Other computers' Botkins this app uses (Settings › Computers and teams, the first launch and the switcher). A phone can't make these calls.
       remoteHosts: () => ({ using: remote.inUse(), hosts: remote.list() }),
-      pairRemoteHost: (input) => remote.pair({ link: input?.link, address: input?.address, code: input?.code }),
+      pairRemoteHost: async (input) => {
+        const result = await remote.pair({ link: input?.link, address: input?.address, code: input?.code, name: profile.status().profile?.name });
+        if (profile.token()) void profile.bindRemote(result.id).catch((error) => console.error("Profile bind:", error.message));
+        return result;
+      },
       useRemoteHost: (id) => {
         const using = remote.use(typeof id === "string" && id ? id : null);
         if (using && viewingChat) viewingChat = null;
@@ -420,6 +468,33 @@ else
       },
       forgetRemoteHost: (id) => remote.forget(String(id)),
       renameRemoteHost: (id, name) => remote.rename(String(id), name),
+      // Hosted profile identity.  Only the public status/directory crosses into the page; the
+      // bearer token and browser verifier remain in ProfileManager's protected file.
+      profileStatus: () => profile.status({ existing: !!workspace.state.bots.length || !!workspace.state.chats.length || !!remote.list().length }),
+      profileStart: async (label) => {
+        const attempt = await profile.start(label);
+        return attempt;
+      },
+      profileOpen: async () => {
+        const url = profile.pendingUrl();
+        if (!url || !url.startsWith("https://profile.botkins.app/#")) throw new Error("Start profile setup first.");
+        await host.shell.openExternal(url);
+      },
+      profileFinish: async () => {
+        return profile.finish();
+      },
+      profileRefresh: () => profile.refresh({ retry: true }),
+      profileHome: () => profile.home(),
+      profileUpdate: (name, avatar) => profile.update(name, avatar),
+      profileDisconnect: () => profile.disconnectLocal(),
+      profileReconnect: () => profile.reconnectLocal(),
+      profileDeleteAccount: (email) => profile.deleteAccount(email),
+      profileOptOut: () => profile.optOut(),
+      profileSignOut: () => profile.signOut(),
+      profileApprove: (id, code) => profile.approve(id, code),
+      profileRevoke: (id) => profile.revoke(id),
+      profileConnect: (id) => profile.connect(id),
+      profileMarkMigrationPrompted: () => profile.markMigrationPrompted(),
       artifactMedia: async (id, localPath) => {
         const hostId = remote.inUse()?.id;
         if (hostId) {
@@ -501,7 +576,7 @@ else
     if (!trial || isSplitHost()) {
       try {
         const { startAppControl } = await import("./terminal/control-start.mjs");
-        control = await startAppControl({ runtime, root: home.dir, version: app.getVersion(), keys: () => (app.isPackaged && !trial ? { source: "keychain", where: "system keychain" } : null), say: (line) => console.error(line) });
+        control = await startAppControl({ runtime, profile, root: home.dir, version: app.getVersion(), keys: () => (app.isPackaged && !trial ? { source: "keychain", where: "system keychain" } : null), say: (line) => console.error(line) });
       } catch (error) {
         console.error("Control socket: not started (" + error.message + ").");
       }

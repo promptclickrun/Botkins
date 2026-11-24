@@ -1298,6 +1298,9 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
   let checking = [];
   return {
     workspace,
+    // Used only by the desktop/service profile manager to protect its hosted session and browser
+    // verifier.  It never enters a renderer snapshot or the phone link.
+    secretStore: keys,
     providers,
     signIns,
     providerUsage,

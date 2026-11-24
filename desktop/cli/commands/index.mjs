@@ -21,8 +21,9 @@ import { sharingCommands } from "./sharing.mjs";
 import { teamCommands } from "./team.mjs";
 import { piCommands } from "./pi.mjs";
 import { appsCommands } from "./apps.mjs";
+import { profileCommands } from "./profile.mjs";
 
-export const COMMANDS = { ...service, ...tui, ...install, ...link, ...workspace, ...tools, ...settings };
+export const COMMANDS = { ...service, ...tui, ...install, ...link, ...workspace, ...tools, ...settings, ...profileCommands };
 // What one bot has of the tools and skills is said under the bot: `botkins bots tools <bot>`.
 Object.assign(COMMANDS.bots.commands, botTools);
 // Plugins: to install, update and switch one on is to look at it first (cli/commands/plugins.mjs).

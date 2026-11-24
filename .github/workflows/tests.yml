@@ -68,6 +68,15 @@ jobs:
       # Type-checks the window's code and bundles it.
       - run: npm run build
       - run: npm test
+      - name: Verify profile enrollment and host continuity
+        if: runner.os == 'Linux'
+        working-directory: profiles
+        run: |
+          npm ci
+          npm test
+          npm run test:link
+          npm run test:browser
+          xvfb-run -a npm run test:desktop
       - name: Fill a secure form on a Linux screen
         if: runner.os == 'Linux'
         run: xvfb-run -a node --test test/form-browser.test.mjs

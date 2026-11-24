@@ -2,7 +2,13 @@
 // The workspace keeps the setting, so a relaunch of the same data folder opens on Home too.
 export async function skipWelcome(page) {
   await page.waitForFunction(() => !!window.botkins);
-  await page.evaluate(() => window.botkins.setPreferences({ onboarded: true }));
+  await page.evaluate(async () => {
+    // Seeded workspaces now receive the one-time profile continuity prompt. Smokes that only
+    // need Home deliberately choose the documented local-only path before marking welcome done.
+    const profile = await window.botkins.profileStatus();
+    if (profile.migration?.needed) await window.botkins.profileOptOut();
+    await window.botkins.setPreferences({ onboarded: true });
+  });
   return page;
 }
 

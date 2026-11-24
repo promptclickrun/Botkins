@@ -1,0 +1,17 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "botkins-profiles",
+  "main": "src/index.mjs",
+  "build": { "command": "npm run build" },
+  "compatibility_date": "2026-11-23",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": false,
+  "preview_urls": false,
+  "routes": [{ "pattern": "profile.botkins.app", "custom_domain": true }],
+  "assets": { "directory": "./public", "binding": "ASSETS" },
+  "observability": { "enabled": false },
+  "limits": { "cpu_ms": 25 },
+  "d1_databases": [{ "binding": "DB", "database_name": "botkins-profiles", "database_id": "2ba432b5-d86c-4a41-a9a9-fa190e6f08da" }],
+  "send_email": [{ "name": "EMAIL", "allowed_sender_addresses": ["profiles@login.botkins.app"] }],
+  "ratelimits": [{ "name": "IP_LIMIT", "namespace_id": "47625", "simple": { "limit": 60, "period": 60 } }]
+}

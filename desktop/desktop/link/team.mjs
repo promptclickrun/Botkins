@@ -430,6 +430,10 @@ const SELF_METHODS = new Set([
   "link.push.unregister",
   "link.push.presence",
   "link.push.activity",
+  // A legacy owner/member connection may bind only its own existing profile principal.
+  "link.profile.bind",
+  // Explicitly unbinds only that principal's host grant and its profile-backed devices.
+  "link.profile.unbind",
   "link.sync",
   // A member may always leave: it removes only their own device.
   "link.unpair",

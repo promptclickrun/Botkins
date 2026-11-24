@@ -366,6 +366,25 @@ export type RemoteHost = {
   /** The team this host's member pairing belongs to. */
   team?: string;
 };
+export type ProfileHost = {
+  serverId: string;
+  serverKey: string;
+  name: string;
+  hosts: string[];
+  member?: true;
+};
+export type ProfileDevice = { id: string; label: string; current?: boolean; code?: string };
+export type ProfileState = {
+  signedIn: boolean;
+  profile: { profileId: string; name: string; email?: string; avatar?: string; deviceId?: string } | null;
+  pending: { id: string; code: string; url: string; label: string } | null;
+  optedOut: boolean;
+  migration: { needed: boolean; prompted: boolean };
+  hosts: ProfileHost[];
+  devices: ProfileDevice[];
+  pendingDevices: ProfileDevice[];
+  localDisconnected?: boolean;
+};
 export type TeamScope = "agents" | "today" | "skills" | "mcp" | "plugins" | "settings";
 export type TeamRole = {
   id: string;
@@ -410,6 +429,8 @@ export type State = {
     using: { id: string; name: string; state: "idle" | "connecting" | "online" | "offline" | "revoked"; route: "direct" | "relay" | null; version: string | null; capabilities: string[]; member?: true; team?: string } | null;
     hosts: RemoteHost[];
   };
+  /** The hosted profile's public identity and computer directory; no token or verifier is sent. */
+  profile?: ProfileState;
   bots: Bot[];
   /** Full team management data for this computer's owner, or this member's filtered identity. */
   team?: OwnerTeam | MemberTeam;
@@ -609,6 +630,24 @@ declare global {
     /** The app, as its page reaches it (desktop/preload.cjs). */
     botkins: {
       snapshot(): Promise<State>;
+      profileStatus(): Promise<ProfileState>;
+      /** Starts the HTTPS hosted profile page; only a short code and public URL are returned. */
+      profileStart(label?: string): Promise<{ id: string; url: string; code: string; label: string }>;
+      profileOpen(): Promise<void>;
+      /** Checks the saved browser attempt once. A null result means the person has not finished yet. */
+      profileFinish(): Promise<ProfileState["profile"]>;
+      profileRefresh(): Promise<ProfileState>;
+      profileHome(): Promise<ProfileState | null>;
+      profileUpdate(name: string, avatar?: string): Promise<ProfileState>;
+      profileDisconnect(): Promise<ProfileState>;
+      profileReconnect(): Promise<ProfileState | null>;
+      profileDeleteAccount(email: string): Promise<ProfileState>;
+      profileOptOut(): Promise<ProfileState>;
+      profileSignOut(): Promise<ProfileState>;
+      profileApprove(id: string, code: string): Promise<ProfileState>;
+      profileRevoke(id: string): Promise<ProfileState>;
+      profileConnect(serverId: string): Promise<{ id: string; name: string; member?: true }>;
+      profileMarkMigrationPrompted(): Promise<ProfileState>;
       models(): Promise<ModelInfo[]>;
       setModel(
         scope: "global" | "routines" | "bot" | "chat",

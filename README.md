@@ -91,6 +91,7 @@ Pair the phone app, and your team goes with you.
 - **One-click Azure.** Deploy a VM that runs Botkins with its own relay, then open the pairing link it returns on your phone. It works from a phone, with no SSH key. Turn on **Screen access** to also get a virtual screen with Chrome that you can see and control from your phone. See [Botkins on Azure](deploy/azure/README.md).
 
   [![Deploy to Azure](https://aka.ms/deploytoazurebutton)](https://portal.azure.com/#create/Microsoft.Template/uri/https%3A%2F%2Fraw.githubusercontent.com%2Fpromptclickrun%2FBotkins%2Fmain%2Fdeploy%2Fazure%2Fazuredeploy.json/createUIDefinitionUri/https%3A%2F%2Fraw.githubusercontent.com%2Fpromptclickrun%2FBotkins%2Fmain%2Fdeploy%2Fazure%2FcreateUiDefinition.json)
+- **Bring your hosts to another device.** Set up an optional Botkins profile, then sign in on another phone or desktop with a passkey and a trusted-device approval or email code. Botkins links the computers and teams you configure. You can also continue with local pairing and set up a profile later.
 - **Computers and teams.** Pair one Botkins with another, or join a team with an invite code, from the first launch or Settings → Computers and teams, and switch between them from the side menu.
 
 ## Privacy and security
@@ -99,7 +100,7 @@ Botkins is built to keep your work yours. This is how.
 
 | Promise | How Botkins keeps it |
 | --- | --- |
-| **No Botkins account. No Botkins cloud.** | Your bots, chats, memory and wiki live in a folder on your computer. |
+| **Optional profiles.** | Direct pairing works without an account. A profile stores your verified identity, devices and public host connection details. Your bots, chats, memory and wiki live on the host. |
 | **No telemetry.** | The app sends no analytics or usage data to us. |
 | **We never see your passwords.** | Each provider's own tool keeps its own sign-in. |
 | **Secrets stay locked.** | Keys and tokens live in an encrypted vault. The system keychain guards the vault key. Values are never shown again after you save them. |
@@ -114,7 +115,7 @@ Botkins is built to keep your work yours. This is how.
 | **Releases are verifiable.** | Each release ships with `SHA256SUMS` and a signature. |
 | **The code is open.** | Read every line. MIT licensed. |
 
-For the full trust model, read the [link host notes](mobile/link-host/README.md) and the [relay notes](mobile/relay/README.md).
+For the full trust model, read the [link host notes](mobile/link-host/README.md), [relay notes](mobile/relay/README.md) and [profile service](profiles/README.md).
 
 ## Get started
 

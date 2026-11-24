@@ -7,15 +7,16 @@ import { fetch as expoFetch } from "expo/fetch";
 import { forget, keep, readKept } from "@/state/keep";
 import * as Network from "expo-network";
 import { AppState, Platform } from "react-native";
-import { checkJoin, findHost, findInvite, type FetchLike, type JoinAttempt, type JoinTarget, LinkClient, LinkError, pair, type Pairing, startJoin } from "@/link/client";
+import { checkJoin, findHost, findInvite, type FetchLike, type JoinAttempt, type JoinTarget, LinkClient, LinkError, pair, type PairDevice, type Pairing, startJoin } from "@/link/client";
 import { setRandomSource } from "@/link/crypto";
 import type { PairTarget } from "@/link/pairing";
+import type { ProfileHost } from "@/link/profile";
 import { relayFetch } from "@/link/relay";
 import type { Calls, ChatDetail, ScreenFrame, ScreenInput } from "@/link/types";
 import { textMode, useChatPrefs } from "./chatPrefs";
 import { loadPrefs } from "./prefs";
 import { newPresenceKey, removePresenceKey } from "./presence";
-import { currentOf, hasRoom, indexOf, type Kept, NO_COMPUTERS, pairingKey, readKeptComputers, savedIds, TOO_MANY, using, withDetails, withPairing, without } from "./computers";
+import { currentOf, hasRoom, indexOf, type Kept, NO_COMPUTERS, pairingKey, readKeptComputers, savedIds, tidy, TOO_MANY, using, withDetails, withPairing, without } from "./computers";
 import { applyParts, forgetComputer, mergeChat, onComputerChange, showToast, useApp } from "./store";
 import { createPartsBatcher } from "./partsBatch";
 import { canBrowse, NearbyPace } from "./reconnect";
@@ -47,6 +48,11 @@ const partsBatcher = createPartsBatcher(applyParts, {
   },
 });
 onComputerChange(() => partsBatcher.clear());
+let savedStorageLocked = false;
+let savedStorageRetry: ReturnType<typeof AppState.addEventListener> | null = null;
+// A profile pairing is a separate trust path from the phone's manual pairings. While one is in
+// use it may temporarily be the active link, but it never replaces the local pairing in `kept`.
+let activeProfilePairing: Pairing | null = null;
 useChatPrefs.subscribe((prefs, before) => prefs.textStreaming !== before.textStreaming && client?.textStreamingChanged());
 /** Who waits for the next sync to come back (`freshSync`). */
 const syncWaiters = new Set<() => void>();
@@ -74,6 +80,12 @@ function follow(pairing: Pairing) {
     check: () => fetcher.check(),
     onHosts: (hosts) => {
       const next = { ...pairing, hosts };
+      if (activeProfilePairing?.serverId === next.serverId) {
+        activeProfilePairing = next;
+        useApp.setState({ pairing: next });
+        void import("@/state/profile").then((profile) => profile.onProfilePairingHosts(next)).catch(() => {});
+        return;
+      }
       // A computer that was unpaired in the meantime is not brought back.
       if (!kept.list.some((item) => item.serverId === next.serverId)) return;
       kept = withDetails(kept, next);
@@ -117,6 +129,7 @@ const EMPTY = { route: null, synced: false, parts: {}, texts: {}, chats: {}, run
  */
 function startOver() {
   nearbyPace.reset();
+  activeProfilePairing = null;
   const pairing = currentOf(kept);
   client?.stop();
   client = null;
@@ -135,15 +148,41 @@ async function readSaved(): Promise<{ kept: Kept; fromOldVersion: boolean }> {
   return { kept: read, fromOldVersion: !index && read.list.length > 0 };
 }
 
+async function retrySavedStorage() {
+  if (!savedStorageLocked) return;
+  try {
+    const saved = await readSaved();
+    savedStorageLocked = false;
+    savedStorageRetry?.remove();
+    savedStorageRetry = null;
+    // Do not overwrite a pairing made while protected storage was locked. It will be persisted by
+    // that flow once storage is available; the next launch can read the complete index.
+    if (kept.list.length || useApp.getState().pairings.length) return;
+    kept = saved.kept;
+    useApp.setState({ pairing: currentOf(kept), pairings: kept.list, link: "connecting" });
+    const pairing = currentOf(kept);
+    if (pairing) follow(pairing);
+  } catch {
+    // The phone remains usable with whatever was already in memory until the next foreground.
+  }
+}
+
+function retrySavedStorageOnActive() {
+  savedStorageRetry ??= AppState.addEventListener("change", (next) => {
+    if (next === "active") void retrySavedStorage();
+  });
+}
+
 /** Reads what the phone saved and starts following the computer in use, when there is one. */
 export async function boot() {
   // The keychain can't be read before the phone was unlocked for the first time since it was turned
   // on, and the app can be started in the background then. That is not "no pairing": the read is
   // tried again until it works. Only when the person has the app in front and it still fails is
   // the pairing given up.
+  let saved: { kept: Kept; fromOldVersion: boolean } | undefined;
   for (let failed = 0; ; ) {
     try {
-      const saved = await readSaved();
+      saved = await readSaved();
       kept = saved.kept;
       // The one pairing an older version saved becomes the list. The old entry goes only once the new ones are written.
       if (saved.fromOldVersion && kept.list[0]) {
@@ -155,13 +194,18 @@ export async function boot() {
       }
       break;
     } catch {
-      if (AppState.currentState === "active" && ++failed >= 3) break;
+      if (AppState.currentState === "active" && ++failed >= 3) {
+        savedStorageLocked = true;
+        retrySavedStorageOnActive();
+        break;
+      }
       await new Promise((resolve) => setTimeout(resolve, 1000));
     }
   }
   await loadPrefs();
-  const pairing = currentOf(kept);
-  useApp.setState({ booted: true, pairing, pairings: kept.list, link: "connecting" });
+  const held = useApp.getState();
+  const pairing = savedStorageLocked ? held.pairing : currentOf(kept);
+  useApp.setState(savedStorageLocked ? { booted: true, pairing, pairings: held.pairings, link: held.link } : { booted: true, pairing, pairings: kept.list, link: "connecting" });
   if (pairing) follow(pairing);
   // Notifications, and the tools bots can run on this phone. Loaded here, not at the top, because
   // both use this file.
@@ -232,6 +276,7 @@ export async function pairWith(target: PairTarget, person?: string) {
   kept = next;
   await saveIndex();
   startOver();
+  void import("@/state/profile").then((profile) => profile.onLocalPairing(pairing)).catch(() => {});
   return pairing;
 }
 
@@ -282,11 +327,82 @@ export async function joinWithPairing(pairing: Pairing) {
   kept = next;
   await saveIndex();
   startOver();
+  void import("@/state/profile").then((profile) => profile.onLocalPairing(pairing)).catch(() => {});
   return pairing;
+}
+
+/** Connects to a host from the profile directory without changing the phone's local pairing list. */
+export async function connectProfileHost(
+  target: ProfileHost,
+  issueTicket: (publicKey: string) => Promise<string>,
+  person?: string,
+): Promise<Pairing> {
+  const link = await import("@/link/client") as unknown as {
+    profileConnect?: (fetcher: FetchLike, target: ProfileHost, device: PairDevice, issueTicket: (publicKey: string) => Promise<string>) => Promise<Pairing>;
+  };
+  if (!link.profileConnect) throw new LinkError("protocol", "This version of Botkins cannot connect to a profile host.");
+  return link.profileConnect(fetcher, target, { name: deviceName(), platform: Platform.OS, kind: "phone", ...(person && { person }) }, issueTicket);
+}
+
+/** Binds an already-authorized local pairing to a profile without changing the active computer. */
+export async function bindProfileHost(pairing: Pairing, issueTicket: () => Promise<string>): Promise<ProfileHost> {
+  const ticket = await issueTicket();
+  const temporary = new LinkClient(pairing, { fetch: fetcher, onParts() {}, onState() {} });
+  try {
+    return await temporary.call<ProfileHost>("link.profile.bind", ticket);
+  } finally {
+    temporary.stop();
+  }
+}
+
+/** Removes this profile's trust from a locally reachable host before its directory entry is deleted. */
+export async function unbindProfileHost(pairing: Pairing, profileId: string): Promise<void> {
+  const temporary = new LinkClient(pairing, { fetch: fetcher, onParts() {}, onState() {} });
+  try {
+    await temporary.call("link.profile.unbind", profileId);
+  } finally {
+    temporary.stop();
+  }
+}
+
+/** Removes local keys that were upgraded to profile trust; unbound manual pairings remain. */
+export async function dropProfileBoundPairings(serverIds: ReadonlyArray<string>) {
+  if (!serverIds.length) return;
+  const remove = new Set(serverIds);
+  if (activeProfilePairing && remove.has(activeProfilePairing.serverId)) activeProfilePairing = null;
+  const removed = kept.list.filter((pairing) => remove.has(pairing.serverId));
+  if (!removed.length) return;
+  for (const pairing of removed) {
+    removePresenceKey(pairing.presenceTag);
+    await forget(pairingKey(pairing.serverId)).catch(() => {});
+  }
+  kept = tidy(kept.list.filter((pairing) => !remove.has(pairing.serverId)), kept.current);
+  await saveIndex().catch(() => {});
+  startOver();
+}
+
+/** Uses an enrolled profile pairing while leaving any manual pairing for the same computer intact. */
+export function activateProfilePairing(pairing: Pairing) {
+  if (activeProfilePairing?.serverId === pairing.serverId && activeProfilePairing.secretKey === pairing.secretKey) return;
+  client?.stop();
+  activeProfilePairing = pairing;
+  useApp.setState({ pairing, link: "connecting", route: null, synced: false, parts: {}, texts: {}, chats: {}, running: {}, models: undefined, providers: undefined, skills: undefined });
+  follow(pairing);
+}
+
+/** Returns to the currently selected manual pairing after profile sign-out or host removal. */
+export function deactivateProfilePairing() {
+  if (!activeProfilePairing) return;
+  activeProfilePairing = null;
+  startOver();
 }
 
 /** Starts using another computer this phone is paired with. The one in use until now stays paired. */
 export async function switchComputer(serverId: string) {
+  if (activeProfilePairing) {
+    activeProfilePairing = null;
+    startOver();
+  }
   const next = using(kept, serverId);
   if (next === kept || next.current === kept.current) return;
   kept = next;

@@ -235,6 +235,17 @@ test("pairing with a code makes this app a desktop device of the host, and the c
   assert.equal(a.link.status().devices.length, 1);
 });
 
+test("a profile computer without a vault stays in memory and never writes its private key", (t) => {
+  const root = tempDir(t);
+  const file = join(root, "remote-hosts.json");
+  const lib = { LinkClient: class {} };
+  const remote = new RemoteHosts({ file, protect: null, lib });
+  remote.adoptPairing({ serverId: "profile-server", serverKey: "public-key", secretKey: "profile-private-key", hosts: ["127.0.0.1:1"] }, { name: "Profile computer" });
+  assert.equal(remote.list()[0].id, "profile-server");
+  assert.equal(readFileSync(file, "utf8").includes("profile-private-key"), false);
+  assert.equal(new RemoteHosts({ file, protect: null, lib }).list().length, 0);
+});
+
 test("using a host shows its bots and chats, sends the window's calls there, and follows a chat", async (t) => {
   const a = await host(t);
   const b = client(t);

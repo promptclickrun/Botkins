@@ -75,6 +75,45 @@ client.watch([chatId]);                                       // at most 4 chats
 - `LinkClient` reconnects by itself. Call `client.wake()` when the app comes to the front or the network changes.
 - `state === "revoked"` means the host no longer knows this device. Delete the stored `Pairing` and show the pairing screen. Do not retry.
 
+## Profile-bound Link enrollment (`profile-v1`)
+
+A signed-in Botkins profile may bind a host to one existing Link principal, then enroll more
+devices without a QR code. The host returns the public descriptor
+`{ serverId, serverKey, name, hosts, member?: true }`. `serverKey` is the host's X25519 public
+key; it is pinned for every enrollment and is never replaced by a name match.
+
+The local owner/CLI calls `await link.bindOwnerProfile(ticket)`. An existing sealed Link session
+may call `link.profile.bind(ticket)`, but only for its own owner or existing team-member
+principal. Gadget principals are refused. A member binding keeps the existing `memberId`, chats,
+views and role; the verified profile name updates that member's host display. An account-free QR
+or team pairing remains a normal legacy-trusted device until it explicitly binds itself.
+
+`profileConnect(fetch, target, device, issueTicket)` makes a fresh X25519 device key, asks the
+profile service for an opaque connect ticket, and seals `{ ticket, publicKey, device }` to the
+pinned host. It tries the host's LAN address and its `relay!…` address; the relay carries route
+`profile` (6) and never sees the ticket or Link private key. The host redeems the ticket with
+`POST https://profile.botkins.app/v1/proofs/redeem` and JSON
+`{ ticket, purpose: "bind" | "connect", serverId, serverKey, publicKey? }`. Bind omits
+`publicKey`; connect includes the exact fresh public key. The response is
+`{ profileId, deviceId, name, statusKey }`. The host then checks
+`POST /v1/devices/status` with `{ statusKey }`.
+
+The bind device is checked only while binding. Later enrollments use the same `profileId`, so
+revoking or replacing that original device does not lock out another active profile device. A
+positive status result is reused for 60 seconds on active traffic, with at most 64 cached keys and
+coalesced checks; idle devices are not polled. A failed status check denies the operation. Existing
+profile sessions recheck on session open and calls, and are removed when their device becomes
+inactive. A profile device cannot become a gadget or gain `presenceKey`/person privileges, and it
+cannot replace a legacy device.
+
+Explicit local `link.unbindOwnerProfile(expectedProfileId)` or sealed
+`link.profile.unbind(expectedProfileId)` clears only that principal's host grant and its
+profile-backed devices/sessions; sign-out on a client does not unbind the host. Removing one
+profile device tombstones only its cloud `deviceId` for that profile/role. Other profile devices,
+legacy devices and future devices remain independent. Removing a team member removes their
+membership and profile grant. Profile proofs and `statusKey` never appear in `status().devices`,
+paired events or client device lists.
+
 ### Light steps (`step-details-v1`)
 
 Most of a long turn's bytes are the inputs and outputs of its steps, and a chat shows them only when a step is opened. A client that sends `steps: "light"` in the `link.sync` argument gets `chat:<id>` and `run:<id>` with light steps: a step keeps its `input` and `output` only when each is at most 400 characters, when the step is a question the bot asked (`ask_user`, `ask`), or when it started a helper. Any other step comes without them and says `more: true`. `link.messages` answers in the form the session follows in.

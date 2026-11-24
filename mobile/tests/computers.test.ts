@@ -106,6 +106,21 @@ test("the switcher lists every computer, ticks the one in use, and ends with a w
   assert.equal(computerChoice("delete"), null);
 });
 
+test("the normal switcher adds every profile directory host once, without duplicating local pairings", () => {
+  const directory = [
+    { serverId: "aaa", serverKey: "k-aaa", name: "Mac aaa", hosts: ["10.0.0.2:1"] },
+    { serverId: "remote", serverKey: "k-remote", name: "Work PC", hosts: ["10.0.0.3:1"] },
+    { serverId: "team", serverKey: "k-team", name: "The team", hosts: ["10.0.0.4:1"], member: true },
+  ];
+  assert.deepEqual(computerActions([a], "aaa", directory), [
+    { id: "use:aaa", title: "Mac aaa", state: "on" },
+    { id: "profile:remote", title: "Work PC", state: "off" },
+    { id: "profile:team", title: "The team", state: "off" },
+    { id: "add", title: "Connect a computer…", image: "plus" },
+  ]);
+  assert.deepEqual(computerChoice("profile:remote"), { use: "remote", profile: true });
+});
+
 // ---- a computer with no bots: bringing in the agents a person already has
 
 test("bringing in agents: what is ticked, what is added, and the words", () => {
