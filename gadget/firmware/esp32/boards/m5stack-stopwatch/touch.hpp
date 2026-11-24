@@ -18,19 +18,21 @@ namespace stopwatch {
 class Touch {
  public:
   static constexpr int kWidth = 466, kHeight = 466;
+  enum class Event { None, Down, Move, Up };
+
   /** After Power::begin. False when the controller doesn't answer. */
   bool begin(i2c_master_bus_handle_t bus);
   /**
-   * One poll (every 20 ms). True when a finger was lifted: (x, y) is where it first came down, in
-   * panel pixels.
+   * One poll (every 20 ms). Reports Down (where the finger came down), Move (current point while
+   * held), and Up (where the finger lifted).
    */
-  bool poll(int& x, int& y);
+  Event poll(int& x, int& y);
 
  private:
   bool read(bool& down, int& x, int& y);
   i2c_master_dev_handle_t dev_ = nullptr;
   bool held_ = false;
-  int down_x_ = 0, down_y_ = 0;
+  int last_x_ = 0, last_y_ = 0;
   uint8_t failures_ = 0;
 };
 

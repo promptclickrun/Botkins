@@ -1,9 +1,7 @@
 // Copyright (c) 2026 Hermes Gadget SDK contributors
 // SPDX-License-Identifier: MIT
-// Adapted from Hermes Gadget firmware/drivers/stopwatch.cpp (StopWatchControl::begin, set_amplifier)
-// and firmware/esp32/main/port_stopwatch.cpp (StopWatchBoard::begin). The register sequence is
-// theirs, unchanged; the red key's reading is their StopWatchControl::take_key_press; the battery
-// and power-off parts are left out.
+// Adapted from Hermes Gadget firmware/drivers/stopwatch.cpp (StopWatchControl::begin, set_amplifier,
+// power_off) and firmware/esp32/main/port_stopwatch.cpp (StopWatchBoard::begin).
 #include "stopwatch_power.hpp"
 
 #include "esp_log.h"
@@ -15,14 +13,21 @@ namespace {
 const char* TAG = "stopwatch.power";
 constexpr uint8_t kPm1 = 0x6E, kIoe = 0x4F;
 
-// M5PM1 registers, from M5Stack's M5PM1 library (src/M5PM1.h, commit 315d2899).
-constexpr uint8_t kI2cConfig = 0x09;  // 0 = no I2C idle sleep
-constexpr uint8_t kWatchdog = 0x0A;   // 0 = watchdog off
+// M5PM1 registers, from M5Stack's M5PM1 library (src/M5PM1.h).
+constexpr uint8_t kPowerConfig = 0x06;    // bit 4: LED_EN default level (1=high, 0=low)
+constexpr uint8_t kI2cConfig = 0x09;      // 0 = no I2C idle sleep
+constexpr uint8_t kWatchdog = 0x0A;       // 0 = watchdog off
+constexpr uint8_t kSystemCommand = 0x0C;  // 0xA1 = power off
+constexpr uint8_t kGpioDrive = 0x13;      // bit 5: LED_EN drive (0=push-pull, 1=open-drain)
 constexpr uint8_t kIrqMask1 = 0x43, kIrqMask2 = 0x44, kIrqMask3 = 0x45;  // 1 = masked
+constexpr uint8_t kButtonStatus = 0x48;   // bit 0: down now; bit 7: was pressed, cleared by the read
 constexpr uint8_t kButtonConfig = 0x49;
-constexpr uint8_t kButtonStatus = 0x48;  // bit 0: down now; bit 7: was pressed, cleared by the read
+
+constexpr uint8_t kLedControl = 1 << 4;
+constexpr uint8_t kLedDriveOpenDrain = 1 << 5;
+constexpr uint8_t kShutdown = 0xA1;
 constexpr uint8_t kButtonDown = 1 << 0, kButtonWasPressed = 1 << 7;
-constexpr uint8_t kShortPressPolls = 10;  // polled every 100 ms: under a second
+constexpr uint8_t kLongHoldPolls = 8;  // polled every 100 ms: ~800 ms hold
 // The PM1 acts on its key by itself: a single click resets the ESP32, a double click powers
 // off, a long press enters download mode. The single-click reset goes; the long press is put
 // at its longest, 4 s.
@@ -93,6 +98,8 @@ bool Power::begin(i2c_master_bus_handle_t bus) {
   if (!pm1_change(kButtonConfig, kNoClickReset | kLongPressMask, kNoClickReset | kLongPress4s)) return false;
   // Nothing may pull the PM1's interrupt line.
   if (!pm1_write(kIrqMask1, 0x1F) || !pm1_write(kIrqMask2, 0x3F) || !pm1_write(kIrqMask3, 0x07)) return false;
+  // Keep the green status LED off (open-drain + low so the PM1 cannot blink it).
+  set_status_led(false);
 
   // Levels before directions: supplies on, both resets released, motor and
   // amplifier off. The expander's other pins keep their configuration.
@@ -117,19 +124,40 @@ bool Power::set_amplifier(bool on) {
   return true;
 }
 
-bool Power::take_red_press() {
+bool Power::set_status_led(bool on) {
+  if (!pm1_) return false;
+  if (on) {
+    return pm1_change(kGpioDrive, kLedDriveOpenDrain, 0) && pm1_change(kPowerConfig, kLedControl, kLedControl);
+  }
+  return pm1_change(kPowerConfig, kLedControl, 0) && pm1_change(kGpioDrive, kLedDriveOpenDrain, kLedDriveOpenDrain);
+}
+
+Power::RedEvent Power::poll_red() {
   uint8_t status;
-  if (!pm1_ || !pm1_read(kButtonStatus, &status, 1)) return false;
+  if (!pm1_ || !pm1_read(kButtonStatus, &status, 1)) return RedEvent::None;
   if (status & kButtonDown) {
     red_down_ = true;
     if (red_polls_ < 255) red_polls_++;
-    return false;
+    if (!red_hold_fired_ && red_polls_ >= kLongHoldPolls) {
+      red_hold_fired_ = true;
+      return RedEvent::LongHold;
+    }
+    return RedEvent::None;
   }
   // Up now. A press that began and ended between two polls shows only in the flag.
-  const bool pressed = red_down_ ? red_polls_ < kShortPressPolls : (status & kButtonWasPressed) != 0;
+  const bool short_press = red_down_ ? !red_hold_fired_ : (status & kButtonWasPressed) != 0;
   red_down_ = false;
+  red_hold_fired_ = false;
   red_polls_ = 0;
-  return pressed;
+  return short_press ? RedEvent::ShortPress : RedEvent::None;
+}
+
+bool Power::power_off() {
+  if (!pm1_) return false;
+  set_amplifier(false);
+  set_status_led(false);
+  ESP_LOGI(TAG, "powering off via M5PM1");
+  return pm1_write(kSystemCommand, kShutdown);
 }
 
 }  // namespace stopwatch

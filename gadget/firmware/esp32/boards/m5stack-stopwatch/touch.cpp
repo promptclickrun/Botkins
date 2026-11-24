@@ -1,9 +1,7 @@
 // Copyright (c) 2026 Hermes Gadget SDK contributors
 // SPDX-License-Identifier: MIT
 // Adapted from Hermes Gadget firmware/drivers/cst816.hpp (cst816_touch, Cst816Fault) and
-// firmware/esp32/main/port_touch.cpp and port_stopwatch.cpp (the CST816 set-up and poll). What
-// changed: one controller only, and a tap (where the finger came down, reported on its lift)
-// instead of every sample.
+// firmware/esp32/main/port_touch.cpp and port_stopwatch.cpp (the CST816 set-up and poll).
 #include "touch.hpp"
 
 #include "esp_log.h"
@@ -46,8 +44,8 @@ bool Touch::read(bool& down, int& x, int& y) {
   return !down || (x < kWidth && y < kHeight);
 }
 
-bool Touch::poll(int& x, int& y) {
-  if (!dev_) return false;
+Touch::Event Touch::poll(int& x, int& y) {
+  if (!dev_) return Event::None;
   bool down = false;
   int at_x = 0, at_y = 0;
   if (!read(down, at_x, at_y)) {
@@ -56,23 +54,29 @@ bool Touch::poll(int& x, int& y) {
     if (held_ && failures_ >= kReleaseAfter) {
       held_ = false;
       ESP_LOGW(TAG, "held touch released after %d failed polls", kReleaseAfter);
-      x = down_x_, y = down_y_;
-      return true;
+      x = last_x_, y = last_y_;
+      return Event::Up;
     }
-    return false;
+    return Event::None;
   }
   failures_ = 0;
   if (down && !held_) {
     held_ = true;
-    down_x_ = at_x, down_y_ = at_y;
-    return false;
+    last_x_ = at_x, last_y_ = at_y;
+    x = at_x, y = at_y;
+    return Event::Down;
+  }
+  if (down && held_) {
+    last_x_ = at_x, last_y_ = at_y;
+    x = at_x, y = at_y;
+    return Event::Move;
   }
   if (!down && held_) {
     held_ = false;
-    x = down_x_, y = down_y_;
-    return true;
+    x = last_x_, y = last_y_;
+    return Event::Up;
   }
-  return false;
+  return Event::None;
 }
 
 }  // namespace stopwatch

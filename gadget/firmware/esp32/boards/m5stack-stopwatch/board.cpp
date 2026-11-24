@@ -2,19 +2,18 @@
 // 466x466 CO5300 AMOLED with a CST820 touch controller, one ES8311 for the speaker and the
 // microphone, an M5PM1 power manager and an M5IOE1 I/O expander, a blue, a yellow and a red key.
 //
-// Pins (I2C SDA 47 / SCL 48; the blue key on GPIO 1, the yellow on GPIO 2, both active low; the
-// touch controller at 0x15 and the red key read through the M5PM1) are hardware facts as the
-// Hermes Gadget firmware has them for this board (firmware/esp32/main/board.cpp, MIT).
-// Not used here: the touch INT line (GPIO 13), the BMI270, the RX8130 clock, the vibration motor.
-//
-// The blue key talks: held, it listens; let go, it sends (a press under 300 ms is given up). A
-// press while it speaks stops the speaking. The yellow key approves a request on show (held for
-// most of a second, it denies it), and otherwise starts a new chat. A tap on the home screen opens
-// the quick controls (core/src/home.cpp), which the touch screen works; they close by themselves
-// after 8 s without a touch, and the blue key closes them before it talks. The red key only wakes
-// the screen: it is the StopWatch's power key, and its M5PM1 powers the board off on a double click,
-// so a control that asks to be pressed twice quickly must never be on it.
+// Controls:
+// - Tap/hold the home screen OR hold the top blue key: push-to-talk voice mode (a press while
+//   speaking stops the speaking).
+// - Top yellow key (left): opens/closes quick controls (settings), or approves/denies an active
+//   permission request (short press = approve, hold >= 800 ms = deny).
+// - Red power button:
+//   * Single press: toggles sleep mode (AMOLED off, M5PM1 green status LED off).
+//   * Hold (~800 ms): opens the "Slide to power off" screen; dragging the slider to the right
+//     powers the board off via M5PM1 (holding/pressing the red button boots it back up).
+#include <algorithm>
 #include <atomic>
+#include <cmath>
 #include <cstring>
 #include <set>
 #include <string>
@@ -45,7 +44,15 @@ constexpr int kTouchEvery = 2;                    // the touch controller every 
 constexpr int64_t kShortestTalkMs = 300, kDenyHoldMs = 800;
 // Redraws come at most this often: a reply that streams in changes the view many times a second.
 constexpr int kRedrawMs = 150;
-constexpr int64_t kPanelCloseMs = 8000;  // the quick controls close after this long without a touch
+constexpr int kSliderRedrawMs = 25;
+constexpr int64_t kPanelCloseMs = 8000;      // the quick controls close after this long without a touch
+constexpr int64_t kPowerOffCloseMs = 15000;  // the power-off slider closes after this long without a touch
+
+// Power-off slider geometry (466x466 screen coordinates, matching screen.cpp).
+constexpr float kSliderMinCx = 101.0f, kSliderMaxCx = 365.0f, kSliderCy = 233.0f;
+constexpr float kSliderHitR = 56.0f;
+constexpr float kCancelCx = 233.0f, kCancelCy = 352.0f, kCancelHitR = 52.0f;
+constexpr int kSliderConfirmPermille = 820;
 
 i2c_master_bus_handle_t g_bus = nullptr;
 stopwatch::Power g_power;
@@ -63,9 +70,15 @@ std::string g_kind = "boot";  // what the frame shows (under g_frame_lock)
 int64_t now_ms() { return esp_timer_get_time() / 1000; }
 
 // ── What the person did lately ──────────────────────────────────────────────────────────────────
-std::atomic<int64_t> g_activity_at{0};   // a key or a touch: the screen lights up
-std::atomic<bool> g_panel_open{false};   // the quick controls are on show
-std::atomic<int64_t> g_panel_at{0};      // when they opened, or were last touched
+std::atomic<int64_t> g_activity_at{0};     // a key or a touch: the screen lights up
+std::atomic<bool> g_manual_sleep{false};   // single-pressed power button: stay dark until woken
+std::atomic<bool> g_panel_open{false};     // the quick controls are on show
+std::atomic<int64_t> g_panel_at{0};        // when they opened, or were last touched
+std::atomic<bool> g_power_off_open{false}; // the slide-to-power-off overlay is on show
+std::atomic<int64_t> g_power_off_at{0};
+std::atomic<int> g_slider_permille{0};     // 0..1000
+std::atomic<bool> g_powering_off{false};
+
 enum class Light { Bright, Dim, Dark };
 const char* const kLightNames[] = {"bright", "dim", "dark"};
 std::atomic<int> g_light{(int)Light::Bright};  // the draw task's; read by the touch path
@@ -74,6 +87,7 @@ void wake_draw() {
   if (g_draw_task) xTaskNotifyGive(g_draw_task);
 }
 void activity() {
+  g_manual_sleep = false;
   g_activity_at = now_ms();
   wake_draw();
 }
@@ -81,6 +95,17 @@ void set_panel(bool open, const char* why) {
   if (g_panel_open.exchange(open) == open) return;
   g_panel_at = now_ms();
   ESP_LOGI(TAG, "quick controls %s (%s)", open ? "open" : "closed", why);
+  wake_draw();
+}
+void set_power_off(bool open, const char* why) {
+  if (open) {
+    g_slider_permille = 0;
+    g_powering_off = false;
+    set_panel(false, why);
+  }
+  if (g_power_off_open.exchange(open) == open) return;
+  g_power_off_at = now_ms();
+  ESP_LOGI(TAG, "power-off screen %s (%s)", open ? "open" : "closed", why);
   wake_draw();
 }
 
@@ -95,14 +120,8 @@ uint8_t panel_percent(const botkins::View::Settings& s, Light light) {
 }
 
 // ── The screen, and how bright it is ────────────────────────────────────────────────────────────
-// An AMOLED left showing the same thing burns in. Online and idle (not listening, sending, working,
-// writing or speaking, no request on show), with nothing changed, no key pressed and no touch: after
-// the settings' dimAfter seconds it dims (the sleepy Botkin, faint), after offAfter seconds (counted
-// from the last activity) its output goes off; 0 is never. A view that changes, a key or a touch
-// brings it back at once; a key still does its own job, a touch on a dim screen only wakes it.
-// Only the panel's brightness (0x51) and display on/off (0x29/0x28) commands are used.
 Light g_shown_light = Light::Bright;  // the draw task's own
-uint8_t g_panel_percent = 100;       // what the panel was last told (kInit leaves it at 0xFF)
+uint8_t g_panel_percent = 100;        // what the panel was last told (kInit leaves it at 0xFF)
 
 /** The draw task's only way to change the panel's light, with one log line for each change. */
 void set_light(Light next, const botkins::View::Settings& s, const char* why) {
@@ -111,6 +130,10 @@ void set_light(Light next, const botkins::View::Settings& s, const char* why) {
   bool ok = true;
   if (next == Light::Dark) {
     ok = g_display.brightness(0) && g_display.output(false);
+    if (g_power_ok) {
+      g_power.set_amplifier(false);
+      g_power.set_status_led(false);
+    }
   } else {
     if (g_shown_light == Light::Dark) ok = g_display.output(true);
     ok = g_display.brightness(percent) && ok;
@@ -143,6 +166,7 @@ bool same(const botkins::View& a, const botkins::View& b) {
 /** A name for what is on screen, for the log's timings and the console's frame. */
 std::string kind_of(const botkins::View& view, stopwatch::Screen::Mode mode) {
   using Mode = stopwatch::Screen::Mode;
+  if (mode == Mode::PowerOff) return g_powering_off.load() ? "powering-off" : "power-off";
   if (mode == Mode::Quick) return view.settings.mute ? "quick-muted" : "quick";
   if (mode == Mode::Dimmed) return "dimmed";
   static const char* const stages[] = {"setup", "joining", "no-network", "connecting", "online", "removed"};
@@ -177,13 +201,14 @@ void draw_task(void*) {
   botkins::View shown;
   botkins::View::Settings applied;
   Mode shown_mode = Mode::Home;
+  int shown_slider = -1;
+  bool shown_powering_off = false;
   bool drawn = false, settings_seen = false;
   int64_t active_at = now_ms(), activity_seen = 0;
-  std::set<std::string> timed;  // the screen kinds whose draw and flush were logged (first and second draw)
+  std::set<std::string> timed;
   std::set<std::string> timed_again;
   int wait_ms = 1000;
   for (;;) {
-    // Woken by a change, a key or a touch; otherwise once a second, to see whether it is time to dim.
     ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(wait_ms));
     wait_ms = 1000;
     const botkins::View view = g_gadget->view();
@@ -197,7 +222,7 @@ void draw_task(void*) {
       active_at = now;
     }
     const bool changed = !drawn || !same(view, shown);
-    if (changed || !idle(view)) active_at = now;
+    if (!g_manual_sleep.load() && (changed || !idle(view))) active_at = now;
 
     // The quick controls close by themselves.
     if (g_panel_open) {
@@ -205,22 +230,42 @@ void draw_task(void*) {
       if (left <= 0) set_panel(false, "8 s without a touch");
       else if (left < wait_ms) wait_ms = (int)left;
     }
+    // The power-off slider closes by itself if untouched (unless already powering off).
+    if (g_power_off_open && !g_powering_off.load()) {
+      const int64_t left = kPowerOffCloseMs - (now - g_power_off_at);
+      if (left <= 0) set_power_off(false, "15 s without a touch");
+      else if (left < wait_ms) wait_ms = (int)left;
+    }
 
     const int64_t quiet = now - active_at;
     Light want = Light::Bright;
     const char* why = "activity";
-    if (s.off_after > 0 && quiet >= (int64_t)s.off_after * 1000) want = Light::Dark, why = "offAfter";
-    else if (s.dim_after > 0 && quiet >= (int64_t)s.dim_after * 1000) want = Light::Dim, why = "dimAfter";
-    if (want != Light::Bright) set_panel(false, "the screen dims");
-    const Mode mode = g_panel_open ? Mode::Quick : want == Light::Dim ? Mode::Dimmed : Mode::Home;
+    if (g_manual_sleep.load()) {
+      want = Light::Dark;
+      why = "sleep";
+    } else if (s.off_after > 0 && quiet >= (int64_t)s.off_after * 1000 && !g_power_off_open) {
+      want = Light::Dark;
+      why = "offAfter";
+    } else if (s.dim_after > 0 && quiet >= (int64_t)s.dim_after * 1000 && !g_power_off_open) {
+      want = Light::Dim;
+      why = "dimAfter";
+    }
+    if (want != Light::Bright) {
+      set_panel(false, "the screen dims");
+      if (want == Light::Dark) set_power_off(false, "sleep");
+    }
 
-    if (want != Light::Dark && (changed || mode != shown_mode || !drawn)) {
-      // Drawn first, then lit: a dark panel comes back with the new frame, not the old one.
+    const Mode mode = g_power_off_open ? Mode::PowerOff : g_panel_open ? Mode::Quick : want == Light::Dim ? Mode::Dimmed : Mode::Home;
+    const int slider = g_slider_permille.load();
+    const bool powering_off = g_powering_off.load();
+    const bool overlay_changed = mode == Mode::PowerOff && (slider != shown_slider || powering_off != shown_powering_off);
+
+    if (want != Light::Dark && (changed || mode != shown_mode || overlay_changed || !drawn)) {
       const std::string kind = kind_of(view, mode);
       const size_t faces_before = g_screen.face_memory();
       xSemaphoreTake(g_frame_lock, portMAX_DELAY);
       const int64_t t0 = esp_timer_get_time();
-      g_screen.draw(view, mode);
+      g_screen.draw(view, mode, slider / 1000.0f, powering_off);
       const int64_t t1 = esp_timer_get_time();
       g_kind = kind;
       xSemaphoreGive(g_frame_lock);
@@ -235,15 +280,15 @@ void draw_task(void*) {
       }
       shown = view;
       shown_mode = mode;
+      shown_slider = slider;
+      shown_powering_off = powering_off;
       drawn = true;
       set_light(want, s, changed ? "the view changed" : why);
-      vTaskDelay(pdMS_TO_TICKS(kRedrawMs));
-      // A change while this one was drawn left its notification: the loop draws it next.
+      vTaskDelay(pdMS_TO_TICKS(mode == Mode::PowerOff ? kSliderRedrawMs : kRedrawMs));
       continue;
     }
     set_light(want, s, want == Light::Bright ? "brightness" : why);
-    // Nothing waits (no change, no key, no touch): one screen of the bot's faces drawn ahead.
-    if (drawn && want != Light::Dark && idle(view) && ulTaskNotifyValueClear(nullptr, 0) == 0) {
+    if (drawn && want != Light::Dark && mode != Mode::PowerOff && idle(view) && ulTaskNotifyValueClear(nullptr, 0) == 0) {
       xSemaphoreTake(g_frame_lock, portMAX_DELAY);
       const int64_t t0 = esp_timer_get_time();
       const bool did = g_screen.warm(shown, shown_mode);
@@ -251,8 +296,6 @@ void draw_task(void*) {
       xSemaphoreGive(g_frame_lock);
       if (did) {
         if (ms > 300) ESP_LOGI(TAG, "a face drawn ahead in %lld ms; faces %u KB", (long long)ms, (unsigned)(g_screen.face_memory() / 1024));
-        // The next one soon, after a pause: this core's idle task must run (the task watchdog
-        // watches it), and one face can take 3 s.
         wait_ms = 50;
       }
     }
@@ -285,27 +328,13 @@ struct Key {
   }
 };
 
-/** A tap on the screen (the touch controller's, or the console's). */
-void tap(int x, int y) {
-  if ((Light)g_light.load() != Light::Bright) {
-    ESP_LOGI(TAG, "tap at %d,%d: wakes the screen", x, y);
-    activity();
-    return;
-  }
-  if (!g_panel_open) {
-    // A tap on the home screen opens the quick controls, unless a request waits on the keys or the gadget is busy listening.
-    activity();
-    const botkins::View view = g_gadget->view();
-    const bool opens = view.stage == botkins::View::Stage::Online && view.request.id.empty() && !view.listening && !view.sending;
-    ESP_LOGI(TAG, "tap at %d,%d: %s", x, y, opens ? "opens the quick controls" : "nothing there");
-    if (opens) set_panel(true, "a tap");
-    return;
-  }
+/** Handles a tap inside the open quick-controls panel. */
+void quick_panel_tap(int x, int y) {
   activity();
   g_panel_at = now_ms();
   const botkins::QuickAction action = botkins::quick_hit(x, y, stopwatch::Display::kWidth, stopwatch::Display::kHeight);
   static const char* const names[] = {"none", "volume down", "volume up", "mute", "brightness", "new chat", "close"};
-  ESP_LOGI(TAG, "tap at %d,%d: %s", x, y, names[(int)action]);
+  ESP_LOGI(TAG, "quick tap at %d,%d: %s", x, y, names[(int)action]);
   using A = botkins::QuickAction;
   switch (action) {
     case A::None:
@@ -329,81 +358,244 @@ void tap(int x, int y) {
   if (after.mic != before.mic) patch.set("mic", after.mic);
   if (patch.size() > 0) g_gadget->change_settings(patch);
   if (action == A::VolumeDown || action == A::VolumeUp) {
-    // Heard at the new volume: set here, before the tick, as the draw task would a moment later.
     g_audio.set_volume(after.volume);
     g_audio.tick();
   }
 }
 
+bool sleeping() { return (Light)g_light.load() == Light::Dark || g_manual_sleep.load(); }
+
+void tap(int x, int y) {
+  if (sleeping()) {
+    ESP_LOGI(TAG, "tap at %d,%d: ignored in sleep mode", x, y);
+    return;
+  }
+  if ((Light)g_light.load() != Light::Bright) {
+    ESP_LOGI(TAG, "tap at %d,%d: wakes the screen", x, y);
+    activity();
+    return;
+  }
+  if (g_power_off_open) {
+    const float dx = (float)x - kCancelCx, dy = (float)y - kCancelCy;
+    if (dx * dx + dy * dy <= kCancelHitR * kCancelHitR) {
+      set_power_off(false, "Cancel");
+    }
+    return;
+  }
+  if (g_panel_open) {
+    quick_panel_tap(x, y);
+  }
+}
+
 void keys_task(void*) {
+  enum class TalkSource { None, Blue, Touch };
   Key blue{kBlue, kKeyBlue}, yellow{kYellow, kKeyYellow};
-  bool talking = false;
-  int64_t blue_down_at = 0, yellow_down_at = 0;
+  TalkSource talk_source = TalkSource::None;
+  int64_t talk_down_at = 0;
+  int64_t yellow_down_at = 0;
+  bool yellow_ignored = false;
+
   bool forced_red_down = false;
+  bool forced_red_hold_fired = false;
   int forced_red_polls = 0;
+
+  bool touch_ignored = false;
+  bool touch_woke_screen = false;
+  bool panel_touch_active = false;
+  int panel_down_x = 0, panel_down_y = 0;
+  bool slider_dragging = false;
+  float slider_drag_offset = 0.0f;
+
+  auto begin_talk = [&](TalkSource src, const char* why) {
+    activity();
+    set_panel(false, why);
+    set_power_off(false, why);
+    const botkins::View view = g_gadget->view();
+    if ((view.speaking || g_audio.playing()) && !view.live) {
+      g_gadget->stop_speaking();
+      g_audio.cut();
+      return;
+    }
+    if (view.stage == botkins::View::Stage::Online && talk_source == TalkSource::None) {
+      if (src == TalkSource::Touch && !view.request.id.empty()) return;
+      g_gadget->start_listening();
+      talk_source = src;
+      talk_down_at = now_ms();
+    }
+  };
+
+  auto end_talk = [&](TalkSource src) {
+    if (talk_source != src) return;
+    talk_source = TalkSource::None;
+    const int64_t held = now_ms() - talk_down_at;
+    g_gadget->stop_listening(held >= kShortestTalkMs);
+    if (held < kShortestTalkMs) ESP_LOGI(TAG, "a press of %lld ms is given up", (long long)held);
+  };
+
+  auto cancel_active_voice = [&]() {
+    if (talk_source != TalkSource::None) {
+      talk_source = TalkSource::None;
+      g_gadget->stop_listening(false);
+    }
+    const botkins::View view = g_gadget->view();
+    if (view.speaking || g_audio.playing()) {
+      g_gadget->stop_speaking();
+      g_audio.cut();
+    }
+  };
+
   for (unsigned tick = 0;; tick++) {
     vTaskDelay(pdMS_TO_TICKS(kPollMs));
+
+    // ── Blue key: push-to-talk ──
     if (blue.poll()) {
       if (blue.down) {
-        activity();
-        set_panel(false, "the blue key");
-        blue_down_at = blue.since;
-        const botkins::View view = g_gadget->view();
-        if ((view.speaking || g_audio.playing()) && !view.live) {
-          // A press while it reads a reply aloud only stops the reading. With live voice it is how the person
-          // interrupts: the core cuts the voice and starts their turn (below).
-          g_gadget->stop_speaking();
-          g_audio.cut();
-          talking = false;
-        } else if (view.stage == botkins::View::Stage::Online) {
-          g_gadget->start_listening();  // muted: the core says the microphone is off, and records nothing
-          talking = true;
-        }
-      } else if (talking) {
-        talking = false;
-        // Both edges are debounced alike, so this is how long the key was held.
-        const int64_t held = blue.since - blue_down_at;
-        g_gadget->stop_listening(held >= kShortestTalkMs);
-        if (held < kShortestTalkMs) ESP_LOGI(TAG, "a press of %lld ms is given up", (long long)held);
+        begin_talk(TalkSource::Blue, "the blue key");
+      } else {
+        end_talk(TalkSource::Blue);
       }
     }
+
+    // ── Yellow key: settings (quick controls), or permission approve/deny ──
     if (yellow.poll()) {
       if (yellow.down) {
-        activity();
-        yellow_down_at = yellow.since;
+        if (sleeping()) {
+          yellow_ignored = true;
+        } else {
+          yellow_ignored = false;
+          activity();
+          yellow_down_at = yellow.since;
+        }
       } else {
-        const int64_t held = yellow.since - yellow_down_at;
-        const botkins::View view = g_gadget->view();
-        if (view.stage == botkins::View::Stage::Online) {
-          if (!view.request.id.empty()) {
-            // A question or a form is answered on the phone or the computer (the screen says so).
-            if (view.request.kind == "permission") g_gadget->answer(held >= kDenyHoldMs ? "deny" : "approve");
+        if (yellow_ignored) {
+          yellow_ignored = false;
+        } else {
+          const int64_t held = yellow.since - yellow_down_at;
+          if (g_power_off_open) {
+            set_power_off(false, "the yellow key");
           } else {
-            g_gadget->new_chat();
+            const botkins::View view = g_gadget->view();
+            if (view.stage == botkins::View::Stage::Online && !view.request.id.empty() && view.request.kind == "permission") {
+              g_gadget->answer(held >= kDenyHoldMs ? "deny" : "approve");
+            } else {
+              set_panel(!g_panel_open.load(), "the yellow key");
+            }
           }
         }
       }
     }
+
+    // ── Red power button (M5PM1): single-press = sleep/wake, hold = slide-to-power-off ──
     if (tick % kRedEvery == 0) {
-      // The red key, through the M5PM1; or a press from the console, read the same way (under a second).
-      bool red = g_power_ok && g_power.take_red_press();
+      using RedEvent = stopwatch::Power::RedEvent;
+      RedEvent red = g_power_ok ? g_power.poll_red() : RedEvent::None;
       if (now_ms() < g_forced_until[kKeyRed]) {
         forced_red_down = true;
-        forced_red_polls++;
+        if (forced_red_polls < 255) forced_red_polls++;
+        if (!forced_red_hold_fired && forced_red_polls >= 8) {
+          forced_red_hold_fired = true;
+          red = RedEvent::LongHold;
+        }
       } else if (forced_red_down) {
-        red = red || forced_red_polls < 10;
+        if (!forced_red_hold_fired) red = RedEvent::ShortPress;
         forced_red_down = false;
+        forced_red_hold_fired = false;
         forced_red_polls = 0;
       }
-      // Only a wake: a double click on this key powers the StopWatch off (the M5PM1 does it itself).
-      if (red) {
-        ESP_LOGI(TAG, "the red key: wakes the screen");
+
+      if (red == RedEvent::LongHold) {
+        ESP_LOGI(TAG, "the red key held: opening power-off slider");
+        cancel_active_voice();
         activity();
+        set_power_off(true, "the red key held");
+      } else if (red == RedEvent::ShortPress) {
+        if (g_power_off_open) {
+          ESP_LOGI(TAG, "the red key: closing power-off slider");
+          set_power_off(false, "the red key");
+        } else if ((Light)g_light.load() == Light::Dark || g_manual_sleep.load()) {
+          ESP_LOGI(TAG, "the red key: wakes from sleep");
+          activity();
+        } else {
+          ESP_LOGI(TAG, "the red key: entering sleep mode");
+          cancel_active_voice();
+          set_panel(false, "sleep");
+          g_manual_sleep = true;
+          if (g_power_ok) g_power.set_status_led(false);
+          wake_draw();
+        }
       }
     }
+
+    // ── Touch screen (CST820, polled every 20 ms) ──
     if (g_touch_ok && tick % kTouchEvery == 0) {
-      int x, y;
-      if (g_touch.poll(x, y)) tap(x, y);
+      int x = 0, y = 0;
+      const auto ev = g_touch.poll(x, y);
+      if (ev == stopwatch::Touch::Event::Down) {
+        if (sleeping()) {
+          touch_ignored = true;
+        } else if ((Light)g_light.load() != Light::Bright) {
+          ESP_LOGI(TAG, "touch at %d,%d: wakes the screen", x, y);
+          touch_woke_screen = true;
+          activity();
+        } else if (g_power_off_open) {
+          activity();
+          g_power_off_at = now_ms();
+          const float thumb_cx = kSliderMinCx + (g_slider_permille.load() / 1000.0f) * (kSliderMaxCx - kSliderMinCx);
+          const float sdx = (float)x - thumb_cx, sdy = (float)y - kSliderCy;
+          const float cdx = (float)x - kCancelCx, cdy = (float)y - kCancelCy;
+          if (sdx * sdx + sdy * sdy <= kSliderHitR * kSliderHitR) {
+            slider_dragging = true;
+            slider_drag_offset = (float)x - thumb_cx;
+          } else if (cdx * cdx + cdy * cdy <= kCancelHitR * kCancelHitR) {
+            set_power_off(false, "Cancel");
+          }
+        } else if (g_panel_open) {
+          panel_touch_active = true;
+          panel_down_x = x;
+          panel_down_y = y;
+        } else {
+          ESP_LOGI(TAG, "home touch down at %d,%d: voice mode", x, y);
+          begin_talk(TalkSource::Touch, "screen touch");
+        }
+      } else if (ev == stopwatch::Touch::Event::Move) {
+        if (!touch_ignored && slider_dragging && g_power_off_open) {
+          g_power_off_at = now_ms();
+          const float cx = std::max(kSliderMinCx, std::min(kSliderMaxCx, (float)x - slider_drag_offset));
+          const int permille = (int)std::lround(((cx - kSliderMinCx) / (kSliderMaxCx - kSliderMinCx)) * 1000.0f);
+          if (permille != g_slider_permille.load()) {
+            g_slider_permille = permille;
+            wake_draw();
+          }
+        }
+      } else if (ev == stopwatch::Touch::Event::Up) {
+        if (touch_ignored) {
+          touch_ignored = false;
+        } else if (touch_woke_screen) {
+          touch_woke_screen = false;
+        } else if (slider_dragging) {
+          slider_dragging = false;
+          if (g_slider_permille.load() >= kSliderConfirmPermille) {
+            ESP_LOGI(TAG, "power-off slider confirmed: shutting down");
+            g_powering_off = true;
+            wake_draw();
+            vTaskDelay(pdMS_TO_TICKS(250));
+            if (g_display_ok) {
+              g_display.brightness(0);
+              g_display.output(false);
+            }
+            if (g_power_ok) g_power.power_off();
+            vTaskDelay(pdMS_TO_TICKS(1000));
+          } else {
+            g_slider_permille = 0;
+            wake_draw();
+          }
+        } else if (panel_touch_active) {
+          panel_touch_active = false;
+          if (g_panel_open) quick_panel_tap(panel_down_x, panel_down_y);
+        } else if (talk_source == TalkSource::Touch) {
+          end_talk(TalkSource::Touch);
+        }
+      }
     }
   }
 }
