@@ -4,9 +4,9 @@
 import { Check } from "lucide-react-native";
 import { type ReactNode, useState } from "react";
 import { ScrollView, StyleSheet, View } from "react-native";
-import { type BotkinLook, type LookOptions, availableHeads, colorsOf, CUSTOM, EYES, HEADS_CAPABILITY, hasAccent, headName, KIT_PALETTES } from "@/data/botLook";
+import { type BotkinLook, type LookOptions, availableHeads, colorsOf, CUSTOM, EYES, hasAccent, headName, KIT_PALETTES } from "@/data/botLook";
 import { COLOR_SLOTS, type FourColors, remember, SUGGESTED, TEMPLATES, templateOf } from "@/data/lookTemplates";
-import { useCapability } from "@/state/hooks";
+import { usePart } from "@/state/hooks";
 import { BotAvatar, ColorPicker, Label, radius, space, T, Tap, useTheme } from "@/ui";
 
 export type LookEditorProps = LookOptions & {
@@ -18,16 +18,15 @@ export type LookEditorProps = LookOptions & {
 
 /** Which looks can this computer save? */
 export function useLookOptions(): LookOptions {
-  const advanced = useCapability("looks-v2");
-  const expandedHeads = useCapability(HEADS_CAPABILITY);
-  return { advanced, expandedHeads };
+  const capabilities = usePart("meta")?.capabilities;
+  return { advanced: capabilities?.includes("looks-v2"), capabilities };
 }
 
 const SWATCH = 40;
 const RING = SWATCH + 10;
 const EYE_CELL = 76;
 
-export function LookEditor({ value, onChange, advanced, expandedHeads, onDragging }: LookEditorProps) {
+export function LookEditor({ value, onChange, advanced, capabilities, onDragging }: LookEditorProps) {
   const { colors } = useTheme();
   const [slot, setSlot] = useState<number | null>(null);
   const [recent, setRecent] = useState<string[]>([]);
@@ -48,7 +47,7 @@ export function LookEditor({ value, onChange, advanced, expandedHeads, onDraggin
       <View>
         <Label>Character</Label>
         <View style={{ flexDirection: "row", flexWrap: "wrap", marginHorizontal: -space.xs }}>
-          {availableHeads(expandedHeads).map((head) => {
+          {availableHeads(capabilities).map((head) => {
             const selected = head.id === value.head;
             return (
               <View key={head.id} style={{ width: "25%", padding: space.xs }}>

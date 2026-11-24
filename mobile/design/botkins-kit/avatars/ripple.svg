@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256"><title>Ripple</title><style data-layer="blink">@keyframes bk-blink{0%,92%,100%{transform:scaleY(1)}94%,94.6%{transform:scaleY(.09)}97%{transform:scaleY(1)}}.bk-blink-2448007760{transform-box:fill-box;transform-origin:center;animation:bk-blink 4853ms ease-in-out -1760ms infinite}@media(prefers-reduced-motion:reduce){.bk-blink-2448007760{animation:none}}</style>
+<g transform="translate(0 0) scale(1)">
+  <path data-role="shell" fill="#598f91" d="M17 156C25 143 44 136 55 117C70 91 70 65 95 43C118 22 150 20 177 32C198 41 218 62 226 80C229 88 224 93 217 88C204 80 191 75 180 80C165 87 169 105 182 118C197 133 213 134 230 135C243 136 248 148 242 162C227 199 183 223 133 228C86 232 43 219 23 198C10 184 9 170 17 156Z"/>
+  <path data-role="shell" fill="#81afb0" d="M35 147C51 134 62 123 71 102C79 83 83 64 99 50C113 38 132 32 151 34C129 37 117 44 104 57C91 71 88 87 79 105C69 126 55 140 35 147Z"/>
+  <path data-role="shell" fill="#477679" d="M14 177C21 199 54 216 93 219C150 224 207 200 238 165C218 207 170 228 119 229C75 230 41 217 23 198C17 191 13 185 14 177Z"/>
+  <path data-role="accent" fill="#c7b27f" d="M157 36C172 37 188 46 202 58C214 69 221 81 222 85C213 80 204 76 196 75C196 70 192 61 183 53C175 46 166 40 157 36Z"/>
+  <path data-role="accent" fill="#e8cf98" d="M153 39C158 38 168 41 173 45C177 49 172 50 166 48C161 47 154 44 151 42C150 40 151 39 153 39Z"/>
+  <path data-role="shell" fill="#4b7b7b" d="M43 168C46 148 64 131 92 123C123 114 154 119 170 137C187 157 179 181 158 198C135 214 104 218 77 209C55 203 40 189 43 168Z"/>
+  <path data-role="paper" fill="#f2e5c8" d="M46 165C50 145 67 131 94 124C122 116 151 121 165 138C179 155 172 177 152 192C132 206 105 210 81 203C58 197 43 184 46 165Z"/>
+  <path data-role="paper" fill="#fff0d8" d="M54 151C63 138 81 131 97 128C117 123 136 124 149 131C133 127 119 128 100 132C82 135 66 141 54 151Z"/>
+  <g data-layer="eyes" data-anchors="85,132,163" fill="#593515"><ellipse class="bk-blink-2448007760" cx="85" cy="163" rx="8.5" ry="17"/><ellipse class="bk-blink-2448007760" cx="132" cy="163" rx="8.5" ry="17"/></g>
+</g></svg>

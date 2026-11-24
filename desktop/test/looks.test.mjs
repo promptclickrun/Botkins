@@ -35,8 +35,8 @@ const seed = (dir, bots) => {
 test("the characters and palettes are the design kit's", () => {
   const files = readdirSync(new URL("avatars/", KIT)).filter((name) => name.endsWith(".svg")).map((name) => name.replace(/\.svg$/, "")).sort();
   assert.deepEqual(HEADS, files, "one id for each of the kit's avatars");
-  assert.equal(HEADS.length, 23);
-  for (const head of ["drip", "orbit", "pebble"]) {
+  assert.equal(HEADS.length, 30);
+  for (const head of ["brim", "clover", "drip", "dune", "gloop", "mallow", "orbit", "pebble", "ripple", "wisp"]) {
     const look = { head, palette: "tidepool", eyes: "curious" };
     assert.deepEqual(lookField(look), look);
     assert.deepEqual(linkCleanLook(look), look);
@@ -186,8 +186,11 @@ test("a phone changes a bot's look on the bot itself, and the link keeps no look
   t.after(() => link.stop());
   assert.ok(!link.meta().capabilities.includes(HEADS_CAPABILITY), "the link respects a backend with the original catalog");
   link.backend.capabilities = [HEADS_CAPABILITY];
+  assert.ok(!link.meta().capabilities.includes("botkin-heads-v3"));
   assert.ok(link.meta().capabilities.includes(HEADS_CAPABILITY));
-  const chosen = { head: "pebble", palette: "bluebell", eyes: "curious" };
+  link.backend.capabilities.push("botkin-heads-v3");
+  assert.ok(link.meta().capabilities.includes("botkin-heads-v3"));
+  const chosen = { head: "wisp", palette: "bluebell", eyes: "curious" };
   await link.dispatch({}, { m: "link.setLook", a: ["pip", chosen] });
   assert.deepEqual(ws.bot("pip").look, chosen);
   assert.deepEqual(JSON.parse(readFileSync(join(dir, "workspace.json"), "utf8")).bots[0].look, chosen, "saved with the bot");
@@ -327,6 +330,10 @@ test("the renderer draws a custom look in its four colors and its own eyes", () 
       for (const fill of fills) assert.ok(onLine(fill, colors[index]), head + " " + role + " " + fill + " comes from " + colors[index]);
     }
     assert.notEqual(svg, draw({ head, palette: "original" }, "Idle"));
+    const idleEyes = EYES.map(eyes => draw({ ...look, eyes }, "Idle").match(/<g data-layer="eyes"[^>]*>[\s\S]*?<\/g>/)?.[0]);
+    assert.ok(idleEyes.every(Boolean), head + ": every style has eyes");
+    assert.equal(new Set(idleEyes).size, EYES.length, head + ": six distinct eye shapes");
+    assert.equal(draw({ ...look, eyes: "oval" }, "Idle"), svg);
   }
   const look = { head: "sprig", palette: "custom", colors };
   assert.deepEqual(kitOptions(look, "Oval", Botkins.palettes), { palette: colors });
@@ -334,10 +341,6 @@ test("the renderer draws a custom look in its four colors and its own eyes", () 
   assert.deepEqual(kitOptions({ head: "sprig", palette: "fig", eyes: "wink" }, "Curious", Botkins.palettes), { palette: "Fig" }, "a state's own expression stays");
   assert.deepEqual(kitOptions({ head: "sprig", palette: "fig" }, "Oval", Botkins.palettes), { palette: "Fig" }, "a look from before passes what it always did");
   assert.deepEqual(kitOptions({ head: "sprig", palette: "custom", colors: colors.slice(1) }, "Oval", Botkins.palettes), { palette: "Original" }, "custom without four colors draws as Original");
-  // Idle's eyes are Oval: every eye style draws differently there, and Oval is the same as none.
-  const idle = EYES.map((eyes) => draw({ ...look, eyes }, "Idle"));
-  assert.equal(new Set(idle).size, EYES.length);
-  assert.equal(idle[0], draw(look, "Idle"));
   // Listening is Curious and Completed smiles: their own eyes stay, whatever the bot's are.
   for (const state of ["Listening", "Completed", "Waiting", "Like"]) {
     assert.notEqual(BotkinsMotionCatalog.states[state].eyes, "Oval");

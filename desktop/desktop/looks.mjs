@@ -18,11 +18,11 @@
 // Those fields are still read from files and left where they are, and nothing draws them.
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import catalog from "./link/botkin-heads.json" with { type: "json" };
+import { headIds as HEADS, originalHeadIds } from "./link/botkin-heads.mjs";
 
 /** The characters by id, matching design/botkins-kit/avatars/*.svg. */
-export const HEADS = [...catalog.original, ...catalog.additional].sort();
-export const HEADS_CAPABILITY = catalog.capability;
+export { HEADS };
+export { HEADS_CAPABILITY, headCapabilities } from "./link/botkin-heads.mjs";
 /** The 7 palettes (design/botkins-kit/customize.js). Original keeps each character's own colors. */
 export const PALETTES = ["original", "terracotta", "honey", "fern", "tidepool", "bluebell", "fig"];
 
@@ -100,7 +100,7 @@ export function migrateLooks(state, saved = {}) {
   }
   for (const bot of bots) {
     if (bot.look) continue;
-    bot.look = nextLook(bot.id, bots.map((b) => b.look), catalog.original);
+    bot.look = nextLook(bot.id, bots.map((b) => b.look), originalHeadIds);
     changed = true;
   }
   return changed;

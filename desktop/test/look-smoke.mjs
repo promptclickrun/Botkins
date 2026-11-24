@@ -191,7 +191,7 @@ try {
       await page.getByRole("dialog", { name: "Bot Studio" }).waitFor();
       // The current characters, the seven palettes and eight color templates, and six kinds of eyes.
       const studio = page.getByRole("dialog", { name: "Bot Studio" });
-      assert.equal(await studio.getByRole("radiogroup", { name: "Character" }).getByRole("radio").count(), 23);
+      assert.equal(await studio.getByRole("radiogroup", { name: "Character" }).getByRole("radio").count(), 30);
       assert.equal(await studio.getByRole("radiogroup", { name: "Palette" }).getByRole("radio").count(), 15);
       assert.equal(await studio.getByRole("radiogroup", { name: "Eyes" }).getByRole("radio").count(), 6);
     },

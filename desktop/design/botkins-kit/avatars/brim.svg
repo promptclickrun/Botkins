@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256"><title>Brim</title><style data-layer="blink">@keyframes bk-blink{0%,92%,100%{transform:scaleY(1)}94%,94.6%{transform:scaleY(.09)}97%{transform:scaleY(1)}}.bk-blink-2079124{transform-box:fill-box;transform-origin:center;animation:bk-blink 3993ms ease-in-out -124ms infinite}@media(prefers-reduced-motion:reduce){.bk-blink-2079124{animation:none}}</style>
+<g transform="translate(0 0) scale(1)">
+  <path data-role="accent" fill="#c79c68" d="M65 111C68 94 100 85 125 85C152 84 174 95 178 112C180 132 181 149 190 169C202 192 195 213 177 222C162 230 141 229 118 229C89 229 65 226 57 212C47 198 50 185 56 167C61 150 62 132 65 111Z"/>
+  <path data-role="accent" fill="#a87851" d="M54 198C58 214 77 221 110 222C147 223 178 224 192 205C186 225 168 230 125 229C92 229 67 227 58 215C54 210 52 204 54 198Z"/>
+  <path data-role="paper" fill="#f7e3bd" d="M69 161C75 145 96 137 123 137C152 137 174 147 178 167C184 190 170 209 148 216C125 223 93 219 76 207C62 196 61 178 69 161Z"/>
+  <path data-role="paper" fill="#fff0d3" d="M71 159C79 146 99 141 119 141C135 140 148 143 156 147C141 145 130 145 119 146C96 146 82 152 71 159Z"/>
+  <path data-role="shell" fill="#b75f63" d="M17 127C21 114 34 108 45 94C64 68 82 45 113 35C143 26 168 35 187 53C203 68 213 91 228 105C235 112 242 117 242 125C242 136 228 146 207 149C181 153 158 142 132 140C100 138 73 146 46 148C27 150 11 144 17 127Z"/>
+  <path data-role="shell" fill="#d98482" d="M43 109C59 88 78 57 105 45C125 36 145 36 160 41C142 40 124 43 108 51C83 63 62 91 43 109Z"/>
+  <path data-role="shell" fill="#944f55" d="M17 128C33 139 61 132 87 127C111 122 131 122 153 127C185 133 218 143 241 124C241 137 226 146 207 149C180 153 159 143 133 140C98 137 75 145 46 148C28 150 11 145 17 128Z"/>
+  <path data-role="accent" fill="#e6ba79" d="M44 133C57 133 70 130 79 129C73 134 57 139 48 138C43 138 40 135 44 133ZM173 137C187 139 196 141 204 141C197 145 182 145 173 142C169 141 169 138 173 137Z"/>
+  <path data-role="accent" fill="#eac78d" d="M151 58C154 55 161 56 167 61C171 64 171 67 168 69C164 72 156 69 152 65C149 62 149 59 151 58ZM178 72C181 70 187 74 188 78C190 82 187 84 183 82C179 81 175 76 178 72Z"/>
+  <g data-layer="eyes" data-anchors="100,146,173" fill="#593515"><ellipse class="bk-blink-2079124" cx="100" cy="173" rx="8.5" ry="17"/><ellipse class="bk-blink-2079124" cx="146" cy="173" rx="8.5" ry="17"/></g>
+</g></svg>

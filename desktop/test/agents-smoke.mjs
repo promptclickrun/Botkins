@@ -67,14 +67,14 @@ try {
   const characters = studio.getByRole("radiogroup", { name: "Character" });
   const palettes = studio.getByRole("radiogroup", { name: "Palette" });
   // All characters share a grid. The seven palettes and eight color templates share a row.
-  await expect(characters.getByRole("radio")).toHaveCount(23);
+  await expect(characters.getByRole("radio")).toHaveCount(30);
   await expect(palettes.getByRole("radio")).toHaveCount(15);
   assert.equal(await studio.getByRole("tab").count(), 0, "no pack tabs");
   await expect(characters.getByRole("radio", { name: "Fathom", exact: true })).toHaveAttribute("aria-checked", "true");
-  // Arrow keys move through the characters (they are in the kit's order: fathom, goggle, …).
+  // Arrow keys move through the characters (they are in the kit's order: fathom, gloop, …).
   await characters.getByRole("radio", { name: "Fathom", exact: true }).focus();
   await page.keyboard.press("ArrowRight");
-  await expect(characters.getByRole("radio", { name: "Goggle", exact: true })).toHaveAttribute("aria-checked", "true");
+  await expect(characters.getByRole("radio", { name: "Gloop", exact: true })).toHaveAttribute("aria-checked", "true");
   await characters.getByRole("radio", { name: "Skiff", exact: true }).click();
   await palettes.getByRole("radio", { name: "Bluebell", exact: true }).click();
   await expect(studio.locator(".look-name")).toHaveText("Skiff");
@@ -102,7 +102,7 @@ try {
   await expect
     .poll(async () => [await studio.locator(".look-name").textContent(), await palettes.getByRole("radio", { checked: true }).textContent()])
     .not.toEqual(["Skiff", "Bluebell"]);
-  await characters.getByRole("radio", { name: "Orbit", exact: true }).click();
+  await characters.getByRole("radio", { name: "Wisp", exact: true }).click();
   await palettes.getByRole("radio", { name: "Bluebell", exact: true }).click();
   // Eyes: six, each drawn on the current character.
   const eyes = studio.getByRole("radiogroup", { name: "Eyes" });
@@ -153,7 +153,7 @@ try {
   await dialog.getByLabel("Name", { exact: true }).fill("Ranger");
   await shoot("create-bot");
   await dialog.getByRole("button", { name: "Create bot", exact: true }).click();
-  await expect.poll(async () => (await bot("Ranger"))?.look).toEqual({ head: "orbit", palette: "custom", eyes: "wink", colors: ["#3e4f86", "#dfae52", "#f4e8c4", "#373722"] });
+  await expect.poll(async () => (await bot("Ranger"))?.look).toEqual({ head: "wisp", palette: "custom", eyes: "wink", colors: ["#3e4f86", "#dfae52", "#f4e8c4", "#373722"] });
   const ranger = await bot("Ranger");
   assert.match(ranger.instructions, /Cite your sources/);
   await page.evaluate(() =>
@@ -227,7 +227,7 @@ try {
   // Bot Studio opens on the saved look and saves a new palette straight to the bot.
   await main.getByRole("button", { name: "Bot Studio", exact: true }).click();
   const editor = page.getByRole("dialog", { name: "Bot Studio" });
-  await expect(editor.getByRole("radiogroup", { name: "Character" }).getByRole("radio", { name: "Orbit", exact: true })).toHaveAttribute("aria-checked", "true");
+  await expect(editor.getByRole("radiogroup", { name: "Character" }).getByRole("radio", { name: "Wisp", exact: true })).toHaveAttribute("aria-checked", "true");
   await expect(editor.getByRole("radiogroup", { name: "Eyes" }).getByRole("radio", { name: "Wink", exact: true })).toHaveAttribute("aria-checked", "true");
   await expect(editor.getByRole("group", { name: "Custom colors" }).getByRole("button", { name: "Shell color, #3e4f86", exact: true })).toBeVisible();
   await editor.getByRole("radiogroup", { name: "Palette" }).getByRole("radio", { name: "Fig", exact: true }).click();
@@ -235,7 +235,7 @@ try {
   await editor.getByRole("button", { name: "Save", exact: true }).click();
   await expect(editor).toHaveCount(0);
   // A kit palette drops the custom colors and keeps the eyes.
-  await expect.poll(async () => (await bot("Ranger")).look).toEqual({ head: "orbit", palette: "fig", eyes: "wink" });
+  await expect.poll(async () => (await bot("Ranger")).look).toEqual({ head: "wisp", palette: "fig", eyes: "wink" });
   const about = main.getByPlaceholder("A line about what this bot is for");
   await expect(about).toHaveValue("Finds primary sources.");
   await about.fill("Digs up sources and sums them up.");

@@ -4,7 +4,7 @@ Open studio.html in a browser after extracting the ZIP. Pick a character, palett
 
 ## Using the assets
 
-- avatars/ holds the original 20 transparent vector heads plus Drip, a swept clay drop, Pebble, a moss-green bean, and Orbit, a blue planet with an ochre ring.
+- avatars/ holds 30 transparent vector heads. The ten Bloub-inspired characters are Brim, Clover, Drip, Dune, Gloop, Mallow, Orbit, Pebble, Ripple and Wisp.
 - animated/<head>/<state>.svg holds 16 ready-to-use clips per head in its original colors. The files contain embedded CSS animation. Use an image element or a browser-based SVG renderer. System Reduce Motion freezes the pose and preserves the state badge. For an explicit static export, enable Reduced motion in the studio.
 - fonts/ contains DejaVu Serif Bold for display and Open Sans Regular for body and labels, with notices. Use the serif for names and short headlines. Use the sans for settings, descriptions, and state labels. On narrow screens, pair a 32px headline with 16px body and 14px labels.
 - theme/tokens.json and theme/botkins.css define the core palette and semantic light/dark colors. Set data-theme="dark" on a parent for dark mode. Pair action with onAction for buttons. Use ink for content and muted for secondary text.

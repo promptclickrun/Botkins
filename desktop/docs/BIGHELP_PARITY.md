@@ -27,7 +27,7 @@ Reference: Bighelp `main` at `6309de48` (2.6.93). Paths starting with `B/` are u
 
 | Area | State | Where |
 |---|---|---|
-| Avatars | Done, with Botkins instead of Bighelp's bodies: a bot is one of the design kit's 23 characters in one of 7 palettes, kept on the bot (`bot.look`); Bot Studio has a live preview and Surprise me; the Botkin acts out what the bot is doing (idle, thinking, planning, looking things up, coding, working, replying, waiting for you, finished or failed); reduced motion | `desktop/looks.mjs`, `src/botkins.ts`, `src/Avatar.tsx`, `src/BotStudio.tsx`, `design/botkins-kit` |
+| Avatars | Done, with Botkins instead of Bighelp's bodies: a bot is one of the design kit's 30 characters in one of 7 palettes, kept on the bot (`bot.look`); Bot Studio has a live preview and Surprise me; the Botkin acts out what the bot is doing (idle, thinking, planning, looking things up, coding, working, replying, waiting for you, finished or failed); reduced motion | `desktop/looks.mjs`, `src/botkins.ts`, `src/Avatar.tsx`, `src/BotStudio.tsx`, `design/botkins-kit` |
 | Agent management | Done: primary bot, pins, hiding, sections, bot menu, bot page, templates, duplicate, delete; chat groups, unread, pin, rename, archive, delete | `desktop/agents.mjs`, `src/Pages.tsx`, `src/BotProfile.tsx`, `src/BotForm.tsx` |
 | Thinking and chat canvas | Done: reasoning, work summary, tasks, background helpers, queue and Send now, attachments, copy, reply, fork, Try again, Scroll to latest message, context meter and Compact, starter prompts | `desktop/canvas.mjs`, `src/ChatView.tsx`, `src/ChatActivity.tsx`, `src/Composer.tsx` |
 | Routines | Done: routines for any bot with a cadence picker, run now, pause, edit, duplicate, runs; bot routine tools; Work counts and Upcoming | `desktop/routines.mjs`, `desktop/schedules.mjs`, `src/Routines.tsx`, `src/Work.tsx` |
@@ -59,7 +59,7 @@ Reference: Bighelp `main` at `6309de48` (2.6.93). Paths starting with `B/` are u
 
 | Bighelp | Botkins gap | Copilot SDK basis |
 |---|---|---|
-| Bot Studio silhouette bodies in sets, with palette, colorways, eyes and mouth (`Bighelp/Resources/BotBodies.json`, `BotLookRenderer.swift`) | None. Bots are Botkins, not silhouette bodies: 23 characters and 7 palettes from the design kit, with no colorways, eyes or mouth to set | None needed |
+| Bot Studio silhouette bodies in sets, with palette, colorways, eyes and mouth (`Bighelp/Resources/BotBodies.json`, `BotLookRenderer.swift`) | None. Bots are Botkins, not silhouette bodies: 30 characters and 7 palettes from the design kit, with no colorways, eyes or mouth to set | None needed |
 | Avatar states follow the bot: idle, listening, thinking, waiting, talking, happy, sleeping | None. A Botkin acts out what its bot is doing, and shows a finished or failed reply for a moment | Turn, tool and request events |
 | Avatar chooser with Surprise me and a color picker (`B/Agents/AvatarChooserView.swift`, `BotStudioView.swift`) | None. Bot Studio picks a character and a palette, with a live preview and Surprise me; there is no free color picker | None needed |
 | Working and needs-you states in bot rows and the sidebar | None | Turn and request events |

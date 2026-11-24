@@ -1,7 +1,7 @@
 // Desktop and phone use the design kit's characters, palettes, eye styles and activity clips.
 // The kit draws the colored shell and expression. Avatar.tsx plays the catalog's poses.
 import { Botkins, BotkinsMotion, BotkinsMotionCatalog } from "virtual:botkins-kit";
-import headCatalog from "../desktop/link/botkin-heads.json";
+import { makeHeadPicker, originalHeadIds } from "../desktop/link/botkin-heads.mjs";
 import { CUSTOM, type FourColors, isCustom, isFourColors, kitOptions } from "./lookRender";
 import type { BotLook, LookEyes, State } from "./types";
 
@@ -20,9 +20,8 @@ export const HEADS: Head[] = Object.entries(sources)
   }))
   .sort((a, b) => a.id.localeCompare(b.id));
 const heads = new Map(HEADS.map((head) => [head.id, head]));
-const originalHeads = HEADS.filter((head) => headCatalog.original.includes(head.id));
-/** A remote computer can save the additional characters when it advertises this catalog. */
-export const availableHeads = (remote?: State["remote"]) => !remote?.using || remote.using.capabilities.includes(headCatalog.capability) ? HEADS : originalHeads;
+const remoteHeads = makeHeadPicker(HEADS);
+export const availableHeads = (remote?: State["remote"]) => remote?.using ? remoteHeads(remote.using.capabilities) : HEADS;
 
 export type Palette = { id: string; name: string; swatch: string | null; colors: FourColors | null };
 /** The palettes. Original keeps each character's own colors, so it has no swatch. */
@@ -51,11 +50,16 @@ export const TEMPLATES: { id: string; name: string; colors: FourColors }[] = [
  */
 const OWN: Record<string, FourColors> = {
   beacon: ["#6e926c", "#a68447", "#ffeba8", "#593515"],
+  brim: ["#ac4d52", "#b58045", "#f9e5be", "#593515"],
+  clover: ["#659579", "#c49a35", "#f7e9c0", "#593515"],
   crumb: ["#e78c13", "#788449", "#ffebab", "#593515"],
   drip: ["#c15b39", "#d37c27", "#fde5b9", "#593515"],
+  dune: ["#c08d3a", "#ad6f4d", "#fde6ba", "#593515"],
   fathom: ["#7b8d68", "#c09235", "#ffeda4", "#593515"],
+  gloop: ["#9e5c76", "#c66935", "#f5dcc1", "#593515"],
   goggle: ["#da5f21", "#c78733", "#ffeba9", "#593515"],
   luna: ["#6a9173", "#d2a126", "#ffeaa7", "#593515"],
+  mallow: ["#b05a4a", "#a9515c", "#f6dec1", "#593515"],
   morel: ["#db5920", "#dd8c1d", "#ffeaa8", "#593515"],
   muse: ["#72926b", "#b96c3a", "#ffeba8", "#593515"],
   oakley: ["#ba9a3f", "#d07b29", "#ffeca5", "#593515"],
@@ -66,6 +70,7 @@ const OWN: Record<string, FourColors> = {
   posy: ["#70926a", "#cea528", "#ffeba8", "#593515"],
   pounce: ["#e88012", "#9a9a67", "#ffeea3", "#593515"],
   ramble: ["#6b936d", "#b1a243", "#ffeba6", "#593515"],
+  ripple: ["#5f999b", "#b39347", "#f2e4c5", "#593515"],
   skiff: ["#be9c3c", "#788449", "#ffeaa9", "#593515"],
   spool: ["#b69744", "#c98331", "#ffeca5", "#593515"],
   sprig: ["#d55d25", "#d5b925", "#ffeba5", "#593515"],
@@ -73,6 +78,7 @@ const OWN: Record<string, FourColors> = {
   toast: ["#e88f12", "#d96d21", "#ffeda3", "#593515"],
   wick: ["#ec8b0f", "#788449", "#ffeda3", "#593515"],
   wicket: ["#c19a39", "#788449", "#ffeda5", "#593515"],
+  wisp: ["#7a6a91", "#ae844c", "#f3dec4", "#593515"],
 };
 
 /** The eye styles, in the kit's order. Oval is each character's own. */
@@ -81,7 +87,7 @@ const eyeNames = new Map(EYES.map((eyes) => [eyes.id as string, eyes.name]));
 
 const hash = (text: string) => [...text].reduce((sum, char) => (sum * 31 + char.charCodeAt(0)) >>> 0, 7);
 /** A bot without a saved look keeps its original character when new heads join the kit. */
-export const defaultLook = (botId: string): BotLook => ({ head: headCatalog.original[hash(botId) % headCatalog.original.length], palette: "original" });
+export const defaultLook = (botId: string): BotLook => ({ head: originalHeadIds[hash(botId) % originalHeadIds.length], palette: "original" });
 /**
  * A look at random, the way the phone picks one: Original comes up most (most characters look best
  * in their own colors), then a kit palette, then one of the templates; half the time with eyes.

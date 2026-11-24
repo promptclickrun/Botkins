@@ -1502,7 +1502,8 @@ test("the computer names what its app supports, and a routine's result lands whe
     await until(() => !!parts.meta);
     assert.ok(parts.meta.capabilities.includes("routine-delivery-v1"), "the app's own capability is announced");
     assert.ok(parts.meta.capabilities.includes("looks-v2"), "the link keeps looks itself here, so it takes the richer ones");
-    assert.ok(parts.meta.capabilities.includes("botkin-heads-v2"), "the link can also save the additional characters");
+    assert.ok(parts.meta.capabilities.includes("botkin-heads-v2"));
+    assert.ok(parts.meta.capabilities.includes("botkin-heads-v3"), "the link can save all ten additional characters");
 
     const id = await call("createRoutine", { botId: "bot-mira", name: "Stand up", prompt: "Remind me to stand up.", cadence: { kind: "daily", time: "10:00" }, deliver: { to: "feed" } });
     await until(() => parts.chats.some((chat: any) => chat.id === id));

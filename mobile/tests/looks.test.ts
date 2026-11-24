@@ -87,7 +87,7 @@ test("an old look resolves as before", () => {
 
 test("a bot without a saved look keeps its original character as the kit grows", () => {
   const original = "beacon crumb fathom goggle luna morel muse oakley pearl pip posy pounce ramble skiff spool sprig tinker toast wick wicket".split(" ");
-  assert.deepEqual(looks.availableHeads(false).map((head) => head.id), original);
+  assert.deepEqual(looks.availableHeads().map((head) => head.id), original);
   for (let i = 0; i < original.length; i++) {
     const id = String.fromCharCode(97 + i);
     assert.equal(looks.defaultLook(id).head, original[(7 * 31 + 97 + i) % original.length]);
@@ -96,9 +96,11 @@ test("a bot without a saved look keeps its original character as the kit grows",
 });
 
 test("new characters are offered on a capable computer, with real artwork for every palette and color slot", () => {
-  const previousHeads = looks.availableHeads(false).map((head) => head.id);
-  const added = looks.availableHeads(true).filter((head) => !previousHeads.includes(head.id));
-  assert.deepEqual(added.map((head) => head.id), ["drip", "orbit", "pebble"]);
+  const previousHeads = looks.availableHeads().map((head) => head.id);
+  const first = looks.availableHeads(["botkin-heads-v2"]).filter((head) => !previousHeads.includes(head.id));
+  assert.deepEqual(first.map((head) => head.id), ["drip", "orbit", "pebble"]);
+  const added = looks.availableHeads(["botkin-heads-v3"]).filter((head) => !previousHeads.includes(head.id));
+  assert.deepEqual(added.map((head) => head.id), ["brim", "clover", "drip", "dune", "gloop", "mallow", "orbit", "pebble", "ripple", "wisp"]);
   for (const { id } of added) {
     for (const palette of generated.PALETTE_LIST) {
       const look = { head: id, palette: palette.id, eyes: "curious" as const };
@@ -107,6 +109,13 @@ test("new characters are offered on a capable computer, with real artwork for ev
       assert.equal(resolved.eyes, "curious");
       assert.ok(String(resolved.image).endsWith(id + "-" + palette.id + ".webp"));
       assert.deepEqual(looks.lookOf({ id: "historical-bot", look }), look);
+    }
+    const colors = TEMPLATES[0].colors;
+    for (const { id: eyes } of looks.EYES) {
+      const custom = looks.resolveLook({ head: id, palette: "custom", colors, eyes });
+      assert.equal(custom.eyes, eyes);
+      assert.equal(custom.ink, colors[3]);
+      assert.deepEqual(custom.custom?.colors, colors);
     }
     const layers = generated.HEAD_LAYERS[id];
     for (const key of ["shell", "accent", "paper", "shade"] as const) {
@@ -118,8 +127,11 @@ test("new characters are offered on a capable computer, with real artwork for ev
 test("a template keeps the parts of its look that the paired host can save", () => {
   const look = { head: "drip", palette: "custom", eyes: "wink" as const, colors: TEMPLATES[0].colors };
   const fallback = looks.defaultLook("template").head;
-  assert.deepEqual(looks.lookForHost(look, "template", { advanced: true, expandedHeads: true }), look);
+  assert.deepEqual(looks.lookForHost(look, "template", { advanced: true, capabilities: ["botkin-heads-v2"] }), look);
   assert.deepEqual(looks.lookForHost(look, "template", { advanced: true }), { ...look, head: fallback });
+  const wisp = { ...look, head: "wisp" };
+  assert.deepEqual(looks.lookForHost(wisp, "template", { advanced: true, capabilities: ["botkin-heads-v2"] }), { ...wisp, head: fallback });
+  assert.deepEqual(looks.lookForHost(wisp, "template", { advanced: true, capabilities: ["botkin-heads-v3"] }), wisp);
   assert.deepEqual(looks.lookForHost(look, "template", {}), { head: fallback, palette: "original" });
 });
 
@@ -168,7 +180,7 @@ test("a random look needs looks-v2 only when asked for one", () => {
   for (let index = 0; index < 300; index++) {
     const simple = looks.randomLook();
     assert.ok(!looks.needsLooksV2(simple), JSON.stringify(simple));
-    assert.ok(looks.availableHeads(false).some((head) => head.id === simple.head));
+    assert.ok(looks.availableHeads().some((head) => head.id === simple.head));
     const advanced = looks.randomLook({ advanced: true });
     assert.ok(generated.HEAD_LIST.some((head) => head.id === advanced.head));
     if (advanced.palette === looks.CUSTOM) assert.ok(isFourColors(advanced.colors));

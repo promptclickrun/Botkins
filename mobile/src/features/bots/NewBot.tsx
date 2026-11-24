@@ -75,7 +75,7 @@ function NewBotEditor() {
   const [picker, setPicker] = useState<"templates" | "import">();
   const options = useLookOptions();
   const prompt = useTextPrompt();
-  const [look, setLook] = useState<BotkinLook>(() => randomLook({ expandedHeads: options.expandedHeads }));
+  const [look, setLook] = useState<BotkinLook>(() => randomLook({ capabilities: options.capabilities }));
   const [customizing, setCustomizing] = useState(false);
   const [name, setName] = useState("");
   const [role, setRole] = useState("");
