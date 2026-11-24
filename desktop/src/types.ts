@@ -112,6 +112,9 @@ export type Message = {
   interim?: boolean;
   steeredRunId?: string;
   answer?: { runId: string; requestId: string; kind: string; title: string };
+  /** A proactive alert the bot sent on its own: the run that made it, and its actions ("proactive-team-v1"). */
+  proactiveRunId?: string;
+  alert?: ProactiveAlert;
   /** Records the person mentioned in this message, for display. */
   mentions?: Mention[];
   plain?: boolean;
@@ -537,6 +540,8 @@ export type NotificationSettings = {
   replies: boolean;
   routines: boolean;
   requests: boolean;
+  /** One plain reminder when something is left waiting on a person, with no model (desktop/reminders.mjs). Missing on an older computer. */
+  reminders?: boolean;
   quietHours: { enabled: boolean; from: string; to: string };
 };
 
@@ -790,8 +795,16 @@ declare global {
       revealSkill(name: string): Promise<void>;
       /** Which skills (names) and MCP servers (ids) one bot leaves out. */
       setBotIntegrations(botId: string, patch: { skillsOff?: string[]; mcpOff?: string[] }): Promise<void>;
-      /** Changes what a bot's Proactive agent is set to (only what `patch` names), or with null forgets it. Needs "proactive-agent-v2". */
-      setBotProactive(botId: string, patch: Partial<ProactiveBotSettings> | null): Promise<void>;
+      /**
+       * Changes what a bot's Proactive agent is set to (only what `patch` names), or with null forgets it. Needs "proactive-agent-v2";
+       * `setUp` and `people` need "proactive-team-v1". The computer checks who calls (desktop/link/proactive-rules.mjs).
+       */
+      setBotProactive(botId: string, patch: ProactivePatch | null): Promise<void>;
+      /**
+       * What a person does with a proactive alert they were sent ("proactive-team-v1"): "take" starts a normal turn in their chat with
+       * what the bot offered and answers that chat; "later" holds what it was about back for a day.
+       */
+      proactiveAct(botId: string, runId: string, action: "take" | "later"): Promise<{ chatId?: string; until?: number }>;
       // Marketplace plugins (`plugins-v1`, docs/plugins.md). Dotted names match the link contract.
       "plugins.marketplaces"(): Promise<PluginMarketplace[]>;
       "plugins.addMarketplace"(source: string): Promise<PluginMarketplace>;
@@ -1826,9 +1839,19 @@ export type Preferences = {
 export type ProactiveWatch = "runs" | "tasks" | "requests" | "context";
 /** The computer's switch for the Proactive agent. Off pauses every bot's agent without forgetting its settings. */
 export type ProactiveSettings = { enabled: boolean };
-/** What a bot's Proactive agent is set to (desktop/proactive-settings.mjs). */
+/** One person a bot looks out for ("proactive-team-v1"): `on` is their own check, `notify: false` delivers their alerts with no notification. */
+export type ProactivePerson = { on: boolean; notify: boolean };
+/** What a delivered proactive alert carries: its run, the label of what the bot offers to do, and what the person chose. */
+export type ProactiveAlert = { runId: string; offer?: string; chosen?: "take" | "later" };
+/** A change to a bot's agent: only what it names. In `people` an entry changes what it names, and null takes that person out. */
+export type ProactivePatch = Partial<Omit<ProactiveBotSettings, "people">> & { people?: Record<string, Partial<ProactivePerson> | null> };
+/** What a bot's Proactive agent is set to (desktop/proactive-settings.mjs). Everything but `people` is shared by everyone it looks out for. */
 export type ProactiveBotSettings = {
   enabled: boolean;
+  /** Its setup steps were finished. Until then it never wakes. */
+  setUp?: boolean;
+  /** Who it looks out for, by "owner" or a member's id. */
+  people?: Record<string, ProactivePerson>;
   /** Minutes between checks: 15, 30, 60 or 120. */
   every: number;
   /** Hours between looks around the bot's own sources; 0 for never. */
@@ -1839,8 +1862,9 @@ export type ProactiveBotSettings = {
   instructions: string;
 };
 /**
- * One bot's agent as this window is sent it. The owner is sent `person` ("owner", or the member it works for); a member is
- * sent `mine` for their own agents and for another person's only `{ enabled, taken }`, so every other field may be missing.
+ * One bot's agent as this window is sent it. The owner is sent everyone in `people` and their own activity (`log`, `pings`…);
+ * a member is sent the shared settings, only their own entry in `people`, and their own activity. Every field may be missing.
+ * `person` and `taken` are from a computer without "proactive-team-v1".
  */
 export type ProactiveBot = Partial<ProactiveBotSettings> & {
   enabled: boolean;
@@ -1933,6 +1957,9 @@ export type BoardItem = {
   snoozedUntil?: number;
   /** The routine that posted it. */
   source?: string;
+  /** A proactive alert's run and its actions ("proactive-team-v1"), as on a chat message. */
+  proactiveRunId?: string;
+  alert?: ProactiveAlert;
   createdAt: number;
   updatedAt: number;
 };

@@ -19,7 +19,7 @@ export default function ExperimentalSettings({ state, bots, settings, change }: 
   const turnOn = async () => {
     const yes = await dialogs.ask({
       title: "Turn on the Proactive agent?",
-      body: "Every bot that has its own Proactive agent switched on wakes on its own, reads what its tools reach (such as your inbox and calendar) and messages you, with nobody watching. Each wake uses the model.",
+      body: "Every bot that was set up to look out for someone wakes on its own, reads what its tools reach (such as your inbox and calendar) and messages them, with nobody watching. Each wake uses the model.",
       confirm: "Turn on",
     });
     if (yes) set(true);
@@ -33,7 +33,7 @@ export default function ExperimentalSettings({ state, bots, settings, change }: 
       <p className="set-status">These are new. They may change or go away, and they can use your model more than you expect.</p>
       <Group
         title="Proactive agent"
-        footer="A bot that tells you what you need to know before you ask. Botkins checks for changes with no model, and wakes the bot only when something changed or a look around is due. The bot reads and drafts only: it never sends, posts, buys or deletes on its own. This switch is for the whole computer: off pauses every bot's agent and keeps what each was set to. Each bot's own switch and settings are on its page."
+        footer="A bot that looks around, tells you what matters and offers to take care of it. It is on from the start, and a bot does nothing until you set it up on its page. Off pauses every bot's agent and keeps what each was set to. A check reads and drafts only: it never sends, posts, buys or deletes until you take its offer."
       >
         <SwitchRow label="Proactive agent" help="Turns the feature on for this computer. Team members can't change it." checked={on} onChange={(next) => (next ? void turnOn() : set(false))} />
       </Group>
@@ -43,7 +43,7 @@ export default function ExperimentalSettings({ state, bots, settings, change }: 
             <Row
               key={bot.id}
               label={bot.name}
-              help={"Checks every " + minutes(p.every) + (p.sweepHours ? ", looks around every " + minutes(p.sweepHours * 60) : "") + ". Alerts today: " + (p.pings ?? 0) + " of " + p.maxPerDay + "." + (p.person && p.person !== "owner" ? " Works for a team member." : "")}
+              help={p.setUp ? "Checks every " + minutes(p.every) + (p.sweepHours ? ", looks around every " + minutes(p.sweepHours * 60) : "") + ". Alerts today: " + (p.pings ?? 0) + " of " + p.maxPerDay + "." + (Object.keys(p.people ?? {}).length > 1 ? " Looks out for " + Object.keys(p.people ?? {}).length + " people." : "") : "Not set up yet."}
             >
               {() => (
                 <button type="button" onClick={() => openBotPage(bot.id)}>
@@ -53,7 +53,7 @@ export default function ExperimentalSettings({ state, bots, settings, change }: 
             </Row>
           ))
         ) : (
-          <ValueRow label="No bot yet" value="—" help="Turn on Proactive on a bot's page." />
+          <ValueRow label="No bot yet" value="—" help="Set up Proactive on a bot's page." />
         )}
       </Group>
       {error && (

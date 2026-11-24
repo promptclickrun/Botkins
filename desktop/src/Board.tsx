@@ -1,3 +1,4 @@
+import AlertActions, { hasProactiveTeam } from "./AlertActions";
 import { useState } from "react";
 import { Check, ExternalLink, MessageCircle, Moon, Sparkles, Target, ThumbsDown, ThumbsUp, X } from "lucide-react";
 import { BotAvatar } from "./Avatar";
@@ -232,6 +233,8 @@ export default function BoardPanel({
                         </span>
                       </div>
                     )}
+                    {/* A proactive alert: what the bot offers to do, and "Not now". The ratings above teach it what helps. */}
+                    {item.status === "open" && hasProactiveTeam(state) && <AlertActions botId={item.botId} alert={item.alert} />}
                     {why === item.id && (
                       <div className="board-why" role="group" aria-label="Less like this because">
                         <small>Less like this because…</small>

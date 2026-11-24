@@ -1,3 +1,4 @@
+import AlertActions, { hasProactiveTeam } from "./AlertActions";
 import {
   Fragment,
   useCallback,
@@ -132,7 +133,19 @@ function Attachments({ list }: { list: Message["attachments"] }) {
   );
 }
 
-function Reactions({ message, state }: { message: Message; state: State }) {
+/** A message's reactions and, under a proactive alert, what the person can do with it. */
+function Reactions({ message, state, botId }: { message: Message; state: State; botId: string }) {
+  const alert = message.alert && hasProactiveTeam(state) ? <AlertActions botId={message.botId ?? botId} alert={message.alert} /> : null;
+  if (!message.reactions?.length) return alert;
+  return (
+    <>
+      <ReactionList message={message} state={state} />
+      {alert}
+    </>
+  );
+}
+
+function ReactionList({ message, state }: { message: Message; state: State }) {
   if (!message.reactions?.length) return null;
   const me = state.team && "me" in state.team ? "member:" + state.team.me.memberId : "owner";
   return <div className="message-reactions">{message.reactions.map(({ actor, emoji }) => {
@@ -650,7 +663,7 @@ function ChatViewBody({
         />
       )}
       {m.role === "assistant" && <LinkPreviewCard text={m.text} enabled={!!state.settings.linkPreviews} />}
-      <Reactions state={state} message={m} />
+      <Reactions state={state} message={m} botId={chat.botId} />
       {actions(m, index)}
     </article>
   );
@@ -1012,7 +1025,7 @@ function ChatViewBody({
               {message.author && <b className="member-speaker">{authorName(state, message.author)}</b>}
               <RichText text={message.text} files={files} />
               <Attachments list={message.attachments} />
-              <Reactions state={state} message={message} />
+              <Reactions state={state} message={message} botId={chat.botId} />
             </article>
           ))}
           {chat.messages.map((m, i) => {
@@ -1077,7 +1090,7 @@ function ChatViewBody({
                       />
                     )}
                       {m.role === "assistant" && <LinkPreviewCard text={m.text} enabled={!!state.settings.linkPreviews} />}
-                      <Reactions state={state} message={m} />
+                      <Reactions state={state} message={m} botId={chat.botId} />
                       {actions(m, i)}
                     </>}
                   </article>
