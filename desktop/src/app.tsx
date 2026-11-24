@@ -49,6 +49,7 @@ import SetupChoice, { SetupConnect, SetupTeam, type SetupPath } from "./SetupCho
 import { ProfileMigrationPrompt } from "./ProfileSettings";
 import type { Attachment, BoardItem, Bot, Chat, MarketAgentTemplate, MentionInput, Message, State } from "./types";
 import { tokenOf, type DraftMention } from "./MentionMenu";
+import { composeSlashPrompt, type DraftCommand } from "./slashCommand";
 import { applyAppearance, startAppearance } from "./appearance";
 import { memberTeam, teamCan } from "./teamAccess";
 import { leftEmpty, newChatToReuse } from "./emptyChat";
@@ -226,6 +227,8 @@ function App() {
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   // Records picked with "@" and "#" stay with their draft (src/MentionMenu.tsx).
   const [draftMentions, setDraftMentions] = useState<Record<string, DraftMention[]>>({});
+  // Slash commands, skills, and tools picked with "/" stay attached to the composer rail (src/slashCommand.ts).
+  const [draftCommands, setDraftCommands] = useState<Record<string, DraftCommand | null>>({});
   const [sending, setSending] = useState(false);
   const dialog = useRef<HTMLDialogElement>(null);
   // The side menu collapsed to icons; shown at once, then kept with the preferences.
@@ -505,14 +508,17 @@ function App() {
     else nav("Chats");
   }
   async function send(key: string, options?: { attachments?: Attachment[]; quote?: string; mentions?: MentionInput[]; delivery?: "steer" | "queue" }, onDispatch?: () => void) {
-    const prompt = drafts[key]?.trim();
+    const prompt = composeSlashPrompt(drafts[key] || "", draftCommands[key]);
     if (!prompt || prompt === "/" || sending) return;
     setSending(true);
     try {
       const parts = /^\/(\S+)(?:\s+([\s\S]*))?$/.exec(prompt);
       const command = parts?.[1].toLowerCase(),
         args = parts?.[2]?.trim() || "";
-      const clear = () => setDrafts((prev) => ({ ...prev, [key]: "" }));
+      const clear = () => {
+        setDrafts((prev) => ({ ...prev, [key]: "" }));
+        setDraftCommands((prev) => ({ ...prev, [key]: null }));
+      };
       if (
         command === "config" ||
         command === "settings" ||
@@ -605,11 +611,13 @@ function App() {
       const id = await newChat(state!.bots[0].id);
       setDrafts((prev) => ({ ...prev, [id]: prev.home || "", home: "" }));
       setDraftMentions((prev) => ({ ...prev, [id]: prev.home ?? [], home: [] }));
+      setDraftCommands((prev) => ({ ...prev, [id]: prev.home ?? null, home: null }));
     }
     setModal("model");
   }
   function prefill(text: string) {
     setDrafts((p) => ({ ...p, [chatId]: text }));
+    setDraftCommands((p) => ({ ...p, [chatId]: null }));
     requestAnimationFrame(() =>
       document
         .querySelector<HTMLTextAreaElement>(
@@ -644,6 +652,8 @@ function App() {
         change={(value) => setDrafts((prev) => ({ ...prev, [key]: value }))}
         mentions={draftMentions[key]}
         setMentions={(list) => setDraftMentions((prev) => ({ ...prev, [key]: list }))}
+        command={draftCommands[key] ?? null}
+        setCommand={(cmd) => setDraftCommands((prev) => ({ ...prev, [key]: cmd }))}
         send={(options, onDispatch) => send(key, options, onDispatch)}
         stop={() => void api.stop(key).catch(fail)}
         botName={key !== "home" && (chat?.botIds?.length ?? 0) > 1 ? "The group" : target.name}

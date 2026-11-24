@@ -4,7 +4,7 @@
 // caret open a list of suggestions above it.
 import { MenuView } from "@react-native-menu/menu";
 import { router } from "expo-router";
-import { ArrowUp, AudioLines, BookOpen, CircleAlert, FileText, FolderKanban, ImageIcon, Lightbulb, Newspaper, Plus, Quote, Sparkles, Square, Target, X } from "lucide-react-native";
+import { ArrowUp, AudioLines, BookOpen, CircleAlert, FileText, FolderKanban, ImageIcon, Lightbulb, Newspaper, Plus, Quote, Sparkles, Square, SquareSlash, Target, Wrench, X } from "lucide-react-native";
 import { type ComponentRef, type ReactNode, type RefObject, useContext, useEffect, useRef, useState } from "react";
 import { Alert, Linking, ScrollView, Text, TextInput, View } from "react-native";
 import Svg, { Circle } from "react-native-svg";
@@ -19,10 +19,11 @@ import { draftPulls } from "@/link/pr-reference";
 import { MessageLink } from "@/ui/LinkHold";
 import { Chip, Glass, ProviderIcon, radius, space, T, Tap, useTheme } from "@/ui";
 import { endTalk, startChatVoice, useLiveVoiceReady, useTalk, useTalkReady } from "../voice/api";
-import { boardKindLabel, teammates, toInput } from "./compose";
+import { boardKindLabel, stripTrigger, teammates, toInput } from "./compose";
 import { documentPickerModule, imagePickerModule, NEEDS_UPDATE } from "./native";
 import {
   botOptions,
+  type DraftCommand,
   type DraftMention,
   findTrigger,
   MAX_MENTIONS,
@@ -46,7 +47,7 @@ const FIELD_PAD_TOP = 8;
 const FIELD_PAD_BOTTOM = 4;
 
 export type ModelPill = { provider?: string; name: string; effort?: string };
-export type SendOptions = { mentions?: MentionInput[]; attachments?: { name: string; path: string }[]; /** A message being replied to (the chat screen adds it). */ quote?: string };
+export type SendOptions = { mentions?: MentionInput[]; attachments?: { name: string; path: string }[]; /** A slash command or skill attached to the rail. */ command?: DraftCommand; /** A message being replied to (the chat screen adds it). */ quote?: string };
 
 /** A thin ring that fills as a file goes up. */
 function ProgressRing({ progress, size = 18 }: { progress: number; size?: number }) {
@@ -73,20 +74,28 @@ function ProgressRing({ progress, size = 18 }: { progress: number; size?: number
   );
 }
 
-/** A small removable pill above the field: a file going up, or a file, page or project mentioned. */
-function Pill({ icon, label, tone, onRemove, removeLabel }: { icon: ReactNode; label: string; tone?: "danger"; onRemove: () => void; removeLabel: string }) {
+/** A small removable pill above the field: an attached command, a file going up, or a mentioned record. */
+function Pill({ icon, label, tone, onRemove, removeLabel }: { icon: ReactNode; label: string; tone?: "danger" | "accent"; onRemove: () => void; removeLabel: string }) {
   const { colors } = useTheme();
+  const bg = tone === "danger" ? colors.dangerSoft : tone === "accent" ? colors.accentSoft : colors.sunken;
+  const textColor = tone === "danger" ? "danger" : tone === "accent" ? "accentText" : "ink2";
+  const closeColor = tone === "accent" ? colors.accentText : colors.muted;
   return (
-    <View style={{ height: 32, maxWidth: 220, flexDirection: "row", alignItems: "center", gap: 6, paddingLeft: 10, borderRadius: radius.pill, backgroundColor: tone === "danger" ? colors.dangerSoft : colors.sunken }}>
+    <View style={{ height: 32, maxWidth: 220, flexDirection: "row", alignItems: "center", gap: 6, paddingLeft: 10, borderRadius: radius.pill, backgroundColor: bg }}>
       {icon}
-      <T variant="footnote" weight="600" color={tone === "danger" ? "danger" : "ink2"} numberOfLines={1} style={{ flexShrink: 1 }}>
+      <T variant="footnote" weight="600" color={textColor} numberOfLines={1} style={{ flexShrink: 1 }}>
         {label}
       </T>
       <Tap onPress={onRemove} feel="select" sink={0.9} hitSlop={{ top: 6, bottom: 6, right: 6 }} accessibilityLabel={removeLabel} style={{ width: 30, height: 32, alignItems: "center", justifyContent: "center" }}>
-        <X size={14} color={colors.muted} strokeWidth={2.4} />
+        <X size={14} color={closeColor} strokeWidth={2.4} />
       </Tap>
     </View>
   );
+}
+
+function commandIcon(kind: DraftCommand["kind"], color: string) {
+  const Icon = kind === "Skill" ? Sparkles : kind === "Tool" ? Wrench : SquareSlash;
+  return <Icon size={14} color={color} strokeWidth={2.2} />;
 }
 
 function mentionIcon(kind: DraftMention["kind"], color: string) {
@@ -207,6 +216,7 @@ export function Composer({
 
   const [focused, setFocused] = useState(false);
   const [caret, setCaret] = useState(value.length);
+  const [command, setCommand] = useState<DraftCommand | null>(null);
   // Carried over when the chat moves between the pane and its own page (folding the phone).
   const [mentions, setMentions] = useState<DraftMention[]>(() => drafts.get(chatId)?.mentions ?? []);
   const [files, setFiles] = useState<Attachment[]>(() => drafts.get(chatId)?.files ?? []);
@@ -307,10 +317,17 @@ export function Composer({
   const pick = (option: Option) => {
     if (!trigger) return;
     if (option.action) {
-      replace(value.slice(0, trigger.start) + value.slice(trigger.end).replace(/^ /, ""), trigger.start);
+      const next = stripTrigger(value, trigger.start, trigger.end);
+      replace(next.text, next.caret);
       if (option.action === "model") {
         if (canManage && mine) router.push({ pathname: "/chat/model", params: { scope: "chat", id: chatId } });
       } else void attempt(api.compact(chatId), "Compacting");
+      return;
+    }
+    if (option.command) {
+      const next = stripTrigger(value, trigger.start, trigger.end);
+      setCommand(option.command);
+      replace(next.text, next.caret);
       return;
     }
     const mention = option.mention;
@@ -416,7 +433,7 @@ export function Composer({
   // --- Send
   const uploading = files.some((file) => file.status === "uploading");
   const ready = files.filter((file) => file.status === "done" && file.path);
-  const empty = !value.trim() && ready.length === 0 && !pinned;
+  const empty = !value.trim() && !command && ready.length === 0 && !pinned;
   // The main button: Stop while a turn is under way and nothing is written, Live voice when nothing
   // is written and the computer can talk, else Send.
   const stop = working && empty && files.length === 0;
@@ -430,15 +447,19 @@ export function Composer({
   };
   const submit = async () => {
     if (empty || uploading) return;
+    const sentCommand = command;
     const sentMentions = liveMentions;
     const sentFiles = files;
+    setCommand(null);
     setMentions([]);
     setFiles([]);
     const ok = await onSend({
+      ...(sentCommand ? { command: sentCommand } : {}),
       ...(sentMentions.length ? { mentions: sentMentions.map(toInput) } : {}),
       ...(ready.length ? { attachments: ready.map((file) => ({ name: file.name, path: file.path! })) } : {}),
     }, sentMentions);
     if (!ok) {
+      setCommand((current) => current ?? sentCommand);
       setMentions(current => [...sentMentions, ...current.filter(m => !sentMentions.some(old => mentionKey(old) === mentionKey(m)))]);
       setFiles(current => [...sentFiles, ...current.filter(f => !sentFiles.some(old => old.key === f.key))]);
     }
@@ -446,7 +467,7 @@ export function Composer({
 
   const references = draftPulls(value);
   const openMessageLink = useContext(MessageLink);
-  const chips = liveMentions.length > 0 || files.length > 0 || references.length > 0;
+  const chips = !!command || liveMentions.length > 0 || files.length > 0 || references.length > 0;
   const mainLabel = stop ? "Stop" : endVoice ? "End voice" : voice ? (liveReady ? "Live voice" : "Talk") : uploading ? "Send, waiting for files" : working ? "Send, it waits its turn" : "Send";
   const plus = (
     <View accessible accessibilityRole="button" accessibilityLabel="Attach" style={{ width: 32, height: 32, borderRadius: 16, alignItems: "center", justifyContent: "center" }}>
@@ -471,6 +492,15 @@ export function Composer({
         {!!quote && <QuoteBar text={quote} onRemove={() => onUnquote?.()} />}
         {chips && (
           <ScrollView horizontal keyboardShouldPersistTaps="always" showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 6, paddingHorizontal: space.sm, paddingTop: 4 }}>
+            {command && (
+              <Pill
+                label={"/" + command.name}
+                tone="accent"
+                icon={commandIcon(command.kind, colors.accentText)}
+                removeLabel={"Remove /" + command.name}
+                onRemove={() => setCommand(null)}
+              />
+            )}
             {files.map((file) => (
               <Pill
                 key={file.key}
@@ -509,7 +539,7 @@ export function Composer({
           onSelectionChange={(event) => setCaret(event.nativeEvent.selection.end)}
           onFocus={() => setFocused(true)}
           onBlur={() => setFocused(false)}
-          placeholder={placeholder}
+          placeholder={command?.hint || placeholder}
           placeholderTextColor={colors.faint}
           keyboardAppearance={dark ? "dark" : "light"}
           selectionColor={colors.accent}

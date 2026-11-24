@@ -25,6 +25,36 @@ export const tokenOf = (mention: DraftMention) => "#" + mention.label;
 export const mentionKey = (mention: DraftMention) => mention.kind + ":" + ("id" in mention ? mention.id : mention.path);
 export const toInput = (mention: DraftMention): MentionInput => ("path" in mention ? { kind: mention.kind, path: mention.path } : { kind: "project", id: mention.id });
 
+/** A slash command, skill, or tool picked with "/", attached to the composer rail instead of inserted as plain text. */
+export type DraftCommand = {
+  name: string;
+  command: string;
+  kind: "Command" | "Skill" | "Tool";
+  description?: string;
+  hint?: string;
+};
+
+/** Combine an attached rail command with the drafted text into the outgoing slash prompt. */
+export function composeSlashPrompt(text: string, command?: DraftCommand | null): string {
+  const body = text.trim();
+  if (!command) return body;
+  const slash = "/" + command.command.replace(/^\//, "");
+  return body ? slash + " " + body : slash;
+}
+
+/** Remove the trigger slice [start, end] cleanly without leaving duplicate spaces behind. */
+export function stripTrigger(text: string, start: number, end: number): { text: string; caret: number } {
+  const before = text.slice(0, start);
+  const after = text.slice(end);
+  if (!before) return { text: after.replace(/^ /, ""), caret: 0 };
+  if (!after) {
+    const trimmed = before.replace(/ $/, "");
+    return { text: trimmed, caret: trimmed.length };
+  }
+  const cleanAfter = /\s$/.test(before) ? after.replace(/^ /, "") : after;
+  return { text: before + cleanAfter, caret: before.length };
+}
+
 /**
  * The bots "@" offers in a chat with one bot: the others Teamwork lets it ask (desktop/teamwork.mjs,
  * `roster`). Empty when Teamwork is off for the app or for this bot. The desktop also leaves out a

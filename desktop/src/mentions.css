@@ -46,7 +46,7 @@
   text-align: right;
 }
 
-/* Chips: mentions and attachments share one wrapping row above the composer. */
+/* Chips: commands, mentions and attachments share one wrapping row above the composer. */
 .composer-chips {
   display: flex;
   flex-wrap: wrap;
@@ -55,6 +55,26 @@
 }
 .composer-chips > .attach-chips {
   display: contents;
+}
+.command-chips .command-chip {
+  background: var(--accent-soft);
+  color: var(--accent-text);
+}
+.command-chips .command-chip > svg {
+  flex: none;
+  color: var(--accent-text);
+}
+.command-chips .command-chip > span {
+  font-weight: 500;
+}
+.command-chips .command-chip > button {
+  color: var(--accent-text);
+  opacity: 0.72;
+}
+.command-chips .command-chip > button:hover {
+  background: var(--accent-soft);
+  color: var(--accent-text);
+  opacity: 1;
 }
 .mention-chip > svg {
   flex: none;

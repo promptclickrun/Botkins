@@ -1,5 +1,5 @@
 import { createContext, useContext, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
-import { ArrowUp, Square, BrainCircuit, Plus, X, File, Folder, Quote } from "lucide-react";
+import { ArrowUp, Square, BrainCircuit, Plus, X, File, Folder, Quote, Sparkles, SquareSlash, Wrench } from "lucide-react";
 import {
   MAX_MENTIONS,
   MentionChips,
@@ -15,6 +15,14 @@ import {
 } from "./MentionMenu";
 import type { Attachment, Bot, BotLook, BotVoice, Capability, MentionInput } from "./types";
 import { draftPulls } from "../desktop/remote/client/pr-reference";
+import {
+  applyCommandOption,
+  isSideCommand,
+  parseSlashInput,
+  stripLeadingTrigger,
+  toDraftCommand,
+  type DraftCommand,
+} from "./slashCommand";
 import { useComposerVoice } from "./ComposerVoice";
 import ProviderIcon, { hasProviderMark } from "./ProviderIcon";
 
@@ -45,6 +53,9 @@ type Props = {
   /** Records picked with "@" and "#", kept with the draft. */
   mentions?: DraftMention[];
   setMentions?: (list: DraftMention[]) => void;
+  /** Slash command, skill, or tool picked with "/", kept as a rail attachment with the draft. */
+  command?: DraftCommand | null;
+  setCommand?: (command: DraftCommand | null) => void;
   /** The bot this composer talks to, for the voice dock. */
   botName?: string;
   /** That bot's look, for the voice dock. */
@@ -54,6 +65,13 @@ type Props = {
   /** Makes a chat to talk in when there is none yet (the home composer). */
   startChat?: () => Promise<string>;
 };
+
+function CommandIcon({ kind }: { kind: DraftCommand["kind"] }) {
+  if (kind === "Skill") return <Sparkles size={13} aria-hidden="true" />;
+  if (kind === "Tool") return <Wrench size={13} aria-hidden="true" />;
+  return <SquareSlash size={13} aria-hidden="true" />;
+}
+
 export default function Composer({
   botId,
   chatId,
@@ -73,6 +91,8 @@ export default function Composer({
   members,
   mentions = NO_MENTIONS,
   setMentions = () => {},
+  command = null,
+  setCommand = () => {},
   botName,
   botLook,
   botVoice,
@@ -87,15 +107,17 @@ export default function Composer({
   const [index, setIndex] = useState(0);
   const input = useRef<HTMLTextAreaElement>(null);
   const listId = useId();
-  const sub = /^\/([^\s]+) (\S*)$/.exec(draft);
-  const show = focused && !dismissed && (/^\/[^\s]*$/.test(draft) || !!sub);
-  const side = /^\/(?:btw|ask)\s+\S/i.test(draft);
+  // "@" and "#" at the caret open the mention menu: bots (in a group chat), or projects, wiki pages and files. In a one-bot chat "@" has nothing to offer, so it opens no menu.
+  const [caret, setCaret] = useState(0);
+  const slash = parseSlashInput(draft, caret);
+  const showCatalog = focused && !dismissed && !!slash;
+  const attachedOptionMode = focused && !dismissed && !slash && !!command?.options?.length && /^\S*$/.test(draft);
+  const show = showCatalog || attachedOptionMode;
+  const side = isSideCommand(draft, command);
   const [files, setFiles] = useState<Attachment[]>([]);
   const [attachError, setAttachError] = useState("");
   const [dragging, setDragging] = useState(false);
   const reply = useContext(QuoteContext);
-  // "@" and "#" at the caret open the mention menu: bots (in a group chat), or projects, wiki pages and files. In a one-bot chat "@" has nothing to offer, so it opens no menu.
-  const [caret, setCaret] = useState(0);
   // Tokens just inserted, so the menu stays closed right after a pick.
   const [picked, setPicked] = useState<string[]>([]);
   const trigger = findTrigger(draft, caret);
@@ -153,7 +175,8 @@ export default function Composer({
   // Dictation and Live Voice (src/ComposerVoice.tsx).
   const voice = useComposerVoice({ chatId, bot: members?.length ? undefined : { id: botId, look: botLook }, botName, botVoice, draft, change, input, startChat });
   // Enter guides an active reply. Queue explicitly saves a separate turn.
-  const ready = !!draft.trim() || files.length > 0;
+  const hasContent = !!draft.trim() || !!command;
+  const ready = hasContent || files.length > 0;
   function addFiles(list: Attachment[]) {
     if (members?.length) {
       setAttachError("Group chats take text only.");
@@ -200,7 +223,7 @@ export default function Composer({
     }
   }
   useEffect(() => {
-    if (!show) {
+    if (!showCatalog) {
       setChoices([]);
       setError("");
       setLoading(false);
@@ -232,25 +255,31 @@ export default function Composer({
       active = false;
       clearTimeout(again);
     };
-  }, [show, botId, chatId, sourceKey]);
-  const query = (sub?.[2] ?? draft.slice(1)).toLowerCase();
+  }, [showCatalog, botId, chatId, sourceKey]);
+  const query = (attachedOptionMode ? draft : slash?.query ?? "").toLowerCase();
   const parent =
-    sub &&
-    choices.find((c) =>
-      [c.command, ...(c.aliases || [])].includes(sub[1].toLowerCase()),
-    );
-  const options = sub
-    ? (parent?.options ?? []).map(
-        (o) =>
-          ({
-            name: parent!.name + " " + o.name,
-            command: parent!.command + " " + o.name,
-            source: parent!.source,
-            description: o.description,
-            kind: parent!.kind,
-          }) as Capability,
-      )
-    : choices;
+    slash?.mode === "subcommand"
+      ? choices.find((c) =>
+          [c.command, ...(c.aliases || [])].includes(slash.parent.toLowerCase()),
+        )
+      : undefined;
+  const options: Capability[] = attachedOptionMode
+    ? (command?.options ?? []).map((o) => ({
+        name: command!.name + " " + o.name,
+        command: command!.command + " " + o.name,
+        source: command!.source,
+        description: o.description,
+        kind: command!.kind,
+      }))
+    : slash?.mode === "subcommand"
+      ? (parent?.options ?? []).map((o) => ({
+          name: parent!.name + " " + o.name,
+          command: parent!.command + " " + o.name,
+          source: parent!.source,
+          description: o.description,
+          kind: parent!.kind,
+        }))
+      : choices;
   const rank = (c: Capability) => {
     const names = [c.command, c.name, ...(c.aliases ?? [])].map((n) =>
       n.toLowerCase(),
@@ -262,14 +291,15 @@ export default function Composer({
   const matches = options
     .filter(
       (c) =>
-        (!busy || c.duringTurn) &&
+        (!busy || c.duringTurn || attachedOptionMode) &&
         [c.command, c.name, c.source, c.description, ...(c.aliases ?? [])].some(
           (t) => t?.toLowerCase().includes(query),
         ),
     )
     .sort((a, b) => rank(a) - rank(b));
   const visible =
-    show && (!sub || (!!parent?.options?.length && !!matches.length));
+    (showCatalog && (slash?.mode !== "subcommand" || (!!parent?.options?.length && !!matches.length))) ||
+    (attachedOptionMode && !!matches.length);
   const selected = Math.min(index, Math.max(0, matches.length - 1));
   useEffect(() => {
     document
@@ -277,13 +307,34 @@ export default function Composer({
       ?.scrollIntoView({ block: "nearest" });
   }, [listId, selected]);
   function select(i: number, activate = false) {
-    if (!matches[i]) return;
-    if (activate && matches[i].command === "model" && pickModel) {
+    const pickedChoice = matches[i];
+    if (!pickedChoice) return;
+    if (attachedOptionMode && command) {
+      const opt = command.options?.find((o) => command.command + " " + o.name === pickedChoice.command);
+      if (opt) setCommand(applyCommandOption(command, opt));
+      else setCommand(toDraftCommand(pickedChoice));
       change("");
+      setCaret(0);
+      setIndex(0);
+      placeCaret.current = { at: 0, value: "" };
+      input.current?.focus();
+      return;
+    }
+    const nextDraft = slash ? stripLeadingTrigger(draft, slash.end) : "";
+    if (activate && pickedChoice.command === "model" && pickModel) {
+      change(nextDraft);
+      setCommand(null);
+      setCaret(0);
+      setIndex(0);
       pickModel();
       return;
     }
-    change("/" + matches[i].command + " ");
+    setCommand(toDraftCommand(pickedChoice));
+    change(nextDraft);
+    setCaret(0);
+    setIndex(0);
+    dismiss(false);
+    placeCaret.current = { at: 0, value: nextDraft };
     input.current?.focus();
   }
   return (
@@ -307,7 +358,7 @@ export default function Composer({
       }}
     >
       {voice.strip}
-      {(quote || files.length > 0 || mentions.length > 0 || references.length > 0 || attachError) && (
+      {(quote || command || files.length > 0 || mentions.length > 0 || references.length > 0 || attachError) && (
         <div className="composer-extras">
           {quote && (
             <div className="reply-quote">
@@ -318,8 +369,29 @@ export default function Composer({
               </button>
             </div>
           )}
-          {(files.length > 0 || mentions.length > 0 || references.length > 0) && (
+          {(command || files.length > 0 || mentions.length > 0 || references.length > 0) && (
             <div className="composer-chips">
+          {command && (
+            <ul className="attach-chips command-chips" aria-label="Command">
+              <li
+                className={"command-chip " + command.kind.toLowerCase()}
+                title={[command.kind, "/" + command.command, command.description].filter(Boolean).join(" · ")}
+              >
+                <CommandIcon kind={command.kind} />
+                <span>/{command.name}</span>
+                <button
+                  type="button"
+                  aria-label={"Remove /" + command.name}
+                  onClick={() => {
+                    setCommand(null);
+                    input.current?.focus();
+                  }}
+                >
+                  <X size={12} />
+                </button>
+              </li>
+            </ul>
+          )}
           {references.length > 0 && <ul className="attach-chips" aria-label="Pull request references">
             {references.map(({ url, label }) => <li key={url} className="mention-chip">
               <a className="mention-open pr-reference" href={url} onClick={(event) => { event.preventDefault(); void window.botkins.openLink(url); }}>{label}</a>
@@ -393,7 +465,7 @@ export default function Composer({
           }
           rows={1}
           maxLength={32000}
-          placeholder={placeholder}
+          placeholder={command?.hint || placeholder}
           value={draft}
           onPaste={(e) => {
             if (e.clipboardData.files.length && fromFiles(e.clipboardData.files)) e.preventDefault();
@@ -409,6 +481,19 @@ export default function Composer({
           onSelect={(e) => setCaret(e.currentTarget.selectionStart ?? 0)}
           onKeyDown={(e) => {
             if (e.nativeEvent.isComposing) return;
+            if (
+              command &&
+              e.key === "Backspace" &&
+              !e.metaKey &&
+              !e.ctrlKey &&
+              !e.altKey &&
+              e.currentTarget.selectionStart === 0 &&
+              e.currentTarget.selectionEnd === 0
+            ) {
+              e.preventDefault();
+              setCommand(null);
+              return;
+            }
             if (mentioning && !visible) {
               const n = mentionChoices.length;
               if (e.key === "Escape") {
@@ -461,7 +546,7 @@ export default function Composer({
             }
             if (e.key === "Enter" && !e.shiftKey) {
               e.preventDefault();
-              if (!sending && draft.trim() && !(visible && loading))
+              if (!sending && hasContent && !(visible && loading))
                 void submit();
             }
           }}
@@ -482,7 +567,7 @@ export default function Composer({
         {busy && !side && (
           <button
             type="button"
-            className={draft.trim() ? "send stop-quiet" : "send"}
+            className={hasContent ? "send stop-quiet" : "send"}
             aria-label="Stop reply"
             onClick={stop}
           >
@@ -493,12 +578,12 @@ export default function Composer({
           <button type="button" className="secondary" aria-label="Queue message" title="Send after this reply" disabled={sending} onClick={() => void submit(true)}>Queue</button>
         )}
         {!busy && !side && !ready && voice.live}
-        {(side || (busy ? !!draft.trim() : ready)) && (
+        {(side || (busy ? hasContent : ready)) && (
           <button
             className="send"
             aria-label={busy && !side ? "Guide reply" : "Send message"}
             title={busy && !side ? "Guide the current reply when supported, or send after it finishes" : undefined}
-            disabled={sending || !draft.trim() || draft.trim() === "/"}
+            disabled={sending || (!command && (!draft.trim() || draft.trim() === "/"))}
           >
             <ArrowUp size={20} />
           </button>
@@ -523,7 +608,9 @@ export default function Composer({
           role="listbox"
           aria-label="Commands, skills and tools"
         >
-          <div className="slash-heading">Commands, skills and tools</div>
+          <div className="slash-heading">
+            {attachedOptionMode && command ? "/" + command.name + " options" : "Commands, skills and tools"}
+          </div>
           {loading ? (
             <p>Reading this bot’s capabilities…</p>
           ) : error ? (
