@@ -3,7 +3,8 @@
 // What Apple carries says only "New message". The real title and text are in `b`, sealed by the
 // computer with a key only it and this phone have (link-host/push.mjs):
 //   b = base64(nonce(12) + ChaCha20-Poly1305(key, nonce, JSON, aad "botkins-push-v1"))
-//   JSON = { t: title, m: text, c: chat id, k: kind, r?: request id, q?: a request's buttons }
+//   JSON = { t: title, m: text, c: chat id, k: kind, r?: request id, q?: a request's buttons,
+//            a?: { b: bot id, r: run id } for a proactive alert that offers to take care of something }
 // The key is in a keychain group this extension shares with the app (modules/botkins-activity). A
 // phone can be paired with several computers: there is a key for each ("key:<the computer's id>"),
 // each is tried, and the id of the computer whose key opened the alert is noted as `host`, so a tap
@@ -48,6 +49,13 @@ final class NotificationService: UNNotificationServiceExtension {
         } else {
           content.categoryIdentifier = "botkins_open"
         }
+      }
+      // A proactive alert that offers to take care of something ("proactive-team-v1"): one button,
+      // "Take care of it", which opens the app. The ids are all the phone needs to ask the computer.
+      if let alert = opened["a"] as? [String: Any], let bot = alert["b"] as? String, let run = alert["r"] as? String {
+        info["alertBot"] = bot
+        info["alertRun"] = run
+        content.categoryIdentifier = "botkins_alert"
       }
       content.userInfo = info
     }
