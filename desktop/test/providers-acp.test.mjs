@@ -354,7 +354,7 @@ test("an ACP agent the person adds serves a chat through the workspace", async (
   const run = ws.state.runs.find((r) => r.chatId === id);
   assert.deepEqual([run.status, run.steps.map((s) => [s.name, s.source, s.status])], ["Completed", [["memory_read", undefined, "Done"]]]);
   assert.ok(called.names.includes("memory_read") && called.names.includes("skill_read"));
-  assert.match(sent("session/prompt").at(-1).prompt[0].text, /<instructions>[\s\S]*Pip[\s\S]*Your skills:\n- today-panel: [\s\S]*<\/instructions>\n\nRemember that I like teal$/);
+  assert.match(sent("session/prompt").at(-1).prompt[0].text, /<instructions>[\s\S]*Pip[\s\S]*Your skills:\n(?:- .+\n)*- today-panel: [\s\S]*<\/instructions>\n\nRemember that I like teal$/);
 });
 
 test("the window an agent reports in a turn is listed for the session's model afterwards", async (t) => {
