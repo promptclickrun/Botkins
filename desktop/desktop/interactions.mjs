@@ -38,6 +38,8 @@ export class Interactions {
         view: {
           botId: chat.botId,
           ...view,
+          // When it was raised: reminders (desktop/reminders.mjs) and the Proactive agent wait this long before they speak of it.
+          time: Date.now(),
           ...(task?.author && { askedBy: { memberId: task.author.memberId, name: task.author.name } }),
           id,
           chatId: chat.id,

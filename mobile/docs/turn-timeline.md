@@ -120,6 +120,7 @@ Run += {
   stoppedOpen?: true;                                     // it ended with plan steps open and nothing went on
 }
 AgentRequest += { detached?: true }                       // a question whose turn went on without an answer
+AgentRequest += { time?: number }                         // when the computer raised it
 ```
 
 The computer gives a bot more turns in the **same run** while its plan has open steps (`reason: "plan"`; at

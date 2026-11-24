@@ -720,6 +720,8 @@ export type AgentRequest = {
   url?: string;
   /** A secure input's fields: 1 is a single value, 2 to 8 a multi-value. Answered with `{ action: "accept", content: { [key]: string | CredentialRef } }`. */
   fields?: SecureField[];
+  /** When the computer raised it (milliseconds). */
+  time?: number;
   /** A question that waited ten minutes: its turn went on without an answer. It stays open as waiting, and an answer starts a new turn that quotes it. */
   detached?: true;
 };
