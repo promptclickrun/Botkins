@@ -375,3 +375,29 @@ test("the watched chat receives the voice's partial reply and final on one assis
   await until(() => messages()?.[1]?.text === "Hi there.", "the final words");
   assert.equal(messages()?.length, 2);
 });
+
+test("manual retry transitions offline back through connecting and reconnects", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "botkins-link-"));
+  const first = await host({ dir });
+  const port = first.link.port;
+  const paired = await pair(fetcher, { hosts: [loopback(first.link)], code: first.link.startPairing().code }, device);
+  await first.link.stop();
+
+  const { client, states, until } = follow(paired);
+  await until(() => states.at(-1) === "offline", "initial offline", 6000);
+
+  const beforeFailRetry = states.length;
+  client.wake("retry");
+  assert.equal(states[beforeFailRetry], "connecting", "manual retry enters connecting immediately");
+  await until(() => states.length > beforeFailRetry + 1 && states.at(-1) === "offline", "offline after failed retry", 6000);
+
+  const again = new LinkHost({ relay: false, dir, backend: new MockBackend(), port });
+  await again.start();
+  const beforeSuccessRetry = states.length;
+  client.wake("retry");
+  assert.equal(states[beforeSuccessRetry], "connecting", "manual retry enters connecting before reconnecting");
+  await until(() => states.at(-1) === "online", "online after manual retry", 6000);
+
+  client.stop();
+  await again.stop();
+});

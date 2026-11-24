@@ -565,17 +565,20 @@ export class LinkClient {
     this.setRoute(null);
   }
   /**
-   * Try again now: the app came to the front, or the network changed. The path in use is not
-   * trusted after that. The next sync asks for an answer at once and gives it a few seconds; when
-   * none comes the session is dropped and the computer is looked for afresh, on every address. So a
-   * phone that was away comes back in seconds, not when a 40-second wait runs out.
+   * Try again now: the app came to the front, the network changed, or the user tapped refresh. The
+   * path in use is not trusted after that. The next sync asks for an answer at once and gives it a
+   * few seconds; when none comes the session is dropped and the computer is looked for afresh, on
+   * every address. So a phone that was away comes back in seconds, not when a 40-second wait runs
+   * out.
    */
-  wake(reason?: "network") {
+  wake(reason?: "network" | "retry") {
     if (!this.lifetime) return;
     this.resting = false;
     this.probeDelay = this.probeMs;
-    // On another network, an address that failed on the last one gets a fresh try.
-    if (reason === "network") this.distrusted.clear();
+    // On another network, or a manual retry, an address that failed gets a fresh try.
+    if (reason === "network" || reason === "retry") this.distrusted.clear();
+    // A manual retry while offline shows as connecting again until the next attempt settles.
+    if (reason === "retry" && this.state === "offline") this.setState("connecting");
     this.suspect = true;
     // A socket can look open long after the system closed it under a suspended app.
     this.options.check?.();

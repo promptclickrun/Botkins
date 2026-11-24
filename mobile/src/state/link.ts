@@ -567,7 +567,7 @@ export async function loadEarlier(chatId: string) {
 }
 
 export function wake() {
-  client?.wake();
+  client?.wake("retry");
 }
 
 /**

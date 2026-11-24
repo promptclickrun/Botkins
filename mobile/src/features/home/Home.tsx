@@ -27,6 +27,7 @@ import { arrangeBots, type BotFilter, filterBots, filterLabels, todayRow } from 
 import { AVATAR, BotBoard, type BoardScroll, BotMenu, BotRow } from "./BotBoard";
 import { runComputerChoice } from "./computers";
 import { applyPlan, DRAG, dropPlan, type Zone } from "./drag";
+import { ServerLinkStatus } from "./ServerLinkStatus";
 
 /** The big avatars at the top: every pinned bot, four to a row, and bigger when there are three or fewer. */
 const TOP = { perRow: 4, width: "25%", size: 80, fewSize: 96 } as const;
@@ -168,7 +169,7 @@ function SettingsButton() {
  * Page's frame for a tab's root, with a scroll view Home can scroll itself: a dragged bot near the
  * top or bottom edge scrolls the page (Page has no handle on its scroll view). Keep it like Page's.
  */
-function HomeFrame({ children, scroll, scrollEnabled, onScrolled }: { children: ReactNode; scroll: BoardScroll; scrollEnabled: boolean; onScrolled: () => void }) {
+function HomeFrame({ children, scroll, scrollEnabled, onScrolled, quietLink }: { children: ReactNode; scroll: BoardScroll; scrollEnabled: boolean; onScrolled: () => void; /** The status beside the computer pill says the link is down, so only a revoked link keeps the banner. */ quietLink?: boolean }) {
   useScrollToTop(scroll.ref);
   const { colors } = useTheme();
   const insets = useSafeAreaInsets();
@@ -215,7 +216,7 @@ function HomeFrame({ children, scroll, scrollEnabled, onScrolled }: { children: 
           max.value = Math.max(0, content.value - view.value);
         }}
       >
-        <LinkBanner />
+        {!quietLink && <LinkBanner />}
         {children}
       </Animated.ScrollView>
     </View>
@@ -262,7 +263,8 @@ export default function Home() {
   const bots = order.shown;
   const chats = useChats();
   const synced = useApp((state) => state.synced);
-  const online = useApp((state) => state.link === "online");
+  const link = useApp((state) => state.link);
+  const online = link === "online";
   const computer = useApp((state) => state.pairing?.name) ?? "Computer";
   const adminOn = useApp((state) => state.parts.meta?.you?.kind === "owner" && state.parts.meta.you.admin === true);
   const computers = useApp((state) => state.pairings);
@@ -321,29 +323,32 @@ export default function Home() {
   const waiting = requests ?? [];
 
   return (
-    <HomeFrame scroll={scroll} scrollEnabled={!dragging} onScrolled={seen.scrolled}>
+    <HomeFrame scroll={scroll} scrollEnabled={!dragging} onScrolled={seen.scrolled} quietLink={link !== "revoked"}>
       <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: space.md }}>
-        {/* A tap opens the computer's page; a hold opens the switcher. */}
-        <HoldMenu title="Computers" actions={computerActions(computers, inUse, directoryHosts)} onPressAction={({ nativeEvent }) => runComputerChoice(nativeEvent.event)} style={{ flexShrink: 1 }}>
-          <Tap
-            onPress={() => router.push("/settings/desktop")}
-            feel="select"
-            accessibilityLabel={computer + (online ? ", connected" : ", not connected") + (adminOn ? ", Admin mode" : "")}
-            accessibilityHint="Hold to switch computers"
-            style={{ flexShrink: 1, flexDirection: "row", alignItems: "center", gap: 7, height: 32, paddingHorizontal: 12, borderRadius: 16, backgroundColor: colors.surface }}
-          >
-            <Dot tone={online ? "success" : "warning"} size={7} />
-            <T variant="footnote" weight="600" color="ink2" numberOfLines={1}>
-              {computer}
-            </T>
-            {/* While Admin mode is on, the lists hold every member's things: the tag says so. */}
-            {adminOn && (
-              <T variant="caption" weight="600" color="accentText" numberOfLines={1}>
-                Admin mode
+        <View style={{ flex: 1, minWidth: 0, flexDirection: "row", alignItems: "center", gap: space.sm }}>
+          {/* A tap opens the computer's page; a hold opens the switcher. */}
+          <HoldMenu title="Computers" actions={computerActions(computers, inUse, directoryHosts)} onPressAction={({ nativeEvent }) => runComputerChoice(nativeEvent.event)} style={{ flexShrink: 1 }}>
+            <Tap
+              onPress={() => router.push("/settings/desktop")}
+              feel="select"
+              accessibilityLabel={computer + (online ? ", connected" : ", not connected") + (adminOn ? ", Admin mode" : "")}
+              accessibilityHint="Hold to switch computers"
+              style={{ flexShrink: 1, flexDirection: "row", alignItems: "center", gap: 7, height: 32, paddingHorizontal: 12, borderRadius: 16, backgroundColor: colors.surface }}
+            >
+              <Dot tone={online ? "success" : "warning"} size={7} />
+              <T variant="footnote" weight="600" color="ink2" numberOfLines={1} style={{ flexShrink: 1 }}>
+                {computer}
               </T>
-            )}
-          </Tap>
-        </HoldMenu>
+              {/* While Admin mode is on, the lists hold every member's things: the tag says so. */}
+              {adminOn && (
+                <T variant="caption" weight="600" color="accentText" numberOfLines={1}>
+                  Admin mode
+                </T>
+              )}
+            </Tap>
+          </HoldMenu>
+          <ServerLinkStatus />
+        </View>
         <View style={{ flexDirection: "row", alignItems: "center", gap: space.sm }}>
           {canCreate && <IconButton icon={Plus} label="New bot" variant="soft" size={44} onPress={() => router.push("/bot/new")} />}
           <SettingsButton />
