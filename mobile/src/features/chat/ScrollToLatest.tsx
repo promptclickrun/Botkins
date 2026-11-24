@@ -3,9 +3,9 @@
 // "how far from the newest" is simply the list's scroll offset (scroll.ts has when it shows).
 import { ArrowDown } from "lucide-react-native";
 import { useEffect } from "react";
-import { View } from "react-native";
+import { StyleSheet, View } from "react-native";
 import Animated, { useAnimatedStyle, useSharedValue, withTiming } from "react-native-reanimated";
-import { Glass, slopFor, Tap, useTheme } from "@/ui";
+import { slopFor, Tap, useTheme } from "@/ui";
 
 const SIZE = 40;
 
@@ -20,11 +20,21 @@ export function ScrollToLatest({ shown, onPress, bottom = 10 }: { shown: boolean
   return (
     <Animated.View pointerEvents={shown ? "box-none" : "none"} style={[{ position: "absolute", left: 0, right: 0, bottom, alignItems: "center" }, style]} accessibilityElementsHidden={!shown} importantForAccessibility={shown ? "auto" : "no-hide-descendants"}>
       <Tap onPress={onPress} disabled={!shown} sink={0.92} hitSlop={slopFor(SIZE)} accessibilityLabel="Scroll to latest message">
-        {/* The glass only draws: the press belongs to the button around it (glass that takes touches itself keeps them). */}
-        <View pointerEvents="none">
-          <Glass style={{ width: SIZE, height: SIZE, borderRadius: SIZE / 2, alignItems: "center", justifyContent: "center" }}>
-            <ArrowDown size={19} color={colors.ink} strokeWidth={2.4} />
-          </Glass>
+        {/* Opaque surface button: avoids an extra backdrop-blur layer over the streaming transcript. */}
+        <View
+          pointerEvents="none"
+          style={{
+            width: SIZE,
+            height: SIZE,
+            borderRadius: SIZE / 2,
+            alignItems: "center",
+            justifyContent: "center",
+            backgroundColor: colors.surface,
+            borderWidth: StyleSheet.hairlineWidth,
+            borderColor: colors.lineStrong,
+          }}
+        >
+          <ArrowDown size={19} color={colors.ink} strokeWidth={2.4} />
         </View>
       </Tap>
     </Animated.View>

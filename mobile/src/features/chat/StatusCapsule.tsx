@@ -1,15 +1,16 @@
-// While a turn runs, its status floats over the message box on glass, the way T3 Code shows a
-// working thread: the bot's face (held still, for battery), what it is doing, how long it has been
-// at it and how many steps ("Coding | 0:42 · 3 steps"). A tap opens the turn's activity. The clock
-// ticks once a second only while the chat is on screen and the app is in front.
+// While a turn runs, its status floats over the message box on an opaque theme pill (the composer
+// keeps the sole glass layer over the streaming transcript so GPU backdrop compositing doesn't
+// multiply every frame): the bot's face (held still, for battery), what it is doing, how long it
+// has been at it and how many steps ("Coding | 0:42 · 3 steps"). A tap opens the turn's activity.
+// The clock ticks once a second only while the chat is on screen and the app is in front.
 import { router } from "expo-router";
 import { useElapsedClock } from "./useElapsedClock";
-import { View } from "react-native";
+import { StyleSheet, View } from "react-native";
 import Animated, { FadeIn } from "react-native-reanimated";
 import type { Bot, Run } from "@/link/types";
 import { activityLabel, useChatActivity } from "@/state/hooks";
 import { useApp } from "@/state/store";
-import { BotAvatar, Glass, T, Tap, useTheme } from "@/ui";
+import { BotAvatar, T, Tap, useTheme } from "@/ui";
 import { stepCount } from "./fold";
 
 /** The capsule's height: ChatScreen keeps this much room above the message box while a turn runs. */
@@ -45,22 +46,34 @@ export function StatusCapsule({ chatId, bot, group, bots, run }: { chatId: strin
         sink={0.96}
         accessibilityLabel={name + (facts ? ", " + facts : "") + (run ? ", show activity" : "")}
       >
-        {/* The glass only draws: the press belongs to the button around it. */}
-        <View pointerEvents="none">
-          <Glass style={{ height: CAPSULE, borderRadius: CAPSULE / 2, flexDirection: "row", alignItems: "center", gap: 8, paddingLeft: 8, paddingRight: 16 }}>
-            <BotAvatar bot={face} size={28} state={state === "idle" ? "thinking" : state} animated={false} />
-            <T variant="footnote" weight="600" numberOfLines={1} style={{ flexShrink: 1 }}>
-              {doing}
-            </T>
-            {!!facts && (
-              <>
-                <View style={{ width: 1, height: 16, backgroundColor: colors.line }} />
-                <T variant="footnote" color="muted" numberOfLines={1} style={{ flexShrink: 1, fontVariant: ["tabular-nums"] }}>
-                  {facts}
-                </T>
-              </>
-            )}
-          </Glass>
+        {/* Opaque surface pill: avoids a second backdrop-blur layer over the streaming transcript. */}
+        <View
+          pointerEvents="none"
+          style={{
+            height: CAPSULE,
+            borderRadius: CAPSULE / 2,
+            flexDirection: "row",
+            alignItems: "center",
+            gap: 8,
+            paddingLeft: 8,
+            paddingRight: 16,
+            backgroundColor: colors.surface,
+            borderWidth: StyleSheet.hairlineWidth,
+            borderColor: colors.lineStrong,
+          }}
+        >
+          <BotAvatar bot={face} size={28} state={state === "idle" ? "thinking" : state} animated={false} />
+          <T variant="footnote" weight="600" numberOfLines={1} style={{ flexShrink: 1 }}>
+            {doing}
+          </T>
+          {!!facts && (
+            <>
+              <View style={{ width: 1, height: 16, backgroundColor: colors.line }} />
+              <T variant="footnote" color="muted" numberOfLines={1} style={{ flexShrink: 1, fontVariant: ["tabular-nums"] }}>
+                {facts}
+              </T>
+            </>
+          )}
         </View>
       </Tap>
     </Animated.View>
