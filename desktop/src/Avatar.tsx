@@ -1,16 +1,15 @@
-import { createContext, memo, useContext, useEffect, useState, useSyncExternalStore, type ReactNode } from "react";
-import { type AvatarState, botkinSvg, botkinUrl, clipDuration, lookKey, lookOf, playsOnce } from "./botkins";
+import { createContext, memo, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { type AvatarState, botkinArt, botkinFace, clipDuration, lookKey, lookOf, motionOf } from "./botkins";
+import { observeVisibleAnimation } from "./visibleAnimation";
 import type { BotLook } from "./types";
 import "./agents.css";
 
 export { activityLabel, botActivity, chatActivity, type AvatarState } from "./botkins";
 
-const reduce = matchMedia("(prefers-reduced-motion: reduce)");
-const watchMotion = (changed: () => void) => {
-  reduce.addEventListener("change", changed);
-  return () => reduce.removeEventListener("change", changed);
-};
 const AvatarAnimationSetting = createContext(true);
+const blink = [[0, 1], [0.92, 1], [0.94, 0.09], [0.946, 0.09], [0.97, 1], [1, 1]].map(([offset, scale]) => ({
+  offset, transform: `scaleY(${scale})`, easing: "ease-in-out",
+}));
 
 /** One desktop-wide setting for every Botkin drawn in the window. */
 export function AvatarAnimations({ enabled, children }: { enabled: boolean; children: ReactNode }) {
@@ -33,42 +32,61 @@ export type BotAvatarProps = {
   label?: string;
 };
 
-/**
- * A bot, drawn as its Botkin and acting out a state. Every bot avatar in the app goes through
- * this component. The picture is the design kit's own animated SVG, shown bare: nothing behind it.
- */
+/** The kit's still shell and expression move together around its pivot. The badge stays put. */
 export const BotAvatar = memo(function BotAvatar({ bot, look: given, state = "idle", size = 52, animated, badge, label }: BotAvatarProps) {
   const look = given ?? lookOf(bot ?? {});
-  const animations = useContext(AvatarAnimationSetting);
-  const still = useSyncExternalStore(watchMotion, () => reduce.matches) || !animations || !(animated ?? state !== "idle");
+  const moving = useContext(AvatarAnimationSetting) && (animated ?? state !== "idle");
   const showBadge = badge ?? size >= 40;
-  // An outcome or a reaction plays once and holds, so each showing needs a picture of its own:
-  // a picture that is already loaded has already played.
-  const once = !still && playsOnce(state);
-  const [played, setPlayed] = useState<string>();
-  // Eyes and custom colors are part of the look too, so a change to either plays it again.
   const drawing = lookKey(look);
-  useEffect(() => {
-    if (!once) return;
-    const url = URL.createObjectURL(new Blob([botkinSvg(look, state, { badge: showBadge })], { type: "image/svg+xml" }));
-    setPlayed(url);
-    return () => {
-      setPlayed(undefined);
-      URL.revokeObjectURL(url);
+  const art = useMemo(() => botkinArt(look), [drawing]);
+  const face = useMemo(() => botkinFace(look, state), [drawing, state]);
+  const clip = motionOf(state);
+  const head = useRef<HTMLSpanElement>(null);
+  useLayoutEffect(() => {
+    const body = head.current;
+    if (!moving || !body) return;
+    let tracks: Animation[] = [];
+    const cancel = () => {
+      for (const track of tracks) track.cancel();
+      tracks = [];
     };
-  }, [once, drawing, state, showBadge]);
-  const src = once ? (played ?? botkinUrl(look, state, { still: true, badge: showBadge })) : botkinUrl(look, state, { still, badge: showBadge });
+    const unobserve = observeVisibleAnimation(body.parentElement, (playback) => {
+      if (playback === "reduced") {
+        cancel();
+      } else if (playback === "paused") {
+        for (const track of tracks) if (track.playState === "running") track.pause();
+      } else if (!tracks.length) {
+        // The browser runs these transforms. A hidden avatar has no frame callback, and one
+        // that has never been on screen has no animation objects either.
+        tracks.push(body.animate(clip.frames, clip.timing));
+        for (const eye of body.querySelectorAll("ellipse")) {
+          tracks.push(eye.animate(blink, { duration: face.blinkDuration, delay: face.blinkDelay, iterations: Infinity }));
+        }
+      } else {
+        // Finished outcomes hold their last pose across a hide/show. A new showing starts fresh.
+        for (const track of tracks) if (track.playState === "paused") track.play();
+      }
+    });
+    return () => {
+      unobserve?.();
+      cancel();
+    };
+  }, [moving, state, clip, face, showBadge]);
   return (
-    <img
+    <span
       className="bot-avatar"
       data-state={state}
-      src={src}
-      width={size}
-      height={size}
-      alt={label ?? ""}
+      style={{ "--avatar-size": `${size}px` } as CSSProperties}
+      role={label ? "img" : undefined}
+      aria-label={label}
       aria-hidden={label ? undefined : "true"}
-      draggable={false}
-    />
+    >
+      <span className="botkin-head" ref={head} style={{ transform: clip.frames[0].transform }}>
+        <img className="botkin-art" ref={art} alt="" draggable={false} />
+        <svg className="botkin-face" viewBox="0 0 256 256" aria-hidden="true" dangerouslySetInnerHTML={{ __html: face.expression }} />
+      </span>
+      {showBadge && face.badge && <svg className="botkin-badge" viewBox="0 0 256 256" aria-hidden="true" dangerouslySetInnerHTML={{ __html: face.badge }} />}
+    </span>
   );
 });
 

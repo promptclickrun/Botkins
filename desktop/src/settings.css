@@ -817,7 +817,7 @@ dialog.bot-sheet .sectionhead {
 }
 
 /* --------------------------------------------------------------- Bot Studio */
-/* A sheet over whatever opened it: a stage with the Botkin, then its 20 characters and 7 palettes. */
+/* A sheet over whatever opened it: a stage with the Botkin, then its characters and 7 palettes. */
 dialog.bot-studio {
   width: min(580px, calc(100vw - 32px));
   max-height: calc(100vh - 32px);

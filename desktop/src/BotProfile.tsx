@@ -18,7 +18,7 @@ import {
 } from "lucide-react";
 import { BotAvatar, activityLabel, botActivity } from "./Avatar";
 import { BotStudio } from "./BotStudio";
-import { lookOf, sameLook } from "./botkins";
+import { availableHeads, lookOf, sameLook } from "./botkins";
 import ModelPicker from "./ModelPicker";
 import { openProviderSettings } from "./providers";
 import { ChatRow, deleteBot, useAsk, type PageActions } from "./Pages";
@@ -279,6 +279,7 @@ export default function BotProfile({
               // Bot Studio saves the look straight to the bot; the profile fields keep their own Save.
               <BotStudio
                 value={look}
+                characters={availableHeads(state.remote)}
                 saving={avatarSaving}
                 cancel={() => setEditAvatar(false)}
                 save={async (v) => {

@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { b64u, newKeyPair, random, unb64u } from "./crypto.mjs";
 import { DEFAULT_RELAY_URL, newRelayKey, validRelayKey } from "./relay.mjs";
 import { defaultTeam } from "./team.mjs";
+import catalog from "./botkin-heads.json" with { type: "json" };
 
 export const DEFAULT_PORT = 47610;
 /** Who set the screen's level from a phone, as it is saved: { deviceId, name, at }, or null when it is not that. */
@@ -30,7 +31,8 @@ const deviceName = (name, kind) => String(name || (KIND_NAMES[kind] ?? "Phone"))
 /** The name of the person a device belongs to ("Jordan"), cleaned; "" when there is none. A device's `name` stays its model. */
 export const personName = (value) => (typeof value === "string" ? value.replace(/[\u0000-\u001f\u007f]/g, " ").trim().slice(0, 60).trim() : "");
 // The Botkins characters, by id. A bot without a look is given the least used one.
-const HEADS = ["beacon", "crumb", "fathom", "goggle", "luna", "morel", "muse", "oakley", "pearl", "pip", "posy", "pounce", "ramble", "skiff", "spool", "sprig", "tinker", "toast", "wick", "wicket"];
+const HEADS = [...catalog.original, ...catalog.additional].sort();
+export const HEADS_CAPABILITY = catalog.capability;
 const hash = (text) => [...text].reduce((sum, char) => (sum * 31 + char.charCodeAt(0)) >>> 0, 7);
 
 /** The eye styles of the design kit. "oval" is every character's own, and is not saved. */

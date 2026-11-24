@@ -1,13 +1,35 @@
 /* Avatars and bot management. Uses the theme's tokens (tokens.css); adds no palette of its own. */
 
 /* ---------------------------------------------------------------- avatars */
-/* A bot is its Botkin: the design kit's animated SVG in an <img> (Avatar.tsx), shown bare.
-   Nothing sits behind it: no tile, no ring, no tint. */
 .bot-avatar {
+  position: relative;
   display: block;
   flex: none;
+  width: var(--avatar-size);
+  height: var(--avatar-size);
+  aspect-ratio: 1;
+  overflow: hidden;
   user-select: none;
   -webkit-user-drag: none;
+}
+.bot-avatar .botkin-head,
+.bot-avatar .botkin-art,
+.bot-avatar .botkin-face,
+.bot-avatar .botkin-badge {
+  display: block;
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+.botkin-head {
+  /* The kit's pivot in its 256-unit artboard is (128,172). */
+  transform-origin: 50% 67.1875%;
+}
+.botkin-face ellipse {
+  transform-box: fill-box;
+  transform-origin: center;
 }
 
 /* -------------------------------------------------------------- bot list */

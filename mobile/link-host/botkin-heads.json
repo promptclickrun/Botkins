@@ -1,0 +1,5 @@
+{
+  "original": ["beacon", "crumb", "fathom", "goggle", "luna", "morel", "muse", "oakley", "pearl", "pip", "posy", "pounce", "ramble", "skiff", "spool", "sprig", "tinker", "toast", "wick", "wicket"],
+  "additional": ["drip", "orbit", "pebble"],
+  "capability": "botkin-heads-v2"
+}

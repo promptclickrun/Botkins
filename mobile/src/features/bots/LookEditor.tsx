@@ -4,30 +4,30 @@
 import { Check } from "lucide-react-native";
 import { type ReactNode, useState } from "react";
 import { ScrollView, StyleSheet, View } from "react-native";
-import { type BotkinLook, colorsOf, CUSTOM, EYES, HEADS, hasAccent, headName, KIT_PALETTES } from "@/data/botLook";
+import { type BotkinLook, type LookOptions, availableHeads, colorsOf, CUSTOM, EYES, HEADS_CAPABILITY, hasAccent, headName, KIT_PALETTES } from "@/data/botLook";
 import { COLOR_SLOTS, type FourColors, remember, SUGGESTED, TEMPLATES, templateOf } from "@/data/lookTemplates";
-import { usePart } from "@/state/hooks";
+import { useCapability } from "@/state/hooks";
 import { BotAvatar, ColorPicker, Label, radius, space, T, Tap, useTheme } from "@/ui";
 
-export type LookEditorProps = {
+export type LookEditorProps = LookOptions & {
   value: BotkinLook;
   onChange: (next: BotkinLook) => void;
-  /** The computer can save eyes and custom colors ("looks-v2"). */
-  advanced?: boolean;
   /** A color drag started or ended, so a scroll view around the editor can hold still. */
   onDragging?: (dragging: boolean) => void;
 };
 
-/** Can the computer save eyes and custom colors? */
-export function useLooksV2() {
-  return !!usePart("meta")?.capabilities?.includes("looks-v2");
+/** Which looks can this computer save? */
+export function useLookOptions(): LookOptions {
+  const advanced = useCapability("looks-v2");
+  const expandedHeads = useCapability(HEADS_CAPABILITY);
+  return { advanced, expandedHeads };
 }
 
 const SWATCH = 40;
 const RING = SWATCH + 10;
 const EYE_CELL = 76;
 
-export function LookEditor({ value, onChange, advanced = false, onDragging }: LookEditorProps) {
+export function LookEditor({ value, onChange, advanced, expandedHeads, onDragging }: LookEditorProps) {
   const { colors } = useTheme();
   const [slot, setSlot] = useState<number | null>(null);
   const [recent, setRecent] = useState<string[]>([]);
@@ -48,7 +48,7 @@ export function LookEditor({ value, onChange, advanced = false, onDragging }: Lo
       <View>
         <Label>Character</Label>
         <View style={{ flexDirection: "row", flexWrap: "wrap", marginHorizontal: -space.xs }}>
-          {HEADS.map((head) => {
+          {availableHeads(expandedHeads).map((head) => {
             const selected = head.id === value.head;
             return (
               <View key={head.id} style={{ width: "25%", padding: space.xs }}>

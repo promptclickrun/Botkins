@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256"><title>Orbit</title><style data-layer="blink">@keyframes bk-blink{0%,92%,100%{transform:scaleY(1)}94%,94.6%{transform:scaleY(.09)}97%{transform:scaleY(1)}}.bk-blink-76451882{transform-box:fill-box;transform-origin:center;animation:bk-blink 4826ms ease-in-out -1882ms infinite}@media(prefers-reduced-motion:reduce){.bk-blink-76451882{animation:none}}</style>
+<g transform="translate(0 0) scale(1)">
+  <path data-role="accent" fill="#bf895a" d="M16 171C9 152 49 117 116 90C175 66 226 62 238 77C249 91 233 111 209 129L201 119C224 103 233 90 229 85C221 76 179 84 123 104C66 127 25 154 27 168Z"/>
+  <path data-role="shell" fill="#7996ad" d="M63 103C71 70 98 44 132 39C172 33 207 53 220 84C235 122 223 171 195 198C168 225 124 226 93 205C63 185 52 142 63 103Z"/>
+  <path data-role="shell" fill="#a1b8c9" d="M76 93C85 64 112 44 143 44C161 43 179 48 191 58C171 51 154 49 137 52C114 55 92 68 76 93Z"/>
+  <path data-role="shell" fill="#627e98" d="M88 192C111 209 138 212 165 204C199 194 217 166 225 136C221 166 212 183 195 199C166 226 124 225 93 205C86 200 80 194 75 187C78 185 82 187 88 192Z"/>
+  <path data-role="shell" fill="#687f98" d="M67 113C72 92 98 79 128 80C161 80 182 92 186 117C190 145 167 168 139 174C108 182 82 170 70 148C63 136 63 125 67 113Z"/>
+  <path data-role="paper" fill="#f5e4c8" d="M68 110C74 90 99 78 128 79C157 79 179 90 182 113C185 138 165 159 137 166C108 173 83 165 72 146C65 135 64 121 68 110Z"/>
+  <path data-role="paper" fill="#fff0d7" d="M73 105C83 89 104 82 128 83C144 83 154 87 163 93C151 89 138 87 126 88C102 87 86 95 73 105Z"/>
+  <path data-role="accent" fill="#d8a56b" d="M17 158C14 170 24 177 42 177C71 177 104 167 146 150C185 133 221 110 235 89C240 82 241 79 239 77C249 89 238 109 223 125C205 144 180 161 149 176C112 194 71 207 41 205C18 204 9 192 11 178C12 170 14 164 17 158Z"/>
+  <path data-role="accent" fill="#b98659" d="M12 183C15 196 30 199 47 199C82 198 120 185 153 169C183 155 211 137 228 120C207 147 180 162 149 177C111 195 71 207 41 205C24 204 13 198 11 185Z"/>
+  <path data-role="accent" fill="#efc58b" d="M24 181C48 190 88 176 116 167C91 180 61 191 37 190C28 190 19 188 19 183C19 181 21 180 24 181Z"/>
+  <g data-layer="eyes" data-anchors="100,145,117" fill="#593515"><ellipse class="bk-blink-76451882" cx="100" cy="117" rx="8.5" ry="17"/><ellipse class="bk-blink-76451882" cx="145" cy="117" rx="8.5" ry="17"/></g>
+</g></svg>

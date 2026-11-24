@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import vm from "node:vm";
 import { Workspace } from "../desktop/workspace.mjs";
-import { CUSTOM, EYES, HEADS, LOOKS_CAPABILITY, PALETTES, cleanLook, linkLooks, lookField, migrateLooks, nextLook, templateLook } from "../desktop/looks.mjs";
+import { CUSTOM, EYES, HEADS, HEADS_CAPABILITY, LOOKS_CAPABILITY, PALETTES, cleanLook, linkLooks, lookField, migrateLooks, nextLook, templateLook } from "../desktop/looks.mjs";
 import { cleanLook as linkCleanLook } from "../desktop/link/store.mjs";
 import { parseTemplateFile, templateFields, templateFile } from "../desktop/templates.mjs";
 import { kitOptions } from "../src/lookRender.ts";
@@ -35,7 +35,12 @@ const seed = (dir, bots) => {
 test("the characters and palettes are the design kit's", () => {
   const files = readdirSync(new URL("avatars/", KIT)).filter((name) => name.endsWith(".svg")).map((name) => name.replace(/\.svg$/, "")).sort();
   assert.deepEqual(HEADS, files, "one id for each of the kit's avatars");
-  assert.equal(HEADS.length, 20);
+  assert.equal(HEADS.length, 23);
+  for (const head of ["drip", "orbit", "pebble"]) {
+    const look = { head, palette: "tidepool", eyes: "curious" };
+    assert.deepEqual(lookField(look), look);
+    assert.deepEqual(linkCleanLook(look), look);
+  }
   const { Botkins } = kit();
   assert.deepEqual(PALETTES, Object.keys(Botkins.palettes).map((name) => name.toLowerCase()));
   assert.equal(PALETTES.length, 7);
@@ -77,12 +82,10 @@ test("a look is a character and a palette the kit has", () => {
 
 test("a new bot gets a character few other bots have", () => {
   const looks = [];
-  // Twenty bots in a row are twenty different characters, each in its own colors.
-  for (let i = 0; i < 20; i++) looks.push(nextLook("bot-" + i, looks));
-  assert.equal(new Set(looks.map((look) => look.head)).size, 20);
+  for (let i = 0; i < HEADS.length; i++) looks.push(nextLook("bot-" + i, looks));
+  assert.deepEqual(looks.map((look) => look.head).sort(), HEADS);
   assert.ok(looks.every((look) => look.palette === "original"));
-  // The twenty-first shares with one other, not more.
-  const more = nextLook("bot-20", looks);
+  const more = nextLook("another-bot", looks);
   assert.equal(looks.filter((look) => look.head === more.head).length, 1);
   // The same bot among the same others always gets the same character.
   assert.deepEqual(nextLook("stable", looks.slice(0, 5)), nextLook("stable", looks.slice(0, 5)));
@@ -157,6 +160,9 @@ test("migrateLooks says whether anything changed", () => {
   assert.deepEqual(state.bots[0].look, { head: "pip", palette: "original" }, "a look a phone chose is kept even when another bot has that character");
   assert.equal(migrateLooks(state), false);
   assert.equal(migrateLooks({ bots: [] }), false);
+  const legacy = { bots: [bot("a")] };
+  migrateLooks(legacy);
+  assert.equal(legacy.bots[0].look.head, "spool", "restoring a workspace from before saved looks keeps its original assignment");
 });
 
 test("a phone changes a bot's look on the bot itself, and the link keeps no looks of its own", async (t) => {
@@ -178,14 +184,18 @@ test("a phone changes a bot's look on the bot itself, and the link keeps no look
     },
   });
   t.after(() => link.stop());
-  await link.dispatch({}, { m: "link.setLook", a: ["pip", { head: "wicket", palette: "bluebell" }] });
-  assert.deepEqual(ws.bot("pip").look, { head: "wicket", palette: "bluebell" });
-  assert.deepEqual(JSON.parse(readFileSync(join(dir, "workspace.json"), "utf8")).bots[0].look, { head: "wicket", palette: "bluebell" }, "saved with the bot");
+  assert.ok(!link.meta().capabilities.includes(HEADS_CAPABILITY), "the link respects a backend with the original catalog");
+  link.backend.capabilities = [HEADS_CAPABILITY];
+  assert.ok(link.meta().capabilities.includes(HEADS_CAPABILITY));
+  const chosen = { head: "pebble", palette: "bluebell", eyes: "curious" };
+  await link.dispatch({}, { m: "link.setLook", a: ["pip", chosen] });
+  assert.deepEqual(ws.bot("pip").look, chosen);
+  assert.deepEqual(JSON.parse(readFileSync(join(dir, "workspace.json"), "utf8")).bots[0].look, chosen, "saved with the bot");
   assert.deepEqual(ws.bot("scout").look, before, "the other bot is untouched");
   // A character the kit doesn't have is refused by the app, and nothing changes.
   await assert.rejects(link.dispatch({}, { m: "link.setLook", a: ["pip", { head: "unicorn", palette: "original" }] }), /Unknown character/);
   await assert.rejects(link.dispatch({}, { m: "link.setLook", a: ["nobody", { head: "pip", palette: "original" }] }), /no longer exists|Unknown bot/);
-  assert.deepEqual(ws.bot("pip").look, { head: "wicket", palette: "bluebell" });
+  assert.deepEqual(ws.bot("pip").look, chosen);
   assert.deepEqual(link.store.data.looks, {}, "the link stores none");
 });
 

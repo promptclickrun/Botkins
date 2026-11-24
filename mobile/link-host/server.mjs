@@ -32,7 +32,7 @@ import { ChatSections } from "./chat-sections.mjs";
 import { SpaceLinks } from "./space-links.mjs";
 import { SpaceAlerts } from "./space-alerts.mjs";
 import { Spaces } from "./spaces.mjs";
-import { cleanLook, deviceKind, LinkStore, personName, SCREEN_MODES } from "./store.mjs";
+import { HEADS_CAPABILITY, cleanLook, deviceKind, LinkStore, personName, SCREEN_MODES } from "./store.mjs";
 import { chatSectionsOf, withChatSections, authorize, chatPeople, cleanGroup, cleanRole, filterParts, ownerParts, inChat, panelOfFrame, panelView, spaceCan, inviteLink, inviteLookup, MAX_CHAT_PEOPLE, newInviteCode, normalizeCode, OWNER, personOf, sharedBotFlags, teamPeople, viewOf, withBotFlags, withChatFlags, hasAction, roleOfMember, seenItemsOf, spacesViewOf } from "./team.mjs";
 import { Failure, searchDirs } from "./tools.mjs";
 import { cleanBotVoice, liveContextOf, liveInstructions, Voice } from "./voice.mjs";
@@ -2020,7 +2020,7 @@ export class LinkHost extends EventEmitter {
       protocol: PROTOCOL,
       // The app names what it supports itself (`backend.capabilities`); a look with eyes and its own
       // colors is one of those when the app keeps looks on its bots, and the link's own otherwise.
-      capabilities: [...new Set([...Object.keys(this.backend.extras ?? {}), ...(Array.isArray(this.backend.capabilities) ? this.backend.capabilities : []), ...CAPABILITIES.filter((c) => (c !== "stream-appends-v1" && c !== "reasoning-appends-v1") || this.backend.streamAppends !== false), ...(this.headless() ? [GRANT_CAPABILITY, ...(this.ownRelay() ? [GRANT_RELAY_CAPABILITY] : [])] : []), ...(typeof this.backend.frames?.page === "function" ? ["frames-v1"] : []), ...(typeof this.backend.setLook === "function" ? [] : ["looks-v2"]), ...(this.spaces.on ? [SPACE_ALERTS_CAPABILITY] : [])])],
+      capabilities: [...new Set([...Object.keys(this.backend.extras ?? {}), ...(Array.isArray(this.backend.capabilities) ? this.backend.capabilities : []), ...CAPABILITIES.filter((c) => (c !== "stream-appends-v1" && c !== "reasoning-appends-v1") || this.backend.streamAppends !== false), ...(this.headless() ? [GRANT_CAPABILITY, ...(this.ownRelay() ? [GRANT_RELAY_CAPABILITY] : [])] : []), ...(typeof this.backend.frames?.page === "function" ? ["frames-v1"] : []), ...(typeof this.backend.setLook === "function" ? [] : ["looks-v2", HEADS_CAPABILITY]), ...(this.spaces.on ? [SPACE_ALERTS_CAPABILITY] : [])])],
     };
   }
   /**

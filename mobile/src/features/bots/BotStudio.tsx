@@ -7,7 +7,7 @@ import { type BotkinLook, cleanLook, lookOf, randomLook, sameLook } from "@/data
 import { useBot } from "@/state/hooks";
 import { api, attempt } from "@/state/link";
 import { Button, EmptyState, Sheet, space } from "@/ui";
-import { LookEditor, useLooksV2 } from "./LookEditor";
+import { LookEditor, useLookOptions } from "./LookEditor";
 import { LookStage } from "./LookStage";
 
 /** Picks a bot's character, eyes and colors, with the bot always in view. */
@@ -24,7 +24,7 @@ export default function BotStudio() {
 
 function Studio({ id, saved }: { id: string; saved: BotkinLook }) {
   const insets = useSafeAreaInsets();
-  const advanced = useLooksV2();
+  const options = useLookOptions();
   const [look, setLook] = useState<BotkinLook>(saved);
   const [busy, setBusy] = useState(false);
   const [dragging, setDragging] = useState(false);
@@ -41,11 +41,11 @@ function Studio({ id, saved }: { id: string; saved: BotkinLook }) {
     <Sheet title="Bot Studio" action="Save" onAction={() => void save()} actionDisabled={!changed} actionLoading={busy} scroll={false} contentStyle={{ paddingHorizontal: 0, paddingBottom: 0, gap: 0 }}>
       <View style={{ paddingHorizontal: space.xl, paddingBottom: space.md }}>
         <LookStage look={look} size={128}>
-          <Button title="Surprise me" icon={Dices} variant="secondary" size="sm" onPress={() => setLook(randomLook({ advanced }))} style={{ alignSelf: "center" }} />
+          <Button title="Surprise me" icon={Dices} variant="secondary" size="sm" onPress={() => setLook(randomLook(options))} style={{ alignSelf: "center" }} />
         </LookStage>
       </View>
       <ScrollView style={{ flex: 1 }} scrollEnabled={!dragging} keyboardShouldPersistTaps="handled" keyboardDismissMode="on-drag" automaticallyAdjustKeyboardInsets contentContainerStyle={{ paddingHorizontal: space.xl, paddingTop: space.sm, paddingBottom: insets.bottom + space.xxl }} showsVerticalScrollIndicator={false}>
-        <LookEditor value={look} onChange={setLook} advanced={advanced} onDragging={setDragging} />
+        <LookEditor value={look} onChange={setLook} {...options} onDragging={setDragging} />
       </ScrollView>
     </Sheet>
   );

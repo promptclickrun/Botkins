@@ -47,7 +47,7 @@ try {
 
   await page.getByRole("heading", { name: "Home", exact: true }).waitFor();
   // Every bot is a Botkin with a look of its own, drawn as a picture in its card.
-  await page.locator(".botcard img.bot-avatar").first().waitFor();
+  await page.locator(".botcard .bot-avatar").first().waitFor();
   const pipLook = (await snapshot()).bots[0].look;
   assert.ok(pipLook && typeof pipLook.head === "string" && typeof pipLook.palette === "string", "Pip has a look");
 
@@ -61,10 +61,13 @@ try {
   // The Botkin opens Bot Studio in its own sheet, on the template's character.
   await dialog.getByRole("button", { name: "Open Bot Studio", exact: true }).click();
   const studio = page.getByRole("dialog", { name: "Bot Studio" });
+  const preview = studio.locator(".look-preview .bot-avatar");
+  const headPlayback = () => preview.locator(".botkin-head").evaluate((head) => head.getAnimations().map((a) => a.playState));
+  const trackCount = () => preview.evaluate((avatar) => avatar.getAnimations({ subtree: true }).length);
   const characters = studio.getByRole("radiogroup", { name: "Character" });
   const palettes = studio.getByRole("radiogroup", { name: "Palette" });
-  // One grid of the 20 characters and a row of the 7 palettes and 8 color templates: no packs or tabs.
-  await expect(characters.getByRole("radio")).toHaveCount(20);
+  // All characters share a grid. The seven palettes and eight color templates share a row.
+  await expect(characters.getByRole("radio")).toHaveCount(23);
   await expect(palettes.getByRole("radio")).toHaveCount(15);
   assert.equal(await studio.getByRole("tab").count(), 0, "no pack tabs");
   await expect(characters.getByRole("radio", { name: "Fathom", exact: true })).toHaveAttribute("aria-checked", "true");
@@ -75,30 +78,52 @@ try {
   await characters.getByRole("radio", { name: "Skiff", exact: true }).click();
   await palettes.getByRole("radio", { name: "Bluebell", exact: true }).click();
   await expect(studio.locator(".look-name")).toHaveText("Skiff");
+  // The preview runs, its picker thumbnails hold still, and a clip pauses at its current pose
+  // when scrolled away. It obeys the system preference and plays a reaction just once.
+  await page.emulateMedia({ reducedMotion: "no-preference" });
+  await expect.poll(headPlayback).toEqual(["running"]);
+  assert.equal(await characters.evaluate((grid) => grid.getAnimations({ subtree: true }).length), 0);
+  await preview.evaluate((avatar) => { avatar.style.translate = "-200vw"; });
+  await expect.poll(headPlayback).toEqual(["paused"]);
+  const heldTime = () => preview.locator(".botkin-head").evaluate(async (head) => (await head.getAnimations()[0].ready).currentTime);
+  const frozen = await heldTime();
+  await page.waitForTimeout(100);
+  assert.equal(await heldTime(), frozen);
+  await preview.evaluate((avatar) => { avatar.style.translate = ""; });
+  await expect.poll(headPlayback).toEqual(["running"]);
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await expect.poll(trackCount).toBe(0);
+  await page.emulateMedia({ reducedMotion: "no-preference" });
+  await studio.getByRole("button", { name: /^Preview:/ }).click();
+  await expect(preview).toHaveAttribute("data-state", "like");
+  await expect.poll(headPlayback).toEqual(["finished"]);
   // Surprise me picks another look.
   await studio.getByRole("button", { name: "Surprise me", exact: true }).click();
   await expect
     .poll(async () => [await studio.locator(".look-name").textContent(), await palettes.getByRole("radio", { checked: true }).textContent()])
     .not.toEqual(["Skiff", "Bluebell"]);
-  await characters.getByRole("radio", { name: "Skiff", exact: true }).click();
+  await characters.getByRole("radio", { name: "Orbit", exact: true }).click();
   await palettes.getByRole("radio", { name: "Bluebell", exact: true }).click();
   // Eyes: six, each drawn on the current character.
   const eyes = studio.getByRole("radiogroup", { name: "Eyes" });
-  const preview = studio.locator(".look-preview img");
+  const shellImage = preview.locator("img");
   await expect(eyes.getByRole("radio")).toHaveCount(6);
   // Surprise me may have picked eyes too, and a character or palette keeps them.
   await eyes.getByRole("radio", { name: "Oval", exact: true }).click();
   await expect(eyes.getByRole("radio", { checked: true })).toHaveAccessibleName("Oval");
-  let before = await preview.getAttribute("src");
+  await expect(preview).toHaveAttribute("data-state", "idle");
+  await expect(preview.locator(".botkin-face ellipse")).toHaveCount(2);
+  const originalShell = await shellImage.getAttribute("src");
   await eyes.getByRole("radio", { name: "Wink", exact: true }).click();
   await expect(eyes.getByRole("radio", { name: "Wink", exact: true })).toHaveAttribute("aria-checked", "true");
-  await expect.poll(() => preview.getAttribute("src")).not.toBe(before);
+  await expect(preview.locator(".botkin-face ellipse")).toHaveCount(1);
+  assert.equal(await shellImage.getAttribute("src"), originalShell, "the new expression uses the same shell");
   // A palette fills the four color slots; changing one makes the colors the bot's own.
   await palettes.getByRole("radio", { name: "Fern", exact: true }).click();
   const slots = studio.getByRole("group", { name: "Custom colors" });
   await expect(slots.getByRole("button")).toHaveCount(4);
   await expect(slots.getByRole("button", { name: "Accent color, #dfae52", exact: true })).toBeVisible();
-  before = await preview.getAttribute("src");
+  const fernShell = await shellImage.getAttribute("src");
   await slots.getByRole("button", { name: "Shell color, #748848", exact: true }).click();
   const shell = page.getByRole("dialog", { name: "Shell color", exact: true });
   await expect(shell).toBeVisible();
@@ -107,7 +132,7 @@ try {
   // The hex field takes the short form too.
   await shell.getByLabel("Hex", { exact: true }).fill("#36c");
   await expect(slots.getByRole("button", { name: "Shell color, #3366cc", exact: true })).toBeVisible();
-  await expect.poll(() => preview.getAttribute("src")).not.toBe(before);
+  await expect.poll(() => shellImage.getAttribute("src")).not.toBe(fernShell);
   await expect(palettes.getByRole("radio", { checked: true })).toHaveCount(0);
   // Arrow keys move the square's point: down is darker, and up comes back.
   await shell.getByRole("slider", { name: "Shell saturation and brightness" }).focus();
@@ -128,7 +153,7 @@ try {
   await dialog.getByLabel("Name", { exact: true }).fill("Ranger");
   await shoot("create-bot");
   await dialog.getByRole("button", { name: "Create bot", exact: true }).click();
-  await expect.poll(async () => (await bot("Ranger"))?.look).toEqual({ head: "skiff", palette: "custom", eyes: "wink", colors: ["#3e4f86", "#dfae52", "#f4e8c4", "#373722"] });
+  await expect.poll(async () => (await bot("Ranger"))?.look).toEqual({ head: "orbit", palette: "custom", eyes: "wink", colors: ["#3e4f86", "#dfae52", "#f4e8c4", "#373722"] });
   const ranger = await bot("Ranger");
   assert.match(ranger.instructions, /Cite your sources/);
   await page.evaluate(() =>
@@ -197,12 +222,12 @@ try {
   await page.locator("aside .botnav-item", { hasText: "Ranger" }).click({ button: "right" });
   await item("Bot page").click();
   await main.getByRole("heading", { name: "Ranger", level: 1 }).waitFor();
-  await main.locator(".profile-portrait img.bot-avatar").waitFor();
+  await main.locator(".profile-portrait .bot-avatar").waitFor();
   await shoot("bot-page-top");
   // Bot Studio opens on the saved look and saves a new palette straight to the bot.
   await main.getByRole("button", { name: "Bot Studio", exact: true }).click();
   const editor = page.getByRole("dialog", { name: "Bot Studio" });
-  await expect(editor.getByRole("radiogroup", { name: "Character" }).getByRole("radio", { name: "Skiff", exact: true })).toHaveAttribute("aria-checked", "true");
+  await expect(editor.getByRole("radiogroup", { name: "Character" }).getByRole("radio", { name: "Orbit", exact: true })).toHaveAttribute("aria-checked", "true");
   await expect(editor.getByRole("radiogroup", { name: "Eyes" }).getByRole("radio", { name: "Wink", exact: true })).toHaveAttribute("aria-checked", "true");
   await expect(editor.getByRole("group", { name: "Custom colors" }).getByRole("button", { name: "Shell color, #3e4f86", exact: true })).toBeVisible();
   await editor.getByRole("radiogroup", { name: "Palette" }).getByRole("radio", { name: "Fig", exact: true }).click();
@@ -210,7 +235,7 @@ try {
   await editor.getByRole("button", { name: "Save", exact: true }).click();
   await expect(editor).toHaveCount(0);
   // A kit palette drops the custom colors and keeps the eyes.
-  await expect.poll(async () => (await bot("Ranger")).look).toEqual({ head: "skiff", palette: "fig", eyes: "wink" });
+  await expect.poll(async () => (await bot("Ranger")).look).toEqual({ head: "orbit", palette: "fig", eyes: "wink" });
   const about = main.getByPlaceholder("A line about what this bot is for");
   await expect(about).toHaveValue("Finds primary sources.");
   await about.fill("Digs up sources and sums them up.");
@@ -245,7 +270,7 @@ try {
   // Opening an unread chat marks it read.
   await row(await titleOf(c2)).locator(".row").click();
   await expect.poll(async () => (await snapshot()).chats.find((c) => c.id === c2).unread).toBe(false);
-  await main.locator(".emptychat img.bot-avatar").waitFor();
+  await main.locator(".emptychat .bot-avatar").waitFor();
   await shoot("chat");
 
   assert.deepEqual(errors, [], "no page errors");

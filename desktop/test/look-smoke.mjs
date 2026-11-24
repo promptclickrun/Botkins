@@ -134,14 +134,17 @@ try {
   assert.equal(canvas.toUpperCase(), theme.light.canvas, "the theme's canvas is on the page");
 
   // ---- Bots are Botkins: every avatar is the kit's picture, and nothing network-bound loads.
-  const avatars = page.locator("img.bot-avatar");
+  const avatars = page.locator(".bot-avatar");
   await avatars.first().waitFor();
-  const drawn = await avatars.evaluateAll((imgs) => imgs.map((img) => ({ src: img.src.slice(0, 5), ok: img.complete && img.naturalWidth > 0 })));
+  const drawn = await avatars.locator("img").evaluateAll((imgs) => imgs.map((img) => ({ src: img.src.slice(0, 5), ok: img.complete && img.naturalWidth > 0 })));
   assert.ok(drawn.length >= bots.length, "each bot shows an avatar");
   assert.ok(drawn.every((a) => a.src === "blob:" && a.ok), "avatars are drawn from the kit, in the page");
   assert.equal(await page.locator(".avatar, svg.ba-body, .ba-pose").count(), 0, "no Lottie face or silhouette is left");
   // The kit draws every character in a 256-unit box.
-  assert.deepEqual(await avatars.first().evaluate((img) => [img.naturalWidth, img.naturalHeight, img.dataset.state]), [256, 256, "idle"]);
+  assert.deepEqual(await avatars.first().evaluate((avatar) => {
+    const img = avatar.querySelector("img");
+    return [img.naturalWidth, img.naturalHeight, avatar.dataset.state];
+  }), [256, 256, "idle"]);
   if (wanted("home")) await shot("home");
 
   // ---- A tour of the places, for screenshots.
@@ -186,9 +189,9 @@ try {
       await event("botkins-open-bot", "chief");
       await page.locator(".bot-profile").getByRole("button", { name: "Bot Studio", exact: true }).click();
       await page.getByRole("dialog", { name: "Bot Studio" }).waitFor();
-      // Twenty characters, the kit's seven palettes with the eight color templates, and six kinds of eyes.
+      // The current characters, the seven palettes and eight color templates, and six kinds of eyes.
       const studio = page.getByRole("dialog", { name: "Bot Studio" });
-      assert.equal(await studio.getByRole("radiogroup", { name: "Character" }).getByRole("radio").count(), 20);
+      assert.equal(await studio.getByRole("radiogroup", { name: "Character" }).getByRole("radio").count(), 23);
       assert.equal(await studio.getByRole("radiogroup", { name: "Palette" }).getByRole("radio").count(), 15);
       assert.equal(await studio.getByRole("radiogroup", { name: "Eyes" }).getByRole("radio").count(), 6);
     },

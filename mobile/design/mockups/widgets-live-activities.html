@@ -403,7 +403,7 @@
     <div><b>Every tap is a deep link.</b> <code>botkins://bot/&lt;id&gt;</code> opens the Botkin's last chat or a new one, <code>botkins://chat/&lt;id&gt;</code> a chat. A small widget has one tap target, plus buttons that open the app.</div>
     <div><b>Picking a Botkin.</b> The widget asks for a Botkin from the computer in use. The app keeps the list, with names, looks and states, where the widget can read it.</div>
     <div><b>Live without updates.</b> The timers count by themselves. The app reloads the widgets when a Botkin starts, finishes or needs you, and a silent push wakes it for that when it's closed.</div>
-    <div><b>Controls show a symbol, not a picture.</b> Each of the 20 characters needs its outline as a custom symbol. Control Center, the Lock Screen and the Action button take only symbols.</div>
+    <div><b>Controls show a symbol, not a picture.</b> Each character needs its outline as a custom symbol. Control Center, the Lock Screen and the Action button take only symbols.</div>
   </div>
 </section>
 
@@ -817,7 +817,7 @@
   <div class="notes" style="margin-top:0">
     <div><b>1. Botkin widgets.</b> New widget kinds in <code>targets/widgets</code>, which already holds the Botkin pictures. The app writes a small snapshot (Botkins, looks, states, chats) to a shared App Group and reloads the widgets. The computer: a silent push when a Botkin starts, finishes or needs you, so a closed app can refresh them (iOS rations these).</div>
     <div><b>2. Usage widgets.</b> The same snapshot carries the last <code>provider-usage-v1</code> answer. The computer: none.</div>
-    <div><b>3. Controls.</b> One custom symbol per character (20), drawn from the kit's outlines. A control per Botkin, plus Talk and New chat.</div>
+    <div><b>3. Controls.</b> One custom symbol per character, drawn from the kit's outlines. A control per Botkin, plus Talk and New chat.</div>
     <div><b>4. Card per Botkin.</b> Change <code>BotkinActivityAttributes</code> (both copies), <code>activityState</code> in <code>link-host/push.mjs</code> and <code>src/state/activity.ts</code> together, with <code>tests/activity.test.ts</code>. A phone on an older build must still show something sensible.</div>
     <div><b>5. Steps and thinking.</b> The computer sends the last three steps and one line of thinking, at most one update every few seconds. Sealing that text is the open question in section 3.</div>
     <div><b>6. Answers.</b> App Intents for Deny, Allow once, Allow for this chat, a choice, Stop and Try again. Notification actions and Reply… go through the same answer call.</div>

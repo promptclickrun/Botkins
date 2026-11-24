@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256"><title>Drip</title><style data-layer="blink">@keyframes bk-blink{0%,92%,100%{transform:scaleY(1)}94%,94.6%{transform:scaleY(.09)}97%{transform:scaleY(1)}}.bk-blink-2138709{transform-box:fill-box;transform-origin:center;animation:bk-blink 4729ms ease-in-out -309ms infinite}@media(prefers-reduced-motion:reduce){.bk-blink-2138709{animation:none}}</style>
+<g transform="translate(0 0) scale(1)">
+  <path data-role="shell" fill="#c46443" d="M176 18C185 14 193 16 190 25C182 49 182 61 195 85C206 106 225 126 222 158C219 204 184 232 135 237C85 242 39 226 26 190C10 148 31 111 59 88C83 68 115 59 138 40C151 29 164 22 176 18Z"/>
+  <path data-role="shell" fill="#dc8060" d="M33 137C40 119 56 103 74 89C96 73 122 61 144 44C155 35 167 28 176 25C168 35 158 45 148 53C127 72 100 83 79 98C59 111 44 123 33 137Z"/>
+  <path data-role="shell" fill="#a45239" d="M30 183C46 213 78 227 120 227C171 228 208 206 220 168C214 208 181 232 135 237C87 242 44 227 30 196C28 191 27 188 27 184C27 181 29 181 30 183Z"/>
+  <path data-role="accent" fill="#dd9a59" d="M194 113C197 110 202 114 205 120C209 128 209 135 206 137C201 140 195 133 193 128C190 121 190 116 194 113ZM207 144C209 142 213 143 213 147C214 150 212 153 210 153C206 153 205 147 207 144Z"/>
+  <path data-role="shell" fill="#ac5135" d="M39 170C40 144 67 124 103 115C139 105 170 109 186 130C203 152 197 182 177 200C159 216 128 225 96 222C62 220 38 202 39 170Z"/>
+  <path data-role="paper" fill="#f6dfb4" d="M41 167C44 141 69 122 106 113C140 105 170 111 184 132C198 154 190 182 171 199C151 215 122 220 94 217C62 214 39 197 41 167Z"/>
+  <path data-role="paper" fill="#ffeac5" d="M48 157C57 137 79 123 106 117C135 110 155 112 169 120C148 115 128 116 108 121C83 126 61 138 48 157Z"/>
+  <g data-layer="eyes" data-anchors="84,135,163" fill="#593515"><ellipse class="bk-blink-2138709" cx="84" cy="163" rx="8.5" ry="17"/><ellipse class="bk-blink-2138709" cx="135" cy="163" rx="8.5" ry="17"/></g>
+</g></svg>
