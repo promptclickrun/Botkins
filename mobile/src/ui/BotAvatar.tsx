@@ -7,8 +7,9 @@
 // pivot, open eyes blink, and the badge stays put. The bot's own eye style takes the place of the
 // kit's open "oval" eyes; a state with an expression of its own (curious, smiling, sleepy) keeps it.
 import { Image } from "expo-image";
-import { memo, type ReactNode, useEffect, useLayoutEffect, useMemo, useState } from "react";
+import { memo, type ReactNode, useEffect, useId, useLayoutEffect, useMemo, useState } from "react";
 import { AccessibilityInfo, Animated, Easing, type StyleProp, useAnimatedValue, View, type ViewStyle } from "react-native";
+import { trackResource } from "@/state/ledger";
 import { useAppActive } from "@/state/useAppActive";
 import Svg, { Circle, Ellipse, G, Path } from "react-native-svg";
 import { BADGE_ICONS, type BotkinClip, type BotkinState, CLIPS, FILLED_BADGES, MOUTHS } from "@/data/botkinMotion";
@@ -16,8 +17,8 @@ import { lookOf, type ResolvedLook, resolveLook } from "@/data/botLook";
 import type { BotkinLook } from "@/link/types";
 import type { AvatarState } from "@/state/hooks";
 import { usePrefs } from "@/state/prefs";
-import { useAvatarMotion } from "./avatarMotion";
-import { avatarBeat, avatarCanMove, avatarMotion, schedulePasses, scheduleRestPasses } from "./avatarRest";
+import { useAvatarMotionContext } from "./avatarMotion";
+import { avatarBeat, avatarMotion, isListWorkingState, resolveAvatarMotion, schedulePasses, scheduleRestPasses } from "./avatarRest";
 import { useOnShow } from "./useOnShow";
 
 const CLIP_FOR: Record<AvatarState, BotkinState> = {
@@ -107,8 +108,8 @@ function Head({ look, size }: { look: ResolvedLook; size: number }) {
 }
 
 export const BotAvatar = memo(function BotAvatar({ bot, look: given, state = "idle", size = 52, animated: asked, badge, style }: BotAvatarProps) {
-  const screenMoves = useAvatarMotion();
-  const animated = asked ?? screenMoves;
+  const { mode, budget } = useAvatarMotionContext();
+  const slotId = useId();
   const animations = usePrefs((prefs) => prefs.avatarAnimations);
   const spec = given ?? lookOf(bot ?? {});
   const colorKey = spec.colors?.join(",");
@@ -119,11 +120,38 @@ export const BotAvatar = memo(function BotAvatar({ bot, look: given, state = "id
   const inner = size;
   const unit = inner / 256;
   const reducedMotion = useReducedMotion();
-  const still = !avatarCanMove(animations, reducedMotion, animated);
+  const mightMove = animations && !reducedMotion && asked !== false && (asked === true || mode !== "off");
   // Under another page, or in a tab that isn't selected, the head holds the pose it has: nothing
   // jumps while the next screen slides over it, and it starts its clip again when it is seen.
-  const visible = useOnShow(!still);
-  const seen = useAppActive(visible && !still);
+  const visible = useOnShow(mightMove);
+  const seen = useAppActive(visible && mightMove);
+
+  const wantsListSlot = mode === "list" && asked === undefined && !!budget && seen && isListWorkingState(state);
+  const [hasLoopSlot, setHasLoopSlot] = useState(false);
+  useEffect(() => {
+    if (!wantsListSlot || !budget) {
+      setHasLoopSlot(false);
+      return;
+    }
+    const claim = () => setHasLoopSlot(budget.acquire(slotId));
+    claim();
+    const unsub = budget.subscribe(claim);
+    return () => {
+      unsub();
+      budget.release(slotId);
+      setHasLoopSlot(false);
+    };
+  }, [wantsListSlot, budget, slotId]);
+
+  const resolvedMotion = resolveAvatarMotion({
+    enabled: animations,
+    reducedMotion,
+    mode,
+    state,
+    animated: asked,
+    hasLoopSlot,
+  });
+  const still = !resolvedMotion.allowMotion && !resolvedMotion.allowRest && !resolvedMotion.allowBlink;
 
   // The head moves through the clip's poses; `step` runs from 0 to the last pose.
   const step = useAnimatedValue(0);
@@ -133,8 +161,16 @@ export const BotAvatar = memo(function BotAvatar({ bot, look: given, state = "id
   const motion = avatarMotion[state];
   const { blinkMs, firstBlinkMs } = avatarBeat(head.name);
   useLayoutEffect(() => {
-    if (still) step.setValue(0);
+    if (still || (!resolvedMotion.allowMotion && !resolvedMotion.allowRest)) step.setValue(0);
     if (!seen || last < 1) return;
+    if (motion === "rest" && !resolvedMotion.allowRest) {
+      step.setValue(0);
+      return;
+    }
+    if (motion !== "rest" && !resolvedMotion.allowMotion) {
+      step.setValue(0);
+      return;
+    }
     step.setValue(0);
     // Ease each equal-length segment within one timing so a working loop repeats entirely natively.
     const pass = Animated.timing(step, {
@@ -148,35 +184,47 @@ export const BotAvatar = memo(function BotAvatar({ bot, look: given, state = "id
       },
     });
     if (motion === "rest") {
+      const entry = trackResource("animation", "BotAvatar:rest", state);
       const stop = scheduleRestPasses(head.name, () => {
+        entry.bump();
         step.setValue(0);
         pass.start();
       });
       return () => {
         stop();
         pass.stop();
+        entry.release();
       };
     }
+    const entry = trackResource("animation", "BotAvatar:" + motion, state);
     const animation = motion === "loop" ? Animated.loop(pass) : pass;
     animation.start();
-    return () => animation.stop();
-  }, [clip, motion, still, seen, step, last, head.name]);
+    return () => {
+      animation.stop();
+      entry.release();
+    };
+  }, [clip, motion, still, seen, step, last, head.name, resolvedMotion.allowMotion, resolvedMotion.allowRest, state]);
 
   const blinks = eyes !== "smile" && eyes !== "sleepy";
   useLayoutEffect(() => {
     lids.setValue(1);
-    if (!seen || !blinks) return;
+    if (!seen || !blinks || !resolvedMotion.allowBlink) return;
+    const entry = trackResource("animation", "BotAvatar:blink", state);
     const blink = Animated.sequence([
       Animated.timing(lids, { ...nativeTiming, toValue: 0.09, duration: blinkMs * 0.02, easing: ease }),
       Animated.timing(lids, { ...nativeTiming, toValue: 0.09, duration: blinkMs * 0.006 }),
       Animated.timing(lids, { ...nativeTiming, toValue: 1, duration: blinkMs * 0.024, easing: ease }),
     ]);
-    const stop = schedulePasses(firstBlinkMs, blinkMs, () => blink.start());
+    const stop = schedulePasses(firstBlinkMs, blinkMs, () => {
+      entry.bump();
+      blink.start();
+    });
     return () => {
       stop();
       blink.stop();
+      entry.release();
     };
-  }, [still, seen, blinks, blinkMs, firstBlinkMs, lids]);
+  }, [still, seen, blinks, blinkMs, firstBlinkMs, lids, resolvedMotion.allowBlink, state]);
 
   const pose = useMemo(() => {
     if (poses.length < 2) return undefined;

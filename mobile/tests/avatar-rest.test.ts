@@ -1,7 +1,21 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { AVATAR_ANIMATIONS_WARNING, readAvatarAnimations } from "../src/state/avatarPrefs";
-import { avatarBeat, avatarCanMove, avatarMotion, nextPass, REST_BEAT_MS, REST_LATE_MS, REST_SPREAD_MS, schedulePasses, scheduleRestPasses } from "../src/ui/avatarRest";
+import {
+  avatarBeat,
+  avatarCanMove,
+  avatarMotion,
+  createAvatarLoopBudget,
+  isListWorkingState,
+  MAX_LIST_AVATAR_LOOPS,
+  nextPass,
+  resolveAvatarMotion,
+  REST_BEAT_MS,
+  REST_LATE_MS,
+  REST_SPREAD_MS,
+  schedulePasses,
+  scheduleRestPasses,
+} from "../src/ui/avatarRest";
 
 test("only working states loop, resting states pause, and outcomes play once", () => {
   for (const state of ["thinking", "planning", "browsing", "coding", "working", "retrying", "talking", "listening"] as const)
@@ -93,4 +107,65 @@ test("a rest pass that starts a little late still plays", (t) => {
   assert.equal(play.mock.callCount(), 1);
   assert.ok(REST_LATE_MS >= 200);
   stop();
+});
+
+test("list avatars hold pose when idle, never blink, and only loop when working with a budget slot", () => {
+  assert.equal(MAX_LIST_AVATAR_LOOPS, 3);
+  for (const state of ["thinking", "planning", "browsing", "coding", "working", "retrying"] as const) {
+    assert.equal(isListWorkingState(state), true, state);
+    assert.deepEqual(
+      resolveAvatarMotion({ enabled: true, reducedMotion: false, mode: "list", state, hasLoopSlot: true }),
+      { allowMotion: true, allowRest: false, allowBlink: false },
+      `${state} with slot`,
+    );
+    assert.deepEqual(
+      resolveAvatarMotion({ enabled: true, reducedMotion: false, mode: "list", state, hasLoopSlot: false }),
+      { allowMotion: false, allowRest: false, allowBlink: false },
+      `${state} without slot`,
+    );
+  }
+  for (const state of ["idle", "waiting", "needs-input", "pending", "sleeping", "completed", "error", "listening"] as const) {
+    assert.equal(isListWorkingState(state), false, state);
+    assert.deepEqual(
+      resolveAvatarMotion({ enabled: true, reducedMotion: false, mode: "list", state, hasLoopSlot: true }),
+      { allowMotion: false, allowRest: false, allowBlink: false },
+      `${state} holds pose in list`,
+    );
+  }
+});
+
+test("focal avatars keep full motion and Reduce Motion stills everything", () => {
+  assert.deepEqual(
+    resolveAvatarMotion({ enabled: true, reducedMotion: false, mode: "focal", state: "idle", hasLoopSlot: false }),
+    { allowMotion: true, allowRest: true, allowBlink: true },
+  );
+  assert.deepEqual(
+    resolveAvatarMotion({ enabled: true, reducedMotion: true, mode: "focal", state: "working", hasLoopSlot: true }),
+    { allowMotion: false, allowRest: false, allowBlink: false },
+  );
+  assert.deepEqual(
+    resolveAvatarMotion({ enabled: false, reducedMotion: false, mode: "focal", state: "working", hasLoopSlot: true }),
+    { allowMotion: false, allowRest: false, allowBlink: false },
+  );
+});
+
+test("list avatar loop budget caps concurrent loops at 3 and hands off on release", () => {
+  const budget = createAvatarLoopBudget(3);
+  let notifications = 0;
+  const unsub = budget.subscribe(() => {
+    notifications += 1;
+  });
+  assert.equal(budget.acquire("row-1"), true);
+  assert.equal(budget.acquire("row-2"), true);
+  assert.equal(budget.acquire("row-3"), true);
+  assert.equal(budget.acquire("row-4"), false);
+  assert.equal(budget.activeCount(), 3);
+  assert.equal(budget.acquire("row-2"), true, "idempotent for current holder");
+  const beforeRelease = notifications;
+  budget.release("row-2");
+  assert.equal(budget.activeCount(), 2);
+  assert.equal(notifications, beforeRelease + 1);
+  assert.equal(budget.acquire("row-4"), true, "waiting row can now claim slot");
+  assert.equal(budget.activeCount(), 3);
+  unsub();
 });

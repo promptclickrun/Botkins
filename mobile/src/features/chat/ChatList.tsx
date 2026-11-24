@@ -261,7 +261,7 @@ function ChatListScreen() {
 /** Avatars move on this screen (see `AvatarMotion`). */
 export default function ChatList() {
   return (
-    <AvatarMotion>
+    <AvatarMotion mode="list">
       <ChatListScreen />
     </AvatarMotion>
   );
