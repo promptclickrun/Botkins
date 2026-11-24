@@ -14,6 +14,8 @@ import {
   Trash2,
   Zap,
 } from "lucide-react";
+import { Button } from "glisse";
+import { GlassSegmented } from "./GlisseUI";
 import { BotAvatar } from "./Avatar";
 import { useAsk, type PageActions } from "./Pages";
 import { Choices } from "./Preferences";
@@ -140,19 +142,12 @@ export function CadencePicker({
   return (
     <fieldset className="cadence">
       <legend>Repeats</legend>
-      <div className="segmented" role="radiogroup" aria-label="Repeats">
-        {KINDS.filter(([k]) => allowOnce || k !== "once").map(([k, label]) => (
-          <button
-            type="button"
-            key={k}
-            role="radio"
-            aria-checked={value.kind === k}
-            onClick={() => pick(k)}
-          >
-            {label}
-          </button>
-        ))}
-      </div>
+      <GlassSegmented
+        aria-label="Repeats"
+        value={value.kind}
+        items={KINDS.filter(([k]) => allowOnce || k !== "once").map(([k, label]) => ({ value: k, label }))}
+        onValueChange={(next) => pick(next as Cadence["kind"])}
+      />
       {value.kind === "weekly" && (
         <div className="daypicker" role="group" aria-label="Days">
           {DAY_LABELS.map((d, i) => (
@@ -647,26 +642,21 @@ function RoutineDetail({
         </div>
       </section>
       <div className="actionrow routine-actions">
-        <button className="primary" disabled={busy || item.running} onClick={() => act(() => api.runRoutine(chat.id))}>
-          <Zap size={15} />
+        <Button variant="filled" className="lg-compact" icon={<Zap size={15} />} disabled={busy || item.running} onClick={() => act(() => api.runRoutine(chat.id))}>
           Run now
-        </button>
-        <button disabled={busy || finished} onClick={() => act(() => api.setRoutineEnabled(chat.id, paused))}>
-          {paused ? <Play size={15} /> : <Pause size={15} />}
+        </Button>
+        <Button variant="glass" className="lg-compact" icon={paused ? <Play size={15} /> : <Pause size={15} />} disabled={busy || finished} onClick={() => act(() => api.setRoutineEnabled(chat.id, paused))}>
           {paused ? "Resume" : "Pause"}
-        </button>
-        <button disabled={busy} onClick={edit}>
-          <Pencil size={15} />
+        </Button>
+        <Button variant="glass" className="lg-compact" icon={<Pencil size={15} />} disabled={busy} onClick={edit}>
           Edit
-        </button>
-        <button disabled={busy || !others.length} aria-expanded={copyTo !== null} onClick={() => setCopyTo(copyTo === null ? others[0]?.id ?? "" : null)}>
-          <Copy size={15} />
+        </Button>
+        <Button variant="glass" className="lg-compact" icon={<Copy size={15} />} disabled={busy || !others.length} aria-expanded={copyTo !== null} onClick={() => setCopyTo(copyTo === null ? others[0]?.id ?? "" : null)}>
           Duplicate for…
-        </button>
-        <button onClick={() => actions.open(chat.id)}>
-          <MessageCircle size={15} />
+        </Button>
+        <Button variant="glass" className="lg-compact" icon={<MessageCircle size={15} />} onClick={() => actions.open(chat.id)}>
           Open chat
-        </button>
+        </Button>
         <button
           className="danger"
           disabled={busy || item.running}

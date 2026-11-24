@@ -26,6 +26,8 @@ import {
   X,
   type LucideIcon,
 } from "lucide-react";
+import { Button, Input } from "glisse";
+import { GlassTabBar } from "./GlisseUI";
 import type { AppUpdate, AppInfo, Bot, Catalog, MarketAgentTemplate, Preferences, State, NotificationSettings } from "./types";
 import ModelPicker from "./ModelPicker";
 import { AppearanceSettings, BehaviorSettings, ChatDisplaySettings, BackgroundSettings, HarnessSettings, SummarySettings } from "./Preferences";
@@ -406,26 +408,17 @@ export default function Settings({
                     ))}
                   </select>
                 </span>
-                <div className="segmented" role="tablist" aria-label={bot.name + " settings"}>
-                  {(
-                    [
-                      ["model", "Model"],
-                      ["profile", "Profile"],
-                      ["capabilities", "Capabilities"],
-                      ["memory", "Memory"],
-                    ] as const
-                  ).map(([v, label]) => (
-                    <button
-                      key={v}
-                      type="button"
-                      role="tab"
-                      aria-selected={view === v}
-                      onClick={() => setView(v)}
-                    >
-                      {label}
-                    </button>
-                  ))}
-                </div>
+                <GlassTabBar
+                  aria-label={bot.name + " settings"}
+                  value={view}
+                  items={[
+                    { value: "model", label: "Model" },
+                    { value: "profile", label: "Profile" },
+                    { value: "capabilities", label: "Capabilities" },
+                    { value: "memory", label: "Memory" },
+                  ]}
+                  onValueChange={(next) => setView(next as typeof view)}
+                />
               </div>
               {view === "model" && (
                 <Group title="Default model" footer={"The default for new chats with " + bot.name + "."}>
@@ -456,14 +449,14 @@ export default function Settings({
                         <small>Plugins, MCP servers, skills, commands and tools.</small>
                       </div>
                       <div className="set-control">
-                        <button
-                          type="button"
-                          className="set-button"
+                        <Button
+                          variant="glass"
+                          className="lg-compact"
                           disabled={busy}
                           onClick={() => act(async () => setCatalog(await api.catalog(id, undefined, true)))}
                         >
                           {busy ? "Working…" : "Inspect capabilities"}
-                        </button>
+                        </Button>
                       </div>
                     </div>
                     {catalog && (
@@ -629,10 +622,10 @@ function BotProfileForm({
     >
       <div className="set-card">
         <Row label="Name">
-          {(id) => <input id={id} name="name" required maxLength={48} defaultValue={bot.name} />}
+          {(id) => <Input id={id} name="name" required maxLength={48} defaultValue={bot.name} />}
         </Row>
         <Row label="Role">
-          {(id) => <input id={id} name="role" required maxLength={90} defaultValue={bot.role} />}
+          {(id) => <Input id={id} name="role" required maxLength={90} defaultValue={bot.role} />}
         </Row>
         <Row label="Instructions" stacked>
           {(id) => <textarea id={id} name="instructions" required rows={3} maxLength={30000} defaultValue={bot.instructions} />}
@@ -651,9 +644,9 @@ function BotProfileForm({
           )}
         </Row>
         <div className="set-actions">
-          <button className="set-button primary" disabled={busy}>
+          <Button type="submit" variant="filled" className="lg-compact" disabled={busy}>
             Save bot
-          </button>
+          </Button>
         </div>
       </div>
     </form>

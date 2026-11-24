@@ -32,6 +32,7 @@ import {
   Volume2,
   Square,
 } from "lucide-react";
+import { Button, Glass, Menu as GlisseMenu } from "glisse";
 import { type CompletionScroll, finalReplyIndex } from "./completionScroll";
 import { isSilentMessage } from "../desktop/link/silent-reply.mjs";
 import { pullRequestUrl } from "../desktop/link/pr-url.mjs";
@@ -164,23 +165,25 @@ function ReactionList({ message, state }: { message: Message; state: State }) {
 }
 
 function ChatOptions({ state, chat, fail }: { state: State; chat: Chat; fail: (error: unknown) => void }) {
-  const menu = useMenu();
   const item = regenerateTitleItem(state, chat, fail);
-  if (!item) return null;
+  if (!item || item === "separator") return null;
+  const Icon = item.icon;
   return (
-    <>
-      <button
-        className="chathead-icon menu-button"
-        aria-label="Chat options"
-        title="Chat options"
-        aria-haspopup="menu"
-        aria-expanded={!!menu.node}
-        onClick={(event) => menu.show(event, chat.title, [item])}
-      >
-        <Ellipsis size={17} />
-      </button>
-      {menu.node}
-    </>
+    <GlisseMenu
+      className="chathead-menu"
+      aria-label="Chat options"
+      align="end"
+      icon={<Ellipsis size={17} />}
+      items={[
+        {
+          label: item.label,
+          icon: Icon ? <Icon size={14} aria-hidden="true" /> : undefined,
+          onSelect: item.run,
+          disabled: item.disabled,
+          destructive: item.danger,
+        },
+      ]}
+    />
   );
 }
 
@@ -1300,7 +1303,9 @@ function ChatViewBody({
           </div>
         </div>
         {/* Always there, so it can fade in and out; hidden, it is out of the tab order and out of reach. */}
-        <button
+        <Button
+          variant="glass"
+          icon={<ArrowDown size={18} strokeWidth={2.25} aria-hidden="true" />}
           className={"to-latest" + (away ? " shown" : "")}
           aria-label="Scroll to latest message"
           title="Scroll to latest message"
@@ -1311,13 +1316,11 @@ function ChatViewBody({
             // From the keyboard, focus moves on to the composer, since the button hides.
             if (e.detail === 0) document.querySelector<HTMLElement>(".composewrap textarea")?.focus();
           }}
-        >
-          <ArrowDown size={18} strokeWidth={2.25} aria-hidden="true" />
-        </button>
+        />
         {notice && (
-          <div className="canvas-notice" role="status">
+          <Glass className="canvas-notice" role="status">
             {notice}
-          </div>
+          </Glass>
         )}
       </div>
       {reactionDialog.node}

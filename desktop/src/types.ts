@@ -1941,6 +1941,7 @@ export type PhoneLink = {
 };
 export type AppUpdate = { auto?: boolean; status: "idle" | "checking" | "current" | "available" | "downloading" | "restarting" | "error"; current: string; latest?: string; message?: string; canInstall: boolean };
 export type AppInfo = { version: string; electron: string; chrome: string; platform: string };
+export type BackdropId = "clean" | "mesh" | "botkins" | "grid";
 export type Appearance = {
   /** System, light or dark. */
   theme: "system" | "light" | "dark";
@@ -1957,6 +1958,8 @@ export type Appearance = {
   /** The person picked the font themselves. */
   fontPicked?: boolean;
   textSize: "small" | "default" | "large" | "larger";
+  /** Backdrop layer rendered behind the glass UI; "clean" keeps the solid theme surface. */
+  backdrop?: BackdropId;
   /** "theme", or a hex color for the person's own messages. */
   bubble: string;
   /** Missing on an older computer means the usual desktop default: on. */

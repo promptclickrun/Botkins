@@ -53,12 +53,16 @@ import type { Attachment, BoardItem, Bot, Chat, MarketAgentTemplate, MentionInpu
 import { tokenOf, type DraftMention } from "./MentionMenu";
 import { composeSlashPrompt, type DraftCommand } from "./slashCommand";
 import { applyAppearance, startAppearance } from "./appearance";
+import { BackdropLayer } from "./Backdrop";
+import { backdropOf } from "./themes";
 import { memberTeam, teamCan } from "./teamAccess";
 import { chatMentionPeople } from "./peopleView";
 import { leftEmpty, newChatToReuse } from "./emptyChat";
 import { allUnreadChats, botUnreadChats } from "./unread";
 import { chatsPageUnreadChats } from "./chatSections";
+import "glisse/styles.css";
 import "./style.css";
+import "./glisse.css";
 
 // The remembered colors go on before anything is drawn.
 startAppearance();
@@ -868,6 +872,7 @@ function App() {
   );
   return (
     <AvatarAnimations enabled={state.settings.appearance.avatarAnimations !== false}>
+    <BackdropLayer backdrop={backdropOf(state.settings.appearance.backdrop)} />
     <div className={"shell" + (collapsed ? " collapsed" : "")}>
       <aside aria-label="Side menu">
         <div className="brand">

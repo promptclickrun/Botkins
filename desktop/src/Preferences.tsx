@@ -1,11 +1,14 @@
 import { saveChatDisplay } from "./chatDisplay";
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import { Check } from "lucide-react";
+import { Button, Slider } from "glisse";
 import type { Preferences as Values, Appearance, HarnessStatus } from "./types";
+import { BackdropPreview } from "./Backdrop";
+import { GlassSegmented } from "./GlisseUI";
 import { ProviderInstall } from "./ProviderSetup";
 import { Group, Row, SwitchRow, ValueRow } from "./SettingsRows";
 import { modeOf, previewContrast } from "./appearance";
-import { type Mode, TEXT_SIZES, THEMES, type ThemeColors, fontShown, fontsHere, themeFor, themeOf } from "./themes";
+import { BACKDROPS, backdropOf, type Mode, TEXT_SIZES, THEMES, type ThemeColors, fontShown, fontsHere, themeFor, themeOf } from "./themes";
 
 type Patch = Parameters<typeof window.botkins.setPreferences>[0];
 type Props = {
@@ -100,13 +103,12 @@ function rove(e: KeyboardEvent<HTMLElement>) {
 /** A few choices side by side, one of them on. */
 export function Choices<T extends string>({ label, value, options, onChange }: { label: string; value: T; options: { id: T; name: string }[]; onChange: (id: T) => void }) {
   return (
-    <div className="segmented set-choices" role="radiogroup" aria-label={label} onKeyDown={rove}>
-      {options.map((option) => (
-        <button key={option.id} type="button" role="radio" aria-checked={option.id === value} tabIndex={option.id === value ? 0 : -1} onClick={() => onChange(option.id)}>
-          {option.name}
-        </button>
-      ))}
-    </div>
+    <GlassSegmented
+      aria-label={label}
+      value={value}
+      items={options.map((option) => ({ value: option.id, label: option.name }))}
+      onValueChange={(next) => onChange(next as T)}
+    />
   );
 }
 
@@ -252,16 +254,14 @@ export function AppearanceSettings({ settings, change, fail }: Props) {
         />
         <Row label="Contrast" help="Stronger lines and clearer quiet text across the app.">
           {(id, describedBy) => (
-            <input
+            <Slider
               id={id}
               aria-describedby={describedBy}
-              type="range"
-              className="set-range"
               min={0}
               max={100}
               step={5}
               value={contrast}
-              onChange={(e) => moveContrast(Number(e.target.value))}
+              onValueChange={moveContrast}
             />
           )}
         </Row>
@@ -284,6 +284,32 @@ export function AppearanceSettings({ settings, change, fail }: Props) {
           <div className="set-control">
             <Choices label="Text size" value={a.textSize} options={TEXT_SIZES} onChange={(textSize) => void update({ textSize })} />
           </div>
+        </div>
+      </Group>
+      <Group title="Backdrop" footer="Clean keeps your solid theme surface. Other backdrops shine gently through the glass controls.">
+        <div className="backdrop-cards" role="radiogroup" aria-label="Backdrop" onKeyDown={rove}>
+          {BACKDROPS.map((item) => {
+            const on = backdropOf(a.backdrop) === item.id;
+            return (
+              <button
+                key={item.id}
+                type="button"
+                role="radio"
+                aria-checked={on}
+                aria-label={item.name}
+                tabIndex={on ? 0 : -1}
+                className={"backdrop-card" + (on ? " on" : "")}
+                onClick={() => void update({ backdrop: item.id })}
+              >
+                <BackdropPreview id={item.id} />
+                <span className="backdrop-name">
+                  {on && <Check size={13} strokeWidth={2.5} aria-hidden="true" />}
+                  {item.name}
+                </span>
+                <span className="backdrop-desc">{item.description}</span>
+              </button>
+            );
+          })}
         </div>
       </Group>
       <Group title="Your messages">
@@ -448,9 +474,9 @@ export function BehaviorSettings({ settings, change, fail }: Props) {
           label="Remembered approvals"
           help="Saved tool approvals and cross-host Teamwork permissions."
           value={
-            <button
-              type="button"
-              className="set-button"
+            <Button
+              variant="glass"
+              className="lg-compact"
               onClick={() =>
                 window.botkins
                   .clearApprovals()
@@ -459,7 +485,7 @@ export function BehaviorSettings({ settings, change, fail }: Props) {
               }
             >
               Clear remembered approvals
-            </button>
+            </Button>
           }
         />
       </Group>
@@ -507,7 +533,7 @@ export function BehaviorSettings({ settings, change, fail }: Props) {
             )}
           </Row>
           <div className="set-actions">
-            <button className="set-button primary">Save instructions</button>
+            <Button type="submit" variant="filled" className="lg-compact">Save instructions</Button>
           </div>
         </div>
       </form>

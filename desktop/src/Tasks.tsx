@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Check, MessageCircle, Play, Plus, RotateCcw, Trash2, X } from "lucide-react";
+import { Button } from "glisse";
 import { BotAvatar } from "./Avatar";
 import { RichText } from "./RichText";
 import type { BotTask, State, TaskPriority, TaskStatus } from "./types";
@@ -185,16 +186,20 @@ export default function TasksPage({
                 </button>
               )}
               {current && ["review", "blocked", "done"].includes(current.status) && (
-                <button type="button" onClick={() => void act(() => api.moveTask(current.id, "ready"), true)}>
-                  <RotateCcw size={15} /> Try again
-                </button>
+                <Button variant="glass" className="lg-compact" icon={<RotateCcw size={15} />} onClick={() => void act(() => api.moveTask(current.id, "ready"), true)}>
+                  Try again
+                </Button>
               )}
               {current && current.status !== "working" && (
-                <button type="button" className="danger" onClick={() => void act(() => api.deleteTask(current.id), true)}>
-                  <Trash2 size={15} /> Delete
-                </button>
+                <Button variant="glass" destructive className="lg-compact" icon={<Trash2 size={15} />} onClick={() => void act(() => api.deleteTask(current.id), true)}>
+                  Delete
+                </Button>
               )}
-              {current?.status !== "working" && <button className="primary">{current ? "Save" : "Add task"}</button>}
+              {current?.status !== "working" && (
+                <Button type="submit" variant="filled" className="lg-compact">
+                  {current ? "Save" : "Add task"}
+                </Button>
+              )}
             </div>
           </form>
         )}

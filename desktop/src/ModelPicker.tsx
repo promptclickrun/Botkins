@@ -1,5 +1,7 @@
 import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
-import { BrainCircuit, Check, ChevronDown, Search } from "lucide-react";
+import { BrainCircuit, Check, ChevronDown } from "lucide-react";
+import { Button, SearchField } from "glisse";
+import { GlassSegmented } from "./GlisseUI";
 import type { Bot, Chat, FastMode, ModelChoice, ModelInfo, Preferences, ProviderStatus } from "./types";
 import ProviderIcon from "./ProviderIcon";
 import { effortLabel, findModel, modelFacts, modelName, plainError, PROVIDER_NAMES, useModelCatalog, useProviders, useProviderUsage } from "./providers";
@@ -357,36 +359,33 @@ export default function ModelPicker({
           Model
         </span>
         {searchable && (
-          <span className="mp-search">
-            <Search size={14} aria-hidden="true" />
-            <input
-              type="search"
-              aria-label="Search models"
-              aria-controls={uid + "-list"}
-              placeholder="Search models"
-              value={query}
-              onChange={(e) => {
-                setQuery(e.target.value);
+          <SearchField
+            className="mp-search-field lg-search-compact"
+            aria-label="Search models"
+            aria-controls={uid + "-list"}
+            placeholder="Search models"
+            value={query}
+            onValueChange={(next) => {
+              setQuery(next);
+              setSearchPages(1);
+              setCursor(undefined);
+            }}
+            onKeyDown={(e) => {
+              if (e.key === "ArrowDown" || e.key === "Enter") {
+                e.preventDefault();
+                if (!visible && order.length && !isMore(order[0])) pick(order[0]);
+                list.current?.focus();
+              }
+              if (e.key === "Escape" && query) {
+                // Clears the search instead of closing the dialog.
+                e.preventDefault();
+                e.stopPropagation();
+                setQuery("");
                 setSearchPages(1);
                 setCursor(undefined);
-              }}
-              onKeyDown={(e) => {
-                if (e.key === "ArrowDown" || e.key === "Enter") {
-                  e.preventDefault();
-                  if (!visible && order.length && !isMore(order[0])) pick(order[0]);
-                  list.current?.focus();
-                }
-                if (e.key === "Escape" && query) {
-                  // Clears the search instead of closing the dialog.
-                  e.preventDefault();
-                  e.stopPropagation();
-                  setQuery("");
-                  setSearchPages(1);
-                  setCursor(undefined);
-                }
-              }}
-            />
-          </span>
+              }
+            }}
+          />
         )}
       </div>
       {empty ? (
@@ -636,9 +635,9 @@ export default function ModelPicker({
       )}
       {!empty && !held && (
         <div className="model-save">
-          <button className="primary" disabled={!ready || unavailable || (!!draft && !models.length)}>
+          <Button type="submit" variant="filled" className="lg-compact" disabled={!ready || unavailable || (!!draft && !models.length)}>
             {saving ? "Saving…" : "Save model"}
-          </button>
+          </Button>
           {saved && <small role="status">Model saved.</small>}
         </div>
       )}
@@ -684,40 +683,18 @@ function Levels({
   change: (effort: string) => void;
 }) {
   const all = firstLabel ? ["", ...levels] : levels;
-  const row = useRef<HTMLDivElement>(null);
-  function keys(e: KeyboardEvent<HTMLDivElement>) {
-    const at = all.indexOf(value);
-    const next =
-      e.key === "ArrowRight" || e.key === "ArrowDown"
-        ? (at + 1) % all.length
-        : e.key === "ArrowLeft" || e.key === "ArrowUp"
-          ? (at - 1 + all.length) % all.length
-          : e.key === "Home"
-            ? 0
-            : e.key === "End"
-              ? all.length - 1
-              : -1;
-    if (next < 0) return;
-    e.preventDefault();
-    change(all[next]);
-    requestAnimationFrame(() => row.current?.querySelectorAll<HTMLElement>("[role=radio]")[next]?.focus());
-  }
+  const current = all.includes(value) ? value : all[0];
   return (
-    <div ref={row} className="segmented thinking-levels" role="radiogroup" aria-label={label} onKeyDown={keys}>
-      {all.map((l) => (
-        <button
-          key={l || "default"}
-          type="button"
-          role="radio"
-          aria-checked={value === l}
-          tabIndex={value === l || (!all.includes(value) && l === all[0]) ? 0 : -1}
-          disabled={disabled}
-          onClick={() => change(l)}
-        >
-          {l ? effortLabel(l) : firstLabel}
-        </button>
-      ))}
-    </div>
+    <GlassSegmented
+      className={"thinking-levels" + (disabled ? " is-disabled" : "")}
+      aria-label={label}
+      aria-disabled={disabled || undefined}
+      value={current}
+      items={all.map((l) => ({ value: l, label: l ? effortLabel(l) : (firstLabel ?? "") }))}
+      onValueChange={(next) => {
+        if (!disabled) change(next);
+      }}
+    />
   );
 }
 

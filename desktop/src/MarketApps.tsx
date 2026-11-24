@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState, useSyncExternalStore, type ReactNode } from "react";
 import { AlertCircle, ArrowLeft, Bot, Check, CheckCircle2, ChevronRight, LayoutGrid, Loader2, Search, ShieldAlert } from "lucide-react";
+import { SearchField } from "glisse";
 import { useAsk } from "./Pages";
 import { Group, errorText } from "./SettingsRows";
 import type { ComposioAccount, ComposioCatalog, ComposioToolkit, McpServer, State } from "./types";
@@ -373,10 +374,7 @@ function Empty({ icon, title, text, action }: { icon: ReactNode; title: string; 
 function SearchBox({ value, onChange, label = "Search apps" }: { value: string; onChange: (text: string) => void; label?: string }) {
   return (
     <div className="set-toolbar int-toolbar plugin-toolbar">
-      <label className="int-filter">
-        <Search size={14} aria-hidden="true" />
-        <input type="search" aria-label={label} placeholder={label} value={value} onChange={(e) => onChange(e.target.value)} />
-      </label>
+      <SearchField aria-label={label} placeholder={label} value={value} onValueChange={onChange} />
     </div>
   );
 }

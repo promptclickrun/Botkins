@@ -1,5 +1,6 @@
 import { useEffect, useId, useRef, type ReactNode } from "react";
 import { createPortal } from "react-dom";
+import { Switch } from "glisse";
 import "./settings.css";
 
 /** A main-process error as a sentence: drops Electron's "Error invoking remote method …" prefix. */
@@ -144,15 +145,12 @@ export function SwitchRow({
   return (
     <Row label={label} help={help}>
       {(id, describedBy) => (
-        <input
+        <Switch
           id={id}
-          type="checkbox"
-          role="switch"
-          className="switch set-switch"
           aria-describedby={describedBy}
           checked={checked}
           disabled={disabled}
-          onChange={(e) => onChange(e.target.checked)}
+          onCheckedChange={onChange}
         />
       )}
     </Row>

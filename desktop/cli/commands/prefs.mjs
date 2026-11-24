@@ -31,6 +31,7 @@ const number = (value) => Number(value).toLocaleString("en-US");
 const KEYS = [
   ["appearance.theme", "system | light | dark", "Light, dark, or the computer's own"],
   ["appearance.colorTheme", list(THEMES.themes.map((theme) => theme.id)), "The color theme"],
+  ["appearance.backdrop", "clean | mesh | botkins | grid", "The backdrop behind the glass"],
   ["appearance.textSize", "small | default | large | larger", "The size of the text"],
   ["appearance.font", list(THEMES.fonts.map((font) => font.id)), "The font"],
   ["appearance.bubble", "theme | #rrggbb", "The color of your messages"],

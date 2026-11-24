@@ -4,11 +4,22 @@
 // the design kit's own palette, "ink" (what the app wears until a person picks a theme) is black on
 // white and white on black, and the others are named after the kit's bot palettes.
 import catalog from "../desktop/themes.json";
-import type { Appearance } from "./types";
+import type { Appearance, BackdropId } from "./types";
 
+export type { BackdropId };
 export type ThemeColors = (typeof catalog.themes)[number]["light"];
 export type Theme = { id: string; name: string; light: ThemeColors; dark: ThemeColors; mono?: boolean };
 export type Mode = "light" | "dark";
+
+export const DEFAULT_BACKDROP: BackdropId = "clean";
+export const BACKDROPS: { id: BackdropId; name: string; description: string }[] = [
+  { id: "clean", name: "Clean", description: "Solid theme surface" },
+  { id: "mesh", name: "Mesh", description: "Vibrant radial blobs with soft sheen" },
+  { id: "botkins", name: "Botkins", description: "Ambient indigo, pink and teal orbs" },
+  { id: "grid", name: "Grid", description: "Subtle 28px hairline grid" },
+];
+export const backdropOf = (id: string | undefined): BackdropId =>
+  BACKDROPS.some((b) => b.id === id) ? (id as BackdropId) : DEFAULT_BACKDROP;
 
 export const THEMES: Theme[] = catalog.themes;
 export const DEFAULT_THEME = catalog.default;

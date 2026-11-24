@@ -1,6 +1,7 @@
 // Spaces in the window ("spaces-v1"): the side menu's Spaces, a space's page and All spaces. The
 // pure parts (names, tags, lines, lists) are in spaces.ts; the Share popover is in SpaceShare.tsx.
 import { useEffect, useRef, useState, type ReactNode } from "react";
+import { Button } from "glisse";
 import {
   ArrowDown,
   ArrowUp,
@@ -373,9 +374,9 @@ export function NewPanel({ state, space, botId, close, opened }: { state: State;
           </p>
         )}
         <div className="ask-actions">
-          <button className="primary" disabled={busy || !prompt.trim()}>
+          <Button type="submit" variant="filled" className="lg-compact" disabled={busy || !prompt.trim()}>
             Create
-          </button>
+          </Button>
         </div>
       </form>
     </dialog>

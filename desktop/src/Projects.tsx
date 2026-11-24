@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Button } from "glisse";
 import {
   ArrowDown,
   ArrowLeft,
@@ -97,9 +98,9 @@ export default function Projects({
               <FolderKanban size={30} />
               <h2>Start a project</h2>
               <p>Give a piece of work a home. Add a folder to make it a coding project.</p>
-              <button className="primary" onClick={() => setCreating(true)}>
-                <Plus size={16} /> New project
-              </button>
+              <Button variant="filled" className="lg-compact" icon={<Plus size={16} />} onClick={() => setCreating(true)}>
+                New project
+              </Button>
             </div>
           ) : (
             <section className="project-group" aria-label="Projects">

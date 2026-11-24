@@ -48,6 +48,7 @@ import {
   UserRound,
   type LucideIcon,
 } from "lucide-react";
+import { Button, Input, SearchField } from "glisse";
 import { BotAvatar, activityLabel, botActivity, chatActivity } from "./Avatar";
 import type { Bot, Chat, Section, State } from "./types";
 import { memberTeam, teamCan } from "./teamAccess";
@@ -297,27 +298,30 @@ function AskDialog({ ask, done }: { ask: Ask; done: (answer: string | null) => v
         {ask.field && (
           <label>
             {ask.field.label}
-            <input
+            <Input
               autoFocus
               required
               maxLength={ask.field.max}
               value={value}
-              onChange={(e) => setValue(e.target.value)}
+              onValueChange={setValue}
               onFocus={(e) => e.currentTarget.select()}
             />
           </label>
         )}
         <div className="ask-actions">
-          <button type="button" className="secondary" onClick={() => done(null)}>
+          <Button variant="glass" className="lg-compact" onClick={() => done(null)}>
             Cancel
-          </button>
-          <button
-            className={ask.danger ? "primary danger-primary" : "primary"}
+          </Button>
+          <Button
+            type="submit"
+            variant="filled"
+            destructive={ask.danger}
+            className="lg-compact"
             autoFocus={!ask.field}
             disabled={!!ask.field && !value.trim()}
           >
             {ask.confirm}
-          </button>
+          </Button>
         </div>
       </form>
     </dialog>,
@@ -720,8 +724,10 @@ function BotsSection({ state, actions, home }: { state: State; actions: PageActi
             </button>
           )}
           {(!home || tools) && teamCan(state, "agents", "manage") && (
-          <button
-            className="textbutton"
+          <Button
+            variant="glass"
+            className="lg-compact"
+            icon={<FolderPlus size={15} />}
             onClick={() =>
               run(
                 actions,
@@ -737,15 +743,13 @@ function BotsSection({ state, actions, home }: { state: State; actions: PageActi
               )
             }
           >
-            <FolderPlus size={15} />
             New section
-          </button>
+          </Button>
           )}
           {teamCan(state, "agents", "create") && (
-            <button className="textbutton" onClick={actions.addBot}>
-              <Plus size={15} />
+            <Button variant="glass" className="lg-compact" icon={<Plus size={15} />} onClick={actions.addBot}>
               Add bot
-            </button>
+            </Button>
           )}
         </span>
       </div>
@@ -762,15 +766,13 @@ function BotsSection({ state, actions, home }: { state: State; actions: PageActi
               </button>
             ))}
           </div>
-          <label className="search">
-            <Search size={15} />
-            <input
-              aria-label="Search bots"
-              placeholder="Search bots"
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-            />
-          </label>
+          <SearchField
+            className="lg-search-compact"
+            aria-label="Search bots"
+            placeholder="Search bots"
+            value={query}
+            onValueChange={setQuery}
+          />
         </div>
       )}
       <BotCards state={state} actions={actions} query={query} filter={filter} large={home} />
@@ -1260,15 +1262,14 @@ export function ChatsPage({
       <section>
         <div className="sectionhead">
           <h2>Conversations</h2>
-          <label className="search">
-            <Search size={15} />
-            <input
-              aria-label="Search chats"
-              placeholder="Search chats"
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-            />
-          </label>
+          <Input
+            className="lg-search-compact"
+            icon={<Search size={15} />}
+            aria-label="Search chats"
+            placeholder="Search chats"
+            value={query}
+            onValueChange={setQuery}
+          />
         </div>
         <div className="chat-tools">
           <div className="filters chat-filters" role="group" aria-label="Show chats">
