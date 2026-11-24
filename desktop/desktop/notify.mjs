@@ -84,8 +84,11 @@ export function decide(event, { settings, focused, now = new Date(), timeZone, m
   const schedule = run.scheduleId != null ? chat?.schedules?.find((s) => s.id === run.scheduleId) : null;
   // A no-output routine is deliberately silent even when its saved notify flag is old or absent.
   if (schedule?.deliver?.to === "none") return null;
+  // A proactive check goes to the one person it looked out for, never to routine targets; set to
+  // deliver quietly, it puts the alert in their chat and says nothing.
+  if (run.proactive && schedule?.notify === false) return null;
   const target =
-    routine && !run.panelId
+    routine && !run.panelId && !run.proactive
       ? (resolved ?? resolveRoutineTargets({ run, chat, entry: schedule }))
       : null;
   if (run.panelId) {

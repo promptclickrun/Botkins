@@ -446,7 +446,7 @@ export class Push {
     const chat = chats.get(run.chatId);
     const kind = this.kindOf(run, chat);
     const resolved =
-      kind === "routines" && !run.panelId
+      kind === "routines" && !run.panelId && !run.proactive
         ? resolveRoutineTargets({
             run,
             chat,

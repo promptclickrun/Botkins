@@ -265,6 +265,25 @@ test("notify off delivers quietly: the alert is in the person's chat with no not
   assert.equal(desktopNote({ type: "turn", chat: ws.chat(run.chatId), run, bot: ws.bot("pip") }, { settings: ws.state.settings, focused: false, mine: true }), null);
 });
 
+test("a proactive check never takes routine notify targets: no override tool, and saved targets are ignored", async (t) => {
+  const { ws, seen } = setup(t, { team: team() });
+  ws.proactive.setBot("pip", wizard(["owner", "m_avery"]));
+  const { chat, entry } = ws.proactive.routine("pip", "m_avery");
+  // Targets saved on Avery's routine would tell the owner about Avery's evidence.
+  entry.notifyTargets = { people: ["owner"], devices: [] };
+  const names = ws.panels.routines.tools(ws.bot("pip"), chat, { id: "r1", chatId: chat.id, scheduleId: entry.id, trigger: "scheduled", proactive: true }, { stopped: false }).map((tool) => tool.name);
+  assert.ok(!names.includes("routine_notify"), "a proactive check can't choose who hears of it");
+  const averysChat = chatOf(ws, "pip", "m_avery");
+  failedRun(ws, "a", averysChat, "Avery report");
+  seen.reply = proposal("Your report failed.");
+  await tick(ws, "pip", "m_avery");
+  const run = ws.state.runs.find((r) => r.proactive);
+  assert.equal(ws.resolveRoutineTargets(ws.chat(run.chatId), run), null);
+  // The owner's computer is not Avery's: no notification there, whatever targets were saved.
+  const resolved = ws.resolveRoutineTargets(ws.chat(run.chatId), run);
+  assert.equal(desktopNote({ type: "turn", chat: ws.chat(run.chatId), run, bot: ws.bot("pip") }, { settings: ws.state.settings, focused: false, mine: false, resolved }), null);
+});
+
 // ── Who may change what ─────────────────────────────────────────────────────────────────────────
 
 test("the link lets a member who sees a bot reach its Proactive agent, and nobody else", () => {

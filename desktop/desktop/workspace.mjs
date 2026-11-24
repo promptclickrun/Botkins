@@ -1444,7 +1444,8 @@ export class Workspace {
   /** Resolves the concrete host + device targets for a finished routine run. */
   resolveRoutineTargets(chat, run) {
     const entry = chat?.schedules?.find((item) => item.id === run?.scheduleId && item.routine);
-    if (!entry) return null;
+    // A proactive check speaks to the one person it looked out for (proactive-rules): never to targets.
+    if (!entry || entry.proactive || run?.proactive) return null;
     const ctx = this.notifyTargetsContext(chat.botId);
     return resolveRoutineNotifyTargets({
       ...ctx,

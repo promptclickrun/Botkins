@@ -759,8 +759,9 @@ export class Routines {
       ),
     ];
     // Per-run notification override: only available inside an active routine/scheduled run that can notify.
-    if ((run?.scheduleId != null || run?.trigger === "scheduled") && !this.noOutput(chat, run?.scheduleId)) {
-      const runEntry = chat.schedules?.find((s) => s.id === run.scheduleId && s.routine);
+    // Not in a proactive check: its alert is for the one person it looked out for, and nobody else.
+    const runEntry = chat.schedules?.find((s) => s.id === run?.scheduleId && s.routine);
+    if ((run?.scheduleId != null || run?.trigger === "scheduled") && !this.noOutput(chat, run?.scheduleId) && !run?.proactive && !runEntry?.proactive) {
       const runActor = personOf(runEntry?.createdBy ?? chat.createdBy);
       tools.push(
         tool(
