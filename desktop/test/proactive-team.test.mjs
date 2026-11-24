@@ -14,6 +14,8 @@ import { decide as desktopNote, Notifier } from "../desktop/notify.mjs";
 import { authorize, defaultTeam, filterParts, ownerParts } from "../desktop/link/team.mjs";
 import { ownerWindowView } from "../desktop/admin-view.mjs";
 import { routineName } from "../desktop/proactive.mjs";
+import { controlApi } from "../desktop/terminal/control.mjs";
+import { LinkHost } from "../desktop/link/index.mjs";
 
 const HOUR = 3600_000;
 const NOW = Date.UTC(2026, 10, 22, 18);
@@ -391,6 +393,57 @@ test("a member is sent the shared settings and only their own entry and activity
   assert.deepEqual(Object.keys(cut.people).sort(), ["m_avery", "m_blake", "owner"]);
 });
 
+test("only the owner can resume a bot they paused, including after loading its settings", (t) => {
+  const { ws } = setup(t, { team: team() });
+  ws.proactive.setBot("pip", wizard(["owner", "m_avery"], { sweepHours: 3 }));
+  ws.proactive.setBot("pip", { enabled: false });
+  assert.throws(() => ws.proactive.setBot("pip", { enabled: true }, "m_avery"), /The owner paused this bot's Proactive agent/);
+  ws.proactive.setBot("pip", { people: { m_avery: { notify: false } } }, "m_avery");
+  const saved = migrateProactive(ws.state.settings.proactive, ws.state.proactive);
+  assert.equal(saved.settings.bots.pip.pausedBy, "owner");
+  assert.equal(ws.proactive.active("pip", "owner"), false);
+  assert.equal(ws.proactive.active("pip", "m_avery"), false);
+  ws.proactive.setBot("pip", { enabled: true });
+  assert.equal(ws.proactive.config("pip").pausedBy, undefined);
+  assert.equal(ws.proactive.active("pip", "owner"), true);
+  assert.equal(ws.proactive.config("pip").sweepHours, 3);
+  assert.ok(ws.proactive.config("pip").watch.includes("tasks"));
+  assert.throws(() => ws.proactive.setBot("pip", { pausedBy: "owner" }, "m_avery"), /Unknown Proactive agent setting/);
+});
+
+test("revoking agents.view while retaining the bot in the role stops the member's check", async (t) => {
+  const current = team();
+  const { ws, seen } = setup(t, { team: current });
+  ws.proactive.setBot("pip", wizard(["m_avery"]));
+  failedRun(ws, "a", chatOf(ws, "pip", "m_avery"), "Avery report");
+  const role = current.roles.find((role) => role.id === "r_mgr");
+  role.perms.agents = [];
+  await tick(ws, "pip", "m_avery", "manual");
+  assert.equal(seen.prompts.length, 0);
+  assert.equal(ws.proactive.active("pip", "m_avery"), false);
+  role.perms.agents = ["view"];
+  await tick(ws, "pip", "m_avery", "manual");
+  assert.equal(seen.prompts.length, 1);
+});
+
+test("an alert is not delivered when agents.view is revoked after the check decides", async (t) => {
+  const current = team();
+  const { ws, seen } = setup(t, { team: current });
+  ws.proactive.setBot("pip", wizard(["m_avery"]));
+  const evidenceChat = chatOf(ws, "pip", "m_avery");
+  failedRun(ws, "a", evidenceChat, "Avery report");
+  seen.reply = proposal("Private report alert.");
+  const routines = ws.panels.routines;
+  const deliver = routines.deliver.bind(routines);
+  routines.deliver = (...args) => {
+    current.roles.find((role) => role.id === "r_mgr").perms.agents = [];
+    return deliver(...args);
+  };
+  await tick(ws, "pip", "m_avery");
+  assert.equal(ws.chat(evidenceChat).messages.length, 0);
+  assert.equal(ws.state.runs.find((run) => run.proactive).delivery, undefined);
+});
+
 // ── What it watches ─────────────────────────────────────────────────────────────────────────────
 
 test("signals: a routine run that failed, and a turn that stopped with open plan steps", () => {
@@ -418,7 +471,7 @@ test("signals: a routine run that failed, and a turn that stopped with open plan
 
 // ── Offers ──────────────────────────────────────────────────────────────────────────────────────
 
-test("an alert offers to take care of it: that starts a normal turn in the person's chat, and Not now brings it back a day later", async (t) => {
+test("taking an alert starts a fresh private turn, and Not now brings an alert back a day later", async (t) => {
   const { ws, seen } = setup(t, { team: team() });
   ws.proactive.setBot("pip", wizard(["owner", "m_avery"]));
   const averysChat = chatOf(ws, "pip", "m_avery");
@@ -440,9 +493,16 @@ test("an alert offers to take care of it: that starts a normal turn in the perso
 
   seen.reply = "On it.";
   const sent = ws.proactive.act("pip", runId, "take", "m_avery");
-  assert.equal(sent.chatId, averysChat);
   await sent.turn;
-  const asked = ws.chat(averysChat).messages.find((m) => m.role === "user" && /weekly report again/.test(m.text));
+  assert.notEqual(sent.chatId, averysChat);
+  const work = ws.chat(sent.chatId);
+  assert.equal(work.title, alert.alert.offer);
+  assert.equal(work.createdBy, "m_avery");
+  assert.deepEqual(ws.chatPeople(work.id).invited, []);
+  assert.equal(work.schedules, undefined);
+  assert.doesNotMatch(JSON.stringify(work.messages), /Your report failed/);
+  assert.doesNotMatch(seen.prompts[1], /Your report failed/);
+  const asked = work.messages.find((m) => m.role === "user" && /weekly report again/.test(m.text));
   assert.deepEqual(asked.author, { memberId: "m_avery", name: "Avery" }, "the turn is the member's own, under their limits");
   const run = ws.state.runs.find((r) => r.id === asked.runId);
   assert.equal(run.proactive, undefined, "a normal turn: its tools and approvals are the chat's");
@@ -454,7 +514,8 @@ test("an alert offers to take care of it: that starts a normal turn in the perso
   failedRun(ws, "a2", averysChat, "Avery backups");
   seen.reply = proposal("Your backups failed.", { offer: { label: "Check the backups", prompt: "Look at why my backups failed." } });
   await tick(ws, "pip", "m_avery");
-  const second = ws.chat(averysChat).messages.findLast((m) => m.alert);
+  const delivered = (prefix) => ws.state.chats.flatMap((chat) => chat.messages).find((message) => message.alert && message.text.startsWith(prefix));
+  const second = delivered("Your backups failed.");
   assert.match(second.text, /^Your backups failed\./);
   ws.proactive.act("pip", second.proactiveRunId, "later", "m_avery");
   assert.equal(second.alert.chosen, "later");
@@ -467,10 +528,91 @@ test("an alert offers to take care of it: that starts a normal turn in the perso
   failedRun(ws, "a3", averysChat, "Avery invoices");
   seen.reply = proposal("Your invoices failed.", { offer: { label: "x".repeat(200), prompt: "" } });
   await tick(ws, "pip", "m_avery");
-  const third = ws.chat(averysChat).messages.findLast((m) => m.alert);
+  const third = delivered("Your invoices failed.");
   assert.match(third.text, /^Your invoices failed\./);
   assert.equal(third.alert.offer, undefined);
   assert.throws(() => ws.proactive.act("pip", third.proactiveRunId, "take", "m_avery"), /nothing to take care of/);
+});
+
+test("Not now holds evidence across the recipient's bots, even after the original bot is forgotten", async (t) => {
+  const current = team();
+  current.roles.find((role) => role.id === "r_mgr").bots.push("scout");
+  const { ws, seen } = setup(t, { team: current });
+  ws.proactive.setBot("pip", wizard(["m_avery"]));
+  ws.proactive.setBot("scout", wizard(["m_avery", "owner"]));
+  const chatId = chatOf(ws, "pip", "m_avery");
+  failedRun(ws, "a", chatId, "Shared evidence across bots");
+  seen.reply = proposal("Report failed.");
+  await tick(ws, "pip", "m_avery");
+  const { until } = ws.proactive.act("pip", ws.chat(chatId).messages.at(-1).proactiveRunId, "later", "m_avery");
+  const held = until - 23 * HOUR;
+  assert.equal(ws.proactive.wake("scout", "scheduled", held, "m_avery"), null);
+  ws.peopleOf = (id) => ({ invited: id === chatId ? ["owner"] : [] });
+  assert.deepEqual(ws.proactive.wake("scout", "scheduled", held, "owner")?.keys, ["run:a"], "the same evidence is still available to someone else");
+  ws.proactive.setBot("pip", null);
+  ws.state.proactive = migrateProactive(ws.state.settings.proactive, ws.state.proactive).state;
+  assert.equal(ws.proactive.wake("scout", "scheduled", held, "m_avery"), null);
+  assert.deepEqual(ws.proactive.wake("scout", "scheduled", until, "m_avery")?.keys, ["run:a"]);
+});
+
+test("legacy bot pauses and snoozes survive migration without enabling a bot or shortening a snooze", () => {
+  const settings = { enabled: false, bots: { pip: { enabled: false, setUp: true }, scout: { enabled: true, setUp: true } } };
+  const old = { shape: 3, bots: {
+    pip: { people: { m_avery: { snoozed: { "run:a": NOW } }, owner: { snoozed: { "run:a": NOW - HOUR } } } },
+    scout: { people: { m_avery: { snoozed: { "run:a": NOW + HOUR } } } },
+  } };
+  const saved = migrateProactive(settings, old);
+  assert.equal(saved.settings.enabled, false);
+  assert.deepEqual([saved.settings.bots.pip.enabled, saved.settings.bots.pip.pausedBy], [false, "owner"]);
+  assert.equal(saved.settings.bots.scout.pausedBy, undefined);
+  assert.deepEqual(saved.state.snoozed, { m_avery: { "run:a": NOW + HOUR }, owner: { "run:a": NOW - HOUR } });
+  assert.equal(saved.state.bots.pip.people.m_avery.snoozed, undefined);
+  assert.deepEqual(migrateProactive(saved.settings, saved.state), saved);
+});
+
+function waitingAlert(t) {
+  const current = team();
+  const { ws } = setup(t, { team: current });
+  const chat = ws.chat(chatOf(ws, "pip", "m_avery"));
+  const text = "PRIVATE alert words";
+  chat.messages.push({ role: "assistant", text, alert: { runId: "proactive-1" }, proactiveRunId: "proactive-1" }, { role: "user", text: "Please run the report", runId: "working" });
+  chat.posted = [{ from: "Pip", text }];
+  const request = { kind: "permission", id: "approval", title: "Approve report?", chatId: chat.id };
+  ws.interactions.snapshot = () => [request];
+  return { ws, current, chat, request };
+}
+
+test("the owner approval view redacts alert history in link parts and window IPC, without changing storage", (t) => {
+  const { ws, current, chat, request } = waitingAlert(t);
+  const part = "chat:" + chat.id;
+  const link = { ownerParts: (parts) => ownerParts(parts, current), spacesFor: () => [] };
+  const cut = link.ownerParts({ chats: [{ id: chat.id, createdBy: chat.createdBy, last: { text: chat.messages[0].text } }], live: { requests: [request] }, [part]: { id: chat.id, messages: chat.messages } });
+  const off = ownerWindowView(ws.snapshot(), link, false);
+  for (const view of [[cut.chats, cut[part]], off.chats]) {
+    assert.doesNotMatch(JSON.stringify(view), /PRIVATE alert words|proactive-1/);
+    assert.match(JSON.stringify(view), /Please run the report/);
+  }
+  assert.match(JSON.stringify(ownerWindowView(ws.snapshot(), link, true).chats), /PRIVATE alert words/);
+  assert.equal(chat.posted[0].text, "PRIVATE alert words");
+});
+
+test("the CLI can read enough to answer a member's approval without reading their proactive alerts", async (t) => {
+  const { ws, chat } = waitingAlert(t);
+  const cli = controlApi({ runtime: { workspace: ws, handlers: {} } });
+  const output = await cli["chat.read"]([chat.id], {});
+  assert.doesNotMatch(JSON.stringify(output), /PRIVATE alert words/);
+  assert.deepEqual(output.messages.map(({ index, text }) => [index, text]), [[1, "Please run the report"]]);
+  assert.equal(output.request.id, "approval");
+});
+
+test("the host cannot invite anyone into a chat that holds a person's alerts", (t) => {
+  const { ws, current, chat } = waitingAlert(t);
+  const dir = mkdtempSync(join(tmpdir(), "botkins-proactive-link-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const link = new LinkHost({ dir, backend: { snapshot: () => ws.snapshot(), subscribe: () => () => {} }, relay: false });
+  link.store.data.team = current;
+  assert.throws(() => link.inviteToChat(chat.id, "owner"), /holds one person's alerts and can't be shared/);
+  assert.deepEqual(link.chatPeople(chat.id).invited, []);
 });
 
 test("a Feed card carries the same actions, and taking care of it starts a turn in the person's own chat", async (t) => {
@@ -510,7 +652,8 @@ test("a proactive alert's notification is titled with the bot's name alone, neve
 });
 
 test("the computer's own notification of an alert has the two actions where the system shows buttons, and a click opens the alert", async (t) => {
-  const { ws, seen } = setup(t, { team: team() });
+  const current = team();
+  const { ws, seen } = setup(t, { team: current });
   const shown = [];
   class FakeNotification {
     static isSupported = () => true;
@@ -526,7 +669,10 @@ test("the computer's own notification of an alert has the two actions where the 
   }
   const opened = [];
   const acted = [];
-  new Notifier(ws, { Notification: FakeNotification, focused: () => false, open: (chatId) => opened.push(chatId), openSettings() {}, act: (alert, action) => acted.push([alert.botId, alert.runId, action]) });
+  new Notifier(ws, { Notification: FakeNotification, focused: () => false, open: (chatId) => opened.push(chatId), openSettings() {}, act: (alert, action) => {
+    acted.push([alert.botId, alert.runId, action]);
+    return action === "take" ? { chatId: "new-work-chat" } : {};
+  } });
   ws.proactive.setBot("pip", wizard(["owner", "m_avery"]));
   failedRun(ws, "o", chatOf(ws, "pip", "owner"), "Owner payroll");
   failedRun(ws, "a", chatOf(ws, "pip", "m_avery"), "Avery report");
@@ -534,6 +680,11 @@ test("the computer's own notification of an alert has the two actions where the 
   await tick(ws, "pip", "owner");
   await tick(ws, "pip", "m_avery");
   assert.equal(shown.length, 1, "the computer's notifications are the owner's: a member's alert shows none here");
+  const memberRun = ws.state.runs.find((r) => r.proactive && ws.chat(r.chatId).createdBy === "m_avery");
+  current.roles.find((role) => role.id === "r_mgr").perms.agents = [];
+  ws.notifiesOwner = () => true; // A stale invitation must not cause a member's alert to be shown here.
+  ws.events.emit("turn", { chat: ws.chat(memberRun.chatId), run: memberRun });
+  assert.equal(shown.length, 1, "no alert is shown if the recipient lost bot access before notification");
   const note = shown[0];
   assert.equal(note.options.title, "Pip");
   assert.equal(note.options.body, "Payroll failed.");
@@ -542,9 +693,9 @@ test("the computer's own notification of an alert has the two actions where the 
   note.handlers.action({}, 1);
   note.handlers.action({}, 0);
   assert.deepEqual(acted, [["pip", run.id, "later"], ["pip", run.id, "take"]]);
-  assert.deepEqual(opened, [run.delivery.chatId], "taking it opens the chat where the bot goes to work");
+  assert.deepEqual(opened, ["new-work-chat"], "taking it opens the new chat where the bot goes to work");
   note.handlers.click();
-  assert.deepEqual(opened, [run.delivery.chatId, run.delivery.chatId]);
+  assert.deepEqual(opened, ["new-work-chat", run.delivery.chatId]);
 });
 
 // ── Found in review ─────────────────────────────────────────────────────────────────────────────

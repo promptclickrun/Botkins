@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { random } from "./crypto.mjs";
+import { SILENT } from "./silent-reply.mjs";
 
 export const SCOPE_ACTIONS = Object.freeze({
   agents: Object.freeze(["view", "chat", "create", "manage", "delete"]),
@@ -776,6 +777,26 @@ export function sharedBotFlags(flags) {
 }
 const READ_REQUEST_METHODS = new Set(["respond"]);
 
+const isProactiveAlert = (message) => !!(message?.alert || message?.proactiveRunId);
+const isProactiveRoutine = (chat) => chat?.schedules?.some((entry) => entry.proactive);
+
+/** Alert history is for the person the chat looks out for, not for invitees. */
+export function privateProactiveChat(chat) {
+  return !!(isProactiveRoutine(chat) || chat?.messages?.some(isProactiveAlert));
+}
+
+export function withoutProactiveAlerts(chat, routine = isProactiveRoutine(chat)) {
+  if (!Array.isArray(chat?.messages)) return chat;
+  const { posted: _posted, ...rest } = chat;
+  const redact = (message) => isProactiveAlert(message) || (routine && message.role === "assistant");
+  // Keep message positions for pagination and chat actions, using the clients' invisible reply marker.
+  return { ...rest, messages: chat.messages.map((message) => redact(message) ? { role: "assistant", text: SILENT } : message) };
+}
+
+export function ownerApprovalChats(live) {
+  return new Set((live?.requests ?? []).filter((request) => request.kind === "permission" || request.kind === "secure").map((request) => request.chatId));
+}
+
 /**
  * What an owner device is sent with Admin mode off: what the person "owner" is part of, not every
  * member's chats, spaces and bots. It changes what the owner is shown, never what the owner may do:
@@ -790,8 +811,15 @@ const READ_REQUEST_METHODS = new Set(["respond"]);
  */
 export function ownerParts(parts, team, extra = {}) {
   const out = { ...parts };
-  const waiting = new Set((parts.live?.requests ?? []).filter((request) => request.kind === "permission" || request.kind === "secure").map((request) => request.chatId));
-  const listed = (parts.chats ?? []).filter((chat) => inChat(team, chat, OWNER) || waiting.has(chat.id));
+  const waiting = ownerApprovalChats(parts.live);
+  const limited = new Map();
+  const listed = (parts.chats ?? []).flatMap((chat) => {
+    if (inChat(team, chat, OWNER)) return [chat];
+    if (!waiting.has(chat.id)) return [];
+    limited.set(chat.id, isProactiveRoutine(chat));
+    const { last: _preview, ...rest } = chat;
+    return [withoutProactiveAlerts(rest)];
+  });
   const ids = new Set(listed.map((chat) => chat.id));
   out.chats = listed;
   const live = parts.live;
@@ -813,6 +841,7 @@ export function ownerParts(parts, team, extra = {}) {
   for (const name of Object.keys(parts)) {
     const about = /^(?:chat|run):(.+)$/.exec(name);
     if (about && !ids.has(about[1])) out[name] = null;
+    else if (about && name.startsWith("chat:") && limited.has(about[1])) out[name] = withoutProactiveAlerts(parts[name], limited.get(about[1]));
   }
   const used = new Set(listed.flatMap((chat) => [chat.botId, ...(chat.botIds ?? [])]));
   const records = Array.isArray(extra.spaces) ? extra.spaces : null;

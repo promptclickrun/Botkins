@@ -1,3 +1,5 @@
+import { proactiveSees } from "./link/proactive-rules.mjs";
+
 const oneLine = (value, limit) =>
   typeof value === "string"
     ? value.replace(/[\u0000-\u001f\u007f]/g, " ").trim().slice(0, limit)
@@ -100,10 +102,7 @@ export const narrower = (a, b) => ({ member: a.member || b.member, skills: a.ski
 
 /** Whether a member's role lets them see a bot. Someone who is no longer a member sees none. */
 export function memberSeesBot(memberId, team, botId) {
-  const member = team?.members?.find((item) => item.id === memberId);
-  const group = team?.groups?.find((item) => item.id === member?.groupId);
-  const bots = team?.roles?.find((item) => item.id === group?.roleId)?.bots;
-  return bots === "all" || (Array.isArray(bots) && bots.includes(botId));
+  return proactiveSees(team, memberId, botId);
 }
 
 /** Whether a member's role lets them manage bots and see this one. Someone who is no longer a member may not. */

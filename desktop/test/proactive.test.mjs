@@ -237,7 +237,7 @@ test("the single-bot setting of an earlier version becomes that bot's, with its 
 
 test("older and damaged shapes are tolerated", () => {
   const mig = (settings, state) => migrateProactive(settings, state);
-  assert.deepEqual(mig(undefined, undefined), { settings: { enabled: true, bots: {} }, state: { shape: 3, bots: {}, reminders: {} } });
+  assert.deepEqual(mig(undefined, undefined), { settings: { enabled: true, bots: {} }, state: { shape: 4, bots: {}, reminders: {}, snoozed: {} } });
   assert.deepEqual(mig("nope", 5).settings, { enabled: true, bots: {} });
   assert.deepEqual(mig({ enabled: true, botId: 5 }, {}).settings, { enabled: true, bots: {} });
   assert.equal(mig({ enabled: false, botId: "pip", every: 7 }, {}).settings.bots.pip.every, 30, "a value that is no longer valid is the usual one");

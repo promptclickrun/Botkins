@@ -94,7 +94,7 @@ export function decide(event, { settings, focused, now = new Date(), timeZone, m
   // A bot that looks out for the person speaks under its own name: the title is the bot's name alone and the
   // text is the alert's first line. A check that failed is in the bot's Proactive log, not a notification.
   if (run.proactive) {
-    if (failed) return null;
+    if (failed || !run.delivery) return null;
     return { title: botName, body: firstLine(reply?.text) || "Has something for you.", chatId: run.delivery?.chatId ?? chat?.id ?? run.chatId, ...(event.alert && chat?.botId && { alert: { botId: chat.botId, ...event.alert } }) };
   }
   return {
@@ -114,7 +114,7 @@ export class Notifier {
    * @param options.focused () => boolean, whether the window is focused
    * @param options.open (chatId) => void, shows the window on that chat
    * @param options.openSettings (tab) => void, opens one Settings section
-   * @param options.act ({ botId, runId }, "take" | "later") => void, what a proactive alert's button does
+   * @param options.act ({ botId, runId }, "take" | "later") => { chatId? }, what a proactive alert's button does
    */
   constructor(workspace, { Notification, focused, open, openSettings, act }) {
     this.act = act;
@@ -145,6 +145,11 @@ export class Notifier {
   }
   consider(event) {
     try {
+      if (event.run?.proactive) {
+        const { chat } = event;
+        const person = chat?.createdBy ?? "owner";
+        if (!chat || !this.ws.proactive.eligible(person, chat.botId) || person !== "owner") return;
+      }
       // A chat's alerts go to its people only: the computer's own are for its owner.
       const chatId = event.type === "turn" ? (event.chat?.id ?? event.run?.chatId) : event.type === "reminder" ? undefined : event.request?.chatId;
       const mine = !chatId || typeof this.ws.notifiesOwner !== "function" || this.ws.notifiesOwner(chatId);
@@ -166,8 +171,8 @@ export class Notifier {
       const chosen = actions[index]?.action;
       if (!chosen) return;
       try {
-        this.act(alert, chosen);
-        if (chosen === "take" && chatId) this.open(chatId);
+        const result = this.act(alert, chosen);
+        if (chosen === "take" && result?.chatId) this.open(result.chatId);
       } catch (error) {
         console.error("Notification:", error.message);
       }

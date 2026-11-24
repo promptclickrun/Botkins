@@ -1914,10 +1914,11 @@ export type ProactivePerson = { on: boolean; notify: boolean };
 /** What a delivered proactive alert carries: its run, the label of what the bot offers to do, and what the person chose. */
 export type ProactiveAlert = { runId: string; offer?: string; chosen?: "take" | "later" };
 /** A change to a bot's agent: only what it names. In `people` an entry changes what it names, and null takes that person out. */
-export type ProactivePatch = Partial<Omit<ProactiveBotSettings, "people">> & { people?: Record<string, Partial<ProactivePerson> | null> };
+export type ProactivePatch = Partial<Omit<ProactiveBotSettings, "people" | "pausedBy">> & { people?: Record<string, Partial<ProactivePerson> | null> };
 /** What a bot's Proactive agent is set to (desktop/proactive-settings.mjs). Everything but `people` is shared by everyone it looks out for. */
 export type ProactiveBotSettings = {
   enabled: boolean;
+  pausedBy?: "owner";
   /** Its setup steps were finished. Until then it never wakes. */
   setUp?: boolean;
   /** Who it looks out for, by "owner" or a member's id. */

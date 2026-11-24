@@ -18,6 +18,7 @@ import { uploadSkill } from "./skill-import.mjs";
 import { parseSkill } from "./skill-format.mjs";
 import { botVoiceField } from "./voice.mjs";
 import { proactiveChats, proactivePatch, proactiveSees, proactiveStart } from "./proactive-rules.mjs";
+import { chatPeople } from "./team.mjs";
 
 const now = () => Date.now();
 /** The demo computer's owner, as a person. */
@@ -1522,7 +1523,8 @@ export class MockBackend {
   }
   /** A made-up proactive alert in a person's own chat with a bot, with one offer ("proactive-team-v1"). The offer's prompt stays here. */
   demoAlert(bot, person) {
-    const mine = (chat) => chat.botId === bot.id && !chat.schedules?.length && !chat.botIds && !chat.panelId && (chat.createdBy ?? "owner") === person;
+    const team = this.teamOf?.();
+    const mine = (chat) => chat.botId === bot.id && !chat.schedules?.length && !chat.botIds && !chat.panelId && (chat.createdBy ?? "owner") === person && !chatPeople(team, chat).invited.length;
     let chat = this.state.chats.find(mine);
     if (!chat) {
       chat = { id: "chat-" + randomUUID().slice(0, 8), botId: bot.id, title: "New chat", time: now(), messages: [], ...(person !== "owner" && { createdBy: person }) };
@@ -1533,7 +1535,7 @@ export class MockBackend {
     chat.messages.push({ role: "assistant", text, time: now(), proactiveRunId: runId, alert: { runId, offer: "Draft who takes what" } });
     chat.time = now();
     chat.unread = true;
-    this.proactiveAlerts.set(runId, { botId: bot.id, person, chatId: chat.id, prompt: "Draft who should take the press kit, the status page and the support macros, and show it to me before anything is sent." });
+    this.proactiveAlerts.set(runId, { botId: bot.id, person, chatId: chat.id, label: "Draft who takes what", prompt: "Draft who should take the press kit, the status page and the support macros, and show it to me before anything is sent." });
   }
   async call(method, args, context = {}) {
     this.callContexts.push({ method, principal: context.principal ? structuredClone(context.principal) : null });
@@ -2223,8 +2225,7 @@ export class MockBackend {
       const unknown = Object.keys(patch).find((key) => !Object.hasOwn(usual, key));
       if (unknown) throw new Error("Unknown Proactive agent setting: " + unknown);
       const start = held ?? proactiveStart(usual, person);
-      // The demo has a team only when it is given one (dev-host.mjs): without it a member who reached this far manages the bot.
-      const checked = team ? proactivePatch({ patch, start, by: person, team, botId: id }) : patch;
+      const checked = proactivePatch({ patch, start, by: person, team, botId: id });
       const { people: named, ...shared } = checked;
       for (const key of ["enabled", "setUp"]) if (shared[key] !== undefined && typeof shared[key] !== "boolean") throw new Error("Choose on or off");
       const people = { ...start.people };
@@ -2237,6 +2238,7 @@ export class MockBackend {
         }
       }
       const next = (bots[id] = { ...start, ...shared, people });
+      if (next.enabled) delete next.pausedBy;
       // So that the demo has something to show: a person the bot now looks out for gets one made-up alert, with an offer.
       if (this.state.proactive.enabled && next.enabled && next.setUp && next.people[person]?.on && ![...this.proactiveAlerts.values()].some((alert) => alert.botId === id && alert.person === person)) this.demoAlert(bot, person);
       return null;
@@ -2259,11 +2261,14 @@ export class MockBackend {
       }
       // Taking it starts a turn with the bot, as sending a message does.
       if (this.teamOf?.() && !proactiveChats(this.teamOf(), this.caller.id)) throw new Error("Your team role can't chat with this bot.");
+      const chatId = this.handlers.createChat.call(this, id);
+      const chat = this.chat(chatId);
+      Object.assign(chat, { title: alert.label, titleSet: true, ...(this.caller.id !== "owner" && { createdBy: this.caller.id }) });
       // A normal turn, as the person's own message: the demo bot answers it as it answers any message.
-      this.handlers.send.call(this, alert.chatId, alert.prompt, this.caller.id === "owner" ? undefined : { author: { memberId: this.caller.id, name: this.caller.name } });
+      this.handlers.send.call(this, chatId, alert.prompt, this.caller.id === "owner" ? undefined : { author: { memberId: this.caller.id, name: this.caller.name } });
       // Marked once the turn has started: a start that fails leaves the alert to try again.
       mark();
-      return { chatId: alert.chatId };
+      return { chatId };
     },
     botMemory(id) {
       return this.memory.get(id) ?? (id === "bot-mira" ? "- Prefers short lists\n- Launch is on the 24th\n- Weekly review happens on Fridays" : "");

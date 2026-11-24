@@ -793,6 +793,33 @@ test("a proactive alert is titled with the bot's name alone and carries its acti
   }
 });
 
+test("a proactive push rechecks the recipient's agents.view permission and bot allowlist", async () => {
+  const { call, done, paired, link } = await setup();
+  try {
+    await call("link.push.register", { token: TOKEN, env: "production" });
+    const device = { ...link.store.device(paired.deviceId), memberId: "m_sam" };
+    const team = link.store.data.team;
+    team.members.push({ id: "m_sam", name: "Sam", groupId: "g_everyone", deviceIds: [device.id] });
+    const role = team.roles.find((role: { id: string }) => role.id === "r_guest");
+    role.bots = ["bot-mira"];
+    const run = { id: "proactive-private", chatId: "proactive-check", scheduleId: 1, proactive: true, status: "Completed", delivery: { to: "chat", chatId: "proactive-check" } };
+    const chat = { id: run.chatId, botId: "bot-mira", createdBy: device.memberId, messages: [{ role: "assistant", runId: run.id, text: "Private alert" }] };
+    const check = () => {
+      const sends: Sent[] = [];
+      link.push.onFinish(sends, [device], {}, run, new Map([[chat.id, chat]]), new Map());
+      return sends;
+    };
+    assert.equal(check().length, 1);
+    role.perms.agents = [];
+    assert.deepEqual(check(), [], "membership does not keep delivery after agents.view is revoked");
+    role.perms.agents = ["view"];
+    role.bots = [];
+    assert.deepEqual(check(), [], "permission without the bot does not allow delivery");
+  } finally {
+    await done();
+  }
+});
+
 test("a reminder reaches only the person it is for, once, by their own choices", async () => {
   const { call, until, done, sent, paired, backend } = await setup();
   try {

@@ -34,6 +34,7 @@
 // is late is worse than one that is missing.
 import { ALL_CARD, askDetail, botCard, CARD_AAD, cardOver } from "./cards.mjs";
 import { b64u, hkdf, random, seal } from "./crypto.mjs";
+import { proactiveSees } from "./proactive-rules.mjs";
 import { signWithRelayKey } from "./relay.mjs";
 import { Failure } from "./tools.mjs";
 
@@ -421,7 +422,7 @@ export class Push {
   kindOf(run, chat) {
     if (!chat || chat.temporary || run.status === "Stopped" || run.notify === false) return null;
     // A bot's own check that failed is in its Proactive log, not a notification.
-    if (run.proactive && run.status !== "Completed") return null;
+    if (run.proactive && (run.status !== "Completed" || !run.delivery)) return null;
     // A run that published nothing (a routine set to "No output", or one that reached the end with
     // no result to deliver) has nothing to tell: a notification would show an earlier run's words.
     // One that failed is still worth a look.
@@ -447,6 +448,8 @@ export class Push {
     const failed = run.status !== "Completed";
     const watching = this.attention?.();
     for (const device of targets) {
+      const person = device.memberId ?? "owner";
+      if (run.proactive && (!chat || person !== (chat.createdBy ?? "owner") || !proactiveSees(this.store.data.team, person, chat.botId))) continue;
       if (!this.maySeeChat(device, chat)) continue;
       const record = this.store.push(device.id);
       // The card is brought up to date whatever the notification choices are. It is not ended: it

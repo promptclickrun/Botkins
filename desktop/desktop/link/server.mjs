@@ -34,6 +34,7 @@ import { SpaceAlerts } from "./space-alerts.mjs";
 import { Spaces } from "./spaces.mjs";
 import { headCapabilities, cleanLook, deviceKind, LinkStore, personName, SCREEN_MODES } from "./store.mjs";
 import { chatSectionsOf, withChatSections, authorize, chatPeople, cleanGroup, cleanRole, filterParts, ownerParts, inChat, panelOfFrame, panelView, spaceCan, inviteLink, inviteLookup, MAX_CHAT_PEOPLE, newInviteCode, normalizeCode, OWNER, personOf, sharedBotFlags, teamPeople, viewOf, withBotFlags, withChatFlags, hasAction, roleOfMember, seenItemsOf, spacesViewOf } from "./team.mjs";
+import { ownerApprovalChats, privateProactiveChat, withoutProactiveAlerts } from "./team.mjs";
 import { Failure, searchDirs } from "./tools.mjs";
 import { ASK_BOT_DESCRIPTION, cleanBotVoice, liveContextOf, liveInstructions, Voice } from "./voice.mjs";
 import { Uploads } from "./uploads.mjs";
@@ -1475,6 +1476,7 @@ export class LinkHost extends EventEmitter {
     const state = this.backend.snapshot();
     const chat = (state.chats ?? []).find((item) => item.id === chatId);
     if (!chat) throw new Failure("That chat is no longer available.");
+    if (privateProactiveChat(chat)) throw new Failure("This chat holds one person's alerts and can't be shared.");
     if (person !== OWNER && !team.members.some((member) => member.id === person)) throw new Failure("That person is no longer on the team.");
     const people = chatPeople(team, chat);
     if (people.createdBy === person || people.invited.includes(person)) return people.invited;
@@ -1910,7 +1912,10 @@ export class LinkHost extends EventEmitter {
     }
     if (method === "link.messages") {
       const limit = Math.max(1, Math.min(Number(args[2]) || CHAT_PAGE, 200));
-      const page = chatPart(this.backend.snapshot(), String(args[0]), undefined, { before: Number(args[1]), limit });
+      const id = String(args[0]);
+      const chat = (state.chats ?? []).find((item) => item.id === id);
+      const redact = chat && session.deviceId !== undefined && principal.kind === "owner" && !principal.admin && !inChat(this.store.data.team, chat, OWNER);
+      const page = chatPart(redact ? { ...state, chats: [withoutProactiveAlerts(chat)] } : state, id, undefined, { before: Number(args[1]), limit });
       // A session that follows with light steps gets its earlier pages the same way.
       return session.light ? lightPart(page) : page;
     }
@@ -2236,11 +2241,11 @@ export class LinkHost extends EventEmitter {
     if (previous.stamp === stamp && (quiet || previous.liveRev === this.liveRev)) return previous;
     // The computer's own indicators name every chat, so they stay out: a view's own are made below
     // from its own `live`, after it was cut to its chats.
-    // The owner's cut keeps or drops a chat's page and its run whole, so those (the largest parts) are not
-    // read here: a kept one is sent as it is, or cut to a reasoning client's form once for each version
-    // (`compactJson`). A member's cut also changes what is inside one.
-    const whole = (name) => principal.kind === "owner" && (name.startsWith("chat:") || name.startsWith("run:"));
-    const raw = Object.fromEntries([...this.parts].filter(([name]) => name !== "quietLive").map(([name, part]) => [name, whole(name) ? true : JSON.parse(part.json)]));
+    // The owner's pages stay whole unless an approval can expose another person's alert history.
+    const live = JSON.parse(this.parts.get("live")?.json ?? "null");
+    const waiting = principal.kind === "owner" && !admin ? ownerApprovalChats(live) : null;
+    const whole = (name) => principal.kind === "owner" && (name.startsWith("run:") || (name.startsWith("chat:") && !waiting?.has(name.slice(5))));
+    const raw = Object.fromEntries([...this.parts].filter(([name]) => name !== "quietLive").map(([name, part]) => [name, name === "live" ? live : whole(name) ? true : JSON.parse(part.json)]));
     const records = this.lastState().spaces;
     const team = this.store.data.team;
     const values =

@@ -10,7 +10,7 @@
 // - A member changes only their own entry. They add themselves only when their role manages the bot.
 // - A member whose role manages the bot may also finish the setup steps and change what the people share,
 //   but never look-around (it reads the computer's own accounts), the tasks watch (tasks are the owner's),
-//   or the bot's switch to off.
+//   or turn the bot off or resume one the owner paused.
 // - A member whose role doesn't see the bot may do nothing.
 //
 // Nobody is told of another person's alerts: an entry has no field for that, and the app refuses one.
@@ -30,8 +30,9 @@ const may = (role, scope, action) => Array.isArray(role?.perms?.[scope]) && role
 /** Whether a bot may look out for a person: the owner always, a member while their role sees the bot. */
 export function proactiveSees(team, person, botId) {
   if (person === OWNER) return true;
-  const bots = roleOf(team, person)?.bots;
-  return bots === "all" || (Array.isArray(bots) && bots.includes(botId));
+  const role = roleOf(team, person);
+  const bots = role?.bots;
+  return may(role, "agents", "view") && (bots === "all" || (Array.isArray(bots) && bots.includes(botId)));
 }
 /** Whether a person may set a bot's agent up and change what its people share: the owner, or a member whose role manages the bot. */
 export function proactiveManages(team, person, botId) {
@@ -58,6 +59,7 @@ export function proactivePatch({ patch, start, by, team, botId }) {
   const member = by !== OWNER;
   if (member && !proactiveSees(team, by, botId)) throw new Error("Your team role can't see this bot.");
   const { people, ...shared } = patch;
+  if (Object.hasOwn(shared, "pausedBy")) throw new Error("Unknown Proactive agent setting: pausedBy");
   const named = people === undefined ? undefined : plain(people) ? people : null;
   if (named === null) throw new Error("Choose who this bot looks out for.");
   const had = plain(start?.people) ? start.people : {};
@@ -65,6 +67,7 @@ export function proactivePatch({ patch, start, by, team, botId }) {
     const manages = proactiveManages(team, by, botId);
     if (Object.keys(shared).length) {
       if (!manages) throw new Error("Your team role can't change this bot's Proactive settings. You can turn your own alerts on or off.");
+      if (shared.enabled === true && start?.pausedBy === OWNER) throw new Error("The owner paused this bot's Proactive agent.");
       if (shared.enabled === false || shared.setUp === false) throw new Error("Only the owner can turn this bot's Proactive agent off. Turn your own alerts off instead.");
       if (shared.sweepHours !== undefined && shared.sweepHours !== (start?.sweepHours ?? 0)) throw new Error("Only the owner can turn on look-around: it reads the computer's own tools and accounts.");
       if (Array.isArray(shared.watch)) shared.watch = [...shared.watch.filter((watch) => watch !== "tasks"), ...(start?.watch?.includes("tasks") ? ["tasks"] : [])];
@@ -75,6 +78,8 @@ export function proactivePatch({ patch, start, by, team, botId }) {
       if (entry !== null && !had[by] && !manages) throw new Error("Your team role can't add you. Ask the owner to add you.");
     }
   } else {
+    if (shared.enabled === false) shared.pausedBy = OWNER;
+    else if (shared.enabled === true) shared.pausedBy = undefined;
     for (const [id, entry] of Object.entries(named ?? {})) {
       if (id === OWNER || entry === null) continue;
       const who = team?.members?.find((item) => item.id === id);
