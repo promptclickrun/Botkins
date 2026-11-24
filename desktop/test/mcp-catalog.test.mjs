@@ -140,6 +140,44 @@ test("a program is added only with the person's yes to its exact command line", 
   assert.doesNotMatch(JSON.stringify(ws.snapshot()), new RegExp(SECRET));
 });
 
+test("moving an older program to the catalog's version needs its key typed again, on the link and in the CLI", async (t) => {
+  const { ws, catalog } = setup(t);
+  const brave = entry("brave-search");
+  const line = commandLine(brave);
+  const old = ["-y", "@brave/brave-search-mcp-server@2.0.0"];
+  const id = ws.integrations.saveServer({ name: "brave-search", type: "stdio", enabled: true, command: "npx", args: old, env: { BRAVE_API_KEY: SECRET } });
+  const listed = () => catalog.list().entries.find((e) => e.id === "brave-search");
+  assert.equal(listed().keysSet, true, "the saved key is there");
+  assert.equal(listed().commandChanged, true, "but it would not go to the new command");
+  // The link call says so before anything changes, and never repeats a key.
+  assert.throws(() => catalog.add("brave-search", { confirm: line }), (error) => /Enter the API key for Brave Search again/.test(error.message) && /newer version/.test(error.message) && !error.message.includes(SECRET));
+  assert.deepEqual(ws.integrations.server(id).args, old, "nothing was changed");
+  // The CLI asks for the key (here: refuses with no terminal and no file) instead of confirming blind.
+  const calls = [];
+  const client = { call: async (name, ...args) => (calls.push([name, ...args]), name === "mcpCatalog.list" ? catalog.list() : catalog.add(...args)) };
+  let out = "";
+  let err = "";
+  const io = { stdout: { write: (text) => void (out += text) }, stderr: { write: (text) => void (err += text) }, env: {}, stdin: { isTTY: false }, client };
+  assert.equal(await main(["tools", "connect", "brave-search", "--yes"], io), 2);
+  assert.match(err, /--secrets/);
+  assert.match(err, /key/i);
+  assert.deepEqual(calls.map(([name]) => name), ["mcpCatalog.list"], "nothing was sent");
+  assert.deepEqual(ws.integrations.server(id).args, old);
+  // With a fresh key it is moved, and the new key goes to the new command.
+  const fresh = "sk-fresh-0123456789abcdef";
+  const secrets = join(tempDir(t), "keys.json");
+  writeFileSync(secrets, JSON.stringify({ key: fresh }));
+  out = err = "";
+  assert.equal(await main(["tools", "connect", "brave-search", "--yes", "--secrets", secrets], io), 0);
+  assert.doesNotMatch(out + err, new RegExp(SECRET + "|" + fresh));
+  assert.deepEqual(ws.integrations.server(id).args, ["-y", "@brave/brave-search-mcp-server@2.1.4"]);
+  assert.equal(ws.integrations.serversFor({})["brave-search"].env.BRAVE_API_KEY, fresh);
+  assert.equal(listed().commandChanged, undefined, "and it is no longer outdated");
+  // Configure on the current version still keeps the key without asking.
+  catalog.add("brave-search", { confirm: line });
+  assert.equal(ws.integrations.serversFor({})["brave-search"].env.BRAVE_API_KEY, fresh);
+});
+
 test("the link cuts a catalog call to its shape and refuses a saved credential where a key goes", () => {
   assert.deepEqual(remoteArgs("mcpCatalog.list", ["anything"]), []);
   assert.deepEqual(remoteArgs("mcpCatalog.add", ["render", { keys: { key: "abc" }, extra: 1 }]), ["render", { keys: { key: "abc" } }]);

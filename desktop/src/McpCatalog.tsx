@@ -323,7 +323,7 @@ export function CatalogEntryPage({ state, catalog, id, back, backLabel = "Back t
   const keyed = entry.keys.length > 0;
   const stdio = entry.transport === "stdio";
   const status = entryStatus(entry);
-  const keysNeeded = keyed && (!entry.added || entry.keysSet === false || changingKey);
+  const keysNeeded = keyed && (!entry.added || entry.keysSet === false || entry.commandChanged === true || changingKey);
 
   /** Reads the key fields once, then empties them. Undefined when a needed key is missing. */
   function takeKeys(): Record<string, string> | undefined {
@@ -333,7 +333,7 @@ export function CatalogEntryPage({ state, catalog, id, back, backLabel = "Back t
       const value = fields.current[key.id]?.value ?? "";
       if (value) keys[key.id] = value;
     }
-    const required = !entry!.added;
+    const required = !entry!.added || entry!.commandChanged === true;
     const missing = entry!.keys.find((key) => !keys[key.id]);
     if (required && missing) {
       setError("Enter the " + missing.label + ".");

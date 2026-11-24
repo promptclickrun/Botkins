@@ -108,7 +108,7 @@ function Entry({ entry }: { entry: McpCatalogEntry }) {
   let actions;
   if (!owner) actions = <T variant="footnote" color="muted" center>Only the owner of your computer can add apps</T>;
   else if (!entry.added) actions = plan.kind === "key" ? keyForm(true) : <Button title={plan.label} wide size="lg" loading={busy || signing} disabled={!online} accessibilityLabel={plan.label + " " + entry.name} onPress={add} />;
-  else if (changing) actions = keyForm(false);
+  else if (changing || entry.commandChanged) actions = keyForm(!!entry.commandChanged);
 
   // A program on the computer: its exact line, what it gets, its package and license, before the yes.
   const program = entry.transport === "stdio" && !!entry.command && (
@@ -175,7 +175,7 @@ function Entry({ entry }: { entry: McpCatalogEntry }) {
             ) : (
               <Row title="Needs sign-in" />
             ))}
-          {entry.keys.length > 0 && !changing && (
+          {entry.keys.length > 0 && !changing && !entry.commandChanged && (
             <Row title={entry.keysSet ? "Key saved" : "Needs a key"} value={owner ? (entry.keysSet ? "Change key" : "Add key") : undefined} onPress={owner ? () => setChanging(true) : undefined} />
           )}
           {canView && !!entry.serverId && <Row title="Open tool" subtitle={entry.serverName} chevron onPress={() => router.push({ pathname: "/tools/[id]", params: { id: entry.serverId! } })} />}

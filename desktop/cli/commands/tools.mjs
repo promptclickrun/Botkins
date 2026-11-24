@@ -349,7 +349,8 @@ export const tools = {
             }
             options.confirm = entry.command;
           }
-          if (entry.keys.length && (!entry.added || entry.keysSet === false || context.options.secrets !== undefined)) options.keys = await catalogKeys(context, entry);
+          if (entry.commandChanged) context.note(safe(entry.name) + " is moving to a newer version. A saved key only goes to the command it was saved for, so it needs its key again.");
+          if (entry.keys.length && (!entry.added || entry.keysSet === false || entry.commandChanged || context.options.secrets !== undefined)) options.keys = await catalogKeys(context, entry);
           const result = await context.client.call("mcpCatalog.add", id, options);
           context.print(result, (done) => (done.next === "sign-in" ? safe(entry.name) + " is added. Sign it in next: botkins tools sign-in " + shellWord(done.serverId, "<its id>") : safe(entry.name) + " is added and on."));
         },
