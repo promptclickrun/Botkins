@@ -672,21 +672,28 @@ export class CopilotProvider extends ModelProvider {
    * device sign-in, where the person types a one-time code on a page they open on any device.
    */
   async signIn(options) {
-    const flow = {};
+    const previous = this.signInFlow;
+    if (previous && !previous.cancelled) throw new Error("A Copilot sign-in is already in progress on this host.");
+    const finished = Promise.withResolvers();
+    const flow = { done: finished.promise, cancelled: false };
     this.signInFlow = flow;
     try {
+      // A retry can arrive while the cancelled SDK is closing. It must acquire its own client.
+      if (previous) await previous.done;
+      if (flow.cancelled) throw new Error("Sign-in cancelled.");
       const approved = await this.authorizeAccount(options, flow);
-      if (this.signInFlow !== flow) throw new Error("Sign-in cancelled.");
+      if (flow.cancelled) throw new Error("Sign-in cancelled.");
       if (approved) await this.resumeApprovedAccount(approved, flow);
     } finally {
       if (this.signInFlow === flow) this.signInFlow = null;
+      finished.resolve();
     }
   }
   async authorizeAccount({ open, device }, flow) {
     return this.withAccounts(async (accounts, client) => {
       const { flowId, step } = await accounts.login.begin({ kind: "githubDotCom", method: device ? "device-code" : "web" });
       flow.cancel = () => accounts.login.cancel({ flowId }).catch(() => {});
-      const cancelled = () => this.signInFlow !== flow;
+      const cancelled = () => flow.cancelled;
       try {
         if (cancelled()) throw new Error("Sign-in cancelled.");
         if (device) {
@@ -751,7 +758,7 @@ export class CopilotProvider extends ModelProvider {
             (approved.host && auth.host !== approved.host)) {
           throw new Error("Copilot could not load the approved account on this host. Try signing in again.");
         }
-        if (this.connection !== ready || this.signInFlow !== flow) throw new Error("Sign-in cancelled.");
+        if (this.connection !== ready || flow?.cancelled) throw new Error("Sign-in cancelled.");
         rmSync(this.signedOutFile, { force: true });
         return client;
       } catch (error) {
@@ -770,7 +777,7 @@ export class CopilotProvider extends ModelProvider {
   async cancelSignIn() {
     const flow = this.signInFlow;
     if (!flow) return;
-    this.signInFlow = null;
+    flow.cancelled = true;
     await flow.cancel?.();
   }
   // A shared keychain item can belong to another Copilot installation. If the OS protects it,
