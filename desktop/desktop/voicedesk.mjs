@@ -4,13 +4,12 @@
 // choices and keys. This file only shapes what the page needs: plain data, never a key.
 import { VoiceTurns } from "./link/voice-history.mjs";
 import { Failure } from "./link/tools.mjs";
-import { cleanBotVoice, effectiveTts, liveInstructions as sharedLiveInstructions, MAX_AUDIO, MAX_SPEAK } from "./link/voice.mjs";
+import { ackFirstRule, ASK_BOT_DESCRIPTION, cleanBotVoice, effectiveTts, liveInstructions as sharedLiveInstructions, MAX_AUDIO, MAX_SPEAK } from "./link/voice.mjs";
 
 /** The one tool a live voice has. The voice only talks; the bot does the work, as a normal turn in the chat. */
 export const ASK_BOT = {
   name: "ask_bot",
-  description:
-    "Hands the person's request to the bot, which can use its tools, files and memory, and returns the bot's answer. Use it for new work: fresh or current information, anything to look up, do, change or remember. Not for what the conversation or your notes already answer.",
+  description: ASK_BOT_DESCRIPTION,
   parameters: {
     type: "object",
     properties: { request: { type: "string", description: "The request, in the person's own words." } },
@@ -91,6 +90,7 @@ export function liveInstructions(bot, profile = "") {
     "You only do the talking. For anything beyond small talk (a question about their work, anything to look up, do, remember or change, or anything that needs " +
       name +
       "'s memory, tools or files), call the ask_bot tool once with the request in the person's own words, wait for the result, and then tell them what it answered in your own words. Never make up what the bot would say.",
+    ackFirstRule(name),
     "Sometimes the tool answers that " +
       name +
       " needs the person's approval, has a question for them, or is still working. Say exactly that, and that the request is on their screen: you can't approve or answer for them, and you don't call the tool again for the same request. When you are then told that " +

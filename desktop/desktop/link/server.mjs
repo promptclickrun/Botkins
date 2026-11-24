@@ -35,7 +35,7 @@ import { Spaces } from "./spaces.mjs";
 import { headCapabilities, cleanLook, deviceKind, LinkStore, personName, SCREEN_MODES } from "./store.mjs";
 import { chatSectionsOf, withChatSections, authorize, chatPeople, cleanGroup, cleanRole, filterParts, ownerParts, inChat, panelOfFrame, panelView, spaceCan, inviteLink, inviteLookup, MAX_CHAT_PEOPLE, newInviteCode, normalizeCode, OWNER, personOf, sharedBotFlags, teamPeople, viewOf, withBotFlags, withChatFlags, hasAction, roleOfMember, seenItemsOf, spacesViewOf } from "./team.mjs";
 import { Failure, searchDirs } from "./tools.mjs";
-import { cleanBotVoice, liveContextOf, liveInstructions, Voice } from "./voice.mjs";
+import { ASK_BOT_DESCRIPTION, cleanBotVoice, liveContextOf, liveInstructions, Voice } from "./voice.mjs";
 import { Uploads } from "./uploads.mjs";
 
 export const PROTOCOL = 1;
@@ -82,7 +82,7 @@ const MAX_VOICE_AUDIO = 5 * 1024 * 1024; // what one call can carry, well under 
 /** The one tool a live voice has: the voice only talks; the bot does the work. The phone runs it by sending the message to the chat. */
 const ASK_BOT = {
   name: "ask_bot",
-  description: "Hands the person's request to the bot, which can use its tools, files and memory, and returns the bot's answer. Use it for new work: fresh or current information, anything to look up, do, change or remember. Not for what the conversation or your notes already answer.",
+  description: ASK_BOT_DESCRIPTION,
   parameters: { type: "object", properties: { message: { type: "string", description: "The request, in the person's own words." } }, required: ["message"], additionalProperties: false },
 };
 const MAX_WAITERS = 2; // "link.sync" calls a session may have waiting at once

@@ -208,6 +208,8 @@ test("splitSentences and cutForSpeech cut at sentence ends", () => {
   assert.match(cut, /here\. The rest is in the chat\.$/);
 });
 
+const ACK_FIRST = /first say one short sentence out loud that you're on it and who or what you're asking.*and only then call the tool\. Never call a tool silently\./;
+
 test("startLive gives the voice the bot's name and role and the one ask_bot tool", async () => {
   const voice = fakeVoice();
   const desk = new VoiceDesk({ voice: () => voice, workspace: fakeWorkspace });
@@ -222,6 +224,9 @@ test("startLive gives the voice the bot's name and role and the one ask_bot tool
   assert.match(args.instructions, /ask_bot/);
   assert.match(ASK_BOT.description, /new work/);
   assert.match(ASK_BOT.description, /Not for what the conversation or your notes already answer/);
+  // Acknowledge first, then call the tool: in the instructions every provider gets, and in the tool's own description.
+  assert.match(args.instructions, ACK_FIRST);
+  assert.match(ASK_BOT.description, /Always speak first: say one short sentence out loud that you're on it and who you're asking, and only then call this tool\. Never call it silently\./);
   assert.deepEqual(args.about, { chatId: "chat-1", botId: "bot-1", botName: "Pip" }, "whom the voice speaks for, for a helper that needs to know");
   assert.equal(desk.isOwn("live-1"), true, "a session this window started");
   assert.deepEqual(ASK_BOT.parameters.required, ["request"]);
@@ -323,6 +328,8 @@ test("the instructions keep to the bot", () => {
   const layered = liveInstructions({ name: "Wren", instructions: "Speak in Spanish." }, "IDENTITY.md\nSpeak in English.");
   assert.ok(layered.indexOf("Speak in Spanish.") > layered.indexOf("Speak in English."));
   assert.match(liveInstructions({ instructions: "x".repeat(25000) }), /including small talk, call ask_bot/);
+  assert.match(text, ACK_FIRST);
+  assert.match(liveInstructions({ instructions: "x".repeat(25000) }), ACK_FIRST, "also when the long instructions are left out");
   assert.match(text, /Never make up/);
 });
 
@@ -391,6 +398,7 @@ test("Codex live: an ephemeral thread with Botkins' tool only, realtime over Web
   assert.equal(thread.config.features.shell_tool, false);
   assert.deepEqual(thread.dynamicTools[0].tools.map((t) => t.name), ["ask_bot"]);
   assert.deepEqual(thread.dynamicTools[0].tools[0].inputSchema, ASK_BOT.parameters);
+  assert.match(thread.dynamicTools[0].tools[0].description, /Always speak first/, "Codex's voice is told to speak first too");
   const start = peer.seen.find((c) => c[0] === "thread/realtime/start")[1];
   assert.deepEqual(start, { threadId: "thread-9", outputModality: "audio", transport: { type: "webrtc", sdp: "v=0 offer" }, version: "v3", includeStartupContext: false, voice: "juniper" });
   const first = peer.seen.find((c) => c[0] === "thread/realtime/appendText")[1];
