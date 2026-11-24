@@ -1414,6 +1414,22 @@ export function liveTranscript(messages, { botName, bots = [], userName, budget 
 }
 
 /**
+ * How a live voice handles a tool: say that you're on it out loud, then call it. Every live
+ * provider gets this through the instructions (OpenAI, Azure, Codex, Gemini and ElevenLabs), so a
+ * slow `ask_bot` never leaves the person in silence. The tool's own description says the same.
+ */
+export function ackFirstRule(name = "the bot") {
+  return (
+    "When the person asks for something that needs a tool, first say one short sentence out loud that you're on it and who or what you're asking (for example \"On it, I'll ask " + name + " to check that.\"), and only then call the tool. Never call a tool silently. " +
+    "While you wait for a slow tool, don't fill the silence with filler; if it takes long, one short \"still working on it\" is enough. When the result comes back, answer with it briefly."
+  );
+}
+
+/** The `ask_bot` tool's description, for every live provider. It repeats the acknowledge-first rule, because some models weigh a tool's description more than their instructions. */
+export const ASK_BOT_DESCRIPTION =
+  "Hands the person's request to the bot, which can use its tools, files and memory, and returns the bot's answer. Use it for new work: fresh or current information, anything to look up, do, change or remember. Not for what the conversation or your notes already answer. Always speak first: say one short sentence out loud that you're on it and who you're asking, and only then call this tool. Never call it silently.";
+
+/**
  * The live voice's instructions. `notes` is what the app gave (`backend.liveContext`):
  * `{ userName?, identity?, user? }`, each cut here. `location` is from `liveContextOf`.
  */
@@ -1430,6 +1446,7 @@ export function liveInstructions({ bot, messages = [], bots = [], notes = {}, lo
   return [
     "You are the voice of " + name + ", a bot the person works with. Speak as " + name + ", in the first person, warmly and briefly: this is a spoken conversation, so no lists, no Markdown, and one or two sentences unless asked for more.",
     "When the answer is already in the conversation below or in these notes, answer it yourself: what " + name + " already said or found, who you are, who the person is, where they are. Don't ask the bot again for something it already answered. Call the ask_bot tool only for new work: fresh or current information, anything to look up, do, change or remember, or when you aren't sure. Then call it once with the request in the person's own words, wait for the result, and tell them what it answered in your own words. Never make up what the bot would say.",
+    ackFirstRule(name),
     userName && "The person's name is " + userName + ".",
     place && "The person is near " + place + ". Use it only when it helps, such as for the time, the weather or places nearby.",
     about && "About " + name + ":\n" + about,

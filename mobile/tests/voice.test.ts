@@ -8,7 +8,7 @@ import { chmodSync, existsSync, mkdtempSync, readFileSync, realpathSync, rmSync,
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, test } from "node:test";
-import { botVoiceField, cleanBotVoice, LIVE_LIMITS, liveContextOf, liveInstructions, liveTranscript, Voice, wavFromPcm } from "../link-host/voice.mjs";
+import { ackFirstRule, ASK_BOT_DESCRIPTION, botVoiceField, cleanBotVoice, LIVE_LIMITS, liveContextOf, liveInstructions, liveTranscript, Voice, wavFromPcm } from "../link-host/voice.mjs";
 import { remoteArgs } from "../link-host/methods.mjs";
 import { missing } from "../src/features/voice/choices";
 import { MockBackend } from "../link-host/mock-backend.mjs";
@@ -1339,6 +1339,71 @@ test("live voice on the computer: the chat, the app's notes and the place reach 
     // A bad place is refused before anything is set up.
     await assert.rejects((link as any).liveVoice({ chatId: chat.id, botId: chat.botId, provider: "openai", context: { location: { latitude: 200, longitude: 0 } } }), /That location isn't valid\./);
     assert.equal(asked.length, 2);
+  } finally {
+    await link.stop();
+  }
+});
+
+// The acknowledge-first rule: the voice says it is on it, then calls the tool, for every live provider.
+const ACK = /first say one short sentence out loud that you're on it and who or what you're asking.*and only then call the tool\. Never call a tool silently\./;
+const NO_FILLER = /don't fill the silence with filler.*still working on it.*answer with it briefly/;
+
+test("live voice: the instructions and the ask_bot description both say to speak first, then call the tool", () => {
+  const rule = ackFirstRule("Patch");
+  assert.match(rule, ACK);
+  assert.match(rule, NO_FILLER);
+  assert.match(rule, /On it, I'll ask Patch to check that\./);
+  assert.match(liveInstructions({ bot, messages: [], bots: [bot] }), ACK);
+  assert.ok(liveInstructions({ bot, messages: [], bots: [bot] }).includes(ackFirstRule("Pip")), "with the bot's name");
+  assert.match(ASK_BOT_DESCRIPTION, /Always speak first: say one short sentence out loud that you're on it and who you're asking, and only then call this tool\. Never call it silently\./);
+  assert.ok(ASK_BOT_DESCRIPTION.length <= 2000, "within what the voice accepts for a description");
+});
+
+test("live voice on the computer: OpenAI, Gemini and ElevenLabs each get the acknowledge-first rule in their own instructions field, and the tool says it too", async () => {
+  const net = fake({
+    "POST api.openai.com/v1/realtime/calls": () => new Response("v=0\r\no=openai 2 2 IN IP4 0.0.0.0\r\n"),
+    "POST api.openai.com/v1/realtime/client_secrets": () => ({ value: "ek_short_lived_secret_value", expires_at: Math.floor(NOW / 1000) + 600 }),
+    "POST generativelanguage.googleapis.com/v1beta/auth_tokens": () => ({ name: "auth_tokens/abc", uses: 1 }),
+    "POST api.elevenlabs.io/v1/convai/tools": () => ({ id: "tool_1", tool_config: {} }),
+    "POST api.elevenlabs.io/v1/convai/agents/create": () => ({ agent_id: "agent_1" }),
+    "GET api.elevenlabs.io/v1/convai/conversation/get-signed-url": () => ({ signed_url: "wss://api.elevenlabs.io/v1/convai/conversation?agent_id=agent_1&conversation_signature=S" }),
+  });
+  const backend = new MockBackend({ speed: 0.05 });
+  const link = new LinkHost({ relay: false, dir: scratch(), backend, port: 0, fetch: net.fetch as any });
+  const voice = (link as any).voice;
+  try {
+    voice.setKey("openai", KEY);
+    voice.setKey("gemini", "AIza-gemini-key-123456");
+    voice.setKey("elevenlabs", "xi-eleven-key-12345");
+    const chat = (backend.snapshot().chats as any[]).find((item) => item.id === "chat-blog");
+    const open = (provider: string, sdp?: string) => (link as any).liveVoice({ chatId: chat.id, botId: chat.botId, provider, ...(sdp && { sdp }) });
+
+    // OpenAI by WebRTC: the session sent with the offer. By socket: the session.update sent first.
+    const webrtc = await open("openai", "v=0 offer");
+    const offered = JSON.parse(String((net.last().body as FormData).get("session")));
+    assert.match(offered.instructions, ACK);
+    assert.match(offered.tools[0].description, /Always speak first/);
+    const socket = await open("openai");
+    assert.match(socket.session.session.instructions, ACK);
+    assert.match(socket.session.session.tools[0].description, /Always speak first/);
+    // The phone and the desktop app get the same tool back to run.
+    assert.match(webrtc.tools[0].description, /Never call it silently/);
+
+    // Gemini: the system instruction and the function declaration.
+    const gemini = await open("gemini");
+    assert.match(gemini.setup.setup.systemInstruction.parts[0].text, ACK);
+    assert.match(gemini.setup.setup.tools[0].functionDeclarations[0].description, /Always speak first/);
+
+    // ElevenLabs: the agent's prompt override and the client tool it is given.
+    const eleven = await open("elevenlabs");
+    assert.match(eleven.init.conversation_config_override.agent.prompt.prompt, ACK);
+    const tool = net.seen.filter((s) => s.url.pathname === "/v1/convai/tools").map(json).at(-1);
+    assert.match(tool.tool_config.description, /Always speak first/);
+
+    // Azure speaks the OpenAI protocol through the same session builder.
+    const built = voice.openaiSession({ model: "m", voice: "v", instructions: offered.instructions, tools: webrtc.tools });
+    assert.match(built.instructions, ACK);
+    assert.match(built.tools[0].description, /Always speak first/);
   } finally {
     await link.stop();
   }
