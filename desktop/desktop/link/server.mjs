@@ -762,7 +762,7 @@ export class LinkHost extends EventEmitter {
       name: this.store.name,
       serverId: this.store.data.serverId,
       addresses: this.server ? reachable() : [],
-      devices: this.store.data.devices.map(({ publicKey: _key, ...device }) => ({ ...device, connected: live.has(device.id) })),
+      devices: this.store.data.devices.map(({ publicKey: _key, ...device }) => ({ ...device, connected: live.has(device.id), canNotify: device.kind !== "gadget" && this.push.view(device.id)?.routines === true })),
       pairing: pairing ? { code: pairing.code, expiresAt: pairing.expiresAt, url: this.pairingUrl(pairing.code) } : null,
       relay: { enabled: !!this.relaySettings(), connected: !!this.relayLink?.connected, url: this.relayUrl(), ...(this.relayLink?.taken && { problem: "taken" }) },
       // The phones that get notifications, and what each allows bots to use.
@@ -874,6 +874,7 @@ export class LinkHost extends EventEmitter {
       createdAt: device.createdAt,
       lastSeenAt: device.lastSeenAt,
       connected: live.has(device.id),
+      canNotify: device.kind !== "gadget" && this.push.view(device.id)?.routines === true,
       ...(device.id === asking && { current: true }),
     }));
   }
@@ -956,6 +957,42 @@ export class LinkHost extends EventEmitter {
     }
     return own;
   }
+  /** Context for routine notification target discovery, validation, and resolution ("routine-notify-targets-v1"). */
+  notifyTargetsContext() {
+    return {
+      team: this.team(),
+      devices: this.store.data.devices.map((device) => ({
+        id: device.id,
+        name: device.name,
+        kind: device.kind,
+        platform: device.platform,
+        ...(device.memberId && { memberId: device.memberId }),
+        canNotify: device.kind !== "gadget" && this.push.view(device.id)?.routines === true,
+      })),
+      host: {
+        name: this.store.name || "This computer",
+        platform: process.platform,
+        headless: this.headless(),
+        profileLinked: Boolean(this.store.data.profiles?.owner),
+      },
+      profiles: this.store.data.profiles ?? null,
+      ownerName: this.ownerName(),
+    };
+  }
+  /** The non-gadget paired devices belonging to one member, for their `team.me.devices` sync view. */
+  memberDevices(memberId) {
+    const live = this.liveDevices();
+    return this.store.data.devices
+      .filter((device) => device.memberId === memberId && device.kind !== "gadget")
+      .map((device) => ({
+        id: device.id,
+        name: device.name,
+        kind: device.kind,
+        platform: device.platform,
+        connected: live.has(device.id),
+        canNotify: this.push.view(device.id)?.routines === true,
+      }));
+  }
   // ── Teams and invites ───────────────────────────────────────────────────────────────
 
   team() {
@@ -979,6 +1016,7 @@ export class LinkHost extends EventEmitter {
           kind: device.kind,
           platform: device.platform,
           connected: live.has(device.id),
+          canNotify: device.kind !== "gadget" && this.push.view(device.id)?.routines === true,
         })),
       })),
       invites: team.invites.map((invite) => ({ ...structuredClone(invite), link: inviteLink(invite.code, serverKey, this.relayUrl()) })),
@@ -2248,7 +2286,10 @@ export class LinkHost extends EventEmitter {
         ? raw
         : principal.kind === "owner"
         ? ownerParts(raw, team, Array.isArray(records) ? { spaces: records, ...this.spaces.context(OWNER) } : {})
-        : filterParts(raw, principal, team, Array.isArray(records) ? { spaces: records, ...this.spaces.context(principal.memberId) } : {});
+        : filterParts(raw, principal, team, {
+            ...(Array.isArray(records) ? { spaces: records, ...this.spaces.context(principal.memberId) } : {}),
+            memberDevices: this.memberDevices(principal.memberId),
+          });
     const put = (name, json) => {
       if (previous.get(name)?.json !== json) previous.set(name, { json, v: ++this.version });
     };

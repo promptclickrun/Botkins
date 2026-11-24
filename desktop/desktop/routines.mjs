@@ -15,6 +15,16 @@ import { nextTime, textField } from "./panels.mjs";
 import { BOARD_KINDS, GOAL_CATEGORIES } from "./board.mjs";
 import { spaceShare } from "./link/team.mjs";
 import { isGroup } from "./groups.mjs";
+import {
+  ROUTINE_NOTIFY_TARGETS,
+  discoverNotifyTargets,
+  normalizeRunNotifyTargets,
+  resolveRoutineTargets,
+  summarizeNotifyTargets,
+  validateNotifyTargets,
+} from "./link/notify-targets.mjs";
+
+export { ROUTINE_NOTIFY_TARGETS };
 
 export const CADENCES = ["once", "daily", "weekdays", "weekly", "custom"];
 /** The version of routine destinations (`deliver`), for a phone to check before it offers them. */
@@ -367,46 +377,76 @@ export class Routines {
     return chatId;
   }
   /** `update` with a model: `data.model` null goes back to the routines default. */
-  async updateWithModel(chatId, data, now = Date.now()) {
+  async updateWithModel(chatId, data, now = Date.now(), actor = "owner") {
     const model = await this.modelField(data?.model);
-    const entry = this.update(chatId, data, now);
+    const entry = this.update(chatId, data, now, actor);
     if (model !== undefined) {
       this.setModel(this.ws.chat(chatId), model);
       this.ws.save();
     }
     return entry;
   }
+  /** Resolves `notify` + `notifyTargets` input into canonical persisted changes. */
+  notifyChange(botId, data, actor = "owner", opts = {}) {
+    const notify = notifyField(data.notify);
+    const hasTargets = data.notifyTargets !== undefined && data.notifyTargets !== null;
+    if (notify === false && hasTargets) throw new Error("Choose either notify: false or notifyTargets, not both.");
+    if (notify === false) return { notify: false, notifyTargets: null };
+    if (data.notifyTargets === null) return { notify: notify ?? true, notifyTargets: null };
+    if (hasTargets) {
+      const validated = validateNotifyTargets(data.notifyTargets, this.ws.notifyTargetsContext(botId), {
+        resolveNames: opts.resolveNames === true,
+        actor,
+      });
+      if (Array.isArray(opts.warnings)) opts.warnings.push(...validated.warnings);
+      if (validated.empty) return { notify: false, notifyTargets: null };
+      return { notify: true, notifyTargets: validated.targets };
+    }
+    return { notify, notifyTargets: undefined };
+  }
   /**
    * Makes a routine. `createdBy` is the team member who made it (never taken from `data`): it is
    * kept on the routine and on its chat, so the routine's turns run under that member's limits
    * and its result is theirs to hear of.
    */
-  create(data, now = Date.now(), createdBy) {
+  create(data, now = Date.now(), createdBy, opts = {}) {
     this.ws.bot(data.botId);
     // A script runs on this computer, so only its owner writes one.
     if (createdBy && data.script != null) throw new Error("Only the computer's owner can add a script to a routine.");
     const fields = this.fields(data, now);
     const deliver = deliveryField(data.deliver, this.ws, data.botId, personOf(createdBy));
-    const notify = notifyField(data.notify);
+    const notifyChange = this.notifyChange(data.botId, data, personOf(createdBy), opts);
     const chatId = this.ws.createChat(data.botId, "Routine · " + fields.name);
     const chat = this.ws.chat(chatId);
     if (createdBy) chat.createdBy = createdBy;
     const id = (chat.lastScheduleId ?? 0) + 1;
     chat.lastScheduleId = id;
-    chat.schedules = [{ id, routine: true, enabled: true, createdAt: now, ...fields, ...(createdBy && { createdBy }), ...(deliver && { deliver }), ...(notify === false && { notify: false }) }];
+    chat.schedules = [
+      {
+        id,
+        routine: true,
+        enabled: true,
+        createdAt: now,
+        ...fields,
+        ...(createdBy && { createdBy }),
+        ...(deliver && { deliver }),
+        ...(notifyChange.notify === false && { notify: false }),
+        ...(notifyChange.notifyTargets && { notifyTargets: notifyChange.notifyTargets }),
+      },
+    ];
     this.ws.save();
     return chatId;
   }
-  update(chatId, data, now = Date.now()) {
+  update(chatId, data, now = Date.now(), actor = "owner", opts = {}) {
     const { chat, entry } = this.find(chatId);
     if (entry.proactive) throw new Error(MANAGED);
     // Whoever changes it, the result may only go to a chat of the routine's creator.
     const deliver = data.deliver === undefined ? undefined : (deliveryField(data.deliver, this.ws, chat.botId, personOf(entry.createdBy)) ?? null);
-    const notify = notifyField(data.notify);
+    const notifyChange = this.notifyChange(chat.botId, data, actor, opts);
     // A change of destination, of notifying or of the model alone leaves the schedule as it is, so a finished one-time routine can still take it.
     if (["name", "prompt", "cadence", "timezone", "script", "followUp"].every((k) => data[k] === undefined)) {
       this.setDeliver(entry, deliver);
-      this.setNotify(entry, notify);
+      this.setNotifyTargets(entry, notifyChange);
       this.ws.save();
       return entry;
     }
@@ -428,7 +468,7 @@ export class Routines {
     }
     Object.assign(entry, fields);
     this.setDeliver(entry, deliver);
-    this.setNotify(entry, notify);
+    this.setNotifyTargets(entry, notifyChange);
     delete entry.finishedAt;
     chat.title = "Routine · " + entry.name;
     this.ws.save();
@@ -445,6 +485,14 @@ export class Routines {
     if (notify === undefined) return;
     if (notify === false) entry.notify = false;
     else delete entry.notify;
+  }
+  /** Applies both `notify` and `notifyTargets`. Preserves existing `notifyTargets` when undefined (older clients). */
+  setNotifyTargets(entry, change) {
+    if (!change) return;
+    this.setNotify(entry, change.notify);
+    if (change.notifyTargets === undefined) return;
+    if (change.notifyTargets) entry.notifyTargets = change.notifyTargets;
+    else delete entry.notifyTargets;
   }
   /** Pauses or resumes a routine or any chat schedule. */
   setEnabled(chatId, id, enabled, now = Date.now()) {
@@ -486,6 +534,18 @@ export class Routines {
     const { chatId: picked, ...rest } = entry.deliver ?? {};
     const keep = botId === chat.botId && (picked === undefined || this.ws.inChat(picked, personOf(createdBy)));
     const deliver = entry.deliver && (keep ? entry.deliver : rest);
+    // Keep only notification targets still eligible for the destination bot and visible to the copier.
+    let notifyTargets;
+    if (entry.notifyTargets) {
+      const available = discoverNotifyTargets({ ...this.ws.notifyTargetsContext(botId), actor: personOf(createdBy) });
+      const validPeople = new Set(available.people.map((person) => person.id));
+      const validDevices = new Set(available.people.flatMap((person) => (person.devices ?? []).map((device) => device.id)));
+      const people = (entry.notifyTargets.people ?? []).filter((id) => validPeople.has(id));
+      const devices = (entry.notifyTargets.devices ?? []).filter((id) => validDevices.has(id));
+      if (people.length || devices.length) {
+        notifyTargets = { ...(people.length && { people }), ...(devices.length && { devices }) };
+      }
+    }
     const copy = this.create(
       {
         botId,
@@ -495,6 +555,7 @@ export class Routines {
         timezone: entry.timezone,
         deliver,
         ...(entry.notify === false && { notify: false }),
+        ...(notifyTargets && { notifyTargets }),
         ...(entry.script && { script: entry.script, followUp: entry.followUp === true }),
       },
       now,
@@ -529,6 +590,10 @@ export class Routines {
       ...(entry.createdBy && { createdBy: entry.createdBy }),
       // Left out when the routine notifies, which is the usual way.
       ...(entry.notify === false && { notify: false }),
+      ...(entry.notifyTargets && {
+        notifyTargets: entry.notifyTargets,
+        notifySummary: summarizeNotifyTargets(entry.notifyTargets, this.ws.notifyTargetsContext(chat.botId)),
+      }),
       ...(entry.script && { script: entry.script, followUp: entry.followUp === true }),
       // Kept by Botkins for the bot's Proactive agent: changed on the bot's profile, not here.
       ...(entry.proactive && { proactive: true }),
@@ -539,7 +604,17 @@ export class Routines {
   /** The line added to a routine run's turn so the bot writes for its destination. "" for the default. */
   destinationNote(chat, scheduleId) {
     const entry = chat.schedules?.find((s) => s.id === scheduleId && s.routine);
-    return (entry?.deliver && DESTINATION_NOTES[entry.deliver.to]) || "";
+    const base = (entry?.deliver && DESTINATION_NOTES[entry.deliver.to]) || "";
+    if (!entry || entry.deliver?.to === "none") return base;
+    const available = discoverNotifyTargets({
+      ...this.ws.notifyTargetsContext(chat.botId),
+      actor: personOf(entry.createdBy ?? chat.createdBy),
+    });
+    const totalDevices = available.people.reduce((sum, person) => sum + (person.devices?.length ?? 0), 0);
+    if (available.people.length <= 1 && totalDevices <= 1) return base;
+    const note =
+      "[Multiple people or devices can receive alerts for this routine. Call routine_notify_targets to inspect available recipients and routine_notify before finishing if you need to notify specific people/devices or suppress alerts for this run.]";
+    return base ? `${base}\n${note}` : note;
   }
   /**
    * The chat a routine's reply goes to: the one chosen, else the bot's latest chat that the
@@ -643,12 +718,26 @@ export class Routines {
         additionalProperties: false,
       },
     };
-    const notifyProp = { notify: { type: "boolean", description: "false makes the routine run quietly: no notification on the computer or the phone when it finishes. Leave it out to notify, which is the usual way." } };
+    const notifyProp = {
+      notify: { type: "boolean", description: "false makes the routine run quietly: no notification on the computer or the phone when it finishes. Leave it out to notify, which is the usual way." },
+      notifyTargets: {
+        type: "object",
+        description:
+          "Default notification recipients for this routine. Call routine_notify_targets first to get valid person IDs (e.g. \"owner\", \"m_…\") and device IDs (e.g. \"host\", paired device IDs). " +
+          "Omit to alert everyone who sees this routine; pass notify: true (without notifyTargets) on update to reset to everyone; pass notify: false to silence.",
+        properties: {
+          people: { type: "array", items: str, description: "Person IDs (or unique person names) whose devices should all be alerted." },
+          devices: { type: "array", items: str, description: "Specific device IDs (\"host\" or paired device IDs, or unique device names) to alert." },
+        },
+        additionalProperties: false,
+      },
+    };
     // "Remind me here": a result sent to a chat goes to the chat it was asked in, when that chat can take it.
     // A routine a bot makes belongs to whoever the bot is working for: the member who wrote this
     // turn's message, else the member whose chat this is, else the owner.
     const maker = task?.author?.memberId ?? chat.createdBy;
-    const here = (deliver) => (deliver?.to === "chat" && deliver.chatId === undefined && !chatProblem(chat, bot.id, ws, personOf(maker)) ? { ...deliver, chatId: chat.id } : deliver);
+    const actor = personOf(maker);
+    const here = (deliver) => (deliver?.to === "chat" && deliver.chatId === undefined && !chatProblem(chat, bot.id, ws, actor) ? { ...deliver, chatId: chat.id } : deliver);
     const cadenceOf = (a) =>
       a.cadence ? { kind: a.cadence, time: a.time, days: a.days, date: a.date, cron: a.cron } : undefined;
     const id = { id: { type: "string", description: "Routine id from routine_list" } };
@@ -656,7 +745,55 @@ export class Routines {
       tool("routine_list", "List your routines: scheduled tasks that run your instructions in their own chat.", {}, [], () =>
         this.list(bot.id).map(({ chat, entry }) => this.view(chat, entry)),
       ),
+      tool(
+        "routine_notify_targets",
+        "List the people and devices eligible to receive routine notifications for this bot, including whether each device currently has routine alerts enabled.",
+        {},
+        [],
+        () => discoverNotifyTargets({ ...ws.notifyTargetsContext(bot.id), actor }),
+      ),
     ];
+    // Per-run notification override: only available inside an active routine/scheduled run that can notify.
+    if ((run?.scheduleId != null || run?.trigger === "scheduled") && !this.noOutput(chat, run?.scheduleId)) {
+      const runEntry = chat.schedules?.find((s) => s.id === run.scheduleId && s.routine);
+      const runActor = personOf(runEntry?.createdBy ?? chat.createdBy);
+      tools.push(
+        tool(
+          "routine_notify",
+          "Override who gets alerted when this routine run finishes. Call routine_notify_targets first to see valid person and device IDs. " +
+            "Use mode \"only\" with people and/or devices to alert specific recipients (even if the routine is normally quiet), \"none\" to suppress alerts for this run, or \"default\" to fall back to the routine's default notification settings. " +
+            "Calling this again during the same run replaces the previous choice.",
+          {
+            mode: { type: "string", enum: ["only", "none", "default"] },
+            people: { type: "array", items: str, description: "For mode \"only\": person IDs (or unique names) to alert across all their devices." },
+            devices: { type: "array", items: str, description: "For mode \"only\": specific device IDs (or unique names) to alert." },
+            message: { type: "string", description: "Optional short alert line (up to 160 characters) shown in the notification." },
+          },
+          ["mode"],
+          (a) => {
+            const ctx = ws.notifyTargetsContext(bot.id);
+            const { override, warnings } = normalizeRunNotifyTargets(a, ctx, { resolveNames: true, actor: runActor });
+            if (override.mode === "default") delete run.notifyTargets;
+            else run.notifyTargets = override;
+            ws.save();
+            const resolved = resolveRoutineTargets({
+              ...ctx,
+              entry: runEntry ?? { notify: true },
+              run,
+              chatNotifiesOwner: ws.notifiesOwner(chat.id),
+            });
+            return {
+              ok: true,
+              mode: override.mode,
+              targets: resolved.explicit
+                ? { host: Boolean(resolved.host), devices: [...(resolved.deviceIds ?? [])] }
+                : { default: true },
+              ...(warnings.length && { warnings }),
+            };
+          },
+        ),
+      );
+    }
     // A scheduled, routine or task run can't create routines, so unattended work can't multiply itself.
     if (!run?.scheduleId && !run?.taskId)
       tools.push(
@@ -664,7 +801,7 @@ export class Routines {
           "routine_create",
           "Create a routine when the person asks you to do something on a schedule or to remind them later. " +
             "The routine runs `instructions` as a new turn in its own chat at each time, and `deliver` can send the result to your chat with the person, their Feed, Ideas or Goals. Write instructions as what you should do then, e.g. \"Remind the person to review their inbox.\" " +
-            "Before you create it, confirm with the person how often it runs, where the result goes (`deliver`), and whether they want a notification each run (`notify`), unless they already said. " +
+            "Before you create it, confirm with the person how often it runs, where the result goes (`deliver`), and whether they want a notification each run (`notify` or `notifyTargets`), unless they already said. " +
             "Today is " + new Date().toISOString().slice(0, 10) + ".",
           { name: str, instructions: str, ...cadenceProps, ...deliverProp, ...notifyProp },
           ["name", "instructions", "cadence"],
@@ -673,22 +810,36 @@ export class Routines {
             const cadence = cadenceOf(a);
             if (cadence?.kind === "cron" && !slowEnough(cadence.cron))
               throw new Error("Bots can't create routines that run more often than every 15 minutes. The person can set that up under Routines.");
-            const chatId = this.create({ botId: bot.id, name: a.name, prompt: a.instructions, cadence, timezone: a.timezone, deliver: here(a.deliver), notify: a.notify }, undefined, maker);
+            const warnings = [];
+            const chatId = this.create(
+              { botId: bot.id, name: a.name, prompt: a.instructions, cadence, timezone: a.timezone, deliver: here(a.deliver), notify: a.notify, notifyTargets: a.notifyTargets },
+              undefined,
+              maker,
+              { resolveNames: true, warnings },
+            );
             const found = this.find(chatId);
-            return this.view(found.chat, found.entry);
+            return { ...this.view(found.chat, found.entry), ...(warnings.length && { warnings }) };
           },
         ),
       );
     tools.push(
       tool(
         "routine_update",
-        "Change one of your routines: its name, instructions, schedule or where its result goes (deliver). Supply only what changes; a new schedule needs cadence and its fields.",
+        "Change one of your routines: its name, instructions, schedule, where its result goes (deliver), or who it notifies (notify / notifyTargets). Supply only what changes; a new schedule needs cadence and its fields.",
         { ...id, name: str, instructions: str, ...cadenceProps, ...deliverProp, ...notifyProp },
         ["id"],
         (a) => {
           owned(a.id);
-          const entry = this.update(a.id, { name: a.name, prompt: a.instructions, cadence: cadenceOf(a), timezone: a.timezone, deliver: here(a.deliver), notify: a.notify });
-          return this.view(ws.chat(a.id), entry);
+          const warnings = [];
+          const notifyTargets = a.notify === true && a.notifyTargets === undefined ? null : a.notifyTargets;
+          const entry = this.update(
+            a.id,
+            { name: a.name, prompt: a.instructions, cadence: cadenceOf(a), timezone: a.timezone, deliver: here(a.deliver), notify: a.notify, notifyTargets },
+            undefined,
+            actor,
+            { resolveNames: true, warnings },
+          );
+          return { ...this.view(ws.chat(a.id), entry), ...(warnings.length && { warnings }) };
         },
       ),
       tool("routine_pause", "Pause one of your routines.", id, ["id"], (a) => {

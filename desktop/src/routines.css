@@ -712,6 +712,74 @@
   gap: 2px;
 }
 
+/* Routine notification target picker ("routine-notify-targets-v1"). */
+.routine-notify-fieldset > small {
+  display: block;
+  margin-top: 8px;
+}
+.routine-notify-fieldset:disabled {
+  opacity: 0.65;
+}
+.routine-target-picker {
+  margin-top: 12px;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--sunken);
+  display: grid;
+  gap: 10px;
+}
+.routine-target-group {
+  display: grid;
+  gap: 6px;
+}
+.routine-form .routine-target-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  font-size: calc(13px * var(--text-scale));
+  font-weight: 500;
+  cursor: pointer;
+}
+.routine-form .routine-target-person {
+  font-weight: 600;
+}
+.routine-target-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+.routine-target-devices {
+  display: grid;
+  gap: 5px;
+  padding-left: 22px;
+}
+.routine-target-tag,
+.routine-target-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 6px;
+  border-radius: 99px;
+  font-size: calc(11px * var(--text-scale));
+  font-weight: 600;
+  background: var(--surface);
+  color: var(--muted);
+  box-shadow: 0 0 0 1px var(--line);
+}
+.routine-target-note {
+  margin: 0;
+  font-size: calc(12px * var(--text-scale));
+  color: var(--muted);
+}
+.routine-target-error {
+  margin: 0;
+  font-size: calc(12.5px * var(--text-scale));
+  font-weight: 600;
+  color: var(--danger);
+}
+
 /* What a routine runs: its instructions, or a script with an optional follow-up action. */
 .routine-runs small {
   display: block;

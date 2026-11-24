@@ -8,6 +8,7 @@ import type { Bot, BotTask, TaskPriority, TaskStatus } from "@/link/types";
 import type { RoutineEntry } from "@/state/hooks";
 import { cadenceLabel, upcoming } from "@/state/time";
 import { BotAvatar, Chip, space, T, Tap, tint, type Tone, useTheme } from "@/ui";
+import { type NotifyTargetView, routineNotifyBadge } from "./notifyTargets";
 
 /** A list row whose trailing control (a switch, a button) stays its own tap target for VoiceOver. */
 export function SplitRow({ leading, title, subtitle, onPress, accessory, label, muted, hint }: { leading?: ReactNode; title: string; subtitle?: string; onPress: () => void; accessory?: ReactNode; label?: string; muted?: boolean; hint?: string }) {
@@ -38,11 +39,12 @@ export function SplitRow({ leading, title, subtitle, onPress, accessory, label, 
 /** A one-time routine that already ran. */
 export const isFinished = (routine: RoutineEntry) => !!routine.entry.finishedAt || (routine.entry.cadence?.kind === "once" && routine.entry.nextAt == null);
 
-/** "Weekdays at 8:30 AM · Tomorrow 8:30 AM", "… · Paused", "… · Done". */
-export function routineSubtitle(routine: RoutineEntry) {
+/** "Weekdays at 8:30 AM · Tomorrow 8:30 AM", "… · Paused", "… · Done", plus non-default alert target summary. */
+export function routineSubtitle(routine: RoutineEntry, view?: NotifyTargetView | null) {
   const when = routine.entry.cadence ? cadenceLabel(routine.entry.cadence) : routine.entry.cron ? "Custom schedule" : "Scheduled";
   const state = isFinished(routine) ? "Done" : routine.entry.enabled === false ? "Paused" : upcoming(routine.entry.nextAt);
-  return state ? when + " · " + state : when;
+  const alerts = routineNotifyBadge(routine.entry, view);
+  return [when, state, alerts].filter(Boolean).join(" · ");
 }
 
 export const routineName = (routine: RoutineEntry) => routine.entry.name || routine.chat.title.replace(/^Routine · /, "") || "Routine";

@@ -9,7 +9,7 @@ import { join } from "node:path";
 import { after, test } from "node:test";
 import { LinkHost } from "../link-host/index.mjs";
 import { MockBackend } from "../link-host/mock-backend.mjs";
-import { type FetchLike, LinkClient, pair, type Pairing } from "../src/link/client";
+import { type FetchLike, LinkClient, checkJoin, pair, startJoin, type Pairing } from "../src/link/client";
 import { agree, fromUtf8, hkdf, open, unb64u, utf8 } from "../src/link/crypto";
 
 const fetcher = fetch as unknown as FetchLike;
@@ -747,6 +747,164 @@ test("a phone that named the wrong one of Apple's services is corrected from the
     await call("link.push.test");
     assert.equal(sent[1].env, "production", "the next one goes straight to the right service");
   } finally {
+    await done();
+  }
+});
+
+test("routine notification targets route pushes to exact people and devices, support run overrides, respect previews and access, and keep Live Activities", async () => {
+  const { dir, link, backend, parts, until, call, done, sent, paired } = await setup(0.05);
+  void dir;
+  const extraClients: LinkClient[] = [];
+  const OWNER2_TOKEN = "11".repeat(32);
+  const SARAH_TOKEN = "22".repeat(32);
+  const ALEX_TOKEN = "33".repeat(32);
+  try {
+    assert.ok(parts.meta.capabilities.includes("routine-notify-targets-v1"), "capability is advertised");
+
+    // Second owner phone
+    const owner2Paired = await pair(fetcher, { hosts: ["127.0.0.1:" + link.port], code: link.startPairing().code }, { name: "Owner iPad", platform: "ios" });
+    const owner2 = new LinkClient(owner2Paired, { fetch: fetcher, onParts() {}, onState() {} });
+    owner2.start();
+    extraClients.push(owner2);
+
+    // Give r_guest access to bot-mira so team members can see bot-mira routines
+    const guestRole = structuredClone((link as any).store.data.team.roles.find((r: any) => r.id === "r_guest"));
+    guestRole.bots = ["bot-mira"];
+    await call("link.team.saveRole", guestRole);
+
+    // Create a second group/role without bot-mira for access-check testing
+    const restrictedRole = { ...structuredClone(guestRole), id: "r_ABCDEFGHJK", name: "Quill only", bots: ["bot-quill"] };
+    await call("link.team.saveRole", restrictedRole);
+    await call("link.team.saveGroup", { id: "g_quill", name: "Quill team", roleId: "r_ABCDEFGHJK" });
+
+    // Join Sarah (can see bot-mira) and Alex (can only see bot-quill)
+    const joinMember = async (groupId: string, deviceName: string, memberName: string) => {
+      const invite = await call("link.team.createInvite", { groupId, days: 7, maxUses: 1 });
+      const target = {
+        hosts: ["127.0.0.1:" + link.port],
+        code: invite.code,
+        serverId: link.status().serverId,
+        serverKey: Buffer.from((link as any).store.data.keys.publicKey).toString("base64url"),
+        name: link.status().name,
+      };
+      const started = await startJoin(fetcher, target, { name: deviceName, person: memberName, platform: "ios", kind: "phone" });
+      if (started.result.status !== "pending") throw new Error("expected pending join");
+      await call("link.team.approve", started.result.requestId);
+      const checked = await checkJoin(fetcher, started.attempt);
+      if (checked.status !== "approved") throw new Error("expected approved join");
+      const memberParts: Record<string, any> = {};
+      const client = new LinkClient(checked.pairing, { fetch: fetcher, onParts: (next) => void Object.assign(memberParts, next), onState() {} });
+      client.start();
+      extraClients.push(client);
+      await until(() => !!memberParts.meta, memberName + " first state");
+      return { pairing: checked.pairing, client, parts: memberParts, memberId: (link as any).store.data.team.members.find((m: any) => m.name === memberName).id as string };
+    };
+
+    const sarah = await joinMember("g_everyone", "Sarah iPhone", "Sarah");
+    const alex = await joinMember("g_quill", "Alex iPhone", "Alex");
+
+    // Verify member's own synced team.me.devices includes Sarah's phone and canNotify updates after push registration.
+    assert.deepEqual(
+      sarah.parts.team?.me?.devices?.map((d: any) => [d.id, d.name, d.canNotify]),
+      [[sarah.pairing.deviceId, "Sarah iPhone", false]],
+    );
+
+    // Register push on all 4 phones and mark them away
+    await call("link.push.register", { token: TOKEN, env: "production", cards: "all" });
+    await call("link.push.activity", "all", ACTIVITY);
+    await call("link.push.presence", false);
+    await (owner2 as any).call("link.push.register", { token: OWNER2_TOKEN, env: "production" });
+    await (owner2 as any).call("link.push.presence", false);
+    await (sarah.client as any).call("link.push.register", { token: SARAH_TOKEN, env: "production" });
+    await (sarah.client as any).call("link.push.presence", false);
+    await (alex.client as any).call("link.push.register", { token: ALEX_TOKEN, env: "production" });
+    await (alex.client as any).call("link.push.presence", false);
+
+    await until(() => sarah.parts.team?.me?.devices?.[0]?.canNotify === true, "Sarah canNotify synced");
+
+    // 1. Person-targeted routine (Sarah only): only Sarah's phone gets alert; owner phones do NOT; owner Live Activity still runs.
+    const routineId = await call("createRoutine", {
+      botId: "bot-mira",
+      name: "Daily Ops",
+      prompt: "Check ops.",
+      cadence: { kind: "daily", time: "09:00" },
+      notifyTargets: { people: [sarah.memberId] },
+    });
+    sent.length = 0;
+    await call("runRoutine", routineId);
+    await until(() => sent.some((item) => item.type === "alert" && item.token === SARAH_TOKEN), "Sarah alert");
+    await delay(250);
+    const alerts1 = sent.filter((item) => item.type === "alert");
+    assert.deepEqual(alerts1.map((a) => a.token), [SARAH_TOKEN], "only Sarah's phone gets the routine alert");
+    assert.equal(unseal(sarah.pairing, alerts1[0].payload.b).k, "routine");
+    assert.ok(sent.some((item) => item.token === ACTIVITY), "Live Activity on owner's phone still updated");
+
+    // 2. Device-only targeting: only Owner iPad gets the alert (not Owner's primary phone or Sarah).
+    await call("updateRoutine", routineId, { notifyTargets: { devices: [owner2Paired.deviceId] } });
+    sent.length = 0;
+    await call("runRoutine", routineId);
+    await until(() => sent.some((item) => item.type === "alert" && item.token === OWNER2_TOKEN), "Owner iPad alert");
+    await delay(250);
+    assert.deepEqual(
+      sent.filter((item) => item.type === "alert").map((a) => a.token),
+      [OWNER2_TOKEN],
+      "only the targeted device gets the alert",
+    );
+
+    // 3. Per-run override (run.notifyTargets) with custom message + previews: false redaction + access boundary.
+    // Disable previews on Sarah's phone, then emit a completed routine run overriding targets to Sarah + Alex (ineligible for bot-mira) with a custom message.
+    await (sarah.client as any).call("link.push.prefs", { previews: false });
+    await until(() => (link as any).store.push(sarah.pairing.deviceId)?.prefs?.previews === false, "Sarah previews off");
+
+    sent.length = 0;
+    const customRunId = "run-override-1";
+    const chat = (backend as any).chat(routineId);
+    chat.messages.push({ role: "assistant", text: "Secret body details", runId: customRunId, time: Date.now() });
+    (backend as any).state.runs.unshift({
+      id: customRunId,
+      chatId: routineId,
+      title: "Daily Ops",
+      time: Date.now(),
+      status: "Completed",
+      detail: "",
+      trigger: "scheduled",
+      scheduleId: 1,
+      notifyTargets: {
+        mode: "only",
+        people: [sarah.memberId, alex.memberId],
+        devices: [owner2Paired.deviceId],
+        message: "Server CPU 99% — check prod",
+      },
+    });
+    (backend as any).changed();
+    await until(() => sent.filter((item) => item.type === "alert").length === 2, "Sarah + Owner iPad alerts");
+    await delay(250);
+    const alerts3 = sent.filter((item) => item.type === "alert");
+    assert.deepEqual(alerts3.map((a) => a.token).sort(), [OWNER2_TOKEN, SARAH_TOKEN].sort(), "Alex is skipped because Alex cannot access bot-mira");
+    const owner2Alert = unseal(owner2Paired, alerts3.find((a) => a.token === OWNER2_TOKEN)!.payload.b);
+    const sarahAlert = unseal(sarah.pairing, alerts3.find((a) => a.token === SARAH_TOKEN)!.payload.b);
+    assert.equal(owner2Alert.m, "Server CPU 99% — check prod", "custom message delivered when previews are on");
+    assert.equal(sarahAlert.m, "New message", "custom message is redacted when previews are off");
+
+    // 4. Per-run override mode: "none" suppresses all phone alerts even when routine targets exist.
+    sent.length = 0;
+    const quietRunId = "run-override-none";
+    (backend as any).state.runs.unshift({
+      id: quietRunId,
+      chatId: routineId,
+      title: "Daily Ops",
+      time: Date.now(),
+      status: "Completed",
+      detail: "",
+      trigger: "scheduled",
+      scheduleId: 1,
+      notifyTargets: { mode: "none" },
+    });
+    (backend as any).changed();
+    await delay(300);
+    assert.equal(sent.filter((item) => item.type === "alert").length, 0, "mode:none suppresses all phone alerts");
+  } finally {
+    for (const c of extraClients) c.stop();
     await done();
   }
 });

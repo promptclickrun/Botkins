@@ -7,6 +7,8 @@ export type Place = RoutineDelivery["to"];
 export const DELIVERY = "routine-delivery-v1";
 /** The computer also takes "No output": the routine runs, keeps its history, and publishes nothing. */
 export const NO_OUTPUT = "routine-no-output-v1";
+/** The computer takes per-person and per-device routine notification targets (`notifyTargets`). */
+export const NOTIFY_TARGETS = "routine-notify-targets-v1";
 
 /** Where a result can land, in the computer's order. The chat's label names the bot when one is chosen. */
 export const PLACES: { value: Place; label: string; hint: string; image: string }[] = [

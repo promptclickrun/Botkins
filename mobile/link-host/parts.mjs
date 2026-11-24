@@ -55,6 +55,7 @@ function runSummary(run) {
     ...(run.summary && { summary: run.summary }),
     ...(run.panelId && { panelId: run.panelId }),
     ...(run.scheduleId != null && { scheduleId: run.scheduleId }),
+    ...(run.notifyTargets && { notifyTargets: run.notifyTargets }),
     ...(run.usage && { usage: run.usage }),
   };
 }

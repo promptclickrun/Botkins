@@ -1,5 +1,6 @@
 // Desktop notifications. `decide` is pure so the rules are testable without Electron;
 // `Notifier` connects it to workspace events and a Notification class supplied by main.mjs.
+import { resolveRoutineTargets } from "./link/notify-targets.mjs";
 import { defaultSettings } from "./preferences.mjs";
 
 const minutes = (text) => {
@@ -37,7 +38,7 @@ export function firstLine(text, max = 140) {
  * event: {type: "turn", chat, run, bot} or {type: "request", request, bot, chat}.
  * Returns {title, body, chatId} or null.
  */
-export function decide(event, { settings, focused, now = new Date(), timeZone, mine = true } = {}) {
+export function decide(event, { settings, focused, now = new Date(), timeZone, mine = true, resolved } = {}) {
   const prefs = { ...defaultSettings.notifications, ...settings?.notifications };
   if (inQuietHours(prefs.quietHours, now, timeZone)) return null;
   const botName = event.bot?.name ?? "Botkins";
@@ -62,28 +63,37 @@ export function decide(event, { settings, focused, now = new Date(), timeZone, m
       chatId: event.request.chatId,
     };
   }
-  if (event.type !== "turn" || !mine) return null;
+  if (event.type !== "turn") return null;
   const { chat, run } = event;
   if (!run || run.notify === false || run.status === "Stopped" || run.status === "Working" || chat?.temporary) return null;
   const failed = run.status !== "Completed";
   const routine = run.scheduleId != null || run.trigger === "scheduled";
   if (routine && run.status === "Completed" && run.noOutput === true) return null;
+  const schedule = run.scheduleId != null ? chat?.schedules?.find((s) => s.id === run.scheduleId) : null;
   // A no-output routine is deliberately silent even when its saved notify flag is old or absent.
-  if (run.scheduleId != null && chat?.schedules?.find((s) => s.id === run.scheduleId)?.deliver?.to === "none") return null;
-  // A routine the person set to run quietly says nothing, whatever came of the run.
-  if (run.scheduleId != null && chat?.schedules?.find((s) => s.id === run.scheduleId)?.notify === false) return null;
+  if (schedule?.deliver?.to === "none") return null;
+  const target =
+    routine && !run.panelId
+      ? (resolved ?? resolveRoutineTargets({ run, chat, entry: schedule }))
+      : null;
   if (run.panelId) {
     // Panel refreshes are frequent and quiet; only a failed scheduled one needs the person.
-    if (!(routine && failed && prefs.routines)) return null;
+    if (!mine || !(routine && failed && prefs.routines)) return null;
   } else if (routine) {
     if (!prefs.routines) return null;
-  } else if (!prefs.replies || focused) return null;
+    if (target?.explicit) {
+      if (target.silent || !target.host) return null;
+    } else if (!mine) {
+      return null;
+    }
+  } else if (!mine || !prefs.replies || focused) return null;
   const reply = chat?.messages?.findLast((m) => m.runId === run.id && m.role !== "user" && !m.interim);
+  const customMessage = !failed ? target?.message : null;
   return {
     title: botName + " · " + (routine ? run.title : chat?.title || "Reply"),
     body: failed
       ? (run.status === "Needs you" ? "Failed: " : run.status + ": ") + (firstLine(run.detail) || "Open the chat for details.")
-      : firstLine(reply?.text) || "Finished.",
+      : firstLine(customMessage || reply?.text) || "Finished.",
     // A routine whose result went to another chat opens that chat.
     chatId: run.delivery?.chatId ?? chat?.id ?? run.chatId,
   };
@@ -120,7 +130,11 @@ export class Notifier {
       // A chat's alerts go to its people only: the computer's own are for its owner.
       const chatId = event.type === "turn" ? (event.chat?.id ?? event.run?.chatId) : event.request?.chatId;
       const mine = !chatId || typeof this.ws.notifiesOwner !== "function" || this.ws.notifiesOwner(chatId);
-      const note = decide(event, { settings: this.ws.state.settings, focused: this.focused(), mine });
+      const resolved =
+        event.type === "turn" && typeof this.ws.resolveRoutineTargets === "function"
+          ? this.ws.resolveRoutineTargets(event.chat, event.run)
+          : undefined;
+      const note = decide(event, { settings: this.ws.state.settings, focused: this.focused(), mine, resolved });
       if (note) this.show(note);
     } catch (error) {
       console.error("Notification:", error.message);

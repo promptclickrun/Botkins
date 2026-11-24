@@ -87,7 +87,8 @@ test("three devices pair one after another, and each new one leaves the others a
     assert.deepEqual(list.map((device) => !!device.current), [0, 1, 2].map((i) => i === index));
     assert.ok(list.every((device) => device.connected && device.createdAt > 0 && device.lastSeenAt >= device.createdAt));
     // Nothing of a key, a session or a notification address is in it.
-    assert.deepEqual(Object.keys(list[0]).sort(), ["connected", "createdAt", "id", "kind", "lastSeenAt", "name", "platform", ...(list[0].current ? ["current"] : [])].sort());
+    assert.deepEqual(Object.keys(list[0]).sort(), ["canNotify", "connected", "createdAt", "id", "kind", "lastSeenAt", "name", "platform", ...(list[0].current ? ["current"] : [])].sort());
+    assert.ok(list.every((device) => typeof device.canNotify === "boolean"));
   }
   // The computer's own page sees the same three (the desktop app's Settings reads this).
   assert.deepEqual(link.status().devices.map((device: { kind: string; connected: boolean }) => [device.kind, device.connected]), [["phone", true], ["phone", true], ["desktop", true]]);

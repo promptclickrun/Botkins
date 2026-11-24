@@ -37,9 +37,10 @@ export function deviceCall({ workspace, handlers, folders }) {
     const callArgs = member && name === "send" ? [checked[0], checked[1], { ...(checked[2] ?? {}), author: member }] : checked;
     if (name === "recordVoiceLine") return handlers[name](checked[0], checked[1], checked[2], checked[3], member, checked[4]);
     if (member) {
-      // These three take the member's id beside what the device sent; a handler never reads it from the device.
+      // These four take the member's id beside what the device sent; a handler never reads it from the device.
       if (name === "mentionables") return workspace.mentions.candidates(checked[0], checked[1], member.memberId);
       if (name === "createRoutine") return workspace.panels.routines.createWithModel(checked[0] ?? {}, undefined, member.memberId);
+      if (name === "updateRoutine") return workspace.panels.routines.updateWithModel(checked[0], checked[1] ?? {}, undefined, member.memberId);
       if (name === "duplicateRoutine") return workspace.panels.routines.duplicate(checked[0], checked[1], undefined, member.memberId);
     }
     if (Object.hasOwn(FOR_A_PERSON, name)) return handlers[name](...Array.from({ length: FOR_A_PERSON[name] }, (_, at) => checked[at]), member ? member.memberId : "owner");

@@ -1254,7 +1254,7 @@ export class MockBackend {
     // What this stand-in app supports itself, beyond the link's own list.
     // "files-v1": a file out and in as text, without a dialog. "folders-v1": the folder browser.
     // "artifacts-v1": what the bots made or were given, from an index the app keeps (here: made up).
-    this.capabilities = ["message-reactions-v1", "client-message-id-v1", "voice-turns-v1", "voice-history-v1", "quiet-replies-v1", "routine-delivery-v1", ...(process.env.BOTKINS_DEV_NO_OUTPUT === "off" ? [] : ["routine-no-output-v1"]), "routine-scripts-v1", "routine-models-v1", "routine-silent-v1", "proactive-agent-v2", "proactive-learning-v1", "models-v2", "fast-mode-v1", "side-pane-v1", "files-v1", "folders-v1", "project-artifacts-v1", "artifacts-v1", "secure-input-v1", "chat-title-regeneration-v1", ...(process.env.BOTKINS_DEV_USAGE === "off" ? [] : ["provider-usage-v1"])];
+    this.capabilities = ["message-reactions-v1", "client-message-id-v1", "voice-turns-v1", "voice-history-v1", "quiet-replies-v1", "routine-delivery-v1", ...(process.env.BOTKINS_DEV_NO_OUTPUT === "off" ? [] : ["routine-no-output-v1"]), "routine-scripts-v1", "routine-models-v1", "routine-silent-v1", "routine-notify-targets-v1", "proactive-agent-v2", "proactive-learning-v1", "models-v2", "fast-mode-v1", "side-pane-v1", "files-v1", "folders-v1", "project-artifacts-v1", "artifacts-v1", "secure-input-v1", "chat-title-regeneration-v1", ...(process.env.BOTKINS_DEV_USAGE === "off" ? [] : ["provider-usage-v1"])];
     this.capabilities.push("project-folders-v1", "project-mode-v1", "project-clone-v1");
     if (this.timeline) this.capabilities.push("turn-timeline-v1");
     // "bot-voice-v1": a bot may have a voice of its own. BOTKINS_DEV_BOT_VOICE=off is an older computer.
@@ -2641,15 +2641,18 @@ export class MockBackend {
       // A script routine's prompt is its follow-up action's, needed only when that is on.
       const script = data.script ? text(data.script, 20000, "script") : undefined;
       const prompt = script && !data.followUp ? String(data.prompt ?? "").trim() : text(data.prompt, 4000, "prompt");
-      chat.schedules = [{ id: 1, routine: true, enabled: true, name: data.name, prompt, cadence: data.cadence, timezone: data.timezone || "America/Chicago", recurring: data.cadence.kind !== "once", nextAt: now() + 20 * HOUR, createdAt: now(), ...(data.deliver && { deliver: delivery(data.deliver) }), ...(data.notify === false && { notify: false }), ...(script && { script, followUp: data.followUp === true }) }];
+      chat.schedules = [{ id: 1, routine: true, enabled: true, name: data.name, prompt, cadence: data.cadence, timezone: data.timezone || "America/Chicago", recurring: data.cadence.kind !== "once", nextAt: now() + 20 * HOUR, createdAt: now(), ...(data.deliver && { deliver: delivery(data.deliver) }), ...(data.notify === false && { notify: false }), ...(data.notifyTargets && { notifyTargets: data.notifyTargets }), ...(script && { script, followUp: data.followUp === true }) }];
       if (data.model) chat.model = data.model;
       return chatId;
     },
     updateRoutine(id, patch) {
       const chat = this.chat(id);
       const entry = chat.schedules.find((s) => s.routine);
-      const { deliver, model, script, ...rest } = patch;
+      const { deliver, model, script, notifyTargets, ...rest } = patch;
       Object.assign(entry, rest);
+      if (notifyTargets === null) delete entry.notifyTargets;
+      else if (notifyTargets !== undefined) entry.notifyTargets = notifyTargets;
+      if (entry.notify === false) delete entry.notifyTargets;
       if (deliver) entry.deliver = delivery(deliver);
       if (script === null) {
         delete entry.script;

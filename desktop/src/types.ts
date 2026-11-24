@@ -222,6 +222,8 @@ export type Run = {
   usage?: Usage;
   /** The chat schedule or routine entry that started this run. */
   scheduleId?: number;
+  /** Per-run notification override set by an agent via `routine_notify` ("routine-notify-targets-v1"). */
+  notifyTargets?: RunNotifyTargets;
   /** A routine completed without publishing a reply (explicitly quiet or no provider text). */
   noOutput?: boolean;
   /** When the turn ended. */
@@ -331,7 +333,7 @@ export type TeamRole = {
   bots: "all" | string[];
 };
 export type TeamGroup = { id: string; name: string; roleId: string };
-export type TeamDevice = { id: string; name: string; kind: string; platform: string; connected: boolean };
+export type TeamDevice = { id: string; name: string; kind: string; platform: string; connected: boolean; canNotify?: boolean };
 export type TeamMember = { id: string; name: string; groupId: string; joinedAt: number; deviceIds: string[]; devices: TeamDevice[] };
 export type TeamInvite = {
   id: string;
@@ -355,6 +357,7 @@ export type MemberTeam = {
     name: string;
     group: { id: string; name: string };
     role: { name: string; perms: Record<TeamScope, string[]>; bots: "all" | string[] };
+    devices?: TeamDevice[];
   };
   team: { name: string };
   people?: TeamPerson[];
@@ -372,6 +375,8 @@ export type State = {
   bots: Bot[];
   /** Full team management data for this computer's owner, or this member's filtered identity. */
   team?: OwnerTeam | MemberTeam;
+  /** Synced paired devices on a remote host (owner view only); used for routine notification targeting. */
+  remotePhones?: Array<{ id: string; name: string; kind?: string; platform?: string; canNotify?: boolean }>;
   chats: Chat[];
   runs: Run[];
   panels: Panel[];
@@ -452,6 +457,8 @@ export type ChatSchedule = {
   deliver?: RoutineDelivery;
   /** false when the routine runs quietly: no notification when a run finishes. Left out when it notifies. */
   notify?: boolean;
+  /** Specific people ("owner" or member ids) and/or device ids ("host" or paired device ids) to notify ("routine-notify-targets-v1"). */
+  notifyTargets?: RoutineNotifyTargets;
   /** On a routine a team member made: that member's id. Its turns run under their limits. Left out for the owner's. */
   createdBy?: string;
   name?: string;
@@ -476,6 +483,10 @@ export type RoutineDelivery = {
   /** With to "goal": one of the goal categories. */
   category?: string;
 };
+/** Explicit routine notification targets ("routine-notify-targets-v1"). Absent means everyone allowed. */
+export type RoutineNotifyTargets = { people?: string[]; devices?: string[] };
+/** Per-run notification override set by an agent via `routine_notify` ("routine-notify-targets-v1"). */
+export type RunNotifyTargets = { mode: "only" | "none" | "default"; people?: string[]; devices?: string[]; message?: string };
 export type RoutineInput = {
   botId: string;
   name: string;
@@ -492,6 +503,8 @@ export type RoutineInput = {
   deliver?: RoutineDelivery | null;
   /** false to run quietly, with no notification when a run finishes. Left out, it notifies. */
   notify?: boolean;
+  /** Specific notification targets ("routine-notify-targets-v1"). null resets to everyone; omitted on an edit keeps the existing targets. */
+  notifyTargets?: RoutineNotifyTargets | null;
 };
 export type UsageTotals = {
   turns: number;
@@ -1728,7 +1741,7 @@ export type PhoneLink = {
   /** The name phones show for this computer. */
   name: string;
   addresses: { address: string; kind: "lan" | "tailnet" | "loopback" | "link"; interface: string }[];
-  devices: { id: string; name: string; person?: string; platform: string; kind?: "phone" | "desktop" | "gadget"; gadget?: GadgetInfo; createdAt: number; lastSeenAt: number; connected: boolean }[];
+  devices: { id: string; name: string; person?: string; platform: string; kind?: "phone" | "desktop" | "gadget"; gadget?: GadgetInfo; createdAt: number; lastSeenAt: number; connected: boolean; canNotify?: boolean }[];
   /** The link has "gadget-settings-v1": a gadget's page with its settings, Wi-Fi and restart, and `gadget` on each gadget above. */
   gadgetSettings?: boolean;
   /** An open pairing code. `qr` is the code's link as one SVG path in a square of `size` units. */

@@ -10,6 +10,7 @@ import { useApp } from "@/state/store";
 import { ago, upcoming } from "@/state/time";
 import { BotAvatar, Button, Dot, EmptyState, Group, haptic, HoldMenu, IconButton, IconTile, Label, Loading, Mascot, Page, Row, Segmented, space, switchColors, T, useTheme } from "@/ui";
 import { isFinished, routineName, routineSubtitle, RunIcon, SplitRow, taskSubtitle } from "./bits";
+import { buildNotifyTargetView } from "./notifyTargets";
 import { ProjectList } from "@/features/projects/Projects";
 import { ActivityList } from "./Activity";
 import { cronLabel, scheduleLabel } from "./cron";
@@ -58,6 +59,10 @@ function NeedsYou({ needs }: { needs: Need[] }) {
 
 function RoutineRow({ routine }: { routine: RoutineEntry }) {
   const { colors } = useTheme();
+  const meta = usePart("meta");
+  const team = usePart("team");
+  const phones = usePart("phones");
+  const settings = usePart("settings");
   const canUse = useCan("today", "use");
   const canCreate = useCan("today", "create");
   const canManage = useCan("today", "manage");
@@ -65,6 +70,10 @@ function RoutineRow({ routine }: { routine: RoutineEntry }) {
   const name = routineName(routine);
   const on = routine.entry.enabled !== false;
   const finished = isFinished(routine);
+  const targetView = useMemo(
+    () => (routine.entry.notifyTargets ? buildNotifyTargetView({ meta, team, phones, settings, botId: routine.chat.botId }) : null),
+    [routine.entry.notifyTargets, meta, team, phones, settings, routine.chat.botId],
+  );
   const remove = () =>
     Alert.alert("Delete " + name + "?", "Its chat and past runs are deleted too.", [
       { text: "Cancel", style: "cancel" },
@@ -89,7 +98,7 @@ function RoutineRow({ routine }: { routine: RoutineEntry }) {
       <SplitRow
         leading={<BotAvatar bot={routine.bot ?? { id: routine.chat.botId }} size={44} />}
         title={name}
-        subtitle={routineSubtitle(routine)}
+        subtitle={routineSubtitle(routine, targetView)}
         muted={!on || finished}
         hint="Long press for more"
         onPress={canManage ? () => openRoutine(routine.id) : () => openChat(routine.id)}

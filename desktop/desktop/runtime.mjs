@@ -55,7 +55,7 @@ import { DEFAULT_RELAY_URL } from "./link/relay.mjs";
 import { env } from "./home.mjs";
 import { phonePage } from "./phonepage.mjs";
 import { headCapabilities, LOOKS_CAPABILITY } from "./looks.mjs";
-import { ROUTINE_DELIVERY, ROUTINE_MODELS, ROUTINE_OWNER, ROUTINE_SCRIPTS, ROUTINE_SILENT } from "./routines.mjs";
+import { ROUTINE_DELIVERY, ROUTINE_MODELS, ROUTINE_NOTIFY_TARGETS, ROUTINE_OWNER, ROUTINE_SCRIPTS, ROUTINE_SILENT } from "./routines.mjs";
 import { PROACTIVE, PROACTIVE_LEARNING } from "./proactive.mjs";
 import { SPACES } from "./spaces.mjs";
 import { HeldCut, teamFromCut } from "./headless/team-cut.mjs";
@@ -117,7 +117,7 @@ export const KEYED_PROVIDERS = "keyed-providers-v1";
 /** A bot may have a voice of its own (`bot.voice`): reading aloud and live voice, over Settings › Voice. */
 export const BOT_VOICE = "bot-voice-v1";
 const CHAT_TITLE_REGENERATION = "chat-title-regeneration-v1";
-export const CAPABILITIES = ["message-reactions-v1", "client-message-id-v1", "voice-turns-v1", "voice-history-v1", "quiet-replies-v1", "models-v2", "fast-mode-v1", LOOKS_CAPABILITY, ...headCapabilities, BOT_VOICE, ROUTINE_DELIVERY, "routine-no-output-v1", ROUTINE_OWNER, ROUTINE_SCRIPTS, ROUTINE_MODELS, ROUTINE_SILENT, PROACTIVE, PROACTIVE_LEARNING, BOARD_MENTIONS, PROVIDER_USAGE, SIDE_PANE, REMOTE_HOSTS, FILES, FOLDERS, ARTIFACTS, PROJECT_ARTIFACTS, "project-folders-v1", "project-mode-v1", "project-clone-v1", "secure-input-v1", "turn-timeline-v1", PLUGINS, PLUGIN_STARTS, PROVIDER_SIGNIN, SPACES, AGENT_TEMPLATES, COMPOSIO_APPS, MARKET_REFRESH, MCP_APPS, "pi-packages-v1", "skill-upload-v1", "skills-catalog-v1", CHAT_TITLE_REGENERATION, KEYED_PROVIDERS];
+export const CAPABILITIES = ["message-reactions-v1", "client-message-id-v1", "voice-turns-v1", "voice-history-v1", "quiet-replies-v1", "models-v2", "fast-mode-v1", LOOKS_CAPABILITY, ...headCapabilities, BOT_VOICE, ROUTINE_DELIVERY, "routine-no-output-v1", ROUTINE_OWNER, ROUTINE_SCRIPTS, ROUTINE_MODELS, ROUTINE_SILENT, ROUTINE_NOTIFY_TARGETS, PROACTIVE, PROACTIVE_LEARNING, BOARD_MENTIONS, PROVIDER_USAGE, SIDE_PANE, REMOTE_HOSTS, FILES, FOLDERS, ARTIFACTS, PROJECT_ARTIFACTS, "project-folders-v1", "project-mode-v1", "project-clone-v1", "secure-input-v1", "turn-timeline-v1", PLUGINS, PLUGIN_STARTS, PROVIDER_SIGNIN, SPACES, AGENT_TEMPLATES, COMPOSIO_APPS, MARKET_REFRESH, MCP_APPS, "pi-packages-v1", "skill-upload-v1", "skills-catalog-v1", CHAT_TITLE_REGENERATION, KEYED_PROVIDERS];
 /**
  * What a paired device is told this app supports. A feature whose calls the link does not carry
  * (desktop/link/methods.mjs) is left out, so a device never asks for what it cannot reach.
@@ -313,6 +313,17 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
     // On the two-container host the link is in the other container: the event waits for its next look (headless/space-events.mjs).
     spaceEvent: spaceEvents ? spaceEvents.add : (event) => link?.spaceEvent?.(event),
     notifiesOwner: told ? told.notifiesOwner : (chatId) => link?.notifiesOwner?.(chatId),
+    notifyTargets: told
+      ? () => {
+          const team = told.team();
+          return {
+            team,
+            devices: [],
+            host: { name: "This computer", platform: process.platform, headless: true, canNotify: false },
+            ownerName: team?.people?.find((person) => person.id === "owner")?.name ?? "",
+          };
+        }
+      : () => link?.notifyTargetsContext?.(),
     formBrowser,
     savedLogins: (chatId, origin) => loginLookups ? loginLookups.find(chatId, origin) : link.loginNames(chatId, origin),
     ...(host.headless && !formBrowser && { pageUnavailable: "Browser form filling needs the desktop viewer or a Linux host with Chromium and an X11 display. See A screen without Docker in the terminal guide." }),
