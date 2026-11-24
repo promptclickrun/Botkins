@@ -37,7 +37,7 @@ import { Composer, type ModelPill, type SendOptions } from "./Composer";
 import { ChangesView } from "./Changes";
 import { ContextMeter } from "./ContextMeter";
 import { drafts, keepDraft, useChatSplit } from "./split";
-import { sessionTodos, todoLabel } from "../../../link-host/session-todos";
+import { closed, sessionTodos, todoLabel, TRANSFER_TODOS } from "../../../link-host/session-todos";
 import { TodoList } from "./TodoList";
 import { latestTurn } from "./helpers";
 import { HelperRail } from "./HelperRail";
@@ -1027,6 +1027,7 @@ function ChatScreenScreen({ pane: paneId, onLeave: leavePane, onList }: { pane?:
           {canChat && todoOpen && (
             <ScrollView style={{ maxHeight: Math.min(240, requestRoom / 2), marginHorizontal: space.md }} keyboardShouldPersistTaps="handled">
               <TodoList todos={todos} />
+              {!working && todos.some(todo => !closed(todo)) && <Chip label="Transfer and continue todos" onPress={() => sendText(TRANSFER_TODOS)} />}
             </ScrollView>
           )}
           {!!newest?.agents?.length && <HelperRail chatId={chatId} run={newest} />}

@@ -5,7 +5,7 @@ import { test } from "node:test";
 import { addable, addLabel, agentLine, agentNotes, copyLine, firstPick, foundLine, pickedKeys } from "../src/features/bots/agents";
 import type { Pairing } from "../src/link/client";
 import type { ImportableAgent } from "../src/link/types";
-import { computerActions, computerChoice, currentOf, hasRoom, indexOf, isPairing, MAX_COMPUTERS, NO_COMPUTERS, pairingKey, readKeptComputers, tidy, using, withDetails, withPairing, without } from "../src/state/computers";
+import { computerActions, computerChoice, currentOf, hasRoom, indexOf, isPairing, MAX_COMPUTERS, NO_COMPUTERS, pairingKey, readKeptComputers, moveComputer, startupComputers, startupProfilePairing, tidy, using, withDetails, withPairing, without } from "../src/state/computers";
 
 const pairing = (id: string, name = "Mac " + id, hosts = ["10.0.0.2:47610"]): Pairing => ({ serverId: id, serverKey: "k-" + id, deviceId: "d-" + id, secretKey: "s-" + id, hosts, name });
 const a = pairing("aaa");
@@ -137,4 +137,34 @@ test("bringing in agents: what is ticked, what is added, and the words", () => {
   assert.deepEqual(agentNotes(list[3]!), ["Its model, gpt-9, isn't on your account. The bot will use your default model.", "Sets its own tools in GitHub Copilot. As a bot it uses Botkins' Skills, MCP servers and approvals."]);
   assert.deepEqual(agentNotes(list[1]!), []);
   assert.equal(copyLine(list), "Botkins copies each agent. Your GitHub Copilot files stay as they are.");
+});
+
+test("the saved order interleaves profile and local computers and keeps the active check", () => {
+  const host = { serverId: "remote", serverKey: "key", name: "Office", hosts: ["office"] };
+  const order = ["removed", "remote", "bbb"];
+  assert.deepEqual(computerActions([a, b], a.serverId, [host], order).map(row => row.id), ["profile:remote", "use:bbb", "use:aaa", "add"]);
+  assert.equal(computerActions([a, b], a.serverId, [host], order)[2]?.state, "on");
+});
+
+test("reordering changes the picker without switching hosts or changing the primary", () => {
+  const first = tidy([a, b], b.serverId);
+  const order = moveComputer([a.serverId, b.serverId], 1, -1);
+  assert.deepEqual(order, [b.serverId, a.serverId]);
+  assert.equal(moveComputer(order, 0, -1), order);
+  const saved = JSON.parse(JSON.stringify({ primaryHost: a.serverId, computerOrder: order }));
+  assert.equal(currentOf(first), b);
+  assert.equal(currentOf(startupComputers(first, saved.primaryHost)), a);
+  assert.equal(currentOf(startupComputers(first, "removed")), b);
+  assert.equal(currentOf(startupComputers(first, null)), b);
+  assert.equal(computerActions([a, b], a.serverId, [], saved.computerOrder)[0]?.id, "use:" + b.serverId);
+});
+
+test("a manual primary wins over a saved profile selection and a profile primary uses its own pairing", () => {
+  const local = [a, b];
+  const profile = { [c.serverId]: c };
+  assert.equal(startupProfilePairing(a.serverId, c.serverId, local, profile, []), undefined);
+  assert.equal(startupProfilePairing(c.serverId, b.serverId, local, profile, []), c);
+  assert.equal(startupProfilePairing("removed", c.serverId, local, profile, []), c);
+  assert.equal(startupProfilePairing(null, b.serverId, local, profile, [b.serverId]), b);
+  assert.equal(startupProfilePairing(null, null, [], profile, []), undefined);
 });

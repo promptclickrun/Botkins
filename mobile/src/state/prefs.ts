@@ -40,9 +40,11 @@ export type Prefs = {
   openSpaces: string[];
   /** The panels pinned to Home, in the order they were pinned. A panel of another computer is kept and not shown. */
   homePanels: PanelPin[];
+  computerOrder: string[];
+  primaryHost: string | null;
 };
 export type PanelPin = { spaceId: string; panelId: string };
-const defaults: Prefs = { mode: "system", lightTheme: DEFAULT_THEME, darkTheme: DEFAULT_THEME, themePicked: false, textSize: 16, font: DEFAULT_FONT, fontPicked: false, controlSize: "regular", haptics: true, avatarAnimations: DEFAULT_AVATAR_ANIMATIONS, todayOpen: true, foldedProviders: [], toldNotices: [], tabOrder: USUAL_TABS, openSpaces: [], homePanels: [] };
+const defaults: Prefs = { mode: "system", lightTheme: DEFAULT_THEME, darkTheme: DEFAULT_THEME, themePicked: false, textSize: 16, font: DEFAULT_FONT, fontPicked: false, controlSize: "regular", haptics: true, avatarAnimations: DEFAULT_AVATAR_ANIMATIONS, todayOpen: true, foldedProviders: [], toldNotices: [], tabOrder: USUAL_TABS, openSpaces: [], homePanels: [], computerOrder: [], primaryHost: null };
 
 export const usePrefs = create<Prefs>(() => defaults);
 
@@ -79,6 +81,8 @@ function read(saved: Record<string, unknown>): Prefs {
     toldNotices: Array.isArray(saved.toldNotices) ? saved.toldNotices.filter((key): key is string => typeof key === "string" && key.length <= 700).slice(-400) : defaults.toldNotices,
     tabOrder: tabOrder(saved.tabOrder),
     openSpaces: ids(saved.openSpaces),
+    computerOrder: ids(saved.computerOrder),
+    primaryHost: isId(saved.primaryHost) ? saved.primaryHost : null,
     homePanels: Array.isArray(saved.homePanels) ? saved.homePanels.filter((pin): pin is PanelPin => !!pin && isId((pin as PanelPin).spaceId) && isId((pin as PanelPin).panelId)).map(({ spaceId, panelId }) => ({ spaceId, panelId })).slice(0, 24) : defaults.homePanels,
     foldedProviders: Array.isArray(saved.foldedProviders) ? saved.foldedProviders.filter((id): id is string => typeof id === "string" && id.length <= 100).slice(0, 100) : defaults.foldedProviders,
   };
@@ -93,7 +97,9 @@ export async function loadPrefs() {
   }
 }
 
+let pendingWrite = Promise.resolve();
 export function setPrefs(patch: Partial<Prefs>) {
   usePrefs.setState(patch);
-  void keep(KEY, JSON.stringify(usePrefs.getState())).catch(() => {});
+  const snapshot = JSON.stringify(usePrefs.getState());
+  pendingWrite = pendingWrite.then(() => keep(KEY, snapshot)).catch(() => {});
 }

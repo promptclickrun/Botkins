@@ -88,11 +88,44 @@ export function savedIds(index: string | null): string[] {
 /** The index as it is saved: ids only. The pairings themselves are saved one by one. */
 export const indexOf = (kept: Kept) => JSON.stringify({ current: kept.current, ids: kept.list.map((pairing) => pairing.serverId) });
 
-/** The switcher's menu: each paired computer (the one in use is ticked), then a way to pair one more. */
-export function computerActions(list: Pairing[], current: string | null | undefined, directory: ReadonlyArray<ProfileHost> = []): { id: string; title: string; state?: "on" | "off"; image?: string }[] {
-  const local = new Set(list.map((pairing) => pairing.serverId));
-  const profile = directory.filter((host) => !local.has(host.serverId)).map((host) => ({ id: "profile:" + host.serverId, title: host.name || (host.member ? "Team" : "Computer"), state: host.serverId === current ? ("on" as const) : ("off" as const) }));
-  return [...list.map((pairing) => ({ id: "use:" + pairing.serverId, title: pairing.name || "Computer", state: pairing.serverId === current ? ("on" as const) : ("off" as const) })), ...profile, { id: "add", title: "Connect a computer…", image: "plus" }];
+/** Local pairings take precedence over directory entries for the same host. New hosts appear last. */
+export function orderedComputers(list: Pairing[], directory: ReadonlyArray<ProfileHost>, order: readonly string[]): ProfileHost[] {
+  const hosts = new Map<string, ProfileHost>();
+  for (const host of [...list, ...directory]) if (!hosts.has(host.serverId)) hosts.set(host.serverId, host);
+  const ids = new Set([...order, ...hosts.keys()]);
+  return Array.from(ids).flatMap(id => hosts.get(id) ?? []);
+}
+
+export function moveComputer(ids: string[], from: number, by: -1 | 1) {
+  const to = from + by;
+  if (from < 0 || from >= ids.length || to < 0 || to >= ids.length) return ids;
+  const next = ids.slice();
+  next[from] = ids[to]!;
+  next[to] = ids[from]!;
+  return next;
+}
+
+/** Prefer a primary manual pairing on launch, falling back to the previous selection. */
+export function startupComputers(kept: Kept, primary: string | null) {
+  return primary ? using(kept, primary) : kept;
+}
+
+/** Local link boot already chose the manual primary. Restore profile access only when needed. */
+export function startupProfilePairing(primary: string | null, last: string | null, local: Pairing[], profile: Record<string, Pairing>, bound: string[]) {
+  if (local.some(host => host.serverId === primary)) return undefined;
+  const current = primary && Object.hasOwn(profile, primary) ? primary : last;
+  if (!current) return undefined;
+  return profile[current] ?? (bound.includes(current) ? local.find(host => host.serverId === current) : undefined);
+}
+
+export function computerActions(list: Pairing[], current: string | null | undefined, directory: ReadonlyArray<ProfileHost> = [], order: readonly string[] = []): { id: string; title: string; state?: "on" | "off"; image?: string }[] {
+  const local = new Set(list.map(pairing => pairing.serverId));
+  const rows = orderedComputers(list, directory, order).map(host => ({
+    id: (local.has(host.serverId) ? "use:" : "profile:") + host.serverId,
+    title: host.name || (host.member ? "Team" : "Computer"),
+    state: host.serverId === current ? ("on" as const) : ("off" as const),
+  }));
+  return [...rows, { id: "add", title: "Connect a computer…", image: "plus" }];
 }
 /** What a tap in that menu asks for: use a computer, add one, or nothing. */
 export function computerChoice(event: string): { use: string; profile?: boolean } | "add" | null {

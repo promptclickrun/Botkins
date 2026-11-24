@@ -1320,3 +1320,47 @@ test("a transport disconnect recovers a journaled final reply without sending an
   assert.equal(ws.chat(id).messages.at(-1).text, "Already finished");
   assert.equal(log.sent.length, 1);
 });
+
+test("an open checklist follows a provider round trip across prewarm and reload", async (t) => {
+  const first = [{ id: "a", title: "Inspect archive", status: "in_progress" }];
+  const next = [...first.map(row => ({ ...row, status: "done" })), { id: "b", title: "Verify copy", status: "pending" }];
+  const finished = next.map(row => ({ ...row, status: "done" }));
+  const prompts = [];
+  class OtherSession extends ProviderSession {
+    on(listener) { this.listener = listener; return () => {}; }
+    async todos() { return this.plan ?? null; }
+    async send({ prompt }) {
+      prompts.push(prompt);
+      this.plan = { rows: next };
+      this.listener({ type: "session.todos_changed", data: {} });
+      return { text: "Ready for verification?" };
+    }
+  }
+  class Other extends ModelProvider {
+    id = "other";
+    name = "Other";
+    async models() { return [{ id: "other-1", provider: this.id, available: true }]; }
+    async openSession() { return new OtherSession(); }
+    async deleteSession() {}
+  }
+  const { ws, dir } = warm(t, async (_id, { prompt }, sdk) => {
+    prompts.push(prompt);
+    sdk.rows = prompt.startsWith("Start") ? first : finished;
+    sdk.rpc.plan = { readSqlTodosWithDependencies: async () => ({ rows: sdk.rows }) };
+    sdk.emit({ type: "session.todos_changed", data: {} });
+    return { data: { content: "Ready?" } };
+  }, { more: [new Other()] });
+  const chat = ws.createChat("pip");
+  await ws.send(chat, "Start");
+  assert.deepEqual(ws.chat(chat).todos, first);
+  await ws.setModel("chat", chat, { model: "other-1", provider: "other" });
+  await ws.prewarm(chat);
+  await ws.send(chat, "Advance the checklist");
+  assert.ok(prompts.at(-1).includes(JSON.stringify(first)));
+  assert.deepEqual(ws.chat(chat).todos, next);
+  await ws.setModel("chat", chat, { model: "auto", provider: "copilot" });
+  await ws.send(chat, "Finish the checklist");
+  assert.ok(prompts.at(-1).includes(JSON.stringify(next)));
+  assert.deepEqual(ws.state.runs[0].todos, finished);
+  assert.deepEqual(new Workspace(join(dir, "data"), ws.providers, () => {}).chat(chat).todos, finished);
+});
