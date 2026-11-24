@@ -574,6 +574,9 @@ export async function startPush() {
   const activityPacer = createCoalescedPacer({
     quietMs: ACTIVITY_QUIET_MS,
     minIntervalMs: ACTIVITY_MIN_INTERVAL_MS,
+    // The first change after a quiet spell (a turn starting) goes at once, so the card starts
+    // before the person can lock the phone; the updates that follow are paced.
+    leading: true,
     run: () => void followActivities(),
   });
 

@@ -34,7 +34,18 @@ const fetcher = relayFetch(expoFetch as unknown as FetchLike);
 setRandomSource((length) => Crypto.getRandomBytes(length));
 
 let client: LinkClient | null = null;
-const partsBatcher = createPartsBatcher(applyParts);
+type FrameHandle = { raf: number } | { timeout: ReturnType<typeof setTimeout> };
+// Text-only ticks wait for the next frame. The display link stops in the background (a push can
+// wake the app to sync), so there they wait on a short timer instead.
+const partsBatcher = createPartsBatcher(applyParts, {
+  schedule: (fn): FrameHandle =>
+    AppState.currentState === "active" && typeof requestAnimationFrame === "function" ? { raf: requestAnimationFrame(() => fn()) } : { timeout: setTimeout(fn, 16) },
+  cancel: (handle) => {
+    const held = handle as FrameHandle;
+    if ("raf" in held) cancelAnimationFrame(held.raf);
+    else clearTimeout(held.timeout);
+  },
+});
 onComputerChange(() => partsBatcher.clear());
 useChatPrefs.subscribe((prefs, before) => prefs.textStreaming !== before.textStreaming && client?.textStreamingChanged());
 /** Who waits for the next sync to come back (`freshSync`). */
@@ -56,6 +67,8 @@ function follow(pairing: Pairing) {
     onUnreachable: () => void lookNearby(pairing.serverId),
     onRoute: (route) => useApp.setState({ route }),
     onSync: () => {
+      // Whoever waits for this sync (a wake task) reads the store next: give it the buffered text too.
+      if (syncWaiters.size) partsBatcher.flush();
       for (const done of [...syncWaiters]) done();
     },
     check: () => fetcher.check(),
@@ -162,6 +175,7 @@ export async function boot() {
       nearbyPace.reset();
       client?.wake();
     } else if (state === "background") {
+      partsBatcher.flush();
       client?.rest();
       fetcher.rest();
     }

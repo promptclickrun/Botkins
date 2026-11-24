@@ -8,7 +8,7 @@ import { readScreenFrame } from "@/state/link";
 import { useApp } from "@/state/store";
 import { useAppActive } from "@/state/useAppActive";
 import { holdScreen } from "@/features/pane/watching";
-import { claimScreenFeed } from "./feedRegistry";
+import { claimScreenFeed, whenScreenFeedFree } from "./feedRegistry";
 import { type FeedState, runScreenFeed } from "./screenFeed";
 
 export type SlotName = "a" | "b";
@@ -37,7 +37,21 @@ export function useFeed({ enabled, display, maxWidth, quality, gapMs = 0, once =
     if (!active || !computer) return;
     const controller = new AbortController();
     const { signal } = controller;
-    const releaseFeed = claimScreenFeed(computer, display, once ? "ScreenCard" : gapMs > 0 ? "PaneScreen" : "Remote", () => controller.abort());
+    // One feed per computer: a bigger view may hold it, or take it later. Either way this view
+    // waits and starts again (a new `run`) when the slot is free.
+    let unwait: (() => void) | undefined;
+    const waitTurn = () => {
+      unwait?.();
+      unwait = whenScreenFeedFree(computer, () => setRun((n) => n + 1));
+    };
+    const releaseFeed = claimScreenFeed(computer, display, once ? "ScreenCard" : gapMs > 0 ? "PaneScreen" : "Remote", () => {
+      controller.abort();
+      waitTurn();
+    });
+    if (!releaseFeed) {
+      waitTurn();
+      return () => unwait?.();
+    }
     const release = holdScreen(computer);
     const stop = () => {
       releaseFeed();
@@ -80,6 +94,7 @@ export function useFeed({ enabled, display, maxWidth, quality, gapMs = 0, once =
 
     return () => {
       controller.abort();
+      unwait?.();
       waiting.current?.finish(false);
       stop();
     };

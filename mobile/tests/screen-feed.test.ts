@@ -127,3 +127,38 @@ test("claimScreenFeed enforces at most one active feed per host/display and trac
   assert.equal(activeFeedCount(), 0);
   assert.equal(ledgerSnapshot().activeByKind.feed, 0);
 });
+
+test("one feed per computer whatever the display; a smaller view waits and is woken when the slot frees", async () => {
+  const { whenScreenFeedFree } = await import("../src/features/remote/feedRegistry");
+  setLedgerEnabled(true);
+  resetLedger();
+  let paneAborted = 0;
+  // The pane asks without a display, Settings › Screen with one: still the same computer's slot.
+  const releasePane = claimScreenFeed("host-2", undefined, "PaneScreen", () => { paneAborted += 1; });
+  assert.ok(releasePane);
+  const releaseRemote = claimScreenFeed("host-2", "1", "Remote", assert.fail);
+  assert.ok(releaseRemote);
+  assert.equal(paneAborted, 1);
+  assert.equal(activeFeedCount(), 1);
+
+  // While Settings › Screen holds it, the pane and a chat card can't take it back; they wait.
+  assert.equal(claimScreenFeed("host-2", undefined, "PaneScreen", assert.fail), null);
+  assert.equal(claimScreenFeed("host-2", undefined, "ScreenCard", assert.fail), null);
+  let woken = 0;
+  const cancel = whenScreenFeedFree("host-2", () => { woken += 1; });
+  let cancelledWoken = 0;
+  whenScreenFeedFree("host-2", () => { cancelledWoken += 1; })();
+  releasePane();
+  assert.equal(woken, 0, "the superseded pane's release does not free the slot");
+  releaseRemote();
+  assert.equal(woken, 1);
+  assert.equal(cancelledWoken, 0);
+  assert.equal(activeFeedCount(), 0);
+  cancel();
+
+  // Free again: the pane takes it.
+  const again = claimScreenFeed("host-2", undefined, "PaneScreen", () => {});
+  assert.ok(again);
+  again();
+  assert.equal(ledgerSnapshot().activeByKind.feed, 0);
+});

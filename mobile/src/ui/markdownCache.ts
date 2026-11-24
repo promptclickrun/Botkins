@@ -14,7 +14,9 @@ function canSeal(token: Token) {
 // A real reference link definition begins at the start of a line (optional 0-3 spaces).
 // Checking `text.includes("]:")` would falsely disable caching for TypeScript index signatures
 // or JSON/code snippets containing `]:`.
-const REF_DEF = /^ {0,3}\[[^\]\n]+\]:/m;
+// A link reference definition, also inside block quotes and list items ("> [a]: url", "- [a]: url").
+// Over-matching only costs a full lex; missing one leaves an earlier [a] as plain text.
+const REF_DEF = /^[ \t]*(?:>[ \t]*)*(?:(?:[-*+]|\d{1,9}[.)])[ \t]+)*\[[^\]\n]+\]:/m;
 
 /** Reuse marked's actual tokens up to a proven block boundary. The next pass starts with the
  * blank separator so the lexer retains the same top-level context. */

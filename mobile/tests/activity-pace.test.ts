@@ -57,3 +57,20 @@ test("createCoalescedPacer flushNow runs immediately and leaves no pending timer
   assert.ok(ACTIVITY_MIN_INTERVAL_MS >= 1000);
   assert.ok(ACTIVITY_QUIET_MS > 0);
 });
+
+test("a leading pacer runs the first change after a quiet spell at once, then paces the rest", () => {
+  let runs = 0;
+  let clock = 10_000;
+  const pacer = createCoalescedPacer({ quietMs: 250, minIntervalMs: 2000, leading: true, now: () => clock, run: () => { runs += 1; } });
+  pacer.schedule();
+  assert.equal(runs, 1, "the first change starts the card at once");
+  assert.equal(pacer.pending(), false);
+  clock += 100;
+  pacer.schedule();
+  assert.equal(runs, 1, "a change right after waits for the interval");
+  assert.equal(pacer.pending(), true);
+  pacer.cancel();
+  clock += 5000;
+  pacer.schedule();
+  assert.equal(runs, 2, "after another quiet spell it runs at once again");
+});

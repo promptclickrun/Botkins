@@ -9,6 +9,8 @@ export type PacerOptions = {
   run: () => void;
   /** Optional clock for tests. */
   now?: () => number;
+  /** Run at once when nothing ran for `minIntervalMs` (the first change after a quiet spell). */
+  leading?: boolean;
 };
 
 export type CoalescedPacer = {
@@ -27,7 +29,7 @@ export const WIDGET_MIN_INTERVAL_MS = 15_000;
 export const ACTIVITY_QUIET_MS = 250;
 export const ACTIVITY_MIN_INTERVAL_MS = 2000;
 
-export function createCoalescedPacer({ quietMs, minIntervalMs, run, now = Date.now }: PacerOptions): CoalescedPacer {
+export function createCoalescedPacer({ quietMs, minIntervalMs, run, now = Date.now, leading = false }: PacerOptions): CoalescedPacer {
   let timer: ReturnType<typeof setTimeout> | null = null;
   let lastRun = -Infinity;
 
@@ -44,6 +46,10 @@ export function createCoalescedPacer({ quietMs, minIntervalMs, run, now = Date.n
     schedule() {
       if (timer) return;
       const elapsed = now() - lastRun;
+      if (leading && elapsed >= minIntervalMs) {
+        fire();
+        return;
+      }
       const wait = Math.max(quietMs, elapsed < minIntervalMs ? minIntervalMs - elapsed : 0);
       if (wait <= 0) {
         fire();

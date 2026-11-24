@@ -47,7 +47,9 @@ function write() {
 }
 const pacer = createCoalescedPacer({ quietMs: WIDGET_QUIET_MS, minIntervalMs: WIDGET_MIN_INTERVAL_MS, run: write });
 const soon = () => {
-  if (AppState.currentState !== "active") return;
+  // In the background (a push woke the app to sync) no foreground comes to flush it: write now.
+  // The snapshot diff skips a write when nothing the widgets show has changed.
+  if (AppState.currentState !== "active") return pacer.flushNow();
   pacer.schedule();
 };
 
