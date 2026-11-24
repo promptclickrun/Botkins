@@ -15,7 +15,7 @@ import { DemoUpdates } from "./mock-update.mjs";
 import { uploadSkill } from "./skill-import.mjs";
 import { parseSkill } from "./skill-format.mjs";
 import { botVoiceField } from "./voice.mjs";
-import { proactivePatch, proactiveSees, proactiveStart } from "./proactive-rules.mjs";
+import { proactiveChats, proactivePatch, proactiveSees, proactiveStart } from "./proactive-rules.mjs";
 
 const now = () => Date.now();
 /** The demo computer's owner, as a person. */
@@ -2225,12 +2225,21 @@ export class MockBackend {
       const alert = this.proactiveAlerts.get(runId);
       if (!alert || alert.botId !== id || alert.person !== this.caller.id) throw new Error("This alert is no longer available.");
       if (alert.chosen) throw new Error("You already chose what to do with this alert.");
-      alert.chosen = action;
-      const message = this.chat(alert.chatId).messages.find((item) => item.proactiveRunId === runId);
-      if (message) message.alert = { ...message.alert, chosen: action };
-      if (action === "later") return { until: now() + 24 * HOUR };
+      const mark = () => {
+        alert.chosen = action;
+        const message = this.chat(alert.chatId).messages.find((item) => item.proactiveRunId === runId);
+        if (message) message.alert = { ...message.alert, chosen: action };
+      };
+      if (action === "later") {
+        mark();
+        return { until: now() + 24 * HOUR };
+      }
+      // Taking it starts a turn with the bot, as sending a message does.
+      if (this.teamOf?.() && !proactiveChats(this.teamOf(), this.caller.id)) throw new Error("Your team role can't chat with this bot.");
       // A normal turn, as the person's own message: the demo bot answers it as it answers any message.
       this.handlers.send.call(this, alert.chatId, alert.prompt, this.caller.id === "owner" ? undefined : { author: { memberId: this.caller.id, name: this.caller.name } });
+      // Marked once the turn has started: a start that fails leaves the alert to try again.
+      mark();
       return { chatId: alert.chatId };
     },
     botMemory(id) {

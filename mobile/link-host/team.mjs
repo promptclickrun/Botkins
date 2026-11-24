@@ -920,6 +920,8 @@ export function authorize(principal, team, method, args = [], lookups = {}) {
   if (policy === "owner") return "Only the owner can do that.";
   if (method === "boardAct" && args[1] === "delete") action = "delete";
   else if (method === "boardAct" && (args[1] === "yes" || args[1] === "goal")) action = "create";
+  // Taking an alert's offer starts a turn with the bot, as sending a message does.
+  else if (method === "proactiveAct" && args[2] === "take") action = "chat";
   else if (method === "changePanel" && args[1] === "delete") action = "delete";
   else if (method === "routine" && args[1]?.action === "remove") action = "delete";
   else if (method === "saveSkill" && args[0]?.original) action = "manage";

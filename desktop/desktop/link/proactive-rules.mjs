@@ -37,6 +37,10 @@ export function proactiveSees(team, person, botId) {
 export function proactiveManages(team, person, botId) {
   return person === OWNER || (may(roleOf(team, person), "agents", "manage") && proactiveSees(team, person, botId));
 }
+/** Whether a person may take an alert's offer: it starts a turn with the bot, which is chatting. */
+export function proactiveChats(team, person) {
+  return person === OWNER || may(roleOf(team, person), "agents", "chat");
+}
 /** The people a bot may look out for, for a checklist: the owner first, then each member whose role sees the bot. */
 export function proactiveEligible(team, botId, ownerName = "") {
   const owner = team?.people?.find((person) => person?.id === OWNER)?.name || ownerName;

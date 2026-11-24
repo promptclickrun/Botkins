@@ -104,7 +104,7 @@ export class Reminders {
       if (own.day !== day) Object.assign(own, { day, count: 0 });
       for (const [key, at] of Object.entries(own.sent)) if (now - at > SENT_DAYS * 86400_000) delete own.sent[key];
       if (!due.length) continue;
-      const told = ws.proactive.told(person);
+      const told = ws.proactive.told(person, now);
       for (const item of due) {
         if ((own.count ?? 0) >= REMINDER_CAP) break;
         if (own.sent[item.key] || told.has(item.key)) continue;

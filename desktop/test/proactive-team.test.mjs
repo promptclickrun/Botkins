@@ -12,6 +12,8 @@ import { deviceCall } from "../desktop/device-call.mjs";
 import { dispatch } from "../desktop/routines.mjs";
 import { decide as desktopNote, Notifier } from "../desktop/notify.mjs";
 import { authorize, defaultTeam, filterParts, ownerParts } from "../desktop/link/team.mjs";
+import { ownerWindowView } from "../desktop/admin-view.mjs";
+import { routineName } from "../desktop/proactive.mjs";
 
 const HOUR = 3600_000;
 const NOW = Date.UTC(2026, 10, 22, 18);
@@ -543,4 +545,96 @@ test("the computer's own notification of an alert has the two actions where the 
   assert.deepEqual(opened, [run.delivery.chatId], "taking it opens the chat where the bot goes to work");
   note.handlers.click();
   assert.deepEqual(opened, [run.delivery.chatId, run.delivery.chatId]);
+});
+
+// ── Found in review ─────────────────────────────────────────────────────────────────────────────
+
+test("the computer's own window, with Admin mode off, is shown no other person's activity or reminders", async (t) => {
+  const current = team();
+  const { ws, seen } = setup(t, { team: current });
+  ws.proactive.setBot("pip", wizard(["owner", "m_avery"]));
+  failedRun(ws, "a", chatOf(ws, "pip", "m_avery"), "Avery report");
+  seen.reply = proposal("PRIVATE alert words");
+  await tick(ws, "pip", "m_avery");
+  const link = { ownerParts: (parts) => ownerParts(parts, current), spacesFor: () => [] };
+  const state = { ...ws.snapshot(), reminders: [{ key: "request:x", person: "m_avery", title: "Pip is waiting on your answer", body: "PRIVATE question" }, { key: "request:y", person: "owner", title: "Pip is waiting on your answer", body: "Mine" }] };
+  const off = ownerWindowView(state, link, false);
+  assert.equal("activity" in off.proactive.bots.pip, false);
+  assert.equal(JSON.stringify([off.proactive, off.reminders]).includes("PRIVATE"), false);
+  assert.deepEqual(Object.keys(off.proactive.bots.pip.people).sort(), ["m_avery", "owner"], "who it looks out for is still shown");
+  const on = ownerWindowView(state, link, true);
+  assert.match(on.proactive.bots.pip.activity.m_avery.log[0].said, /PRIVATE alert words/, "Admin mode shows everything, as it does for chats");
+});
+
+test("a long bot name and a long person's name still make a routine, and one bot that can't be brought in step doesn't stop the rest", (t) => {
+  const current = team();
+  current.members[0].name = "Avery " + "Longname ".repeat(6).trim();
+  const { ws } = setup(t, { team: current });
+  ws.updateBot("pip", { name: "Pip the very long named assistant of the studio" });
+  assert.ok(routineName(ws.bot("pip"), "m_avery", current).length <= 80);
+  ws.proactive.setBot("pip", wizard(["owner", "m_avery"]));
+  assert.equal(managed(ws).length, 2);
+  assert.equal(ws.proactive.inStep(), true);
+  // A bot whose routine can't be made is left for the next look; the others are still brought in step.
+  ws.proactive.setBot("scout", wizard(["owner"]));
+  const real = ws.panels.routines.fields.bind(ws.panels.routines);
+  ws.panels.routines.fields = (data, now) => {
+    if (data.botId === "pip") throw new Error("Invalid name");
+    return real(data, now);
+  };
+  ws.proactive.config("pip").every = 15;
+  ws.proactive.config("scout").every = 60;
+  assert.doesNotThrow(() => ws.proactive.sync());
+  assert.equal(ws.proactive.routine("scout").entry.cron, "0 */1 * * *");
+});
+
+test("taking an offer needs a role that may chat, a failed start leaves the alert to try again, and Not now also holds a plain reminder back", async (t) => {
+  const current = team();
+  const { ws, seen } = setup(t, { team: current });
+  const bots = [{ id: "pip" }];
+  const call = (principal, ...args) => authorize(principal, current, "proactiveAct", args, { bot: (id) => bots.find((bot) => bot.id === id) });
+  current.roles.find((r) => r.id === "r_see").perms.agents = ["view"];
+  assert.match(call(blake, "pip", "run-1", "take"), /role can't do that/, "starting a turn is chatting");
+  assert.equal(call(blake, "pip", "run-1", "later"), "");
+  assert.equal(call(avery, "pip", "run-1", "take"), "");
+
+  ws.proactive.setBot("pip", wizard(["owner", "m_blake"]));
+  const blakesChat = chatOf(ws, "pip", "m_blake");
+  failedRun(ws, "b", blakesChat, "Blake expenses");
+  seen.reply = proposal("Your expenses failed.", { offer: { label: "Run them again", prompt: "Run my expenses again." } });
+  await tick(ws, "pip", "m_blake");
+  const alert = ws.chat(blakesChat).messages.findLast((m) => m.alert);
+  assert.throws(() => ws.proactive.act("pip", alert.proactiveRunId, "take", "m_blake"), /role can't chat/, "the host checks it too");
+
+  // A start that fails leaves the alert as it was.
+  const ownersChat = chatOf(ws, "pip", "owner");
+  failedRun(ws, "o", ownersChat, "Owner payroll");
+  seen.reply = proposal("Payroll failed.", { offer: { label: "Run payroll again", prompt: "Run payroll again." } });
+  await tick(ws, "pip", "owner");
+  const mine = ws.chat(ownersChat).messages.findLast((m) => m.alert);
+  const submit = ws.submit.bind(ws);
+  ws.submit = () => { throw new Error("Up to 20 messages can wait at once."); };
+  assert.throws(() => ws.proactive.act("pip", mine.proactiveRunId, "take", "owner"), /Up to 20/);
+  assert.equal(mine.alert.chosen, undefined);
+  ws.submit = submit;
+  // Not now: no plain reminder for the same thing while it is held back.
+  ws.proactive.act("pip", mine.proactiveRunId, "later", "owner");
+  const sent = [];
+  ws.events.on("reminder", (reminder) => sent.push(reminder.key));
+  ws.reminders.tick(Date.now() + 3 * HOUR);
+  assert.equal(sent.includes("run:o"), false);
+});
+
+test("removing a person's routine turns their check off even when the scheduler looks in between", async (t) => {
+  const { ws } = setup(t);
+  ws.proactive.setBot("pip", wizard(["owner"]));
+  const id = ws.proactive.routine("pip").chat.id;
+  const deleteChat = ws.agents.deleteChat.bind(ws.agents);
+  ws.agents.deleteChat = async (chatId) => {
+    await deleteChat(chatId);
+    if (!ws.proactive.inStep()) ws.proactive.sync();
+  };
+  await ws.panels.routines.remove(id);
+  assert.equal(ws.proactive.config("pip").people.owner.on, false);
+  assert.equal(ws.proactive.routine("pip"), null, "it is not made again");
 });

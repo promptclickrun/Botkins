@@ -8,7 +8,7 @@ import { firstLine, inQuietHours } from "./notify.mjs";
 import { localZone, SILENT } from "./routines.mjs";
 import { botProactiveField, defaultBotProactive, migrateProactive } from "./proactive-settings.mjs";
 import { memberCanSpaces, memberManagesBot, memberSeesBot, personName } from "./team-turn.mjs";
-import { proactivePatch, proactiveStart } from "./link/proactive-rules.mjs";
+import { proactiveChats, proactivePatch, proactiveStart } from "./link/proactive-rules.mjs";
 
 import { fact, personalEvidence } from "./proactive-context.mjs";
 import { digest, learningView, METHODS, rateSuggestion, rememberSuggestion, reviewFrom, selectSuggestion, skillCatalog, SKILL_STEPS } from "./proactive-learning.mjs";
@@ -37,8 +37,8 @@ export const cronEvery = (minutes) => (minutes < 60 ? "*/" + minutes + " * * * *
 /** The day a time falls on, in a zone: "2026-11-22". */
 export const dayOf = (time, timeZone) => new Intl.DateTimeFormat("en-CA", { timeZone, year: "numeric", month: "2-digit", day: "2-digit" }).format(time);
 
-/** The name of the routine Botkins keeps for one bot and one person. It is never a notification's title. */
-export const routineName = (bot, person, team) => (bot?.name ?? "This bot") + " looks out for " + (person === OWNER ? "you" : personName(team, person) || "a member");
+/** The name of the routine Botkins keeps for one bot and one person, within a routine name's 80 characters. It is never a notification's title. */
+export const routineName = (bot, person, team) => ((bot?.name ?? "This bot") + " looks out for " + (person === OWNER ? "you" : personName(team, person) || "a member")).slice(0, 80).trim();
 
 /** Whether a routine or task run ended needing the person: the app's own "Needs you", or a status that says it failed. */
 export const runFailed = (run) => run.status === "Needs you" || ["failed", "error"].includes(String(run.status ?? "").toLowerCase());
@@ -193,7 +193,14 @@ export class Proactive {
    * loses its settings, and a person who was taken out loses their routine.
    */
   sync(now = Date.now()) {
-    for (const id of new Set([...Object.keys(this.ws.state.settings.proactive.bots), ...Object.keys(this.state.bots)])) this.syncBot(id, now);
+    for (const id of new Set([...Object.keys(this.ws.state.settings.proactive.bots), ...Object.keys(this.state.bots)])) {
+      try {
+        this.syncBot(id, now);
+      } catch (error) {
+        // One bot that can't be brought in step is left for the next look: the others still are.
+        console.error("Proactive routine:", error.message);
+      }
+    }
     this.ws.save();
   }
   /**
@@ -380,10 +387,17 @@ export class Proactive {
     for (const key of Object.keys(this.state.reminders?.[person]?.sent ?? {})) keys.add(key);
     return keys;
   }
-  /** The keys one of a person's agents alerted them about: a plain reminder for the same thing would be a second ping. */
-  told(person) {
+  /**
+   * The keys one of a person's agents alerted them about, and the ones they answered "Not now" while that
+   * still holds: a plain reminder for the same thing would be a second ping.
+   */
+  told(person, now = Date.now()) {
     const keys = new Set();
-    for (const [, who, gate] of this.gates()) if (who === person) for (const key of Object.keys(gate.told ?? {})) keys.add(key);
+    for (const [, who, gate] of this.gates()) {
+      if (who !== person) continue;
+      for (const key of Object.keys(gate.told ?? {})) keys.add(key);
+      for (const [key, until] of Object.entries(gate.snoozed ?? {})) if (until > now) keys.add(key);
+    }
     for (const task of this.ws.active.values()) {
       const check = task.run?.recovery?.proactiveCheck;
       if (check?.person === person) for (const key of check.keys) keys.add(key);
@@ -593,14 +607,17 @@ export class Proactive {
       return { until: alert.until };
     }
     if (!alert.offer) throw new Error("This alert has nothing to take care of.");
+    // Taking it starts a turn with the bot, as sending a message does (the link checks the same: link/team.mjs).
+    if (!proactiveChats(this.ws.teamOf(), by)) throw new Error("Your team role can't chat with this bot.");
     const createdBy = by === OWNER ? undefined : by;
     const delivered = alert.chatId && this.ws.state.chats.find((c) => c.id === alert.chatId);
     const chat = delivered && this.ws.inChat(delivered.id, by) ? delivered : this.ws.panels.routines.chatTarget(botId, { to: "chat" }, bot.name, createdBy, true);
     const author = createdBy && { memberId: by, name: personName(this.ws.teamOf(), by) || "A member" };
+    // Marked once the turn has started: a start that fails leaves the alert to try again.
+    const turn = this.ws.submit(chat.id, alert.offer.prompt, { delivery: "queue", ...(author && { author }) });
     alert.chosen = "take";
     this.mark(botId, alert, "take");
     this.ws.save();
-    const turn = this.ws.submit(chat.id, alert.offer.prompt, { delivery: "queue", ...(author && { author }) });
     return { chatId: chat.id, turn: Promise.resolve(turn) };
   }
   finished(run, check) {

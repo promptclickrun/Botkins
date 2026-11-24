@@ -464,9 +464,10 @@ export class Routines {
   /** Deletes a routine and the chat that holds its runs. */
   async remove(chatId) {
     const { chat, entry } = this.find(chatId);
-    await this.ws.agents.deleteChat(chatId);
-    // Removing the routine a bot keeps for a person turns that person's check off, or it would come back at the next change.
+    // Removing the routine a bot keeps for a person turns that person's check off, or it would come back at the next
+    // change. Before the chat goes: the scheduler may look while it is being deleted.
     if (entry.proactive) this.ws.proactive.routineRemoved(chat);
+    await this.ws.agents.deleteChat(chatId);
   }
   removeSchedule(chatId, id) {
     const { chat } = this.schedule(chatId, id);
