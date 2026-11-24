@@ -56,11 +56,20 @@ export function entryState(entry: McpCatalogEntry): { line: string; attention: b
 /** The line under an app in a list: its state when added, then what it does. */
 export const entryLine = (entry: McpCatalogEntry) => [entryState(entry)?.line, entry.description].filter(Boolean).join(" · ");
 
-/** How an app connects, in words. */
-export function connectsLine(entry: McpCatalogEntry) {
-  const how = entry.transport === "stdio" ? "A program on your computer" : entry.local ? "An app on your computer" : "Over the internet";
-  const auth = entry.auth === "oauth" ? "signs in in your browser" : entry.auth === "key" ? "needs an API key" : "no sign-in";
-  return how + " · " + auth;
+/** How an app connects, in two short lines: where it runs, and how it signs in. */
+export function connectsLines(entry: McpCatalogEntry): { how: string; auth: string } {
+  return {
+    how: entry.transport === "stdio" ? "A program on your computer" : entry.local ? "An app on your computer" : "Over the internet",
+    auth: entry.auth === "oauth" ? "Signs in in your browser" : entry.auth === "key" ? "Needs an API key" : "No sign-in",
+  };
+}
+
+/** The chip on an app's card once it is added ("Added", "Sign in", "Needs a key", "Off"); nothing before, when the card offers Add. */
+export function appBadge(entry: McpCatalogEntry): { label: string; attention: boolean } | undefined {
+  const state = entryState(entry);
+  if (!state) return;
+  const label = state.line === "Needs sign-in" ? "Sign in" : state.line === "Signed in" ? "Added" : state.line;
+  return { label, attention: state.attention };
 }
 
 /** Only an address on the web opens from the phone. */
@@ -117,7 +126,7 @@ export function landingShelves({ agents, entries, skills }: { agents: MarketAgen
   };
 }
 
-/** Market › Bots: Starters (when any), Botkins' Everyday and Builder, then each other marketplace. */
+/** Market › Bots: Starters (when any), Botkins' Everyday and For builders, then each other marketplace. */
 export function templateGroups(agents: MarketAgent[]): { key: string; title: string; agents: MarketAgent[] }[] {
   const groups = new Map<string, { key: string; title: string; agents: MarketAgent[] }>();
   const put = (key: string, title: string, agent: MarketAgent) => {
@@ -128,31 +137,109 @@ export function templateGroups(agents: MarketAgent[]): { key: string; title: str
   for (const agent of orderTemplates(agents)) {
     if (agent.starter) put("starters", "Starters", agent);
     else if (agent.builtIn && agent.group === "everyday") put("everyday", "Everyday", agent);
-    else if (agent.builtIn && agent.group === "builder") put("builder", "Builder", agent);
+    else if (agent.builtIn && agent.group === "builder") put("builder", "For builders", agent);
     else if (agent.builtIn) put("botkins", agent.marketplaceName || "Botkins", agent);
     else put("market:" + agent.marketplace, agent.marketplaceName || "Other", agent);
   }
   return [...groups.values()];
 }
 
+// ---- Bots page: search, chips, sections ----
+
+/** A chip on the Bots page: "all", "starters", "everyday", "builder", or "cat:<category id>". */
+export type BotChip = { key: string; label: string };
+
+/** The category's id in a chip's key, if it is one. */
+export const chipCategory = (key: string) => (key.startsWith("cat:") ? key.slice(4) : undefined);
+
+/** All, Starters, Everyday and For builders (each only when it holds a bot), then each category by how many it holds. */
+export function botChips(agents: MarketAgent[]): BotChip[] {
+  const chips: BotChip[] = [{ key: "all", label: "All" }];
+  if (agents.some((agent) => agent.starter)) chips.push({ key: "starters", label: "Starters" });
+  if (agents.some((agent) => !agent.starter && agent.builtIn && agent.group === "everyday")) chips.push({ key: "everyday", label: "Everyday" });
+  if (agents.some((agent) => !agent.starter && agent.builtIn && agent.group === "builder")) chips.push({ key: "builder", label: "For builders" });
+  const categories = new Map<string, { name: string; count: number; first: number }>();
+  agents.forEach((agent, index) => {
+    if (!agent.category) return;
+    const seen = categories.get(agent.category) ?? { name: agent.categoryName || agent.category, count: 0, first: index };
+    seen.count += 1;
+    categories.set(agent.category, seen);
+  });
+  const sorted = [...categories].sort((a, b) => b[1].count - a[1].count || a[1].first - b[1].first);
+  return [...chips, ...sorted.map(([id, item]) => ({ key: "cat:" + id, label: item.name }))];
+}
+
+/** The bots a chip keeps. */
+export function chipAgents(agents: MarketAgent[], chip: string) {
+  if (chip === "starters") return agents.filter((agent) => agent.starter);
+  if (chip === "everyday") return agents.filter((agent) => !agent.starter && agent.builtIn && agent.group === "everyday");
+  if (chip === "builder") return agents.filter((agent) => !agent.starter && agent.builtIn && agent.group === "builder");
+  const category = chipCategory(chip);
+  return category ? agents.filter((agent) => agent.category === category) : agents;
+}
+
+/** The Bots page's list: the chip's bots, narrowed by what was typed (name, role, summary, category). An empty query keeps all. */
+export function filterBots(agents: MarketAgent[], { query = "", chip = "all" }: { query?: string; chip?: string }) {
+  const kept = chipAgents(agents, chip);
+  return query.trim() ? searchTemplates(kept, query) : orderTemplates(kept);
+}
+
+/** The Bots page, top to bottom: the groups of the bots that pass the chip and the query. Starters is a carousel; the rest are grids. */
+export const botSections = (agents: MarketAgent[], options: { query?: string; chip?: string }) => templateGroups(filterBots(agents, options));
+
+/** A template's one-line job: its role, unless that only repeats the name; then its summary. */
+export const jobLine = (agent: MarketAgent) => (agent.role && agent.role.trim().toLowerCase() !== agent.name.trim().toLowerCase() ? agent.role : agent.summary);
+
+/** Under a starter's job: what it hands back, else its category. */
+export const deliverableLine = (agent: MarketAgent) => agent.deliverable || agent.categoryName || "";
+
+/** A bot that stops to ask before it acts has an approval step. */
+export const asksFirst = (agent: MarketAgent) => !!agent.approval?.trim();
+
 // ---- Apps page ----
 
-export type AppsBlock = { kind: "mac" } | { kind: "category"; id: string; name: string; entries: McpCatalogEntry[] } | { kind: "composio" };
+export type AppsBlock = { kind: "mac" } | { kind: "featured"; entries: McpCatalogEntry[] } | { kind: "category"; id: string; name: string; entries: McpCatalogEntry[] } | { kind: "composio" };
+
+/** The apps the Featured carousel leads with, in this order, when the computer's catalog has them. */
+export const FEATURED_APP_IDS = ["notion", "linear", "stripe", "figma", "sentry", "vercel", "supabase", "atlassian", "hubspot", "posthog"] as const;
+export const FEATURED_APPS = 6;
+
+/** The featured apps: the picks above that the catalog has, in that order. */
+export const featuredApps = (entries: McpCatalogEntry[], limit = FEATURED_APPS) =>
+  FEATURED_APP_IDS.flatMap((id) => entries.filter((entry) => entry.id === id)).slice(0, limit);
+
+/** The chips of the Apps page: All, then each category the catalog has, in the computer's order. */
+export function appChips(entries: McpCatalogEntry[]): { key: string; label: string }[] {
+  const seen = new Map<string, string>();
+  for (const entry of entries) if (!seen.has(entry.category)) seen.set(entry.category, entry.categoryName || "Other");
+  return [{ key: "all", label: "All" }, ...[...seen].map(([key, label]) => ({ key, label }))];
+}
 
 /**
- * The Apps page, top to bottom: the Mac's own tools first on a Mac, the direct catalog by category
- * (narrowed by a query), and Composio last, as one secondary row. Composio is never in front of the
- * catalog, signed in or not.
+ * The Apps page, top to bottom: the Mac's own tools first on a Mac, the featured apps, the direct
+ * catalog by category (narrowed by a query or one category), and Composio last, as one secondary
+ * row. Composio is never in front of the catalog, signed in or not. A query or a chosen category
+ * leaves out the Mac's tools and the featured apps, and a chosen category leaves out Composio too.
  */
-export function appsBlocks(entries: McpCatalogEntry[], { mac, query = "" }: { mac: boolean; query?: string }): AppsBlock[] {
-  const shown = query.trim() ? searchEntries(entries, query) : entries;
+export function appsBlocks(entries: McpCatalogEntry[], { mac, query = "", category, featured = false }: { mac: boolean; query?: string; category?: string; featured?: boolean }): AppsBlock[] {
+  const searching = !!query.trim();
+  const chosen = !!category && category !== "all";
+  const narrowed = searching || chosen;
+  const found = searching ? searchEntries(entries, query) : entries;
+  const shown = chosen ? found.filter((entry) => entry.category === category) : found;
   const categories = new Map<string, { kind: "category"; id: string; name: string; entries: McpCatalogEntry[] }>();
   for (const entry of shown) {
     const block = categories.get(entry.category) ?? { kind: "category" as const, id: entry.category, name: entry.categoryName || "Other", entries: [] };
     block.entries.push(entry);
     categories.set(entry.category, block);
   }
-  return [...(mac && !query.trim() ? [{ kind: "mac" as const }] : []), ...categories.values(), { kind: "composio" }];
+  const lead = featuredApps(entries);
+  return [
+    ...(mac && !narrowed ? [{ kind: "mac" as const }] : []),
+    ...(featured && !narrowed && lead.length ? [{ kind: "featured" as const, entries: lead }] : []),
+    ...categories.values(),
+    ...(chosen ? [] : [{ kind: "composio" as const }]),
+  ];
 }
 
 // ---- Skills ----

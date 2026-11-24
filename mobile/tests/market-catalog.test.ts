@@ -115,7 +115,7 @@ test("starters come first, then Botkins' everyday and builder, then other market
   assert.equal(heroTemplate([AGENTS[0]]), undefined);
   assert.deepEqual(
     templateGroups(AGENTS).map((g) => [g.title, g.agents.map((a) => a.id)]),
-    [["Starters", ["starter-b", "starter-a"]], ["Everyday", ["everyday"]], ["Builder", ["builder"]], ["Acme", ["outside"]]],
+    [["Starters", ["starter-b", "starter-a"]], ["Everyday", ["everyday"]], ["For builders", ["builder"]], ["Acme", ["outside"]]],
   );
   // No starters: no Starters group.
   assert.equal(templateGroups(AGENTS.filter((a) => !a.starter)).some((g) => g.title === "Starters"), false);
