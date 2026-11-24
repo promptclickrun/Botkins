@@ -13,6 +13,8 @@
 // (Chief of Staff, Coding partner, Money manager), which are defined elsewhere and listed through
 // HOME_STARTERS below.
 
+import { STARTERS } from "./starters.mjs";
+
 export const FIRST_PARTY_MARKETPLACE = Object.freeze({ id: "botkins-app", name: "Botkins", builtIn: true });
 /** The characters a first-party template may wear. */
 export const NEWER_HEADS = Object.freeze(["brim", "clover", "dune", "gloop", "mallow", "ripple", "wisp", "drip", "pebble", "orbit"]);
@@ -251,7 +253,48 @@ export const FIRST_PARTY_TEMPLATES = Object.freeze([
  * template when they are here. They are defined by the Home starter work; the lead connects them
  * here at merge, as templates of the same shape (`template`, `category`, `deliverable`, …).
  */
-export const HOME_STARTERS = Object.freeze([]);
+/** The listing facts the three Home starters add; their names, looks and instructions come from starters.mjs. */
+const STARTER_LISTING = {
+  "chief-of-staff": {
+    category: "productivity",
+    group: "everyday",
+    deliverable: "a short plan for the day and one running list of what is open",
+    dayOne: "Tell it what is on your plate today, or connect your calendar and mail.",
+    approval: "Asks before it sends, books or deletes anything.",
+    keywords: ["planning", "follow-up", "today"],
+    pairing: { kind: "proactive", note: "Looks out for what is late or waiting on you, and drafts the follow-up." },
+  },
+  "coding-partner": {
+    category: "dev",
+    group: "builder",
+    deliverable: "a tested change on a new branch and a pull request that says what changed and why",
+    dayOne: "Point it at a project folder on your computer.",
+    approval: "Never pushes to main, force-pushes or deletes a branch without asking.",
+    keywords: ["code", "tests", "pull request"],
+  },
+  "money-manager": {
+    category: "finance",
+    group: "everyday",
+    deliverable: "a monthly budget by category, the bills coming up, and anything unusual flagged",
+    dayOne: "Paste a statement or a list of bills, or connect a money app.",
+    approval: "Never moves money or makes payments: it tells you what to check.",
+    keywords: ["budget", "bills", "spending"],
+    pairing: { kind: "proactive", note: "Speaks up for a bill that went up, a late payment or a charge you may not recognize." },
+  },
+};
+
+/** The Home starters as first-party templates, listed before every other one. */
+export const HOME_STARTERS = Object.freeze(
+  STARTERS.map((starter) =>
+    Object.freeze({
+      name: starter.id,
+      ...STARTER_LISTING[starter.id],
+      template: { name: starter.name, role: starter.role, summary: starter.summary, look: { ...starter.look } },
+      instructions: starter.instructions,
+      ...(starter.suggestProactive && { suggestProactive: true }),
+    }),
+  ),
+);
 
 /** The listing fields a first-party template adds to a marketplace one. */
 export function contractOf(entry) {

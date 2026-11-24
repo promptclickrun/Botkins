@@ -19,7 +19,12 @@ test("the set is the agreed twelve, in two groups, and none is a Home starter", 
   const names = FIRST_PARTY_TEMPLATES.map((t) => t.template.name.toLowerCase());
   for (const starter of ["chief of staff", "coding partner", "money manager"]) assert.equal(names.includes(starter), false, starter + " belongs to the Home starters");
   assert.equal(new Set(FIRST_PARTY_TEMPLATES.map((t) => t.name)).size, FIRST_PARTY_TEMPLATES.length);
-  assert.deepEqual(HOME_STARTERS, [], "the starters are connected at merge");
+  assert.deepEqual(HOME_STARTERS.map((s) => s.template.name), ["Chief of Staff", "Coding partner", "Money manager"], "the Home starters, from starters.mjs");
+  for (const starter of HOME_STARTERS) {
+    assert.ok(starter.deliverable && starter.dayOne && starter.approval && starter.group, starter.name + " has the listing facts");
+    assert.ok(STARTER_HEADS.includes(starter.template.look.head), starter.name + " wears a starter's look");
+  }
+  assert.equal(bundledTemplates()[0].starter, true, "the starters come first by default");
 });
 
 test("each template keeps the single-job contract", () => {
@@ -78,12 +83,14 @@ test("agents.browse lists Botkins' own first, with the contract fields, and agen
   const catalog = new PluginCatalog(tempDir(t));
   const { agents, categories } = await catalog.agents({});
   const own = agents.filter((a) => a.marketplace === "botkins-app");
-  assert.deepEqual(own.map((a) => a.name), [...NAMES.everyday, ...NAMES.builder]);
+  assert.deepEqual(own.map((a) => a.name), ["Chief of Staff", "Coding partner", "Money manager", ...NAMES.everyday, ...NAMES.builder]);
   assert.equal(agents.indexOf(own[0]), 0, "first");
+  assert.deepEqual(own.slice(0, 3).map((a) => a.starter), [true, true, true], "the Home starters lead");
+  assert.match((await catalog.agentTemplate(own[0].id)).instructions, /^You are my chief of staff/);
   const bill = own.find((a) => a.name === "Subscription & Bill Watch");
   assert.deepEqual([bill.builtIn, bill.author, bill.deliverable, bill.pairing.kind], [true, "Botkins", "a list of recurring charges with renewal dates and price changes", "proactive"]);
   assert.ok(categories.some((c) => c.id === "dev"));
-  const found = await catalog.agentTemplate(own[0].id);
+  const found = await catalog.agentTemplate(own.find((a) => !a.starter).id);
   assert.match(found.instructions, /^Your one job: /);
   assert.equal((await catalog.agents({ query: "pull request" })).agents.some((a) => a.name === "PR Shepherd"), true);
   await assert.rejects(catalog.agentTemplate("gone@botkins-app"), /no longer in Botkins/);
