@@ -46,8 +46,6 @@ export type McpCatalogEntry = {
   signingIn?: boolean;
   /** Key entries: every key is in the vault. */
   keysSet?: boolean;
-  /** A program that holds this entry's keys but runs an older command: moving it to the catalog's version needs every key typed again. */
-  commandChanged?: true;
 };
 export type McpCatalog = { entries: McpCatalogEntry[]; categories: { id: string; name: string; count: number }[] };
 /** What adding an app answers: its tool server, and whether the browser sign-in (signInMcpServer) comes next. */
