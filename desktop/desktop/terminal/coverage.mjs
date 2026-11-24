@@ -114,6 +114,12 @@ export const WORKSPACE = {
   "skillsCatalog.search": cmd("skills search"),
   "skillsCatalog.preview": cmd("skills preview"),
   "skillsCatalog.install": cmd("skills install"),
+  // The featured shelf: upstream skills pinned to a commit, installed with `skills preview` and `skills install`.
+  "skillsCatalog.featured": cmd("skills featured"),
+  // ── The direct apps catalog (desktop/mcp-catalog.mjs) ──
+  "mcpCatalog.list": cmd("tools catalog"),
+  // A key comes from a hidden question or --secrets; a program's line is shown and needs a yes.
+  "mcpCatalog.add": cmd("tools connect"),
   "piPackages.browse": cmd("pi browse"),
   "piPackages.preview": cmd("pi show"),
   "piPackages.list": cmd("pi list"),
@@ -398,6 +404,8 @@ export const CHANGES = {
   "plugins.removeMarketplace": 0,
   "skills.upload": (_, result) => result?.added?.join(", "),
   "skillsCatalog.install": (_, result) => result?.added?.[0],
+  // By the catalog entry's id, never a key.
+  "mcpCatalog.add": 0,
   "piPackages.install": 0,
   "piPackages.setEnabled": 0,
   "plugins.install": 0,
@@ -601,7 +609,7 @@ export const CHANGES = {
   "apps.remove": (args, value) => value?.slug ?? args?.[0],
 };
 /** The service's own calls that only read, wait or talk in a chat: no line. Every call is in this list, in CHANGES or in LOGS_ITSELF. */
-export const READS = ["skillsCatalog.search", "skillsCatalog.preview", "piPackages.browse", "piPackages.preview", "piPackages.list", "status", "logs.read", "doctor", "events.wait", "pair.status", "devices.list", "bots.list", "bots.get", "providers.list", "providers.services", "providers.login.read", "providers.login.input", "providers.login.cancel", "models", "chat.open", "chat.list", "chat.send", "chat.read", "chat.stop", "runs.list", "routines.list", "plugins.list", "plugins.marketplaces", "plugins.refresh", "plugins.browse", "plugins.preview", "config.get", "config.describe", "relay.status", "update.status", "update.check", "methods", "plugins.get", "tools.list", "tools.get", "tools.import.preview", "tools.signIn.read", "tools.signIn.input", "tools.signIn.cancel", "skills.list", "skills.get", "bots.tools", "bots.access", "bots.menu", "folders.list", "gadgets.get"];
+export const READS = ["skillsCatalog.search", "skillsCatalog.preview", "skillsCatalog.featured", "mcpCatalog.list", "piPackages.browse", "piPackages.preview", "piPackages.list", "status", "logs.read", "doctor", "events.wait", "pair.status", "devices.list", "bots.list", "bots.get", "providers.list", "providers.services", "providers.login.read", "providers.login.input", "providers.login.cancel", "models", "chat.open", "chat.list", "chat.send", "chat.read", "chat.stop", "runs.list", "routines.list", "plugins.list", "plugins.marketplaces", "plugins.refresh", "plugins.browse", "plugins.preview", "config.get", "config.describe", "relay.status", "update.status", "update.check", "methods", "plugins.get", "tools.list", "tools.get", "tools.import.preview", "tools.signIn.read", "tools.signIn.input", "tools.signIn.cancel", "skills.list", "skills.get", "bots.tools", "bots.access", "bots.menu", "folders.list", "gadgets.get"];
 // The reads of the rest of the workspace, one line for each area (each area's builder writes only its own line).
 export const MORE_READS = {
   bots: ["bots.flags", "bots.proactive", "bots.memory", "bots.sections", "bots.sections.get", "bots.importable", "bots.import.preview", "templates.list", "templates.get", "templates.import.preview", "templates.browse", "templates.market"],

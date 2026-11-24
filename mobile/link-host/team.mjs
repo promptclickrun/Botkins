@@ -149,6 +149,11 @@ const POLICY = {
   "skillsCatalog.search": ["skills", "read"],
   "skillsCatalog.preview": ["skills", "read"],
   "skillsCatalog.install": ["skills", "create"],
+  "skillsCatalog.featured": ["skills", "read"],
+  // The direct apps catalog: anyone who sees tools may read it. Adding one can start a program on
+  // the computer and stores keys in its vault, so it is the owner's, as a sign-in is.
+  "mcpCatalog.list": ["mcp", "view"],
+  "mcpCatalog.add": "owner",
   saveSkill: ["skills", "create"],
   removeSkill: ["skills", "delete"],
   setSkillEnabled: ["skills", "manage"],

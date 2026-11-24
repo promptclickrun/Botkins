@@ -4,7 +4,52 @@
 export type SkillUpload = { filename: string; data: string; replace?: string[] };
 export type SkillImportResult = { added: string[]; conflicts: string[] };
 export type CatalogSkill = { id: string; source: string; skillId: string; name: string; installs: number; available: boolean; installed?: string };
-export type CatalogPreview = { name: string; description: string; text: string; token: string; installed?: string };
+/** Where a featured skill comes from: its repository at a pinned commit, its license and who wrote it. */
+export type SkillSource = { author: string; license: string; repo: string; commit: string; path: string; url: string; pack?: string };
+export type CatalogPreview = { name: string; description: string; text: string; token: string; installed?: string; /** A featured skill's source. */ source?: SkillSource; /** A featured skill's files, the license among them. */ files?: string[] };
+/** A skill on the featured shelf ("skills-featured-v1"). Its id is `owner/repo/skill@commit7`: preview and install it as a catalog skill. */
+export type FeaturedSkill = SkillSource & { id: string; name: string; summary: string; group: string; installed?: string };
+
+/** How an app of the direct apps catalog signs in ("mcp-catalog-v1"). */
+export type McpCatalogAuth = "none" | "oauth" | "key";
+/** An app of the direct apps catalog, with where it stands on the computer. No value of a key is ever in it. */
+export type McpCatalogEntry = {
+  id: string;
+  name: string;
+  category: string;
+  categoryName: string;
+  /** One line, in Botkins' words. */
+  description: string;
+  transport: "http" | "stdio";
+  auth: McpCatalogAuth;
+  /** http: the server's address. */
+  url?: string;
+  /** stdio: the npm package, its exact version and license, the line that runs, and the names of the values it gets. */
+  package?: string;
+  version?: string;
+  license?: string;
+  command?: string;
+  env?: string[];
+  /** The fields a key entry asks for, by label only. */
+  keys: { id: string; label: string; hint?: string }[];
+  docs: string;
+  /** A letter tile: the app has no picture Botkins may show. */
+  icon: { letter: string };
+  /** A server on the computer that another app runs, and what it needs. */
+  local?: string;
+  added: boolean;
+  serverId?: string;
+  serverName?: string;
+  enabled?: boolean;
+  /** OAuth entries: signed in and not expired. */
+  signedIn?: boolean;
+  signingIn?: boolean;
+  /** Key entries: every key is in the vault. */
+  keysSet?: boolean;
+};
+export type McpCatalog = { entries: McpCatalogEntry[]; categories: { id: string; name: string; count: number }[] };
+/** What adding an app answers: its tool server, and whether the browser sign-in (signInMcpServer) comes next. */
+export type McpCatalogAdded = { serverId: string; next: "sign-in" | "done" };
 
 export type ModelChoice = { model: string; provider?: string; source?: string; reasoningEffort?: string };
 export type FastMode = "off" | "fast" | "ultrafast";
@@ -56,6 +101,26 @@ export type HarnessStatus = {
   error?: string;
   install?: { url: string; command?: string };
 };
+/** Which of OpenAI's APIs a model is spoken to in ("keyed-providers-v1"). */
+export type KeyApi = "responses" | "completions";
+/** A model a person names for Azure Foundry (a deployment) or an OpenAI endpoint. */
+export type KeyedModel = { id: string; name?: string; api?: KeyApi; contextWindow?: number; maxOutput?: number };
+/** The settings of OpenRouter (none), Azure Foundry and an OpenAI endpoint. Never a key. */
+export type KeyedConfig = { endpoint?: string; baseUrl?: string; api?: KeyApi; apiVersion?: string; models?: KeyedModel[] };
+/** What the app shows for a provider that answers on a key (`ProviderStatus.keyed`; its `signIn` is "key"). */
+export type KeyedProvider = {
+  /** The settings this provider takes. OpenRouter: none; Azure Foundry: endpoint, apiVersion, models; an OpenAI endpoint: baseUrl, api, models. */
+  fields: Array<"endpoint" | "baseUrl" | "api" | "apiVersion" | "models">;
+  /** A key is kept on the computer (it is never sent back). */
+  hasKey: boolean;
+  /** True only for an OpenAI endpoint: a server on this computer or your own network needs no key. */
+  keyOptional: boolean;
+  config: KeyedConfig;
+  /** What is still missing, in a sentence, or null when the provider is ready. */
+  needs: string | null;
+  /** Where to get a key. */
+  keyUrl?: string;
+};
 export type ProviderStatus = {
   id: string;
   name: string;
@@ -68,7 +133,7 @@ export type ProviderStatus = {
   account?: string;
   plan?: string;
   message?: string;
-  signIn: "browser" | "services" | null;
+  signIn: "browser" | "services" | "key" | null;
   signOut: boolean;
   install?: { url: string; command?: string };
   starting?: boolean;
@@ -80,6 +145,8 @@ export type ProviderStatus = {
    * on a computer without the capability.
    */
   signInWays?: { guided: boolean; token: boolean };
+  /** For a provider whose signIn is "key" (OpenRouter, Azure Foundry, an OpenAI endpoint): its settings and what is missing ("keyed-providers-v1"). */
+  keyed?: KeyedProvider;
 };
 /**
  * What a sign-in or an install run on the computer says, in order ("provider-signin-v1"): a page
@@ -120,7 +187,7 @@ export type BotkinEyes = "oval" | "button" | "smile" | "sleepy" | "wink" | "curi
 /**
  * How a bot looks. `palette` is one of the kit's, or "custom" with `colors`
  * ([shell, accent, faceplate, eyes], each "#rrggbb"). `eyes` and "custom" need a computer whose
- * capabilities include "looks-v2"; an older one refuses them.
+ * capabilities include "looks-v2". Drip, Orbit and Pebble were added in "botkin-heads-v2". All ten additional heads are available with "botkin-heads-v3".
  */
 export type BotkinLook = { head: string; palette: string; eyes?: BotkinEyes; colors?: [string, string, string, string] };
 export type BotAccessGrant = { all: boolean; projects: string[] };
@@ -233,6 +300,7 @@ export type Mention =
   | { kind: "file" | "wiki"; path: string; label: string }
   | { kind: "board"; id: string; label: string; board?: BoardItem["kind"]; body?: string; links?: { url: string; title?: string }[] };
 export type Message = {
+  reactions?: { actor: string; emoji: string }[];
   clientMessageId?: string;
   /** One utterance in live voice, identified across partials and the final transcript. */
   voiceId?: string;
@@ -990,6 +1058,7 @@ export type UsageReport = {
  * name of the person each device belongs to, and "link.devices.setPerson"),
  * "side-pane-v1" (a bot can open a pane beside a chat: a custom view, a table, a website, the screen),
  * "adoptMcpSignIn", and what the computer's app supports itself: "looks-v2" (eyes and custom colors),
+ * "botkin-heads-v2" and "botkin-heads-v3" (the 23- and 30-character catalogs in Bot Studio),
  * "routine-delivery-v1" (where a routine's result lands, and whether it notifies), "models-v2"
  * (context window and other model details), "files-v1" (a file out or in without a dialog on the
  * computer: a template, the usage table, a wiki export), "folders-v1" (the folder browser, and
@@ -1044,7 +1113,7 @@ export type Meta = {
 };
 
 /** Everything the phone keeps in step with the desktop, by part name. */
-export type ProactiveWatch = "runs" | "tasks" | "requests";
+export type ProactiveWatch = "runs" | "tasks" | "requests" | "context";
 /** The computer's switch for the Proactive agent. Off pauses every bot's agent without forgetting its settings. */
 export type ProactiveSettings = { enabled: boolean };
 /** What a bot's Proactive agent is set to. */
@@ -1065,9 +1134,13 @@ export type ProactiveBot = Partial<ProactiveBotSettings> & {
   pings?: number;
   day?: string;
   log?: ProactiveLog[];
+  nextReviewAt?: number;
+  learning?: { rated: number; preferred: string[]; retired: string[];
+    evaluation?: { trained: number; tested: number; baseline: number; previous: number; challenger: number; promoted: boolean };
+  };
 };
 export type ProactivePart = { enabled: boolean; bots: Record<string, ProactiveBot | undefined> };
-export type ProactiveLog = { at: number; reason: "signals" | "sweep" | "check"; signals: number; outcome: "alerted" | "silent" | "failed"; runId: string; said?: string };
+export type ProactiveLog = { at: number; reason: "signals" | "sweep" | "check" | "context" | "review"; score?: number; signals: number; outcome: "alerted" | "silent" | "failed"; runId: string; said?: string };
 export type Parts = {
   meta: Meta;
   settings: Preferences;
@@ -1158,6 +1231,16 @@ export type MarketAgent = {
   version?: string;
   author?: string;
   keywords?: string[];
+  /** Botkins' own templates: the named deliverable, how it is useful on day one, what it asks before, and a suggested pairing. */
+  deliverable?: string;
+  dayOne?: string;
+  approval?: string;
+  group?: "everyday" | "builder";
+  pairing?: { kind: "routine" | "proactive"; cadence?: string; note: string };
+  /** Catalog ids of apps that help it (mcpCatalog). */
+  apps?: string[];
+  /** A Home starter: shown before every other template. */
+  starter?: boolean;
 };
 /** A category's chip: how many templates the other filters leave in it. */
 export type MarketAgentCategory = { id: string; name: string; count: number };
@@ -1357,8 +1440,8 @@ export type PairedDevice = {
   person?: string;
   platform: string;
   kind: "phone" | "desktop" | "gadget";
-  /** A gadget's board and firmware, as it said them, and the bot it talks with ("gadgets-v1"). */
-  gadget?: { board?: string; firmware?: string; botId?: string };
+  /** A gadget's board and firmware, as it said them, the bot it talks with ("gadgets-v1"), and its settings and Wi-Fi ("gadget-settings-v1"). */
+  gadget?: GadgetInfo;
   createdAt: number;
   lastSeenAt: number;
   connected: boolean;
@@ -1370,6 +1453,34 @@ export type PairedDevice = {
  * a gadget's whole `Pairing`.
  */
 export type GadgetIntroduction = { deviceId: string; serverId: string; serverKey: string; name: string; hosts: string[] };
+/** A gadget's settings ("gadget-settings-v1"). The computer keeps them; the gadget applies them. */
+export type GadgetSettings = {
+  /** 0 to 100. */
+  volume: number;
+  mic: "low" | "normal" | "high";
+  /** The microphone is off. */
+  mute: boolean;
+  /** 5 to 100. */
+  brightness: number;
+  /** Seconds idle before the screen dims, and before it goes dark. 0 is never. */
+  dimAfter: number;
+  offAfter: number;
+};
+/** A gadget as the device list shows it. */
+export type GadgetInfo = {
+  board?: string;
+  firmware?: string;
+  botId?: string;
+  settings?: GadgetSettings;
+  /** The network in use, the saved networks' names and the signal in dBm, as the gadget last said. Never a password. */
+  wifi?: { network?: string; saved: string[]; signal?: number };
+  /** Wi-Fi changes the gadget hasn't taken yet. */
+  wifiWaiting?: ({ add: string } | { forget: string })[];
+  /** A restart was asked for and hasn't happened yet. */
+  restarting?: true;
+};
+/** A Wi-Fi change for a gadget: a network with its password, or one to forget. */
+export type GadgetWifiChange = { add: { ssid: string; password: string } } | { forget: string };
 /** The part a gadget follows in place of the app's parts (gadget/docs/contract.md). */
 export type GadgetPart = {
   name: string;
@@ -1383,6 +1494,15 @@ export type GadgetPart = {
   /** The newest reply, as plain words. `parts` is how many pieces "link.gadget.speak" reads it in. */
   reply?: { id: string; text: string; parts: number };
   voice: { hear: boolean; speak: boolean; live?: LiveProvider };
+  /** While working: how many steps the turn has taken. */
+  steps?: number;
+  settings: GadgetSettings;
+  /** Names the bot's Botkin: a new one means the faces ("link.gadget.face") are new. Absent on a computer without the design kit. */
+  face?: { look: string };
+  /** Wi-Fi changes for the gadget to take and then report done ("link.gadget.set" `wifiDone`). */
+  wifi?: { changes: ({ id: string } & ({ add: { ssid: string; password: string } } | { forget: string }))[] };
+  /** A restart the owner asked for: the gadget says `restarting` with this id, then restarts. */
+  restart?: string;
 };
 export type PhoneRecord = {
   name: string;
@@ -1417,7 +1537,7 @@ export type DeviceAnswer = { ok: true; result: unknown } | { ok: false; error: s
 
 export type SttProvider = "device" | "openai" | "azure" | "elevenlabs" | "custom" | "local";
 export type TtsProvider = "device" | "openai" | "azure" | "elevenlabs" | "gemini" | "custom" | "local";
-export type LiveProvider = "codex" | "openai" | "gemini" | "elevenlabs";
+export type LiveProvider = "codex" | "openai" | "azure" | "gemini" | "elevenlabs";
 /**
  * A voice of a bot's own ("bot-voice-v1"), saved with the bot by the computer's app. Every field is
  * optional: one that is absent means the same as the shared VoiceSettings. No key is ever in it.
@@ -1509,6 +1629,7 @@ export type Calls = {
   /** Generates and saves a title from the chat's messages ("chat-title-regeneration-v1"). */
   regenerateChatTitle(id: string): string;
   deleteChat(id: string): void;
+  reactToMessage(chatId: string, index: number, time: number | null, emoji: string): NonNullable<Message["reactions"]>;
   forkChat(chatId: string, messageIndex: number): string;
   warmChat(chatId: string): void;
   startProjectChat(botIds: string[], projectId: string, mode?: ChatMode, folder?: string | null): string;
@@ -1553,7 +1674,13 @@ export type Calls = {
    * Signs a provider in with a token or key the person pasted (or a saved credential, `{ $credential: id }`).
    * Sent once; the computer keeps it in its own vault or hands it to the tool, and never sends it back.
    */
-  providerUseToken(providerId: string, token: string, options?: { service?: string }): { connected: boolean; account?: string | null; plan?: string | null };
+  providerUseToken(providerId: string, token: string, options?: { service?: string }): { connected: boolean; account?: string | null; plan?: string | null; needs?: string };
+  /**
+   * The settings of OpenRouter, Azure Foundry or an OpenAI endpoint ("keyed-providers-v1"): replaces
+   * all of them and answers the provider's new status. The key goes through providerUseToken. The
+   * computer checks every value and throws a sentence for one that isn't acceptable.
+   */
+  providerConfigure(providerId: string, config: KeyedConfig): ProviderStatus;
   /** Installs a provider's command-line tool with the command the computer names for it (`install.command`). Read it like a sign-in. */
   installProvider(providerId: string): { session: string };
   providerServices(id: string, query?: string): ProviderService[];
@@ -1694,6 +1821,12 @@ export type Calls = {
   "skillsCatalog.search"(query: string): CatalogSkill[];
   "skillsCatalog.preview"(id: string): CatalogPreview;
   "skillsCatalog.install"(token: string, replace?: string[]): SkillImportResult;
+  /** The featured shelf ("skills-featured-v1"): upstream skills pinned to a commit. Preview and install them by id. */
+  "skillsCatalog.featured"(): FeaturedSkill[];
+  /** The direct apps catalog ("mcp-catalog-v1"). */
+  "mcpCatalog.list"(): McpCatalog;
+  /** Adds an app as a tool server, or sets its keys again. A stdio app needs `confirm`: its exact `command`. Owner only. */
+  "mcpCatalog.add"(id: string, options?: { keys?: Record<string, string>; confirm?: string }): McpCatalogAdded;
   "piPackages.browse"(query?: { query?: string; page?: number }): { packages: PiPackageListing[]; nextPage?: number };
   "piPackages.preview"(name: string): PiPackageVersion;
   "piPackages.list"(): InstalledPiPackage[];
@@ -1771,6 +1904,11 @@ export type Calls = {
   "link.devices.list"(): PairedDevice[];
   /** Pairs a gadget by introduction ("gadgets-v1"): its public key (X25519, base64url) as it gave it over a cable or Bluetooth. */
   "link.gadgets.add"(input: { publicKey: string; name?: string; board?: string; botId?: string }): GadgetIntroduction;
+  /** A gadget's settings and its bot ("gadget-settings-v1"): any of them. Answers the device list afterwards. */
+  "link.gadgets.configure"(id: string, patch: Partial<GadgetSettings> & { botId?: string }): PairedDevice[];
+  /** A Wi-Fi network to add, with its password, or to forget. The gadget takes it at its next look (within 10 minutes). */
+  "link.gadgets.wifi"(id: string, change: GadgetWifiChange): { queued: true };
+  "link.gadgets.restart"(id: string): null;
   /** Renames a paired device (this one or another). Answers the list as it is afterwards. */
   "link.devices.rename"(id: string, name: string): PairedDevice[];
   /** Names the person a paired device belongs to (a team member's device names the member). Needs "device-person-v1". Answers the list as it is afterwards. */
@@ -1815,7 +1953,7 @@ export type Calls = {
   "link.credentials.link"(input: { manager: PasswordManagerId; vaultId: string; itemId: string; fieldId: string; name: string }): string;
   "link.screen.info"(): ScreenInfo;
   /** The newest picture of a display. With `after`, waits a moment for a change and leaves `jpeg` out when there is none. */
-  "link.screen.frame"(options: { display?: string; maxWidth?: number; quality?: number; after?: number }): ScreenFrame;
+  "link.screen.frame"(options: { display?: string; maxWidth?: number; quality?: number; after?: number; wait?: boolean }): ScreenFrame;
   "link.screen.input"(display: string, events: ScreenInput[]): void;
   /** The phone stopped watching. */
   "link.screen.stop"(): void;
@@ -1852,8 +1990,8 @@ export type Calls = {
   "link.voice.set"(patch: VoicePatch): void;
   /** Saves a provider's key on the computer (a string, or a saved credential), or removes it with null. It is never sent back. */
   "link.voice.key"(provider: VoiceKeyProvider, key: string | { $credential: string } | null): void;
-  /** The models and voices a provider offers. */
-  "link.voice.options"(kind: "stt" | "tts" | "live", provider: string): VoiceOptions;
+  /** The models and voices a provider offers. For Azure, `model` is the model whose voices are wanted ("" is the standard voices); without it, the saved one. */
+  "link.voice.options"(kind: "stt" | "tts" | "live", provider: string, model?: string): VoiceOptions;
   /** Speech to text on the computer's provider. `audio` is base64, at most about two minutes of 16 kHz WAV. */
   "link.voice.transcribe"(input: { audio: string; format: "wav" | "m4a" | "mp3" | "webm"; language?: string }): { text: string };
   /** Text to speech on the computer's provider: base64 audio to play. At most 4,000 characters; split long text by sentence. */
