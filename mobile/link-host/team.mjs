@@ -38,9 +38,13 @@ const POLICY = {
   duplicateBot: ["agents", "create"],
   importableAgents: ["agents", "create"],
   importAgents: ["agents", "create"],
-  // A bot's Proactive agent: the person who may manage the bot sets it, for themselves (the app checks whose it is).
+  // A bot's Proactive agent ("proactive-team-v1"): anyone whose role sees the bot may reach it, because a person
+  // the owner added turns their own alerts on and off. The app checks the rest, by who calls: a member changes
+  // only their own entry, and only a role that manages the bot adds itself or changes what the people share.
   // The computer's own switch for it is a preference, which a member never changes (setPreferences below).
-  setBotProactive: ["agents", "manage"],
+  setBotProactive: ["agents", "view"],
+  // What a person does with an alert they were sent ("Take care of it", "Not now"): the app has it only for the person it was for.
+  proactiveAct: ["agents", "view"],
   setBotAccess: "owner",
   setBotIntegrations: "owner",
   botMemory: "owner",
@@ -417,7 +421,7 @@ const SELF_METHODS = new Set([
   // A member may always leave: it removes only their own device.
   "link.unpair",
 ]);
-const BOT_METHODS = new Set(["updateBot", "setBotProactive", "setBotFlags", "makePrimary", "reorderBots", "deleteBot", "duplicateBot", "setBotAccess", "setBotIntegrations", "botMemory", "setBotMemory", "saveTemplate", "exportTemplateText", "link.setLook"]);
+const BOT_METHODS = new Set(["updateBot", "setBotProactive", "proactiveAct", "setBotFlags", "makePrimary", "reorderBots", "deleteBot", "duplicateBot", "setBotAccess", "setBotIntegrations", "botMemory", "setBotMemory", "saveTemplate", "exportTemplateText", "link.setLook"]);
 const CHAT_METHODS = new Set(["setChatFlags", "renameChat", "regenerateChatTitle", "deleteChat", "forkChat", "reactToMessage", "warmChat", "setChatProject", "recordVoiceLine", "send", "stop", "unqueue", "sendNow", "compact", "sideQuestion", "clearApprovals", "mentionables", "link.messages", "link.step", "sidePane", "changeSchedule", "link.voice.live", "link.voice.endLive", "link.team.inviteToChat", "link.team.removeFromChat", "link.chats.setSection", "mcpApps.view", "mcpApps.callTool", "mcpApps.readResource"]);
 /** What only the person who started a chat (or the owner) may do to it; someone invited may not. */
 const CREATOR_METHODS = new Set(["renameChat", "regenerateChatTitle", "deleteChat", "setChatProject", "changeSchedule", "setModel", "clearApprovals", "compact", "link.team.inviteToChat"]);
@@ -816,6 +820,8 @@ export function ownerParts(parts, team, extra = {}) {
     for (const space of records) if (mine.has(space.id)) for (const item of space.items ?? []) used.add(item.botId);
   }
   out.bots = (parts.bots ?? []).filter((bot) => !bot.createdBy || used.has(bot.id));
+  // What a bot told another person is that person's: the owner is shown who it looks out for, not what it said to them.
+  if ("proactive" in parts) out.proactive = ownerProactive(parts.proactive);
   out.meta = { ...(parts.meta ?? {}), you: { kind: "owner", admin: false } };
   return out;
 }
@@ -1019,21 +1025,31 @@ export function teamPart(team, forOwner, principal = { kind: "owner" }, ownerNam
   };
 }
 
+/** What one person's check did, as the app keeps it beside a bot's settings: the owner's at the top of the entry, each member's under `activity`. */
+const PROACTIVE_ACTIVITY = ["chatId", "lastSweepAt", "day", "pings", "log", "nextReviewAt", "learning"];
+
 /**
- * The `proactive` part as a member is sent it: the computer's switch, and for each bot their role manages the settings and
- * log of the agent they set up (`mine`), or only that another person's is there (`taken`). Never `person`, and nothing of the
- * owner's agents or another member's.
+ * The `proactive` part as a member is sent it ("proactive-team-v1"): the computer's switch, and for each bot their role
+ * sees the settings its people share, the member's own entry in `people` (nobody else's), and what their own check did.
+ * Nothing of the owner's activity or another member's: an alert is its recipient's alone. `mine` says the member is one
+ * of the bot's people, for an app from before `people`.
  */
 export function memberProactive(part, me, botIds) {
   const bots = {};
   for (const [id, entry] of Object.entries(part?.bots ?? {})) {
     if (!botIds.has(id) || !entry || typeof entry !== "object") continue;
-    if (entry.person === me) {
-      const { person: _person, ...rest } = entry;
-      bots[id] = { ...rest, mine: true };
-    } else bots[id] = { enabled: entry.enabled === true, taken: true };
+    const { activity, people, person: _person, ...rest } = entry;
+    for (const field of PROACTIVE_ACTIVITY) delete rest[field];
+    const own = people && typeof people === "object" && Object.hasOwn(people, me) ? people[me] : undefined;
+    const did = activity && typeof activity === "object" && Object.hasOwn(activity, me) ? activity[me] : undefined;
+    bots[id] = { ...rest, people: own ? { [me]: own } : {}, ...(did && typeof did === "object" ? did : {}), ...(own && { mine: true }) };
   }
   return { enabled: part?.enabled === true, bots };
+}
+/** The `proactive` part for an owner device with Admin mode off: everyone's entry, and no other person's activity. */
+export function ownerProactive(part) {
+  if (!part || typeof part !== "object") return part;
+  return { ...part, bots: Object.fromEntries(Object.entries(part.bots ?? {}).map(([id, entry]) => [id, entry && typeof entry === "object" ? (({ activity: _activity, ...rest }) => rest)(entry) : entry])) };
 }
 
 /** A copy of the named parts with everything outside a member's role and ownership removed. */
@@ -1071,8 +1087,8 @@ export function filterParts(parts, principal, team, extra = {}) {
   const visibleBots = can("agents") ? (parts.bots ?? []).filter((bot) => visible(role, bot.id)) : [];
   out.bots = visibleBots.map(seen).sort((a, b) => (place.get(a.id) ?? Infinity) - (place.get(b.id) ?? Infinity));
   const botIds = new Set(visibleBots.map((bot) => bot.id));
-  // The Proactive agent as this member may see it: their own bots' agents, and only whether another person's is there.
-  if ("proactive" in parts) out.proactive = memberProactive(parts.proactive, me, mayManage ? botIds : new Set());
+  // The Proactive agent as this member may see it: for each bot their role sees, the shared settings and their own entry and activity.
+  if ("proactive" in parts) out.proactive = memberProactive(parts.proactive, me, botIds);
   // A chat's flags are the member's own. Unread is theirs too: since they last marked it read; a
   // chat they never marked follows the workspace when they started it, and is new to them otherwise.
   out.chats = shared.map((chat) => {

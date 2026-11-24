@@ -147,6 +147,7 @@ for (const name of [
   "revealWikiExport",
   "updateBot",
   "setBotProactive",
+  "proactiveAct",
   "setBotFlags",
   "makePrimary",
   "reorderBots",

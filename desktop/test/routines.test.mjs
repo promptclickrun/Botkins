@@ -277,7 +277,9 @@ test("notification decisions follow the toggles, focus, quiet hours and run kind
 
 test("notification settings are validated and merged", () => {
   const s = changeSettings(defaultSettings, { notifications: { replies: false, quietHours: { enabled: true, from: "23:30" } } });
-  assert.deepEqual(s.notifications, { replies: false, routines: true, requests: true, quietHours: { enabled: true, from: "23:30", to: "07:00" } });
+  assert.deepEqual(s.notifications, { replies: false, routines: true, requests: true, reminders: true, quietHours: { enabled: true, from: "23:30", to: "07:00" } });
+  assert.equal(changeSettings(s, { notifications: { reminders: false } }).notifications.reminders, false);
+  assert.throws(() => changeSettings(s, { notifications: { reminders: "yes" } }), /Invalid notification/);
   assert.throws(() => changeSettings(s, { notifications: { quietHours: { from: "24:00" } } }), /Invalid notification/);
   assert.throws(() => changeSettings(s, { notifications: { replies: "yes" } }), /Invalid notification/);
   assert.throws(() => changeSettings(s, { notifications: { sound: true } }), /Invalid notification/);

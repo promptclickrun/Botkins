@@ -56,7 +56,7 @@ import { env } from "./home.mjs";
 import { phonePage } from "./phonepage.mjs";
 import { headCapabilities, LOOKS_CAPABILITY } from "./looks.mjs";
 import { ROUTINE_DELIVERY, ROUTINE_MODELS, ROUTINE_OWNER, ROUTINE_SCRIPTS, ROUTINE_SILENT } from "./routines.mjs";
-import { PROACTIVE, PROACTIVE_LEARNING } from "./proactive.mjs";
+import { PROACTIVE, PROACTIVE_LEARNING, PROACTIVE_TEAM } from "./proactive.mjs";
 import { SPACES } from "./spaces.mjs";
 import { HeldCut, teamFromCut } from "./headless/team-cut.mjs";
 import { LoginLookups } from "./headless/login-lookups.mjs";
@@ -117,7 +117,7 @@ export const KEYED_PROVIDERS = "keyed-providers-v1";
 /** A bot may have a voice of its own (`bot.voice`): reading aloud and live voice, over Settings › Voice. */
 export const BOT_VOICE = "bot-voice-v1";
 const CHAT_TITLE_REGENERATION = "chat-title-regeneration-v1";
-export const CAPABILITIES = ["message-reactions-v1", "client-message-id-v1", "voice-turns-v1", "voice-history-v1", "quiet-replies-v1", "models-v2", "fast-mode-v1", LOOKS_CAPABILITY, ...headCapabilities, BOT_VOICE, ROUTINE_DELIVERY, "routine-no-output-v1", ROUTINE_OWNER, ROUTINE_SCRIPTS, ROUTINE_MODELS, ROUTINE_SILENT, PROACTIVE, PROACTIVE_LEARNING, BOARD_MENTIONS, PROVIDER_USAGE, SIDE_PANE, REMOTE_HOSTS, FILES, FOLDERS, ARTIFACTS, PROJECT_ARTIFACTS, "project-folders-v1", "project-mode-v1", "project-clone-v1", "secure-input-v1", "turn-timeline-v1", PLUGINS, PLUGIN_STARTS, PROVIDER_SIGNIN, SPACES, AGENT_TEMPLATES, COMPOSIO_APPS, MARKET_REFRESH, MCP_APPS, "pi-packages-v1", "skill-upload-v1", "skills-catalog-v1", CHAT_TITLE_REGENERATION, KEYED_PROVIDERS];
+export const CAPABILITIES = ["message-reactions-v1", "client-message-id-v1", "voice-turns-v1", "voice-history-v1", "quiet-replies-v1", "models-v2", "fast-mode-v1", LOOKS_CAPABILITY, ...headCapabilities, BOT_VOICE, ROUTINE_DELIVERY, "routine-no-output-v1", ROUTINE_OWNER, ROUTINE_SCRIPTS, ROUTINE_MODELS, ROUTINE_SILENT, PROACTIVE, PROACTIVE_LEARNING, PROACTIVE_TEAM, BOARD_MENTIONS, PROVIDER_USAGE, SIDE_PANE, REMOTE_HOSTS, FILES, FOLDERS, ARTIFACTS, PROJECT_ARTIFACTS, "project-folders-v1", "project-mode-v1", "project-clone-v1", "secure-input-v1", "turn-timeline-v1", PLUGINS, PLUGIN_STARTS, PROVIDER_SIGNIN, SPACES, AGENT_TEMPLATES, COMPOSIO_APPS, MARKET_REFRESH, MCP_APPS, "pi-packages-v1", "skill-upload-v1", "skills-catalog-v1", CHAT_TITLE_REGENERATION, KEYED_PROVIDERS];
 /**
  * What a paired device is told this app supports. A feature whose calls the link does not carry
  * (desktop/link/methods.mjs) is left out, so a device never asks for what it cannot reach.
@@ -347,6 +347,8 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
     focused: () => host.window.focused(),
     open: (chatId) => host.window.openChat(chatId),
     openSettings: (tab) => host.window.openSettings(tab),
+    // A proactive alert's buttons on the computer's own notification: the computer's notifications are the owner's.
+    act: ({ botId, runId }, action) => void workspace.proactive.act(botId, runId, action, "owner").turn?.catch((error) => console.error("Workspace turn:", error.message)),
   });
   // A sign-in page a provider asks for opens in the person's browser, and only a web page does.
   signIns = new SignIns({
@@ -556,6 +558,13 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
     updateBot: (id, data) => workspace.updateBot(id, data),
     // A bot's Proactive agent, for the person who calls: the window and the command line are the owner's (desktop/device-call.mjs names a member).
     setBotProactive: (id, patch, person = "owner") => workspace.proactive.setBot(id, patch, person),
+    // What a person does with an alert they were sent: "take" starts a normal turn with the bot's offer in their chat
+    // and answers that chat's id, "later" holds what it was about back for a day. Only the person it was for has it.
+    proactiveAct: (id, runId, action, person = "owner") => {
+      const { turn, ...answer } = workspace.proactive.act(id, runId, action, person);
+      turn?.catch((error) => console.error("Workspace turn:", error.message));
+      return answer;
+    },
     // Skills and MCP servers for every bot (desktop/integrations.mjs)
     saveMcpServer: (data) => workspace.integrations.saveServer(data),
     setMcpServerEnabled: (id, enabled) => workspace.integrations.setServerEnabled(id, enabled),
@@ -1242,8 +1251,18 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
   // line, which show everything, as an owner with Admin mode on. The desktop app's window gets
   // its snapshot from desktop/main.mjs, cut by the window's own Admin mode: desktop/admin-view.mjs.)
   const snapshot = () => ({ ...withOwnerChatSections(workspace.snapshot(), link), spaces: link?.spacesFor?.("owner"), ...(link ? { team: link.team() } : {}), phones: { revision: phoneRevision } });
+  // Reminders are about things that have waited 15 minutes: a look twice a minute is often enough.
+  let remindedAt = 0;
   const tick = () => {
     tickChatSchedules(workspace);
+    if (Date.now() - remindedAt >= 30_000) {
+      remindedAt = Date.now();
+      try {
+        workspace.reminders.tick();
+      } catch (error) {
+        console.error("Reminders:", error.message);
+      }
+    }
     try {
       workspace.tasks.tick();
     } catch (error) {

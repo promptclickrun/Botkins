@@ -44,6 +44,7 @@ export const WORKSPACE = {
   makePrimary: cmd("bots primary"),
   setBotFlags: cmd("bots flags"),
   setBotProactive: cmd("bots proactive"),
+  proactiveAct: cmd("bots alert"),
   ...each("botMemory setBotMemory", cmd("bots memory")),
   ...each("addSection", cmd("bots sections add")),
   renameSection: cmd("bots sections rename"),
@@ -436,8 +437,10 @@ export const CHANGES = {
   "bots.order": null,
   "bots.primary": (args, value) => value?.name ?? args?.[0],
   "bots.flags.set": (args, value) => value?.name ?? args?.[0],
-  // The bot's name only: not its rules, and not who the agent works for.
+  // The bot's name only: not its rules, and not who it looks out for.
   "bots.proactive.set": (args, value) => value?.name ?? args?.[0],
+  // The bot's name only: not the alert's words, and not what was offered.
+  "bots.proactive.act": (args, value) => value?.name ?? args?.[0],
   "bots.memory.set": (args, value) => value?.name ?? args?.[0],
   "bots.sections.add": (args, value) => value?.name ?? args?.[0],
   "bots.sections.rename": (args, value) => value?.name ?? args?.[0],
