@@ -10,7 +10,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { basename, join, posix } from "node:path";
 import { fileURLToPath } from "node:url";
 import { demoGitHub } from "./mock-prs.mjs";
-import { starterById } from "./starters.mjs";
+import { STARTERS, starterById } from "./starters.mjs";
 import { DemoSignIns } from "./mock-signin.mjs";
 import { DemoUpdates } from "./mock-update.mjs";
 import { DEMO_FEATURED, demoCatalogAdd, demoCatalogList } from "./mock-catalog.mjs";
@@ -1260,17 +1260,43 @@ function pluginWarnings(entry, old = false) {
 
 // ── Agent templates ("agent-templates-v1", docs/agent-templates.md) ─────────────────────────────────
 // Made-up templates from two marketplaces, read from nowhere: the built-in "Botkins" and a team's own
-// ("Team picks", not built in). The order is the catalogs' own, Botkins first. BOTKINS_DEV_AGENTS=off
-// leaves the capability out, as an older computer would.
+// ("Team picks", not built in). The order is the catalogs' own: the three Home starters, then Botkins'
+// own, then the team's. Every look is one of the ten newer characters, one to a template, so a list
+// of them is as varied as a real computer's. BOTKINS_DEV_AGENTS=off leaves the capability out, as an
+// older computer would.
 const AGENT_CATEGORIES = { writing: "Writing", research: "Research", productivity: "Productivity", work: "Work", dev: "Development", learning: "Learning", health: "Health", finance: "Finance", home: "Home", media: "Media", life: "Life", other: "Other" };
 const agentTemplate = (marketplace, marketplaceName, builtIn, name, entry) => ({ id: name + "@" + marketplace, marketplace, marketplaceName, builtIn, ...entry, ...(entry.category && { categoryName: AGENT_CATEGORIES[entry.category] ?? "Other" }) });
+// What the real computer lists beside each Home starter (desktop/agent-templates-first-party.mjs).
+const STARTER_FACTS = {
+  "chief-of-staff": { category: "productivity", group: "everyday", deliverable: "a short plan for the day and one running list of what is open", dayOne: "Tell it what is on your plate today, or connect your calendar and mail.", approval: "Asks before it sends, books or deletes anything.", keywords: ["planning", "follow-up", "today"], pairing: { kind: "proactive", note: "Looks out for what is late or waiting on you, and drafts the follow-up." } },
+  "coding-partner": { category: "dev", group: "builder", deliverable: "a tested change on a new branch and a pull request that says what changed and why", dayOne: "Point it at a project folder on your computer.", approval: "Never pushes to main, force-pushes or deletes a branch without asking.", keywords: ["code", "tests", "pull request"] },
+  "money-manager": { category: "finance", group: "everyday", deliverable: "a monthly budget by category, the bills coming up, and anything unusual flagged", dayOne: "Paste a statement or a list of bills, or connect a money app.", approval: "Never moves money or makes payments: it tells you what to check.", keywords: ["budget", "bills", "spending"], pairing: { kind: "proactive", note: "Speaks up for a bill that went up, a late payment or a charge you may not recognize." } },
+};
+const DEMO_STARTERS = STARTERS.map((starter) =>
+  agentTemplate("botkins", "Botkins", true, starter.id, {
+    name: starter.name,
+    role: starter.role,
+    summary: starter.summary,
+    look: { ...starter.look },
+    version: "1.0.0",
+    author: "Botkins",
+    starter: true,
+    instructions: starter.instructions,
+    ...STARTER_FACTS[starter.id],
+  }),
+);
 const DEMO_AGENTS = [
+  ...DEMO_STARTERS,
   agentTemplate("botkins", "Botkins", true, "inbox-triage", {
     name: "Inbox Triage",
     role: "Email sorter",
     summary: "Reads your new mail, sorts what matters from what can wait, and drafts short replies for you to check.",
-    look: { head: "beacon", palette: "tidepool" },
+    look: { head: "brim", palette: "tidepool" },
     category: "productivity",
+    group: "everyday",
+    deliverable: "a sorted inbox and a short draft for each mail that needs a reply",
+    dayOne: "Connect your mail, or paste a few messages.",
+    approval: "Never sends a reply: it shows the drafts and waits.",
     version: "1.0.0",
     author: "Botkins",
     keywords: ["email", "inbox", "mail"],
@@ -1280,8 +1306,11 @@ const DEMO_AGENTS = [
     name: "Meeting Prep",
     role: "Briefing writer",
     summary: "Before each meeting, gathers who is coming, what was said last time and what to decide, on one page.",
-    look: { head: "spool", palette: "honey" },
+    look: { head: "clover", palette: "honey" },
     category: "productivity",
+    group: "everyday",
+    deliverable: "a one-page brief before each meeting",
+    dayOne: "Connect your calendar.",
     version: "1.2.0",
     author: "Botkins",
     keywords: ["calendar", "meetings", "notes"],
@@ -1291,8 +1320,11 @@ const DEMO_AGENTS = [
     name: "Plain Editor",
     role: "Editor",
     summary: "Makes your writing shorter and clearer without changing what you mean.",
-    look: { head: "muse", palette: "fig" },
+    look: { head: "dune", palette: "fig" },
     category: "writing",
+    group: "everyday",
+    deliverable: "your text, shorter and clearer, with a list of what changed",
+    dayOne: "Paste any text.",
     version: "1.0.0",
     author: "Botkins",
     keywords: ["editing", "clarity", "style"],
@@ -1302,8 +1334,11 @@ const DEMO_AGENTS = [
     name: "Story Spark",
     role: "Writing partner",
     summary: "Helps you start a story: a premise, a few characters and the first scene, then follows your lead.",
-    look: { head: "luna", palette: "bluebell" },
+    look: { head: "gloop", palette: "bluebell" },
     category: "writing",
+    group: "everyday",
+    deliverable: "three premises, then characters and a first scene",
+    dayOne: "Say what kind of story you like.",
     version: "0.9.1",
     author: "Botkins",
     keywords: ["fiction", "stories", "ideas"],
@@ -1313,19 +1348,40 @@ const DEMO_AGENTS = [
     name: "Habit Coach",
     role: "Coach",
     summary: "Checks in each day on the habits you chose, keeps count, and helps you plan around a missed day.",
-    look: { head: "sprig", palette: "fern" },
+    look: { head: "ripple", palette: "fern" },
     category: "health",
+    group: "everyday",
+    deliverable: "a daily check-in and a running count for each habit",
+    dayOne: "Tell it the habits you chose.",
     version: "1.0.0",
     author: "Botkins",
     keywords: ["habits", "fitness", "routine"],
     instructions: "Help the person keep the habits they chose.\n\n- Ask once a day how each habit went.\n- Keep a running count, and say it plainly.\n- When a day is missed, help plan the next one. No guilt.\n- You are not a doctor: for anything medical, suggest they ask one.",
   }),
+  agentTemplate("botkins", "Botkins", true, "code-reviewer", {
+    name: "Code Reviewer",
+    role: "Reviewer",
+    summary: "Reads a pull request the way a careful teammate would, and says what to fix first.",
+    look: { head: "orbit", palette: "tidepool" },
+    category: "dev",
+    group: "builder",
+    deliverable: "a review: what is wrong, what is risky, and what is fine, in that order",
+    dayOne: "Point it at a pull request or a branch.",
+    approval: "Never approves or merges: it only comments.",
+    version: "1.0.0",
+    author: "Botkins",
+    keywords: ["review", "pull request", "quality"],
+    instructions: "Review the change you are given.\n\n- Start with what is wrong or risky, most serious first.\n- Point to the line and say why.\n- Then note what is good, in one line.\n- Never approve or merge.",
+  }),
   agentTemplate("team-picks", "Team picks", false, "release-notes", {
     name: "Release Notes",
     role: "Changelog writer",
     summary: "Turns a list of merged pull requests into release notes people want to read.",
-    look: { head: "tinker", palette: "terracotta" },
+    look: { head: "wisp", palette: "terracotta" },
     category: "dev",
+    deliverable: "release notes grouped as New, Better and Fixed",
+    dayOne: "Give it the merged pull requests.",
+    approval: "Asks before it publishes anything.",
     version: "2.0.0",
     author: "Acme platform team",
     keywords: ["github", "changelog", "releases"],
