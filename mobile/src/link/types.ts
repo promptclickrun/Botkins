@@ -557,6 +557,8 @@ export type Step = {
   agentId?: string;
   /** The step has a longer input or output than it carries here ("step-details-v1"): `link.step` reads them. */
   more?: boolean;
+  /** The computer can stop this helper or background command on its own: `stopHelper` ("stop-helper-v1"). Set only while it runs. */
+  stoppable?: boolean;
 };
 /** One step's input and output, read when the step is opened (`link.step`). */
 export type StepDetail = { input?: string; output?: string };
@@ -573,7 +575,7 @@ export type ReasoningView = { run: string; items: Reasoning[] };
  * "turn-timeline-v1": `prompt` is what it was asked, `intent` what it says it is doing now, and
  * `result` what it came back with (each cut short by the computer).
  */
-export type Subagent = { id: string; name: string; description?: string; status: "Running" | "Done" | "Failed" | "Stopped"; started: number; finished?: number; detail?: string; prompt?: string; intent?: string; result?: string };
+export type Subagent = { id: string; name: string; description?: string; status: "Running" | "Done" | "Failed" | "Stopped"; started: number; finished?: number; detail?: string; prompt?: string; intent?: string; result?: string; /** The computer can stop it on its own (`stopHelper`, "stop-helper-v1"). Set only while it runs. */ stoppable?: boolean };
 export type Usage = { input: number; output: number; cacheRead?: number; cost?: number; model?: string; durationMs?: number };
 export type TeamAsk = {
   id: string;
@@ -1741,6 +1743,8 @@ export type Calls = {
   setMyAvatar(image: string | null): { avatar?: string };
   catalog(botId: string, chatId?: string, refresh?: boolean): Catalog;
   stop(chatId: string): void;
+  /** Stops one helper or background command of the chat's turn, by its id (a helper's id is the id of the step that started it). "stop-helper-v1". */
+  stopHelper(chatId: string, id: string): void;
   unqueue(chatId: string, itemId: string): void;
   sendNow(chatId: string, itemId: string): void;
   retry(runId: string): void;
