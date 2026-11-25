@@ -2,6 +2,8 @@
 // It runs with the person's shell as a login shell (so their PATH and profile apply), in the bot's
 // own folder, and stops after SCRIPT_TIMEOUT_MS. Its output (standard output and error together) is
 // kept, cut to its last SCRIPT_OUTPUT characters.
+// A script command (desktop/script-commands.mjs) runs the same way, with `timeoutMs: null` (the
+// person who typed it can press Stop) and its arguments on standard input (`input`).
 import { spawn } from "node:child_process";
 
 export const SCRIPT_TIMEOUT_MS = 10 * 60 * 1000;
@@ -18,9 +20,10 @@ export function shellFor(script, platform = process.platform, env = process.env)
 /**
  * Runs a script. Resolves (never rejects) with { exitCode, signal, output, timedOut, stopped, error }.
  * `exitCode` is null when the script was killed or could not start. `stop()` on the returned
- * handle ends it early.
+ * handle ends it early. `timeoutMs: null` sets no time limit. `input` is text for the script's
+ * standard input (it is never part of the command). `routine: false` leaves out BOTKINS_ROUTINE.
  */
-export function runScript(script, { cwd, timeoutMs = SCRIPT_TIMEOUT_MS, env = process.env, platform = process.platform } = {}) {
+export function runScript(script, { cwd, timeoutMs = SCRIPT_TIMEOUT_MS, env = process.env, platform = process.platform, input, routine = true } = {}) {
   const { file, args } = shellFor(script, platform, env);
   let output = "";
   let timedOut = false;
@@ -30,8 +33,8 @@ export function runScript(script, { cwd, timeoutMs = SCRIPT_TIMEOUT_MS, env = pr
   };
   const child = spawn(file, args, {
     cwd,
-    env: { ...env, BOTKINS_ROUTINE: "1" },
-    stdio: ["ignore", "pipe", "pipe"],
+    env: routine ? { ...env, BOTKINS_ROUTINE: "1" } : env,
+    stdio: [input === undefined ? "ignore" : "pipe", "pipe", "pipe"],
     // Its own process group, so a timeout or Stop ends what the script started too.
     detached: platform !== "win32",
     windowsHide: true,
@@ -46,18 +49,23 @@ export function runScript(script, { cwd, timeoutMs = SCRIPT_TIMEOUT_MS, env = pr
   };
   child.stdout.setEncoding("utf8").on("data", add);
   child.stderr.setEncoding("utf8").on("data", add);
-  const timer = setTimeout(() => {
+  if (input !== undefined) {
+    // A script that does not read its input closes the pipe early; that is not an error.
+    child.stdin.on("error", () => {});
+    child.stdin.end(String(input));
+  }
+  const timer = timeoutMs == null ? null : setTimeout(() => {
     timedOut = true;
     kill();
   }, timeoutMs);
-  timer.unref?.();
+  timer?.unref?.();
   const done = new Promise((resolve) => {
     let error = "";
     child.on("error", (e) => {
       error = e.message;
     });
     child.on("close", (code, signal) => {
-      clearTimeout(timer);
+      if (timer) clearTimeout(timer);
       resolve({ exitCode: code, signal: signal ?? null, output, timedOut, stopped, ...(error && { error }) });
     });
   });

@@ -257,7 +257,13 @@ export function toolsApi({ workspace, handlers, bot, signIns, log }) {
     "skills.get": ([ref]) => {
       const found = skill(ref);
       // Only a skill that Botkins keeps can be read whole; one from a linked folder is read in its folder.
-      return found.editable ? { ...found, ...handlers.readSkill(found.name) } : found;
+      // A script command is read with its script: the terminal is the owner's.
+      return found.editable ? { ...found, ...handlers.readSkill(found.name), ...(found.command === "script" && { script: handlers["skills.readScript"](found.name).script }) } : found;
+    },
+    /** A script command, or with `original` a change to one: { name, description, script, original? }. The command line has shown the script and been told yes. */
+    async "skills.saveScript"([data = {}]) {
+      const name = await handlers["skills.saveScript"](data);
+      return skill(name);
     },
     /** A new skill, or with `original` a change to one: { name, description, instructions, original? }. */
     async "skills.save"([data = {}]) {

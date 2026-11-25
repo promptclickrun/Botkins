@@ -155,6 +155,9 @@ const POLICY = {
   skills: ["skills", "read"],
   readSkill: ["skills", "read"],
   "skills.upload": ["skills", "create"],
+  // A script command runs on the owner's computer, so only the owner reads or saves one ("script-commands-v1").
+  "skills.saveScript": "owner",
+  "skills.readScript": "owner",
   "skillsCatalog.search": ["skills", "read"],
   "skillsCatalog.preview": ["skills", "read"],
   "skillsCatalog.install": ["skills", "create"],

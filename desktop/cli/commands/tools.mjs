@@ -616,14 +616,14 @@ export const tools = {
         summary: "List the skills",
         usage: "botkins skills list",
         async run(context) {
-          context.print(await skillResult(context, "skills.list"), (all) => (all.skills.length ? table(["NAME", "STATE", "FROM", "DESCRIPTION"], all.skills.map((skill) => [skill.name, skill.enabled ? "on" : "off", skill.origin === "botkins" ? "Botkins" : skill.origin, skill.description.length > 70 ? skill.description.slice(0, 69) + "…" : skill.description])) : "No skills yet. Add one with `botkins skills add`."));
+          context.print(await skillResult(context, "skills.list"), (all) => (all.skills.length ? table(["NAME", "STATE", "FROM", "DESCRIPTION"], all.skills.map((skill) => [skill.name, skill.enabled ? "on" : "off", skill.command === "script" ? "Botkins (script)" : skill.origin === "botkins" ? "Botkins" : skill.origin, skill.description.length > 70 ? skill.description.slice(0, 69) + "…" : skill.description])) : "No skills yet. Add one with `botkins skills add`."));
         },
       },
       show: {
         summary: "Show one skill, with its instructions when Botkins keeps it",
         usage: "botkins skills show <skill>",
         async run(context) {
-          context.print(await skillResult(context, "skills.get", one(context, "Name the skill.")), (skill) => [skill.name + (skill.enabled ? "" : " (off)"), skill.description, skill.instructions !== undefined ? "\n" + skill.instructions : "\nIts instructions are in " + skill.path + "."].join("\n"));
+          context.print(await skillResult(context, "skills.get", one(context, "Name the skill.")), (skill) => [skill.name + (skill.enabled ? "" : " (off)") + (skill.command === "script" ? " (script command)" : ""), skill.description, skill.command === "script" && skill.script !== undefined ? "\nScript:\n" + skill.script.split(/\r?\n/).map((line) => "    " + safe(line.replaceAll("\t", "    "))).join("\n") : skill.instructions !== undefined ? "\n" + skill.instructions : "\nIts instructions are in " + skill.path + "."].join("\n"));
         },
       },
       add: {
@@ -643,6 +643,44 @@ export const tools = {
           context.print(await skillResult(context, "skills.save", { name, description: o.description, instructions }), (skill) => "Added " + safe(skill.name) + ". Every bot has it now; `botkins bots skills <bot> --off " + shellWord(skill.name, "<the skill>") + "` takes it from one." + (hasUnshown(skill.name) ? " Take the skill's name from `botkins skills list --json`: it has a character that cannot be written in a command." : ""));
         },
       },
+      "add-script": {
+        summary: "Add or change a script command: a slash command that runs a script with no model",
+        usage: "botkins skills add-script <name> --description <text> (--script <text> | --script-file <path>) [--yes]",
+        options: {
+          description: { type: "string", value: "text", about: "One line that says what the command does (shown in the / menu)" },
+          script: { type: "string", value: "text", about: "The script (up to 20,000 characters)" },
+          "script-file": { type: "string", value: "path", about: "Read the script from a file (\"-\" reads standard input)" },
+          ...YES,
+        },
+        details: "A script command is a slash command that runs a script on this computer, with no model: type /<name> some words in any chat. The script runs in your login shell (PowerShell on Windows), in the chat's project folder or the bot's own folder, and has no time limit: Stop ends it. The words after the name are in $BOTKINS_ARGS and on standard input, never part of the command. Only you add one: this shows the whole script first and asks. With no terminal it needs --yes. A name that a script command has already is changed, and its old script is gone. No bot is offered it as a skill.",
+        async run(context) {
+          const name = one(context, "Give the command a name (lowercase letters, numbers and dashes).");
+          const o = context.options;
+          if (o.description === undefined) throw usage("Give --description: one line that says what the command does.");
+          if ((o.script === undefined) === (o["script-file"] === undefined)) throw usage("Give --script or --script-file, one of them.");
+          const script = o.script ?? (await textFrom(context, o["script-file"], "script file"));
+          if (!script.trim()) throw usage("The script is empty.");
+          const existing = (await skillResult(context, "skills.list")).skills.find((skill) => skill.name === name);
+          show(
+            context,
+            [
+              (existing?.command === "script" ? "This changes the script command /" : "This adds a script command: /") + safe(name),
+              "It runs this script on this computer, with your account's access, each time you type /" + safe(name) + " in a chat. No model reads it or runs it. It has no time limit; Stop ends it.",
+              "For: " + safe(o.description),
+              "Script:",
+              ...script.split(/\r?\n/).map((line) => "    " + safe(line.replaceAll("\t", "    "))),
+            ].join("\n"),
+          );
+          if (!(await confirm(context, "Save this script command?"))) {
+            context.note("Nothing was saved.");
+            return EXIT.failed;
+          }
+          context.print(
+            await skillResult(context, "skills.saveScript", { name, description: o.description, script, ...(existing?.command === "script" && { original: existing.name }) }),
+            (skill) => "Saved /" + safe(skill.name) + ". Type it in any chat. No bot is offered it as a skill.",
+          );
+        },
+      },
       edit: {
         summary: "Change a skill that Botkins keeps",
         usage: "botkins skills edit <skill> [--name <text>] [--description <text>] [--instructions <text> | --instructions-file <path>]",
@@ -658,6 +696,7 @@ export const tools = {
           if (o.instructions !== undefined && o["instructions-file"] !== undefined) throw usage("Give --instructions or --instructions-file, not both.");
           if (o.name === undefined && o.description === undefined && o.instructions === undefined && o["instructions-file"] === undefined) throw usage("Say what to change: --name, --description, --instructions or --instructions-file.");
           const before = await skillResult(context, "skills.get", ref);
+          if (before.command === "script") throw new CliError(before.name + " is a script command. Change it with `botkins skills add-script " + shellWord(before.name, "<the command>") + "`, which shows the whole script first.");
           if (before.instructions === undefined) throw new CliError(before.name + " is not a skill that Botkins keeps. Change it in its folder: " + before.path);
           const instructions = o.instructions ?? (o["instructions-file"] !== undefined ? await textFrom(context, o["instructions-file"], "file") : before.instructions);
           context.print(await skillResult(context, "skills.save", { original: before.name, name: o.name ?? before.name, description: o.description ?? before.description, instructions }), (skill) => "Saved " + skill.name + ".");

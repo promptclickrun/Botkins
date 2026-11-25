@@ -962,6 +962,9 @@ declare global {
       /** Creates a skill, or rewrites one of Botkins' own when `original` is its current name. Returns its name. */
       saveSkill(data: { name: string; description: string; instructions: string; original?: string }): Promise<string>;
       removeSkill(name: string): Promise<void>;
+      /** Creates a script command, or rewrites one when `original` is its current name ("script-commands-v1"). Returns its name. */
+      "skills.saveScript"(data: ScriptCommand & { original?: string }): Promise<string>;
+      "skills.readScript"(name: string): Promise<ScriptCommand>;
       setSkillEnabled(name: string, enabled: boolean): Promise<void>;
       /** Asks for a folder: a skill is copied in; a folder of skills or a plugin is linked. null when cancelled. */
       /** A plugin folder is installed as a plugin, switched off (`id`, `enabled: false`); it is never linked as a folder of skills. */
@@ -1448,7 +1451,11 @@ export type SkillInfo = {
   folderId?: string;
   /** Why no bot gets this skill on this computer, as the computer says it ("Needs the botkins command line on this host."). */
   unavailable?: string;
+  /** "script": a slash command that runs a script with no model ("script-commands-v1"). No bot is given it as a skill. */
+  command?: "script";
 };
+/** A script command, whole: what it is for and the script that /name runs ("script-commands-v1"; the owner's alone). */
+export type ScriptCommand = { name: string; description: string; script: string };
 export type SkillFolders = {
   folders: { id: string; path: string; missing: boolean; skills: number }[];
   plugins: { id: string; path: string; missing: boolean }[];

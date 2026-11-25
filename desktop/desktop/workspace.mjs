@@ -23,6 +23,7 @@ import { CopilotProvider } from "./providers/copilot/index.mjs";
 import { Integrations } from "./integrations.mjs";
 import { Plugins } from "./plugins.mjs";
 import { pluginTools } from "./plugin-tools.mjs";
+import { matchScriptCommand, RESERVED_COMMANDS, runScriptCommand, scriptChoice, scriptCommandTools } from "./script-commands.mjs";
 import { SecureInputs } from "./secure-input.mjs";
 import { updateTools } from "./updates.mjs";
 import { profileContext } from "./bot-profile-files.mjs";
@@ -991,6 +992,11 @@ export class Workspace {
       // A reaction's prompt is in no message of the chat: a retry takes it from here.
       ...(run.reaction && { message }),
     };
+    // A person's message that is a script command: known now, so that the chat is busy with it from the start (the menu is then asked of the bot's menu session).
+    if (!run.reaction && run.scheduleId == null && !run.panelId && !run.taskId && !run.recovery?.proactiveCheck && !(recovering && run.recovery?.input) && !isGroup(chat)) {
+      const typed = this.scriptCommandFor(chat, bot, prompt);
+      if (typed) Object.assign(task, { script: true, typedScript: typed });
+    }
     // A group chat names its first speaker at once, so the UI never shows a nameless typing row.
     if (isGroup(chat)) task.speaker = responders(chat, this.state.bots, prompt)[0]?.id;
     // A new turn counts the plugins' blocks again from none. A recovery or a retry of the same turn comes through here
@@ -1374,6 +1380,8 @@ export class Workspace {
     if (chat.helper) return records;
     return [
       ...(access.plugins ? pluginTools(this, bot, chat, run, task) : []),
+      // A script command that a bot proposes: the person is shown the whole script (desktop/script-commands.mjs). The owner's alone.
+      ...(access.member ? [] : scriptCommandTools(this, bot, chat, run, task)),
       ...this.secureInputs.tools(bot, chat, run, task),
       ...updateTools(this.updates, chat, run, task, () => this.active.get(chat.id)),
       ...this.panels.tools(bot, chat, run, task),
@@ -1807,7 +1815,21 @@ export class Workspace {
     }
     return target;
   }
+  /**
+   * The "/" menu of a chat: what its provider's session lists, and the script commands that are on
+   * (desktop/script-commands.mjs). A command or skill that the session has under the same name wins.
+   * A chat that a team member started has no script commands in its menu: they are the owner's.
+   */
   async catalog(botId, chatId, fresh = false) {
+    const data = await this.inventory(botId, chatId, fresh);
+    const chat = chatId ? this.state.chats.find((c) => c.id === chatId) : null;
+    if (!Array.isArray(data?.choices) || chat?.createdBy) return data;
+    const taken = new Set(data.choices.flatMap((c) => [c.name, c.command, ...(c.aliases ?? [])].map((word) => String(word).toLowerCase())));
+    const scripts = this.integrations.scriptCommands().filter((c) => c.enabled && !c.unavailable && !taken.has(c.name)).map(scriptChoice);
+    return scripts.length ? { ...data, choices: [...data.choices, ...scripts] } : data;
+  }
+  /** The provider's own menu for a chat (the part of `catalog` that opens a session). */
+  async inventory(botId, chatId, fresh = false) {
     const bot = this.bot(botId);
     const chat = chatId
       ? this.state.chats.find((c) => c.id === chatId && c.botId === botId)
@@ -1818,7 +1840,9 @@ export class Workspace {
     if (!fresh && cached && cached.expires > Date.now()) return cached.data;
     const generation = this.catalogGeneration;
     const active = chatId && this.active.get(chatId);
-    if (active && !active.finishing) {
+    // A script command running has no session to ask: the bot's menu session answers (and the chat's lock is held until it ends).
+    const scripting = active?.script === true;
+    if (active && !active.finishing && !scripting) {
       const read = active.ready.then((s) =>
         s ? s.inventory() : Promise.reject(new Error("Chat stopped.")),
       );
@@ -1832,7 +1856,7 @@ export class Workspace {
     // A chat with a conversation lists its own session's menu. A new chat, or a bot with no chat
     // yet, uses the bot's menu session, so browsing "/" never starts a conversation.
     const target =
-      chat.established && chat.messages?.some((m) => m.role === "assistant") ? chat : this.menuTarget(bot, chatId ? chat : null);
+      chat.established && chat.messages?.some((m) => m.role === "assistant") && !scripting ? chat : this.menuTarget(bot, chatId ? chat : null);
     const data = await this.locked(target.id, async () => {
       const again = this.catalogs.get(key);
       if (!fresh && again && again.expires > Date.now()) return again.data;
@@ -2286,6 +2310,35 @@ export class Workspace {
       if (task.session === session) task.session = undefined;
     }
   }
+  /**
+   * The script command that a person's message asks for: { name, args }, or null when the message
+   * is not one. The "/" menu's own commands win a clash (`catalog`): the names that Botkins and the
+   * providers are known to have, and anything in the chat's last menu.
+   */
+  scriptCommandFor(chat, bot, prompt) {
+    const typed = matchScriptCommand(prompt);
+    if (!typed || RESERVED_COMMANDS.has(typed.name)) return null;
+    const menu = this.catalogs.get(chat.id) ?? this.catalogs.get(bot.id);
+    if (menu?.data?.choices?.some((c) => [c.name, c.command, ...(c.aliases ?? [])].some((word) => String(word).toLowerCase() === typed.name))) return null;
+    return this.integrations.scriptCommands().some((c) => c.name === typed.name && c.enabled) ? typed : null;
+  }
+  /** Runs a typed script command as a turn with no model: busy while it runs, Stop ends it, its output is the reply. */
+  async runTypedScript(chat, bot, run, task, { name, args }) {
+    this.access.assertChat(chat, [bot]);
+    const said = (text) => chat.messages.push({ role: "command", plain: true, time: Date.now(), runId: run.id, text });
+    run.command = name;
+    // The owner's alone: a turn that a team member wrote, or that runs in a member's chat, runs nothing on this computer.
+    if (this.accessForTurn(chat, task).member) return said("Only the computer's owner can run a script command.");
+    const command = this.integrations.runnableScript(name);
+    if (!command) {
+      const why = this.integrations.scriptCommands().find((c) => c.name === name)?.unavailable;
+      return said("/" + name + " can't run. " + (why ?? "Open Settings, Skills to look at it."));
+    }
+    if (run.recovery?.commandStarted || (task.recovering && !run.recovery)) throw new Error("Botkins restarted during this command. Check its result before running it again.");
+    (run.recovery ??= {}).commandStarted = true;
+    this.save();
+    await runScriptCommand(this, { chat, bot, run, task, command, args });
+  }
   async executeTurn(chat, bot, prompt, run, task) {
     let session, unsubscribe, proposals;
     const check = run.recovery?.proactiveCheck;
@@ -2295,6 +2348,12 @@ export class Workspace {
       if (task.stopped) return;
       if (check && !this.proactive.current(chat, check.person)) {
         proposals = { candidates: [] };
+        return;
+      }
+      // A script command runs its script with no model, and no session is opened for it (desktop/script-commands.mjs).
+      if (task.typedScript) {
+        await this.runTypedScript(chat, bot, run, task, task.typedScript);
+        if (!task.stopped && !this.closing) run.status = "Completed";
         return;
       }
       task.compactRequested = chat.main && !check && prompt.trim() === "/compact";

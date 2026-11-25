@@ -116,6 +116,9 @@ export const WORKSPACE = {
   changeSchedule: cmd("routines schedule"),
   // ── Plugins ──
   "skills.upload": cmd("skills upload"),
+  // A script command (desktop/script-commands.mjs): `skills add-script` shows the whole script and needs a yes; `skills show` prints it.
+  "skills.saveScript": cmd("skills add-script"),
+  "skills.readScript": cmd("skills show"),
   "skillsCatalog.search": cmd("skills search"),
   "skillsCatalog.preview": cmd("skills preview"),
   "skillsCatalog.install": cmd("skills install"),
@@ -455,6 +458,8 @@ export const CHANGES = {
   "tools.signOut": (args, value) => value?.name ?? args?.[0],
   "tools.forgetApprovals": (args) => args?.[0] ?? "every chat",
   "skills.save": (args) => args?.[0]?.name,
+  // By the command's name, never its script.
+  "skills.saveScript": (args) => args?.[0]?.name,
   "skills.remove": 0,
   "skills.enable": 0,
   "skills.addFolder": 0,

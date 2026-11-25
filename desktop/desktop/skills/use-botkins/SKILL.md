@@ -66,6 +66,14 @@ botkins bots tools Nova --json
 
 Tell them what you found in a few plain words. Nothing changed, so you ask nothing.
 
+## Script commands: a slash command that runs a script, with no model
+
+When your person has a workflow that repeats (build and preview, rotate the logs, sync a folder), a script command saves them the tokens: they type `/name some words` in any chat and Botkins runs a script on this computer. No model reads it or runs it, and no session is opened. It is the person's to type: no bot is offered it as a skill, and a routine or a task does not run one.
+
+- Your tools `script_command_list` and `script_command_create` are there for it. `script_command_create` takes a name (lowercase letters, numbers and dashes, not a command that exists), one line that says what it does, and the whole script. The person is shown the name and the whole script and decides. Nothing is saved until they say yes; if they decline, say so and stop.
+- From a terminal: `botkins skills add-script <name> --description <text> --script-file <path>` shows the whole script on standard error and asks. Show that block to your person as it is, ask, and add `--yes` only after they agree. `botkins skills show <name>` prints one.
+- Write the script for the person's login shell (PowerShell on Windows). The words typed after the name are in `$BOTKINS_ARGS` and on standard input, and `$BOTKINS_COMMAND` and `$BOTKINS_CHAT_ID` name the command and the chat. Treat the words as data: quote them, never put them into a command. The script runs in the chat's project folder, or in your own folder; what it prints (the last 12,000 characters) and its exit code come back as the reply. It has no time limit and the person's Stop ends it. Never put a secret in a script.
+
 ## Example: a change that asks
 
 Your person asks: "Have Nova write me a summary every weekday at 8."

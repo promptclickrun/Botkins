@@ -4,6 +4,7 @@ import { View } from "react-native";
 import { useBot, usePart, useSkills } from "@/state/hooks";
 import { api, attempt } from "@/state/link";
 import { EmptyState, Group, IconTile, Label, Loading, Page, Row } from "@/ui";
+import { botSkills } from "@/features/skills/shared";
 
 const toggle = (list: string[] | undefined, item: string, on: boolean) => (on ? (list ?? []).filter((entry) => entry !== item) : [...(list ?? []).filter((entry) => entry !== item), item]);
 
@@ -11,7 +12,9 @@ const toggle = (list: string[] | undefined, item: string, on: boolean) => (on ? 
 export default function Capabilities() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const bot = useBot(id);
-  const skills = useSkills();
+  const all = useSkills();
+  // A script command is typed by the person; a bot neither has it nor leaves it out.
+  const skills = all && botSkills(all);
   const offForAll = usePart("skills")?.disabled;
   const servers = usePart("mcp");
 

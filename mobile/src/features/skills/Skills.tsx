@@ -5,7 +5,7 @@ import { askReplace } from "./replaceSkill";
 import { finishSkillImport } from "./importSkill";
 import { useTheme } from "@/ui";
 import { type Href, router, Stack } from "expo-router";
-import { BookOpen, Folder, FolderPlus, Plus, Puzzle, Sparkles } from "lucide-react-native";
+import { BookOpen, Folder, FolderPlus, Plus, Puzzle, Sparkles, Terminal } from "lucide-react-native";
 import { useState } from "react";
 import { Alert, View } from "react-native";
 import type { SkillInfo } from "@/link/types";
@@ -15,9 +15,9 @@ import { markTold, pluginHref, useComputerKey, useInstalledPlugins, useToldNotic
 import { skillsNotices } from "@/features/market/plugins/logic";
 import { Notice } from "@/features/market/plugins/parts";
 import { brand, Button, EmptyState, Field, Group, IconTile, Label, Loading, Page, Row, space, T } from "@/ui";
-import { FILTER_FROM, filterSkills, folderName, isBuiltIn, readableName, skillOrigin, skillsIn } from "./shared";
+import { FILTER_FROM, filterSkills, folderName, isBuiltIn, isScript, readableName, skillOrigin, skillsIn } from "./shared";
 
-const open = (name: string) => router.push({ pathname: "/skills/[name]", params: { name } });
+const open = (name: string, kind?: "script") => router.push({ pathname: "/skills/[name]", params: { name, ...(kind && { kind }) } });
 
 /** The skills on the computer: the person's own and the ones that ship with it, then the linked folders and plugins. */
 export default function Skills() {
@@ -25,6 +25,8 @@ export default function Skills() {
   const canRead = useCan("skills", "read");
   const canCreate = useCan("skills", "create");
   const supportsUpload = useCapability("skill-upload-v1");
+  // A script command runs on the computer, so it is the owner's alone ("script-commands-v1").
+  const supportsScripts = useCapability("script-commands-v1") && !useMember();
   const {colors} = useTheme();
   async function upload() {
     const host = useApp.getState().pairing?.serverId;
@@ -79,7 +81,7 @@ export default function Skills() {
   const row = (skill: SkillInfo) => (
     <Row
       key={skill.name}
-      leading={<IconTile icon={isBuiltIn(skill) ? Sparkles : skill.origin === "folder" ? Folder : BookOpen} color={isBuiltIn(skill) ? brand.tide : brand.clay} size={36} />}
+      leading={<IconTile icon={isBuiltIn(skill) ? Sparkles : isScript(skill) ? Terminal : skill.origin === "folder" ? Folder : BookOpen} color={isBuiltIn(skill) ? brand.tide : brand.clay} size={36} />}
       title={readableName(skill.name)}
       subtitle={[skillOrigin(skill, folders), skill.description].filter(Boolean).join(" · ")}
       toggled={canManage ? (pending[skill.name] ?? (skill.enabled && !off?.includes(skill.name))) : undefined}
@@ -108,7 +110,7 @@ export default function Skills() {
 
   return (
     <Page title="Skills" caption="What your bots know how to do" keyboard>
-      <Stack.Screen options={{ headerRight: canCreate ? () => <MenuView title="Add skill" actions={[{id:"create", title:"Create skill"}, ...(supportsUpload && online ? [{id:"upload", title:"Upload skill"}] : [])]} onPressAction={({nativeEvent}) => nativeEvent.event === "upload" ? void upload() : open("new")}>
+      <Stack.Screen options={{ headerRight: canCreate ? () => <MenuView title="Add skill" actions={[{id:"create", title:"Create skill"}, ...(supportsScripts ? [{id:"script", title:"Create script command"}] : []), ...(supportsUpload && online ? [{id:"upload", title:"Upload skill"}] : [])]} onPressAction={({nativeEvent}) => nativeEvent.event === "upload" ? void upload() : nativeEvent.event === "script" ? open("new", "script") : open("new")}>
         <View accessible accessibilityRole="button" accessibilityLabel="Add skill" style={{width:44, height:44, alignItems:"center", justifyContent:"center"}}><Plus color={colors.ink} size={22} /></View>
       </MenuView> : undefined }} />
       {!canRead ? (

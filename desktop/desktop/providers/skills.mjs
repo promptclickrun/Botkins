@@ -48,7 +48,8 @@ export function enabledSkills(spec) {
   const plugins = (spec.plugins ?? []).map((folder) => join(folder, "skills")).filter((folder) => existsSync(folder));
   for (const folder of [...(spec.skills?.directories ?? []), ...plugins])
     for (const skill of skillsIn(folder, undefined, spec.skills?.standalone)) {
-      if (seen.has(skill.name) || off.has(skill.name)) continue;
+      // A script command is the person's to type, never a skill that a model reads (desktop/script-commands.mjs).
+      if (seen.has(skill.name) || off.has(skill.name) || skill.command) continue;
       seen.add(skill.name);
       list.push({ name: skill.name, description: skill.description, path: skill.path });
     }

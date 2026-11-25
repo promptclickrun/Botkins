@@ -72,6 +72,8 @@ for (const name of [
   // Agent templates in the marketplaces ("agent-templates-v1"), and Marketplace › Apps (Composio)
   "pickSkillUpload",
   "skills.upload",
+  "skills.saveScript",
+  "skills.readScript",
   "skillsCatalog.search",
   "skillsCatalog.preview",
   "skillsCatalog.install",

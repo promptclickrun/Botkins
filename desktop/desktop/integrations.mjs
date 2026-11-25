@@ -21,6 +21,7 @@ import { parseSkill, slug } from "./link/skill-format.mjs";
 import { McpOAuth, REDIRECT_PORT } from "./oauth.mjs";
 import { MANIFESTS as PLUGIN_MANIFESTS } from "./plugin-reading.mjs";
 import { isRef } from "./vault.mjs";
+import { SCRIPT_FILE, SCRIPT_KIND, cleanScriptCommand, commandKind, hashScript, scriptSkillFile } from "./script-commands.mjs";
 import { reachable } from "./terminal/reach.mjs";
 import { randomUUID } from "node:crypto";
 import { cpSync, existsSync, lstatSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
@@ -199,10 +200,13 @@ export function skillsIn(folder, origin, standalone = []) {
       try {
         const file = join(path, "SKILL.md");
         if (statSync(file).isFile()) {
-          const skill = parseSkill(readFileSync(file, "utf8").slice(0, MAX_SKILL_TEXT), entry.name);
+          const text = readFileSync(file, "utf8").slice(0, MAX_SKILL_TEXT);
+          const skill = parseSkill(text, entry.name);
           if (skill.name && !names.has(skill.name)) {
             names.add(skill.name);
-            found.push({ name: skill.name, description: skill.description.slice(0, 600), path, origin });
+            // A skill that says it is a script command is never offered to a model (providers/skills.mjs). Whether it can run is skills() and scriptCommands().
+            const command = commandKind(text);
+            found.push({ name: skill.name, description: skill.description.slice(0, 600), path, origin, ...(command === SCRIPT_KIND && { command }) });
           }
           // Each imported skill has its own top-level folder. A manifest among its references is a companion file.
           if (standalone.includes(path)) continue;
@@ -241,12 +245,15 @@ export class Integrations {
     this.reachable = () => reachable();
     const state = ws.state;
     state.mcpServers ??= [];
+    const kept = Object.fromEntries(Object.entries(state.skills?.scripts && typeof state.skills.scripts === "object" ? state.skills.scripts : {}).filter(([name, hash]) => SKILL_NAME.test(name) && typeof hash === "string" && /^[0-9a-f]{64}$/.test(hash)));
     state.skills = {
       ...(Array.isArray(state.skills?.standalone) && {standalone: state.skills.standalone}),
       ...(state.skills?.catalog && {catalog: state.skills.catalog}),
       folders: Array.isArray(state.skills?.folders) ? state.skills.folders : [],
       plugins: Array.isArray(state.skills?.plugins) ? state.skills.plugins : [],
       disabled: Array.isArray(state.skills?.disabled) ? state.skills.disabled : [],
+      // The script commands Botkins saved: name -> the SHA-256 of the script that the person saw (desktop/script-commands.mjs).
+      ...(Object.keys(kept).length && { scripts: kept }),
     };
     this.vault = ws.vault;
     // Sign-in for remote servers. Its tokens live in the vault; a change shows in Settings at once.
@@ -651,7 +658,14 @@ export class Integrations {
     add(skillsIn(bundledSkills, "built-in"));
     // The command-line skill stays in the list on a host with no command, with the reason. Its switch is still the person's own.
     const noCommand = this.reachable() ? null : "Needs the botkins command line on this host.";
-    return out.map((s) => (noCommand && s.name === COMMAND_SKILL && s.origin === "built-in" ? { ...s, unavailable: noCommand } : s)).sort((a, b) => a.name.localeCompare(b.name));
+    return out
+      .map(({ command, ...s }) => {
+        // Only a skill that Botkins saved as a script command is one. The header alone, in a linked or imported folder, is not.
+        const script = s.origin === "botkins" ? this.scriptState(s) : null;
+        if (script) return { ...s, command: SCRIPT_KIND, ...(script.problem && { unavailable: script.problem }) };
+        return noCommand && s.name === COMMAND_SKILL && s.origin === "built-in" ? { ...s, unavailable: noCommand } : s;
+      })
+      .sort((a, b) => a.name.localeCompare(b.name));
   }
   folders() {
     const view = (f) => ({ id: f.id, path: f.path, missing: !existsSync(f.path) });
@@ -659,6 +673,81 @@ export class Integrations {
       folders: this.skillState.folders.map((f) => ({ ...view(f), skills: skillsIn(f.path, "folder").length })),
       plugins: this.skillState.plugins.map(view),
     };
+  }
+  // Script commands (desktop/script-commands.mjs)
+  /**
+   * Whether a skill of Botkins' own folder is a script command that Botkins saved, and whether it can run.
+   * Null when it is not one. `problem` is the reason it can't run now (the script changed outside Botkins).
+   */
+  scriptState(skill) {
+    const saved = this.skillState.scripts?.[skill.name];
+    if (!saved || skill.path !== join(this.skillsDir, skill.name)) return null;
+    const read = this.scriptText(skill.path);
+    if (read === null) return { problem: "The script is missing. Save the command again." };
+    if (hashScript(read) !== saved) return { problem: "The script was changed outside Botkins. Open the command and save it again to use it." };
+    return {};
+  }
+  /** The script in a command's folder; null when there is no plain file there (a link is never followed). */
+  scriptText(dir) {
+    const file = join(dir, SCRIPT_FILE);
+    try {
+      if (lstatSync(dir).isSymbolicLink() || !lstatSync(file).isFile()) return null;
+      return readFileSync(file, "utf8");
+    } catch {
+      return null;
+    }
+  }
+  /** Every script command: { name, description, enabled, path, unavailable? }. */
+  scriptCommands() {
+    return this.skills().filter((s) => s.command === SCRIPT_KIND).map(({ name, description, enabled, path, unavailable }) => ({ name, description, enabled, path, ...(unavailable && { unavailable }) }));
+  }
+  /** A script command's fields for its editor, whole: the name, what it is for and the script. */
+  readScriptCommand(name) {
+    const item = this.scriptCommands().find((s) => s.name === name);
+    if (!item) throw new Error("This isn't a script command that Botkins keeps.");
+    const script = this.scriptText(item.path);
+    if (script === null) throw new Error("This command's script is missing. Save the command again.");
+    return { name: item.name, description: item.description, script, ...(item.unavailable && { unavailable: item.unavailable }) };
+  }
+  /**
+   * The script to run for a typed command: { name, script } for one that is on and whole, else null.
+   * The script is read now and checked against the one that was saved, so a file that was changed
+   * since is never run.
+   */
+  runnableScript(name) {
+    const item = this.scriptCommands().find((s) => s.name === name);
+    if (!item || !item.enabled || item.unavailable) return null;
+    const script = this.scriptText(item.path);
+    if (script === null || hashScript(script) !== this.skillState.scripts?.[name]) return null;
+    return { name, script };
+  }
+  /**
+   * Saves a script command, or rewrites one (`original` is its current name). The caller has shown
+   * the person the script (a card, the review of `botkins skills add-script`, or the editor itself).
+   */
+  saveScriptCommand({ name, description, script, original }) {
+    const fields = cleanScriptCommand({ name, description, script });
+    const id = fields.name;
+    const current = original ? this.ownSkillDir(original) : null;
+    if (original && !this.scriptCommands().some((s) => s.name === original)) throw new Error("This isn't a script command. Change it as a skill.");
+    if (id !== original && this.skills().some((s) => s.name === id)) throw new Error("A skill named " + id + " already exists.");
+    mkdirSync(this.skillsDir, { recursive: true });
+    if (lstatSync(this.skillsDir, { throwIfNoEntry: false })?.isSymbolicLink()) throw new Error("The Botkins skills folder cannot be a symbolic link.");
+    const dir = join(this.skillsDir, id);
+    if (current && current !== dir) renameSync(current, dir);
+    if (lstatSync(dir, { throwIfNoEntry: false })?.isSymbolicLink()) throw new Error("This command's folder is a link.");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "SKILL.md"), scriptSkillFile(fields));
+    writeFileSync(join(dir, SCRIPT_FILE), fields.script, { mode: 0o600 });
+    const scripts = (this.skillState.scripts ??= {});
+    if (original && original !== id) {
+      delete scripts[original];
+      this.skillState.disabled = this.skillState.disabled.map((n) => (n === original ? id : n));
+      for (const bot of this.ws.state.bots) if (bot.skillsOff) bot.skillsOff = bot.skillsOff.map((n) => (n === original ? id : n));
+    }
+    scripts[id] = hashScript(this.scriptText(dir));
+    this.changed();
+    return id;
   }
   /** One of Botkins' own skills, for editing. */
   readSkill(name) {
@@ -680,6 +769,7 @@ export class Integrations {
       instructions: text(instructions, MAX_SKILL_TEXT, "set of instructions"),
     };
     const current = original ? this.ownSkillDir(original) : null;
+    if (original && this.skillState.scripts?.[original]) throw new Error("This is a script command. Change it as one: its script is shown for a decision.");
     if (id !== original && this.skills().some((s) => s.name === id)) throw new Error("A skill named " + id + " already exists.");
     mkdirSync(this.skillsDir, { recursive: true });
     const dir = join(this.skillsDir, id);
@@ -784,6 +874,11 @@ export class Integrations {
     if (boundaries.size) this.skillState.standalone = [...boundaries];
     else delete this.skillState.standalone;
     const added = plans.map((plan) => plan.name);
+    // A folder that was imported over a script command, or under its name, is not that command (desktop/script-commands.mjs).
+    if (this.skillState.scripts) {
+      for (const plan of plans) delete this.skillState.scripts[plan.name];
+      if (!Object.keys(this.skillState.scripts).length) delete this.skillState.scripts;
+    }
     for (const [id, name] of Object.entries(this.skillState.catalog ?? {})) if (added.includes(name) || plans.some(plan => plan.existing?.name === name)) delete this.skillState.catalog[id];
     if (enable) this.skillState.disabled = this.skillState.disabled.filter((name) => !added.includes(name));
     this.changed();
@@ -792,6 +887,10 @@ export class Integrations {
   removeSkill(name) {
     const dir = this.ownSkillDir(name);
     rmSync(dir, { recursive: true, force: true });
+    if (this.skillState.scripts) {
+      delete this.skillState.scripts[name];
+      if (!Object.keys(this.skillState.scripts).length) delete this.skillState.scripts;
+    }
     if (this.skillState.standalone) this.skillState.standalone = this.skillState.standalone.filter(entry => entry !== basename(dir));
     for (const [id, skill] of Object.entries(this.skillState.catalog ?? {})) if (skill === name) delete this.skillState.catalog[id];
     this.skillState.disabled = this.skillState.disabled.filter((n) => n !== name);
@@ -839,7 +938,8 @@ export class Integrations {
       ...(this.skillState.standalone?.length && {standalone: this.standaloneSkills}),
       // The command-line skill goes last, and only a host where a bot's shell finds the command offers it.
       // Never in a member's turn: the socket knows no member, so a member's bot must not be taught to act as the owner at the socket.
-      disabled: [...new Set([...this.skillState.disabled, ...(bot?.skillsOff ?? []), ...(this.reachable() && !member ? [] : [COMMAND_SKILL])])],
+      // A script command is the person's to type; no model is offered it as a skill (desktop/script-commands.mjs).
+      disabled: [...new Set([...this.skillState.disabled, ...(bot?.skillsOff ?? []), ...Object.keys(this.skillState.scripts ?? {}), ...(this.reachable() && !member ? [] : [COMMAND_SKILL])])],
     };
   }
 }

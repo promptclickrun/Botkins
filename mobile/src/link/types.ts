@@ -960,8 +960,14 @@ export type SkillInfo = {
   enabled: boolean;
   editable?: boolean;
   folderId?: string;
+  /** Why no bot gets this skill on the computer, as the computer says it. */
+  unavailable?: string;
+  /** "script": a slash command that runs a script on the computer with no model ("script-commands-v1"). */
+  command?: "script";
 };
 export type SkillDetail = { name: string; description: string; instructions: string };
+/** A script command, whole ("script-commands-v1"; the owner's alone): what /name runs on the computer. */
+export type ScriptCommand = { name: string; description: string; script: string };
 
 /**
  * How the app on the computer looks (the phone has its own look, in `prefs.ts`). `colorTheme`,
@@ -1167,6 +1173,8 @@ export type UsageReport = {
  * "agent-templates-v1" (the app's: agent templates from the plugin marketplaces, to start a bot
  * from: `agents.browse` and `agents.template`; docs/agent-templates.md).
  * "skill-upload-v1" accepts Markdown and zip files. "skills-catalog-v1" searches, previews and installs skills.
+ * "script-commands-v1" (the owner's: a skill that is a slash command running a script on the computer with no model;
+ * `skills.saveScript` and `skills.readScript`; the computer adds enabled ones to the "/" menu (`catalog`), source "Script").
  * "market-refresh-v1" (the app's: `plugins.refresh` reads every marketplace again now, so new
  * plugins and agent templates show without waiting for the hour; docs/plugins.md).
  * "people-avatars-v1" (each person may have a picture, `Person.avatar`, and sets their own with
@@ -1806,6 +1814,9 @@ export type Calls = {
   readSkill(name: string): SkillDetail;
   saveSkill(skill: { name: string; description: string; instructions: string; original?: string }): string;
   removeSkill(name: string): void;
+  /** Creates a script command, or rewrites one when `original` is its current name ("script-commands-v1"). Returns its name. */
+  "skills.saveScript"(command: ScriptCommand & { original?: string }): string;
+  "skills.readScript"(name: string): ScriptCommand;
   setSkillEnabled(name: string, enabled: boolean): void;
   saveMcpServer(server: McpServerInput): string;
   setMcpServerEnabled(id: string, enabled: boolean): void;

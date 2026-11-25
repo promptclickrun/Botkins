@@ -462,3 +462,39 @@ test("a word of a command that Botkins prints for someone to run is quoted for a
   assert.equal(odd.out.includes(turn), false);
   assert.ok(odd.out.includes("--off <the tool>`") && odd.out.includes("`botkins tools test <the tool>`") && odd.out.includes("`botkins tools list --json`"), odd.out);
 });
+
+test("a script command is shown whole first and needs a yes; the log names it, never its script", { skip }, async (t) => {
+  const { botkins, put, changes, client, everything } = await service(t);
+  const script = "echo \"$BOTKINS_ARGS\"\n\trm -rf build\t# ‮evil";
+  const add = (...more) => ["skills", "add-script", "deploy-preview", "--description", "Builds a preview.", "--script-file", put("run.sh", script), ...more];
+  // With no terminal there is nobody to ask: the whole script is shown on standard error, nothing is saved, and the flag is named.
+  const asked = await botkins(add());
+  assert.equal(asked.exit, 2);
+  assert.match(asked.err, /^This adds a script command: \/deploy-preview\nIt runs this script on this computer, with your account's access, each time you type \/deploy-preview in a chat\. No model reads it or runs it\./);
+  assert.ok(asked.err.includes("For: Builds a preview.\nScript:\n    echo \"$BOTKINS_ARGS\"\n        rm -rf build    # \\u{202e}evil"), "every line of the script, made safe to read");
+  assert.match(asked.err, /This needs a yes\. Run it again with --yes\./);
+  assert.deepEqual((await client.call("skills.list")).skills.filter((skill) => skill.command === "script"), []);
+  // With the yes it is saved. It is a skill that no bot is offered, and it shows what it is.
+  assert.match((await botkins(add("--yes"))).out, /^Saved \/deploy-preview\./);
+  const listed = (await client.call("skills.list")).skills.find((skill) => skill.name === "deploy-preview");
+  assert.equal(listed.command, "script");
+  assert.match((await botkins(["skills", "list"])).out, /deploy-preview +on +Botkins \(script\)/);
+  const shown = (await botkins(["skills", "show", "deploy-preview"])).out;
+  assert.match(shown, /^deploy-preview \(script command\)\nBuilds a preview\.\n\nScript:\n {4}echo /);
+  assert.equal((await botkins(["skills", "show", "deploy-preview", "--json"])).json().script, script);
+  // Changing it says so and asks again; the old script is replaced.
+  const again = await botkins(["skills", "add-script", "deploy-preview", "--description", "Builds.", "--script", "make-the-preview-now"]);
+  assert.equal(again.exit, 2);
+  assert.match(again.err, /^This changes the script command \/deploy-preview\n/);
+  assert.equal((await botkins(["skills", "add-script", "deploy-preview", "--description", "Builds.", "--script", "make-the-preview-now", "--yes"])).exit, 0);
+  assert.equal((await client.call("skills.get", "deploy-preview")).script, "make-the-preview-now");
+  // A name that a command has, an empty script and a skill's name are refused, and `skills edit` points to the right command.
+  assert.match((await botkins(["skills", "add-script", "help", "--description", "x", "--script", "true", "--yes"])).err, /already has/);
+  assert.equal((await botkins(["skills", "add-script", "x", "--description", "x", "--script", " ", "--yes"])).exit, 2);
+  assert.equal((await botkins(["skills", "add-script", "x", "--description", "x"])).exit, 2);
+  assert.match((await botkins(["skills", "edit", "deploy-preview", "--description", "y"])).err, /is a script command\. Change it with `botkins skills add-script deploy-preview`/);
+  // The log names the call and the command, never the script.
+  assert.deepEqual((await changes()).filter((line) => line.startsWith("skills.saveScript")), ["skills.saveScript deploy-preview", "skills.saveScript deploy-preview"]);
+  // Neither the workspace file (a hash is all it holds) nor the log has a script.
+  assert.equal(["rm -rf build", "make-the-preview-now"].some((word) => everything().includes(word)), false);
+});
