@@ -329,3 +329,67 @@ test("mobile link-host markChatsRead enforces current bot role even for chat cre
   assert.deepEqual(view.c_vis, { seen: 100 });
   assert.equal(view.c_hidden_own, undefined, "creator who lost access to bot is ignored");
 });
+
+test("runMarkChatsRead fallback skips the host's real reply for a team member's deleted chat but keeps other refusals", async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "botkins-mobile-member-fallback-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const snapshot = {
+    bots: [
+      { id: "bot-vis", name: "Pip" },
+      { id: "bot-hidden", name: "Ghost" },
+    ],
+    chats: [
+      { id: "c_vis", botId: "bot-vis", title: "Visible", time: 100, unread: true, createdBy: "m_view", messages: [] },
+      { id: "c_other", botId: "bot-vis", title: "Other member", time: 200, unread: true, createdBy: "m_other", messages: [] },
+      { id: "c_hidden_own", botId: "bot-hidden", title: "Lost bot access", time: 300, unread: true, createdBy: "m_view", messages: [] },
+    ],
+    requests: [],
+    runs: [],
+  };
+  const host = new LinkHost({
+    dir,
+    backend: {
+      snapshot: () => snapshot,
+      subscribe: () => () => {},
+      call: async () => null,
+    },
+  });
+  host.store.data.devices = [{ id: "dev-1", name: "Val's Phone", memberId: "m_view", pub: "x", role: "member" }];
+  host.store.data.team = {
+    name: "Crew",
+    roles: [{ id: "r_viewer", name: "Viewer", perms: { agents: ["view"], today: [], skills: [], mcp: [], plugins: [], settings: [] }, bots: ["bot-vis"] }],
+    groups: [{ id: "g_viewers", name: "Viewers", roleId: "r_viewer" }],
+    members: [
+      { id: "m_view", name: "Val", groupId: "g_viewers" },
+      { id: "m_other", name: "Sam", groupId: "g_viewers" },
+    ],
+    chats: {},
+    views: {},
+  };
+  const session = { deviceId: "dev-1" };
+
+  // Confirm the host's real reply for a deleted chat is the shared not-found/not-allowed message.
+  await assert.rejects(
+    () => host.dispatch(session, { m: "setChatFlags", a: ["c_deleted", { unread: false }] }),
+    (err: Error) => err.message === "That chat belongs to the owner or another member.",
+  );
+
+  const client = {
+    hasBatch: false,
+    markChatsRead: async () => { throw new Error("should not call batch"); },
+    setChatFlags: async (id: string, flags: { unread: false }) => {
+      await host.dispatch(session, { m: "setChatFlags", a: [id, flags] });
+    },
+  };
+
+  assert.deepEqual(await runMarkChatsRead(["c_vis", "c_deleted", "c_other"], client), { ok: true });
+  assert.deepEqual(host.store.data.team.views.m_view?.chats, { c_vis: { seen: 100 } });
+
+  // Other real host refusals (such as a bot removed from the member's role) still count as failures.
+  const failed = await runMarkChatsRead(["c_deleted", "c_hidden_own"], client);
+  assert.equal(failed.ok, false);
+  if (!failed.ok) {
+    assert.equal(failed.failed, 1);
+    assert.match(String(failed.error), /bot isn't available to your team role/i);
+  }
+});

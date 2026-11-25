@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { panelKeyFromInput } from "../desktop/frames.mjs";
+import { normalizePanelFrameId, panelKeyFromInput } from "../desktop/frames.mjs";
 import {
   PANEL_FULLSCREEN_SUFFIX,
   isPanelFullscreenShortcut,
@@ -122,5 +122,17 @@ describe("panelOpen helpers", () => {
     assert.equal(panelKeyFromInput({ type: "keyDown", key: "Escape", isComposing: true }), null);
     assert.equal(panelKeyFromInput({ type: "keyDown", key: "Escape", shift: true }), null);
     assert.equal(panelKeyFromInput({ type: "keyDown", key: "f", meta: true, shift: true, alt: true }), null);
+  });
+
+  it("validates reported opened-panel frame ids", () => {
+    const id = "9f8e7d6c-5b4a-4321-89ab-cdef01234567";
+    assert.equal(normalizePanelFrameId(id), id);
+    assert.equal(normalizePanelFrameId(null), null);
+    assert.equal(normalizePanelFrameId(undefined), null);
+    assert.equal(normalizePanelFrameId(true), null);
+    assert.equal(normalizePanelFrameId(""), null);
+    assert.equal(normalizePanelFrameId("frame-" + id), null);
+    assert.equal(normalizePanelFrameId(id.toUpperCase()), null);
+    assert.equal(normalizePanelFrameId("not-a-frame-id"), null);
   });
 });

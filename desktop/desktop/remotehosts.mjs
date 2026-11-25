@@ -29,6 +29,15 @@ export const REMOTE_HOSTS = "remote-hosts-v1";
 /** A client follows at most this many chats in detail (the link's own limit). */
 const WATCHED = 4;
 
+const MISSING_CHAT_RE = /^unknown chat\b(?!\s+flag\b)|\bchat\b.*\b(?:no longer (?:exists|available)|not found|gone)\b/i;
+const UNAVAILABLE_MEMBER_CHAT = "That chat belongs to the owner or another member.";
+
+/** Per-chat `setChatFlags` fallback errors that mean the chat is gone or not visible to this member. */
+export function isSkippedMarkReadError(message) {
+  const text = String(message ?? "").trim();
+  return text === UNAVAILABLE_MEMBER_CHAT || MISSING_CHAT_RE.test(text);
+}
+
 /** Calls about this window and this computer: they run here whichever host is shown. */
 export const HERE = new Set([
   "snapshot", "appInfo", "appUpdateStatus", "checkAppUpdate", "installAppUpdate", "setAppUpdateAuto", "openAppRelease",
@@ -707,7 +716,6 @@ export class RemoteHosts {
       const stillCurrent = () => this.client === client && this.current === hostId;
       const formatError = (error) => (error?.code === "offline" ? host.name + " can't be reached right now." : String(error?.message ?? error));
       const unknownBatch = /unknown method|not supported|not allowed|unsupported|not a function|can't be done from a phone/i;
-      const missingChat = /^unknown chat\b(?!\s+flag\b)|\bchat\b.*\b(?:no longer (?:exists|available)|not found|gone)\b/i;
       let useFallback = !(this.parts.meta?.capabilities ?? []).includes("mark-chats-read-v1");
       if (!useFallback) {
         for (let i = 0; i < ids.length; i += MAX_MARK_CHATS_READ) {
@@ -734,7 +742,7 @@ export class RemoteHosts {
         } catch (error) {
           if (!stillCurrent()) return null;
           const message = formatError(error);
-          if (missingChat.test(message)) continue;
+          if (isSkippedMarkReadError(message)) continue;
           errors.push(message);
         }
       }

@@ -14,7 +14,14 @@ function standIn(id: string, exports: unknown) {
   load.cache[full] = mod;
 }
 
-function loadProfileStore(storage: Map<string, string>, startAttempt: () => Promise<{ id: string; verifier: string; url: string; code: string }>) {
+function loadProfileStore(
+  storage: Map<string, string>,
+  startAttempt: () => Promise<{ id: string; verifier: string; url: string; code: string }>,
+  options?: {
+    finish?: () => Promise<{ token: string; profileId: string; deviceId: string; name: string; email: string } | null>;
+    onKeep?: (key: string, value: string, write: () => void) => Promise<void>;
+  },
+) {
   standIn("react-native", {
     AppState: { currentState: "background", addEventListener: () => ({ remove() {} }) },
   });
@@ -22,7 +29,10 @@ function loadProfileStore(storage: Map<string, string>, startAttempt: () => Prom
     addNetworkStateListener: () => ({ remove() {} }),
   });
   standIn("../src/state/keep", {
-    keep: async (key: string, value: string) => { storage.set(key, value); },
+    keep: async (key: string, value: string) => {
+      if (options?.onKeep) await options.onKeep(key, value, () => { storage.set(key, value); });
+      else storage.set(key, value);
+    },
     readKept: async (key: string) => storage.get(key) ?? null,
     forget: async (key: string) => { storage.delete(key); },
   });
@@ -45,7 +55,7 @@ function loadProfileStore(storage: Map<string, string>, startAttempt: () => Prom
     },
     profileApi: {
       start: startAttempt,
-      finish: async () => null,
+      finish: options?.finish ?? (async () => null),
       home: async () => ({ profile: { id: "p", name: "Alex", email: "a@example.com" }, hosts: [], devices: [], pending: [] }),
     },
   });
@@ -129,6 +139,47 @@ test("continuing without a profile cancels an in-flight verification start", asy
 
   assert.equal(store.useProfile.getState().attempt, null);
   assert.equal(store.useProfile.getState().busy, false);
+  assert.equal(storage.get("botkins.profile.choice.v1"), "dismissed");
+  assert.equal(storage.has("botkins.profile.attempt.v1"), false);
+});
+
+test("continuing without a profile rolls back a finish that is already saving its session", async () => {
+  const storage = new Map<string, string>();
+  const pending = { id: "c".repeat(32), verifier: "verifier-secret", url: "https://profile.botkins.app/#" + "c".repeat(32), code: "246810" };
+  const session = { token: "tok-1", profileId: "prof-1", deviceId: "dev-1", name: "Alex", email: "a@example.com" };
+  let sessionWriteStarted!: () => void;
+  const writingSession = new Promise<void>((resolve) => { sessionWriteStarted = resolve; });
+  let releaseSessionWrite!: () => void;
+  const pauseSessionWrite = new Promise<void>((resolve) => { releaseSessionWrite = resolve; });
+
+  const store = loadProfileStore(storage, async () => pending, {
+    finish: async () => session,
+    onKeep: async (key, _value, write) => {
+      if (key === "botkins.profile.session.v1") {
+        write();
+        sessionWriteStarted();
+        await pauseSessionWrite;
+        return;
+      }
+      write();
+    },
+  });
+
+  await store.loadProfile(0);
+  await store.beginProfile("Test Phone");
+  const finishing = store.finishPending();
+  await writingSession;
+
+  const dismissing = store.dismissPrompt();
+  releaseSessionWrite();
+  const [finished] = await Promise.all([finishing, dismissing]);
+
+  assert.equal(finished, undefined);
+  assert.equal(store.useProfile.getState().session, null);
+  assert.equal(store.useProfile.getState().attempt, null);
+  assert.equal(store.useProfile.getState().prompt, null);
+  assert.equal(store.useProfile.getState().busy, false);
+  assert.equal(storage.has("botkins.profile.session.v1"), false);
   assert.equal(storage.get("botkins.profile.choice.v1"), "dismissed");
   assert.equal(storage.has("botkins.profile.attempt.v1"), false);
 });

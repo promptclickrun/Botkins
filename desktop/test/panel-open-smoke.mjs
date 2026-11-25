@@ -70,7 +70,10 @@ const html = `<!doctype html>
 
 writeFileSync(join(data, "frames", frameId + ".html"), html);
 writeFileSync(join(data, "frames", frameId + ".json"), "null");
-writeFileSync(join(data, "frames", frameId2 + ".html"), "<!doctype html><body style='font:14px system-ui;margin:16px'>All launch milestones are green.</body>");
+writeFileSync(
+  join(data, "frames", frameId2 + ".html"),
+  `<!doctype html><body style='font:14px system-ui;margin:16px'>All launch milestones are green. <button type="button" id="focus-other">Focus summary</button><script>window.__otherKeys={toggle:0};addEventListener("keydown",(e)=>{if((e.metaKey||e.ctrlKey)&&e.shiftKey&&e.key.toLowerCase()==="f")window.__otherKeys.toggle++;});</script></body>`,
+);
 writeFileSync(join(data, "frames", frameId2 + ".json"), "null");
 
 const bots = [
@@ -388,6 +391,53 @@ try {
   await expect(dialog).not.toHaveClass(/fullscreen/);
   await dialog.getByRole("button", { name: "Close" }).click();
   await expect(dialog).toHaveCount(0);
+
+  // 10. Shortcut is bound to the open panel's frame id, not other custom frames.
+  // Even if main still holds `frameId` as open when focus is in `frameId2`, neither
+  // `before-input-event` nor `frame-panel-key` swallows or forwards Cmd/Ctrl+Shift+F.
+  const otherIframe = win.locator(`iframe[src="botkins-app://frame-${frameId2}/"]`).first();
+  await expect(otherIframe).toBeVisible();
+  const otherBtn = win.frameLocator(`iframe[src="botkins-app://frame-${frameId2}/"]`).first().locator("#focus-other");
+  await expect(otherBtn).toBeVisible();
+  await otherBtn.click();
+  const otherFrame = await (await otherIframe.elementHandle())?.contentFrame();
+  assert.ok(otherFrame, "other custom frame should be present");
+  await otherFrame.evaluate(() => { window.__otherKeys = { toggle: 0 }; });
+  await win.evaluate((staleFrameId) => {
+    window.__strayPanelKeys = [];
+    window.__offStrayPanelKeys = window.botkins.onPanelKey?.((data) => window.__strayPanelKeys.push(data));
+    window.botkins.setPanelOpen?.(staleFrameId);
+  }, frameId);
+  try {
+    await app.evaluate(({ BrowserWindow }) => {
+      const w = BrowserWindow.getAllWindows()[0];
+      const prevented = [];
+      const listener = (event, input) => {
+        if (input.type === "keyDown" && String(input.key).toLowerCase() === "f") {
+          prevented.push(event.defaultPrevented);
+        }
+      };
+      w.webContents.on("before-input-event", listener);
+      w.__stopPanelKeyProbe = () => {
+        w.webContents.removeListener("before-input-event", listener);
+        return prevented;
+      };
+    });
+    await sendInputKey("F", [inputMod, "shift"]);
+    const prevented = await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].__stopPanelKeyProbe());
+    assert.deepEqual(prevented, [false], "before-input-event must not swallow Cmd/Ctrl+Shift+F in another custom frame");
+
+    await win.keyboard.press(`${mod}+Shift+F`);
+    await expect.poll(() => otherFrame.evaluate(() => window.__otherKeys.toggle)).toBe(1);
+    await win.waitForTimeout(150);
+    assert.deepEqual(await win.evaluate(() => window.__strayPanelKeys), [], "main must not forward panel-key from a different custom frame");
+    await expect(dialog).toHaveCount(0);
+  } finally {
+    await win.evaluate(() => {
+      window.__offStrayPanelKeys?.();
+      window.botkins.setPanelOpen?.(null);
+    });
+  }
 
   assert.deepEqual(errors, [], "Unexpected renderer errors: " + errors.join("; "));
   console.log("Panel open smoke passed.");

@@ -834,8 +834,8 @@ declare global {
       onFrameGesture?(fn: (data: { frame: string }) => void): () => void;
       /** Real key press caught in the main process while focus is in a subframe ("toggle" or "escape"). */
       onPanelKey?(fn: (data: { key: "toggle" | "escape" }) => void): () => void;
-      /** Tells the main window whether an opened space panel is currently open. */
-      setPanelOpen?(open: boolean): void;
+      /** Tells the main window the opened space panel's active frame id, or null when none is open. */
+      setPanelOpen?(frameId: string | null): void;
       boardAct(id: string, action: "read" | "unread" | "clear" | "done" | "reopen" | "yes" | "goal" | "notToday" | "up" | "down" | "delete", value?: string): Promise<string | undefined>;
       // Chat canvas
       chooseFiles(): Promise<Attachment[]>;
