@@ -100,30 +100,23 @@ function paced() {
   return { commits, frames, timers, clock, batcher };
 }
 
-test("run summaries alone reach the store once a second: the first at once, the rest together", () => {
-  const { commits, timers, clock, batcher } = paced();
+test("run summaries alone reach the store once per second, with the first at once", (t) => {
+  t.mock.timers.enable({ apis: ["Date", "setTimeout"], now: 10_000 });
+  const commits: Record<string, unknown>[] = [];
+  const batcher = createPartsBatcher((parts) => commits.push(parts));
   assert.equal(isSummaryOnlyParts({ runs: [] }), true);
   assert.equal(isSummaryOnlyParts({ runs: [], live: {} }), false);
-
   batcher.push({ runs: [{ id: "r", stepCount: 1 }] });
-  assert.equal(commits.length, 1, "the first summary after a quiet spell goes at once");
+  assert.equal(commits.length, 1);
 
-  // Thirty more steps in the same second: one bot's turn, or ten bots' steps through the relay.
   for (let step = 2; step <= 31; step++) {
-    clock.now += 30;
+    t.mock.timers.tick(30);
     batcher.push({ runs: [{ id: "r", stepCount: step }] });
   }
-  assert.equal(commits.length, 1, "the steps that follow wait");
-  assert.equal(timers.filter((timer) => timer.live).length, 1, "on one timer");
-  assert.equal(timers[0]!.ms, SUMMARY_FLUSH_MS - 30, "that ends with the spell the first one started");
-
-  clock.now = 10_000 + SUMMARY_FLUSH_MS;
-  timers[0]!.fn();
-  assert.equal(commits.length, 2);
-  assert.deepEqual(commits[1], { runs: [{ id: "r", stepCount: 31 }] }, "the newest summaries are the ones kept");
-
-  // A second later nothing is waiting, so the next one goes at once again.
-  clock.now += SUMMARY_FLUSH_MS;
+  assert.equal(commits.length, 1);
+  t.mock.timers.tick(SUMMARY_FLUSH_MS - 30 * 30);
+  assert.deepEqual(commits[1], { runs: [{ id: "r", stepCount: 31 }] });
+  t.mock.timers.tick(SUMMARY_FLUSH_MS);
   batcher.push({ runs: [{ id: "r", stepCount: 32 }] });
   assert.equal(commits.length, 3);
 });

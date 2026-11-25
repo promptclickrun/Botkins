@@ -34,13 +34,24 @@ test("one run changing draws one Activity row and hidden working rows stop pulsi
   draws = 0;
   await act(async () => applyParts({ runs: runs.map((row, i) => i === 0 ? { ...row, summary: "2 steps", stepCount: 2 } : row) }));
   t.diagnostic(draws + " Activity rows drawn for one changed run");
-  assert.equal(draws, 1);
+  const visibleDraws = draws;
   await act(async () => useVisibility.setState({ shown: false }));
-  assert.equal(active(), 0);
+  const hiddenPulses = active();
+  const blurDraws = draws - visibleDraws;
+  draws = 0;
+  for (let step = 3; step <= 102; step++) {
+    await act(async () => applyParts({ runs: runs.map((row, i) => i < 3 ? { ...row, summary: step + " steps", stepCount: step } : row) }));
+  }
+  t.diagnostic(JSON.stringify({ visibleDraws, blurDraws, hiddenPulses, hiddenDraws: draws }));
+  assert.equal(visibleDraws, 1);
+  assert.equal(hiddenPulses, 0);
+  assert.equal(blurDraws, 3, "only working rows need to stop pulsing");
+  assert.equal(draws, 0, "progress while covered should not commit Activity rows");
   await act(async () => useVisibility.setState({ shown: true, active: false }));
   assert.equal(active(), 0);
   await act(async () => useVisibility.setState({ active: true }));
   assert.equal(active(), 3);
+  assert.equal(screen.root.root.findAllByType("Pulse").filter((node) => node.props.text === "102 steps").length, 3);
 });
 
 test("ten island clock ticks update ten time labels without rereading the turn or its collapsed list", async (t) => {

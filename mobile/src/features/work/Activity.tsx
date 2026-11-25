@@ -49,7 +49,7 @@ const RunRow = memo(function RunRow({ run, name, when, chip, pulse }: RunRowProp
             {work.kinds.length > 0 && <IconStack kinds={work.kinds} ringColor={colors.surface} size={11} badgeSize={19} />}
             {!!work.summary && (
               <ShimmerLabel
-                active={pulse && run.status === "Working"}
+                active={pulse}
                 text={work.summary}
                 variant="footnote"
                 color={run.status === "Needs you" ? "danger" : "ink2"}
@@ -69,7 +69,10 @@ const RunRow = memo(function RunRow({ run, name, when, chip, pulse }: RunRowProp
 
 /** The latest 40 runs; a tap opens the run's chat. */
 export function ActivityList() {
-  const runs = usePart("runs") ?? [];
+  const inView = useAppActive(useOnShow());
+  // Keep the rows in place for navigation. A covered list only needs the current runs when it comes back.
+  const covered = useMemo(() => inView ? undefined : useApp.getState().parts.runs, [inView]);
+  const runs = useApp((state) => inView ? state.parts.runs : covered) ?? [];
   const meta = usePart("meta");
   const team = usePart("team");
   const phones = usePart("phones");
@@ -78,8 +81,6 @@ export function ActivityList() {
   const allBots = useBots();
   const bots = useMemo(() => new Map<string, Bot>(allBots.map((bot) => [bot.id, bot])), [allBots]);
   const chatBot = useMemo(() => new Map(chats.map((chat) => [chat.id, chat.botId])), [chats]);
-  // A mounted tab can be covered while its bots keep working.
-  const inView = useAppActive(useOnShow());
   if (runs.length === 0)
     return (
       <T variant="callout" color="muted" center style={{ paddingVertical: space.huge }}>
@@ -91,7 +92,7 @@ export function ActivityList() {
       {runs.slice(0, 40).map((run) => {
         const botId = chatBot.get(run.chatId);
         const chip = run.notifyTargets ? runNotifyChip(run.notifyTargets, buildNotifyTargetView({ meta, team, phones, settings, botId: botId ?? null })) : null;
-        return <RunRow key={run.id} run={run} name={botId ? bots.get(botId)?.name : undefined} when={ago(run.time)} chip={chip} pulse={inView} />;
+        return <RunRow key={run.id} run={run} name={botId ? bots.get(botId)?.name : undefined} when={ago(run.time)} chip={chip} pulse={inView && run.status === "Working"} />;
       })}
     </Group>
   );
