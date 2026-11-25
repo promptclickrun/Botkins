@@ -88,6 +88,7 @@ export class ProfileManager {
     this.pendingBindings = [];
     this.boundHosts = {};
     this.binding = false;
+    this.connecting = new Map();
     this.generation = 0;
     this.load();
   }
@@ -236,6 +237,7 @@ export class ProfileManager {
 
   invalidate() {
     this.generation++;
+    this.connecting.clear();
     this.remoteHosts()?.dropProfileBound?.();
     this.session = null;
     this.directory = null;
@@ -604,22 +606,32 @@ export class ProfileManager {
     }
   }
 
-  async connect(serverId) {
+  connect(serverId) {
+    const id = String(serverId);
     const token = this.token();
     const epoch = this.generation;
-    const host = this.directory?.hosts?.find((entry) => entry.serverId === String(serverId));
+    if (!token) return Promise.reject(new Error("Sign in to use profile computers."));
+    const existing = this.connecting.get(id);
+    if (existing && existing.epoch === epoch && existing.token === token) return existing.promise;
+    const host = this.directory?.hosts?.find((entry) => entry.serverId === id);
     const remote = this.remoteHosts();
-    if (!token) throw new Error("Sign in to use profile computers.");
-    if (!host) throw new Error("That profile computer is no longer listed. Refresh the profile.");
-    if (!remote || typeof remote.adoptPairing !== "function") throw new Error("Connecting to another computer is not available on this host.");
-    if (typeof this.lib?.profileConnect !== "function") throw new Error("This Botkins build has no profile computer connection yet.");
-    const pairing = await this.lib.profileConnect(remote.transport(), host, this.device ?? {}, (publicKey) => {
+    if (!host) return Promise.reject(new Error("That profile computer is no longer listed. Refresh the profile."));
+    if (!remote || typeof remote.adoptPairing !== "function") return Promise.reject(new Error("Connecting to another computer is not available on this host."));
+    if (typeof this.lib?.profileConnect !== "function") return Promise.reject(new Error("This Botkins build has no profile computer connection yet."));
+    const entry = { epoch, token, promise: null };
+    entry.promise = (async () => {
+      const pairing = await this.lib.profileConnect(remote.transport(), host, this.device ?? {}, (publicKey) => {
+        if (epoch !== this.generation || token !== this.token()) throw new Error("The profile session ended while connecting.");
+        return this.profileApi().proof(token, "connect", host.serverId, host.serverKey, publicKey);
+      });
       if (epoch !== this.generation || token !== this.token()) throw new Error("The profile session ended while connecting.");
-      return this.profileApi().proof(token, "connect", host.serverId, host.serverKey, publicKey);
+      const result = remote.adoptPairing(pairing, { name: host.name, member: host.member });
+      this.changed();
+      return result;
+    })().finally(() => {
+      if (this.connecting.get(id) === entry) this.connecting.delete(id);
     });
-    if (epoch !== this.generation || token !== this.token()) throw new Error("The profile session ended while connecting.");
-    const result = remote.adoptPairing(pairing, { name: host.name, member: host.member });
-    this.changed();
-    return result;
+    this.connecting.set(id, entry);
+    return entry.promise;
   }
 }
