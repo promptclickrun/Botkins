@@ -3,7 +3,7 @@
 // Manages:
 // 1. Botkins Profile sign-in (profile.botkins.app passkey/code flow) and direct Link pairing fallback.
 // 2. Multi-host connections (connect to one or more of your Botkins hosts, over LAN/Tailscale or relay).
-// 3. Dispatching incoming `browser_*` asks to BrowserController (chrome.debugger) and returning results.
+// 3. Dispatching incoming `browser_*` asks to BrowserController (DOM-first via chrome.scripting, with ephemeral chrome.debugger fallback) and returning results.
 // 4. Lightweight MV3 alarm watchdog (1 min) to restore connections if Chrome ever restarts the worker.
 import {
   BrowserHostClient,
@@ -44,7 +44,7 @@ function makeBrowserState(settings) {
     mode: settings.mode === "group" ? "group" : "all",
     browser: detectBrowserName(),
     profile: String(settings.profileLabel || "").trim(),
-    version: chrome.runtime?.getManifest?.().version || "0.1.0",
+    version: chrome.runtime?.getManifest?.().version || "0.2.0",
   };
 }
 

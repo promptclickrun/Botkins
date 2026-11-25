@@ -5,9 +5,11 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const distFile = join(root, "dist/background.js");
-if (!existsSync(distFile)) {
-  throw new Error("Run `npm run build` in extension/ first.");
+const distFiles = [join(root, "dist/background.js"), join(root, "dist/dom-driver.js")];
+for (const file of distFiles) {
+  if (!existsSync(file)) {
+    throw new Error(`Missing ${file}. Run \`npm run build\` in extension/ first.`);
+  }
 }
 const outDir = join(root, "release");
 mkdirSync(outDir, { recursive: true });

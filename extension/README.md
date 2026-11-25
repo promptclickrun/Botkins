@@ -4,7 +4,7 @@ Manifest V3 Chromium extension that lets your Botkins bots control the browser p
 
 ## How it works
 
-- **No blocking remote-debugging dialog:** drives tabs via `chrome.debugger`, attaching lazily on tool calls and detaching after 20 seconds of idle so the debugging banner disappears when bots are not browsing.
+- **DOM-first, password-manager safe:** drives tabs via `chrome.scripting.executeScript` and captures viewport screenshots with `chrome.tabs.captureVisibleTab` — no debugging banner and no failure on pages where Proton Pass, 1Password, Bitwarden, or Grammarly inject `chrome-extension://` iframes. Uses ephemeral `chrome.debugger` CDP sessions only as a fallback (full-page screenshots, CSP-blocked `eval`, file uploads / trusted input, or raw `browser_cdp`) and detaches immediately after each call.
 - **Botkins Profile sign-in (or direct pairing):** sign in once via `profile.botkins.app` to see all of your Botkins hosts, then toggle which hosts can control this browser profile. Or paste a `botkins://pair?...` link from **Settings › Phone**.
 - **Multi-browser support:** label each browser profile in Settings (e.g. `Work Chrome`, `Mac Studio Edge`). Bots can list connected browsers with `browser_list` and target a specific one with the `browser` argument.
 - **OpenClaw / Claude tab model:** defaults to **All tabs** (every ordinary tab except incognito, internal `chrome://`/`edge://` pages, and per-tab paused tabs) with one-click switch to **Botkins group** (orange tab group).
