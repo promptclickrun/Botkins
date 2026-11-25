@@ -8,7 +8,7 @@ import type { ProfileHost } from "@/link/profile";
 import { deviceName } from "@/state/link";
 import { showToast, useApp } from "@/state/store";
 import { useProfile, approveDevice, beginProfile, deleteProfileAccount, dismissPrompt, finishPending, profileDeviceLabel, refreshProfile, removeProfileHost, restartProfileAttempt, revokeDevice, selectProfileHost, signOutProfile, syncLocalPairings, updateProfile } from "@/state/profile";
-import { pendingDeviceLabel, profileCode, profileHostIsLocal, profileHostSubtitle, PROFILE_BROWSER_COPY, PROFILE_MIGRATION_COPY, PROFILE_OPTIONAL_COPY } from "./profileLogic";
+import { pendingDeviceLabel, profileCode, profileCodeLabel, profileHostIsLocal, profileHostSubtitle, PROFILE_BROWSER_COPY, PROFILE_MIGRATION_COPY, PROFILE_OPTIONAL_COPY } from "./profileLogic";
 import { Badge, Button, EmptyState, Group, IconTile, Label, Loading, Page, Row, space, T, useTextPrompt, useTheme } from "@/ui";
 
 function close() {
@@ -47,7 +47,7 @@ export default function Profile() {
       }
     : start;
   const noThanks = () => {
-    dismissPrompt();
+    void dismissPrompt();
     close();
   };
   const refreshAll = () => void syncLocalPairings();
@@ -68,28 +68,28 @@ export default function Profile() {
         {attempt ? (
           <Group>
             <View style={{ padding: space.lg, gap: space.sm }}>
-              <T variant="headline">Finish in your browser</T>
+              <T variant="headline">Verify in your browser</T>
               <T variant="subhead" color="muted">{PROFILE_BROWSER_COPY}</T>
-              <T variant="display" center selectable accessibilityLabel={"Profile code " + profileCode(attempt.code)} style={{ letterSpacing: 4, paddingVertical: space.md }}>
+              <T variant="display" center selectable accessibilityLabel={profileCodeLabel(attempt.code)} style={{ letterSpacing: 6, fontVariant: ["tabular-nums"], paddingVertical: space.md }}>
                 {profileCode(attempt.code)}
               </T>
               <T variant="footnote" color="muted" center>
                 This code matches the request in the browser.
               </T>
             </View>
-            <Row leading={<IconTile icon={ExternalLink} color={colors.accent} />} title="Continue in the secure browser" subtitle="Your passkey and email stay in the system browser" chevron disabled={busy} onPress={() => void browser()} />
-            <Row leading={<IconTile icon={Copy} color={colors.ink2} />} title="Copy code" chevron disabled={busy} onPress={() => void Clipboard.setStringAsync(attempt.code).then(() => showToast("Code copied", "success"))} />
-            <Row leading={<IconTile icon={Check} color={colors.success} />} title="I finished in the browser" chevron disabled={busy} onPress={() => void finishPending()} />
+            <Row leading={<IconTile icon={ExternalLink} color={colors.accent} />} title="Open profile.botkins.app" subtitle="Your passkey and email stay in the system browser" chevron disabled={busy} onPress={() => void browser()} />
+            <Row leading={<IconTile icon={Copy} color={colors.ink2} />} title="Copy" chevron disabled={busy} onPress={() => void Clipboard.setStringAsync(attempt.code).then(() => showToast("Code copied", "success"))} />
+            <Row leading={<IconTile icon={Check} color={colors.success} />} title="Finish" subtitle="Return here once you finish in the browser" chevron disabled={busy} onPress={() => void finishPending()} />
             <Row leading={<IconTile icon={KeyRound} color={colors.ink2} />} title="Start over" subtitle="Use this if the browser request expired" chevron disabled={busy} onPress={() => void restartProfileAttempt()} />
           </Group>
         ) : (
           <Group>
-            <Row leading={<IconTile icon={ShieldCheck} color={colors.success} />} title="Use a profile" subtitle="Create one or sign in, with a passkey" chevron disabled={busy} onPress={() => void browser()} />
-            <Row leading={<IconTile icon={Monitor} color={colors.ink2} />} title="Keep using this phone only" subtitle="Your local pairings stay here and are not changed" chevron onPress={noThanks} />
+            <Row leading={<IconTile icon={ShieldCheck} color={colors.success} />} title="Set up a profile" subtitle="Create one or sign in, with a passkey" chevron disabled={busy} onPress={() => void browser()} />
+            <Row leading={<IconTile icon={Monitor} color={colors.ink2} />} title="Continue without a profile" subtitle="Your local pairings stay here and are not changed" chevron onPress={noThanks} />
           </Group>
         )}
         {!!error && <T variant="footnote" color="danger">{error}</T>}
-        {!!attempt && <Button title="Not now" variant="ghost" wide onPress={noThanks} />}
+        {!!attempt && <Button title="Continue without a profile" variant="ghost" wide onPress={noThanks} />}
       </Page>
     );
   }

@@ -898,20 +898,50 @@ button.space-tag:hover {
 
 /* An app panel, opened: the same panel with the window's room, and the ask bar under it. */
 .space-opened {
-  width: min(960px, calc(100vw - 48px));
+  width: min(1160px, calc(100vw - 48px));
+  max-width: calc(100vw - 48px);
   max-height: calc(100vh - 48px);
   padding: 20px 20px 16px;
+  overflow: hidden;
+  transition: width 160ms ease, height 160ms ease, border-radius 160ms ease, padding 160ms ease;
 }
 .space-opened[open] {
-  display: grid;
-  grid-template-rows: minmax(0, 1fr) auto;
+  display: flex;
+  flex-direction: column;
   gap: 14px;
 }
-.space-opened-close {
+.space-opened.fullscreen {
+  width: 100vw;
+  height: 100vh;
+  max-width: none;
+  max-height: none;
+  margin: 0;
+  inset: 0;
+  border-radius: 0;
+  box-shadow: none;
+  padding: 20px 24px 16px;
+}
+.space-opened.fullscreen::backdrop {
+  background: var(--surface);
+}
+@media (prefers-reduced-motion: reduce) {
+  .space-opened {
+    transition: none;
+  }
+}
+.space-opened-actions {
   position: absolute;
   top: 14px;
   right: 14px;
   z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.space-opened.fullscreen .space-opened-actions {
+  right: 20px;
+}
+.space-opened-actions button {
   display: grid;
   place-items: center;
   width: 30px;
@@ -919,18 +949,68 @@ button.space-tag:hover {
   border-radius: 50%;
   color: var(--muted);
 }
+.space-opened-actions button:is(:hover, :focus-visible) {
+  background: var(--hover);
+  color: var(--ink);
+}
 .space-opened-panel {
+  flex: 1;
   min-height: 0;
   overflow: auto;
+  padding-bottom: 2px;
 }
 .space-opened-panel > .live-panel.today-panel {
   margin: 0;
   box-shadow: none;
   background: none;
-  padding: 0 36px 0 0;
+  padding: 0;
+}
+.space-opened-panel > .live-panel.today-panel > .panel-top {
+  padding-right: 72px;
+}
+.space-opened .live-panel .panel-blocks {
+  max-height: none;
+  overflow: visible;
+}
+.space-opened .live-panel .html-frame {
+  --frame-cap: max(320px, calc(100vh - 290px));
+}
+.space-opened.fullscreen .space-opened-panel {
+  display: flex;
+  flex-direction: column;
+}
+.space-opened.fullscreen .space-opened-panel > .live-panel.today-panel {
+  flex: 1;
+  min-height: 0;
+}
+.space-opened.fullscreen .live-panel .panel-blocks {
+  flex: 1;
+  min-height: 0;
+  max-height: none;
+  display: flex;
+  flex-direction: column;
+  overflow: auto;
+}
+.space-opened.fullscreen .live-panel .html-frame {
+  flex: 1;
+  min-height: 240px;
+  display: flex;
+  flex-direction: column;
+  --frame-cap: none;
+}
+.space-opened.fullscreen .live-panel .html-frame iframe,
+.space-opened.fullscreen .live-panel .html-frame.loading iframe {
+  /* HtmlFrame sizes its frame to the page; full screen gives it the whole window. */
+  flex: 1;
+  height: 100% !important;
+  max-height: none;
+}
+.space-opened.fullscreen .live-panel .html-frame.failed {
+  flex: none;
 }
 /* A panel's asks: what its bot says is worth asking next. A click fills the bar under them. */
 .space-asks {
+  flex-shrink: 0;
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
@@ -954,6 +1034,7 @@ button.space-tag:hover {
 }
 /* In the opened view the ask bar is part of the sheet, not floating over a page. */
 .space-ask.space-opened-ask {
+  flex-shrink: 0;
   position: static;
   transform: none;
   width: auto;

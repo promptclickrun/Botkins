@@ -168,6 +168,24 @@ export function chatsApi({ workspace, handlers, bot }) {
       await handlers.setChatFlags(found.id, patch);
       return view(chat(found.id));
     },
+    /** Marks one or more chats as read in one save: explicit chat refs, `--bot`, or `--all`. */
+    async "chats.read"([refs, options = {}]) {
+      const list = Array.isArray(refs) ? refs : [];
+      const { bot: botRef, all } = options && typeof options === "object" && !Array.isArray(options) ? options : {};
+      const modes = Number(list.length > 0) + Number(botRef !== undefined) + Number(all === true);
+      if (modes !== 1) throw new ControlError("Give one or more chats, --bot <bot>, or --all.", "BAD_ARGUMENT");
+      let ids;
+      if (list.length) {
+        ids = [...new Set(list.map((ref) => chat(ref).id))];
+      } else if (botRef !== undefined) {
+        const who = bot(botRef);
+        ids = state().chats.filter((entry) => !entry.archived && !entry.panelId && entry.unread && entry.botId === who.id).map((entry) => entry.id);
+      } else {
+        ids = state().chats.filter((entry) => !entry.archived && entry.unread).map((entry) => entry.id);
+      }
+      if (ids.length) await handlers.markChatsRead(ids);
+      return { ids, count: ids.length };
+    },
     /**
      * What `chats.project` would do, and nothing of it done: the chat, the project it would be in (with its folder) and the mode
      * that is asked for. The command shows this before it asks for the yes that yolo needs.

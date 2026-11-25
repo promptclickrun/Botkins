@@ -472,6 +472,20 @@ export const api = new Proxy({} as Api, {
   },
 });
 
+/** Binds calls to the computer active right now; if the person switches computers mid-flow, `isCurrent()` turns false and further calls are ignored. */
+export function boundApi(): { api: Api; isCurrent: () => boolean } {
+  const host = client;
+  const isCurrent = () => client === host;
+  const bound = new Proxy({} as Api, {
+    get: (_target, method: string) => (...args: unknown[]) => {
+      if (!host) return Promise.reject(new LinkError("offline", "Pair with your computer first."));
+      if (client !== host) return Promise.resolve(undefined);
+      return host.call(method, ...args);
+    },
+  });
+  return { api: bound, isCurrent };
+}
+
 /** The frame request belongs to the viewer and the computer on which it opened. */
 export async function readScreenFrame(computer: string, options: Parameters<Calls["link.screen.frame"]>[0], signal: AbortSignal) {
   if (!client || useApp.getState().pairing?.serverId !== computer) throw new LinkError("offline", "The computer changed.");

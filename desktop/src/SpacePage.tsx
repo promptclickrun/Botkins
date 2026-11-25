@@ -9,6 +9,7 @@ import {
   LayoutList,
   Lightbulb,
   Lock,
+  MailOpen,
   Maximize2,
   MessageSquare,
   Pencil,
@@ -33,6 +34,7 @@ import OpenedPanel from "./SpacePanelOpen";
 import { usePanelDrag, usePanelResize, useSpaceDrag } from "./SpaceArrange";
 import { CadencePicker, ZoneInput, cronFromCadence } from "./Routines";
 import { memberTeam, teamCan } from "./teamAccess";
+import { changedSpaces } from "./unread";
 import {
   accessTag,
   arrangePin,
@@ -109,6 +111,7 @@ export function SidebarSpaces({
   const dialogs = useAsk();
   const menu = useMenu();
   const spaces = state.spaces ?? [];
+  const unreadSpaces = changedSpaces(spaces);
   // Pinned spaces are dragged up and down; a line shows where one lands.
   const drag = useSpaceDrag(spaces, fail);
   async function create() {
@@ -116,15 +119,26 @@ export function SidebarSpaces({
     if (!name) return;
     openSpace(await api["spaces.create"]({ name }));
   }
+  function markAllSpacesRead() {
+    if (unreadSpaces.length === 0) return;
+    void Promise.all(unreadSpaces.map((s) => api["link.spaces.seen"](s.id))).catch(fail);
+  }
   return (
     <>
       <div className="sidebarlabel">
         <span className="nav-label">Spaces</span>
-        {teamCan(state, "today", "create") && (
-          <button aria-label="New space…" title={collapsed ? "New space…" : undefined} onClick={() => void create().catch(fail)}>
-            <Plus size={15} />
-          </button>
-        )}
+        <span className="sidebarlabel-actions">
+          {!collapsed && unreadSpaces.length > 0 && (
+            <button aria-label="Mark all spaces as read" title="Mark all as read" onClick={markAllSpacesRead}>
+              <MailOpen size={15} />
+            </button>
+          )}
+          {teamCan(state, "today", "create") && (
+            <button aria-label="New space…" title={collapsed ? "New space…" : undefined} onClick={() => void create().catch(fail)}>
+              <Plus size={15} />
+            </button>
+          )}
+        </span>
       </div>
       <nav aria-label="Spaces" className="spacenav">
         {drag.shown.map((s) => {
@@ -139,6 +153,9 @@ export function SidebarSpaces({
               onClick={() => openSpace(s.id)}
               onContextMenu={(e) =>
                 menu.show(e, name, [
+                  ...(s.changed > 0
+                    ? [{ label: "Mark as read", icon: MailOpen, run: () => void api["link.spaces.seen"](s.id).catch(fail) }, "separator" as const]
+                    : []),
                   ...moveItems(spaces, s.id, drag.send),
                   "separator",
                   { label: "Unpin", icon: PinOff, run: () => void setPinned(spaces, s.id, false).catch(fail) },
@@ -177,6 +194,9 @@ export function AllSpaces({ state, openSpace, fail }: { state: State; openSpace:
           {items.map((s) => {
             const name = spaceName(s);
             const items = (): MenuItem[] => [
+              ...(s.changed > 0
+                ? [{ label: "Mark as read", icon: MailOpen, run: () => void api["link.spaces.seen"](s.id).catch(fail) }, "separator" as const]
+                : []),
               ...(s.pinned
                 ? [...moveItems(spaces, s.id, (next) => next && void api["link.spaces.arrange"](next).catch(fail)), "separator" as const]
                 : []),
@@ -400,8 +420,10 @@ export function SpacePage({
   const [hidden, showHidden] = useState(false);
   const [text, setText] = useState("");
   const [asking, setAsking] = useState(false);
-  /** The app panel that is opened large, or "". */
-  const [openedId, setOpenedId] = useState("");
+  /** The app panel that is opened large, or null. */
+  const [openedState, setOpenedState] = useState<{ id: string; fullscreen?: boolean } | null>(null);
+  const openPanel = (id: string, fullscreen?: boolean) => setOpenedState({ id, fullscreen });
+  const closePanel = () => setOpenedState(null);
   /** The panel the ask is about ("Ask Pip to change it"), or "" for the whole space. */
   const [aboutPanel, setAboutPanel] = useState("");
   useEffect(() => {
@@ -425,8 +447,21 @@ export function SpacePage({
     const panel = panels.find((p) => p.id === shown.id);
     if (!panel) return null;
     const targets = arrange ? moveTargets(state.spaces ?? [], space, panel, me) : [];
+    const isApp = panel.blocks.some((b) => b.type === "html");
     return (
       <>
+        {isApp && (
+          <button
+            onClick={() => {
+              close();
+              openedPanel(panel);
+              openPanel(panel.id, true);
+            }}
+          >
+            <Maximize2 size={16} />
+            Open full screen
+          </button>
+        )}
         {targets.length > 0 && (
           <label>
             Space
@@ -579,7 +614,7 @@ export function SpacePage({
     }
   }
 
-  const opened = panels.find((p) => p.id === openedId);
+  const opened = openedState ? panels.find((p) => p.id === openedState.id) : undefined;
   let body: ReactNode = null;
   if (content && !shown.length && !board && !hidden)
     body = addAllowed ? (
@@ -619,7 +654,7 @@ export function SpacePage({
               }
               tools={
                 p.blocks.some((b) => b.type === "html") && (
-                  <button aria-label={"Open " + p.title} title="Open" onClick={() => setOpenedId(p.id)}>
+                  <button aria-label={"Open " + p.title} title="Open" onClick={() => openPanel(p.id)}>
                     <Maximize2 size={16} />
                   </button>
                 )
@@ -744,14 +779,17 @@ export function SpacePage({
       )}
       {opened && (
         <OpenedPanel
+          key={opened.id}
           title={opened.title}
           bot={askAllowed ? state.bots.find((b) => b.id === opened.botId) : undefined}
           asks={asksOf(opened)}
-          close={() => setOpenedId("")}
+          frameIds={opened.blocks.flatMap((b) => (b.type === "html" ? [b.frame] : []))}
+          initialFullscreen={openedState?.fullscreen}
+          close={closePanel}
           ask={async (said) => {
             try {
               const { chatId } = await api["spaces.ask"]({ spaceId: space.id, botId: opened.botId, text: said, panelId: opened.id });
-              setOpenedId("");
+              closePanel();
               openNew(chatId);
             } catch (e) {
               fail(e);

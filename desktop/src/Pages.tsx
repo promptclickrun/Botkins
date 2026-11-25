@@ -1,7 +1,7 @@
 import { storageKey } from "./storage";
 import { useBotDrag } from "./useBotDrag";
 import { useChatDrag } from "./useChatDrag";
-import { chatGroups, hasChatSections, movedSection, type ChatGroup } from "./chatSections";
+import { chatGroups, chatsPageUnreadChats, hasChatSections, movedSection, type ChatGroup } from "./chatSections";
 import {
   useEffect,
   useLayoutEffect,
@@ -51,6 +51,7 @@ import {
 import { BotAvatar, activityLabel, botActivity, chatActivity } from "./Avatar";
 import type { Bot, Chat, Section, State } from "./types";
 import { memberTeam, teamCan } from "./teamAccess";
+import { botUnreadChats, unreadBotIds } from "./unread";
 import "./agents.css";
 import "./groups.css";
 
@@ -89,6 +90,10 @@ const previewOf = (text: string) =>
 export type PageActions = {
   open: (chatId: string) => void;
   botChat: (bot: Bot) => void;
+  /** Marks every unread chat that counts toward this bot's side-menu dot as read. */
+  markBotRead: (botId: string) => void;
+  /** Marks every non-archived, non-panel unread chat across all bots as read. */
+  markAllRead: () => void;
   addBot: () => void;
   newChat: () => void;
   showChats: () => void;
@@ -361,9 +366,11 @@ const runSection = (actions: PageActions, p: Promise<unknown>) =>
 export function botMenuItems(state: State, b: Bot, actions: PageActions, ask: AskFn): MenuItem[] {
   const primary = state.bots[0]?.id === b.id;
   const sections = state.sections ?? [];
+  const hasUnread = botUnreadChats(state.chats, b.id).length > 0;
   const items: MenuItem[] = [
     { label: "New chat", icon: MessageSquarePlus, run: () => actions.newChatWith(b.id) },
     { label: "Bot page", icon: UserRound, run: () => actions.botPage(b.id) },
+    ...(hasUnread ? [{ label: "Mark as read", icon: MailOpen, run: () => actions.markBotRead(b.id) }] : []),
     "separator",
     {
       label: b.pinned ? "Unpin" : "Pin",
@@ -436,7 +443,7 @@ export function botMenuItems(state: State, b: Bot, actions: PageActions, ask: As
   const kept = items.filter((item) => {
     if (item === "separator") return true;
     if (item.label === "New chat") return teamCan(state, "agents", "chat");
-    if (item.label === "Bot page") return teamCan(state, "agents");
+    if (item.label === "Bot page" || item.label === "Mark as read") return teamCan(state, "agents");
     if (item.label === "Duplicate") return teamCan(state, "agents", "create");
     if (item.label.startsWith("Delete")) return teamCan(state, "agents", "delete");
     return teamCan(state, "agents", "manage");
@@ -781,15 +788,14 @@ export function SidebarBots({ state, actions, compact }: { state: State; actions
   const menu = useMenu();
   const dialogs = useAsk();
   const { primary, pinned, sections, rest } = arrangeBots(state);
-  // One walk over the chats: each bot's latest chat (the one its row opens) and whether any is unread.
+  // One walk over the chats for each bot's latest preview; the shared helper owns the unread dot.
   const latest = new Map<string, Chat>();
-  const unread = new Set<string>();
   for (const c of state.chats) {
     if (c.panelId || c.archived) continue;
     const seen = latest.get(c.botId);
     if (!seen || c.time > seen.time) latest.set(c.botId, c);
-    if (c.unread) unread.add(c.botId);
   }
+  const unread = unreadBotIds(state.chats);
   const item = (b: Bot) => {
     const items = () => botMenuItems(state, b, actions, dialogs.ask);
     const activity = botActivity(state, b.id);
@@ -1048,8 +1054,19 @@ export function ChatRow({
   const menu = useMenu();
   const dialogs = useAsk();
   if (!b) return null;
-  const controls = teamCan(state, "agents", "chat") ? actions : undefined;
-  const items = () => chatMenuItems(state, chat, controls!, dialogs.ask);
+  const canChat = teamCan(state, "agents", "chat");
+  const canMarkRead = !canChat && !!chat.unread && teamCan(state, "agents");
+  const controls = canChat || canMarkRead ? actions : undefined;
+  const items = (): MenuItem[] =>
+    canChat
+      ? chatMenuItems(state, chat, controls!, dialogs.ask)
+      : [
+          {
+            label: "Mark read",
+            icon: MailOpen,
+            run: () => run(controls!, api().setChatFlags(chat.id, { unread: false })),
+          },
+        ];
   const last = chat.messages.at(-1)?.text;
   const row = (
     <button className={"row chatrow" + (chat.unread ? " unread" : "")} onClick={() => open(chat.id)}>
@@ -1066,7 +1083,7 @@ export function ChatRow({
       <span className="rowtext">
         <span className="rowtop">
           <strong>
-            {chat.pinned && controls && <Pin size={12} className="row-pin" aria-label="Pinned" />}
+            {chat.pinned && canChat && controls && <Pin size={12} className="row-pin" aria-label="Pinned" />}
             {chat.title}
           </strong>
           <time>{shortTime(chat.time)}</time>
@@ -1171,7 +1188,7 @@ export function ChatsPage({
   const dialogs = useAsk();
   const drag = useChatDrag(state.chats, (e) => runSection(actions, Promise.reject(e)));
   const chats = state.chats;
-  const unread = chats.filter((c) => c.unread && !c.archived).length;
+  const unread = chatsPageUnreadChats(chats).length;
   const archived = chats.filter((c) => c.archived).length;
   // Sections are there only when the computer in use keeps them ("chat-sections-v1").
   const sections = hasChatSections(state) ? state.chatSections ?? [] : undefined;
@@ -1241,18 +1258,26 @@ export function ChatsPage({
             />
           </label>
         </div>
-        <div className="filters chat-filters" role="group" aria-label="Show chats">
-          {(
-            [
-              ["All", "All"],
-              ["Unread", unread ? "Unread · " + unread : "Unread"],
-              ["Archived", archived ? "Archived · " + archived : "Archived"],
-            ] as const
-          ).map(([f, label]) => (
-            <button key={f} aria-pressed={filter === f} onClick={() => setFilter(f)}>
-              {label}
+        <div className="chat-tools">
+          <div className="filters chat-filters" role="group" aria-label="Show chats">
+            {(
+              [
+                ["All", "All"],
+                ["Unread", unread ? "Unread · " + unread : "Unread"],
+                ["Archived", archived ? "Archived · " + archived : "Archived"],
+              ] as const
+            ).map(([f, label]) => (
+              <button key={f} aria-pressed={filter === f} onClick={() => setFilter(f)}>
+                {label}
+              </button>
+            ))}
+          </div>
+          {unread > 0 && teamCan(state, "agents") && (
+            <button className="ghost chat-mark-read" onClick={() => actions.markAllRead()}>
+              <MailOpen size={14} />
+              Mark all as read
             </button>
-          ))}
+          )}
         </div>
         {groups.map((group) => (group.kind === "pinned" ? plain(group) : group.kind === "section" ? sectionGroup(group) : null))}
         {movable && sections!.length > 0 ? (

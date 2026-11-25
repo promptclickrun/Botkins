@@ -198,3 +198,13 @@ test("the web view's iOS-only list prop goes in as a list, which Android's nativ
   assert.match(source, /dataDetectorTypes=\{\["none"\]\}/);
   assert.doesNotMatch(source, /dataDetectorTypes="/);
 });
+
+test("opened HTML panels fill the phone panel page while keeping their saved state", () => {
+  const panelPage = readFileSync(new URL("../src/features/spaces/PanelPage.tsx", import.meta.url), "utf8");
+  const blocks = readFileSync(new URL("../src/ui/Blocks.tsx", import.meta.url), "utf8");
+  const htmlFrame = readFileSync(new URL("../src/ui/HtmlFrame.tsx", import.meta.url), "utf8");
+  assert.match(panelPage, /<Blocks[^>]*fill=\{hasHtml\}[^>]*state=\{hasHtml \? panelState/);
+  assert.match(panelPage, /flexGrow:\s*1/);
+  assert.match(blocks, /<HtmlFrame[^>]*state=\{state\}[^>]*fill=\{fill\}[^>]*inset=\{!fill\}/);
+  assert.match(htmlFrame, /inset = true/);
+});

@@ -35,7 +35,7 @@ import { SpaceAlerts } from "./space-alerts.mjs";
 import { Spaces } from "./spaces.mjs";
 import { ChatTyping } from "./typing.mjs";
 import { headCapabilities, cleanLook, deviceKind, LinkStore, personName, SCREEN_MODES } from "./store.mjs";
-import { chatSectionsOf, withChatSections, authorize, chatPeople, cleanGroup, cleanRole, filterParts, ownerParts, inChat, panelOfFrame, panelView, spaceCan, inviteLink, inviteLookup, MAX_CHAT_PEOPLE, newInviteCode, normalizeCode, OWNER, personOf, sharedBotFlags, teamPeople, viewOf, withBotFlags, withChatFlags, hasAction, roleOfMember, seenItemsOf, spacesViewOf } from "./team.mjs";
+import { chatSectionsOf, withChatSections, authorize, chatPeople, cleanGroup, cleanRole, filterParts, ownerParts, inChat, panelOfFrame, panelView, spaceCan, inviteLink, inviteLookup, MAX_CHAT_PEOPLE, newInviteCode, normalizeCode, OWNER, personOf, sharedBotFlags, teamPeople, viewOf, visible, withBotFlags, withChatFlags, hasAction, roleOfMember, seenItemsOf, spacesViewOf } from "./team.mjs";
 import { ownerApprovalChats, privateProactiveChat, withoutProactiveAlerts } from "./team.mjs";
 import { Failure, searchDirs } from "./tools.mjs";
 import { ASK_BOT_DESCRIPTION, cleanBotVoice, liveContextOf, liveInstructions, Voice } from "./voice.mjs";
@@ -1811,6 +1811,22 @@ export class LinkHost extends EventEmitter {
     if (method === "setBotFlags") view = withBotFlags(view, String(args[0]), args[1]);
     else if (method === "reorderBots") view = { ...view, order: (Array.isArray(args[0]) ? args[0] : []).filter((id) => typeof id === "string").slice(0, 500) };
     else if (method === "setChatFlags") view = withChatFlags(view, String(args[0]), args[1], (state.chats ?? []).find((chat) => chat.id === args[0])?.time);
+    else if (method === "markChatsRead") {
+      const [ids] = remoteArgs("markChatsRead", args);
+      const role = roleOfMember(team, principal.memberId);
+      const byId = new Map((state.chats ?? []).map((chat) => [chat.id, chat]));
+      let changed = false;
+      for (const id of ids) {
+        const chat = byId.get(id);
+        if (!chat || !inChat(team, chat, principal.memberId) || !visible(role, chat.botId)) continue;
+        const time = Number.isFinite(chat.time) ? chat.time : 0;
+        const prev = view.chats[chat.id];
+        if (!prev?.unread && prev?.seen === time) continue;
+        view = withChatFlags(view, chat.id, { unread: false }, chat.time);
+        changed = true;
+      }
+      if (!changed) return null;
+    }
     this.setTeam({ ...team, views: { ...(team.views ?? {}), [principal.memberId]: view } });
     return null;
   }
@@ -2198,7 +2214,7 @@ export class LinkHost extends EventEmitter {
     }
     if (principal.kind === "member") {
       // A member's own view: kept here, not in the workspace, so it is nobody else's.
-      if (method === "setChatFlags" || method === "reorderBots") return this.memberView(principal, method, args, state);
+      if (method === "setChatFlags" || method === "markChatsRead" || method === "reorderBots") return this.memberView(principal, method, args, state);
       if (method === "setBotFlags") {
         this.memberView(principal, method, args, state);
         const shared = sharedBotFlags(args[1]);

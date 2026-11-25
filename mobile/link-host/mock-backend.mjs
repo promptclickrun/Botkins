@@ -1409,7 +1409,7 @@ export class MockBackend {
     // "files-v1": a file out and in as text, without a dialog. "folders-v1": the folder browser.
     // "artifacts-v1": what the bots made or were given, from an index the app keeps (here: made up).
     this.capabilities = ["message-reactions-v1", "client-message-id-v1", "voice-turns-v1", "voice-history-v1", "quiet-replies-v1", "routine-delivery-v1", ...(process.env.BOTKINS_DEV_NO_OUTPUT === "off" ? [] : ["routine-no-output-v1"]), "routine-scripts-v1", "routine-models-v1", "routine-silent-v1", "routine-notify-targets-v1", "proactive-agent-v2", "proactive-learning-v1", "proactive-team-v1", "models-v2", "fast-mode-v1", "side-pane-v1", "files-v1", "folders-v1", "project-artifacts-v1", "artifacts-v1", "secure-input-v1", "chat-title-regeneration-v1", ...(process.env.BOTKINS_DEV_USAGE === "off" ? [] : ["provider-usage-v1"])];
-    this.capabilities.push("project-folders-v1", "project-mode-v1", "project-clone-v1");
+    this.capabilities.push("project-folders-v1", "project-mode-v1", "project-clone-v1", "mark-chats-read-v1");
     if (this.timeline) this.capabilities.push("turn-timeline-v1");
     // "bot-voice-v1": a bot may have a voice of its own. BOTKINS_DEV_BOT_VOICE=off is an older computer.
     this.botVoice = process.env.BOTKINS_DEV_BOT_VOICE !== "off";
@@ -2491,6 +2491,17 @@ export class MockBackend {
     },
     setChatFlags(id, flags) {
       Object.assign(this.chat(id), flags);
+    },
+    markChatsRead(ids) {
+      if (!Array.isArray(ids)) throw new Error("Choose valid chats to mark as read.");
+      const seen = new Set();
+      for (const id of ids) {
+        if (typeof id !== "string" || !id.trim()) throw new Error("Choose valid chats to mark as read.");
+        if (seen.has(id)) continue;
+        seen.add(id);
+        const chat = this.state.chats.find((c) => c.id === id);
+        if (chat?.unread) chat.unread = false;
+      }
     },
     renameChat(id, title) {
       Object.assign(this.chat(id), { title: text(title, 120, "title"), titleSet: true });

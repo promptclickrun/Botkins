@@ -88,6 +88,7 @@ export const WORKSPACE = {
   forkChat: cmd("chats fork"),
   compact: cmd("chats compact"),
   setChatFlags: cmd("chats flags"),
+  markChatsRead: cmd("chats read"),
   setChatProject: cmd("chats project"),
   createGroupChat: cmd("chats group"),
   retry: cmd("chats retry"),
@@ -476,6 +477,7 @@ export const CHANGES = {
   "chats.fork": (args, value) => value?.from,
   "chats.compact": (args, value) => value?.id,
   "chats.flags": (args, value) => value?.id,
+  "chats.read": (_args, value) => some(value?.ids),
   // By the chat's id and the mode that it has now ("<id> (yolo)"), so that a log line shows a chat that was given yolo.
   "chats.project": (args, value) => (value?.id ? value.id + " (" + (value.mode ?? "default") + ")" : null),
   "chats.group": (args, value) => value?.id,

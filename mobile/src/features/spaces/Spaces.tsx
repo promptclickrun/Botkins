@@ -4,11 +4,12 @@
 // (drop it under On Home) or take it off (under More); a still hold opens its menu, which has the
 // same moves, as VoiceOver's actions do.
 import { useScrollToTop } from "expo-router";
-import { Plus } from "lucide-react-native";
+import { MailOpen, Plus } from "lucide-react-native";
 import { type ReactNode, useEffect, useMemo, useState } from "react";
 import { StyleSheet, useWindowDimensions, View } from "react-native";
 import Animated, { useAnimatedRef, useAnimatedScrollHandler, useSharedValue } from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { changedSpaces } from "@/features/chat/unread";
 import type { BoardScroll } from "@/features/home/BotBoard";
 import type { SpaceSummary } from "@/link/types";
 import { useBots, useCan } from "@/state/hooks";
@@ -17,7 +18,7 @@ import { type PanelPin, usePrefs } from "@/state/prefs";
 import { panelHeadline } from "@/state/widgetData";
 import { useApp } from "@/state/store";
 import { BotAvatar, Dot, EmptyState, HoldMenu, IconButton, IconTile, Label, LinkBanner, Loading, Page, space as gap, T, Tap, type TextPromptOptions, useShape, useTextPrompt, useTheme } from "@/ui";
-import { openPanel, openShare, openSpace, setPanelPinned, setPinned, useArranging, useSpaceContent, useSpaces, useSpacesOn } from "./data";
+import { markSpacesRead, openPanel, openShare, openSpace, setPanelPinned, setPinned, useArranging, useSpaceContent, useSpaces, useSpacesOn } from "./data";
 import { spaceIcon } from "./icons";
 import { panelPinsHere, rowLine, spaceDropPlan, spaceItems, spaceTitle, type SpaceZone, withMove } from "./logic";
 import { SortArea, SortCell, SortHandle, useSorter } from "./sortable";
@@ -37,12 +38,14 @@ function SpaceRow({ space, spaces }: { space: SpaceSummary; spaces: SpaceSummary
   const title = spaceTitle(space);
   const pinWord = space.pinned ? "Take off Home" : "Pin to Home";
   const actions = [
+    ...(space.changed > 0 ? [{ name: "read", label: "Mark as read" }] : []),
     { name: "pin", label: pinWord },
     ...(up ? [{ name: "up", label: "Move up" }] : []),
     ...(down ? [{ name: "down", label: "Move down" }] : []),
   ];
   const run = (name: string) => {
-    if (name === "pin") setPinned(spaces, space.id, !space.pinned);
+    if (name === "read") void markSpacesRead([space.id]);
+    else if (name === "pin") setPinned(spaces, space.id, !space.pinned);
     else if (name === "up" && up) void attempt(api["link.spaces.arrange"](up));
     else if (name === "down" && down) void attempt(api["link.spaces.arrange"](down));
     else if (name === "share") openShare(space.id);
@@ -51,6 +54,7 @@ function SpaceRow({ space, spaces }: { space: SpaceSummary; spaces: SpaceSummary
     <HoldMenu
       title={title}
       actions={[
+        ...(space.changed > 0 ? [{ id: "read", title: "Mark as read", image: "envelope.open" }] : []),
         { id: "pin", title: pinWord, image: space.pinned ? "pin.slash" : "pin" },
         { id: "up", title: "Move up", image: "arrow.up", attributes: { disabled: !up } },
         { id: "down", title: "Move down", image: "arrow.down", attributes: { disabled: !down } },
@@ -260,8 +264,23 @@ export default function Spaces() {
       </Page>
     );
   const ask = () => newSpace(prompt.ask);
+  const unreadSpaces = changedSpaces(spaces);
+  const headerActions = (unreadSpaces.length > 0 || canCreate) ? (
+    <>
+      {unreadSpaces.length > 0 && (
+        <IconButton
+          icon={MailOpen}
+          label="Mark all as read"
+          variant="soft"
+          size={44}
+          onPress={() => void markSpacesRead(unreadSpaces.map((space) => space.id))}
+        />
+      )}
+      {canCreate && <IconButton icon={Plus} label="New space" variant="soft" size={44} onPress={ask} />}
+    </>
+  ) : undefined;
   return (
-    <SpacesFrame scroll={scroll} scrollEnabled={!dragging} actions={canCreate ? <IconButton icon={Plus} label="New space" variant="soft" size={44} onPress={ask} /> : undefined}>
+    <SpacesFrame scroll={scroll} scrollEnabled={!dragging} actions={headerActions}>
       {prompt.node}
       {!synced ? <Loading /> : !spaces.length ? <EmptyState title="No spaces yet" action={canCreate ? "New space" : undefined} onAction={canCreate ? ask : undefined} /> : <SpaceList spaces={spaces} scroll={scroll} onDragging={setDragging} />}
       {synced && <PinnedPanels spaces={spaces} />}

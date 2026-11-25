@@ -21,13 +21,22 @@
 // the rest are listed with their last line, as on a phone.
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
-import { REMOTE_METHODS } from "./link/methods.mjs";
+import { MAX_MARK_CHATS_READ, REMOTE_METHODS } from "./link/methods.mjs";
 import { cleanBotVoice, effectiveTts } from "./link/voice.mjs";
 
 /** What this app can do as a client, by the name another build would look for. */
 export const REMOTE_HOSTS = "remote-hosts-v1";
 /** A client follows at most this many chats in detail (the link's own limit). */
 const WATCHED = 4;
+
+const MISSING_CHAT_RE = /^unknown chat\b(?!\s+flag\b)|\bchat\b.*\b(?:no longer (?:exists|available)|not found|gone)\b/i;
+const UNAVAILABLE_MEMBER_CHAT = "That chat belongs to the owner or another member.";
+
+/** Per-chat `setChatFlags` fallback errors that mean the chat is gone or not visible to this member. */
+export function isSkippedMarkReadError(message) {
+  const text = String(message ?? "").trim();
+  return text === UNAVAILABLE_MEMBER_CHAT || MISSING_CHAT_RE.test(text);
+}
 
 /** Calls about this window and this computer: they run here whichever host is shown. */
 export const HERE = new Set([
@@ -699,6 +708,51 @@ export class RemoteHosts {
     name = LINK_NAMES[name] ?? name;
     if (!name.startsWith("link.") && !REMOTE_METHODS.has(name)) throw new Error("That can only be done on " + host.name + " itself.");
     if (this.state === "revoked") throw new Error(host.name + " no longer knows this computer. Pair again to use it.");
+    if (name === "markChatsRead") {
+      const ids = Array.isArray(args[0]) ? [...new Set(args[0].filter((id) => typeof id === "string" && id))] : [];
+      if (ids.length === 0) return null;
+      const client = this.client;
+      const hostId = this.current;
+      const stillCurrent = () => this.client === client && this.current === hostId;
+      const formatError = (error) => (error?.code === "offline" ? host.name + " can't be reached right now." : String(error?.message ?? error));
+      const unknownBatch = /unknown method|not supported|not allowed|unsupported|not a function|can't be done from a phone/i;
+      let useFallback = !(this.parts.meta?.capabilities ?? []).includes("mark-chats-read-v1");
+      if (!useFallback) {
+        for (let i = 0; i < ids.length; i += MAX_MARK_CHATS_READ) {
+          if (!stillCurrent()) return null;
+          try {
+            await client.call("markChatsRead", ids.slice(i, i + MAX_MARK_CHATS_READ));
+          } catch (error) {
+            if (!stillCurrent()) return null;
+            const message = formatError(error);
+            if (i === 0 && unknownBatch.test(message)) {
+              useFallback = true;
+              break;
+            }
+            throw new Error(message);
+          }
+        }
+        if (!useFallback) return null;
+      }
+      const errors = [];
+      for (const id of ids) {
+        if (!stillCurrent()) return null;
+        try {
+          await client.call("setChatFlags", id, { unread: false });
+        } catch (error) {
+          if (!stillCurrent()) return null;
+          const message = formatError(error);
+          if (isSkippedMarkReadError(message)) continue;
+          errors.push(message);
+        }
+      }
+      if (errors.length === 1) throw new Error(errors[0]);
+      if (errors.length > 1) {
+        const uniqueErrors = [...new Set(errors)];
+        throw new Error(`Couldn't mark ${errors.length} chats as read: ${uniqueErrors.slice(0, 3).join("; ")}`);
+      }
+      return null;
+    }
     try {
       return await this.client.call(name, ...args);
     } catch (error) {

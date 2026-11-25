@@ -9,6 +9,7 @@ import {
   SlidersHorizontal,
   ChevronRight,
   CircleAlert,
+  MailOpen,
   PanelLeftClose,
   PanelLeftOpen,
   Plus,
@@ -46,7 +47,7 @@ import { hasSpaces } from "./spaces";
 import Welcome from "./Welcome";
 import FirstBot from "./FirstBot";
 import SetupChoice, { SetupConnect, SetupTeam, type SetupPath } from "./SetupChoice";
-import { ProfileMigrationPrompt } from "./ProfileSettings";
+import { ProfileMigrationPrompt, useMigrationPrompt } from "./ProfileSettings";
 import type { Attachment, BoardItem, Bot, Chat, MarketAgentTemplate, MentionInput, Message, State } from "./types";
 import { tokenOf, type DraftMention } from "./MentionMenu";
 import { composeSlashPrompt, type DraftCommand } from "./slashCommand";
@@ -54,6 +55,8 @@ import { applyAppearance, startAppearance } from "./appearance";
 import { memberTeam, teamCan } from "./teamAccess";
 import { chatMentionPeople } from "./peopleView";
 import { leftEmpty, newChatToReuse } from "./emptyChat";
+import { allUnreadChats, botUnreadChats } from "./unread";
+import { chatsPageUnreadChats } from "./chatSections";
 import "./style.css";
 
 // The remembered colors go on before anything is drawn.
@@ -349,9 +352,21 @@ function App() {
       setChatId(id);
       setMessageTarget(Number.isInteger(messageIndex) ? { chatId: id, index: messageIndex! } : null);
       setModal("");
-      if (state?.chats.find((c) => c.id === id)?.unread)
+      if (state?.chats.find((c) => c.id === id)?.unread && teamCan(state, "agents"))
         void api.setChatFlags(id, { unread: false }).catch(fail);
     });
+  }
+  function markChatsRead(ids: string[]) {
+    if (!state || !teamCan(state, "agents") || ids.length === 0) return;
+    void api.markChatsRead(ids).catch(fail);
+  }
+  function markBotRead(botId: string, exceptId?: string) {
+    if (!state) return;
+    markChatsRead(botUnreadChats(state.chats, botId).filter((c) => c.id !== exceptId).map((c) => c.id));
+  }
+  function markAllChatsRead() {
+    if (!state) return;
+    markChatsRead(allUnreadChats(state.chats).map((c) => c.id));
   }
   // Notification clicks open their chat.
   const openRef = useRef(open);
@@ -406,9 +421,13 @@ function App() {
     });
   }
   function openSpace(id: string) {
+    const alreadyOpen = page === "Space" && spaceId === id && !chatId && !profileId;
     leave(() => {
       nav("Space");
       setSpaceId(id);
+      if (alreadyOpen && state?.spaces?.some((s) => s.id === id && s.changed > 0)) {
+        void api["link.spaces.seen"](id).catch(fail);
+      }
     });
   }
   // For listeners set up once: the way to a space as it is now, and whether a space is one the window knows.
@@ -481,32 +500,40 @@ function App() {
     return key;
   }
   function botChat(b: Bot) {
-    const chats = state?.chats.filter((c) => c.botId === b.id && personalChat(c)) ?? [];
-    // Settings › Chat › When you select a bot: "Start a new chat". A new chat nobody wrote in yet
-    // is that new chat, so selecting the bot twice makes one, not two; so is one that was archived
-    // when it was left. It is taken out of the archive first, also when it is not shown as
-    // archived yet: the archiving of a chat just left may still be on its way.
-    if (state?.settings.botTap === "new" && teamCan(state, "agents", "chat")) {
-      const blank = newChatToReuse(state.chats, b.id, state);
-      if (blank) {
-        if (blank.archived) reopenedChats.current.add(blank.id);
-        void api.setChatFlags(blank.id, { archived: false }).then(() => open(blank.id)).catch(fail);
+    leave(() => {
+      const chats = state?.chats.filter((c) => c.botId === b.id && personalChat(c)) ?? [];
+      // Settings › Chat › When you select a bot: "Start a new chat". A new chat nobody wrote in yet
+      // is that new chat, so selecting the bot twice makes one, not two; so is one that was archived
+      // when it was left. It is taken out of the archive first, also when it is not shown as
+      // archived yet: the archiving of a chat just left may still be on its way.
+      if (state?.settings.botTap === "new" && teamCan(state, "agents", "chat")) {
+        markBotRead(b.id);
+        const blank = newChatToReuse(state.chats, b.id, state);
+        if (blank) {
+          if (blank.archived) reopenedChats.current.add(blank.id);
+          void api.setChatFlags(blank.id, { archived: false }).then(() => open(blank.id)).catch(fail);
+        }
+        else void newChat(b.id).catch(fail);
+        return;
       }
-      else void newChat(b.id).catch(fail);
-      return;
-    }
-    let visited: string | null = null;
-    try { visited = localStorage.getItem(visitKey(host, b.id)); } catch { /* storage unavailable */ }
-    const eligible = new Set(chats.map((c) => c.id));
-    // Before the first visit on this desktop, prefer the last conversation the person worked in.
-    const lastTurn = state?.runs.find((run) => eligible.has(run.chatId) && run.scheduleId == null && run.trigger !== "scheduled");
-    const recent = chats.sort((a, b) => b.time - a.time);
-    const c = recent.find((c) => c.id === visited) ?? recent.find((c) => c.id === lastTurn?.chatId)
-      ?? recent.find((c) => c.messages.some((message) => message.role === "user" && !message.runId))
-      ?? recent[0];
-    if (c) open(c.id);
-    else if (state && teamCan(state, "agents", "chat")) void newChat(b.id).catch(fail);
-    else nav("Chats");
+      let visited: string | null = null;
+      try { visited = localStorage.getItem(visitKey(host, b.id)); } catch { /* storage unavailable */ }
+      const eligible = new Set(chats.map((c) => c.id));
+      // Before the first visit on this desktop, prefer the last conversation the person worked in.
+      const lastTurn = state?.runs.find((run) => eligible.has(run.chatId) && run.scheduleId == null && run.trigger !== "scheduled");
+      const recent = chats.sort((a, b) => b.time - a.time);
+      const c = recent.find((c) => c.id === visited) ?? recent.find((c) => c.id === lastTurn?.chatId)
+        ?? recent.find((c) => c.messages.some((message) => message.role === "user" && !message.runId))
+        ?? recent[0];
+      if (c) {
+        markBotRead(b.id, c.id);
+        open(c.id);
+      } else {
+        markBotRead(b.id);
+        if (state && teamCan(state, "agents", "chat")) void newChat(b.id).catch(fail);
+        else nav("Chats");
+      }
+    });
   }
   async function send(key: string, options?: { attachments?: Attachment[]; quote?: string; mentions?: MentionInput[]; delivery?: "steer" | "queue" }, onDispatch?: () => void) {
     const prompt = composeSlashPrompt(drafts[key] || "", draftCommands[key]);
@@ -711,8 +738,9 @@ function App() {
       else nav("Home");
     }
   }, [spaces, page, spaceId, !!openedSpace]);
+  const migrationPrompt = useMigrationPrompt(state?.profile);
   if (!state) return <main>{error || "Opening Botkins…"}</main>;
-  if (state.profile?.migration.needed) return <ProfileMigrationPrompt state={state} />;
+  if (migrationPrompt.open) return <ProfileMigrationPrompt state={state} onDismiss={migrationPrompt.dismiss} />;
   if (firstRun && setupPath === "") return <SetupChoice choose={setSetupPath} state={state} />;
   if (firstRun && setupPath === "computer") return <SetupConnect back={() => setSetupPath("")} />;
   if (firstRun && setupPath === "team") return <SetupTeam back={() => setSetupPath("")} initialJoin={teamJoinUrl || undefined} />;
@@ -743,6 +771,11 @@ function App() {
   const actions: PageActions = {
     open,
     botChat,
+    markBotRead: (id) => markBotRead(id),
+    markAllRead: () => {
+      if (!state) return;
+      markChatsRead(chatsPageUnreadChats(state.chats).map((c) => c.id));
+    },
     addBot: () => setModal("bot"),
     newChat: () => setModal("chat"),
     showChats: () => nav("Chats"),
@@ -858,11 +891,18 @@ function App() {
           <>
             <div className="sidebarlabel">
               <span className="nav-label">Bots</span>
-              {teamCan(state, "agents", "create") && !hostDown && (
-                <button aria-label="Create bot" title={collapsed ? "Create bot" : undefined} onClick={() => setModal("bot")}>
-                  <Plus size={15} />
-                </button>
-              )}
+              <span className="sidebarlabel-actions">
+                {!collapsed && allUnreadChats(state.chats).length > 0 && (
+                  <button aria-label="Mark all as read" title="Mark all as read" onClick={markAllChatsRead}>
+                    <MailOpen size={15} />
+                  </button>
+                )}
+                {teamCan(state, "agents", "create") && !hostDown && (
+                  <button aria-label="Create bot" title={collapsed ? "Create bot" : undefined} onClick={() => setModal("bot")}>
+                    <Plus size={15} />
+                  </button>
+                )}
+              </span>
             </div>
             <SidebarBots state={state} actions={actions} compact={collapsed} />
           </>

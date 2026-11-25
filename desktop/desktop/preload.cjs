@@ -16,6 +16,21 @@ if (process.isMainFrame === false) {
   };
   window.addEventListener("pointerdown", tell, true);
   window.addEventListener("keydown", tell, true);
+  // Trusted panel shortcuts (Cmd/Ctrl+Shift+F, Escape) observed in the frame's isolated world for
+  // input paths that bypass WebContents `before-input-event` (such as CDP keyboard dispatch).
+  // Untrusted events made by the page itself are ignored, and main deduplicates against before-input-event.
+  window.addEventListener(
+    "keydown",
+    (event) => {
+      if (!event.isTrusted || event.repeat || event.isComposing) return;
+      if (event.key === "Escape" && !event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey) {
+        ipcRenderer.send("frame-panel-key", "escape");
+      } else if ((event.metaKey || event.ctrlKey) && event.shiftKey && !event.altKey && event.key.toLowerCase() === "f") {
+        ipcRenderer.send("frame-panel-key", "toggle");
+      }
+    },
+    true,
+  );
   // A second layer under the guard a view's page starts with (desktop/view-guard.mjs). The ways
   // to open a peer-to-peer connection are taken away in the page's own world from here, before
   // any of its code runs and where it cannot reach to stop it. This also holds in a frame the
@@ -166,6 +181,7 @@ for (const name of [
   "renameSection",
   "deleteSection",
   "setChatFlags",
+  "markChatsRead",
   "renameChat",
   "regenerateChatTitle",
   "deleteChat",
@@ -452,6 +468,17 @@ api.onFrameGesture = (fn) => {
   ipcRenderer.on("frame-gesture", listener);
   return () => ipcRenderer.removeListener("frame-gesture", listener);
 };
+// A real key press caught by the main process while focus is inside a panel iframe.
+api.onPanelKey = (fn) => {
+  const listener = (_, data) => fn(data);
+  ipcRenderer.on("panel-key", listener);
+  return () => ipcRenderer.removeListener("panel-key", listener);
+};
+api.setPanelOpen = (frameIds) =>
+  ipcRenderer.send(
+    "panel-open",
+    Array.isArray(frameIds) ? frameIds.filter((id) => typeof id === "string") : [],
+  );
 // The window uses the Botkins bridge.
 // Only the window's own page gets it. This script runs in the frames of custom views too (see the
 // top of this file), and a page a bot wrote must never hold the app's bridge.

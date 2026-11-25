@@ -16,6 +16,7 @@ import { profileHostsOf, profilePrompt, type ProfilePrompt } from "@/features/pr
 export const PROFILE_SESSION_KEY = "botkins.profile.session.v1";
 export const PROFILE_ATTEMPT_KEY = "botkins.profile.attempt.v1";
 export const PROFILE_CHOICE_KEY = "botkins.profile.choice.v1";
+export const PROFILE_CANCELED_SESSION_KEY = "botkins.profile.canceled.v1";
 /** Legacy pre-index blob. New profile pairings are one key per host. */
 export const PROFILE_PAIRINGS_KEY = "botkins.profile.pairings.v1";
 export const PROFILE_PAIRINGS_INDEX_KEY = "botkins.profile.pairings.index.v1";
@@ -51,6 +52,23 @@ const validSession = (value: unknown): value is ProfileSession => {
   if (!value || typeof value !== "object") return false;
   const item = value as Record<string, unknown>;
   return text(item.token) && text(item.profileId) && text(item.deviceId) && typeof item.name === "string" && typeof item.email === "string";
+};
+type CanceledSession = { profileId: string; deviceId: string; token: string };
+const validCanceledSession = (value: unknown): value is CanceledSession => {
+  if (!value || typeof value !== "object") return false;
+  const item = value as Record<string, unknown>;
+  return text(item.profileId) && text(item.deviceId) && text(item.token);
+};
+const canceledSessionMarker = (session: ProfileSession) =>
+  JSON.stringify({ profileId: session.profileId, deviceId: session.deviceId, token: session.token });
+const matchesCanceledSession = (session: ProfileSession, value: string | null) => {
+  const canceled = parse(value, validCanceledSession);
+  return Boolean(
+    canceled &&
+    canceled.profileId === session.profileId &&
+    canceled.deviceId === session.deviceId &&
+    canceled.token === session.token,
+  );
 };
 const validAttempt = (value: unknown): value is ProfileAttempt => {
   if (!value || typeof value !== "object") return false;
@@ -293,12 +311,13 @@ export async function loadProfile(localPairings = useApp.getState().pairings.len
   if (useProfile.getState().loaded) return;
   if (profileLoading) return profileLoading;
   profileLoading = (async () => {
-    let values: [string | null, string | null, string | null, string | null, string | null, string | null, string | null, string | null, string | null];
+    let values: [string | null, string | null, string | null, string | null, string | null, string | null, string | null, string | null, string | null, string | null];
     try {
       values = await Promise.all([
         readKept(PROFILE_SESSION_KEY),
         readKept(PROFILE_ATTEMPT_KEY),
         readKept(PROFILE_CHOICE_KEY),
+        readKept(PROFILE_CANCELED_SESSION_KEY),
         readKept(PROFILE_PAIRINGS_INDEX_KEY),
         readKept(PROFILE_PAIRINGS_KEY),
         readKept(PROFILE_BOUND_KEY),
@@ -312,8 +331,22 @@ export async function loadProfile(localPairings = useApp.getState().pairings.len
       retryProfileOnActive();
       return;
     }
-    const [sessionText, attemptText, choice, pairingsIndex, legacyPairings, boundText, currentText, excludedText, removalsText] = values;
-    const session = parse(sessionText, validSession);
+    const [sessionText, attemptText, choice, canceledText, pairingsIndex, legacyPairings, boundText, currentText, excludedText, removalsText] = values;
+    const storedSession = parse(sessionText, validSession);
+    const canceled = Boolean(storedSession && matchesCanceledSession(storedSession, canceledText));
+    const session = canceled ? null : storedSession;
+    if (canceled) {
+      await queueProfileStorage(async () => {
+        try {
+          await forget(PROFILE_SESSION_KEY);
+          await forget(PROFILE_CANCELED_SESSION_KEY).catch(() => {});
+        } catch {
+          // Keep the canceled marker so the next launch stays signed out and retries cleanup.
+        }
+      });
+    } else if (!storedSession && canceledText) {
+      void queueProfileStorage(() => forget(PROFILE_CANCELED_SESSION_KEY).catch(() => {}));
+    }
     const attempt = parse(attemptText, validAttempt);
     let pairings: Record<string, Pairing>;
     try {
@@ -374,9 +407,15 @@ function registerLifecycle() {
   }
 }
 
-export function dismissPrompt() {
-  useProfile.setState({ prompt: null });
-  void keep(PROFILE_CHOICE_KEY, "dismissed").catch(() => {});
+export async function dismissPrompt() {
+  authGeneration += 1;
+  useProfile.setState({ prompt: null, attempt: null, busy: false, error: null });
+  await queueProfileStorage(async () => {
+    await Promise.all([
+      keep(PROFILE_CHOICE_KEY, "dismissed").catch(() => {}),
+      forget(PROFILE_ATTEMPT_KEY).catch(() => {}),
+    ]);
+  });
 }
 
 export async function beginProfile(label = deviceName()): Promise<ProfileAttempt | undefined> {
@@ -386,10 +425,15 @@ export async function beginProfile(label = deviceName()): Promise<ProfileAttempt
   try {
     const attempt = await profileApi.start(label.trim() || deviceName());
     if (generation !== authGeneration) return undefined;
-    await keep(PROFILE_ATTEMPT_KEY, JSON.stringify(attempt));
+    await queueProfileStorage(async () => {
+      if (generation !== authGeneration) return;
+      await keep(PROFILE_ATTEMPT_KEY, JSON.stringify(attempt));
+    });
+    if (generation !== authGeneration) return undefined;
     useProfile.setState({ attempt, busy: false, prompt: null });
     return attempt;
   } catch (error) {
+    if (generation !== authGeneration) return undefined;
     useProfile.setState({ busy: false, error: error instanceof Error ? error.message : "The profile sign-in could not start." });
     return undefined;
   }
@@ -397,14 +441,15 @@ export async function beginProfile(label = deviceName()): Promise<ProfileAttempt
 
 /** Discards an expired browser request so a fresh six-digit request can be started. */
 export async function restartProfileAttempt() {
-  await forget(PROFILE_ATTEMPT_KEY).catch(() => {});
-  useProfile.setState({ attempt: null, error: null });
+  authGeneration += 1;
+  useProfile.setState({ attempt: null, busy: false, error: null });
+  await queueProfileStorage(() => forget(PROFILE_ATTEMPT_KEY).catch(() => {}));
 }
 
 export async function finishPending(): Promise<ProfileSession | null | undefined> {
   const attempt = useProfile.getState().attempt;
   if (!attempt || useProfile.getState().busy) return undefined;
-  const generation = authGeneration;
+  let generation = authGeneration;
   useProfile.setState({ busy: true, error: null });
   const session = await profileCall(() => profileApi.finish(attempt), generation);
   if (generation !== authGeneration || useProfile.getState().attempt !== attempt) return undefined;
@@ -417,20 +462,54 @@ export async function finishPending(): Promise<ProfileSession | null | undefined
     return null;
   }
   const previous = useProfile.getState().session;
-  if (previous && previous.profileId !== session.profileId) {
-    authGeneration += 1;
-    await clearProfilePairings(previous.profileId, Object.keys(useProfile.getState().pairings));
-    await clearCurrent();
-    await dropProfileBoundPairings(useProfile.getState().boundLocal);
-    await clearBound();
-    await clearExcluded();
-    await clearPendingRemovals();
-    useProfile.setState({ pairings: {}, boundLocal: [], excluded: [], pendingRemovals: [] });
+  let committed = false;
+  try {
+    if (previous && previous.profileId !== session.profileId) {
+      generation = ++authGeneration;
+      await clearProfilePairings(previous.profileId, Object.keys(useProfile.getState().pairings));
+      await clearCurrent();
+      await dropProfileBoundPairings(useProfile.getState().boundLocal);
+      await clearBound();
+      await clearExcluded();
+      await clearPendingRemovals();
+      if (generation !== authGeneration) return undefined;
+      useProfile.setState({ pairings: {}, boundLocal: [], excluded: [], pendingRemovals: [] });
+    }
+    await queueProfileStorage(async () => {
+      if (generation !== authGeneration) return;
+      let wroteSession = false;
+      try {
+        await keep(PROFILE_SESSION_KEY, JSON.stringify(session));
+        wroteSession = true;
+        if (generation !== authGeneration) return;
+        await keep(PROFILE_CHOICE_KEY, "enrolled");
+        if (generation !== authGeneration) return;
+        await forget(PROFILE_CANCELED_SESSION_KEY).catch(() => {});
+        await forget(PROFILE_ATTEMPT_KEY).catch(() => {});
+        if (generation !== authGeneration) return;
+        committed = true;
+        useProfile.setState({ session, attempt: null, prompt: null, busy: false, error: null });
+      } finally {
+        if (wroteSession && !committed) {
+          try {
+            await forget(PROFILE_SESSION_KEY);
+          } catch {
+            if (generation !== authGeneration) {
+              await keep(PROFILE_CANCELED_SESSION_KEY, canceledSessionMarker(session)).catch(() => {});
+            }
+          }
+        }
+      }
+    });
+  } catch (error) {
+    if (generation !== authGeneration || useProfile.getState().attempt !== attempt) return undefined;
+    useProfile.setState({
+      busy: false,
+      error: error instanceof Error && error.message ? error.message : "The profile session could not be saved.",
+    });
+    return undefined;
   }
-  await saveSession(session);
-  await keep(PROFILE_CHOICE_KEY, "enrolled");
-  await forget(PROFILE_ATTEMPT_KEY).catch(() => {});
-  useProfile.setState({ session, attempt: null, prompt: null, busy: false, error: null });
+  if (!committed || generation !== authGeneration) return undefined;
   await refreshProfile();
   void syncLocalPairings();
   return session;

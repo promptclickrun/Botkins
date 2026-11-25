@@ -1695,6 +1695,7 @@ export type Calls = {
   createChat(botId: string): string;
   createGroupChat(botIds: string[], title?: string): string;
   setChatFlags(id: string, flags: Partial<Pick<ChatSummary, "pinned" | "archived" | "unread">>): void;
+  markChatsRead(ids: string[]): void;
   renameChat(id: string, title: string): void;
   /** Generates and saves a title from the chat's messages ("chat-title-regeneration-v1"). */
   regenerateChatTitle(id: string): string;

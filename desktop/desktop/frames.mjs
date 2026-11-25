@@ -117,6 +117,38 @@ const BRIDGE = String.raw`(() => {
   post("ready");
 })();`;
 
+/**
+ * Classifies an Electron `before-input-event` key press for an opened panel's focused frame.
+ * Returns "toggle" for Cmd/Ctrl+Shift+F, "escape" for plain Escape, or null otherwise.
+ * Ignores keyUp, auto-repeat, and IME composition.
+ */
+export function panelKeyFromInput(input) {
+  if (!input || input.type !== "keyDown" || input.isAutoRepeat || input.isComposing) return null;
+  if (input.key === "Escape" && !input.meta && !input.control && !input.alt && !input.shift) return "escape";
+  if ((input.meta || input.control) && input.shift && !input.alt && String(input.key ?? "").toLowerCase() === "f") return "toggle";
+  return null;
+}
+
+/** Validates an opened panel's active frame id reported by the renderer, or returns null. */
+export function normalizePanelFrameId(frameId) {
+  return typeof frameId === "string" && /^[0-9a-f-]{36}$/.test(frameId) ? frameId : null;
+}
+
+export const MAX_PANEL_OPEN_FRAMES = 4;
+
+/** Validates a list of opened-panel frame ids reported by the renderer, deduplicated and capped. */
+export function normalizePanelFrameIds(frameIds) {
+  if (!Array.isArray(frameIds)) return [];
+  const seen = new Set();
+  for (const item of frameIds) {
+    const id = normalizePanelFrameId(item);
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    if (seen.size >= MAX_PANEL_OPEN_FRAMES) break;
+  }
+  return [...seen];
+}
+
 const BASE_STYLE =
   // The Ink theme in light, until the app sends the colors in use (src/HtmlFrame.tsx).
   ":root{color-scheme:light dark;--ink:#000000;--muted:#595959;--line:#e7e7e4;--paper:#f5f5f3;--surface:#f5f5f3;--canvas:#ffffff;--rail:#f7f7f5;--sunken:#ededea;--accent:#000000;--active:#ededea;" +

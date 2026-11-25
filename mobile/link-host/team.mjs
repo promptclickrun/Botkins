@@ -61,6 +61,7 @@ const POLICY = {
   createChat: ["agents", "chat"],
   createGroupChat: ["agents", "chat"],
   setChatFlags: ["agents", "chat"],
+  markChatsRead: ["agents", "view"],
   renameChat: ["agents", "chat"],
   regenerateChatTitle: ["agents", "chat"],
   deleteChat: ["agents", "chat"],
@@ -917,8 +918,13 @@ function lookup(kind, value, lookups) {
   if (Array.isArray(source)) return source.find((item) => item.id === value);
   return source && typeof source === "object" ? source[value] : null;
 }
-function visible(role, botId) {
+export function visible(role, botId) {
   return role?.bots === "all" || (Array.isArray(role?.bots) && role.bots.includes(botId));
+}
+function isMarkReadOnly(patch) {
+  if (!patch || typeof patch !== "object" || Array.isArray(patch)) return false;
+  const keys = Object.keys(patch);
+  return keys.length === 1 && keys[0] === "unread" && patch.unread === false;
 }
 function botIdOf(method, args) {
   if (BOT_METHODS.has(method)) {
@@ -983,6 +989,7 @@ export function authorize(principal, team, method, args = [], lookups = {}) {
   else if (method === "changePanel" && args[1] === "delete") action = "delete";
   else if (method === "routine" && args[1]?.action === "remove") action = "delete";
   else if (method === "saveSkill" && args[0]?.original) action = "manage";
+  else if (method === "setChatFlags" && isMarkReadOnly(args[1])) action = "view";
   if (!hasAction(role.perms, scope, action)) return "Your team role can't do that.";
   // A routine's script runs on the owner's computer, so only the owner writes or changes one ("routine-scripts-v1").
   if ((method === "createRoutine" && args[0]?.script != null) || (method === "updateRoutine" && args[1]?.script !== undefined)) return "Only the owner can add or change a routine's script.";
