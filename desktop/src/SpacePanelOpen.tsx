@@ -2,17 +2,17 @@
 // bar "Ask <bot> to change it" under it. The panel is the one on the space's page, with its saved
 // state and its notes; only the room it gets changes. Over the bar are the panel's asks: what its
 // bot says is worth asking next. A click puts one in the field and does not send it.
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { ArrowUp, Maximize2, Minimize2, X } from "lucide-react";
 import { BotAvatar } from "./Avatar";
 import {
-  FRAME_KEY_EVENT,
   PANEL_FULLSCREEN_SUFFIX,
-  frameKeyAction,
   isPanelFullscreenShortcut,
+  isRepeatedPanelEscape,
   panelCancelAction,
   resolvePanelFullscreen,
   shouldPersistPanelFullscreen,
+  trustedFrameKeyAction,
   writePanelFullscreen,
   type PanelFullscreenSource,
 } from "./panelOpen";
@@ -21,6 +21,20 @@ import { storageKey } from "./storage";
 import type { Bot } from "./types";
 
 const FULLSCREEN_HINT = MOD === "⌘" ? "⇧⌘F" : "Ctrl+Shift+F";
+
+function isTopOpenedPanel(dialog: HTMLDialogElement | null): dialog is HTMLDialogElement {
+  if (!dialog?.open) return false;
+  if (dialog.querySelector("dialog[open]")) return false;
+  for (const other of document.querySelectorAll("dialog:modal")) {
+    if (other !== dialog) return false;
+  }
+  return true;
+}
+
+function isFocusInPanelFrame(dialog: HTMLDialogElement): boolean {
+  const active = document.activeElement;
+  return active instanceof HTMLIFrameElement && dialog.contains(active) && active.closest("dialog[open]") === dialog;
+}
 
 export default function OpenedPanel({
   title,
@@ -63,6 +77,7 @@ export default function OpenedPanel({
   const finishClose = () => {
     if (closedRef.current) return;
     closedRef.current = true;
+    window.botkins.setPanelOpen?.(false);
     closeRef.current();
   };
 
@@ -72,17 +87,21 @@ export default function OpenedPanel({
     else finishClose();
   };
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const dialog = ref.current;
     if (dialog && !dialog.open) dialog.showModal();
+    window.botkins.setPanelOpen?.(true);
+    return () => {
+      window.botkins.setPanelOpen?.(false);
+    };
   }, []);
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       const dialog = ref.current;
-      if (!dialog?.open) return;
+      if (!isTopOpenedPanel(dialog)) return;
+      if (isFocusInPanelFrame(dialog)) return;
       if (!isPanelFullscreenShortcut(e)) return;
-      if (dialog.querySelector("dialog[open]")) return;
       const targetDialog = e.target instanceof Element ? e.target.closest("dialog[open]") : null;
       if (targetDialog && targetDialog !== dialog) return;
       const activeDialog = document.activeElement instanceof Element ? document.activeElement.closest("dialog[open]") : null;
@@ -95,20 +114,14 @@ export default function OpenedPanel({
   }, []);
 
   useEffect(() => {
-    const dialog = ref.current;
-    if (!dialog) return;
-    const onFrameKey = (e: Event) => {
-      if (!dialog.open) return;
-      if (dialog.querySelector("dialog[open]")) return;
-      const targetDialog = e.target instanceof Element ? e.target.closest("dialog[open]") : null;
-      if (targetDialog !== dialog) return;
-      const action = frameKeyAction((e as CustomEvent<{ key?: unknown }>).detail?.key, fullscreenRef.current);
+    const off = window.botkins.onPanelKey?.((data) => {
+      const dialog = ref.current;
+      if (!isTopOpenedPanel(dialog) || !isFocusInPanelFrame(dialog)) return;
+      const action = trustedFrameKeyAction(data?.key, fullscreenRef.current);
       if (action === "toggle") applyFullscreen(!fullscreenRef.current, "toggle");
       else if (action === "restore") applyFullscreen(false, "escape");
-      else if (action === "close") dialog.close();
-    };
-    dialog.addEventListener(FRAME_KEY_EVENT, onFrameKey);
-    return () => dialog.removeEventListener(FRAME_KEY_EVENT, onFrameKey);
+    });
+    return () => off?.();
   }, []);
 
   const toggleLabel = fullscreen ? "Exit full screen" : "Full screen";
@@ -118,6 +131,11 @@ export default function OpenedPanel({
       ref={ref}
       className={"space-opened" + (fullscreen ? " fullscreen" : "")}
       aria-label={title}
+      onKeyDown={(e) => {
+        const targetDialog = e.target instanceof Element ? e.target.closest("dialog[open]") : null;
+        if (targetDialog && targetDialog !== e.currentTarget) return;
+        if (isRepeatedPanelEscape(e)) e.preventDefault();
+      }}
       onCancel={(e) => {
         const action = panelCancelAction(fullscreenRef.current, e.target === e.currentTarget);
         if (action === "restore") {

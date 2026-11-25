@@ -6,7 +6,6 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { RefreshCw, TriangleAlert } from "lucide-react";
 import { APPEARANCE_EVENT } from "./appearance";
 import { cleanLabel, cleanPatch, saveGate, type FrameStore } from "./frameState";
-import { FRAME_KEY_EVENT } from "./panelOpen";
 
 const api = window.botkins;
 // The theme's colors a page may use, by the names the app's own styles use (src/tokens.css).
@@ -96,11 +95,6 @@ export default function HtmlFrame({ frame, height, title, store }: { frame: stri
         if (document.activeElement !== ref.current) reply(m.id, Promise.reject(new Error("Click inside this view first.")));
         else if (m.type === "answer") reply(m.id, api.frameAnswer(frame, String(m.text ?? "")));
         else reply(m.id, api.frameOpenLink(frame, String(m.url ?? "")));
-      } else if (m.type === "key") {
-        // Forward only the opened-panel shortcut / Escape from the focused frame as a bubbling event
-        // on this iframe so only the opened panel holding it reacts.
-        if (document.activeElement === ref.current && (m.key === "toggle" || m.key === "escape"))
-          ref.current.dispatchEvent(new CustomEvent(FRAME_KEY_EVENT, { bubbles: true, detail: { key: m.key } }));
       }
     };
     const onTheme = () => post(theme());

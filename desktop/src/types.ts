@@ -832,6 +832,10 @@ declare global {
       onPrefill(fn: (data: { chatId?: string; text: string; panelId?: string; spaceId?: string }) => void): () => void;
       /** The person really clicked or pressed a key inside a custom view (its id). Missing on an older main process. */
       onFrameGesture?(fn: (data: { frame: string }) => void): () => void;
+      /** Real key press caught in the main process while focus is in a subframe ("toggle" or "escape"). */
+      onPanelKey?(fn: (data: { key: "toggle" | "escape" }) => void): () => void;
+      /** Tells the main window whether an opened space panel is currently open. */
+      setPanelOpen?(open: boolean): void;
       boardAct(id: string, action: "read" | "unread" | "clear" | "done" | "reopen" | "yes" | "goal" | "notToday" | "up" | "down" | "delete", value?: string): Promise<string | undefined>;
       // Chat canvas
       chooseFiles(): Promise<Attachment[]>;

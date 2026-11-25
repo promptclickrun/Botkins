@@ -17,7 +17,7 @@ import { HERE, RemoteHosts, splitPreferences } from "./remotehosts.mjs";
 import { adminModeStore, hasAdminMode, ownerWindowView } from "./admin-view.mjs";
 import { fillSecurePage, VIEWER_PARTITION, attachViewer, guardGuest, guardViewerSession } from "./webviewer.mjs";
 import { APP_SCHEME, AppWindows, registerAppScheme } from "./app-window.mjs";
-import { FRAME_CSP, guardedFramePage } from "./frames.mjs";
+import { FRAME_CSP, guardedFramePage, panelKeyFromInput } from "./frames.mjs";
 import { guardedPage, unshadow } from "./view-guard.mjs";
 import { adoptFolder, APP_NAME, dataHome, env } from "./home.mjs";
 import { canvasColor } from "./preferences.mjs";
@@ -58,6 +58,8 @@ let win,
   link,
   // Hosted profile identity and the profile directory (main process only).
   profile,
+  panelOpen = false,
+  lastBeforeInputKey = null,
   quitting = false;
 // "Run at startup" is asked of the system only by the installed app on its own data. A trial run
 // (a test, a development build on a folder of its own) writes its entry inside that folder instead,
@@ -251,6 +253,25 @@ function openWindow() {
   win.webContents.on("will-frame-navigate", (event) => {
     if (!event.isMainFrame && !isViewAddress(event.url)) event.preventDefault();
   });
+  panelOpen = false;
+  lastBeforeInputKey = null;
+  win.webContents.on("did-start-navigation", (_event, _url, isInPlace, isMainFrame) => {
+    if (isMainFrame && !isInPlace) {
+      panelOpen = false;
+      lastBeforeInputKey = null;
+    }
+  });
+  // Real keyboard input from inside a focused panel iframe cannot be forged by page scripts.
+  // Only Cmd/Ctrl+Shift+F while a panel is open is prevented here so the frame keeps its own keys.
+  win.webContents.on("before-input-event", (event, input) => {
+    const key = panelKeyFromInput(input);
+    if (!key || !panelOpen) return;
+    const focused = win.webContents.focusedFrame;
+    if (!focused || focused === win.webContents.mainFrame || !frameIdOf(focused.url)) return;
+    if (key === "toggle") event.preventDefault();
+    lastBeforeInputKey = { key, at: Date.now() };
+    win.webContents.send("panel-key", { key });
+  });
   win.on("close", (event) => {
     if (!quitting && !updateQuit && keepInBackground()) {
       ensureTray();
@@ -259,6 +280,8 @@ function openWindow() {
     }
   });
   win.on("closed", () => {
+    panelOpen = false;
+    lastBeforeInputKey = null;
     win = null;
   });
   win.on("show", syncTray);
@@ -553,6 +576,42 @@ else
       if (!win || win.isDestroyed() || event.sender !== win.webContents || !frame || frame === win.webContents.mainFrame) return;
       const id = frameIdOf(frame.url);
       if (id) win.webContents.send("frame-gesture", { frame: id });
+    });
+    // Trusted panel key observed by the view frame's isolated preload when input bypasses
+    // before-input-event (e.g., CDP keyboard dispatch). Deduplicated against before-input-event.
+    ipcMain.on("frame-panel-key", (event, key) => {
+      const frame = event.senderFrame;
+      if (
+        !panelOpen ||
+        (key !== "toggle" && key !== "escape") ||
+        !win ||
+        win.isDestroyed() ||
+        event.sender !== win.webContents ||
+        !frame ||
+        frame === win.webContents.mainFrame ||
+        frame !== win.webContents.focusedFrame ||
+        !frameIdOf(frame.url)
+      )
+        return;
+      if (lastBeforeInputKey && lastBeforeInputKey.key === key && Date.now() - lastBeforeInputKey.at < 200) {
+        lastBeforeInputKey = null;
+        return;
+      }
+      win.webContents.send("panel-key", { key });
+    });
+    // The main window's own renderer reports whether an opened space panel dialog is active so
+    // `before-input-event` only intercepts Cmd/Ctrl+Shift+F while a panel is open.
+    ipcMain.on("panel-open", (event, open) => {
+      if (
+        !win ||
+        win.isDestroyed() ||
+        event.sender !== win.webContents ||
+        event.senderFrame !== win.webContents.mainFrame ||
+        event.senderFrame?.url !== pathToFileURL(html).href
+      )
+        return;
+      panelOpen = open === true;
+      if (!panelOpen) lastBeforeInputKey = null;
     });
     for (const [name, fn] of Object.entries(handlers))
       ipcMain.handle(name, (event, ...args) => {

@@ -1,15 +1,15 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
+import { panelKeyFromInput } from "../desktop/frames.mjs";
 import {
-  FRAME_KEY_EVENT,
   PANEL_FULLSCREEN_SUFFIX,
-  frameKeyAction,
   isPanelFullscreenShortcut,
-  openedPanelKeyAction,
+  isRepeatedPanelEscape,
   panelCancelAction,
   readPanelFullscreen,
   resolvePanelFullscreen,
   shouldPersistPanelFullscreen,
+  trustedFrameKeyAction,
   writePanelFullscreen,
 } from "../src/panelOpen.ts";
 
@@ -26,7 +26,6 @@ function memoryStorage(initial = {}) {
 describe("panelOpen helpers", () => {
   it("stores and reads the remembered fullscreen choice", () => {
     assert.equal(PANEL_FULLSCREEN_SUFFIX, "panel.fullscreen");
-    assert.equal(FRAME_KEY_EVENT, "botkins-frame-key");
     const store = memoryStorage();
     assert.equal(readPanelFullscreen(TEST_KEY, store), false);
     writePanelFullscreen(TEST_KEY, true, store);
@@ -83,19 +82,17 @@ describe("panelOpen helpers", () => {
     assert.equal(isPanelFullscreenShortcut({ key: "f", metaKey: true, shiftKey: true, defaultPrevented: true }), false);
   });
 
-  it("maps Escape and Cmd/Ctrl+Shift+F while ignoring repeats, IME composition, and handled events", () => {
-    assert.equal(openedPanelKeyAction({ key: "Escape" }, true), "restore");
-    assert.equal(openedPanelKeyAction({ key: "Escape" }, false), "close");
-    assert.equal(openedPanelKeyAction({ key: "Escape", metaKey: true }, true), null);
-    assert.equal(openedPanelKeyAction({ key: "Escape", ctrlKey: true }, false), null);
-    assert.equal(openedPanelKeyAction({ key: "Escape", repeat: true }, true), null);
-    assert.equal(openedPanelKeyAction({ key: "Escape", isComposing: true }, true), null);
-    assert.equal(openedPanelKeyAction({ key: "Escape", defaultPrevented: true }, false), null);
-    assert.equal(openedPanelKeyAction({ key: "f", metaKey: true, shiftKey: true }, false), "toggle");
-    assert.equal(openedPanelKeyAction({ key: "F", ctrlKey: true, shiftKey: true }, true), "toggle");
-    assert.equal(openedPanelKeyAction({ key: "f", metaKey: true, shiftKey: true, repeat: true }, false), null);
-    assert.equal(openedPanelKeyAction({ key: "f", metaKey: true, shiftKey: true, isComposing: true }, false), null);
-    assert.equal(openedPanelKeyAction({ key: "f", metaKey: true, shiftKey: true, defaultPrevented: true }, false), null);
+  it("suppresses only repeated unmodified Escape keydowns", () => {
+    assert.equal(isRepeatedPanelEscape({ key: "Escape", repeat: true }), true);
+    assert.equal(isRepeatedPanelEscape({ key: "Escape", repeat: false }), false);
+    assert.equal(isRepeatedPanelEscape({ key: "Escape" }), false);
+    assert.equal(isRepeatedPanelEscape({ key: "Escape", repeat: true, metaKey: true }), false);
+    assert.equal(isRepeatedPanelEscape({ key: "Escape", repeat: true, ctrlKey: true }), false);
+    assert.equal(isRepeatedPanelEscape({ key: "Escape", repeat: true, altKey: true }), false);
+    assert.equal(isRepeatedPanelEscape({ key: "Escape", repeat: true, shiftKey: true }), false);
+    assert.equal(isRepeatedPanelEscape({ key: "Escape", repeat: true, isComposing: true }), false);
+    assert.equal(isRepeatedPanelEscape({ key: "Escape", repeat: true, defaultPrevented: true }), false);
+    assert.equal(isRepeatedPanelEscape({ key: "Enter", repeat: true }), false);
   });
 
   it("handles native dialog cancel only for its own target", () => {
@@ -105,12 +102,25 @@ describe("panelOpen helpers", () => {
     assert.equal(panelCancelAction(false, false), "ignore");
   });
 
-  it("maps forwarded iframe key messages to panel actions", () => {
-    assert.equal(frameKeyAction("toggle", false), "toggle");
-    assert.equal(frameKeyAction("toggle", true), "toggle");
-    assert.equal(frameKeyAction("escape", true), "restore");
-    assert.equal(frameKeyAction("escape", false), "close");
-    assert.equal(frameKeyAction("other", true), null);
-    assert.equal(frameKeyAction(undefined, false), null);
+  it("maps trusted main-process frame keys without ever closing on Escape", () => {
+    assert.equal(trustedFrameKeyAction("toggle", false), "toggle");
+    assert.equal(trustedFrameKeyAction("toggle", true), "toggle");
+    assert.equal(trustedFrameKeyAction("escape", true), "restore");
+    assert.equal(trustedFrameKeyAction("escape", false), null);
+    assert.equal(trustedFrameKeyAction("other", true), null);
+    assert.equal(trustedFrameKeyAction(undefined, false), null);
+  });
+
+  it("classifies Electron before-input-event payloads while ignoring keyUp, repeat, and composition", () => {
+    assert.equal(panelKeyFromInput({ type: "keyDown", key: "f", meta: true, shift: true }), "toggle");
+    assert.equal(panelKeyFromInput({ type: "keyDown", key: "F", control: true, shift: true }), "toggle");
+    assert.equal(panelKeyFromInput({ type: "keyDown", key: "Escape" }), "escape");
+    assert.equal(panelKeyFromInput({ type: "keyUp", key: "f", meta: true, shift: true }), null);
+    assert.equal(panelKeyFromInput({ type: "keyUp", key: "Escape" }), null);
+    assert.equal(panelKeyFromInput({ type: "keyDown", key: "f", meta: true, shift: true, isAutoRepeat: true }), null);
+    assert.equal(panelKeyFromInput({ type: "keyDown", key: "Escape", isAutoRepeat: true }), null);
+    assert.equal(panelKeyFromInput({ type: "keyDown", key: "Escape", isComposing: true }), null);
+    assert.equal(panelKeyFromInput({ type: "keyDown", key: "Escape", shift: true }), null);
+    assert.equal(panelKeyFromInput({ type: "keyDown", key: "f", meta: true, shift: true, alt: true }), null);
   });
 });
