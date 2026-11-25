@@ -470,3 +470,40 @@ test("a server Botkins gave Pi earlier but this turn hasn't does nothing; a Pi p
   session.turn = null;
   await provider.stop();
 });
+
+test("a chat warmed before its first message still gives Pi every Botkins tool", { skip }, async (t) => {
+  // Pi lists the bridge's tools once, when it connects. A process warmed with no turn (and so no
+  // handlers) must already see them, or the conversation goes without them until Pi restarts.
+  const { ToolBridge } = await import("../desktop/providers/toolbridge.mjs");
+  const bridge = new ToolBridge();
+  const dir = join(root, "case-bridge");
+  const provider = new PiProvider({ dataDir: dir, binary, bridge, env: { ...process.env, FAKE_PI_LOG: join(dir, "log.jsonl") } });
+  t.after(() => Promise.all([provider.stop(), bridge.stop()]));
+  let ran = 0;
+  const side = { name: "side_pane_show", description: "Show a panel.", parameters: { type: "object", properties: {} }, skipPermission: true, defer: "never", handler: async () => (ran++, "shown") };
+  const list = async (server) => {
+    const response = await fetch(server.url, { method: "POST", headers: { ...server.headers, "content-type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }) });
+    return (await response.json()).result.tools.map((tool) => tool.name);
+  };
+  const call = async (server) => {
+    const response = await fetch(server.url, { method: "POST", headers: { ...server.headers, "content-type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "side_pane_show", arguments: {} } }) });
+    return (await response.json()).result;
+  };
+  // What Workspace.prewarm does: no turn, no handlers.
+  const ahead = await provider.openSession(spec({ established: true, hasReplies: true, handlers: null, tools: [side], mcpServers: {} }));
+  await ahead.warm();
+  const { servers } = await ahead.describe();
+  assert.ok(servers.botkins, "the bridge is one of Pi's servers");
+  assert.deepEqual((await list(servers.botkins)).sort(), ["side_pane_show", "update_plan"]);
+  await ahead.close();
+  // Between turns nothing runs: a call says so.
+  const idle = await call(servers.botkins);
+  assert.equal(idle.isError, true);
+  assert.equal(ran, 0);
+  // The turn's own tools run.
+  const turn = await provider.openSession(spec({ established: true, hasReplies: true, tools: [side], mcpServers: {} }));
+  await turn.warm();
+  assert.equal((await call(servers.botkins)).isError, undefined);
+  assert.equal(ran, 1);
+  await turn.close();
+});

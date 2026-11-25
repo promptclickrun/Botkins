@@ -340,7 +340,7 @@ class PiSession extends ProviderSession {
   }
   /** Pi's plan, the one tool Botkins adds to Pi itself. Pi has no plan of its own (OMP does), and a plan means nothing in a throwaway session. */
   planTools() {
-    return this.provider.runtime === PI_ID && this.spec.handlers && !this.spec.temporary && !this.spec.sourcesOnly ? [updatePlanTool(this)] : [];
+    return this.provider.runtime === PI_ID && !this.spec.temporary && !this.spec.sourcesOnly ? [updatePlanTool(this)] : [];
   }
   /** Starts this conversation's process when its chat opens, so its first message doesn't wait for it (Workspace.prewarm). */
   async warm() {
@@ -353,7 +353,11 @@ class PiSession extends ProviderSession {
   }
   async openProcess() {
     const { provider, spec } = this;
-    const tools = spec.handlers ? [...spec.tools, ...this.skills.tools, ...this.planTools()] : [];
+    // Every tool is declared, also when the chat is only warmed (no turn, no handlers): Pi lists the
+    // bridge's tools once, when it connects, and keeps that list for as long as the process runs.
+    // A warmed process started with none would leave the conversation without Botkins' tools until
+    // Pi restarts. Each tool checks for its turn itself and refuses to run without one.
+    const tools = [...spec.tools, ...this.skills.tools, ...this.planTools()];
     this.bridge ??= await provider.bridge?.open(tools, spec.temporary ? {} : { key: provider.id + ":" + spec.sessionId });
     this.bridge?.set(tools);
     const known = provider.sessions.get(spec.sessionId);

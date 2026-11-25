@@ -64,12 +64,13 @@ test("a plan is checked: up to 100 steps, each with a distinct id, text and a kn
   assert.equal(await session.todos(), null);
 });
 
-test("only Pi gets the tool, not OMP (which has its own), a throwaway session or a sources-only one", async () => {
+test("only Pi gets the tool, also when warmed, not OMP (which has its own), a throwaway session or a sources-only one", async () => {
   assert.equal((await piSession()).planTools().length, 1);
   assert.equal((await piSession({}, { runtime: OMP_ID })).planTools().length, 0);
   assert.equal((await piSession({ temporary: true })).planTools().length, 0);
   assert.equal((await piSession({ sourcesOnly: true })).planTools().length, 0);
-  assert.equal((await piSession({ handlers: null })).planTools().length, 0);
+  // A chat warmed before its first message (no turn yet) declares it too: Pi lists the tools once, when it connects.
+  assert.equal((await piSession({ handlers: null })).planTools().length, 1);
 });
 
 test("Pi is told to keep a plan for multi-step work, once the tool can be reached", async () => {
