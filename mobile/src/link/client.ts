@@ -506,6 +506,12 @@ export type LinkOptions = {
   /** Each time a sync came back: the phone is in step with the computer now. */
   onSync?(): void;
   /**
+   * After an answer that held nothing but run summaries, how long the next sync waits (default 1 s).
+   * A computer changes those with every tool step of every bot at work, so a phone on Home was asked
+   * to sync with each one. Nothing else waits: see `paceUntil`.
+   */
+  summaryPaceMs?: number;
+  /**
    * How a reply's text comes on this route (default "live", as it is written; true is "live" too). "whole" or
    * false sends `text: false` ("text-streaming-off-v1"): the indicators stay and the reply comes whole when it
    * ends. "chunks" sends `text: "chunks"` ("text-chunks-v1"): the reply's text comes after whole words a few
@@ -524,6 +530,8 @@ const WAITS = [400, 1000, 2000, 4000, 8000, 15000];
 const DISTRUST_MS = 10 * 60_000;
 /** How long a direct probe waits for its hello. Longer than the first look's 1.5 s: nobody waits on it. */
 const PROBE_HELLO_MS = 3000;
+/** The wait after an answer of run summaries alone, unless `summaryPaceMs` says otherwise. */
+const SUMMARY_PACE_MS = 1000;
 
 export class LinkClient {
   state: LinkState = "connecting";
@@ -569,6 +577,15 @@ export class LinkClient {
   private suspect = false;
   /** Set by `rest`: the app is in the background, so nothing is followed until `wake`. */
   private resting = false;
+  /** Watched chats whose turn is under way, from their run parts: their news never waits. */
+  private underWay = new Set<string>();
+  /**
+   * Until when the next sync waits. The last answer held only run summaries, which change with every
+   * step of every bot at work, and no watched chat is under way: the steps that follow come together
+   * in one answer. A call, a wake and a change of the watched chats end the wait at once.
+   */
+  private paceUntil = 0;
+  private paceEnd: (() => void) | null = null;
 
   constructor(
     private pairing: Pairing,
@@ -609,8 +626,14 @@ export class LinkClient {
     this.probeDelay = this.probeMs;
     this.poll?.abort();
     this.wakeUp?.();
+    this.unpace();
     this.session = null;
     this.setRoute(null);
+  }
+  /** Ends the wait after a summary-only answer: something happened that the next sync should show at once. */
+  private unpace() {
+    this.paceUntil = 0;
+    this.paceEnd?.();
   }
   /**
    * Try again now: the app came to the front, the network changed, or the user tapped refresh. The
@@ -631,6 +654,7 @@ export class LinkClient {
     // A socket can look open long after the system closed it under a suspended app.
     this.options.check?.();
     this.wakeUp?.();
+    this.unpace();
     // The waiting sync may be on a path that just died (the phone left the network).
     this.poll?.abort();
     if (this.route === "relay") void this.probeDirect(false);
@@ -651,6 +675,7 @@ export class LinkClient {
     this.poll?.abort();
     // Clear any pending reconnect backoff timer immediately so the follow loop parks at rest.
     this.wakeUp?.();
+    this.unpace();
   }
   /**
    * An address for this computer that was found another way (it announced itself on the network).
@@ -680,6 +705,7 @@ export class LinkClient {
     this.watching = next;
     if (this.options.streamAppends && this.supportsAppends) delete this.have.live;
     // The waiting request is for the old set: ask again.
+    this.unpace();
     this.poll?.abort();
   }
   /** Requests detailed reasoning for these chats even when reply text is whole/off. */
@@ -687,11 +713,14 @@ export class LinkClient {
     const next = [...new Set(chatIds)].filter((id) => id.length > 0 && id.length <= 128).sort().slice(0, 4);
     if (next.join("\n") === this.reasoningWatching.join("\n")) return;
     this.reasoningWatching = next;
+    this.unpace();
     this.poll?.abort();
   }
   /** The choice behind `textStreaming` changed: a waiting sync that asked otherwise asks again. */
   textStreamingChanged() {
-    if (this.session && this.textFor(this.session) !== this.sentMode) this.poll?.abort();
+    if (!this.session || this.textFor(this.session) === this.sentMode) return;
+    this.unpace();
+    this.poll?.abort();
   }
   private textFor(session: Session): TextMode {
     const mode = this.options.textStreaming?.(routeOf(session)!) ?? "live";
@@ -854,6 +883,7 @@ export class LinkClient {
         this.supportsChunks = undefined;
         this.have = {};
         this.reasonings.clear();
+        this.underWay.clear();
       }
       const session = { id: reply.session, toHost: hkdf(master, salt, INFO.toHost), toPhone: hkdf(master, salt, INFO.toPhone), seq: 0, pushCounter: 0, base };
       if (this.lifetime === lifetime) this.useSession(session);
@@ -922,7 +952,11 @@ export class LinkClient {
       try {
         if (signal?.aborted) throw new Error("The request was cancelled");
         // Pi waits for npm to finish installing dependencies on the computer.
-        return await this.request<T>(method, args, method === "cloneProjectRepository" ? 300_000 : method === "piPackages.install" ? 150_000 : 60_000, signal);
+        const answer = await this.request<T>(method, args, method === "cloneProjectRepository" ? 300_000 : method === "piPackages.install" ? 150_000 : 60_000, signal);
+        // What the person just did shows at once, also right after a summary-only answer. The live
+        // screen's frames and pointer are asked for many times a second and change nothing here.
+        if (!method.startsWith("link.screen.")) this.unpace();
+        return answer;
       } catch (error) {
         if (!signal?.aborted && this.lifetime === lifetime && error instanceof Retry && attempt < 2) continue;
         if (error instanceof LinkError) throw error;
@@ -1122,12 +1156,27 @@ export class LinkClient {
         });
         continue;
       }
+      const hold = this.paceUntil - Date.now();
+      if (hold > 0) {
+        await new Promise<void>((resolve) => {
+          const end = () => {
+            clearTimeout(timer);
+            this.paceEnd = null;
+            resolve();
+          };
+          const timer = setTimeout(end, hold);
+          this.paceEnd = end;
+        });
+        continue;
+      }
       const poll = new AbortController();
       this.poll = poll;
       try {
         // After a wake the path has to prove itself: no waiting on the computer's side, and a short deadline.
+        // It stays unproven until a sync is answered. A sync cut short on purpose (the chat on screen
+        // watches again as the app comes back) is asked again as a quick one: taking the flag here
+        // left that second sync waiting 40 s on a path that had died while the phone was away.
         const quick = this.suspect;
-        this.suspect = false;
         const session = await this.openSession();
         if (poll.signal.aborted) continue;
         const mode = this.textFor(session);
@@ -1182,6 +1231,16 @@ export class LinkClient {
             if (this.options.streamAppends) this.expandReasoning(news.parts);
             if (requestReasoning && text !== "whole") this.publishThinkingPreviews(news.parts, watching);
             this.have = news.v;
+            const names = Object.keys(news.parts);
+            for (const name of names) {
+              if (!name.startsWith("run:")) continue;
+              if ((news.parts[name] as Run | null)?.status === "Working") this.underWay.add(name.slice(4));
+              else this.underWay.delete(name.slice(4));
+            }
+            // A pushed answer stays open, so there is no next sync to hold back.
+            const summariesOnly = !push && names.length > 0 && names.every((name) => name === "runs");
+            const busy = watching.some((chat) => this.underWay.has(chat) || this.texts.has(chat));
+            this.paceUntil = summariesOnly && !busy ? Date.now() + (this.options.summaryPaceMs ?? SUMMARY_PACE_MS) : 0;
             this.options.onParts(news.parts);
           }
           this.options.onSync?.();
@@ -1196,12 +1255,18 @@ export class LinkClient {
         } finally {
           pollLedger.release();
         }
+        // The path answered. A wake since then cut this sync short and never gets here.
+        this.suspect = false;
         if (push && this.pushSession === session) this.pushSession = null;
         accept(news);
       } catch (error) {
         if (this.lifetime !== lifetime) break;
-        // Cut short on purpose (the watched chats changed), or a session to renew: go again.
-        if (poll.signal.aborted || error instanceof Retry) continue;
+        // Cut short on purpose (the watched chats changed): go again, as quick as this one was.
+        if (poll.signal.aborted) continue;
+        // The path answered or is given up: either way the next sync starts from what happens now.
+        this.suspect = false;
+        // A session to renew: go again.
+        if (error instanceof Retry) continue;
         this.useSession(null);
         if (this.lifetime !== lifetime) break;
         const revoked = error instanceof LinkError && error.code === "revoked";

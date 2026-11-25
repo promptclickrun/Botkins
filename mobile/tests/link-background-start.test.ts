@@ -11,12 +11,20 @@ function standIn(path: string, exports: unknown) {
   load.cache[id] = replacement;
 }
 
+const listeners = new Set<(state: string) => void>();
+const appState = { currentState: "background", addEventListener: (_: string, callback: (state: string) => void) => {
+  listeners.add(callback);
+  return { remove: () => listeners.delete(callback) };
+} };
+/** The app's state changes, and everything that listens hears of it, the link first. */
+function become(state: string) {
+  appState.currentState = state;
+  for (const listener of listeners) listener(state);
+}
+/** Every set of chats the link was told to follow. */
+const watches: string[][] = [];
+
 test("locked background boot parks storage recovery, and a later push restores the link for one sync", async () => {
-  const listeners = new Set<(state: string) => void>();
-  const appState = { currentState: "background", addEventListener: (_: string, callback: (state: string) => void) => {
-    listeners.add(callback);
-    return { remove: () => listeners.delete(callback) };
-  } };
   standIn("react-native", { AppState: appState, Platform: { OS: "ios" } });
   standIn("expo-device", {});
   standIn("expo-network", {});
@@ -40,7 +48,7 @@ test("locked background boot parks storage recovery, and a later push restores t
   let rests = 0;
   standIn("../src/link/client", { LinkClient: class {
     constructor(_: unknown, readonly options: { onSync(): void }) {}
-    watch() {}
+    watch(ids: string[]) { watches.push(ids); }
     watchReasoning() {}
     start(options: { resting: boolean }) { assert.equal(options.resting, true); starts++; }
     wake() { wakes++; this.options.onSync(); }
@@ -55,7 +63,30 @@ test("locked background boot parks storage recovery, and a later push restores t
   assert.equal(await syncForPush(100), true);
   restIfAway();
   assert.deepEqual([reads, starts, wakes, rests], [4, 1, 1, 1]);
-  appState.currentState = "active";
-  for (const listener of listeners) listener("active");
+  become("active");
   assert.deepEqual([reads, starts, wakes], [4, 1, 2]);
+});
+
+test("a chat on screen is still followed after a moment away, and a push's sync lets it go", async () => {
+  const { watchChat, chatOnScreen, syncForPush } = load("../src/state/link");
+  watches.length = 0;
+  let stop = watchChat("chat");
+  assert.deepEqual(watches, [["chat"]]);
+  assert.equal(chatOnScreen(), "chat");
+  // Another app for a moment: the chat's screen stops watching as the app goes to the background.
+  become("background");
+  stop();
+  assert.equal(chatOnScreen(), undefined, "no chat is on screen, so its notifications arrive");
+  // Back in front: the link wakes first, then the screen watches again. The link is told nothing,
+  // so the wake's quick check is not cut short and the chat is not loaded again.
+  become("active");
+  stop = watchChat("chat");
+  assert.deepEqual(watches, [["chat"]]);
+  assert.equal(chatOnScreen(), "chat");
+  // Away again, and a push wakes the app: that sync follows no chat.
+  become("background");
+  stop();
+  assert.equal(await syncForPush(100), true);
+  assert.deepEqual(watches, [["chat"], []]);
+  become("active");
 });

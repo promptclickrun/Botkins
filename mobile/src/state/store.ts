@@ -82,19 +82,33 @@ useApp.subscribe((state, prev) => {
   }
 });
 
-/** Joins a fresh page of a chat onto what is already loaded, keeping earlier pages. */
+/**
+ * Joins a fresh page of a chat onto what is already loaded, keeping earlier pages.
+ *
+ * The computer sends a chat's page whole whenever anything in it changes: a reply lands, and all 60
+ * messages and their runs come again as new objects. Each message and run that is the same as the
+ * one held stays that object, so only the rows that changed are drawn again (66 of 90 rows were,
+ * for one new reply); and the same page again is the chat as it is held, so nothing is.
+ */
 export function mergeChat(held: ChatView | undefined, next: ChatDetail): ChatView {
   const runs: Record<string, Run> = {};
-  for (const run of next.runs) runs[run.id] = run;
-  const fresh: ChatView = { ...(next.activeFork && { activeFork: next.activeFork }), from: next.from, total: next.total, messages: next.messages, runs, todos: next.todos, ...(next.pane && { pane: next.pane }) };
+  for (const run of next.runs) runs[run.id] = kept(held?.runs[run.id], run);
+  const pane = kept(held?.pane, next.pane);
+  const fresh: ChatView = { ...(next.activeFork && { activeFork: next.activeFork }), from: next.from, total: next.total, messages: next.messages, runs, todos: kept(held?.todos, next.todos), ...(pane && { pane }) };
   // Earlier messages stay when the new page continues the same chat without a gap.
   if (!held || next.activeFork !== held.activeFork || next.from < held.from || next.from > held.from + held.messages.length || next.total < held.total) return fresh;
-  return {
+  const before = next.from - held.from;
+  const merged: ChatView = {
     ...fresh,
     from: held.from,
-    messages: [...held.messages.slice(0, next.from - held.from), ...next.messages],
+    messages: [...held.messages.slice(0, before), ...next.messages.map((message, index) => kept(held.messages[before + index], message))],
     runs: { ...held.runs, ...runs },
   };
+  const same =
+    merged.total === held.total && merged.todos === held.todos && merged.pane === held.pane &&
+    merged.messages.length === held.messages.length && merged.messages.every((message, index) => message === held.messages[index]) &&
+    Object.keys(merged.runs).length === Object.keys(held.runs).length && next.runs.every((run) => merged.runs[run.id] === held.runs[run.id]);
+  return same ? held : merged;
 }
 
 /** Parsed JSON has no cycles. Compare map keys independently of insertion order. */
@@ -104,6 +118,37 @@ function sameValue(left: unknown, right: unknown): boolean {
   const a = left as Record<string, unknown>, b = right as Record<string, unknown>;
   const keys = Object.keys(a);
   return keys.length === Object.keys(b).length && keys.every((key) => Object.hasOwn(b, key) && sameValue(a[key], b[key]));
+}
+
+/** What was held, when what came says the same: whatever is drawn from it is then not drawn again. */
+function kept<T>(held: T | undefined, next: T): T {
+  return held !== undefined && sameValue(held, next) ? held : next;
+}
+
+/**
+ * A list from the computer again. It comes whole whenever one row changes (the list of chats with
+ * every model call of any bot, since a chat's summary holds its context), and every row was a new
+ * object: every chat's row on Home and Chats, and the open chat's screen, were drawn again. A row
+ * that didn't change stays the same object, and so does the list when none did. Rows are matched by
+ * their `id`; a list of anything else is taken as it comes.
+ */
+function keptRows(held: unknown, next: unknown): unknown {
+  if (!Array.isArray(held) || !Array.isArray(next) || !held.length || !next.length) return next;
+  const idOf = (row: unknown) => (row && typeof row === "object" && typeof (row as { id?: unknown }).id === "string" ? (row as { id: string }).id : undefined);
+  const byId = new Map<string, unknown>();
+  for (const row of held) {
+    const id = idOf(row);
+    if (id !== undefined) byId.set(id, row);
+  }
+  if (!byId.size) return next;
+  let same = held.length === next.length;
+  const rows = next.map((row, index) => {
+    const id = idOf(row);
+    const now = id === undefined ? row : kept(byId.get(id), row);
+    if (now !== held[index]) same = false;
+    return now;
+  });
+  return same ? held : rows;
 }
 
 function normalizeLive(live: Live | QuietLive, previous?: QuietLive): QuietLive {
@@ -149,7 +194,8 @@ export function applyParts(incoming: Record<string, unknown>) {
         putText(name.slice(5), value as ChatText | null);
       } else if (name.startsWith("chat:")) {
         const id = name.slice(5);
-        chats = { ...chats, [id]: value ? mergeChat(chats[id], value as ChatDetail) : undefined };
+        const merged = value ? mergeChat(chats[id], value as ChatDetail) : undefined;
+        if (merged !== chats[id] || !(id in chats)) chats = { ...chats, [id]: merged };
       } else if (name.startsWith("run:")) {
         const id = name.slice(4);
         const nextRun = (value as Run | null) ?? null;
@@ -163,8 +209,11 @@ export function applyParts(incoming: Record<string, unknown>) {
           else if (held.status === "Working") running = { ...running, [id]: { ...held, reasoning: undefined } };
         }
       } else {
+        const held = (parts as Record<string, unknown>)[name];
+        const rows = keptRows(held, value);
+        if (rows === held && held !== undefined) continue;
         if (parts === state.parts) parts = { ...parts };
-        Object.assign(parts, { [name]: value });
+        Object.assign(parts, { [name]: rows });
       }
     }
     if (state.synced && parts === state.parts && texts === state.texts && chats === state.chats && running === state.running) return state;

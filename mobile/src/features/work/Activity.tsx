@@ -1,21 +1,76 @@
 // What the bots ran lately: Work's Activity page (the icon left of the plus), and the whole of Work
 // for a team member whose role has no routines.
 import { router } from "expo-router";
-import { useMemo } from "react";
+import { memo, useMemo } from "react";
 import { View } from "react-native";
-import type { Bot } from "@/link/types";
+import type { Bot, RunSummary } from "@/link/types";
 import { IconStack, ShimmerLabel } from "@/features/chat/ActivityWidgets";
 import { formatFeedWork } from "@/features/chat/activityModel";
 import { useBots, useChats, usePart, useSettings } from "@/state/hooks";
 import { useApp } from "@/state/store";
 import { ago } from "@/state/time";
-import { Group, Loading, Page, space, T, Tap, useTheme } from "@/ui";
+import { useAppActive } from "@/state/useAppActive";
+import { Group, Loading, Page, space, T, Tap, useOnShow, useTheme } from "@/ui";
 import { RunIcon } from "./bits";
 import { buildNotifyTargetView, runNotifyChip } from "./notifyTargets";
 
+/**
+ * One run. Kept as it is while its run is the same object: a bot's every step changes the list, and
+ * the computer's edits keep each run that didn't change (the link's `patchedRows`), so a step draws
+ * its own row again and leaves the other 39 alone. This list stays mounted under every other tab.
+ */
+const RunRow = memo(function RunRow({ run, name, when, chip, pulse }: { run: RunSummary; name?: string; /** How long ago, in the list's words: the list works it out, so the row follows the clock too. */ when: string; /** Who a routine's run tells, in a few words. */ chip: string | null; /** The list is in view, so a run under way may pulse. */ pulse: boolean }) {
+  const { colors, control } = useTheme();
+  // The icon says how it went; the words say it too when it didn't simply finish.
+  const status = run.status === "Completed" ? undefined : run.status === "Needs you" ? "Failed" : run.status;
+  const subtitle = [status, name, when, run.trigger === "scheduled" ? "Scheduled" : undefined, chip].filter(Boolean).join(" · ");
+  const work = formatFeedWork(run);
+  return (
+    <Tap
+      onPress={() => router.push({ pathname: "/chat/[id]", params: { id: run.chatId } })}
+      sink={1}
+      feel="select"
+      hitSlop={0}
+      accessibilityLabel={[run.title || "Run", work.summary, subtitle].filter(Boolean).join(", ")}
+      style={{
+        minHeight: control.row,
+        paddingHorizontal: space.lg,
+        paddingVertical: 11,
+        flexDirection: "row",
+        alignItems: "center",
+        gap: space.md,
+      }}
+    >
+      <RunIcon status={run.status} />
+      <View style={{ flex: 1, minWidth: 0, gap: 3 }}>
+        <T variant="callout" weight="500" color="ink" numberOfLines={1}>
+          {run.title || "Run"}
+        </T>
+        {(work.kinds.length > 0 || !!work.summary) && (
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 6, minWidth: 0 }}>
+            {work.kinds.length > 0 && <IconStack kinds={work.kinds} ringColor={colors.surface} size={11} badgeSize={19} />}
+            {!!work.summary && (
+              <ShimmerLabel
+                active={pulse && run.status === "Working"}
+                text={work.summary}
+                variant="footnote"
+                color={run.status === "Needs you" ? "danger" : "ink2"}
+                numberOfLines={1}
+                style={{ flexShrink: 1 }}
+              />
+            )}
+          </View>
+        )}
+        <T variant="caption" color="muted" numberOfLines={1}>
+          {subtitle}
+        </T>
+      </View>
+    </Tap>
+  );
+});
+
 /** The latest 40 runs; a tap opens the run's chat. */
 export function ActivityList() {
-  const { colors, control } = useTheme();
   const runs = usePart("runs") ?? [];
   const meta = usePart("meta");
   const team = usePart("team");
@@ -25,6 +80,9 @@ export function ActivityList() {
   const allBots = useBots();
   const bots = useMemo(() => new Map<string, Bot>(allBots.map((bot) => [bot.id, bot])), [allBots]);
   const chatBot = useMemo(() => new Map(chats.map((chat) => [chat.id, chat.botId])), [chats]);
+  // A run under way pulses only while this list can be seen and the app is in front: under another
+  // tab or page the pulse ran on for nothing, one loop for every bot at work.
+  const inView = useAppActive(useOnShow());
   if (runs.length === 0)
     return (
       <T variant="callout" color="muted" center style={{ paddingVertical: space.huge }}>
@@ -35,58 +93,8 @@ export function ActivityList() {
     <Group>
       {runs.slice(0, 40).map((run) => {
         const botId = chatBot.get(run.chatId);
-        const name = botId ? bots.get(botId)?.name : undefined;
-        // The icon says how it went; the words say it too when it didn't simply finish.
-        const status = run.status === "Completed" ? undefined : run.status === "Needs you" ? "Failed" : run.status;
-        const notifyChip = run.notifyTargets
-          ? runNotifyChip(run.notifyTargets, buildNotifyTargetView({ meta, team, phones, settings, botId: botId ?? null }))
-          : null;
-        const subtitle = [status, name, ago(run.time), run.trigger === "scheduled" ? "Scheduled" : undefined, notifyChip].filter(Boolean).join(" · ");
-        const work = formatFeedWork(run);
-        const live = run.status === "Working";
-        return (
-          <Tap
-            key={run.id}
-            onPress={() => router.push({ pathname: "/chat/[id]", params: { id: run.chatId } })}
-            sink={1}
-            feel="select"
-            hitSlop={0}
-            accessibilityLabel={[run.title || "Run", work.summary, subtitle].filter(Boolean).join(", ")}
-            style={{
-              minHeight: control.row,
-              paddingHorizontal: space.lg,
-              paddingVertical: 11,
-              flexDirection: "row",
-              alignItems: "center",
-              gap: space.md,
-            }}
-          >
-            <RunIcon status={run.status} />
-            <View style={{ flex: 1, minWidth: 0, gap: 3 }}>
-              <T variant="callout" weight="500" color="ink" numberOfLines={1}>
-                {run.title || "Run"}
-              </T>
-              {(work.kinds.length > 0 || !!work.summary) && (
-                <View style={{ flexDirection: "row", alignItems: "center", gap: 6, minWidth: 0 }}>
-                  {work.kinds.length > 0 && <IconStack kinds={work.kinds} ringColor={colors.surface} size={11} badgeSize={19} />}
-                  {!!work.summary && (
-                    <ShimmerLabel
-                      active={live}
-                      text={work.summary}
-                      variant="footnote"
-                      color={run.status === "Needs you" ? "danger" : "ink2"}
-                      numberOfLines={1}
-                      style={{ flexShrink: 1 }}
-                    />
-                  )}
-                </View>
-              )}
-              <T variant="caption" color="muted" numberOfLines={1}>
-                {subtitle}
-              </T>
-            </View>
-          </Tap>
-        );
+        const chip = run.notifyTargets ? runNotifyChip(run.notifyTargets, buildNotifyTargetView({ meta, team, phones, settings, botId: botId ?? null })) : null;
+        return <RunRow key={run.id} run={run} name={botId ? bots.get(botId)?.name : undefined} when={ago(run.time)} chip={chip} pulse={inView} />;
       })}
     </Group>
   );
