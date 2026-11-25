@@ -21,6 +21,7 @@ const FOR_A_PERSON = {
   "spaces.newPanel": 1, "spaces.ask": 1, "spaces.movePanel": 2, "spaces.patchState": 3, "spaces.note": 2, "spaces.removeNote": 2,
   changePanel: 2, routine: 2, refreshPanel: 1, boardAct: 3,
   // A bot's Proactive agent is changed, and its alerts are acted on, as the person who calls.
+  mainChat: 1, changeMainFork: 4, addBot: 1, duplicateBot: 1, importAgents: 1, setProactiveChatMode: 1,
   setBotProactive: 2, proactiveAct: 3, reactToMessage: 4,
 };
 
@@ -38,7 +39,9 @@ export function deviceCall({ workspace, handlers, folders }) {
     const callArgs = member && name === "send" ? [checked[0], checked[1], { ...(checked[2] ?? {}), author: member }] : name === "respond" ? [checked[0], checked[1], member?.memberId ?? "owner"] : checked;
     if (name === "recordVoiceLine") return handlers[name](checked[0], checked[1], checked[2], checked[3], member, checked[4]);
     if (member) {
-      // These four take the member's id beside what the device sent; a handler never reads it from the device.
+      // The fork can contain private history. Stamp its creator before the first save or snapshot.
+      if (name === "forkChat") return workspace.forkChat(checked[0], checked[1], member.memberId);
+      if (name === "createChat") return workspace.createChat(checked[0], undefined, undefined, member.memberId);
       if (name === "mentionables") return workspace.mentions.candidates(checked[0], checked[1], member.memberId);
       if (name === "createRoutine") return workspace.panels.routines.createWithModel(checked[0] ?? {}, undefined, member.memberId);
       if (name === "updateRoutine") return workspace.panels.routines.updateWithModel(checked[0], checked[1] ?? {}, undefined, member.memberId);
@@ -47,12 +50,7 @@ export function deviceCall({ workspace, handlers, folders }) {
     if (Object.hasOwn(FOR_A_PERSON, name)) return handlers[name](...Array.from({ length: FOR_A_PERSON[name] }, (_, at) => checked[at]), member ? member.memberId : "owner");
     const result = await handlers[name](...callArgs);
     if (member) {
-      // A bot a member makes or copies is marked as theirs. One without the mark is the owner's.
-      if (["addBot", "duplicateBot"].includes(name) && typeof result === "string") {
-        const bot = workspace.state.bots.find((item) => item.id === result);
-        if (bot) bot.createdBy = member.memberId;
-      }
-      if (["createChat", "createGroupChat", "forkChat"].includes(name) && typeof result === "string") {
+      if (name === "createGroupChat" && typeof result === "string") {
         const chat = workspace.state.chats.find((item) => item.id === result);
         if (chat) chat.createdBy = member.memberId;
       }

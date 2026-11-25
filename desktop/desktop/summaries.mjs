@@ -107,7 +107,7 @@ export class Summaries {
     return true;
   }
   eligible(chat, manual = false) {
-    return !!chat && !chat.temporary && !chat.panelId && (manual || !chat.titleSet) && !chat.schedules?.some((entry) => entry.routine);
+    return !!chat && !chat.main && !chat.temporary && !chat.panelId && (manual || !chat.titleSet) && !chat.schedules?.some((entry) => entry.routine);
   }
   /** Explicitly asks for a title without changing the chat's automatic naming policy. */
   regenerate(chatId) {

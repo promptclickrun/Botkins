@@ -58,6 +58,9 @@ const POLICY = {
   deleteTemplate: "owner",
   exportTemplateText: "owner",
   importTemplateText: "owner",
+  mainChat: ["agents", "chat"],
+  changeMainFork: ["agents", "chat"],
+  setProactiveChatMode: ["agents", "view"],
   createChat: ["agents", "chat"],
   createGroupChat: ["agents", "chat"],
   setChatFlags: ["agents", "chat"],
@@ -441,9 +444,9 @@ const SELF_METHODS = new Set([
   "link.unpair",
 ]);
 const BOT_METHODS = new Set(["updateBot", "setBotProactive", "proactiveAct", "setBotFlags", "makePrimary", "reorderBots", "deleteBot", "duplicateBot", "setBotAccess", "setBotIntegrations", "botMemory", "setBotMemory", "saveTemplate", "exportTemplateText", "link.setLook"]);
-const CHAT_METHODS = new Set(["setChatFlags", "renameChat", "regenerateChatTitle", "deleteChat", "forkChat", "reactToMessage", "warmChat", "setChatProject", "recordVoiceLine", "send", "stop", "unqueue", "sendNow", "compact", "sideQuestion", "clearApprovals", "mentionables", "link.messages", "link.step", "sidePane", "changeSchedule", "link.voice.live", "link.voice.endLive", "link.team.inviteToChat", "link.team.removeFromChat", "link.chats.setSection", "mcpApps.view", "mcpApps.callTool", "mcpApps.readResource"]);
+const CHAT_METHODS = new Set(["changeMainFork", "setChatFlags", "renameChat", "regenerateChatTitle", "deleteChat", "forkChat", "reactToMessage", "warmChat", "setChatProject", "recordVoiceLine", "send", "stop", "unqueue", "sendNow", "compact", "sideQuestion", "clearApprovals", "mentionables", "link.messages", "link.step", "sidePane", "changeSchedule", "link.voice.live", "link.voice.endLive", "link.team.inviteToChat", "link.team.removeFromChat", "link.chats.setSection", "mcpApps.view", "mcpApps.callTool", "mcpApps.readResource"]);
 /** What only the person who started a chat (or the owner) may do to it; someone invited may not. */
-const CREATOR_METHODS = new Set(["renameChat", "regenerateChatTitle", "deleteChat", "setChatProject", "changeSchedule", "setModel", "clearApprovals", "compact", "link.team.inviteToChat"]);
+const CREATOR_METHODS = new Set(["changeMainFork", "renameChat", "regenerateChatTitle", "deleteChat", "setChatProject", "changeSchedule", "setModel", "clearApprovals", "compact", "link.team.inviteToChat"]);
 /** A routine is its chat: these take the routine's (chat's) id first ("routine-owner-v1"). */
 const ROUTINE_METHODS = new Set(["updateRoutine", "setRoutineEnabled", "deleteRoutine", "runRoutine", "duplicateRoutine"]);
 
@@ -454,7 +457,7 @@ export const personOf = (principal) => (principal?.kind === "member" ? principal
 /** A chat's people ("team-people-v1"): who started it, and who was invited. Kept in the team, by chat id. */
 export function chatPeople(team, chat) {
   if (chat?.hostDispatch) return { createdBy: OWNER, invited: [] };
-  const invited = chat ? team?.chats?.[chat.id] : undefined;
+  const invited = chat && !chat.main ? team?.chats?.[chat.id] : undefined;
   return { createdBy: chat?.createdBy || OWNER, invited: Array.isArray(invited) ? [...invited] : [] };
 }
 /** Whether a person is in a chat: they started it, or were invited. */
@@ -796,12 +799,12 @@ const isProactiveRoutine = (chat) => chat?.schedules?.some((entry) => entry.proa
 
 /** Alert history is for the person the chat looks out for, not for invitees. */
 export function privateProactiveChat(chat) {
-  return !!(isProactiveRoutine(chat) || chat?.messages?.some(isProactiveAlert));
+  return !!(chat?.main || isProactiveRoutine(chat) || chat?.messages?.some(isProactiveAlert));
 }
 
 export function withoutProactiveAlerts(chat, routine = isProactiveRoutine(chat)) {
   if (!Array.isArray(chat?.messages)) return chat;
-  const { posted: _posted, ...rest } = chat;
+  const { posted: _posted, forkContext: _context, compacted: _summary, ...rest } = chat;
   const redact = (message) => isProactiveAlert(message) || (routine && message.role === "assistant");
   // Keep message positions for pagination and chat actions, using the clients' invisible reply marker.
   return { ...rest, messages: chat.messages.map((message) => redact(message) ? { role: "assistant", text: SILENT } : message) };
@@ -932,7 +935,7 @@ function botIdOf(method, args) {
     if (method === "exportTemplateText") return args[0]?.botId;
     return typeof args[0] === "string" ? args[0] : args[0]?.botId;
   }
-  if (method === "createChat") return args[0];
+  if (method === "mainChat" || method === "createChat") return args[0];
   if (method === "spaces.newPanel" || method === "spaces.ask") return typeof args[0]?.botId === "string" ? args[0].botId : "";
   if (method === "catalog") return args[0];
   if (method === "createGroupChat") return args[0];
@@ -1125,12 +1128,13 @@ export function memberProactive(part, me, botIds) {
     const did = activity && typeof activity === "object" && Object.hasOwn(activity, me) ? activity[me] : undefined;
     bots[id] = { ...rest, people: own ? { [me]: own } : {}, ...(did && typeof did === "object" ? did : {}), ...(own && { mine: true }) };
   }
-  return { enabled: part?.enabled === true, bots };
+  return { enabled: part?.enabled === true, bots, ...(part?.chatMode && { chatMode: part.newChatPeople?.includes(me) ? "new" : "main" }) };
 }
 /** The `proactive` part for an owner device with Admin mode off: everyone's entry, and no other person's activity. */
 export function ownerProactive(part) {
   if (!part || typeof part !== "object") return part;
-  return { ...part, bots: Object.fromEntries(Object.entries(part.bots ?? {}).map(([id, entry]) => [id, entry && typeof entry === "object" ? (({ activity: _activity, ...rest }) => rest)(entry) : entry])) };
+  const { newChatPeople, ...own } = part;
+  return { ...own, bots: Object.fromEntries(Object.entries(part.bots ?? {}).map(([id, entry]) => [id, entry && typeof entry === "object" ? (({ activity: _activity, ...rest }) => rest)(entry) : entry])) };
 }
 
 /** A copy of the named parts with everything outside a member's role and ownership removed. */
@@ -1140,9 +1144,11 @@ export function filterParts(parts, principal, team, extra = {}) {
   const me = principal.memberId;
   const view = viewOf(team, me);
   // A member's chats: the ones they started, and the ones they were invited to.
-  const shared = (parts.chats ?? []).filter((chat) => inChat(team, chat, me) && (chat.createdBy === me || visible(role, chat.botId)));
-  const ownChats = new Set(shared.map((chat) => chat.id));
   const can = (scope, action = SCOPE_ACTIONS[scope][0]) => hasAction(role?.perms, scope, action);
+  const shared = (parts.chats ?? []).filter(chat => inChat(team, chat, me) && (chat.main
+    ? can("agents", "view") && visible(role, chat.botId)
+    : chat.createdBy === me || visible(role, chat.botId)));
+  const ownChats = new Set(shared.map((chat) => chat.id));
   const out = { ...parts };
   // `sections` are the owner's arrangement of Home; a member arranges their own view (below).
   for (const name of ["credentials", "phones", "asks", "voice", "host", "projects", "projectPanels", "tasks", "templates", "sections"]) delete out[name];

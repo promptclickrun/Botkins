@@ -121,8 +121,8 @@ export async function startService({ paths, version, trial = false, reach = !tri
     });
     installTeamworkPeers(runtime, profile, remote.transport());
     const originalAddBot = runtime.handlers.addBot;
-    runtime.handlers.addBot = (data) => {
-      const result = originalAddBot(data);
+    runtime.handlers.addBot = (data, person) => {
+      const result = originalAddBot(data, person);
       if (profile.token()) void profile.ensureLocalHost({ existing: true }).catch((error) => log.error("Profile local host: " + error.message));
       return result;
     };

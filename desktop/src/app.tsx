@@ -70,7 +70,7 @@ type Page = "Home" | "Today" | "Chats" | "Wiki" | WorkTab | "Activity" | "Usage"
 const WORK_PAGES: Page[] = [...WORK_TABS, "Activity", "Usage"];
 type Modal = "" | "bot" | "chat" | "account" | "settings" | "model";
 const personalChat = (chat: Chat) =>
-  !chat.archived && !chat.botIds && !chat.panelId && !chat.schedules?.some((entry) => entry.routine);
+  !chat.archived && (!chat.main || !!(chat.count ?? chat.messages.length)) && !chat.botIds && !chat.panelId && !chat.schedules?.some((entry) => entry.routine);
 const visitKey = (host: string, bot: string) => "botkins.lastChat." + JSON.stringify([host, bot]);
 function App() {
   const [updates] = useState(() => new WindowState());
@@ -499,8 +499,20 @@ function App() {
     open(key);
     return key;
   }
+  async function mainChat(id: string) {
+    if (!state?.proactive?.chatMode) return newChat(id);
+    const key = await api.mainChat(id);
+    await openNew(key);
+    return key;
+  }
   function botChat(b: Bot) {
     leave(() => {
+      // Settings › Chat › When you select a bot: "Main chat", when this computer keeps one.
+      if (state?.proactive?.chatMode && (state.settings.botTap ?? "main") === "main" && teamCan(state, "agents", "chat")) {
+        markBotRead(b.id);
+        void mainChat(b.id).catch(fail);
+        return;
+      }
       const chats = state?.chats.filter((c) => c.botId === b.id && personalChat(c)) ?? [];
       // Settings › Chat › When you select a bot: "Start a new chat". A new chat nobody wrote in yet
       // is that new chat, so selecting the bot twice makes one, not two; so is one that was archived
@@ -508,7 +520,7 @@ function App() {
       // archived yet: the archiving of a chat just left may still be on its way.
       if (state?.settings.botTap === "new" && teamCan(state, "agents", "chat")) {
         markBotRead(b.id);
-        const blank = newChatToReuse(state.chats, b.id, state);
+        const blank = newChatToReuse(state.chats, b.id, state, memberTeam(state)?.me.memberId);
         if (blank) {
           if (blank.archived) reopenedChats.current.add(blank.id);
           void api.setChatFlags(blank.id, { archived: false }).then(() => open(blank.id)).catch(fail);
@@ -572,11 +584,12 @@ function App() {
         return;
       }
       if (command === "new" || command === "clear") {
-        await newChat(bot?.id || state!.bots[0].id);
+        if (command === "clear" && chat?.main) await api.changeMainFork(chat.id, "reset", undefined, chat.activeFork);
+        else await newChat(bot?.id || state!.bots[0].id);
         clear();
         return;
       }
-      const id = key === "home" ? await newChat(state!.bots[0].id) : key;
+      const id = key === "home" ? await mainChat(state!.bots[0].id) : key;
       if ((command === "model" || command === "models") && !args) {
         setModal("model");
         clear();
@@ -636,7 +649,7 @@ function App() {
   }
   async function pickModel(key: string) {
     if (key === "home") {
-      const id = await newChat(state!.bots[0].id);
+      const id = await mainChat(state!.bots[0].id);
       setDrafts((prev) => ({ ...prev, [id]: prev.home || "", home: "" }));
       setDraftMentions((prev) => ({ ...prev, [id]: prev.home ?? [], home: [] }));
       setDraftCommands((prev) => ({ ...prev, [id]: prev.home ?? null, home: null }));
@@ -697,7 +710,7 @@ function App() {
         botName={key !== "home" && (chat?.botIds?.length ?? 0) > 1 ? "The group" : target.name}
         botLook={target.look}
         botVoice={target.voice}
-        startChat={key === "home" ? () => newChat(target.id) : undefined}
+        startChat={key === "home" ? () => mainChat(target.id) : undefined}
         members={
           key !== "home" && (chat?.botIds?.length ?? 0) > 1
             ? chat!.botIds!.map((id) => state!.bots.find((b) => b.id === id)!).filter(Boolean)
@@ -711,7 +724,7 @@ function App() {
   // The welcome shows on first launch and whenever no model provider that is on is connected. A workspace
   // with chats predates it. While the list loads, or every provider is still starting, nothing is known
   // yet, so an onboarded person isn't shown the welcome in the meantime.
-  const onboarded = !!state && (!!state.settings.onboarded || state.chats.length > 0);
+  const onboarded = !!state && (!!state.settings.onboarded || state.chats.some(c => !c.main || c.messages.length > 0));
   const enabledProviders = providers?.filter((p) => p.enabled) ?? [];
   const connectedProviders = enabledProviders.filter(isConnected);
   const settled = !!providers && !(enabledProviders.length > 0 && enabledProviders.every((p) => p.starting));
@@ -768,6 +781,7 @@ function App() {
         created={async (id, after) => {
           receiveSnapshot(await api.snapshot());
           if (id && after?.setUp && proactiveTeam) botPage(id, true);
+          else if (id) await mainChat(id);
         }}
       />
     );
@@ -781,6 +795,7 @@ function App() {
       if (!state) return;
       markChatsRead(chatsPageUnreadChats(state.chats).map((c) => c.id));
     },
+    mainChat: id => void mainChat(id).catch(fail),
     addBot: () => setModal("bot"),
     newChat: () => setModal("chat"),
     showChats: () => nav("Chats"),
@@ -1201,6 +1216,7 @@ function App() {
               receiveSnapshot(await api.snapshot());
               setModal("");
               if (after?.setUp && proactiveTeam) botPage(id, true);
+              else await mainChat(id);
             }}
           />
         )}

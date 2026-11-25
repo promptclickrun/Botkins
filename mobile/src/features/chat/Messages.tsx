@@ -31,7 +31,7 @@ import { Blocks, BotAvatar, Button, Chip, IconButton, Markdown, type PathLinks, 
 export type { Item };
 
 /** What a message's menu can do beyond copying and selecting: quote it in a reply, and fork the chat from it. */
-export type MessageActions = { onReact?: (index: number, time?: number) => void; onReply: (text: string) => void; /** Missing in a group chat, which can't be forked. */ onFork?: (index: number) => void; /** A turn is under way, so forking waits. */ busy: boolean };
+export type MessageActions = { onReact?: (index: number, time?: number) => void; onReply: (text: string) => void; /** Missing in a group chat, which can't be forked. */ onFork?: (index: number) => void; onMainFork?: (index: number) => void; /** A turn is under way, so forking waits. */ busy: boolean };
 
 /** Reply and Fork from here, for a message's hold menu (the desktop's words). */
 function extraActions(actions: MessageActions | undefined) {
@@ -39,13 +39,15 @@ function extraActions(actions: MessageActions | undefined) {
   return [
     ...(actions.onReact ? [{ id: "react", title: "React", image: "face.smiling" }] : []),
     { id: "reply", title: "Reply", image: "arrowshape.turn.up.left" },
-    ...(actions.onFork ? [{ id: "fork", title: "Fork from here", image: "arrow.triangle.branch", attributes: { disabled: actions.busy } }] : []),
+    ...(actions.onMainFork ? [{ id: "main-fork", title: "Fork in Main chat", image: "arrow.triangle.branch", attributes: { disabled: actions.busy } }] : []),
+    ...(actions.onFork ? [{ id: "fork", title: actions.onMainFork ? "Fork as new chat" : "Fork from here", image: "arrow.triangle.branch", attributes: { disabled: actions.busy } }] : []),
   ];
 }
 function runExtra(event: string, message: Message, index: number, actions: MessageActions | undefined) {
   if (event === "react") actions?.onReact?.(index, message.time);
   else if (event === "reply") actions?.onReply(message.text);
   else if (event === "fork") actions?.onFork?.(index);
+  else if (event === "main-fork") actions?.onMainFork?.(index);
 }
 
 /**

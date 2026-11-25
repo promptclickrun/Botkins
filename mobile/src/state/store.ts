@@ -7,6 +7,7 @@ import type { ChatDetail, Live, Message, ModelInfo, Parts, ProviderStatus, Reaso
 
 /** A chat's messages as loaded so far: a run of them ending at the newest. */
 export type ChatView = {
+  activeFork?: string;
   /** The index, in the whole chat, of the first message held. */
   from: number;
   total: number;
@@ -85,9 +86,9 @@ useApp.subscribe((state, prev) => {
 export function mergeChat(held: ChatView | undefined, next: ChatDetail): ChatView {
   const runs: Record<string, Run> = {};
   for (const run of next.runs) runs[run.id] = run;
-  const fresh: ChatView = { from: next.from, total: next.total, messages: next.messages, runs, todos: next.todos, ...(next.pane && { pane: next.pane }) };
+  const fresh: ChatView = { ...(next.activeFork && { activeFork: next.activeFork }), from: next.from, total: next.total, messages: next.messages, runs, todos: next.todos, ...(next.pane && { pane: next.pane }) };
   // Earlier messages stay when the new page continues the same chat without a gap.
-  if (!held || next.from < held.from || next.from > held.from + held.messages.length || next.total < held.total) return fresh;
+  if (!held || next.activeFork !== held.activeFork || next.from < held.from || next.from > held.from + held.messages.length || next.total < held.total) return fresh;
   return {
     ...fresh,
     from: held.from,

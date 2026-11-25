@@ -67,8 +67,8 @@ function ChatRow({ chat, bots, sections, actions }: { chat: ChatSummary; bots: M
   // Renaming and deleting a chat are its starter's (and the owner's); someone invited to it has their own marks only.
   const mine = myPlace(chat, me) === "manages";
   const canRegenerate = useCanRegenerateTitle(chat, mine);
-  const starters = mine ? [{ id: "rename", title: "Rename…", image: "pencil" }, ...(canRegenerate ? [regenerateTitleAction] : [])] : [];
-  const ends = mine ? [{ id: "delete", title: "Delete", image: "trash", attributes: { destructive: true } }] : [];
+  const starters = mine && !chat.main ? [{ id: "rename", title: "Rename…", image: "pencil" }, ...(canRegenerate ? [regenerateTitleAction] : [])] : [];
+  const ends = mine && !chat.main ? [{ id: "delete", title: "Delete", image: "trash", attributes: { destructive: true } }] : [];
   // A section is the person's own way to group their chats, like a pin.
   const filing = sections ? [moveToSection(chat, sections)] : [];
   const menu = chat.archived
@@ -78,7 +78,7 @@ function ChatRow({ chat, bots, sections, actions }: { chat: ChatSummary; bots: M
         ...filing,
         { id: "unread", title: chat.unread ? "Mark as read" : "Mark as unread", image: chat.unread ? "envelope.open" : "envelope.badge" },
         ...starters,
-        { id: "archive", title: "Archive", image: "archivebox" },
+        ...(chat.main ? [] : [{ id: "archive", title: "Archive", image: "archivebox" }]),
         ...ends,
       ];
   const viewOnlyMenu = canView && !chat.archived && chat.unread ? [{ id: "unread", title: "Mark as read", image: "envelope.open" }] : [];
@@ -120,7 +120,7 @@ function ChatRow({ chat, bots, sections, actions }: { chat: ChatSummary; bots: M
                 {title}
               </T>
               <T variant="footnote" color={chat.unread ? "accentText" : "faint"} weight={chat.unread ? "600" : "400"}>
-                {ago(chat.time)}
+                {chat.time ? ago(chat.time) : ""}
               </T>
             </View>
             <View style={{ flexDirection: "row", alignItems: "center", gap: space.sm }}>

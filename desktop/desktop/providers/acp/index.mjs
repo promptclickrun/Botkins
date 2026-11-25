@@ -376,6 +376,7 @@ class AcpSession extends ProviderSession {
 }
 
 export class AcpProvider extends ModelProvider {
+  nativeCompact = false; // ACP has no session compaction method.
   defaultEnabled = false;
   /**
    * @param options.id, name, description  How the provider appears in Botkins.

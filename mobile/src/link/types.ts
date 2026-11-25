@@ -505,6 +505,9 @@ export type ChatContext = { current: number; limit: number; system?: number; too
 /** A chat as lists show it. Its messages arrive in a ChatDetail when the chat is open. */
 export type ChatSummary = {
   hostDispatch?: true;
+  main?: boolean;
+  activeFork?: string;
+  forks?: { id: string; name: string }[];
   fastMode?: FastMode;
   id: string;
   botId: string;
@@ -690,7 +693,7 @@ export type ChatPane = {
   closed?: { runId: string | null; at: number };
 };
 /** One page of a chat's messages. `from` is the index of the first one in the whole chat. */
-export type ChatDetail = { id: string; from: number; total: number; messages: Message[]; runs: Run[]; todos?: Todo[]; pane?: ChatPane };
+export type ChatDetail = { id: string; activeFork?: string; from: number; total: number; messages: Message[]; runs: Run[]; todos?: Todo[]; pane?: ChatPane };
 
 export type FormField = {
   type: string;
@@ -1210,7 +1213,7 @@ export type ProactiveBot = Partial<ProactiveBotSettings> & {
     evaluation?: { trained: number; tested: number; baseline: number; previous: number; challenger: number; promoted: boolean };
   };
 };
-export type ProactivePart = { enabled: boolean; bots: Record<string, ProactiveBot | undefined> };
+export type ProactivePart = { chatMode?: "main" | "new"; enabled: boolean; bots: Record<string, ProactiveBot | undefined> };
 export type ProactiveLog = { at: number; reason: "signals" | "sweep" | "check" | "context" | "review"; score?: number; signals: number; outcome: "alerted" | "silent" | "failed"; runId: string; said?: string };
 export type Parts = {
   meta: Meta;
@@ -1703,6 +1706,9 @@ export type Calls = {
   exportTemplateText(target: { templateId: string } | { botId: string }): SharedFile;
   /** Makes a template from a shared file's text and answers its id. Needs "files-v1". */
   importTemplateText(file: { name?: string; text: string }): string;
+  mainChat(botId: string): string;
+  changeMainFork(id: string, action: "reset" | "fork" | "switch", value?: number | string, expected?: string): string;
+  setProactiveChatMode(mode: "main" | "new"): void;
   createChat(botId: string): string;
   createGroupChat(botIds: string[], title?: string): string;
   setChatFlags(id: string, flags: Partial<Pick<ChatSummary, "pinned" | "archived" | "unread">>): void;

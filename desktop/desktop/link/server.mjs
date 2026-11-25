@@ -1763,6 +1763,7 @@ export class LinkHost extends EventEmitter {
     const chat = (state.chats ?? []).find((item) => item.id === chatId);
     if (!chat) throw new Failure("That chat is no longer available.");
     if (chat.hostDispatch) throw new Failure("A cross-host Teamwork chat is private to the owner.");
+    if (chat.main) throw new Failure("Main chat stays private. Invite people to a new chat instead.");
     if (privateProactiveChat(chat)) throw new Failure("This chat holds one person's alerts and can't be shared.");
     if (person !== OWNER && !team.members.some((member) => member.id === person)) throw new Failure("That person is no longer on the team.");
     const people = chatPeople(team, chat);
@@ -1810,6 +1811,7 @@ export class LinkHost extends EventEmitter {
   memberView(principal, method, args, state) {
     const team = this.store.data.team;
     let view = viewOf(team, principal.memberId);
+    if (method === "setChatFlags" && args[1]?.archived && state.chats?.some(c => c.id === args[0] && c.main)) throw new Failure("Main chat stays in your chats.");
     if (method === "setBotFlags") view = withBotFlags(view, String(args[0]), args[1]);
     else if (method === "reorderBots") view = { ...view, order: (Array.isArray(args[0]) ? args[0] : []).filter((id) => typeof id === "string").slice(0, 500) };
     else if (method === "setChatFlags") view = withChatFlags(view, String(args[0]), args[1], (state.chats ?? []).find((chat) => chat.id === args[0])?.time);
@@ -2487,7 +2489,7 @@ export class LinkHost extends EventEmitter {
     } else delete next.spaces;
     // Who was invited to each chat, for the owner's lists; a member's are added with their own cut (filterParts).
     const invites = this.store.data.team.chats ?? {};
-    next.chats = (next.chats ?? []).map((chat) => (invites[chat.id]?.length ? { ...chat, invited: [...invites[chat.id]] } : chat));
+    next.chats = (next.chats ?? []).map((chat) => (!chat.main && invites[chat.id]?.length ? { ...chat, invited: [...invites[chat.id]] } : chat));
     // The owner's own sections for their chats; a member's are added with their own cut (filterParts).
     const sections = chatSectionsOf(this.store.data.team, OWNER);
     next.chatSections = sections.list;

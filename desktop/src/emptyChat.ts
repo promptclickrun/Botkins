@@ -6,6 +6,7 @@ type Busy = Pick<State, "streams" | "queued">;
 
 /** A chat nobody wrote in and nothing is set on: no message, not working, nothing queued, not pinned, no schedule, not a panel's. */
 const blank = (chat: Chat, state: Busy) =>
+  !chat.main &&
   !chat.pinned &&
   !chat.panelId &&
   !chat.schedules?.length &&
@@ -33,7 +34,7 @@ export function leftEmpty(chat: Chat | undefined, state: Busy, draft = "", reope
  * select-and-leave would leave one more archived empty chat. A group's chat and a chat started in
  * a project are not the bot's plain new chat, so they are never reused.
  */
-export function newChatToReuse(chats: Chat[], botId: string, state: Busy) {
-  const mine = chats.filter((chat) => chat.botId === botId && !chat.botIds && !chat.projectId && blank(chat, state));
+export function newChatToReuse(chats: Chat[], botId: string, state: Busy, person = "owner") {
+  const mine = chats.filter((chat) => chat.botId === botId && (chat.createdBy ?? "owner") === person && !chat.botIds && !chat.projectId && blank(chat, state));
   return mine.find((chat) => !chat.archived) ?? mine.filter((chat) => chat.archived).sort((a, b) => b.time - a.time)[0];
 }

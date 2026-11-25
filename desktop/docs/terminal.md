@@ -335,6 +335,14 @@ botkins templates use inbox-sorter@botkins --name Sorter
 
 ### Chats
 
+`botkins chat <bot>` opens your Main chat with that bot. Use `--new` to start a separate chat, or `--chat <id>` to open an existing thread. Each person's Main chat is private and keeps its address, including when its model changes.
+
+- `botkins chats compact <id>` compacts the active conversation. An ACP model summarizes in a separate session because ACP has no native compact command.
+- `botkins chats fork <id> --at 4 --in-main` continues from message 4 in a new fork of the same Main chat. Without `--in-main`, the command creates a separate thread.
+- `botkins chats reset <id>` starts with empty context. `botkins chats show <id>` lists the saved forks. `botkins chats switch-fork <id> <fork-id>` resumes one, including its previous messages.
+- `botkins models --chat <id> --model <provider/model>` selects the chat's model. Use `inherit` to follow the bot again.
+- In Settings › Chat › Proactive signals, **Main chat** is the default. Choose **New chat every time** to receive each chat alert in a new private thread. In the terminal use `botkins preferences set proactive.chatMode new` or `main`. The choice applies to your alerts on this host. Checks still run in their own routines. Taking an offer starts its own work thread.
+
 `botkins chat <bot>` talks to a bot. `botkins chats` keeps the chats that the Chats page of the window shows.
 
 When the bot asks for an approval in `botkins chat`, the command shows the request on standard error and asks at a terminal. With no terminal it refuses the request: no flag approves one. A person approves a request at a terminal, in the app's window or on a phone. The service's call `chat.respond` refuses a yes (`approve`, `remember`) without the mark `{ "agreed": true }`. A no, a cancel and an answer to a question need none. A bot must never answer a request that waits in a chat: the person does.

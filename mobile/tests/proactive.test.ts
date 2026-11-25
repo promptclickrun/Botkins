@@ -191,8 +191,20 @@ test("through the link: the owner sets anyone, a member only their own entry, ea
     const patId = idOf("Pat");
     await until(() => Array.isArray(sam.parts.bots) && !!sam.parts.proactive && !!pat.parts.proactive, "the members' parts");
     assert.ok(ownerParts.meta.capabilities.includes("proactive-team-v1"));
-    assert.deepEqual(sam.parts.proactive, { enabled: true, bots: {} }, "the computer's switch is on from the start; no bot is set up");
+    assert.deepEqual(sam.parts.proactive, { enabled: true, bots: {}, chatMode: "main" }, "the computer's switch is on from the start; no bot is set up");
 
+    const ownMain = await owner.call<string>("mainChat", "bot-mira");
+    const samMain = await sam.client.call<string>("mainChat", "bot-mira");
+    assert.notEqual(ownMain, samMain);
+    await assert.rejects(sam.client.call("mainChat", "bot-mira", "owner"), /Choose a bot/);
+    await assert.rejects(sam.client.call("changeMainFork", ownMain, "reset"), /belongs to/);
+    await assert.rejects(sam.client.call("setChatFlags", samMain, { archived: true }), /Main chat/);
+    await assert.rejects(sam.client.call("link.team.inviteToChat", samMain, "owner"), /stays private/);
+    await sam.client.call("setProactiveChatMode", "new");
+    await until(() => sam.parts.proactive?.chatMode === "new", "Sam's preference");
+    assert.equal(ownerParts.proactive.chatMode, "main");
+    assert.equal(pat.parts.proactive.chatMode, "main");
+    assert.equal("newChatPeople" in sam.parts.proactive, false);
     // The computer's switch is the owner's alone.
     await assert.rejects(sam.client.call("setPreferences", { proactive: { enabled: false } }), /display preferences only|can't do that/);
     await assert.rejects(owner.call("setPreferences", { proactive: { botId: "bot-mira" } }), /Unknown Proactive agent setting/);
@@ -239,6 +251,7 @@ test("through the link: the owner sets anyone, a member only their own entry, ea
     const alertIn = (parts: Record<string, any>) => parts.chats?.find((chat: any) => chat.botId === "bot-mira" && !chat.schedules);
     const alerts = [...(backend as any).proactiveAlerts.entries()] as [string, any][];
     const [samsRun, samsAlert] = alerts.find(([, alert]) => alert.person === samId)!;
+    assert.notEqual(samsAlert.chatId, samMain);
     const [ownersRun] = alerts.find(([, alert]) => alert.person === "owner")!;
     await until(() => !!alertIn(sam.parts), "the chat with Sam's alert in Sam's parts");
     const message = (backend as any).state.chats.find((chat: any) => chat.id === samsAlert.chatId).messages.at(-1);

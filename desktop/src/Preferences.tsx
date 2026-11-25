@@ -405,7 +405,7 @@ const approvalHelp: Record<Values["approval"], string> = {
   all: "Approves every request, commands and file changes too. Managed policies still apply.",
 };
 
-export function ChatDisplaySettings({ settings }: Pick<Props, "settings">) {
+export function ChatDisplaySettings({ settings, chatMode, fail }: Pick<Props, "settings" | "fail"> & { chatMode?: "main" | "new" }) {
   return (
     <Group title="Chat">
       <Row label="Steps" help={({folded:"Tool calls stay in the working rail", open:"Show every tool call in the chat as it happens", failed:"Show only failed tool calls in the chat"})[settings.steps ?? "folded"]}>
@@ -426,11 +426,18 @@ export function ChatDisplaySettings({ settings }: Pick<Props, "settings">) {
         </select>}
       </Row>
       <Row label="When you select a bot">
-        {(id) => <select className="bot-tap" id={id} value={settings.botTap ?? "latest"} onChange={e => saveChatDisplay({ botTap: e.target.value === "new" ? "new" : "latest" })}>
+        {(id) => <select className="bot-tap" id={id} value={settings.botTap === "main" && !chatMode ? "latest" : settings.botTap ?? (chatMode ? "main" : "latest")} onChange={e => saveChatDisplay({ botTap: e.target.value as Values["botTap"] })}>
+          {chatMode && <option value="main">Open Main chat</option>}
           <option value="latest">Open the latest chat</option>
           <option value="new">Start a new chat</option>
         </select>}
       </Row>
+      {chatMode && <Row label="Proactive signals" help="Where your bots send alerts delivered to chat.">
+        {id => <select id={id} value={chatMode} onChange={e => void window.botkins.setProactiveChatMode(e.target.value === "new" ? "new" : "main").catch(fail)}>
+          <option value="main">Main chat</option>
+          <option value="new">New chat every time</option>
+        </select>}
+      </Row>}
     </Group>
   );
 }

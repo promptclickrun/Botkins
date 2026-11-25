@@ -65,6 +65,7 @@ export const PREFERENCES = {
   "background.runAtStartup": switches("The desktop app starts with the computer (for the app's window; this host starts with `botkins service install`)"),
   "sidebar.order": { type: "list", values: SIDEBAR, about: "The order of the places in the side menu: " + SIDEBAR.join(", ") },
   "sidebar.collapsed": switches("The side menu shows icons only"),
+  "proactive.chatMode": choice(["main", "new"], "Where your proactive chat alerts land: Main chat or New chat every time"),
   "proactive.enabled": switches("Experimental: the computer's switch for the Proactive agent (each bot's own is `botkins bots proactive`)"),
 };
 /** What each choice of the preference `harness` is, in a sentence. */
@@ -187,7 +188,11 @@ const macTools = () => MAC_TOOLS.map((id) => ({ id, name: MAC_TOOL_NAMES[id] ?? 
  * @param handlers   `runtime.handlers`.
  */
 export function prefsApi({ workspace, handlers }) {
-  const settings = () => wholeSettings(workspace.state.settings);
+  const settings = () => {
+    const prefs = wholeSettings(workspace.state.settings);
+    prefs.proactive.chatMode = workspace.proactive.chatMode();
+    return prefs;
+  };
   const view = (only) => Object.fromEntries(Object.keys(PREFERENCES).filter((key) => !only || key === only).map((key) => [key, lookup(settings(), key)]));
   const days = (value) => {
     const count = value === undefined || value === null ? 30 : Number(value);
@@ -212,7 +217,8 @@ export function prefsApi({ workspace, handlers }) {
       const parsed = parsePreference(key, spec, value);
       const gives = Object.hasOwn(WIDENS, key) ? WIDENS[key](lookup(settings(), key), parsed) : null;
       if (gives && options?.agreed !== true) throw bad(gives + " Show that to the person, and give `{ \"agreed\": true }` after the value (on the command line, `--yes`).", "NEEDS_YES");
-      await handlers.setPreferences(patchOf(key, parsed));
+      if (key === "proactive.chatMode") await handlers.setProactiveChatMode(parsed);
+      else await handlers.setPreferences(patchOf(key, parsed));
       return { key, value: lookup(settings(), key) };
     },
 
