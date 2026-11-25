@@ -14,6 +14,13 @@ interface Env {
   APNS_TEAM_ID?: string;
   /** Tests only: how much all copies of shared spaces may take together, in bytes, in place of 1 GiB. Unset in wrangler.jsonc. */
   SPACE_BYTES_MAX?: string;
+  /** The "Botkins Intake" GitHub App, installed on FEEDBACK_REPO only with Issues: write. Feedback is off without all three. */
+  GITHUB_APP_ID?: string;
+  GITHUB_APP_INSTALLATION_ID?: string;
+  /** PEM text of the app's PKCS#8 private key. */
+  GITHUB_APP_KEY?: string;
+  /** The website form's Turnstile secret. Website reports are refused without it. */
+  TURNSTILE_SECRET?: string;
   /** Tests only: replaces both Apple hosts, and adds an `x-botkins-apns-env` header. Unset in wrangler.jsonc. */
   APNS_HOST?: string;
 }

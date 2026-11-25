@@ -625,6 +625,10 @@ export function controlApi(service) {
       return runtime.updates.status();
     },
 
+    // ── Feedback ─────────────────────────────────────────────────────────────────────────────
+    // A bug report or feature request becomes a public issue on the Botkins repo (the window's sendFeedback).
+    "feedback.send": ([report]) => handlers.sendFeedback(report),
+
     methods: () => ({ control: Object.keys(api).sort(), workspace: Object.keys(handlers).sort() }),
   };
   // Tools (MCP servers), skills, and a bot's tools, skills and access (desktop/terminal/control-tools.mjs).

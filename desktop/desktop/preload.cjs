@@ -380,6 +380,7 @@ for (const name of [
   "providerUseToken",
   "installProvider",
   "appInfo",
+  "sendFeedback",
   "appUpdateStatus",
   "checkAppUpdate",
   "installAppUpdate",

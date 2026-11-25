@@ -1207,6 +1207,8 @@ declare global {
       installAppUpdate(): Promise<AppUpdate>;
       openAppRelease(): Promise<void>;
       appInfo(): Promise<AppInfo>;
+      /** A bug report or feature request becomes an issue on the Botkins repo, sent by this computer. */
+      sendFeedback(report: { kind: "bug" | "feature"; title: string; body: string }): Promise<{ number: number; url: string }>;
       // Phone access (Settings › Phone). State.phones.revision goes up when phoneLink() may have changed.
       phoneLink(): Promise<PhoneLink>;
       setPhoneLink(enabled: boolean): Promise<PhoneLink>;

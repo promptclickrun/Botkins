@@ -711,13 +711,13 @@ export function createRelay({ dataDir, pushUpstream = DEFAULT_PUSH_UPSTREAM, cli
     return room;
   };
 
-  async function forwardPush(request) {
+  async function forwardPush(request, route = "/v1/push", off = "push_off") {
     if (request.method !== "POST") return Response.json({ error: "method_not_allowed" }, { status: 405 });
-    if (pushUpstream === "off") return Response.json({ error: "push_off" }, { status: 503 });
+    if (pushUpstream === "off") return Response.json({ error: off }, { status: 503 });
     const body = await readCappedText(request, MAX_PUSH_BODY);
     if (body === null) return Response.json({ error: "too_large" }, { status: 413 });
     try {
-      const upstream = await fetch(pushUpstream.replace(/\/+$/, "") + "/v1/push", {
+      const upstream = await fetch(pushUpstream.replace(/\/+$/, "") + route, {
         method: "POST",
         headers: { "content-type": request.headers.get("content-type") ?? "application/json" },
         body,
@@ -796,6 +796,12 @@ export function createRelay({ dataDir, pushUpstream = DEFAULT_PUSH_UPSTREAM, cli
     if (url.pathname === "/v1/push") {
       if (!allowed("requests", network)) return Response.json({ error: "rate_limited" }, { status: 429 });
       return forwardPush(request);
+    }
+    // A computer's signed bug report or feature request goes on to the upstream relay, which holds
+    // the GitHub token and checks the signature. This relay never sees a token of its own.
+    if (url.pathname === "/v1/feedback") {
+      if (!allowed("requests", network)) return Response.json({ error: "rate_limited" }, { status: 429 });
+      return forwardPush(request, "/v1/feedback", "feedback_off");
     }
     const spaceRoute = SPACE_ROUTE.exec(url.pathname);
     if (spaceRoute) return space(request, network, spaceRoute[1]);

@@ -1045,6 +1045,11 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
     setAppUpdateAuto: (on) => updating().setAuto(on),
     openAppRelease: () => host.shell.openExternal(releasePage),
     appInfo: () => host.info(),
+    // A bug report or feature request from this window, signed by this computer's link (link.feedback.send).
+    sendFeedback: (report) => {
+      if (!link?.sendFeedback) throw new Error("Feedback isn't available on this computer.");
+      return link.sendFeedback({ ...report, app: "Botkins Desktop", version: host.info().version, platform: host.info().platform });
+    },
     // Phone access (Settings › Phone, desktop/phonepage.mjs). Only this window may call these:
     // none is in REMOTE_METHODS (desktop/link/methods.mjs), so a phone can't pair other phones,
     // change what phones may do with this screen, or turn "away from home" on.

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import {
   Bell,
+  Bug,
   Bot as BotIcon,
   Boxes,
   ChartColumn,
@@ -79,6 +80,7 @@ export type SectionId =
   | "storage"
   | "account"
   | "experimental"
+  | "feedback"
   | "about";
 type BotView = "profile" | "model" | "capabilities" | "memory";
 const SECTIONS: { id: SectionId; label: string; icon: LucideIcon }[] = [
@@ -105,6 +107,7 @@ const SECTIONS: { id: SectionId; label: string; icon: LucideIcon }[] = [
   // The id stays "account" so /login and older callers still land here.
   { id: "account", label: "Model providers", icon: Boxes },
   { id: "experimental", label: "Experimental", icon: FlaskConical },
+  { id: "feedback", label: "Send feedback", icon: Bug },
   { id: "about", label: "About", icon: Info },
 ];
 
@@ -575,6 +578,7 @@ export default function Settings({
             />
           )}
           {section === "experimental" && <ExperimentalSettings state={state} bots={bots} settings={preferences} change={changePreferences} />}
+          {section === "feedback" && <Feedback />}
           {section === "about" && <About />}
           {error && (
             <p className="set-status error-text" role="alert">
@@ -651,6 +655,56 @@ function BotProfileForm({
         </div>
       </div>
     </form>
+  );
+}
+
+/** Settings › Send feedback: a bug report or a feature request, opened as an issue on the public Botkins repo. */
+function Feedback() {
+  const [kind, setKind] = useState<"bug" | "feature">("bug");
+  const [title, setTitle] = useState("");
+  const [body, setBody] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [problem, setProblem] = useState("");
+  const [sent, setSent] = useState<{ number: number; url: string } | null>(null);
+  const ready = title.trim().length >= 4 && body.trim().length >= 4 && !busy;
+  async function send() {
+    setBusy(true);
+    setProblem("");
+    try {
+      setSent(await api.sendFeedback({ kind, title: title.trim(), body: body.trim() }));
+      setTitle("");
+      setBody("");
+    } catch (error) { setProblem(errorText(error)); }
+    finally { setBusy(false); }
+  }
+  if (sent) return (
+    <Group>
+      <Row label={"Thanks. It\u2019s issue #" + sent.number + "."} help="You can follow it, and add to it, on GitHub.">
+        {(id) => <div>
+          <button id={id} className="secondary" onClick={() => void api.openLink(sent.url)}>Open on GitHub</button>
+          <button className="secondary" onClick={() => setSent(null)}>Send another</button>
+        </div>}
+      </Row>
+    </Group>
+  );
+  return (
+    <Group
+      footer="This opens a public issue on GitHub with what you write here, the app version and your platform. Leave out names, chats and anything private."
+      actions={<button disabled={!ready} onClick={() => void send()}>{busy ? "Sending\u2026" : kind === "bug" ? "Report bug" : "Send request"}</button>}
+    >
+      <Row label="Kind">
+        {(id) => <select id={id} value={kind} onChange={(e) => setKind(e.target.value === "feature" ? "feature" : "bug")}>
+          <option value="bug">Bug report</option>
+          <option value="feature">Feature request</option>
+        </select>}
+      </Row>
+      <Row label="Title" stacked>
+        {(id) => <input id={id} value={title} maxLength={120} placeholder={kind === "bug" ? "What went wrong, in a few words" : "What you\u2019d like, in a few words"} onChange={(e) => setTitle(e.target.value)} />}
+      </Row>
+      <Row label={kind === "bug" ? "What happened" : "Details"} help={problem || undefined} stacked>
+        {(id, describedBy) => <textarea id={id} aria-describedby={describedBy} rows={8} value={body} maxLength={8000} placeholder={kind === "bug" ? "What you did, what you expected, and what happened instead." : "What it would let you do, and how you\u2019d use it."} onChange={(e) => setBody(e.target.value)} />}
+      </Row>
+    </Group>
   );
 }
 

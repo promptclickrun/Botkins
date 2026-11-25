@@ -18,7 +18,10 @@
   // where every socket comes from one address.
   // APNS_TOPIC is the iPhone app's bundle id. The APNs key is not here: APNS_KEY_P8, APNS_KEY_ID and
   // APNS_TEAM_ID are Worker secrets (see README). APNS_HOST is for tests only and stays unset.
-  "vars": { "RATE_LIMITS": "on", "APNS_TOPIC": "app.botkins.mobile" },
+  // FEEDBACK_REPO is where /v1/feedback opens issues, as the Botkins Intake GitHub App (installed on that repo
+  // only, Issues: write). GITHUB_APP_ID, GITHUB_APP_INSTALLATION_ID, GITHUB_APP_KEY and TURNSTILE_SECRET (the
+  // website form) are Worker secrets; without the app's three the route answers 503.
+  "vars": { "RATE_LIMITS": "on", "APNS_TOPIC": "app.botkins.mobile", "FEEDBACK_REPO": "promptclickrun/Botkins" },
   "ratelimits": [
     { "name": "SOCKETS", "namespace_id": "47611", "simple": { "limit": 30, "period": 60 } },
     { "name": "REQUESTS", "namespace_id": "47612", "simple": { "limit": 120, "period": 60 } },
@@ -27,7 +30,9 @@
     // Public reads of a shared space's copy: 60 a minute for each network.
     { "name": "SPACES", "namespace_id": "47615", "simple": { "limit": 60, "period": 60 } },
     // Pushes: 240 a minute for each computer key. POST /v1/push counts one for each item.
-    { "name": "PUSHES", "namespace_id": "47613", "simple": { "limit": 240, "period": 60 } }
+    { "name": "PUSHES", "namespace_id": "47613", "simple": { "limit": 240, "period": 60 } },
+    // Bug reports and feature requests: 5 a minute for each computer key, or each network from the website.
+    { "name": "FEEDBACK", "namespace_id": "47616", "simple": { "limit": 5, "period": 60 } }
   ],
   "durable_objects": {
     "bindings": [
