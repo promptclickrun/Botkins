@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import { conversations, makeMainChat } from "./link/main-chat.mjs";
 import { textField } from "./panels.mjs";
 import { nextLook } from "./looks.mjs";
+import { holderSessions } from "./providers/sessions.mjs";
 import { GROUP_MIN, isGroup, memberSessionId } from "./groups.mjs";
 import { helperSessionId } from "./teamwork.mjs";
 
@@ -201,9 +202,10 @@ export class Agents {
     const ended = groups.filter((g) => g.botIds.length - 1 < GROUP_MIN);
     chats.push(...ended);
     const memberSessions = [];
+    const def = this.ws.providers.default.id;
     for (const group of groups) {
       if (ended.includes(group)) continue;
-      if (group.members?.[id]?.established) memberSessions.push(memberSessionId(group, id));
+      if (group.members?.[id]) memberSessions.push(...holderSessions(group.members[id], memberSessionId(group, id), def));
       group.botIds = group.botIds.filter((b) => b !== id);
       delete group.members?.[id];
       if (group.botId === id) group.botId = group.botIds[0];
@@ -211,7 +213,7 @@ export class Agents {
     // Sessions this bot kept as a helping teammate in other bots' chats (desktop/teamwork.mjs).
     for (const chat of this.state.chats.flatMap(conversations)) {
       if (!chat.helpers?.[id]) continue;
-      if (chat.helpers[id].established && !chats.includes(chat)) memberSessions.push(helperSessionId(chat, id));
+      if (!chats.includes(chat)) memberSessions.push(...holderSessions(chat.helpers[id], helperSessionId(chat, id), def));
       delete chat.helpers[id];
     }
     const chatIds = new Set(chats.map((c) => c.id));
@@ -318,19 +320,14 @@ export class Agents {
     const browser = this.ws.secureInputs?.formBrowser;
     if (browser) await Promise.all(chats.map(chat => browser.close(chat.id)));
     // A group chat has one session per member (desktop/groups.mjs); any chat may hold teammates' sessions.
+    const def = this.ws.providers.default.id;
     const sessions = chats.flatMap(conversations).flatMap((c) => [
       ...(isGroup(c)
-        ? Object.entries(c.members ?? {})
-            .filter(([, m]) => m.established)
-            .map(([botId, m]) => [memberSessionId(c, botId), m.sessionProvider])
-        : c.established
-          ? [[c.sessionId ?? c.id, c.sessionProvider]]
-          : []),
-      ...Object.entries(c.helpers ?? {})
-        .filter(([, h]) => h.established)
-        .map(([botId, h]) => [helperSessionId(c, botId), h.sessionProvider]),
+        ? Object.entries(c.members ?? {}).flatMap(([botId, m]) => holderSessions(m, memberSessionId(c, botId), def))
+        : holderSessions(c, c.sessionId ?? c.id, def)),
+      ...Object.entries(c.helpers ?? {}).flatMap(([botId, h]) => holderSessions(h, helperSessionId(c, botId), def)),
     ]);
-    sessions.push(...extra.map((id) => [id, undefined]));
+    sessions.push(...extra.map((item) => (Array.isArray(item) ? item : [item, undefined])));
     if (!sessions.length) return;
     const results = await Promise.allSettled(sessions.map(([id, provider]) => this.ws.providers.get(provider).deleteSession(id)));
     const failed = results.find((r) => r.status === "rejected" && !/not found/i.test(String(r.reason?.message)));

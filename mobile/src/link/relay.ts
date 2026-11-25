@@ -74,8 +74,8 @@ export type RelayOptions = {
   deadMs?: number;
 };
 
-/** The fetch `relayFetch` makes. `check` pings every open relay socket and ends those that stay silent for `ms` (3 s). `rest` closes idle sockets immediately when the app goes to background. */
-export type RelayFetch = FetchLike & { supportsPush: true; check(ms?: number): void; rest(): void };
+/** The fetch `relayFetch` makes. `check` pings every open relay socket and ends those that stay silent for `ms` (3 s). `rest` closes sockets cleanly when the app goes to background (`force: true` closes even if a backgrounded request was still pending). */
+export type RelayFetch = FetchLike & { supportsPush: true; check(ms?: number): void; rest(options?: { force?: boolean }): void };
 
 const ROUTES: Record<string, number> = { hello: 1, pair: 2, session: 3, rpc: 4, join: 5, profile: 6 };
 const URL_SHAPE = /^https?:\/\/([^/?#]+)\/botkins\/v1\/(hello|pair|session|rpc|join|profile)$/;
@@ -366,9 +366,9 @@ export function relayFetch(fetcher: FetchLike, options: RelayOptions = {}): Rela
     check: (ms = 3000) => {
       for (const conn of [...conns.values()]) conn.check(ms);
     },
-    rest: () => {
+    rest: ({ force = false } = {}) => {
       for (const conn of [...conns.values()]) {
-        if (conn.pending.size === 0) conn.finish(new Error("The app went to the background"));
+        if (force || conn.pending.size === 0) conn.finish(new Error("The app went to the background"));
       }
     },
   });

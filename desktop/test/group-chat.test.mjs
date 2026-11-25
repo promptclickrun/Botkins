@@ -86,8 +86,8 @@ test("two members answer in order, each from its own session, and the second see
   const scoutConfig = log.configs.get(memberSessionId(chat, "scout"));
   assert.match(scoutConfig.systemMessage.content, /You are Scout, Research partner/);
   assert.match(scoutConfig.systemMessage.content, /group chat with the person and these bots: Pip/);
-  assert.deepEqual(chat.members.pip, { seen: 2, established: true, sessionProvider: "copilot" });
-  assert.deepEqual(chat.members.scout, { seen: 3, established: true, sessionProvider: "copilot" });
+  assert.deepEqual(chat.members.pip, { seen: 2, established: true, sessionProvider: "copilot", sessions: { copilot: { through: 2 } } });
+  assert.deepEqual(chat.members.scout, { seen: 3, established: true, sessionProvider: "copilot", sessions: { copilot: { through: 3 } } });
   assert.equal(ws.state.runs[0].status, "Completed");
   assert.equal(chat.established, false, "the group itself has no session");
 

@@ -7,7 +7,7 @@
 // native side how it went: the card shows "Sent", or gets its buttons back.
 import { Activities, type QueuedAnswer } from "../../modules/botkins-activity";
 import { answerCall } from "./answerCall";
-import { api, freshSync, restIfAway, switchComputer } from "./link";
+import { api, freshSync, holdBackgroundLink, restIfAway, switchComputer } from "./link";
 import { useApp } from "./store";
 
 const latestRun = (chatId: string) =>
@@ -19,6 +19,7 @@ const sending = new Set<string>();
 async function send(answer: QueuedAnswer) {
   if (sending.has(answer.id) || !Activities?.answered) return;
   sending.add(answer.id);
+  const releaseHold = holdBackgroundLink("push");
   try {
     // An answer to another paired computer's request uses that computer, as a tap on its alert does.
     const { pairing, pairings } = useApp.getState();
@@ -42,6 +43,7 @@ async function send(answer: QueuedAnswer) {
     }
   } finally {
     sending.delete(answer.id);
+    releaseHold();
     restIfAway();
   }
 }

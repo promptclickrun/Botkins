@@ -21,7 +21,7 @@ import { ModelProvider, ProviderSession, usageData } from "../provider.mjs";
 import { cliEnv, findBinary, run, versionOf } from "../cli.mjs";
 import { buildInventory, resolvePrompt } from "../commands.mjs";
 import { QUIET_CHECK_MS, watchQuiet } from "../liveness.mjs";
-import { SessionStore, serversWithTokens, transcriptContext } from "../sessions.mjs";
+import { SessionStore, missingConversation, resumeOrRecover, serversWithTokens } from "../sessions.mjs";
 import { skillChoices, skillSupport } from "../skills.mjs";
 import { displayValue } from "../../display.mjs";
 import { env } from "../../home.mjs";
@@ -130,17 +130,6 @@ class OpenCodeSession extends ProviderSession {
     const { provider, spec } = this;
     const api = await provider.server();
     const known = provider.sessions.get(spec.sessionId);
-    // Only "not found" means OpenCode no longer has the session. A timeout or a server error is a
-    // failure: starting a new session over it would leave the real conversation behind.
-    let info =
-      known &&
-      (await api.get("/api/session/" + known.ref).then(
-        (r) => r.data,
-        (error) => {
-          if (error.status === 404) return null;
-          throw error;
-        },
-      ));
     // Servers and the bridge are added to the folder before the session, so its first turn sees their tools.
     // The address stays with the conversation, so OpenCode keeps one connection to it from turn to turn.
     const tools = [...(spec.tools ?? []), ...this.skills.tools];
@@ -150,25 +139,40 @@ class OpenCodeSession extends ProviderSession {
       ...Object.entries(servers).map(([name, server]) => api.put("/api/experimental/mcp/" + encodeURIComponent(name), { config: openCodeServer(server) }, this.location).catch((error) => console.error("OpenCode MCP server " + name + ":", error.message))),
       ...(this.bridge ? [api.put("/api/experimental/mcp/" + this.bridgeName, { config: { type: "remote", url: this.bridge.url, headers: this.bridge.headers, oauth: false, codemode: false, timeout: { execution: 900000 } } }, this.location)] : []),
     ]);
+    // Only "not found" (404 / missing conversation) means OpenCode no longer has the session. A
+    // timeout or a server error is a failure: starting a new session over it would leave the real
+    // conversation behind.
+    const { value: info, recovered, lost } = await resumeOrRecover({
+      spec,
+      hasRef: !!known,
+      isMissing: (error) => error?.status === 404 || missingConversation(error),
+      resume: async () => (await api.get("/api/session/" + known.ref)).data,
+      onMissing: () => {
+        if (!spec.temporary) provider.sessions.delete(spec.sessionId);
+      },
+      create: async () => {
+        const agents = await provider.agents(this.location);
+        const { data } = await api.post("/api/session", {
+          location: this.location,
+          model: this.modelRef(),
+          // The person's own default agent has a role of its own; a bot brings its own instructions.
+          ...(agents.includes("build") && { agent: "build" }),
+          permissions: this.rules(),
+          title: "Botkins",
+        });
+        return data;
+      },
+    });
     // A conversation OpenCode doesn't hold continues from Botkins' own transcript, told once with the
     // first message: the instructions entry is written on every turn and stays the same.
-    this.lost = !info && spec.established && spec.hasReplies ? transcriptContext(spec) : "";
-    if (info) {
+    this.lost = recovered && spec.established ? lost : "";
+    if (!recovered) {
       await api.patch("/api/session/" + info.id, { permissions: this.rules() });
       const wanted = this.modelRef();
       if (info.model?.id !== wanted.id || info.model?.providerID !== wanted.providerID || (info.model?.variant ?? "default") !== (wanted.variant ?? "default"))
         await api.post("/api/session/" + info.id + "/model", { model: wanted });
-    } else {
-      const agents = await provider.agents(this.location);
-      ({ data: info } = await api.post("/api/session", {
-        location: this.location,
-        model: this.modelRef(),
-        // The person's own default agent has a role of its own; a bot brings its own instructions.
-        ...(agents.includes("build") && { agent: "build" }),
-        permissions: this.rules(),
-        title: "Botkins",
-      }));
-      if (!spec.temporary) provider.sessions.set(spec.sessionId, { ref: info.id });
+    } else if (!spec.temporary) {
+      provider.sessions.set(spec.sessionId, { ref: info.id });
     }
     this.sessionId = info.id;
     await api.put("/api/experimental/session/" + info.id + "/instructions/entries/" + INSTRUCTIONS_KEY, { value: spec.instructions + this.skills.instructions + (spec.context ?? "") });

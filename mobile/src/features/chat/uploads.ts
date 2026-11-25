@@ -2,7 +2,7 @@
 // most 3 MB with `link.upload`, then named in `send`'s attachments.
 import { File, FileMode } from "expo-file-system";
 import type { UploadedFile } from "@/link/types";
-import { api } from "@/state/link";
+import { api, holdBackgroundLink } from "@/state/link";
 
 export const MAX_FILES = 10;
 export const MAX_BYTES = 25 * 1024 * 1024;
@@ -68,6 +68,7 @@ let queue: Promise<unknown> = Promise.resolve();
 export function upload(uri: string, name: string, onProgress: (fraction: number) => void, stopped: () => boolean): Promise<UploadedFile> {
   const run = async () => {
     if (stopped()) throw new Error("Removed");
+    const releaseHold = holdBackgroundLink("upload");
     const handle = new File(uri).open(FileMode.ReadOnly);
     try {
       const total = handle.size ?? 0;
@@ -85,6 +86,7 @@ export function upload(uri: string, name: string, onProgress: (fraction: number)
       }
     } finally {
       handle.close();
+      releaseHold();
     }
   };
   const next = queue.then(run, run);

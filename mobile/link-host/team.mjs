@@ -827,7 +827,7 @@ export function privateProactiveChat(chat) {
 
 export function withoutProactiveAlerts(chat, routine = isProactiveRoutine(chat)) {
   if (!Array.isArray(chat?.messages)) return chat;
-  const { posted: _posted, forkContext: _context, compacted: _summary, ...rest } = chat;
+  const { posted: _posted, forkContext: _context, compacted: _summary, sessions: _sessions, ...rest } = chat;
   const redact = (message) => isProactiveAlert(message) || (routine && message.role === "assistant");
   // Keep message positions for pagination and chat actions, using the clients' invisible reply marker.
   return { ...rest, messages: chat.messages.map((message) => redact(message) ? { role: "assistant", text: SILENT } : message) };

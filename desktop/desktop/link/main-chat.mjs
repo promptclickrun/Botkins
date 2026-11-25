@@ -27,7 +27,7 @@ export function findMainChat(chats, botId, person) {
 
 // These belong to the conversation the bot is continuing. The address, recipient,
 // model choice, chat flags, schedules and work history remain attached to the chat.
-const forkFields = ["messages", "sessionId", "sessionProvider", "sessionFolder", "established", "forkContext", "restartSession",
+const forkFields = ["messages", "sessionId", "sessionProvider", "sessionFolder", "sessions", "established", "forkContext", "restartSession",
   "context", "compacted", "posted", "helpers", "todos", "planApplied", "planModel"];
 
 export function changeMainContext(chat, action, value, transcript) {
@@ -61,8 +61,13 @@ export function changeMainContext(chat, action, value, transcript) {
 
 /** Inactive transcripts stay in the workspace file. Clients get the fork picker and the active conversation. */
 export function visibleChat(chat) {
-  if (!chat.main || !(chat.savedForks || chat.compacted || chat.forkContext)) return chat;
-  const { savedForks, compacted, forkContext, ...active } = chat;
+  if (!chat.main && !chat.sessions) return chat;
+  if (!chat.main) {
+    const { sessions: _sessions, ...active } = chat;
+    return active;
+  }
+  if (!(chat.savedForks || chat.compacted || chat.forkContext || chat.sessions)) return chat;
+  const { savedForks, compacted, forkContext, sessions, ...active } = chat;
   return active;
 }
 

@@ -282,6 +282,7 @@ export class Teamwork {
       title: chat.title,
       approval: chat.approval,
       messages: [],
+      get helperMessages() { return record.messages; },
       projectId: chat.projectId,
       folder: chat.folder,
       helper: true,
@@ -290,6 +291,13 @@ export class Teamwork {
       set restartSession(value) { record.restartSession = value; },
       get sessionFolder() { return record.sessionFolder; },
       set sessionFolder(value) { record.sessionFolder = value; },
+      get sessions() { return record.sessions; },
+      set sessions(value) { record.sessions = value; },
+      get forkContext() { return record.forkContext; },
+      set forkContext(value) {
+        if (value === undefined) delete record.forkContext;
+        else record.forkContext = value;
+      },
       get established() {
         return record.established;
       },
@@ -330,6 +338,15 @@ export class Teamwork {
       const { text } = await session.send({ prompt });
       if (over()) throw stopped();
       if (!text) throw new Error("no reply came back");
+      // Record the teammate's exchange so switching harnesses hands off what this helper already discussed.
+      record.messages ??= [];
+      record.messages.push({ role: "user", text: prompt }, { role: "assistant", text });
+      if (record.messages.length > 40) record.messages.splice(0, record.messages.length - 40);
+      const helperProviderId = session.providerId ?? record.sessionProvider;
+      if (helperProviderId && record.sessions?.[helperProviderId]) {
+        record.sessions[helperProviderId].through = record.messages.length;
+      }
+      this.ws.save();
       return text;
     } catch (error) {
       if (error?.code === "BOTKINS_SESSION_LOST") {

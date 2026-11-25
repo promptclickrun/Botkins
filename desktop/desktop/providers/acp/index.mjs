@@ -17,7 +17,7 @@ import { join } from "node:path";
 import { ModelProvider, ProviderSession, usageData } from "../provider.mjs";
 import { StdioRpc, cliEnv, findBinary } from "../cli.mjs";
 import { buildInventory, resolvePrompt } from "../commands.mjs";
-import { SessionStore, missingConversation, serversWithTokens, transcriptContext } from "../sessions.mjs";
+import { SessionStore, missingConversation, resumeOrRecover, serversWithTokens } from "../sessions.mjs";
 import { skillChoices, skillSupport } from "../skills.mjs";
 import { displayValue } from "../../display.mjs";
 import { ReportedLimits, modelDetails } from "../../modeldetails.mjs";
@@ -114,29 +114,40 @@ class AcpSession extends ProviderSession {
       .filter(Boolean);
     if (this.bridge) servers.push({ type: "http", name: BRIDGE, url: this.bridge.url, headers: pairs(this.bridge.headers) });
     const known = spec.established && provider.sessions.get(spec.sessionId);
-    let opened;
-    if (known && provider.live.has(known.ref)) {
-      // The agent still has the session from an earlier turn: it goes on, with the servers it was given then.
-      this.sessionId = known.ref;
-      opened = provider.live.get(known.ref);
-    } else if (known && capabilities.loadSession) {
-      // Loading replays the conversation as updates; they are the past, not this turn.
-      this.replaying = true;
-      try {
-        opened = await rpc.request("session/load", { sessionId: known.ref, cwd: spec.folder, mcpServers: servers }, 120000);
-        this.sessionId = known.ref;
-      } catch (error) {
-        if (/already loaded/i.test(error.message)) this.sessionId = known.ref;
-        else if (!missingConversation(error) && error.code !== -32002) throw error;
-      } finally {
-        this.replaying = false;
-      }
-    }
-    if (!this.sessionId) {
-      opened = await rpc.request("session/new", { cwd: spec.folder, mcpServers: servers }, 120000);
-      this.sessionId = opened.sessionId;
+    const { value: loaded, recovered, lost } = await resumeOrRecover({
+      spec,
+      hasRef: !!(known && (provider.live.has(known.ref) || capabilities.loadSession)),
+      isMissing: (error) => missingConversation(error) || error?.code === -32002,
+      resume: async () => {
+        if (provider.live.has(known.ref)) {
+          // The agent still has the session from an earlier turn: it goes on, with the servers it was given then.
+          return { sessionId: known.ref, opened: provider.live.get(known.ref) };
+        }
+        // Loading replays the conversation as updates; they are the past, not this turn.
+        this.replaying = true;
+        try {
+          const opened = await rpc.request("session/load", { sessionId: known.ref, cwd: spec.folder, mcpServers: servers }, 120000);
+          return { sessionId: known.ref, opened };
+        } catch (error) {
+          if (/already loaded/i.test(error.message)) return { sessionId: known.ref, opened: undefined };
+          throw error;
+        } finally {
+          this.replaying = false;
+        }
+      },
+      onMissing: () => {
+        if (!spec.temporary) provider.sessions.delete(spec.sessionId);
+      },
+      create: async () => {
+        const opened = await rpc.request("session/new", { cwd: spec.folder, mcpServers: servers }, 120000);
+        return { sessionId: opened.sessionId, opened };
+      },
+    });
+    const opened = loaded.opened;
+    this.sessionId = loaded.sessionId;
+    if (recovered) {
       // A conversation the agent doesn't hold continues from Botkins' own transcript.
-      this.lost = spec.established && spec.hasReplies ? transcriptContext(spec) : "";
+      this.lost = spec.established ? lost : "";
       if (!spec.temporary) provider.sessions.set(spec.sessionId, { ref: this.sessionId, told: "" });
     }
     this.options = opened?.configOptions ?? [];

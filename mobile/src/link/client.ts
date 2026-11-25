@@ -756,7 +756,7 @@ export class LinkClient {
       const direct = this.trusted(this.pairing.hosts.filter((host) => !isRelayHost(host)));
       if (!direct.length) return false;
       await findHost(this.options.fetch, direct, { serverId: this.pairing.serverId, serverKey: this.pairing.serverKey }, PROBE_HELLO_MS);
-      if (this.session !== seen || this.opening) return false;
+      if (this.resting || this.session !== seen || this.opening) return false;
       this.useSession(null);
       this.poll?.abort();
       this.wakeUp?.();
@@ -766,7 +766,7 @@ export class LinkClient {
     } finally {
       if (this.probing === seen) {
         this.probing = null;
-        if (this.session === seen) this.scheduleProbe();
+        if (this.session === seen && !this.resting) this.scheduleProbe();
       }
     }
   }
@@ -1220,8 +1220,8 @@ export class LinkClient {
         accept(news);
       } catch (error) {
         if (this.lifetime !== lifetime) break;
-        // Cut short on purpose (the watched chats changed), or a session to renew: go again.
-        if (poll.signal.aborted) continue;
+        // Cut short on purpose (the watched chats changed, or the app went to rest), or a session to renew: go again.
+        if (poll.signal.aborted || this.resting) continue;
         this.wakeCheck = null;
         if (error instanceof Retry) continue;
         this.useSession(null);
