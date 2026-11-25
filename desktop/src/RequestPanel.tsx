@@ -131,7 +131,8 @@ export default function RequestPanel({
     if (busy) return;
     setBusy(true);
     try {
-      await window.botkins.respond(req.id, payload);
+      // A request that holds a script is shown whole below (its full request is open): this panel says so, and only it does.
+      await window.botkins.respond(req.id, req.review && ["approve", "today", "remember"].includes(payload.action) ? { ...payload, reviewed: true } : payload);
     } catch (e) {
       setError(secure ? "The secure answer could not be sent. Check the fields and try again." : String(e));
       setBusy(false);
@@ -229,7 +230,7 @@ export default function RequestPanel({
           {req.detail && !secure && (
             <details
               className="request-raw"
-              open={req.preview && !req.dispatch ? undefined : true}
+              open={req.preview && !req.dispatch && !req.review ? undefined : true}
             >
               <summary>Full request</summary>
               <pre>{shown(req.detail)}</pre>

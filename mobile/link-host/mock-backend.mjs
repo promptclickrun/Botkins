@@ -736,6 +736,8 @@ class MockWiki {
   }
 }
 
+// Names that a script command can't take in the demo (the computer has the full list: desktop/script-commands.mjs).
+const DEMO_RESERVED = new Set(["help", "model", "models", "compact", "btw", "ask", "new", "clear", "init", "review", "plan"]);
 const text = (value, limit, what) => {
   const out = String(value ?? "").trim();
   if (!out) throw new Error("Enter a " + what + ".");
@@ -1519,7 +1521,7 @@ export class MockBackend {
     // "agent-templates-v1" (docs/agent-templates.md): made-up templates. Left out with BOTKINS_DEV_AGENTS=off.
     if (process.env.BOTKINS_DEV_AGENTS !== "off") this.capabilities.push("agent-templates-v1");
     // "plugins-v1" (docs/plugins.md): made-up catalogs and installs. One plugin starts installed.
-    this.capabilities.push("pi-packages-v1", "pi-packages-remove-v1", "skill-upload-v1", "skills-catalog-v1", "skills-featured-v1", "mcp-catalog-v1");
+    this.capabilities.push("pi-packages-v1", "pi-packages-remove-v1", "skill-upload-v1", "skills-catalog-v1", "skills-featured-v1", "script-commands-v1", "mcp-catalog-v1");
     // Each person's own picture ("people-avatars-v1"): `setMyAvatar`, kept on the team's people.
     this.capabilities.push("people-avatars-v1");
     this.catalogToken = "";
@@ -1579,6 +1581,10 @@ export class MockBackend {
     return { app: "botkins", version: this.updates?.current ?? "0.8.0-demo", platform: process.platform };
   }
   snapshot() {
+    // The script commands, by name, where the link's team rule reads them (state.skills.scripts, as the computer keeps them with their hashes).
+    const scripts = Object.fromEntries(this.skillList.filter((skill) => skill.command === "script").map((skill) => [skill.name, "demo"]));
+    if (Object.keys(scripts).length) this.state.skills = { ...this.state.skills, scripts };
+    else if (this.state.skills?.scripts) { const { scripts: _gone, ...rest } = this.state.skills; this.state.skills = rest; }
     // The installed plugins as a phone sees them: a secret setting says only that it is set.
     if (this.pluginsOn) this.state.plugins = this.plugins.installed.map((record) => this.pluginView(record));
     // Each space with what the link needs to count for a person: its panels and open cards (docs/spaces.md).
@@ -2852,17 +2858,21 @@ export class MockBackend {
         bots: this.state.bots.slice(0, 3).map((b) => ({ id: b.id, name: b.name, hint: b.role })),
       };
     },
-    catalog: () => ({
+    catalog() {
+      return {
       choices: [
         { name: "weekly-review", kind: "Skill", command: "/weekly-review", source: "Botkins", description: "Run a weekly review: wins, misses and next steps." },
         { name: "meeting-notes", kind: "Skill", command: "/meeting-notes", source: "Botkins", description: "Turn a transcript into decisions and action items." },
         { name: "compact", kind: "Command", command: "/compact", source: "Botkins", description: "Summarize this chat so far to free up room." },
         { name: "btw", kind: "Command", aliases: ["ask"], command: "/btw", hint: "<question>", duringTurn: true, source: "Botkins", description: "Ask a side question about this chat without adding it to the conversation." },
         { name: "model", kind: "Command", command: "/model", source: "Botkins", description: "Choose the model for this chat.", hint: "[name]", options: [{ name: "auto", description: "Let the app choose" }, { name: "gpt-5.5", description: "GPT-5.5" }] },
+        // The script commands that are on, as the computer lists them (source "Script").
+        ...this.skillList.filter((skill) => skill.command === "script" && !this.state.skills.disabled.includes(skill.name)).map((skill) => ({ name: skill.name, kind: "Command", command: "/" + skill.name, source: "Script", hint: "[arguments]", description: skill.description })),
       ],
       servers: [{ name: "linear", status: "connected" }, { name: "filesystem", status: "connected" }],
       plugins: [],
-    }),
+      };
+    },
     linkPreview: () => null,
     // Wiki. Every change bumps state.wiki.revision.
     wikiTree() {
@@ -3378,7 +3388,8 @@ export class MockBackend {
       const off = new Set(this.state.skills.disabled);
       const { folders, plugins } = this.state.skills;
       return {
-        skills: this.skillList.map(({ instructions: _text, ...skill }) => ({ ...skill, enabled: !off.has(skill.name) })),
+        // A script command's script is read only with `skills.readScript`.
+        skills: this.skillList.map(({ instructions: _text, script: _script, ...skill }) => ({ ...skill, enabled: !off.has(skill.name) })),
         folders: folders.map((folder) => ({ ...folder, missing: false, skills: this.skillList.filter((skill) => skill.folderId === folder.id).length })),
         plugins: plugins.map((plugin) => ({ ...plugin, missing: false })),
       };
@@ -3390,6 +3401,7 @@ export class MockBackend {
     },
     saveSkill({ name, description, instructions, original }) {
       const clean = text(name, 64, "name").toLowerCase().replace(/[^a-z0-9-]+/g, "-");
+      if (this.skillList.find((s) => s.name === original)?.command === "script") throw new Error("This is a script command. Change it as one: its script is shown for a decision.");
       const existing = this.skillList.find((s) => s.name === (original ?? clean));
       if (existing) Object.assign(existing, { name: clean, description, instructions });
       else this.skillList.unshift({ name: clean, description, instructions, path: "/skills/" + clean, origin: "botkins", enabled: true, editable: true });
@@ -3397,6 +3409,27 @@ export class MockBackend {
     },
     removeSkill(name) {
       this.skillList = this.skillList.filter((s) => s.name !== name);
+    },
+    // A script command ("script-commands-v1"): the owner's alone. The demo keeps it in memory and never runs it.
+    "skills.saveScript"({ name, description, script, original }) {
+      const clean = text(name, 64, "name").toLowerCase().replace(/^\//, "");
+      if (!/^[a-z0-9][a-z0-9-]{0,63}$/.test(clean)) throw new Error("Name the command with lowercase letters, numbers and dashes.");
+      if (DEMO_RESERVED.has(clean)) throw new Error("/" + clean + " is a command that Botkins or a model provider already has. Choose another name.");
+      const about = text(description, 600, "description");
+      if (typeof script !== "string" || !script.trim()) throw new Error("Enter the script.");
+      if (script.length > 20000) throw new Error("A script can have up to 20,000 characters.");
+      const before = this.skillList.find((s) => s.name === original);
+      if (original && before?.command !== "script") throw new Error("This isn't a script command. Change it as a skill.");
+      if (clean !== original && this.skillList.some((s) => s.name === clean)) throw new Error("A skill named " + clean + " already exists.");
+      const item = { name: clean, description: about, instructions: "", script, path: "/skills/" + clean, origin: "botkins", enabled: true, editable: true, command: "script" };
+      if (before) Object.assign(before, item);
+      else this.skillList.unshift(item);
+      return clean;
+    },
+    "skills.readScript"(name) {
+      const skill = this.skillList.find((s) => s.name === name && s.command === "script");
+      if (!skill) throw new Error("This isn't a script command that Botkins keeps.");
+      return { name: skill.name, description: skill.description, script: skill.script };
     },
     setSkillEnabled(name, enabled) {
       const off = new Set(this.state.skills.disabled);

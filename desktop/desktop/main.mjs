@@ -33,6 +33,7 @@ import { electronHost } from "./host/electron.mjs";
 import { createWindowPush } from "./window-push.mjs";
 import { installTeamworkPeers } from "./teamwork-peers.mjs";
 import { ProfileManager } from "./profile.mjs";
+import { asPerson } from "./device-call.mjs";
 
 // Use the Botkins path for an existing installation. A development run never changes it.
 if (app.isPackaged && !env("DATA_DIR")) adoptFolder({ appData: app.getPath("appData") });
@@ -650,7 +651,8 @@ else
           if (own) fn(own);
           return theirs ? remote.call(name, [theirs]) : undefined;
         }
-        return fn(...args);
+        // The window is the person: what they send, or send again, may be a script command (desktop/device-call.mjs).
+        return fn(...asPerson(name, args));
       });
     // "Run at startup" names this program by its path: said again on every start, so an app that was
     // moved or updated keeps starting. A refusal here is not worth stopping for.

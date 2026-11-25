@@ -153,7 +153,7 @@ export function gadgetPart({ device, bots = [], chat, live = {}, voice = {}, wor
   const mine = device.gadget ?? {};
   const bot = bots.find((item) => item.id === (chat?.botId ?? mine.botId)) ?? bots.find((item) => !item.hidden) ?? bots[0];
   const chatId = chat?.id;
-  const request = chatId ? (live.requests ?? []).find((item) => !item.dispatch && item.chatId === chatId) : undefined;
+  const request = chatId ? (live.requests ?? []).find((item) => !item.dispatch && !item.review && item.chatId === chatId) : undefined;
   const working = !!chatId && ((live.active ?? []).includes(chatId) || Object.hasOwn(live.streams ?? {}, chatId));
   const writing = working && !!(live.streams ?? {})[chatId];
   const reply = lastReply(chat);
@@ -633,7 +633,8 @@ export class Gadgets {
     }
     // A turn under way takes the words as a steer, as the apps' message boxes do.
     const busy = (state.streams && Object.hasOwn(state.streams, chatId)) || false;
-    await host.backend.call("send", [chatId, words, busy ? { delivery: "steer" } : {}], { principal });
+    // A gadget's words are spoken and transcribed: never a script command (desktop/script-commands.mjs, `gadget` in device-call.mjs).
+    await host.backend.call("send", [chatId, words, busy ? { delivery: "steer" } : {}], { principal, gadget: true });
     host.dirty = true;
     host.changed();
     return { chatId };

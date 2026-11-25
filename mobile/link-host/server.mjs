@@ -2214,6 +2214,8 @@ export class LinkHost extends EventEmitter {
       chat: (id) => (state.chats ?? []).find((chat) => chat.id === id),
       gadget: this.store.device(session.deviceId)?.kind === "gadget",
       request: (id) => (state.requests ?? []).find((request) => request.id === id),
+      // A script command that Botkins keeps: a member may not remove, turn off or replace it (team.mjs).
+      scriptCommand: (name) => Object.hasOwn(state.skills?.scripts ?? {}, name),
       run: (id) => (state.runs ?? []).find((run) => run.id === id),
       // The app says who made each routine once it names "routine-owner-v1".
       routineOwners: Array.isArray(this.backend.capabilities) && this.backend.capabilities.includes("routine-owner-v1"),

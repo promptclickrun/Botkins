@@ -201,7 +201,7 @@ export function controlApi(service) {
       ...(task?.intent && { intent: task.intent }),
       messages,
       count: chat.messages.length,
-      ...(request && { request: { id: request.id, kind: request.kind, title: request.title, ...(request.dispatch && { dispatch: true, detail: request.detail, label: request.label }) } }),
+      ...(request && { request: { id: request.id, kind: request.kind, title: request.title, ...(request.dispatch && { dispatch: true }), ...(request.review && { review: true }), ...((request.dispatch || request.review) && { detail: request.detail, label: request.label }) } }),
       run: state().runs.find((run) => run.chatId === chat.id && (!chat.main || run.forkId === chat.activeFork)) ?? null,
     };
   };
@@ -503,10 +503,25 @@ export function controlApi(service) {
       const only = ref ? bot(ref).id : null;
       return state().chats.filter((chat) => !chat.temporary && (!only || chat.botId === only)).map((chat) => ({ id: chat.id, title: chat.title, botId: chat.botId, bot: state().bots.find((entry) => entry.id === chat.botId)?.name ?? null, messages: chat.messages.length, working: workspace.active.has(chat.id) }));
     },
-    "chat.send": ([chatId, message]) => {
+    /** The script command that a message would run or set up, { name, args, via? }, or null. The command line shows it to the person before it sends one. */
+    "chat.scriptCommand": ([chatId, message]) => {
+      workspace.chat(String(chatId));
+      return typeof message === "string" ? workspace.scriptCommandIn(message) : null;
+    },
+    /**
+     * A message that is a script command runs a script on this computer with the words after the name, which a bot's shell
+     * could choose; one that sets up a schedule of it (`/every 1m /name`) arms it. So it is sent as a script command only with
+     * `{ agreed: true }` as the last argument: the caller showed the person the command and its words and got a yes (the command
+     * line asks at a terminal, or takes --yes). Without it the call is refused. Any other message is plain text and needs no mark.
+     */
+    "chat.send": ([chatId, message, mark]) => {
       const chat = workspace.chat(String(chatId));
       const before = chat.messages.length;
-      handlers.send(chat.id, text(message, 200_000, "a message"), { delivery: "queue" });
+      const script = typeof message === "string" ? workspace.scriptCommandIn(message) : null;
+      const agreed = mark !== null && typeof mark === "object" && !Array.isArray(mark) && mark.agreed === true;
+      if (script && !agreed)
+        throw new ControlError("/" + script.name + " is a script command" + (script.via ? ", and /" + script.via + " would run it again and again" : "") + ": it runs a script on this computer with the words after its name. Show the person the command and its words, and give `{ \"agreed\": true }` as the last argument (on the command line, `botkins chat` asks at a terminal, or takes --yes).", "NEEDS_YES");
+      handlers.send(chat.id, text(message, 200_000, "a message"), { delivery: "queue", ...(script && { allowScript: true }) });
       return { chatId: chat.id, after: before };
     },
     /** A chat as it stands. With `wait`, answers when it differs from what the caller has (`seen`: stream length, message count, working), or after a while. */
@@ -539,7 +554,12 @@ export function controlApi(service) {
       if (["approve", "today", "remember"].includes(answer?.action) && !(mark !== null && typeof mark === "object" && !Array.isArray(mark) && mark.agreed === true))
         throw new ControlError("A yes to a request that waits in a chat needs a yes of the person. Show the request to the person, and give `{ \"agreed\": true }` as the last argument (on the command line, `botkins chat` asks the person at a terminal; no flag gives it).", "NEEDS_YES");
       const asked = workspace.interactions.snapshot().find((entry) => entry.id === String(requestId));
-      await handlers.respond(String(requestId), answer);
+      // A request that holds a script (`review`) is answered with a yes only by a caller that showed all of it: `{ agreed: true, reviewed: true }`
+      // (the command line's `chats approve` and `chat` print the whole script before they ask at a terminal).
+      const yes = ["approve", "today", "remember"].includes(answer?.action);
+      if (asked?.review && yes && mark.reviewed !== true)
+        throw new ControlError("This request holds a script. Show all of it to the person, and give `{ \"agreed\": true, \"reviewed\": true }` as the last argument (`botkins chats approve` shows it and asks at a terminal).", "NEEDS_YES");
+      await handlers.respond(String(requestId), asked?.review && yes ? { ...answer, reviewed: true } : answer);
       return { chatId: asked?.chatId ?? null, kind: asked?.kind ?? null, answered: answer?.action === "deny" || answer?.action === "cancel" ? "no" : "yes" };
     },
 

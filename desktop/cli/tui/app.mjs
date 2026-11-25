@@ -174,7 +174,8 @@ export function createApp({ client, write, size, colors = true, now = () => Date
       const message = bot && (await ask("Message for " + bot.name + ":"));
       if (!message?.trim()) return;
       const { chatId } = await client.call("chat.main", bot.id);
-      await client.call("chat.send", chatId, message.trim());
+      // A person typing in the screen is the yes to a script command.
+      await client.call("chat.send", chatId, message.trim(), { agreed: true });
       Object.assign(state, { tab: "Chats", selected: 0 });
       read({ id: chatId, title: message.trim().slice(0, 60), bot: bot.name, messages: 0 });
     },
@@ -182,7 +183,7 @@ export function createApp({ client, write, size, colors = true, now = () => Date
       const chat = state.reading ? { id: state.reading.chatId, bot: state.reading.bot } : chosen();
       const message = chat && (await ask("Message" + (chat.bot ? " for " + chat.bot : "") + ":"));
       if (!message?.trim()) return;
-      await client.call("chat.send", chat.id, message.trim());
+      await client.call("chat.send", chat.id, message.trim(), { agreed: true });
       if (!state.reading) read(chosen());
     },
     async stopChat() {

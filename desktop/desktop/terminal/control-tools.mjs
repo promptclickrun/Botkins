@@ -9,6 +9,7 @@
 // A secret (an environment value, a header's value, a client secret) goes in through these calls
 // and never comes out: every answer names the keys that have a value, not the values.
 import { parseServers } from "../integrations.mjs";
+import { cleanScriptCommand, scriptRevision, whatRuns } from "../script-commands.mjs";
 import { thingForLog } from "./coverage.mjs";
 import { ControlError } from "./socket.mjs";
 
@@ -257,7 +258,30 @@ export function toolsApi({ workspace, handlers, bot, signIns, log }) {
     "skills.get": ([ref]) => {
       const found = skill(ref);
       // Only a skill that Botkins keeps can be read whole; one from a linked folder is read in its folder.
-      return found.editable ? { ...found, ...handlers.readSkill(found.name) } : found;
+      // A script command is read with its script: the terminal is the owner's.
+      return found.editable ? { ...found, ...handlers.readSkill(found.name), ...(found.command === "script" && { script: handlers["skills.readScript"](found.name).script }) } : found;
+    },
+    /**
+     * A script command as it will be saved, and the revision that a yes for it names: { name, description, script, existing, revision }.
+     * Nothing is saved. A name that a model provider has is refused here.
+     */
+    async "skills.review"([data = {}]) {
+      const fields = cleanScriptCommand(data);
+      const existing = skillList().skills.find((entry) => entry.name === fields.name)?.command === "script";
+      await workspace.assertScriptName(fields.name, existing ? fields.name : undefined);
+      return { ...fields, existing, ...(existing && { original: fields.name }), revision: scriptRevision({ ...fields, ...(existing && { original: fields.name }) }), ...(whatRuns(workspace, fields.name).length && { alsoRunsOn: whatRuns(workspace, fields.name) }) };
+    },
+    /**
+     * A script command, or with `original` a change to one: { name, description, script, original? }. It runs on this computer
+     * whenever a person types it, so the caller shows the person the whole script (`skills.review`) and gets a yes:
+     * `options` is { agreed: true, revision } with the revision that `skills.review` gave for exactly this script. A yes for
+     * another script, or none, is refused. (The window and the phone's editors are the person at the screen: they have no yes to give here.)
+     */
+    async "skills.saveScript"([data = {}, options]) {
+      if (options?.agreed !== true) throw new ControlError("A script command runs a script on this computer each time a person types it. Show the person the whole script (`skills.review` gives it, with its revision), and give `{ \"agreed\": true, \"revision\": \"<its revision>\" }` as the last argument (on the command line, `--yes --revision <it>`).", "NEEDS_YES");
+      if (typeof options.revision !== "string" || options.revision !== scriptRevision(data)) throw new ControlError("The revision is not the one of this script. Run `skills.review` for the script that is to be saved, show it to the person, and give its revision.", "BAD_ARGUMENT");
+      const name = await handlers["skills.saveScript"](data);
+      return skill(name);
     },
     /** A new skill, or with `original` a change to one: { name, description, instructions, original? }. */
     async "skills.save"([data = {}]) {

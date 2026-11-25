@@ -89,7 +89,8 @@ export const CHOICE_MAX = 40;
  */
 export function askOf(request) {
   if (!request) return undefined;
-  if (request.dispatch) return "open";
+  // A request whose words are the whole point (a Teamwork request, a script command's script) is read in the app, never answered from here.
+  if (request.dispatch || request.review) return "open";
   if (request.kind === "permission") return looksDangerous(request) ? "risky" : "approve";
   if (request.kind === "question") {
     const choices = Array.isArray(request.choices) ? request.choices : [];
@@ -105,7 +106,7 @@ export function askDetail(request) {
   const free = request.kind === "question" && (!!request.freeform || !request.choices?.length);
   return {
     id: request.id,
-    k: request.dispatch ? "open" : request.kind,
+    k: request.dispatch || request.review ? "open" : request.kind,
     t: clip(firstLine(request.title) || (request.kind === "permission" ? "Approve" : "Question"), 120),
     ...(request.preview && { p: clip(firstLine(request.preview), 120) }),
     ...(ask === "question" && request.choices?.length && { ch: request.choices.map((choice) => choice.trim()) }),

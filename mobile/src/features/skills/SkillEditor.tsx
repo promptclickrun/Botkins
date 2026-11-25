@@ -6,12 +6,13 @@ import type { SkillDetail, SkillInfo } from "@/link/types";
 import { refresh, useCan, useOnline, useSkills } from "@/state/hooks";
 import { api, attempt } from "@/state/link";
 import { Badge, EmptyState, Field, Group, IconTile, Loading, Row, Sheet, useTheme } from "@/ui";
-import { canEdit, readableName } from "./shared";
+import ScriptEditor from "./ScriptEditor";
+import { canEdit, isScript, readableName } from "./shared";
 
 const EMPTY: SkillDetail = { name: "", description: "", instructions: "" };
 
 export default function SkillEditor() {
-  const { name } = useLocalSearchParams<{ name: string }>();
+  const { name, kind } = useLocalSearchParams<{ name: string; kind?: string }>();
   const skills = useSkills();
   const online = useOnline();
   const isNew = name === "new";
@@ -20,17 +21,21 @@ export default function SkillEditor() {
   const info = skills?.find((skill) => skill.name === name);
   const [loaded, setLoaded] = useState<{ name: string; detail?: SkillDetail }>();
 
+  const script = info ? isScript(info) : false;
   useEffect(() => {
-    if (isNew || !online || !canRead) return;
+    if (isNew || !online || !canRead || script) return;
     let live = true;
     void attempt(api.readSkill(name)).then((detail) => live && setLoaded({ name, detail }));
     return () => {
       live = false;
     };
-  }, [isNew, online, name, canRead]);
+  }, [isNew, online, name, canRead, script]);
 
   if (!canRead || (isNew && !canCreate)) return <Sheet title="Skill"><EmptyState title="Your team role can't use this skill screen" action="Close" onAction={() => router.back()} /></Sheet>;
+  // A script command is the owner's: its own editor reads and saves its script.
+  if (isNew && kind === "script") return <ScriptEditor key="new-script" />;
   if (isNew) return <Editor key="new" />;
+  if (script) return <ScriptEditor key={name} name={name} />;
   const detail = loaded?.name === name ? loaded : undefined;
   if (!detail || !skills)
     return (

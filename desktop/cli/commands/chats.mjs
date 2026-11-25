@@ -145,7 +145,7 @@ export const chatsCommands = {
           const { request } = await context.client.call("chat.read", one(context, "Give the chat id from botkins chats list."));
           if (request?.kind !== "permission") throw usage("This chat has no pending approval.");
           const action = await approvalAction(context, request);
-          const result = await context.client.call("chat.respond", request.id, { action }, ...(action === "deny" ? [] : [{ agreed: true }]));
+          const result = await context.client.call("chat.respond", request.id, { action }, ...(action === "deny" ? [] : [{ agreed: true, ...(request.review && { reviewed: true }) }]));
           context.print(result, "Decision recorded.");
         },
       },

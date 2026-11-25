@@ -25,9 +25,23 @@ const FOR_A_PERSON = {
   setBotProactive: 2, proactiveAct: 3, reactToMessage: 4,
 };
 
+/**
+ * The arguments of a call as a person's: a message the person sends, or a turn they send again, may be a script command
+ * (desktop/script-commands.mjs). A call that comes from the window (main.mjs) or from a paired device (below) is a person's;
+ * a call from the control socket is not, unless the person agreed (desktop/terminal/control.mjs). `send` takes it as an option
+ * in its third argument, `retry` in its second.
+ */
+export function asPerson(name, args) {
+  if (name === "send") return [args[0], args[1], { ...(args[2] && typeof args[2] === "object" ? args[2] : {}), allowScript: true }, ...args.slice(3)];
+  if (name === "retry") return [args[0], { allowScript: true }];
+  return args;
+}
+
 export function deviceCall({ workspace, handlers, folders }) {
   return async (name, args, context = {}) => {
-    const checked = await deviceArgs(folders, name, args);
+    // A paired device is a person (the owner, or a member whose role the computer checked before this call).
+    // A gadget's send is a person's words too, but spoken and transcribed: it never runs a script command.
+    const checked = context.gadget ? await deviceArgs(folders, name, args) : asPerson(name, await deviceArgs(folders, name, args));
     const principal = context.principal;
     const member = principal?.kind === "member" ? { memberId: principal.memberId, name: principal.name } : null;
     // A request is gone once it is answered, so its chat is read before the answer goes in.
@@ -38,6 +52,14 @@ export function deviceCall({ workspace, handlers, folders }) {
     // An answer to a question that outlived its turn becomes the answerer's next message, so it says who they are.
     const callArgs = member && name === "send" ? [checked[0], checked[1], { ...(checked[2] ?? {}), author: member }] : name === "respond" ? [checked[0], checked[1], member?.memberId ?? "owner"] : checked;
     if (name === "recordVoiceLine") return handlers[name](checked[0], checked[1], checked[2], checked[3], member, checked[4]);
+    // A script command is the owner's to remove, turn off or replace, whatever a member's role lets them do to a skill (desktop/script-commands.mjs).
+    if (member) {
+      const names = name === "removeSkill" || name === "setSkillEnabled" ? [checked[0]] : name === "skills.upload" ? checked[0]?.replace : name === "skillsCatalog.install" ? checked[1] : [];
+      const scripts = workspace.state.skills?.scripts ?? {};
+      if (Array.isArray(names) && names.some((skill) => typeof skill === "string" && Object.hasOwn(scripts, skill))) throw new Error("Only the owner can remove, turn off or replace a script command.");
+    }
+    // A member's menu lists the script commands only when their role may use skills ("script-commands-v1").
+    if (member && name === "catalog") return handlers.catalog(checked[0], checked[1], checked[2], member.memberId);
     if (member) {
       // The fork can contain private history. Stamp its creator before the first save or snapshot.
       if (name === "forkChat") return workspace.forkChat(checked[0], checked[1], member.memberId);

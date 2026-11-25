@@ -125,7 +125,7 @@ export const REMOTE_METHODS = new Set([
   ...PLUGIN_METHODS,
   // Agent templates ("agent-templates-v1") and the computer's Composio apps
   ...AGENT_METHODS,
-  "skills.upload", "skillsCatalog.search", "skillsCatalog.preview", "skillsCatalog.install", "skillsCatalog.featured",
+  "skills.upload", "skills.saveScript", "skills.readScript", "skillsCatalog.search", "skillsCatalog.preview", "skillsCatalog.install", "skillsCatalog.featured",
   ...MCP_CATALOG_METHODS,
   ...PI_PACKAGE_METHODS,
   ...COMPOSIO_METHODS,
@@ -476,9 +476,10 @@ export function remoteArgs(method, args, { deviceId, uploads } = {}) {
     return [[...new Set(args[0])]];
   }
   if (method === "respond" && ["approve", "today", "remember", "deny"].includes(args[1]?.action)) {
-    if (args.length !== 2 || !clean(args[0]) || Object.keys(args[1]).some((key) => key !== "action"))
+    // `reviewed` is the in-app request panel's word that it showed a script whole (desktop/interactions.mjs): nothing else is let through.
+    if (args.length !== 2 || !clean(args[0]) || Object.keys(args[1]).some((key) => key !== "action" && key !== "reviewed") || (args[1].reviewed !== undefined && args[1].reviewed !== true))
       throw new Error("Choose one approval action for this request.");
-    return [args[0], { action: args[1].action }];
+    return [args[0], { action: args[1].action, ...(args[1].reviewed === true && { reviewed: true }) }];
   }
   // A picture is a small square JPEG or PNG as a data URL, or null to take it away (team.mjs, cleanAvatar).
   if (method === "setMyAvatar") {

@@ -590,8 +590,8 @@ test("every command of the four groups is described by `botkins help --json`, wi
       for (const argument of command.arguments) assert.ok(command.usage.includes("<" + argument.name + ">"), command.command + " has <" + argument.name + ">");
     }
   }
-  // The commands that ask: the ones that delete or commit, and a chat (only in the mode yolo).
+  // The commands that ask: the ones that delete or commit, a chat (only in the mode yolo), and a task (only when it is a script command).
   const asks = all.areas.flatMap((area) => area.commands).filter((command) => command.asks === "--yes" && ["projects", "todos", "tasks", "artifacts"].includes(command.path[0])).map((command) => command.command).sort();
-  assert.deepEqual(asks, ["artifacts read", "projects chat", "projects commit", "projects remove", "tasks remove", "todos remove"]);
+  assert.deepEqual(asks, ["artifacts read", "projects chat", "projects commit", "projects remove", "tasks add", "tasks edit", "tasks move", "tasks remove", "tasks start", "todos remove"]);
   assert.ok(COMMANDS.projects.commands.commit.run);
 });

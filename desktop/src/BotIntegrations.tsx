@@ -27,9 +27,11 @@ export default function BotIntegrations({
   const [error, setError] = useState("");
   const skillsOff = bot.skillsOff ?? [];
   const mcpOff = bot.mcpOff ?? [];
-  const skills = (list?.skills ?? []).filter((s) => s.enabled);
+  // A script command is typed by the person; it is no skill that a bot has or leaves out.
+  const named = (list?.skills ?? []).filter((s) => !s.command);
+  const skills = named.filter((s) => s.enabled);
   const servers = (state.mcpServers ?? []).filter((s) => s.enabled);
-  const hidden = (list?.skills ?? []).length - skills.length + (state.mcpServers ?? []).length - servers.length;
+  const hidden = named.length - skills.length + (state.mcpServers ?? []).length - servers.length;
   const q = query.trim().toLowerCase();
   const match = (text: string) => !q || text.toLowerCase().includes(q);
   const save = (patch: { skillsOff?: string[]; mcpOff?: string[] }) => {
