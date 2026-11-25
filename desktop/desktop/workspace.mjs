@@ -59,7 +59,7 @@ import { recordActivity } from "./activity.mjs";
 import {
   finishCanvas,
   mainTranscript,
-  forkSystemMessage,
+  earlierConversation,
   forkTranscript,
   mapTodos,
   quotedPrompt,
@@ -84,7 +84,8 @@ import {
 import { Apps } from "./apps.mjs";
 import { createComposio } from "./composio.mjs";
 import { Connects } from "./connects.mjs";
-import { McpApps } from "./mcp-apps.mjs";
+import { McpApps, proxyPrefix } from "./mcp-apps.mjs";
+import { SessionPrompts, contextNote, digest, stableTools } from "./session-prompts.mjs";
 import { reactionTool } from "./reactions.mjs";
 import { ReactionTurns } from "./reaction-turns.mjs";
 import { setReaction } from "./link/message-reactions.mjs";
@@ -332,6 +333,10 @@ export class Workspace {
     this.connects = new Connects(this);
     // MCP servers with interactive views run through Botkins' own client, and their views show in the chat (desktop/mcp-apps.mjs).
     this.mcpApps = new McpApps(this, options?.mcpApps);
+    // Each session's system prompt and tools as it began (desktop/session-prompts.mjs). Records of
+    // sessions unused for a month are removed in the background.
+    this.sessionPrompts = new SessionPrompts(join(dir, "session-prompts"));
+    setTimeout(() => this.sessionPrompts.sweep(), 60_000).unref?.();
     // Panels a bot shows beside a chat (desktop/sidepane.mjs).
     this.sidepane = new SidePane(this, options?.sidePane);
     this.templates = new Templates(this);
@@ -1331,10 +1336,17 @@ export class Workspace {
   profileContext(botId) {
     return profileContext(this, botId);
   }
-  /** What a bot is told at the start of a conversation. */
-  instructionsFor(chat, bot, run) {
-    const interactive = !chat.helper && !run?.panelId && !run?.scheduleId && !run?.taskId;
-    return (
+  /**
+   * What a bot is told at the start of a conversation, in parts (desktop/session-prompts.mjs).
+   * `fixed` stays the same while a session lasts, and a change to it starts a new session's prompt:
+   * the guidance, the group, the bot's profile and its own instructions. `live` holds what may
+   * change while it works (its memory, the project, the space, its team); a session is told those
+   * changes in its turn's message. Nothing here depends on the turn: a session's turns (a person's,
+   * a routine's) share one prompt. A panel's own chat and a helper are sessions of their own.
+   */
+  instructionParts(chat, bot) {
+    const interactive = !chat.helper && !chat.panelId;
+    const head =
       "You are " + bot.name + ", " + bot.role + ". You are working in Botkins." +
       (chat.helper ? "" : "\nUse today_* for persistent dashboard panels and today_routine for recurring updates. Confirm actions after the tool succeeds." + ROUTINE_CONFIRM + clarificationMessage(this.state.settings)) +
       (interactive
@@ -1349,20 +1361,36 @@ export class Workspace {
           "\nFor deliverables and previews, prefer accessible native delivery over a raw host path alone: save reusable files, including complete HTML files, in the workspace and link them so they appear in Artifacts, use MEDIA: for images, audio, or video, and use render_card, show_app, side_pane_show, or today_publish when an interactive or visual view fits." +
           "\nIn a chat with more than one person, you can mention a person as @Name to send them a notification when you want their attention." +
           '\nUse side_pane_show with kind "screen" to offer a clickable screen card only for visible browser automation or interactive desktop actions the person would benefit from watching. Writing code or scripts, running shell commands, builds, background checks and fetching web content do not call for screen sharing. Screen access is the person’s choice.'
-        : "") +
-      forkSystemMessage(chat.forkContext) +
-      this.projects.context(chat, bot) +
-      this.spaces.context(chat) +
-      (chat.groupInstructions || "") +
-      this.teamwork.brief(bot, chat) +
-      this.subagents.brief(chat, run) +
-      this.wiki.context() +
-      (chat.extraInstructions || "") +
-      this.profileContext(bot.id) +
-      "\n\nThe user's custom instructions for this bot take precedence over Botkins defaults and editable profile notes. Use the tools and permissions available for this turn.\n" +
-      bot.instructions +
-      (!chat.helper && bot.clarificationInstructions ? "\nFor this bot, ask the person in these situations: " + bot.clarificationInstructions : "")
-    );
+        : "");
+    return {
+      fixed: {
+        head,
+        group: chat.groupInstructions || "",
+        extra: chat.extraInstructions || "",
+        profile: this.profileContext(bot.id),
+        own:
+          "\n\nThe user's custom instructions for this bot take precedence over Botkins defaults and editable profile notes. Use the tools and permissions available for this turn.\n" +
+          bot.instructions +
+          (!chat.helper && bot.clarificationInstructions ? "\nFor this bot, ask the person in these situations: " + bot.clarificationInstructions : ""),
+      },
+      live: {
+        project: this.projects.context(chat, bot),
+        space: this.spaces.context(chat),
+        team: this.teamwork.brief(bot, chat),
+        subagents: this.subagents.brief(chat),
+        wiki: this.wiki.context(),
+        // The bot's memory goes to a session as its `context`, after the instructions.
+        memory: this.memory.context(bot),
+      },
+    };
+  }
+  /** The instructions a session is given, from instructionParts (without the memory, which is the session's `context`). */
+  composeInstructions({ fixed, live }) {
+    return fixed.head + live.project + live.space + fixed.group + live.team + live.subagents + live.wiki + fixed.extra + fixed.profile + fixed.own;
+  }
+  /** What a bot is told at the start of a conversation, as it is now. */
+  instructionsFor(chat, bot) {
+    return this.composeInstructions(this.instructionParts(chat, bot));
   }
   /** Botkins' own tools for one turn. */
   sessionTools(bot, chat, run, task) {
@@ -1649,29 +1677,45 @@ export class Workspace {
     const pluginSpec = access.plugins
       ? await this.plugins.session(bot, chat, { skillsOnly: !copilotPlugins })
       : { directories: [], mcpServers: {}, hooks: undefined };
-    // Servers with views (and the Composio tool) are run by Botkins for this turn, when they answer;
-    // their tools come with Botkins' own below, and the harness doesn't get them (desktop/mcp-apps.mjs).
+    // What the session was told when it began, or what it begins with now (desktop/session-prompts.mjs).
+    const prompt = this.sessionPrompt(chat, bot, provider, hosted?.model ?? choice);
+    // Servers with views (and the Composio tool) are run by Botkins, when they answer; their tools
+    // come with Botkins' own below, and the harness doesn't get them (desktop/mcp-apps.mjs). Each
+    // stays on the side it began the session on: one that doesn't answer now isn't handed to the
+    // harness, where its tools would have other names. Its tools say so when they are called.
     const routed = await (routing ?? (access.mcp ? this.mcpApps.prepare(bot) : new Map()));
     const ownServers = access.mcp ? this.integrations.serversFor(bot) : {};
-    for (const name of routed.keys()) delete ownServers[name];
+    // (A server that isn't Botkins' yet, one that wasn't ready when the session began, goes to the
+    // harness until it is; it then stays Botkins', which changes the tool list once.)
+    const routes = prompt.record.routes;
+    const routesBefore = JSON.stringify(routes);
+    for (const name of routed.keys()) routes[name] = "botkins";
+    for (const name of Object.keys(ownServers)) if (routes[name] === "botkins") delete ownServers[name];
+    if (JSON.stringify(routes) !== routesBefore) this.sessionPrompts.save(prompt.key, prompt.record);
     const mcpServers = {
       ...ownServers,
       ...(access.mcp && copilotPlugins ? pluginSpec.mcpServers : {}),
     };
+    const tools = this.stableTools(prompt, [...this.sessionTools(bot, chat, run, task), ...this.mcpApps.tools(bot, chat, run, task, routed)], access.mcp);
     const session = await provider.openSession({
       sessionId: chat.sessionId ?? chat.id,
       established: !!chat.established,
-      hasReplies: !!chat.messages?.some((m) => m.role === "assistant"),
+      // While Botkins still has the conversation to tell the session (tellSession), the provider
+      // isn't to tell it again from the history.
+      hasReplies: !chat.forkContext && !!chat.messages?.some((m) => m.role === "assistant"),
       temporary: !!chat.temporary,
       folder,
       coding: !!projectFolder,
       model: hosted?.model ?? choice,
       ...(hosted && { inference: hosted.inference }),
       approval: chat.approval ?? this.state.settings.approval,
-      instructions: this.instructionsFor(chat, bot, run),
-      // The bot's memory changes often; it is kept apart so a save doesn't reopen the session (desktop/memory.mjs).
-      context: this.memory.context(bot),
-      tools: [...this.sessionTools(bot, chat, run, task), ...this.mcpApps.tools(bot, chat, run, task, routed)],
+      // How long a provider that can choose keeps the prompt cache (Settings › General › Keep prompt cache longer).
+      cacheRetention: this.state.settings.longPromptCache === false ? "short" : "long",
+      // The same on every turn of the session; what changed since is told in the turn's message (tellSession).
+      instructions: prompt.instructions,
+      // The bot's memory, kept apart from the instructions, as the session began with it.
+      context: prompt.record.parts.memory,
+      tools,
       // Skills and MCP servers come from Settings and apply to every bot (desktop/integrations.mjs).
       skills: access.skills ? this.integrations.skillsFor(bot, { member: access.member }) : { directories: [], disabled: [] },
       mcpServers,
@@ -1691,6 +1735,83 @@ export class Workspace {
       if (projectFolder || chat.sessionFolder) chat.sessionFolder = projectFolder || undefined;
       this.save();
     }
+    return this.tellSession(session, chat, prompt, task);
+  }
+  /** A session event that says the session was compacted: its next turn begins from the current prompt (session-prompts.mjs). */
+  compacted(session, event) {
+    if (event?.type === "session.compaction_complete" && !event.agentId && session?.promptKey) this.sessionPrompts.stale(session.promptKey);
+  }
+  /**
+   * The system prompt a session has for this turn (desktop/session-prompts.mjs): the one it began
+   * with, unless it begins now. It begins now when it is new to its provider (a new chat, a
+   * restart, another provider), after a compaction, and when the bot's own instructions, its
+   * profile or the model changed. Returns { key, record, instructions, live, note }: `note` tells
+   * the session what changed in the live parts since it was last told, or is "".
+   */
+  sessionPrompt(chat, bot, provider, model) {
+    const key = provider.id + ":" + (chat.sessionId ?? chat.id);
+    const parts = this.instructionParts(chat, bot);
+    const basis = digest([
+      parts.fixed, provider.id, model?.model ?? "", model?.source ?? "",
+      // A space's panels are listed as the turn's people may see them: other people, another prompt.
+      chat.spaceId ? this.turnPeople(chat).people.toSorted() : null,
+    ]);
+    let record = this.sessionPrompts.get(key);
+    const begins = chat.temporary ? !record : !chat.established;
+    if (!record || begins || record.stale || record.basis !== basis)
+      record = this.sessionPrompts.set(key, { chatId: chat.id, botId: bot.id, basis, parts: parts.live, told: parts.live, tools: [], routes: {} }, { temporary: !!chat.temporary });
+    else this.sessionPrompts.used(key);
+    return { key, record, instructions: this.composeInstructions({ fixed: parts.fixed, live: record.parts }), live: parts.live, note: contextNote(record.told, parts.live) };
+  }
+  /**
+   * The session's tools for this turn, in the order and with the definitions it began with
+   * (session-prompts.mjs stableTools). `servers`: whether the turn may use MCP servers at all; when
+   * it may, a server tool that isn't here is one whose server didn't answer.
+   */
+  stableTools(prompt, current, servers = true) {
+    const { record } = prompt;
+    const prefixes = Object.entries(record.routes).filter(([, side]) => side === "botkins").map(([name]) => [proxyPrefix(name), name]);
+    const { tools, changed } = stableTools(record.tools, current, (name) => {
+      const server = servers && prefixes.find(([prefix]) => name.startsWith(prefix))?.[1];
+      return server
+        ? "The " + server + " server isn't answering right now, so its tools can't be used. Try again later."
+        : name + " isn't available in this turn.";
+    });
+    if (changed) this.sessionPrompts.save(prompt.key, record);
+    return tools;
+  }
+  /**
+   * Tells a session, with its first message of the turn, what it hasn't been told: the
+   * conversation so far when it begins from Botkins' transcript (a fork, a moved or restarted
+   * session), before the message, and what changed in its context, after it. Each is told once:
+   * it counts as told when the message was answered, and is told again when it wasn't.
+   */
+  tellSession(session, chat, prompt, task) {
+    const earlier = chat.forkContext || "";
+    const { note } = prompt;
+    // A compaction rewrites what the session holds, and may leave out what a note told it: the
+    // turn that sees one (executeTurn, memberTurn: compacted) has the next begin from the current prompt.
+    session.promptKey = prompt.key;
+    if ((!earlier && !note) || typeof session.send !== "function") return session;
+    const send = session.send.bind(session);
+    let first = true;
+    session.send = async (message, ...rest) => {
+      if (!first || typeof message?.prompt !== "string") return send(message, ...rest);
+      first = false;
+      const result = await send({ ...message, prompt: (earlier ? earlierConversation(earlier) + "\n\n" : "") + message.prompt + (note ? "\n\n" + note : "") }, ...rest);
+      // A turn stopped while its session started returns nothing, and sent nothing: it is told
+      // again with the next message. (One stopped after it was sent may hear it twice.)
+      if (task?.stopped && !result?.text) return result;
+      if (note) {
+        prompt.record.told = prompt.live;
+        this.sessionPrompts.save(prompt.key, prompt.record);
+      }
+      if (earlier && chat.forkContext === earlier) {
+        delete chat.forkContext;
+        this.save();
+      }
+      return result;
+    };
     return session;
   }
   /**
@@ -2231,6 +2352,7 @@ export class Workspace {
       if (task.stopped) return "";
       unsubscribe = session.on((event) => {
         const { type, data, agentId } = event;
+        this.compacted(session, event);
         if (!event.agentId && !event.data?.parentToolCallId) {
           if (event.type === "tool.execution_start") commitInterim(chat, run, task);
           if (event.type === "assistant.message" && !run.noOutput) {
@@ -2352,6 +2474,7 @@ export class Workspace {
         return;
       }
       unsubscribe = session.on((event) => {
+        this.compacted(session, event);
         if (!event.agentId && !event.data?.parentToolCallId) {
           if (event.type === "tool.execution_start") {
             // Text that may still be a [SILENT] answer to a reaction is not kept as a message.
@@ -2397,6 +2520,7 @@ export class Workspace {
           this.save();
         }
         effect = await session.resolvePrompt(prompt, run, chat, this);
+        if (/^\/compact(?:\s|$)/i.test(prompt.trim()) && session.promptKey) this.sessionPrompts.stale(session.promptKey);
       }
       if (task.stopped) return;
       if (effect.mode) await session.setMode(effect.mode, { planModel: chat.planModel });

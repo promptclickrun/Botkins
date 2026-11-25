@@ -301,7 +301,7 @@ test("a turn creates a session in the bot's folder, streams the reply and its wo
     turn.emit("session.tool.input.started", { id: "t3", name: "todowrite" });
     turn.emit("session.tool.called", { id: "t3", input: {} });
     turn.emit("session.tool.success", { id: "t3", content: [], metadata: { todos: [{ content: "Look", status: "completed" }, { content: "Answer", status: "in_progress" }] } });
-    turn.emit("session.step.ended", { tokens: { input: 100, output: 20, reasoning: 5, cache: { read: 300 } }, cost: 0.01 });
+    turn.emit("session.step.ended", { tokens: { input: 100, output: 20, reasoning: 5, cache: { read: 300, write: 40 } }, cost: 0.01 });
     turn.emit("session.step.ended", { tokens: { input: 50, output: 10, reasoning: 0, cache: { read: 100 } }, cost: 0 });
     turn.say("It is in a.txt.", 1);
     // Another session's events are not this one's.
@@ -350,7 +350,8 @@ test("a turn creates a session in the bot's folder, streams the reply and its wo
     { toolCallId: "t3", success: true },
   ]);
   assert.deepEqual(await session.todos(), { rows: [{ id: "1", title: "Look", status: "completed" }, { id: "2", title: "Answer", status: "in_progress" }], dependencies: [] });
-  assert.deepEqual(of("assistant.usage"), [{ inputTokens: 150, outputTokens: 35, cacheReadTokens: 400, cost: 0.01, model: "google/gemini-pro" }]);
+  // OpenCode's tokens.input is the uncached input already; its cache writes are counted too.
+  assert.deepEqual(of("assistant.usage"), [{ inputTokens: 150, outputTokens: 35, cacheReadTokens: 400, cacheWriteTokens: 40, cost: 0.01, model: "google/gemini-pro" }]);
   assert.match(events.find((e) => e.type === "user.message").id, /^msg_/, "the message's id is the fork boundary");
   assert.deepEqual(provider.sessions.get("chat-1"), { ref: created.id });
   // When the session closes, its bridge leaves the folder.
@@ -359,7 +360,7 @@ test("a turn creates a session in the bot's folder, streams the reply and its wo
 });
 
 test("a conversation finds its session again, follows a model change, and one OpenCode has lost continues from the transcript", async (t) => {
-  const { provider, log } = await setup(t);
+  const { provider, log, sent } = await setup(t);
   const first = await provider.openSession(spec());
   await first.send({ prompt: "Hi" });
   await first.close();
@@ -381,7 +382,9 @@ test("a conversation finds its session again, follows a model change, and one Op
   const recovered = await provider.openSession(spec({ established: true, hasReplies: true, history: () => history }));
   await recovered.send({ prompt: "Still there?" });
   const fresh = [...log.sessions.values()][0];
-  assert.match(log.instructions.get(fresh.id), /<earlier-conversation>[\s\S]*User: Hi[\s\S]*Assistant: Hello/);
+  // The transcript comes once, before the message; the instructions entry is written every turn and stays the same.
+  assert.doesNotMatch(log.instructions.get(fresh.id), /earlier-conversation|User: Hi/);
+  assert.match(sent("POST", /\/prompt$/).at(-1)[2].text, /^\[Botkins: this conversation continues from earlier\.[^\n]*\n<earlier-conversation>\nUser: Hi\n\nAssistant: Hello\n<\/earlier-conversation>\n\nStill there\?$/);
   assert.equal(provider.sessions.get("chat-1").ref, fresh.id);
 });
 

@@ -9,7 +9,7 @@ import { compactNumber } from "@/state/time";
 import { BotAvatar, Button, EmptyState, Group, Label, Loading, Page, Row, Segmented, space, T, useTheme } from "@/ui";
 import { useProviderUsage } from "@/state/providerUsage";
 import { Limits } from "./Limits";
-import { shareLine, tokens, type UsageDay, usageDays } from "./computer";
+import { cachePercent, shareLine, tokens, type UsageDay, usageDays } from "./computer";
 import { Card } from "./shared";
 
 type Range = "7" | "30" | "90";
@@ -157,8 +157,12 @@ export default function Usage() {
               <Metric label="Cost" value={totals.priced > 0 ? money.format(totals.cost) : "—"} note={totals.priced > 0 && totals.priced < totals.turns ? "From " + totals.priced + " priced turns" : undefined} />
             </View>
             <View style={{ flexDirection: "row", gap: space.md }}>
-              <Metric label="Input tokens" value={tokens(totals.input)} note={totals.cacheRead > 0 ? tokens(totals.cacheRead) + " from cache" : undefined} />
+              <Metric label="Input tokens" value={tokens(totals.input)} note={totals.cacheRead > 0 ? "+ " + tokens(totals.cacheRead) + " from cache" : undefined} />
               <Metric label="Output tokens" value={tokens(totals.output)} />
+            </View>
+            <View style={{ flexDirection: "row", gap: space.md }}>
+              <Metric label="Cache hit rate" value={cachePercent(totals.cacheHitRate) || "—"} note={cachePercent(totals.cacheHitRate) ? "Of all input" : undefined} />
+              <Metric label="Written to cache" value={typeof totals.cacheWrite === "number" ? tokens(totals.cacheWrite) : "—"} />
             </View>
           </View>
 

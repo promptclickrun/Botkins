@@ -17,7 +17,7 @@ import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { ModelProvider, ProviderSession } from "../provider.mjs";
+import { ModelProvider, ProviderSession, usageData } from "../provider.mjs";
 import { cliEnv, findBinary, run, versionOf } from "../cli.mjs";
 import { buildInventory, resolvePrompt } from "../commands.mjs";
 import { QUIET_CHECK_MS, watchQuiet } from "../liveness.mjs";
@@ -150,7 +150,9 @@ class OpenCodeSession extends ProviderSession {
       ...Object.entries(servers).map(([name, server]) => api.put("/api/experimental/mcp/" + encodeURIComponent(name), { config: openCodeServer(server) }, this.location).catch((error) => console.error("OpenCode MCP server " + name + ":", error.message))),
       ...(this.bridge ? [api.put("/api/experimental/mcp/" + this.bridgeName, { config: { type: "remote", url: this.bridge.url, headers: this.bridge.headers, oauth: false, codemode: false, timeout: { execution: 900000 } } }, this.location)] : []),
     ]);
-    const lost = !info && spec.established && spec.hasReplies ? transcriptContext(spec) : "";
+    // A conversation OpenCode doesn't hold continues from Botkins' own transcript, told once with the
+    // first message: the instructions entry is written on every turn and stays the same.
+    this.lost = !info && spec.established && spec.hasReplies ? transcriptContext(spec) : "";
     if (info) {
       await api.patch("/api/session/" + info.id, { permissions: this.rules() });
       const wanted = this.modelRef();
@@ -169,7 +171,7 @@ class OpenCodeSession extends ProviderSession {
       if (!spec.temporary) provider.sessions.set(spec.sessionId, { ref: info.id });
     }
     this.sessionId = info.id;
-    await api.put("/api/experimental/session/" + info.id + "/instructions/entries/" + INSTRUCTIONS_KEY, { value: spec.instructions + this.skills.instructions + (spec.context ?? "") + lost });
+    await api.put("/api/experimental/session/" + info.id + "/instructions/entries/" + INSTRUCTIONS_KEY, { value: spec.instructions + this.skills.instructions + (spec.context ?? "") });
     provider.attach(this);
     return info.id;
   }
@@ -194,7 +196,7 @@ class OpenCodeSession extends ProviderSession {
       // The turn before this one was given up on (it timed out, or its session was closed) before
       // OpenCode said it had ended. It is waited out, so its last events are not taken for this turn's.
       if (this.provider.unsettled.delete(sessionId)) await api.post("/api/experimental/session/" + sessionId + "/wait", undefined, undefined, 20000).catch(() => {});
-      const turn = (this.turn = { text: [], any: false, usage: { input: 0, output: 0, cacheRead: 0, cost: 0 }, failure: "", started: Date.now(), posted: false, ended: false });
+      const turn = (this.turn = { text: [], any: false, usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 }, failure: "", started: Date.now(), posted: false, ended: false });
       const finished = new Promise((resolve, reject) => Object.assign(turn, { resolve, reject }));
       finished.catch(() => {});
       if (timeoutMs > 0) {
@@ -204,11 +206,12 @@ class OpenCodeSession extends ProviderSession {
       watching = turn.quiet = watchQuiet({ every: this.provider.quietCheckMs, probe: () => this.alive(), onDead: (error) => turn.reject(error) });
       try {
         const { data } = await api.post("/api/session/" + sessionId + "/prompt", {
-          text: this.mode === "plan" ? "Plan mode: do not change any file. Work out a plan, show it, and ask before carrying it out.\n\n" + message.prompt : message.prompt,
+          text: (this.lost ? this.lost + "\n\n" : "") + (this.mode === "plan" ? "Plan mode: do not change any file. Work out a plan, show it, and ask before carrying it out.\n\n" + message.prompt : message.prompt),
           ...(message.attachments?.length && { files: message.attachments.filter((a) => a.kind !== "directory").map((a) => ({ uri: pathToFileURL(a.path).href, name: a.name })) }),
         });
         // Only an ending that comes after the message was handed over is this turn's.
         turn.posted = true;
+        this.lost = "";
         // The message's id is the fork boundary (see OpenCodeProvider.forkSession).
         this.emit("user.message", {}, data?.id);
         if (this.stopRequested) this.interrupt();
@@ -223,14 +226,16 @@ class OpenCodeSession extends ProviderSession {
       }
       const text = turn.text.map((t) => t.trim()).filter(Boolean).join("\n\n");
       const { usage } = turn;
-      if (usage.input || usage.output)
-        this.emit("assistant.usage", {
-          inputTokens: usage.input,
-          outputTokens: usage.output,
-          cacheReadTokens: usage.cacheRead,
+      // OpenCode's tokens.input is the uncached input already: it takes the cache out of the providers that count it in.
+      if (usage.input || usage.output || usage.cacheRead)
+        this.emit("assistant.usage", usageData({
+          input: usage.input,
+          output: usage.output,
+          cacheRead: usage.cacheRead,
+          cacheWrite: usage.cacheWrite,
           ...(usage.cost > 0 && { cost: usage.cost }),
           model: this.model.model,
-        });
+        }));
       return { text };
     } finally {
       clearTimeout(timer);
@@ -281,6 +286,8 @@ class OpenCodeSession extends ProviderSession {
     if (type === "form.created") return void this.form(data.form ?? data);
     const turn = this.turn;
     const agentId = child ? data.sessionID : undefined;
+    // OpenCode compacted the session: the workspace begins the next turn from the current prompt (desktop/session-prompts.mjs).
+    if (!child && /^session\.compact(?:ed|ion\.(?:ended|completed?))$/.test(type)) this.emit("session.compaction_complete", {});
     switch (type) {
       case "session.text.started":
         if (turn && !child) turn.sectionDelta = false;
@@ -343,6 +350,7 @@ class OpenCodeSession extends ProviderSession {
           turn.usage.input += data.tokens.input ?? 0;
           turn.usage.output += (data.tokens.output ?? 0) + (data.tokens.reasoning ?? 0);
           turn.usage.cacheRead += data.tokens.cache?.read ?? 0;
+          turn.usage.cacheWrite += data.tokens.cache?.write ?? 0;
           turn.usage.cost += data.cost ?? 0;
         }
         return;

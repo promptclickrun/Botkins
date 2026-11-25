@@ -39,17 +39,15 @@ export class Memory {
       return "";
     }
   }
-  /**
-   * Replaces a bot's memory with the given text (the person editing it, or a tool below).
-   * `added` means lines were only appended, so the conversation that is saving already knows them.
-   */
-  write(botId, text, { added = false } = {}) {
+  /** Replaces a bot's memory with the given text (the person editing it, or a tool below). */
+  write(botId, text) {
     this.ws.bot(botId);
     if (typeof text !== "string") throw new Error("Memory is text.");
     if (text.length > MEMORY_MAX)
       throw new Error("Memory holds up to " + MEMORY_MAX.toLocaleString("en-US") + " characters. Remove what is no longer needed first.");
     const file = this.file(botId);
     const clean = text.replace(/\r\n/g, "\n").trim();
+    const before = this.entries(botId);
     if (!clean) {
       rmSync(file, { force: true });
     } else {
@@ -57,10 +55,12 @@ export class Memory {
       writeFileSync(file + ".tmp", clean + "\n", { mode: 0o600 });
       renameSync(file + ".tmp", file);
     }
-    // Sessions of this bot carry the old memory in their instructions, so they close and reopen
-    // with the new one. A session in the middle of a turn closes when that turn ends, unless the
-    // change only added a line it wrote itself.
-    this.ws.releaseBotSessions?.(botId, { busy: !added });
+    // Open sessions keep the memory they began with in their instructions, so the start of their
+    // requests stays cached; each is told what was added with its next message
+    // (desktop/session-prompts.mjs). What the person took away (forgot, corrected, rewrote) must not
+    // stay in a session's prompt or in its record: those begin afresh at their next turn.
+    const now = new Set(clean.split("\n").map((line) => line.trim()).filter(Boolean));
+    if (before.some((line) => !now.has(line))) this.ws.sessionPrompts?.staleWhere((record) => record.botId === botId);
     this.ws.notify();
   }
   remove(botId) {
@@ -86,7 +86,7 @@ export class Memory {
       this.write(botId, lines.join("\n"));
     } else {
       lines.push(entry);
-      this.write(botId, lines.join("\n"), { added: true });
+      this.write(botId, lines.join("\n"));
     }
     return { saved: true };
   }

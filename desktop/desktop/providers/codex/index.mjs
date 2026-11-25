@@ -17,7 +17,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { ModelProvider, ProviderSession } from "../provider.mjs";
+import { ModelProvider, ProviderSession, usageData } from "../provider.mjs";
 import { StdioRpc, cliEnv, findBinary, versionOf } from "../cli.mjs";
 import { buildInventory, resolvePrompt } from "../commands.mjs";
 import { watchQuiet } from "../liveness.mjs";
@@ -258,9 +258,9 @@ class CodexSession extends ProviderSession {
       developerInstructions: spec.instructions + this.skills.instructions + (spec.context ?? ""),
     };
     // What a loaded thread can't take in later. The model and the approval level ride with each
-    // turn; `context` (the bot's memory) is left out on purpose: the workspace releases a bot's
-    // sessions when it changes.
-    this.signature = createHash("sha256").update(JSON.stringify([spec.folder, spec.instructions, this.skills.instructions, params.config])).digest("hex");
+    // turn. The instructions and `context` (the bot's memory) are the session's own and stay the
+    // same from turn to turn (desktop/session-prompts.mjs); when they differ, it began anew.
+    this.signature = createHash("sha256").update(JSON.stringify([spec.folder, spec.instructions, spec.context ?? "", this.skills.instructions, params.config])).digest("hex");
     const known = spec.established && provider.sessions.get(spec.sessionId);
     let thread;
     if (known) {
@@ -281,11 +281,11 @@ class CodexSession extends ProviderSession {
       }
     }
     if (!thread) {
-      // A conversation Codex doesn't hold continues from Botkins' own transcript.
-      const lost = spec.established && spec.hasReplies ? transcriptContext(spec) : "";
+      // A conversation Codex doesn't hold continues from Botkins' own transcript, told once with
+      // the first message: the developer instructions are sent again on every resume and stay the same.
+      this.lost = spec.established && spec.hasReplies ? transcriptContext(spec) : "";
       const opened = await rpc.request("thread/start", {
         ...params,
-        developerInstructions: params.developerInstructions + lost,
         serviceName: "botkins",
         ...(spec.temporary && { ephemeral: true }),
       });
@@ -395,7 +395,9 @@ class CodexSession extends ProviderSession {
           input: userInput({
             ...message,
             // Codex has no plan mode on this channel: its read-only sandbox keeps the promise, and it is told.
-            prompt: this.mode === "plan" ? "Plan mode: do not change any file or run anything that changes state. Work out a plan, show it, and ask before carrying it out.\n\n" + message.prompt : message.prompt,
+            prompt:
+              (this.lost ? this.lost + "\n\n" : "") +
+              (this.mode === "plan" ? "Plan mode: do not change any file or run anything that changes state. Work out a plan, show it, and ask before carrying it out.\n\n" + message.prompt : message.prompt),
           }),
           model: this.model.model,
           effort: this.model.reasoningEffort ?? null,
@@ -419,6 +421,8 @@ class CodexSession extends ProviderSession {
           else throw error;
         }
         turn.id = started.turn.id;
+        // Codex has the transcript in its thread now.
+        this.lost = "";
         // The turn's id is its fork boundary (see CodexProvider.forkSession).
         if (!this.spec.temporary) this.provider.sessions.update(this.id, (record) => (record.turns = [...(record.turns ?? []), turn.id].slice(-400)));
         this.emit("user.message", {}, turn.id);
@@ -443,6 +447,8 @@ class CodexSession extends ProviderSession {
   notified(method, params) {
     const turn = this.turn;
     turn?.quiet?.touch();
+    // Codex compacted the thread: the workspace begins the next turn from the current prompt (desktop/session-prompts.mjs).
+    if (method === "thread/compacted" || (method === "item/completed" && params?.item?.type === "contextCompaction")) this.emit("session.compaction_complete", {});
     switch (method) {
       case "item/started": {
         const item = params.item;
@@ -541,13 +547,15 @@ class CodexSession extends ProviderSession {
         const total = this.usage?.total;
         if (total) {
           const spent = (key) => Math.max(0, (total[key] ?? 0) - (turn.baseline?.[key] ?? 0));
-          this.emit("assistant.usage", {
-            inputTokens: spent("inputTokens"),
-            outputTokens: spent("outputTokens"),
-            cacheReadTokens: spent("cachedInputTokens"),
+          // Codex's inputTokens holds the cached input too (its own "non-cached input" is the difference).
+          this.emit("assistant.usage", usageData({
+            input: spent("inputTokens"),
+            output: spent("outputTokens"),
+            cacheRead: spent("cachedInputTokens"),
+            includesCache: true,
             model: this.model.model,
             ...(done.durationMs && { duration: done.durationMs }),
-          });
+          }));
         }
         const text = turn.text.map((t) => t.text.trim()).filter(Boolean).join("\n\n");
         if (done.status === "failed") turn.reject(new Error(done.error?.message || turn.failure || "ChatGPT couldn't finish this reply."));

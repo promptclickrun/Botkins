@@ -14,7 +14,7 @@ import { createHash } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ModelProvider, ProviderSession } from "../provider.mjs";
+import { ModelProvider, ProviderSession, usageData } from "../provider.mjs";
 import { StdioRpc, cliEnv, findBinary } from "../cli.mjs";
 import { buildInventory, resolvePrompt } from "../commands.mjs";
 import { SessionStore, missingConversation, serversWithTokens, transcriptContext } from "../sessions.mjs";
@@ -34,6 +34,22 @@ const BUILT_IN = new Set(Object.keys(PERMISSION_KINDS));
 const signedOut = (error) => error?.code === -32000 || /auth(entication|orization)? required|not (logged|signed) in|(log|sign) ?in (first|required)|unauthenticated|please (log|sign) ?in/i.test(String(error?.message ?? ""));
 
 const pairs = (object) => Object.entries(object ?? {}).map(([name, value]) => ({ name, value: String(value) }));
+/**
+ * A prompt turn's usage (ACP's `Usage`) as an assistant.usage event. ACP's schema counts each kind
+ * of token apart (input, output, thought, cache read, cache write), its total being their sum, so
+ * `inputTokens` leaves the cache out. An agent that passes on its model's own count (Gemini's
+ * promptTokenCount holds the cached input) reports a total smaller than that sum: its input then
+ * has the cached part taken out.
+ */
+export function acpUsage(usage, model) {
+  const input = usage.inputTokens ?? 0;
+  const read = usage.cachedReadTokens ?? 0;
+  const write = usage.cachedWriteTokens ?? 0;
+  const output = usage.outputTokens ?? 0;
+  const thought = usage.thoughtTokens ?? 0;
+  const includesCache = Number.isFinite(usage.totalTokens) && read + write > 0 && usage.totalTokens < input + output + thought + read + write;
+  return usageData({ input, output, cacheRead: read, cacheWrite: write, includesCache, model });
+}
 /** A Botkins MCP server record as ACP's, or null when the agent can't connect to that kind. */
 function acpServer(name, server, capabilities) {
   if (server.type === "stdio") return { name, command: server.command, args: server.args ?? [], env: pairs(server.env) };
@@ -171,7 +187,7 @@ class AcpSession extends ProviderSession {
       const record = provider.sessions.get(spec.sessionId);
       const fresh = spec.temporary || record?.told !== told;
       const text =
-        (fresh && (preamble || this.lost) ? "<instructions>\n" + preamble.trim() + (this.lost ?? "") + "\n</instructions>\n\n" : "") +
+        (fresh && (preamble || this.lost) ? "<instructions>\n" + [preamble.trim(), this.lost].filter(Boolean).join("\n\n") + "\n</instructions>\n\n" : "") +
         (this.mode === "plan" ? "Plan mode: do not change any file. Work out a plan, show it, and ask before carrying it out.\n\n" : "") +
         message.prompt;
       const prompt = [
@@ -189,13 +205,7 @@ class AcpSession extends ProviderSession {
       }
       if (!spec.temporary) provider.sessions.update(spec.sessionId, (r) => (r.told = told));
       this.lost = "";
-      if (result?.usage)
-        this.emit("assistant.usage", {
-          inputTokens: result.usage.inputTokens ?? 0,
-          outputTokens: result.usage.outputTokens ?? 0,
-          cacheReadTokens: result.usage.cachedReadTokens ?? 0,
-          model: this.model.model,
-        });
+      if (result?.usage) this.emit("assistant.usage", acpUsage(result.usage, this.model.model));
       const reply = turn.text.join("").trim();
       if (result?.stopReason === "refusal" && !reply) throw new Error(provider.name + " declined to answer this.");
       if (result?.stopReason === "max_tokens" && !reply) throw new Error(provider.name + " ran out of room before it could answer.");

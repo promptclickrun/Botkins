@@ -74,7 +74,7 @@ async function turn(text) {
   for (const part of reply ? [reply.slice(0, 4), reply.slice(4)] : []) send({ type: "message_update", assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: part } });
   send({
     type: "message_end",
-    message: { role: "assistant", content: [{ type: "text", text: reply }], stopReason: reply ? "stop" : "error", ...(!reply && { errorMessage: error }), usage: { input: 100, output: 7, cacheRead: 20, cacheWrite: 0, totalTokens: 127 } },
+    message: { role: "assistant", content: [{ type: "text", text: reply }], stopReason: reply ? "stop" : "error", ...(!reply && { errorMessage: error }), usage: { input: 100, output: 7, cacheRead: 20, cacheWrite: 3, totalTokens: 130 } },
   });
   send({ type: "agent_end", messages: [] });
   send({ type: "agent_settled", aborted: false });

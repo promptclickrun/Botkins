@@ -186,7 +186,7 @@ test("one member's failure is recorded and the others still answer", async (t) =
   assert.match(run.detail, /Scout: model unavailable/);
   assert.deepEqual(run.steps.map((s) => s.botId), ["pip", "patch"]);
   assert.deepEqual(run.reasoning.map((r) => r.botId), ["pip", "patch"]);
-  assert.deepEqual(run.usage, { input: 20, output: 4 });
+  assert.deepEqual(run.usage, { input: 20, output: 4, cacheRead: 0, cacheWrite: 0 });
   // Group chats are text only.
   assert.throws(() => ws.send(id, "file", { attachments: [ctx.dir] }), /text only/);
   await assert.rejects(ws.forkChat(id, 0), /can't be forked/);

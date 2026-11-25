@@ -199,19 +199,17 @@ test("model and approval changes apply to the open session; changed instructions
   assert.equal(log.configs.get(id).permissions.mode, "manual");
   assert.equal(log.configs.get(id).model, "gpt-x");
   log.resumed.length = 0;
-  // Memory rides outside the reuse check, so the saving chat's session survives its own save…
-  ws.active.set(id, { stopped: false });
   log.disconnected.length = 0;
-  const entry = ws.providers.default.pool.get(id);
-  entry.busy = true;
+  // A memory save closes no session: an open chat keeps the prompt it began with (its cached
+  // start) and is told the change with its next message (test/prompt-caching.test.mjs).
   ws.memory.save("pip", "Likes teal");
   await tick();
-  // …while the bot's other open chat closes so its next turn starts with the new memory.
-  assert.deepEqual(log.disconnected, [other]);
-  entry.busy = false;
-  ws.active.delete(id);
+  assert.deepEqual(log.disconnected, []);
+  // The bot's other chat began before its instructions changed, so its next turn begins anew,
+  // with the new instructions and the memory as it is now: nothing is told as a change.
   await ws.send(other, "Again");
-  assert.match(log.configs.get(other).systemMessage.content, /Likes teal/);
+  assert.match(log.configs.get(other).systemMessage.content, /Answer in one sentence[\s\S]*Likes teal/);
+  assert.doesNotMatch(log.sent.findLast(([session]) => session === other)[1], /context updated/);
   assert.deepEqual(log.resumed, [other]);
 });
 
@@ -966,14 +964,21 @@ test("a second provider serves the chats whose model belongs to it, and a chat c
   await ws.setModel("chat", id, { model: "echo-1", provider: "echo" });
   await ws.send(id, "Second");
   const chat = ws.chat(id);
-  assert.equal(chat.messages.at(-1).text, "echo: Second");
+  // (The echo repeats what it was sent: the transcript, then the message.)
+  assert.match(chat.messages.at(-1).text, /^echo: [\s\S]*\n\nSecond$/);
   assert.equal(chat.sessionProvider, "echo");
   assert.deepEqual(log.deleted, [id], "the old provider's session is removed");
-  assert.equal(seen[0].prompt, "Second");
-  assert.match(seen[0].instructions, /earlier-conversation[\s\S]*First[\s\S]*copilot: First/);
-  assert.doesNotMatch(seen[0].instructions, /earlier-conversation[\s\S]*User: Second/, "the new message isn't repeated in the transcript");
+  // The transcript comes with the first message, before it, and never in the system prompt, where
+  // it would be sent again with every request and no compaction could shrink it.
+  assert.match(seen[0].prompt, /^\[Botkins: this conversation continues from earlier\.[^\n]*\n<earlier-conversation>\n[\s\S]*First[\s\S]*copilot: First\n<\/earlier-conversation>\n\nSecond$/);
+  assert.doesNotMatch(seen[0].prompt, /User: Second/, "the new message isn't repeated in the transcript");
+  assert.doesNotMatch(seen[0].instructions, /earlier-conversation|copilot: First/, "the system prompt has no transcript");
   assert.ok(seen[0].tools.includes("memory_save"), "Botkins' own tools work with any provider");
   assert.equal(seen[0].history, 3);
+  await ws.send(id, "Third");
+  assert.equal(seen[1].prompt, "Third", "the transcript reaches the model once");
+  assert.equal(seen[1].instructions, seen[0].instructions, "the system prompt stays the same");
+  assert.equal(ws.chat(id).forkContext, undefined);
   // A bot whose default model is on the second provider starts there directly; deleting its chat tells that provider.
   await ws.setModel("bot", "scout", { model: "echo-1", provider: "echo" });
   const second = ws.createChat("scout");

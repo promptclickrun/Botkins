@@ -15,11 +15,13 @@ function setup(t, reply, options = {}) {
   return { dir, ws, ...fake };
 }
 const system = (log, id) => log.configs.get(id).systemMessage.content;
+/** The task a child was given: the last part of its first message (its name, mode and limits come before it). */
+const taskOf = (prompt) => prompt.split("Task:\n").pop().trim();
 
 test("top-level turns expose subagent_* tools and guidance, while subagent children cannot recurse", async (t) => {
   const { ws, log } = setup(t, async (id, options, session) => {
     if (id.includes("-sub-")) {
-      return { data: { content: "child saw: " + options.prompt.trim() } };
+      return { data: { content: "child saw: " + taskOf(options.prompt) } };
     }
     const res = JSON.parse(await session.tool("subagent_run", {
       task: "Inspect workspace",
@@ -47,8 +49,12 @@ test("top-level turns expose subagent_* tools and guidance, while subagent child
   const childTools = log.sessions.get(childId).toolNames();
   assert.ok(!childTools.includes("subagent_run"), "subagent child must not get subagent_run");
   assert.ok(!childTools.includes("ask_teammate"), "subagent child must not get ask_teammate");
-  assert.match(system(log, childId), /isolated Botkins subagent \(Workspace check\)/);
-  assert.match(system(log, childId), /Read-only mode:/);
+  // The child's system prompt is the same for every child of this bot; its name, mode and
+  // expected output come with its task, in its first message.
+  assert.match(system(log, childId), /isolated Botkins subagent launched by Pip/);
+  assert.doesNotMatch(system(log, childId), /Workspace check|Read-only mode|one line/);
+  const childPrompt = log.sent.find(([id]) => id === childId)[1];
+  assert.match(childPrompt, /Subagent: Workspace check\.\nRead-only mode: [^\n]+\nExpected output: one line\.\n\nTask:\nInspect workspace$/);
 
   // Activity Island record on parent run
   assert.equal(run.agents.length, 1);
@@ -62,9 +68,9 @@ test("parallel subagent_run fans out multiple children concurrently and collects
   const seen = [];
   const { ws } = setup(t, async (id, options, session) => {
     if (id.includes("-sub-")) {
-      seen.push(options.prompt.trim());
+      seen.push(taskOf(options.prompt));
       await tick(10);
-      return { data: { content: "ok:" + options.prompt.trim() } };
+      return { data: { content: "ok:" + taskOf(options.prompt) } };
     }
     const res = JSON.parse(await session.tool("subagent_run", {
       tasks: [
@@ -85,6 +91,35 @@ test("parallel subagent_run fans out multiple children concurrently and collects
   assert.equal(chat.messages.at(-1).text, "Alpha=ok:task-alpha | Beta=ok:task-beta | Gamma=ok:task-gamma");
   assert.equal(run.agents.length, 3);
   assert.deepEqual(run.agents.map((a) => a.status), ["Done", "Done", "Done"]);
+});
+
+test("sibling subagents share a byte-identical system prompt; each one's own text is in its first message", async (t) => {
+  // Children started side by side share the start of their requests (tools, then the system
+  // prompt), which a model caches once for all of them: nothing per child may be in it.
+  const { ws, log } = setup(t, async (id, options, session) => {
+    if (id.includes("-sub-")) return { data: { content: "done" } };
+    await session.tool("subagent_run", {
+      tasks: [
+        { task: "Read the logs", label: "Logs", readonly: true, expecting: "three lines" },
+        { task: "Fix the typo", label: "Typo", constraints: "touch only README.md" },
+        { task: "Count the files" },
+      ],
+    });
+    return { data: { content: "ok" } };
+  });
+  const chatId = ws.createChat("pip");
+  await ws.send(chatId, "Fan out");
+  const children = [...log.sessions.keys()].filter((id) => id.includes("-sub-"));
+  assert.equal(children.length, 3);
+  const prompts = children.map((id) => system(log, id));
+  assert.ok(prompts.every((prompt) => prompt === prompts[0]), "every child's system prompt is the same, byte for byte");
+  assert.doesNotMatch(prompts[0], /Logs|Typo|Read-only mode|three lines|README/);
+  const firsts = children.map((id) => log.sent.find(([sent]) => sent === id)[1]).sort();
+  assert.deepEqual(firsts.map((prompt) => prompt.slice(prompt.indexOf("Subagent:"))), [
+    "Subagent: Logs.\nRead-only mode: inspect and report only; do not modify files, run mutating commands, or perform external writes.\nExpected output: three lines.\n\nTask:\nRead the logs",
+    "Subagent: Subagent 3.\n\nTask:\nCount the files",
+    "Subagent: Typo.\nConstraints: touch only README.md.\n\nTask:\nFix the typo",
+  ].sort());
 });
 
 test("async subagent_run supports status, wait, and stop", async (t) => {

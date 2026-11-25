@@ -33,7 +33,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { cpSync, existsSync, mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { CopilotClient, CopilotRequestHandler, CopilotWebSocketCloseStatus, CopilotWebSocketHandler, RuntimeConnection, defineTool as sdkTool } from "@microsoft/copilot-sdk";
-import { ModelProvider, ProviderSession } from "../provider.mjs";
+import { ModelProvider, ProviderSession, usageData } from "../provider.mjs";
 import { QUIET_CHECK_MS, watchQuiet } from "../liveness.mjs";
 import { decide } from "./permissions.mjs";
 import { CopilotRelay } from "./relay.mjs";
@@ -227,16 +227,16 @@ export function sessionOptions(spec, turn) {
     // Plugin file hooks are projected and run by Botkins so their settings stay scoped and the
     // native plugin directory cannot register the same hook a second time.
     ...(spec.pluginHooks && { hooks: spec.pluginHooks }),
-    // `context` is the part that changes often (such as the bot's memory). A warm session keeps
-    // the one it opened with; see signatureOf.
+    // The bot's instructions, then its memory (`context`), as the session began with them; see signatureOf.
     systemMessage: { mode: "append", content: spec.instructions + (spec.context ?? "") },
   };
 }
 
 /**
  * What must match for a warm session to serve another turn. Tools and handlers are swapped per
- * turn, the model and approval level are changed on the open session, and `context` is left out
- * on purpose: the workspace releases a bot's idle sessions when its context changes.
+ * turn, and the model and approval level are changed on the open session. The instructions and
+ * `context` are the session's own and stay the same from turn to turn (desktop/session-prompts.mjs):
+ * when they differ, the session began anew, and it is opened again with them.
  */
 const modelKey = (model) => [model.model, model.source ?? "", model.reasoningEffort ?? ""].join("\n");
 const signatureOf = (spec) =>
@@ -246,6 +246,7 @@ const signatureOf = (spec) =>
         spec.folder,
         !!spec.coding,
         spec.instructions,
+        spec.context ?? "",
         spec.skills ?? null,
         spec.mcpServers ?? null,
         spec.plugins ?? null,
@@ -271,6 +272,16 @@ async function switchModel(sdk, selection, failure, inference) {
     throw new Error(failure);
 }
 
+/**
+ * The runtime's usage of one model call in Botkins' terms. Its inputTokens is the whole prompt,
+ * the cached part with it (as OpenAI counts it, for every model it runs, Claude's too); Botkins
+ * counts the uncached input (provider.mjs usageData). The rest of the event is kept as it came.
+ */
+export function copilotUsageData(data) {
+  const { inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, ...rest } = data;
+  return usageData({ ...rest, input: inputTokens, output: outputTokens, cacheRead: cacheReadTokens, cacheWrite: cacheWriteTokens, includesCache: true });
+}
+
 class CopilotSession extends ProviderSession {
   constructor(provider, entry) {
     super();
@@ -281,7 +292,7 @@ class CopilotSession extends ProviderSession {
     this.subscriptions = new Set();
   }
   on(handler) {
-    const off = this.sdk.on(handler);
+    const off = this.sdk.on((event) => handler(event?.type === "assistant.usage" && event.data ? { ...event, data: copilotUsageData(event.data) } : event));
     this.subscriptions.add(off);
     return () => {
       this.subscriptions.delete(off);

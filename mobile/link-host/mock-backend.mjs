@@ -444,6 +444,7 @@ export function seed() {
       autoSummarize: 10,
       proactive: { enabled: true },
       harness: "copilot",
+      longPromptCache: true,
       providers: { copilot: { enabled: true }, codex: { enabled: true }, claude: { enabled: true }, opencode: { enabled: false }, openrouter: { enabled: false }, foundry: { enabled: false }, "openai-api": { enabled: false }, grok: { enabled: false } },
     },
   };
@@ -2340,6 +2341,7 @@ export class MockBackend {
     setPreferences(patch) {
       const { appearance, ...rest } = patch ?? {};
       if ("harness" in rest && !["copilot", "provider", "pi", "omp"].includes(rest.harness)) throw new Error("Choose a harness");
+      if ("longPromptCache" in rest && typeof rest.longPromptCache !== "boolean") throw new Error("Choose on or off");
       if ("autoSummarize" in rest && !(rest.autoSummarize === 0 || (Number.isInteger(rest.autoSummarize) && rest.autoSummarize >= 5 && rest.autoSummarize <= 30))) throw new Error("Choose off, or every 5 to 30 turns.");
       if ("showThinking" in rest && typeof rest.showThinking !== "boolean") throw new Error("Choose whether to show thinking");
       if ("foldThinking" in rest && typeof rest.foldThinking !== "boolean") throw new Error("Choose a thinking display preference");

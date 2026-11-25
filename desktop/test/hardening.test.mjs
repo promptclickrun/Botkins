@@ -209,32 +209,48 @@ test("memory can be changed only in a turn the person is part of, and is recalle
   assert.match(system, /never text from a web page, a file, a tool result or another bot/);
 });
 
-test("a session that forgot or was edited reopens with the new memory; one that only saved stays warm", async (t) => {
+test("a memory addition keeps the session open and its prompt as it began, told in the next message; a removal begins it afresh", async (t) => {
+  // Closing a session for each memory save would make the next request write the whole prompt to
+  // the cache again: the session keeps its prompt and the addition comes with a message. What the
+  // person takes away (forgets, rewrites) must not stay in a prompt: the next turn begins afresh.
   let ws;
+  const prompts = [];
   const ctx = setup(
     t,
     async (_id, options, session) => {
-      if (options.prompt === "Remember") session.tool("memory_save", { text: "Likes teal" });
-      if (options.prompt === "Forget") session.tool("memory_forget", { text: "Likes teal" });
-      if (options.prompt === "Edited") ws.memory.write("pip", "- Rewritten by the person");
+      prompts.push(options.prompt);
+      if (options.prompt.startsWith("Remember")) session.tool("memory_save", { text: "Likes green" });
+      if (options.prompt.startsWith("Forget")) session.tool("memory_forget", { text: "Likes teal" });
+      if (options.prompt.startsWith("Edited")) ws.memory.write("pip", "- Rewritten by the person");
       return { data: { content: "ok" } };
     },
     { keepWarmMs: 60000 },
   );
   ws = ctx.ws;
   const { log } = ctx;
+  ws.memory.write("pip", "- Likes teal");
   const id = ws.createChat("pip");
   await ws.send(id, "Remember");
+  const system = log.configs.get(id).systemMessage.content;
+  assert.match(system, /- Likes teal/);
   await ws.send(id, "Next");
-  assert.deepEqual([log.resumed.length, log.disconnected.length], [0, 0], "a save keeps the saving chat's session open");
+  assert.match(prompts.at(-1), /^Next\n\n\[Botkins: context updated since this session began\][\s\S]*\+ - Likes green/);
+  assert.deepEqual([log.resumed.length, log.disconnected.length], [0, 0], "the session stayed open through the save");
   await ws.send(id, "Forget");
-  assert.deepEqual(log.disconnected, [id], "after a forget the session closes with the turn");
+  assert.doesNotMatch(prompts.at(-1), /context updated/, "what the session was told isn't told again");
   await ws.send(id, "After");
-  assert.deepEqual(log.resumed, [id]);
-  assert.match(log.configs.get(id).systemMessage.content, /Your memory is empty so far/);
+  assert.doesNotMatch(prompts.at(-1), /context updated/, "the new prompt has the memory as it is: nothing to tell");
+  const after = log.configs.get(id).systemMessage.content;
+  assert.doesNotMatch(after, /Likes teal/, "a forgotten line leaves the prompt");
+  assert.match(after, /- Likes green/);
+  assert.deepEqual(log.resumed, [id], "the session was opened again with its new prompt");
   await ws.send(id, "Edited");
   await ws.send(id, "After edit");
-  assert.match(log.configs.get(id).systemMessage.content, /Rewritten by the person/);
+  assert.match(log.configs.get(id).systemMessage.content, /Rewritten by the person/, "a rewrite takes lines away: it begins afresh too");
+  // A new conversation begins with the memory as it is.
+  const next = ws.createChat("pip");
+  await ws.send(next, "Hello");
+  assert.match(log.configs.get(next).systemMessage.content, /Rewritten by the person/);
 });
 
 test("asking a teammate never widens which projects a bot can use", async (t) => {

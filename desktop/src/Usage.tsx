@@ -11,6 +11,9 @@ const RANGES = [7, 30, 90];
 const tokens = (n: number) =>
   n >= 1e6 ? (n / 1e6).toFixed(n >= 1e7 ? 0 : 1) + "M" : n >= 1e3 ? (n / 1e3).toFixed(n >= 1e4 ? 0 : 1) + "K" : String(n);
 const money = (n: number) => "$" + (n >= 100 ? n.toFixed(0) : n.toFixed(2));
+/** A cache hit rate as a whole percent, under 1% shown as "<1%". */
+const percent = (rate: number) => (rate > 0 && rate < 0.01 ? "<1%" : Math.round(rate * 100) + "%");
+const hasRate = (t: UsageTotals): t is UsageTotals & { cacheHitRate: number } => typeof t.cacheHitRate === "number";
 const dayLabel = (date: string, opts: Intl.DateTimeFormatOptions) => new Date(date + "T12:00").toLocaleDateString(undefined, opts);
 
 function Breakdown<Row extends UsageTotals & { key: string }>({ title, rows, label }: { title: string; rows: Row[]; label: (r: Row) => ReactNode }) {
@@ -25,6 +28,7 @@ function Breakdown<Row extends UsageTotals & { key: string }>({ title, rows, lab
               <strong>{label(r)}</strong>
               <small>
                 {r.turns} {r.turns === 1 ? "turn" : "turns"} · {tokens(r.input)} in · {tokens(r.output)} out
+                {hasRate(r) ? " · " + percent(r.cacheHitRate) + " cached" : ""}
                 {r.priced ? " · " + money(r.cost) : ""}
               </small>
             </span>
@@ -114,7 +118,16 @@ export default function Usage({ runCount }: { runCount: number }) {
             <div className="metric">
               <small>Input tokens</small>
               <strong>{tokens(t.input)}</strong>
-              {t.cacheRead > 0 && <small>{tokens(t.cacheRead)} from cache</small>}
+              {(t.cacheRead > 0 || (t.cacheWrite ?? 0) > 0) && (
+                <small>
+                  {[t.cacheRead > 0 && "+ " + tokens(t.cacheRead) + " from cache", (t.cacheWrite ?? 0) > 0 && tokens(t.cacheWrite!) + " to cache"].filter(Boolean).join(" · ")}
+                </small>
+              )}
+            </div>
+            <div className="metric" title="Input read from the prompt cache, as a share of all input: uncached, read from cache and written to it. Turns recorded before this was counted are left out.">
+              <small>Cache hit rate</small>
+              <strong>{hasRate(t) ? percent(t.cacheHitRate) : "—"}</strong>
+              {hasRate(t) && <small>Of all input</small>}
             </div>
             <div className="metric">
               <small>Output tokens</small>

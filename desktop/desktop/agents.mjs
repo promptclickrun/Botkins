@@ -232,6 +232,8 @@ export class Agents {
     this.ws.apps?.removeChats([...chatIds]);
     this.ws.tasks?.removeBot(id);
     this.ws.memory?.remove(id);
+    // What its sessions began with (its memory among it) goes with it (desktop/session-prompts.mjs).
+    this.ws.sessionPrompts?.forget((record) => record.botId === id || chatIds.has(record.chatId));
     // The bot's Proactive agent goes with it (desktop/proactive.mjs).
     this.ws.proactive?.sync();
     this.state.bots[0].hidden = false;
@@ -306,6 +308,8 @@ export class Agents {
     this.ws.catalogs.delete(id);
     this.ws.frames?.removeOwner("chat:" + id);
     this.ws.apps?.removeChats([id]);
+    // What the chat's sessions began with goes with it (desktop/session-prompts.mjs).
+    this.ws.sessionPrompts?.forget((record) => record.chatId === id);
     this.ws.save();
     await this.deleteSessions([chat]);
   }

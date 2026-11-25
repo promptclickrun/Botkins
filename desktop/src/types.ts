@@ -356,9 +356,12 @@ export type Subagent = {
   detail?: string;
 };
 export type Usage = {
+  /** Input that was neither read from nor written to the prompt cache. */
   input: number;
   output: number;
   cacheRead?: number;
+  /** Written to the prompt cache. Runs recorded before it was counted have none. */
+  cacheWrite?: number;
   cost?: number;
   model?: string;
   durationMs?: number;
@@ -631,9 +634,13 @@ export type UsageTotals = {
   input: number;
   output: number;
   cacheRead: number;
+  /** Absent from an older computer. */
+  cacheWrite?: number;
   cost: number;
   /** Turns that reported a cost. */
   priced: number;
+  /** Read from cache ÷ (uncached input + read + written), over runs that count it; null when none do, absent from an older computer. */
+  cacheHitRate?: number | null;
 };
 export type UsageReport = {
   days: number;
@@ -2035,6 +2042,8 @@ export type Preferences = {
   background?: { keepRunning: boolean; runAtStartup: boolean };
   /** On (the default): a bot in a one-bot chat may ask other bots for help (desktop/teamwork.mjs). */
   teamwork?: boolean;
+  /** On (the default): ask providers that support it to keep a chat's prompt cache for about an hour instead of five minutes. Missing on an older computer. */
+  longPromptCache?: boolean;
   /**
    * Turns between a chat's summaries into a new title, on the Default routines model: 5 to 30, or 0
    * for off (desktop/summaries.mjs). Missing on an older computer.

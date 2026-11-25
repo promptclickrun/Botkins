@@ -292,7 +292,7 @@ test("a turn runs Claude Code with Botkins' instructions, tools and servers, and
   assert.deepEqual(of("subagent.started").map((e) => e.data), [{ toolCallId: "t5", agentName: "Explore", agentDescription: "Find the file" }]);
   assert.deepEqual(of("subagent.completed").map((e) => e.data), [{ toolCallId: "t5", result:"Found it" }]);
   assert.deepEqual(await session.todos(), { rows: [{ id: "1", title: "Look", status: "completed" }, { id: "2", title: "Answer", status: "in_progress" }], dependencies: [] });
-  assert.deepEqual(of("assistant.usage").map((e) => e.data), [{ inputTokens: 15, outputTokens: 20, cacheReadTokens: 90, duration: 1500, model: "claude-opus-9" }], "a plan shows no cost");
+  assert.deepEqual(of("assistant.usage").map((e) => e.data), [{ inputTokens: 10, outputTokens: 20, cacheReadTokens: 90, cacheWriteTokens: 5, duration: 1500, model: "claude-opus-9" }], "a plan shows no cost; Anthropic's input leaves the cache out, and a cache write is its own count");
   assert.deepEqual(of("session.usage_info").map((e) => e.data), [{ currentTokens: 125, tokenLimit: 200000 }]);
   assert.equal(of("user.message")[0].id, turn.userId, "the message's id is the fork boundary");
   assert.ok(log.closed >= 1, "Claude Code is not left running after the reply");
@@ -340,8 +340,9 @@ test("a conversation resumes its session, a coding chat reads its project's sett
   await recovered.send({ prompt: "Still there?" });
   const c = log.queries.at(-1).options;
   assert.deepEqual([c.resume, c.sessionId], [undefined, uuidFor("chat-1")]);
-  assert.match(c.systemPrompt.append, /<earlier-conversation>[\s\S]*User: Hi[\s\S]*Assistant: Hello/);
-  assert.doesNotMatch(c.systemPrompt.append, /Still there/);
+  // The transcript comes once, before the message, never in the system prompt (sent with every turn).
+  assert.doesNotMatch(c.systemPrompt.append, /earlier-conversation|User: Hi/);
+  assert.match(log.queries.at(-1).prompt, /^\[Botkins: this conversation continues from earlier\.[^\n]*\n<earlier-conversation>\nUser: Hi\n\nAssistant: Hello\n<\/earlier-conversation>\n\nStill there\?$/);
   // A first turn that failed after Claude Code saved the session is resumed, not started twice.
   const retry = await provider.openSession(spec({ sessionId: "chat-2" }));
   saved.add(uuidFor("chat-2"));
