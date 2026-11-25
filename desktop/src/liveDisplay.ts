@@ -25,3 +25,24 @@ export function liveTurnDisplay({
     liveIntent: showUpdates ? (intent ?? "") : "",
   };
 }
+
+/**
+ * Whether the bot's interim updates show in the chat itself. While the turn runs they do. Once it
+ * ended they go with its thinking: in the chat only where the thinking is open in it, else folded
+ * with the thinking (the fold, or the island's receipt).
+ */
+export function updateInChat({
+  live,
+  showUpdates,
+  showThinking,
+  thinkingMode,
+  islandMode,
+}: {
+  live: boolean;
+  showUpdates: boolean;
+  showThinking: boolean;
+  thinkingMode: string;
+  islandMode: boolean;
+}) {
+  return showUpdates && (live || (showThinking && thinkingMode === "open" && !islandMode));
+}

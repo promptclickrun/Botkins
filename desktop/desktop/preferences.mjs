@@ -152,6 +152,8 @@ export const defaultSettings = {
   access: { allBots: true },
   // Bots may ask each other for help from a chat (desktop/teamwork.mjs).
   teamwork: true,
+  // Ask providers that support it to keep a chat's prompt cache for about an hour, not five minutes (Pi and OMP: PI_CACHE_RETENTION=long).
+  longPromptCache: true,
   // Turns between a chat's summaries into a new title: 5 to 30, or 0 for off (desktop/summaries.mjs).
   autoSummarize: AUTO_SUMMARIZE_DEFAULT,
   sidebar: { order: [...SIDEBAR], collapsed: ICONS_ONLY },
@@ -264,6 +266,7 @@ export function changeSettings(settings, patch) {
       case "linkPreviews":
       case "readAloud":
       case "teamwork":
+      case "longPromptCache":
         if (typeof value !== "boolean") throw new Error("Choose on or off");
         next[key] = value;
         break;

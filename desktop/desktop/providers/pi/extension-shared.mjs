@@ -34,14 +34,19 @@ export function makeBotkinsExtension(file, { mcp = true } = {}) {
     const first = read();
     if (!first) return;
     for (const provider of first.providers ?? []) pi.registerProvider(provider.name, provider.config);
-    let servers = "";
     if (mcp) {
+      // A server is registered again only when its settings changed (a renewed sign-in token), and
+      // one a turn doesn't list stays registered: taking its tools away and bringing them back
+      // would change the tool list the model is sent, and with it everything a model caches after
+      // it. Botkins turns down a call to a server that isn't the turn's (PiSession.permission).
+      const registered = new Map();
       const register = (list) => {
-        const next = JSON.stringify(list ?? {});
-        if (next === servers) return;
-        for (const name of Object.keys(JSON.parse(servers || "{}"))) if (!(name in (list ?? {}))) pi.unregisterMcpServer(name);
-        for (const [name, config] of Object.entries(list ?? {})) pi.registerMcpServer(name, config);
-        servers = next;
+        for (const [name, config] of Object.entries(list ?? {})) {
+          const next = JSON.stringify(config);
+          if (registered.get(name) === next) continue;
+          pi.registerMcpServer(name, config);
+          registered.set(name, next);
+        }
       };
       register(first.servers);
       pi.on("before_agent_start", async (event) => {

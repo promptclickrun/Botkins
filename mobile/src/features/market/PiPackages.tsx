@@ -29,6 +29,9 @@ function Packages({ host, hostName }: { host: string; hostName: string }) {
   const [refreshing, setRefreshing] = useState(false);
   const canInstall = useCan("plugins", "install");
   const canManage = useCan("plugins", "manage");
+  const canUninstall = useCan("plugins", "uninstall");
+  const removable = useCapability("pi-packages-remove-v1");
+  const canRemove = canUninstall && removable;
   const [query, setQuery] = useState("");
   const [page, setPage] = useState(1);
   const [refresh, setRefresh] = useState(0);
@@ -111,6 +114,33 @@ function Packages({ host, hostName }: { host: string; hostName: string }) {
       setBusy("");
     }
   }
+  async function remove(pkg: InstalledPiPackage) {
+    const source = shownText(pkg.name + "@" + pkg.version);
+    const yes = await new Promise<boolean>((resolve) =>
+      Alert.alert(
+        "Remove " + source + "?",
+        "It stops loading in every Botkins chat using Pi or OMP, and its files are deleted from " +
+          shownText(hostName) +
+          ". You can install it again from the catalog.",
+        [
+          { text: "Cancel", style: "cancel", onPress: () => resolve(false) },
+          { text: "Remove", style: "destructive", onPress: () => resolve(true) },
+        ],
+        { cancelable: true, onDismiss: () => resolve(false) },
+      ),
+    );
+    if (!yes || !sameHost()) return;
+    setBusy(pkg.name);
+    setError("");
+    try {
+      await api["piPackages.remove"](pkg.name, pkg.version);
+      setRevision((n) => n + 1);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "The package could not be removed.");
+    } finally {
+      setBusy("");
+    }
+  }
   return (
     <Page
       title="Pi packages"
@@ -132,6 +162,19 @@ function Packages({ host, hostName }: { host: string; hostName: string }) {
               toggled={pkg.enabled}
               onToggle={() => void change(pkg.name, pkg)}
               disabled={!canManage || !!busy}
+              trailing={
+                canRemove && (
+                  <Button
+                    title="Remove"
+                    variant="danger"
+                    size="sm"
+                    accessibilityLabel={"Remove " + pkg.name}
+                    loading={busy === pkg.name}
+                    disabled={!!busy}
+                    onPress={() => void remove(pkg)}
+                  />
+                )
+              }
             />
           ))}
         </Group>

@@ -51,7 +51,9 @@ function useRespond(request: AgentRequest) {
   const respond = async (answer: RequestAnswer, which: string): Promise<boolean> => {
     if (busy) return false;
     setBusy(which);
-    const done = await attempt(api.respond(request.id, answer).then(() => true));
+    // A request that holds a script is shown whole in this panel (detailMode): it says so, and nothing else (a notification, a Live Activity) does.
+    const shownWhole = request.review && ["approve", "today", "remember"].includes(answer.action);
+    const done = await attempt(api.respond(request.id, shownWhole ? { ...answer, reviewed: true } : answer).then(() => true));
     if (done) haptic.success();
     setBusy(null);
     return !!done;

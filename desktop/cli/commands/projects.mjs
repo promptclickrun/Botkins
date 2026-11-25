@@ -16,7 +16,7 @@ import { StringDecoder } from "node:string_decoder";
 import { ago, CliError, EXIT, table, usage } from "../output.mjs";
 import { shellWord } from "./tools.mjs";
 import { shownText } from "../../desktop/shown-text.mjs";
-import { ask, confirm, readAll } from "./input.mjs";
+import { ask, confirm, readAll, withScriptYes } from "./input.mjs";
 
 // No short form: the same as in the commands of tools.
 const YES = { yes: { type: "boolean", about: "Do not ask first" } };
@@ -425,24 +425,26 @@ export const projectsCommands = {
       },
       add: {
         summary: "Add a task",
-        usage: "botkins tasks add <title>… [--details <text>] [--details-file <path>] [--bot <bot>] [--priority <priority>] [--status <lane>]",
-        options: { details: { type: "string", value: "text", about: "What the task is, in more words (8000 characters at most)" }, "details-file": { type: "string", value: "path", about: "The details from a file (\"-\" reads standard input)" }, bot: { type: "string", value: "bot", about: "The bot that does it" }, priority: { type: "string", value: "priority", about: "low, normal (the default), high or urgent" }, status: { type: "string", value: "lane", about: "later (the default) or ready" } },
+        usage: "botkins tasks add <title>… [--details <text>] [--details-file <path>] [--bot <bot>] [--priority <priority>] [--status <lane>] [--yes]",
+        options: { ...YES, details: { type: "string", value: "text", about: "What the task is, in more words (8000 characters at most)" }, "details-file": { type: "string", value: "path", about: "The details from a file (\"-\" reads standard input)" }, bot: { type: "string", value: "bot", about: "The bot that does it" }, priority: { type: "string", value: "priority", about: "low, normal (the default), high or urgent" }, status: { type: "string", value: "lane", about: "later (the default) or ready" } },
         arguments: [{ name: "title", required: true, many: true }],
-        details: "A task with --status ready and a bot starts by itself when the bot is free: a turn of the bot's model, in a chat of its own. Without --status, it waits in Later.",
+        details: "A task with --status ready and a bot starts by itself when the bot is free: a turn of the bot's model, in a chat of its own. Without --status, it waits in Later. A task whose details (else its title) are `/name words` of a script command runs that script with no model: the command, its words and its script are shown and you are asked first (with no terminal it needs --yes).",
         async run(context) {
           const title = context.args.join(" ");
           if (!title) throw usage("Give the task a title.");
           const o = context.options;
           const details = await longText(context, "details", "details");
-          const added = await context.client.call("tasks.add", { title, ...(details !== undefined && { details }), ...(o.bot !== undefined && { bot: o.bot }), ...(o.priority !== undefined && { priority: o.priority }), ...(o.status !== undefined && { status: o.status }) });
+          const data = { title, ...(details !== undefined && { details }), ...(o.bot !== undefined && { bot: o.bot }), ...(o.priority !== undefined && { priority: o.priority }), ...(o.status !== undefined && { status: o.status }) };
+          const added = await withScriptYes(context, (marks) => context.client.call("tasks.add", data, ...marks));
+          if (added === undefined) return EXIT.failed;
           context.print(added, (t) => "Added the task " + safe(t.title) + " (" + t.status + (t.bot ? ", for " + safe(t.bot) : "") + ")." + (t.status === "ready" && t.bot ? " It starts by itself when " + safe(t.bot) + " is free: a turn of the bot's model." : ""));
         },
       },
       edit: {
         summary: "Change a task's title, details, bot or priority",
-        usage: "botkins tasks edit <task> [--title <text>] [--details <text>] [--details-file <path>] [--bot <bot>] [--no-bot] [--priority <priority>]",
-        options: { title: { type: "string", value: "text", about: "A new title" }, details: { type: "string", value: "text", about: "New details" }, "details-file": { type: "string", value: "path", about: "New details from a file (\"-\" reads standard input)" }, bot: { type: "string", value: "bot", about: "The bot that does it" }, "no-bot": { type: "boolean", about: "Give the task to no bot" }, priority: { type: "string", value: "priority", about: PRIORITIES.replaceAll(" or ", ", ") } },
-        details: "Only what you name changes. A task that is working cannot be changed: wait until it stops. Giving a Ready task a bot makes it start by itself when the bot is free.",
+        usage: "botkins tasks edit <task> [--title <text>] [--details <text>] [--details-file <path>] [--bot <bot>] [--no-bot] [--priority <priority>] [--yes]",
+        options: { ...YES, title: { type: "string", value: "text", about: "A new title" }, details: { type: "string", value: "text", about: "New details" }, "details-file": { type: "string", value: "path", about: "New details from a file (\"-\" reads standard input)" }, bot: { type: "string", value: "bot", about: "The bot that does it" }, "no-bot": { type: "boolean", about: "Give the task to no bot" }, priority: { type: "string", value: "priority", about: PRIORITIES.replaceAll(" or ", ", ") } },
+        details: "Only what you name changes. A task that is working cannot be changed: wait until it stops. Giving a Ready task a bot makes it start by itself when the bot is free. A task that is a script command (`/name words`) asks first, as `tasks add` does.",
         async run(context) {
           const ref = one(context, "Name the task (its title or id).");
           const o = context.options;
@@ -450,29 +452,36 @@ export const projectsCommands = {
           const details = await longText(context, "details", "details");
           const patch = { ...(o.title !== undefined && { title: o.title }), ...(details !== undefined && { details }), ...(o.bot !== undefined && { bot: o.bot }), ...(o["no-bot"] && { bot: null }), ...(o.priority !== undefined && { priority: o.priority }) };
           if (!Object.keys(patch).length) throw usage("Give what to change: --title, --details, --bot, --no-bot or --priority.");
-          context.print(await context.client.call("tasks.edit", ref, patch), (t) => "Changed the task " + safe(t.title) + "." + (t.status === "ready" && t.bot ? " It is Ready, so it starts by itself when " + safe(t.bot) + " is free." : ""));
+          const changed = await withScriptYes(context, (marks) => context.client.call("tasks.edit", ref, patch, ...marks));
+          if (changed === undefined) return EXIT.failed;
+          context.print(changed, (t) => "Changed the task " + safe(t.title) + "." + (t.status === "ready" && t.bot ? " It is Ready, so it starts by itself when " + safe(t.bot) + " is free." : ""));
         },
       },
       move: {
         summary: "Move a task to a lane",
-        usage: "botkins tasks move <task> <lane>",
+        usage: "botkins tasks move <task> <lane> [--yes]",
+        options: YES,
         arguments: [{ name: "task", required: true }, { name: "lane", required: true }],
-        details: "The lanes are " + LANES + ". A task is never moved to working: it gets there by itself when it is Ready, has a bot, and the bot is free (or with `botkins tasks start`). A task that is working cannot be moved.",
+        details: "The lanes are " + LANES + ". A task is never moved to working: it gets there by itself when it is Ready, has a bot, and the bot is free (or with `botkins tasks start`). A task that is working cannot be moved. Moving a task that is a script command (`/name words`) to ready asks first.",
         async run(context) {
           if (context.args.length !== 2) throw usage("Name the task, then the lane: " + LANES + ".");
-          context.print(await context.client.call("tasks.move", context.args[0], context.args[1]), (t) => "The task " + safe(t.title) + " is now " + t.status + "." + (t.status === "ready" && t.bot ? " It starts by itself when " + safe(t.bot) + " is free: a turn of the bot's model." : t.status === "ready" ? " It has no bot yet. Give it one with `botkins tasks edit " + word(t.title, "<the task>") + " --bot <bot>`." : ""));
+          const moved = await withScriptYes(context, (marks) => context.client.call("tasks.move", context.args[0], context.args[1], ...marks));
+          if (moved === undefined) return EXIT.failed;
+          context.print(moved, (t) => "The task " + safe(t.title) + " is now " + t.status + "." + (t.status === "ready" && t.bot ? " It starts by itself when " + safe(t.bot) + " is free: a turn of the bot's model." : t.status === "ready" ? " It has no bot yet. Give it one with `botkins tasks edit " + word(t.title, "<the task>") + " --bot <bot>`." : ""));
         },
       },
       start: {
         summary: "Start a task now: a turn of its bot's model",
-        usage: "botkins tasks start <task>",
+        usage: "botkins tasks start <task> [--yes]",
+        options: YES,
         details: "This starts a turn of the model of the task's bot now, in a chat of its own. A model turn can cost money. The bot reads the task and works on it with its tools. A tool that needs an approval waits for a person. When the reply ends, the task moves to review. The task needs a bot. A task that is working already is left as it is.",
         async run(context) {
           const ref = one(context, "Name the task (its title or id).");
           const before = await context.client.call("tasks.get", ref);
           if (!before.bot) throw new CliError("The task " + safe(before.title) + " has no bot. Give it one with `botkins tasks edit " + word(before.title, "<the task>") + " --bot <bot>`.");
           if (before.status !== "working") show(context, "This starts a turn of the model of " + safe(before.bot) + " on the task " + safe(before.title) + ", now. The bot works on it with its tools.");
-          const started = await context.client.call("tasks.start", before.id);
+          const started = await withScriptYes(context, (marks) => context.client.call("tasks.start", before.id, ...marks));
+          if (started === undefined) return EXIT.failed;
           context.print(started, (t) => (t.already ? "The task " + safe(t.title) + " is working already." : "Started the task " + safe(t.title) + ". Follow it with `botkins tasks show " + word(t.title, "<the task>") + "`."));
         },
       },

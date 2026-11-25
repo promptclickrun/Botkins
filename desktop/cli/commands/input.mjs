@@ -95,3 +95,24 @@ export function edit(context, text, name = "botkins.json") {
     rmSync(dir, { recursive: true, force: true });
   }
 }
+
+/**
+ * Makes a call that the service may refuse with NEEDS_SCRIPT_YES: the routine or task it saves, moves or starts is a script command
+ * (desktop/terminal/script-yes.mjs). The text that came with the refusal (the command, its words, its whole script) is shown on
+ * standard error, and the person is asked (--yes agrees, when there is no terminal); then the call is made again with the mark.
+ * `send(marks)` makes the call with `marks` after its arguments. Returns what the call returned, or `undefined` when the person said no.
+ */
+export async function withScriptYes(context, send) {
+  try {
+    return await send([]);
+  } catch (error) {
+    if (error?.code !== "NEEDS_SCRIPT_YES") throw error;
+    // (The last two lines are for a program that makes the call itself.)
+    context.stderr.write(String(error.message).split("\n").slice(0, -2).join("\n") + "\n");
+    if (!(await confirm(context, "Go on?"))) {
+      context.note("Nothing was changed.");
+      return undefined;
+    }
+    return send([{ agreed: true }]);
+  }
+}

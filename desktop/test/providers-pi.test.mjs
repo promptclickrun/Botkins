@@ -69,8 +69,9 @@ test("a turn starts Pi in RPC mode on Botkins' own folder, streams the reply, an
     events.filter((e) => e.type === "assistant.message_delta").map((e) => e.data.deltaContent),
     ["echo", ": hello"],
   );
-  assert.deepEqual(events.find((e) => e.type === "assistant.usage").data, { inputTokens: 100, outputTokens: 7, cacheReadTokens: 20, cacheWriteTokens: 0, model: "opus" });
-  assert.deepEqual(events.find((e) => e.type === "session.usage_info").data, { currentTokens: 127, tokenLimit: 1000 });
+  // pi-ai's input is the uncached input; its cache write reaches the run (it was dropped before).
+  assert.deepEqual(events.find((e) => e.type === "assistant.usage").data, { inputTokens: 100, outputTokens: 7, cacheReadTokens: 20, cacheWriteTokens: 3, model: "opus" });
+  assert.deepEqual(events.find((e) => e.type === "session.usage_info").data, { currentTokens: 130, tokenLimit: 1000 });
   const { started } = seen().find((entry) => entry.started);
   assert.equal(started.agentDir, join(dir, "agent"), "the person's own ~/.pi is left alone");
   for (const flag of ["--mode", "rpc", "--no-extensions", "--no-skills", "--no-approve", "builtin:mcp"]) assert.ok(started.args.includes(flag), flag);
@@ -96,6 +97,33 @@ test("the file the extension reads is the user's own, and goes when Pi stops", {
   await live.rpc.exited;
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(existsSync(live.file), false);
+});
+
+test("a process let go just before the next turn starts another doesn't take that one's file away", { skip }, async () => {
+  // The file has the session's own name: the old process's exit must not remove it from under
+  // the new one, which would then start with no connections ("Model … not found").
+  const { provider } = setup();
+  const first = await provider.openSession(spec());
+  await first.send({ prompt: "hi" });
+  await first.close();
+  const old = provider.live.get("chat-1");
+  provider.release("chat-1");
+  const next = await provider.openSession(spec());
+  await next.send({ prompt: "again" });
+  await old.rpc.exited;
+  await new Promise((resolve) => setImmediate(resolve));
+  const live = provider.live.get("chat-1");
+  assert.notEqual(live, old);
+  assert.notEqual(live.file, old.file, "each process has a file of its own");
+  assert.equal(existsSync(old.file), false, "the old one took its own away");
+  assert.ok(existsSync(live.file), "the new process keeps its file");
+  const { text } = await next.send({ prompt: "and again" });
+  assert.equal(text, "echo: and again");
+  await next.close();
+  await provider.stop();
+  await live.rpc.exited;
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(existsSync(live.file), false, "and it goes when that one stops");
 });
 
 test("a tool Pi wants to run asks Botkins' approval rules, and a refusal blocks it", { skip }, async () => {
@@ -255,7 +283,10 @@ test("a conversation Pi never held goes on from Botkins' transcript", { skip }, 
   await session.send({ prompt: "and again?" });
   const { prompt } = seen().find((entry) => entry.started).started.described;
   assert.match(prompt, /^You are Testy\./);
-  assert.match(prompt, /what is 2\+2/);
+  // The transcript comes once, before the message, and never in the system prompt Pi is given each run.
+  assert.doesNotMatch(prompt, /what is 2\+2/);
+  const sent = seen().filter((entry) => entry.command?.type === "prompt").map((entry) => entry.command.message);
+  assert.match(sent[0], /^\[Botkins: this conversation continues from earlier\.[\s\S]*User: what is 2\+2\n\nAssistant: 4\n<\/earlier-conversation>\n\nand again\?$/);
   await provider.stop();
 });
 
@@ -400,4 +431,19 @@ test("a bundled script runs on this program's Node, without ELECTRON_RUN_AS_NODE
   assert.equal(out.flag, null, "a bot's shell commands don't inherit it");
   assert.deepEqual(out.argv, [script, "--mode", "rpc"], "Pi sees its own command line");
   assert.deepEqual(launcher("/usr/local/bin/pi", ["x"]), { file: "/usr/local/bin/pi", args: ["x"], env: {} }, "an installed program runs as it is");
+});
+
+test("a server Botkins gave Pi earlier but this turn hasn't does nothing; a Pi package's own server still asks", { skip }, async () => {
+  // Pi keeps every server it was given registered, so its tool list stays the same from turn to
+  // turn (extension-shared.mjs). One the turn's person may not use is turned down here.
+  const { provider } = setup();
+  const asked = [];
+  const session = await provider.openSession(spec({ mcpServers: {}, handlers: { permission: async (request) => (asked.push(request.label), { allow: true }) } }));
+  session.turn = { calls: new Map() };
+  session.live = { given: new Set(["crm", "botkins"]) };
+  assert.equal(await session.permission({ toolCallId: "1", toolName: "mcp__crm__find", mcpServerName: "crm", mcpToolName: "find", input: {} }), false);
+  assert.equal(await session.permission({ toolCallId: "2", toolName: "mcp__notes__read", mcpServerName: "notes", mcpToolName: "read", input: {} }), true);
+  assert.deepEqual(asked, ["notes / read"]);
+  session.turn = null;
+  await provider.stop();
 });

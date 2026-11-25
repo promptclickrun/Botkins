@@ -51,9 +51,13 @@ export function recordCanvas(run, chat, task, { type, data, agentId }) {
     case "assistant.usage": {
       if (!data) return false;
       const u = (run.usage ??= { input: 0, output: 0 });
+      // `input` is the uncached input (providers/provider.mjs usageData). Both cache counts are
+      // kept, as 0 when none was used: a run that has `cacheWrite` was counted this way, so its
+      // cache hit rate can be trusted (usage.mjs). Runs from before counted input differently.
       u.input += data.inputTokens || 0;
       u.output += data.outputTokens || 0;
-      if (data.cacheReadTokens) u.cacheRead = (u.cacheRead || 0) + data.cacheReadTokens;
+      u.cacheRead = (u.cacheRead || 0) + (data.cacheReadTokens || 0);
+      u.cacheWrite = (u.cacheWrite || 0) + (data.cacheWriteTokens || 0);
       if (typeof data.cost === "number") u.cost = (u.cost || 0) + data.cost;
       if (data.duration) u.durationMs = (u.durationMs || 0) + data.duration;
       if (!agentId && data.model) u.model = data.model;
@@ -98,8 +102,14 @@ export function recordCanvas(run, chat, task, { type, data, agentId }) {
     case "subagent.failed": {
       const agent = run.agents?.find((a) => a.id === data?.toolCallId);
       if (!agent) return false;
+      // The person stopped this helper: what the harness reports after that does not change it.
+      if (agent.status === "Stopped") return true;
       agent.finished = Date.now();
-      if (type === "subagent.failed") {
+      delete agent.stoppable;
+      if (data.stopped) {
+        agent.status = "Stopped";
+        agent.detail ??= String(data.detail || "Stopped").slice(0, 500);
+      } else if (type === "subagent.failed") {
         agent.status = "Failed";
         agent.detail = String(data.error || "Failed").slice(0, 500);
       } else {
@@ -120,13 +130,17 @@ export function finishCanvas(run) {
   for (const r of run.reasoning ?? []) r.finished ??= now;
   if (run.reasoning) run.reasoning = run.reasoning.filter((r) => r.text.trim());
   if (!run.reasoning?.length) delete run.reasoning;
+  // Nothing can be stopped on its own once the reply is over.
+  for (const step of run.steps ?? []) delete step.stoppable;
   // A helper still running here was cut off by the end of the reply. Nothing says it failed.
-  for (const a of run.agents ?? [])
+  for (const a of run.agents ?? []) {
+    delete a.stoppable;
     if (a.status === "Running") {
       a.status = "Stopped";
       a.detail = "Stopped with the reply";
       a.finished = now;
     }
+  }
   if (run.steps?.length) run.summary = workSummary(run.steps);
 }
 
@@ -232,6 +246,20 @@ export function mainTranscript(chat, botName, end = chat.messages.length) {
   const summary = chat.compacted && chat.compacted.through <= end ? chat.compacted : null;
   const tail = forkTranscript(chat.messages.slice(summary?.through ?? 0, end), botName);
   return [summary?.text, tail].filter(Boolean).join("\n\n");
+}
+
+/**
+ * The conversation so far, for the first message of a session that begins from Botkins' own
+ * transcript (a fork, a moved or restarted session, a harness that lost its copy). It goes in a
+ * message, never in the system prompt: there it would be sent again with every request of the
+ * session, ahead of everything a model caches, and compaction couldn't shrink it.
+ */
+export function earlierConversation(transcript) {
+  return transcript
+    ? "[Botkins: this conversation continues from earlier. Treat the transcript below as the conversation so far and continue from it. The message to answer follows it.]\n<earlier-conversation>\n" +
+        transcript +
+        "\n</earlier-conversation>"
+    : "";
 }
 
 export function forkSystemMessage(transcript) {

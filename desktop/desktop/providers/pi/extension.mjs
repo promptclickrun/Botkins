@@ -3,10 +3,11 @@
 // Pi reads BOTKINS_PI_SESSION, the path of a file Botkins writes for this session (mode 0600, in
 // Botkins' own data folder), and does four things with it:
 //   - registers the plan connections the turn's model answers on (the gateway, desktop/harness);
-//   - registers the session's MCP servers, Botkins' own tools among them, as direct tools;
+//   - registers the session's MCP servers, Botkins' own tools among them, as direct tools, and
+//     keeps them registered for as long as Pi runs, so the tool list stays the same;
 //   - writes the system prompt for each run: Pi's own, less its section on Pi's documentation,
-//     with the bot's instructions after it, read again each time, so a change of memory or
-//     instructions needs no restart (botkinsPrompt);
+//     with the bot's instructions after it (botkinsPrompt). The instructions are read again each
+//     time; Botkins keeps them the same for the whole session (desktop/session-prompts.mjs);
 //   - asks Botkins before a tool runs, through Pi's extension dialog (`select`), so Botkins'
 //     approval rules and the person decide. Botkins' own tools never ask.
 // The file's path is taken out of the environment once read, so the commands the model runs

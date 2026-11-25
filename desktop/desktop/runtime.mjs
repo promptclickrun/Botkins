@@ -56,6 +56,7 @@ import { DEFAULT_RELAY_URL } from "./link/relay.mjs";
 import { env } from "./home.mjs";
 import { phonePage } from "./phonepage.mjs";
 import { headCapabilities, LOOKS_CAPABILITY } from "./looks.mjs";
+import { SCRIPT_COMMANDS_CAPABILITY } from "./script-commands.mjs";
 import { ROUTINE_DELIVERY, ROUTINE_MODELS, ROUTINE_NOTIFY_TARGETS, ROUTINE_OWNER, ROUTINE_SCRIPTS, ROUTINE_SILENT } from "./routines.mjs";
 import { PROACTIVE, PROACTIVE_LEARNING, PROACTIVE_TEAM } from "./proactive.mjs";
 import { SPACES } from "./spaces.mjs";
@@ -119,13 +120,15 @@ export const KEYED_PROVIDERS = "keyed-providers-v1";
 export const BOT_VOICE = "bot-voice-v1";
 const CHAT_TITLE_REGENERATION = "chat-title-regeneration-v1";
 const MARK_CHATS_READ = "mark-chats-read-v1";
-export const CAPABILITIES = ["main-chat-v1", "message-reactions-v1", "client-message-id-v1", "voice-turns-v1", "voice-history-v1", "quiet-replies-v1", "models-v2", "fast-mode-v1", LOOKS_CAPABILITY, ...headCapabilities, BOT_VOICE, ROUTINE_DELIVERY, "routine-no-output-v1", ROUTINE_OWNER, ROUTINE_SCRIPTS, ROUTINE_MODELS, ROUTINE_SILENT, ROUTINE_NOTIFY_TARGETS, PROACTIVE, PROACTIVE_LEARNING, PROACTIVE_TEAM, BOARD_MENTIONS, PROVIDER_USAGE, SIDE_PANE, REMOTE_HOSTS, FILES, FOLDERS, ARTIFACTS, PROJECT_ARTIFACTS, "project-folders-v1", "project-mode-v1", "project-clone-v1", "secure-input-v1", "turn-timeline-v1", PLUGINS, PLUGIN_STARTS, PROVIDER_SIGNIN, SPACES, AGENT_TEMPLATES, COMPOSIO_APPS, MARKET_REFRESH, MCP_APPS, "pi-packages-v1", "skill-upload-v1", "skills-catalog-v1", "skills-featured-v1", MCP_CATALOG_CAPABILITY, CHAT_TITLE_REGENERATION, MARK_CHATS_READ, KEYED_PROVIDERS];
+/** One helper or background command of a turn can be stopped alone (`stopHelper`); each item says so with `stoppable`. */
+const STOP_HELPER = "stop-helper-v1";
+export const CAPABILITIES = ["main-chat-v1", "message-reactions-v1", "client-message-id-v1", "voice-turns-v1", "voice-history-v1", "quiet-replies-v1", "models-v2", "fast-mode-v1", LOOKS_CAPABILITY, ...headCapabilities, BOT_VOICE, ROUTINE_DELIVERY, "routine-no-output-v1", ROUTINE_OWNER, ROUTINE_SCRIPTS, ROUTINE_MODELS, ROUTINE_SILENT, ROUTINE_NOTIFY_TARGETS, PROACTIVE, PROACTIVE_LEARNING, PROACTIVE_TEAM, BOARD_MENTIONS, PROVIDER_USAGE, SIDE_PANE, REMOTE_HOSTS, FILES, FOLDERS, ARTIFACTS, PROJECT_ARTIFACTS, "project-folders-v1", "project-mode-v1", "project-clone-v1", "secure-input-v1", "turn-timeline-v1", PLUGINS, PLUGIN_STARTS, PROVIDER_SIGNIN, SPACES, AGENT_TEMPLATES, COMPOSIO_APPS, MARKET_REFRESH, MCP_APPS, "pi-packages-v1", "pi-packages-remove-v1", "skill-upload-v1", "skills-catalog-v1", "skills-featured-v1", SCRIPT_COMMANDS_CAPABILITY, MCP_CATALOG_CAPABILITY, CHAT_TITLE_REGENERATION, MARK_CHATS_READ, STOP_HELPER, KEYED_PROVIDERS];
 /**
  * What a paired device is told this app supports. A feature whose calls the link does not carry
  * (desktop/link/methods.mjs) is left out, so a device never asks for what it cannot reach.
  */
 export const linkCapabilities = (methods = REMOTE_METHODS) =>
-  CAPABILITIES.filter((name) => (name !== "message-reactions-v1" || methods.has("reactToMessage")) && (!["voice-history-v1", "voice-turns-v1"].includes(name) || methods.has("recordVoiceLine")) && (name !== "project-folders-v1" || (methods.has("editProjectFolder") && methods.has("setChatFolder") && methods.has("chatProjectFolder"))) && (name !== "project-clone-v1" || methods.has("cloneProjectRepository")) && (name !== "project-mode-v1" || methods.has("updateProject")) && (name !== PROJECT_ARTIFACTS || PROJECT_ARTIFACT_CALLS.every((call) => methods.has(call))) && (name !== SPACES || SPACE_CALLS.every((call) => methods.has(call))) && (name !== MARKET_REFRESH || methods.has("plugins.refresh")) && (name !== "pi-packages-v1" || PI_PACKAGE_METHODS.every((call) => methods.has(call))) && (name !== "skill-upload-v1" || methods.has("skills.upload")) && (name !== "skills-catalog-v1" || ["search", "preview", "install"].every(key => methods.has("skillsCatalog." + key))) && (name !== "skills-featured-v1" || methods.has("skillsCatalog.featured")) && (name !== MCP_CATALOG_CAPABILITY || MCP_CATALOG_METHODS.every((call) => methods.has(call))) && (name !== MCP_APPS || MCP_APP_METHODS.every((call) => methods.has(call))) && (name !== CHAT_TITLE_REGENERATION || methods.has("regenerateChatTitle")) && (name !== MARK_CHATS_READ || methods.has("markChatsRead")));
+  CAPABILITIES.filter((name) => (name !== "message-reactions-v1" || methods.has("reactToMessage")) && (!["voice-history-v1", "voice-turns-v1"].includes(name) || methods.has("recordVoiceLine")) && (name !== "project-folders-v1" || (methods.has("editProjectFolder") && methods.has("setChatFolder") && methods.has("chatProjectFolder"))) && (name !== "project-clone-v1" || methods.has("cloneProjectRepository")) && (name !== "project-mode-v1" || methods.has("updateProject")) && (name !== PROJECT_ARTIFACTS || PROJECT_ARTIFACT_CALLS.every((call) => methods.has(call))) && (name !== SPACES || SPACE_CALLS.every((call) => methods.has(call))) && (name !== MARKET_REFRESH || methods.has("plugins.refresh")) && (name !== "pi-packages-v1" || PI_PACKAGE_METHODS.every((call) => methods.has(call))) && (name !== "pi-packages-remove-v1" || methods.has("piPackages.remove")) && (name !== "skill-upload-v1" || methods.has("skills.upload")) && (name !== "skills-catalog-v1" || ["search", "preview", "install"].every(key => methods.has("skillsCatalog." + key))) && (name !== "skills-featured-v1" || methods.has("skillsCatalog.featured")) && (name !== SCRIPT_COMMANDS_CAPABILITY || ["skills.saveScript", "skills.readScript"].every((call) => methods.has(call))) && (name !== MCP_CATALOG_CAPABILITY || MCP_CATALOG_METHODS.every((call) => methods.has(call))) && (name !== MCP_APPS || MCP_APP_METHODS.every((call) => methods.has(call))) && (name !== CHAT_TITLE_REGENERATION || methods.has("regenerateChatTitle")) && (name !== MARK_CHATS_READ || methods.has("markChatsRead")) && (name !== STOP_HELPER || methods.has("stopHelper")));
 /** The calls of spaces (docs/spaces.md). The capability is named to a device only when the link carries them all. */
 export const SPACE_CALLS = ["read", "create", "rename", "remove", "setProject", "setPanelProject", "newPanel", "ask", "movePanel", "patchState", "note", "removeNote"].map((name) => "spaces." + name);
 
@@ -427,6 +430,10 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
       workspace.clearCatalogs();
       return pkg;
     },
+    "piPackages.remove": (name, version) => {
+      pi.packages.remove(name, version);
+      workspace.clearCatalogs();
+    },
     // Agent templates in the marketplaces ("agent-templates-v1", docs/agent-templates.md in the phone's code): reads only.
     "agents.browse": (query) => workspace.plugins.catalog.agents(query),
     "agents.template": (id) => workspace.plugins.catalog.agentTemplate(id),
@@ -638,6 +645,13 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
     skills: () => ({ skills: workspace.integrations.skills(), ...workspace.integrations.folders() }),
     readSkill: (name) => workspace.integrations.readSkill(name),
     saveSkill: (data) => workspace.integrations.saveSkill(data ?? {}),
+    // A script command ("script-commands-v1", desktop/script-commands.mjs): the owner's alone. Its script is read and written whole.
+    "skills.saveScript": async (data) => {
+      // A name that a model provider's own command has can never run: it is refused here, not later (workspace.assertScriptName).
+      await workspace.assertScriptName(data?.name, data?.original);
+      return workspace.integrations.saveScriptCommand(data ?? {});
+    },
+    "skills.readScript": (name) => workspace.integrations.readScriptCommand(name),
     removeSkill: (name) => workspace.integrations.removeSkill(name),
     setSkillEnabled: (name, enabled) => workspace.integrations.setSkillEnabled(name, enabled === true),
     addSkillFolder: async () => {
@@ -823,8 +837,8 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
     deleteTodo: (projectId, todoId) => workspace.projects.deleteTodo(projectId, todoId),
     moveTodo: (projectId, todoId, delta) => workspace.projects.moveTodo(projectId, todoId, delta),
     setBotAccess: (botId, access) => workspace.access.setBotAccess(botId, access),
-    catalog: (botId, chatId, refresh) =>
-      workspace.catalog(botId, chatId, refresh),
+    catalog: (botId, chatId, refresh, person) =>
+      workspace.catalog(botId, chatId, refresh, person),
     // A panel's calls are for a person ("owner" for this window; a paired device's is handed in
     // by desktop/device-call.mjs), who has to be able to change the panel's space.
     changePanel: (id, action, person = "owner") => {
@@ -905,10 +919,13 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
         voiceId: options?.voiceId,
         clientMessageId: options?.clientMessageId,
         ...(options?.notify === false && { notify: false }),
+        // Only a caller that is a person (the window, a paired phone) or that the person agreed for (the command line) says so: see asPerson (desktop/device-call.mjs).
+        ...(options?.allowScript === true && { allowScript: true }),
       });
       turn?.catch((err) => console.error("Workspace turn:", err.message));
     },
     stop: (id) => workspace.stop(id),
+    stopHelper: (id, helperId) => workspace.stopHelper(id, helperId),
     // Opening a chat readies its session, so the next message starts at once.
     warmChat: (id) => void workspace.prewarm(id),
     // Chat canvas (desktop/canvas.mjs)
@@ -923,8 +940,8 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
     sendNow: (id, itemId) => workspace.sendNow(id, itemId),
     reactToMessage: (id, index, time, emoji, person = "owner") => workspace.reactToMessage(id, index, time, emoji, person === "owner" ? person : "member:" + person),
     forkChat: (id, index) => workspace.forkChat(id, index),
-    retry: (runId) => {
-      workspace.retry(runId)?.catch((err) => console.error("Retry:", err.message));
+    retry: (runId, options) => {
+      workspace.retry(runId, { allowScript: options?.allowScript === true })?.catch((err) => console.error("Retry:", err.message));
     },
     compact: (id) => {
       workspace.compact(id)?.catch((err) => console.error("Compact:", err.message));

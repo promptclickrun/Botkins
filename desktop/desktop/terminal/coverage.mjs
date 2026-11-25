@@ -80,6 +80,8 @@ export const WORKSPACE = {
   providerUsage: cmd("providers usage"),
   // ── Chats ──
   ...each("createChat send stop respond", cmd("chat")),
+  // One helper or background command of a turn, stopped alone: `chats stop-helper` lists them and stops one.
+  stopHelper: cmd("chats stop-helper"),
   // (A side question is a person's act in a chat, which the phone has as /btw: it gets a command with the chat commands.)
   mainChat: cmd("chat"),
   changeMainFork: cmd("chats switch-fork"),
@@ -116,6 +118,9 @@ export const WORKSPACE = {
   changeSchedule: cmd("routines schedule"),
   // ── Plugins ──
   "skills.upload": cmd("skills upload"),
+  // A script command (desktop/script-commands.mjs): `skills add-script` shows the whole script and needs a yes; `skills show` prints it.
+  "skills.saveScript": cmd("skills add-script"),
+  "skills.readScript": cmd("skills show"),
   "skillsCatalog.search": cmd("skills search"),
   "skillsCatalog.preview": cmd("skills preview"),
   "skillsCatalog.install": cmd("skills install"),
@@ -130,6 +135,7 @@ export const WORKSPACE = {
   "piPackages.list": cmd("pi list"),
   "piPackages.install": cmd("pi install"),
   "piPackages.setEnabled": cmd("pi enable"),
+  "piPackages.remove": cmd("pi remove"),
   "plugins.marketplaces": cmd("plugins marketplaces"),
   "plugins.addMarketplace": cmd("plugins add-marketplace"),
   "plugins.removeMarketplace": cmd("plugins remove-marketplace"),
@@ -431,6 +437,7 @@ export const CHANGES = {
   "mcpCatalog.add": 0,
   "piPackages.install": 0,
   "piPackages.setEnabled": 0,
+  "piPackages.remove": 0,
   "plugins.install": 0,
   "plugins.update": 0,
   "plugins.setEnabled": 0,
@@ -455,6 +462,8 @@ export const CHANGES = {
   "tools.signOut": (args, value) => value?.name ?? args?.[0],
   "tools.forgetApprovals": (args) => args?.[0] ?? "every chat",
   "skills.save": (args) => args?.[0]?.name,
+  // By the command's name, never its script.
+  "skills.saveScript": (args) => args?.[0]?.name,
   "skills.remove": 0,
   "skills.enable": 0,
   "skills.addFolder": 0,
@@ -501,6 +510,7 @@ export const CHANGES = {
   "chats.retry": (args, value) => value?.id,
   "chats.unqueue": (args, value) => value?.id,
   "chats.sendNow": (args, value) => value?.id,
+  "chats.stopHelper": (args, value) => value?.id,
   "chats.sections.add": (args, value) => value?.name,
   "chats.sections.rename": (args, value) => value?.id,
   "chats.sections.delete": (args, value) => value?.id,
@@ -664,11 +674,11 @@ export const CHANGES = {
   "node.disconnect": null,
 };
 /** The service's own calls that only read, wait or talk in a chat: no line. Every call is in this list, in CHANGES or in LOGS_ITSELF. */
-export const READS = ["skillsCatalog.search", "skillsCatalog.preview", "skillsCatalog.featured", "mcpCatalog.list", "piPackages.browse", "piPackages.preview", "piPackages.list", "status", "logs.read", "doctor", "events.wait", "pair.status", "devices.list", "bots.list", "bots.get", "providers.list", "providers.services", "providers.login.read", "providers.login.input", "providers.login.cancel", "models", "chat.open", "chat.list", "chat.send", "chat.read", "chat.stop", "runs.list", "routines.list", "plugins.list", "plugins.marketplaces", "plugins.refresh", "plugins.browse", "plugins.preview", "config.get", "config.describe", "relay.status", "update.status", "update.check", "methods", "plugins.get", "tools.list", "tools.get", "tools.import.preview", "tools.signIn.read", "tools.signIn.input", "tools.signIn.cancel", "skills.list", "skills.get", "bots.tools", "bots.access", "bots.menu", "folders.list", "gadgets.get", "profile.status", "profile.home"];
+export const READS = ["skills.review", "chat.scriptCommand", "skillsCatalog.search", "skillsCatalog.preview", "skillsCatalog.featured", "mcpCatalog.list", "piPackages.browse", "piPackages.preview", "piPackages.list", "status", "logs.read", "doctor", "events.wait", "pair.status", "devices.list", "bots.list", "bots.get", "providers.list", "providers.services", "providers.login.read", "providers.login.input", "providers.login.cancel", "models", "chat.open", "chat.list", "chat.send", "chat.read", "chat.stop", "runs.list", "routines.list", "plugins.list", "plugins.marketplaces", "plugins.refresh", "plugins.browse", "plugins.preview", "config.get", "config.describe", "relay.status", "update.status", "update.check", "methods", "plugins.get", "tools.list", "tools.get", "tools.import.preview", "tools.signIn.read", "tools.signIn.input", "tools.signIn.cancel", "skills.list", "skills.get", "bots.tools", "bots.access", "bots.menu", "folders.list", "gadgets.get", "profile.status", "profile.home"];
 // The reads of the rest of the workspace, one line for each area (each area's builder writes only its own line).
 export const MORE_READS = {
   bots: ["bots.flags", "bots.proactive", "bots.memory", "bots.sections", "bots.sections.get", "bots.importable", "bots.import.preview", "templates.list", "templates.get", "templates.import.preview", "templates.browse", "templates.market"],
-  chats: ["chats.list", "chats.get", "chats.queue", "chats.mentions", "chats.aside", "chats.sections", "chats.projectLook"], // (`chats.aside` asks the chat's model a question that the chat does not keep.)
+  chats: ["chats.list", "chats.get", "chats.queue", "chats.helpers", "chats.mentions", "chats.aside", "chats.sections", "chats.projectLook"], // (`chats.aside` asks the chat's model a question that the chat does not keep.)
   routines: ["routines.get", "routines.review", "routines.when", "routines.schedules"],
   projects: ["projects.list", "projects.get", "projects.artifacts", "projects.changes", "projects.diff", "todos.list", "todos.get", "tasks.list", "tasks.get", "artifacts.list", "artifacts.read", "artifacts.resolve"],
   wiki: ["wiki.tree", "wiki.find", "wiki.page", "wiki.search", "wiki.history", "wiki.version", "wiki.exportPlan"],

@@ -198,6 +198,8 @@ With `main-chat-v1`, `mainChat(botId)` returns the caller’s private, stable Ma
 
 With `chat-title-regeneration-v1`, `regenerateChatTitle(chatId)` asks the host's summarizer to generate and save a title and returns the title. Only the chat's starter or the owner can request it. It needs a message to summarize and does not change the automatic naming setting or add a turn.
 
+With `stop-helper-v1`, `stopHelper(chatId, id)` stops one helper or one background command of the chat's turn and leaves the turn running. `id` is a helper's id (the id of the step that started it) or a background step's id. The computer offers it only for an item that carries `stoppable: true` on its `Subagent` or `Step`: set while that item runs and the model provider can stop it on its own (Claude Code once it has the task's id, GitHub Copilot through its task list; the others cannot), never after it ended. A stopped helper ends as "Stopped" with the detail "Stopped by you", a stopped command's step as "Stopped". The call rejects with a plain sentence when the item already finished, isn't part of the running turn, or the provider could not stop it. It needs the same permission as `stop`.
+
 
 ## Devices: list, rename, remove (`devices-v1`)
 
@@ -496,6 +498,8 @@ An owner can open a github.com pull request from any readable repository. The ho
 ## Skill uploads and the skills.sh catalog
 
 With `skill-upload-v1`, `skills.upload({filename, data, replace?})` accepts one Markdown or zip file. `data` is standard base64. The computer accepts up to 3 MiB before encoding, 12 MiB unpacked, 512 archive entries and 24 skills. It checks paths and file types, imports the folders and enables the skills. The result is `{added: string[], conflicts: string[]}`. A conflict leaves the batch untouched. Ask the person, then repeat with only the approved names in `replace`.
+
+With `script-commands-v1`, a skill can be a slash command that runs a script on the computer with no model. `skills` lists one with `command: "script"` and never carries its script. `skills.saveScript({name, description, script, original?})` creates or rewrites one and returns its name; `skills.readScript(name)` returns `{name, description, script}`. Both are the owner's alone. The name is lowercase letters, numbers and dashes, and not a command that Botkins or a provider has; the script has up to 20,000 characters. The computer keeps the script in the skill's folder and the SHA-256 of what it saved, and runs only a script that still matches. `catalog` lists each command that is on, with `kind: "Command"` and `source: "Script"`, so a composer needs no change. A phone sends `/name some words` as an ordinary message: the computer runs the script in the chat's project folder (else the bot's own), with the words in `$BOTKINS_ARGS` and on standard input, no time limit (Stop ends it), and the output (the last 12,000 characters) and any non-zero exit code come back as a plain command message. No session is opened and no model is called. `saveSkill` refuses to rewrite one, and no bot is offered one as a skill. Running one needs the team permission to use skills (`skills` "use"): the computer refuses a member whose role lacks it with a plain command message, and `catalog` lists the commands for a member only when their role (and that of the chat's own member) has it. A routine's run or a task whose prompt is `/name words` runs it the same way, with its output as the run's reply.
 
 With `skills-catalog-v1`, the computer makes these calls available:
 

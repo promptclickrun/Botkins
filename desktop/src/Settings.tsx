@@ -504,6 +504,7 @@ export default function Settings({
               stamp={JSON.stringify(state.skills ?? null)}
               plugins={state.plugins}
               hostId={state.remote?.using?.id}
+              scriptsAllowed={!state.remote?.using || (!!state.remote.using.capabilities?.includes("script-commands-v1") && !state.remote.using.member)}
               openPlugin={(id) => {
                 setPluginToOpen(id);
                 setSection("marketplace");

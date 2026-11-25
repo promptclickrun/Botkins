@@ -43,7 +43,8 @@ import { drafts, keepDraft, useChatSplit } from "./split";
 import { closed, sessionTodos, todoLabel, TRANSFER_TODOS } from "../../../link-host/session-todos";
 import { TodoList } from "./TodoList";
 import { latestTurn } from "./helpers";
-import { HelperRail } from "./HelperRail";
+import { HelperRail, railShown } from "./HelperRail";
+import { CrewCard } from "./CrewCard";
 import { LiveTurn, TurnText, WorkPart } from "./LiveTurn";
 import { CAPSULE, StatusCapsule } from "./StatusCapsule";
 import { EndedNote, KeptNote, OpenNote, type MessageActions, MessageRow, UserBubble, WorkLine } from "./Messages";
@@ -332,6 +333,8 @@ const TimelineRow = memo(function TimelineRow({ item, chatId, group, bot, bots, 
     <TurnText item={item} />
   ) : item.kind === "screen" ? (
     <ScreenCard chatId={chatId} panel={item.panel} inView={inView} onOpen={() => openPanel(item.panel.id)} />
+  ) : item.kind === "crew" ? (
+    <CrewCard chatId={chatId} item={item} rows={viewport.rows} />
   ) : item.kind === "activity" ? (
     <WorkLine chatId={chatId} runId={item.runId} label="Turn activity" />
   ) : item.kind === "ended" ? (
@@ -1082,7 +1085,7 @@ function ChatScreenScreen({ pane: paneId, onLeave: leavePane, onList }: { pane?:
               {!working && todos.some(todo => !closed(todo)) && <Chip label="Transfer and continue todos" onPress={() => sendText(TRANSFER_TODOS)} />}
             </ScrollView>
           )}
-          {!!newest?.agents?.length && <HelperRail chatId={chatId} run={newest} />}
+          {railShown(newest) && newest && <HelperRail chatId={chatId} run={newest} />}
           {canChat && requests.length > 0 && (
             <View style={{ paddingHorizontal: space.md }}>
               <RequestPanel key={requests[0].id} request={requests[0]} bot={bots.get(requests[0].botId) ?? bot} maxHeight={requestRoom} count={requests.length} />

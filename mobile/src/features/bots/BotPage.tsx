@@ -83,7 +83,7 @@ function BotDetail({ bot }: { bot: Bot }) {
   const recent = useMemo(() => chats.filter((chat) => chat.botId === bot.id && !chat.botIds && isConversation(chat)).sort((a, b) => b.time - a.time).slice(0, 3), [chats, bot.id]);
 
   // Skills and tools this bot can use: on for everyone, and not switched off for it.
-  const skillsOn = skills?.filter((skill) => skill.enabled && !skillsOffForAll?.includes(skill.name) && !bot.skillsOff?.includes(skill.name)).length;
+  const skillsOn = skills?.filter((skill) => skill.command !== "script" && skill.enabled && !skillsOffForAll?.includes(skill.name) && !bot.skillsOff?.includes(skill.name)).length;
   const toolsOn = servers?.filter((server) => server.enabled && !bot.mcpOff?.includes(server.id)).length ?? 0;
   const capabilities = skillsOn === undefined ? undefined : skillsOn + toolsOn + " on";
   const primary = bots[0]?.id === bot.id;

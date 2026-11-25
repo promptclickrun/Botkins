@@ -557,6 +557,8 @@ export type Step = {
   agentId?: string;
   /** The step has a longer input or output than it carries here ("step-details-v1"): `link.step` reads them. */
   more?: boolean;
+  /** The computer can stop this helper or background command on its own: `stopHelper` ("stop-helper-v1"). Set only while it runs. */
+  stoppable?: boolean;
 };
 /** One step's input and output, read when the step is opened (`link.step`). */
 export type StepDetail = { input?: string; output?: string };
@@ -573,8 +575,9 @@ export type ReasoningView = { run: string; items: Reasoning[] };
  * "turn-timeline-v1": `prompt` is what it was asked, `intent` what it says it is doing now, and
  * `result` what it came back with (each cut short by the computer).
  */
-export type Subagent = { id: string; name: string; description?: string; status: "Running" | "Done" | "Failed" | "Stopped"; started: number; finished?: number; detail?: string; prompt?: string; intent?: string; result?: string };
-export type Usage = { input: number; output: number; cacheRead?: number; cost?: number; model?: string; durationMs?: number };
+export type Subagent = { id: string; name: string; description?: string; status: "Running" | "Done" | "Failed" | "Stopped"; started: number; finished?: number; detail?: string; prompt?: string; intent?: string; result?: string; /** The computer can stop it on its own (`stopHelper`, "stop-helper-v1"). Set only while it runs. */ stoppable?: boolean };
+/** `input` is the input that was neither read from nor written to the prompt cache. */
+export type Usage = { input: number; output: number; cacheRead?: number; cacheWrite?: number; cost?: number; model?: string; durationMs?: number };
 export type TeamAsk = {
   id: string;
   botId: string;
@@ -735,9 +738,13 @@ export type RequestAnswer = {
   /** A saved credential's reference instead of text: the computer puts the value in. */
   value?: string | CredentialRef;
   content?: Record<string, unknown>;
+  /** Only the in-app request panel sends it, after it showed a `review` request whole (a script command's script). The computer refuses a yes to one without it. */
+  reviewed?: true;
 };
 export type AgentRequest = {
   dispatch?: true;
+  /** Its words (a script command's whole script) are read in the app: never answered from a notification, a card or a gadget. */
+  review?: true;
   id: string;
   chatId: string;
   botId: string;
@@ -960,8 +967,14 @@ export type SkillInfo = {
   enabled: boolean;
   editable?: boolean;
   folderId?: string;
+  /** Why no bot gets this skill on the computer, as the computer says it. */
+  unavailable?: string;
+  /** "script": a slash command that runs a script on the computer with no model ("script-commands-v1"). */
+  command?: "script";
 };
 export type SkillDetail = { name: string; description: string; instructions: string };
+/** A script command, whole ("script-commands-v1"; the owner's alone): what /name runs on the computer. */
+export type ScriptCommand = { name: string; description: string; script: string };
 
 /**
  * How the app on the computer looks (the phone has its own look, in `prefs.ts`). `colorTheme`,
@@ -1025,6 +1038,8 @@ export type Preferences = {
    * run ChatGPT and Claude plans (harnesses() says whether each is installed). Missing on an older computer.
    */
   harness?: "copilot" | "provider" | "pi" | "omp";
+  /** Keep prompt cache longer: on (the default), a chat's prompt cache is kept for about an hour instead of five minutes where the provider supports it. Missing on an older computer. */
+  longPromptCache?: boolean;
   /** Tools that run in Botkins on a Mac, switched there only: iMessage and Mail. Missing on an older computer or one that isn't a Mac. */
   macTools?: { imessage?: DeviceLevel; mail?: DeviceLevel };
 };
@@ -1105,7 +1120,8 @@ export type Artifact = {
 export type ArtifactPage = { items: Artifact[]; nextCursor: string | null };
 /** A piece of a file, as base64. `nextOffset` is where the next piece starts; null at the end. A folder has no data. */
 export type ArtifactChunk = { artifact: Artifact; data: string; encoding: "base64"; offset: number; nextOffset: number | null };
-export type UsageTotals = { turns: number; input: number; output: number; cacheRead: number; cost: number; priced: number };
+/** `cacheHitRate`: read from cache ÷ (uncached input + read + written), null when no run counts it. Both cache fields are absent from an older computer. */
+export type UsageTotals = { turns: number; input: number; output: number; cacheRead: number; cacheWrite?: number; cost: number; priced: number; cacheHitRate?: number | null };
 export type UsageReport = {
   days: number;
   totals: UsageTotals;
@@ -1167,6 +1183,8 @@ export type UsageReport = {
  * "agent-templates-v1" (the app's: agent templates from the plugin marketplaces, to start a bot
  * from: `agents.browse` and `agents.template`; docs/agent-templates.md).
  * "skill-upload-v1" accepts Markdown and zip files. "skills-catalog-v1" searches, previews and installs skills.
+ * "script-commands-v1" (the owner's: a skill that is a slash command running a script on the computer with no model;
+ * `skills.saveScript` and `skills.readScript`; the computer adds enabled ones to the "/" menu (`catalog`), source "Script").
  * "market-refresh-v1" (the app's: `plugins.refresh` reads every marketplace again now, so new
  * plugins and agent templates show without waiting for the hour; docs/plugins.md).
  * "people-avatars-v1" (each person may have a picture, `Person.avatar`, and sets their own with
@@ -1741,6 +1759,8 @@ export type Calls = {
   setMyAvatar(image: string | null): { avatar?: string };
   catalog(botId: string, chatId?: string, refresh?: boolean): Catalog;
   stop(chatId: string): void;
+  /** Stops one helper or background command of the chat's turn, by its id (a helper's id is the id of the step that started it). "stop-helper-v1". */
+  stopHelper(chatId: string, id: string): void;
   unqueue(chatId: string, itemId: string): void;
   sendNow(chatId: string, itemId: string): void;
   retry(runId: string): void;
@@ -1806,6 +1826,9 @@ export type Calls = {
   readSkill(name: string): SkillDetail;
   saveSkill(skill: { name: string; description: string; instructions: string; original?: string }): string;
   removeSkill(name: string): void;
+  /** Creates a script command, or rewrites one when `original` is its current name ("script-commands-v1"). Returns its name. */
+  "skills.saveScript"(command: ScriptCommand & { original?: string }): string;
+  "skills.readScript"(name: string): ScriptCommand;
   setSkillEnabled(name: string, enabled: boolean): void;
   saveMcpServer(server: McpServerInput): string;
   setMcpServerEnabled(id: string, enabled: boolean): void;
@@ -1934,6 +1957,7 @@ export type Calls = {
   "piPackages.list"(): InstalledPiPackage[];
   "piPackages.install"(name: string, version: string): InstalledPiPackage;
   "piPackages.setEnabled"(name: string, version: string, enabled: boolean): InstalledPiPackage;
+  "piPackages.remove"(name: string, version: string): void;
   "agents.browse"(query?: { query?: string; category?: string; marketplace?: string }): { agents: MarketAgent[]; categories: MarketAgentCategory[] };
   /** Refused with a sentence when the template is gone. */
   "agents.template"(id: string): MarketAgentTemplate;

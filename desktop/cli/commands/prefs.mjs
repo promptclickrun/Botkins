@@ -42,6 +42,7 @@ const KEYS = [
   ["linkPreviews", "on | off", "Show a preview of a linked page (this computer fetches the page)"],
   ["readAloud", "on | off", "Read replies aloud"],
   ["teamwork", "on | off", "Bots may ask each other for help from a chat"],
+  ["longPromptCache", "on | off", "Keep a chat's prompt cache for about an hour where the provider supports it"],
   ["autoSummarize", "off | 5 to 30", "Turns between a chat's summaries into a new title, on the Default routines model"],
   ["approval", "ask | read | assisted | all", "How tool requests are approved (see below)"],
   ["clarify", "missing, choices, changes, or none", "When a bot asks a clarifying question"],
@@ -193,12 +194,14 @@ const daysOf = (context) => {
 };
 const money = (value) => "$" + (value >= 100 ? value.toFixed(0) : value.toFixed(2));
 const cost = (row) => (row.priced ? money(row.cost) : "-");
+/** A cache hit rate as a whole percent, "-" when no turn counted one (or the computer is older). */
+const cached = (row) => (typeof row.cacheHitRate !== "number" ? "-" : row.cacheHitRate > 0 && row.cacheHitRate < 0.01 ? "<1%" : Math.round(row.cacheHitRate * 100) + "%");
 const usageText = (report) =>
   [
     "The last " + report.days + " days: " + count(report.totals.turns, "turn", "turns") + ".",
-    "Tokens in " + number(report.totals.input) + ", out " + number(report.totals.output) + ", read from the cache " + number(report.totals.cacheRead) + ". Cost " + cost(report.totals) + (report.totals.priced && report.totals.priced < report.totals.turns ? " (priced for " + report.totals.priced + " of the " + report.totals.turns + " turns)" : "") + ".",
-    ...(report.byModel.length ? ["", "By model:", table(["MODEL", "PROVIDER", "TURNS", "IN", "OUT", "COST"], report.byModel.map((row) => [safe(row.model), safe(row.provider ?? ""), row.turns, number(row.input), number(row.output), cost(row)]))] : []),
-    ...(report.byBot.length ? ["", "By bot:", table(["BOT", "TURNS", "IN", "OUT", "COST"], report.byBot.map((row) => [safe(row.name), row.turns, number(row.input), number(row.output), cost(row)]))] : []),
+    "Tokens in " + number(report.totals.input) + ", out " + number(report.totals.output) + ", read from the cache " + number(report.totals.cacheRead) + (report.totals.cacheWrite ? ", written to the cache " + number(report.totals.cacheWrite) : "") + ". Cache hit rate " + cached(report.totals) + ". Cost " + cost(report.totals) + (report.totals.priced && report.totals.priced < report.totals.turns ? " (priced for " + report.totals.priced + " of the " + report.totals.turns + " turns)" : "") + ".",
+    ...(report.byModel.length ? ["", "By model:", table(["MODEL", "PROVIDER", "TURNS", "IN", "OUT", "CACHED", "COST"], report.byModel.map((row) => [safe(row.model), safe(row.provider ?? ""), row.turns, number(row.input), number(row.output), cached(row), cost(row)]))] : []),
+    ...(report.byBot.length ? ["", "By bot:", table(["BOT", "TURNS", "IN", "OUT", "CACHED", "COST"], report.byBot.map((row) => [safe(row.name), row.turns, number(row.input), number(row.output), cached(row), cost(row)]))] : []),
   ].join("\n");
 
 const usageGroup = {

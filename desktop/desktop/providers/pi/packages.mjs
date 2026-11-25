@@ -157,4 +157,17 @@ export class PiPackages {
     writeRecord(dir, next);
     return next;
   }
+  // Takes the package out of every chat's next turn and deletes its files. The folder is first moved
+  // aside in one step, so a list or a turn that starts meanwhile never sees half a package.
+  remove(name, version) {
+    requireName(name);
+    requireVersion(version);
+    if (this.installing.has(name)) throw new Error("This Pi package is still installing. Try again when it finishes.");
+    const dir = join(this.dir, folderId(name));
+    const record = readRecord(dir);
+    if (!record || record.version !== version) throw new Error("That package version is no longer installed.");
+    const trash = join(this.dir, ".remove-" + randomUUID());
+    renameSync(dir, trash);
+    rmSync(trash, { recursive: true, force: true });
+  }
 }

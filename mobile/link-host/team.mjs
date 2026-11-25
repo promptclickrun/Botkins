@@ -76,6 +76,7 @@ const POLICY = {
   send: ["agents", "chat"],
   recordVoiceLine: ["agents", "chat"],
   stop: ["agents", "chat"],
+  stopHelper: ["agents", "chat"],
   unqueue: ["agents", "chat"],
   sendNow: ["agents", "chat"],
   retry: ["agents", "chat"],
@@ -155,6 +156,9 @@ const POLICY = {
   skills: ["skills", "read"],
   readSkill: ["skills", "read"],
   "skills.upload": ["skills", "create"],
+  // A script command runs on the owner's computer, so only the owner reads its script or saves one ("script-commands-v1"). Running one is a member's too when their role may use skills (turnAccess, desktop/team-turn.mjs).
+  "skills.saveScript": "owner",
+  "skills.readScript": "owner",
   "skillsCatalog.search": ["skills", "read"],
   "skillsCatalog.preview": ["skills", "read"],
   "skillsCatalog.install": ["skills", "create"],
@@ -241,6 +245,7 @@ const POLICY = {
   "piPackages.list": ["plugins", "view"],
   "piPackages.install": ["plugins", "install"],
   "piPackages.setEnabled": ["plugins", "manage"],
+  "piPackages.remove": ["plugins", "uninstall"],
   "agents.browse": ["agents", "create"],
   "agents.template": ["agents", "create"],
   "composio.catalog": "owner",
@@ -454,7 +459,7 @@ const SELF_METHODS = new Set([
   "setMyAvatar",
 ]);
 const BOT_METHODS = new Set(["updateBot", "setBotProactive", "proactiveAct", "setBotFlags", "makePrimary", "reorderBots", "deleteBot", "duplicateBot", "setBotAccess", "setBotIntegrations", "botMemory", "setBotMemory", "saveTemplate", "exportTemplateText", "link.setLook"]);
-const CHAT_METHODS = new Set(["changeMainFork", "setChatFlags", "renameChat", "regenerateChatTitle", "deleteChat", "forkChat", "reactToMessage", "warmChat", "setChatProject", "recordVoiceLine", "send", "stop", "unqueue", "sendNow", "compact", "sideQuestion", "clearApprovals", "mentionables", "link.messages", "link.step", "sidePane", "changeSchedule", "link.voice.live", "link.voice.endLive", "link.team.inviteToChat", "link.team.removeFromChat", "link.chats.setSection", "mcpApps.view", "mcpApps.callTool", "mcpApps.readResource"]);
+const CHAT_METHODS = new Set(["changeMainFork", "setChatFlags", "renameChat", "regenerateChatTitle", "deleteChat", "forkChat", "reactToMessage", "warmChat", "setChatProject", "recordVoiceLine", "send", "stop", "stopHelper", "unqueue", "sendNow", "compact", "sideQuestion", "clearApprovals", "mentionables", "link.messages", "link.step", "sidePane", "changeSchedule", "link.voice.live", "link.voice.endLive", "link.team.inviteToChat", "link.team.removeFromChat", "link.chats.setSection", "mcpApps.view", "mcpApps.callTool", "mcpApps.readResource"]);
 /** What only the person who started a chat (or the owner) may do to it; someone invited may not. */
 const CREATOR_METHODS = new Set(["changeMainFork", "renameChat", "regenerateChatTitle", "deleteChat", "setChatProject", "changeSchedule", "setModel", "clearApprovals", "compact", "link.team.inviteToChat"]);
 /** A routine is its chat: these take the routine's (chat's) id first ("routine-owner-v1"). */
@@ -976,7 +981,7 @@ export function authorize(principal, team, method, args = [], lookups = {}) {
   if (lookups.gadget) {
     // The readers stringify the chat id. Check exactly the chat they would open.
     const chatId = ["link.messages", "link.step", "link.push.activity"].includes(method) ? String(args[0]) : chatIdOf(method, args, lookups);
-    if ((method === "respond" && lookup("request", args[0], lookups)?.dispatch) || lookup("chat", chatId, lookups)?.hostDispatch)
+    if ((method === "respond" && (lookup("request", args[0], lookups)?.dispatch || lookup("request", args[0], lookups)?.review)) || lookup("chat", chatId, lookups)?.hostDispatch)
       return "Open the Teamwork request on the owner's computer or paired phone.";
   }
   if (principal?.kind === "owner") return "";
@@ -1012,6 +1017,17 @@ export function authorize(principal, team, method, args = [], lookups = {}) {
   else if (method === "saveSkill" && args[0]?.original) action = "manage";
   else if (method === "setChatFlags" && isMarkReadOnly(args[1])) action = "view";
   if (!hasAction(role.perms, scope, action)) return "Your team role can't do that.";
+  // A script command runs on the owner's computer, so only the owner removes, switches off, replaces or edits one ("script-commands-v1"),
+  // whatever a role may do with other skills. `scriptCommand` names the ones Botkins keeps. (The app checks again, by name, for any call
+  // from a paired device: desktop/device-call.mjs.)
+  const scriptNamed = (name) => typeof name === "string" && !!lookup("scriptCommand", name, lookups);
+  if (
+    ((method === "removeSkill" || method === "setSkillEnabled") && scriptNamed(args[0])) ||
+    (method === "saveSkill" && (scriptNamed(args[0]?.name) || scriptNamed(args[0]?.original))) ||
+    (method === "skills.upload" && Array.isArray(args[0]?.replace) && args[0].replace.some(scriptNamed)) ||
+    (method === "skillsCatalog.install" && Array.isArray(args[1]) && args[1].some(scriptNamed))
+  )
+    return "Only the owner can remove, turn off, replace or edit a script command.";
   // A routine's script runs on the owner's computer, so only the owner writes or changes one ("routine-scripts-v1").
   if ((method === "createRoutine" && args[0]?.script != null) || (method === "updateRoutine" && args[1]?.script !== undefined)) return "Only the owner can add or change a routine's script.";
   if (((method === "skills.upload" && args[0]?.replace?.length) || (method === "skillsCatalog.install" && args[1]?.length)) && !hasAction(role.perms, "skills", "manage")) return "Your team role cannot replace skills.";

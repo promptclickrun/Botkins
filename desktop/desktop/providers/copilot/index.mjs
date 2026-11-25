@@ -33,7 +33,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { cpSync, existsSync, mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { CopilotClient, CopilotRequestHandler, CopilotWebSocketCloseStatus, CopilotWebSocketHandler, RuntimeConnection, defineTool as sdkTool } from "@microsoft/copilot-sdk";
-import { ModelProvider, ProviderSession } from "../provider.mjs";
+import { ModelProvider, ProviderSession, usageData } from "../provider.mjs";
 import { QUIET_CHECK_MS, watchQuiet } from "../liveness.mjs";
 import { decide } from "./permissions.mjs";
 import { CopilotRelay } from "./relay.mjs";
@@ -227,16 +227,16 @@ export function sessionOptions(spec, turn) {
     // Plugin file hooks are projected and run by Botkins so their settings stay scoped and the
     // native plugin directory cannot register the same hook a second time.
     ...(spec.pluginHooks && { hooks: spec.pluginHooks }),
-    // `context` is the part that changes often (such as the bot's memory). A warm session keeps
-    // the one it opened with; see signatureOf.
+    // The bot's instructions, then its memory (`context`), as the session began with them; see signatureOf.
     systemMessage: { mode: "append", content: spec.instructions + (spec.context ?? "") },
   };
 }
 
 /**
  * What must match for a warm session to serve another turn. Tools and handlers are swapped per
- * turn, the model and approval level are changed on the open session, and `context` is left out
- * on purpose: the workspace releases a bot's idle sessions when its context changes.
+ * turn, and the model and approval level are changed on the open session. The instructions and
+ * `context` are the session's own and stay the same from turn to turn (desktop/session-prompts.mjs):
+ * when they differ, the session began anew, and it is opened again with them.
  */
 const modelKey = (model) => [model.model, model.source ?? "", model.reasoningEffort ?? ""].join("\n");
 const signatureOf = (spec) =>
@@ -246,6 +246,7 @@ const signatureOf = (spec) =>
         spec.folder,
         !!spec.coding,
         spec.instructions,
+        spec.context ?? "",
         spec.skills ?? null,
         spec.mcpServers ?? null,
         spec.plugins ?? null,
@@ -271,6 +272,16 @@ async function switchModel(sdk, selection, failure, inference) {
     throw new Error(failure);
 }
 
+/**
+ * The runtime's usage of one model call in Botkins' terms. Its inputTokens is the whole prompt,
+ * the cached part with it (as OpenAI counts it, for every model it runs, Claude's too); Botkins
+ * counts the uncached input (provider.mjs usageData). The rest of the event is kept as it came.
+ */
+export function copilotUsageData(data) {
+  const { inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, ...rest } = data;
+  return usageData({ ...rest, input: inputTokens, output: outputTokens, cacheRead: cacheReadTokens, cacheWrite: cacheWriteTokens, includesCache: true });
+}
+
 class CopilotSession extends ProviderSession {
   constructor(provider, entry) {
     super();
@@ -279,14 +290,58 @@ class CopilotSession extends ProviderSession {
     this.sdk = entry.sdk;
     this.id = entry.id;
     this.subscriptions = new Set();
+    // The command of each shell call, by tool call id: Copilot's task list names a shell by its command.
+    this.commands = new Map();
+    // What Copilot's task list held when it was last read (null: not read yet), and who is listening.
+    this.tasks = null;
+    this.listeners = new Set();
   }
   on(handler) {
-    const off = this.sdk.on(handler);
+    this.listeners.add(handler);
+    const off = this.sdk.on((event) => {
+      const command = event?.type === "tool.execution_start" && event.data?.arguments?.command;
+      if (typeof command === "string" && event.data.toolCallId) {
+        this.commands.set(event.data.toolCallId, { command: command.trim(), at: Date.now() });
+        // A long session keeps only the latest calls.
+        if (this.commands.size > 300) this.commands.delete(this.commands.keys().next().value);
+      }
+      handler(event?.type === "assistant.usage" && event.data ? { ...event, data: copilotUsageData(event.data) } : event);
+      // The list is read when a helper or a shell call starts or ends, never for a text delta.
+      if (/^subagent\./.test(event?.type ?? "") || (/^tool\.execution_(start|complete)$/.test(event?.type ?? "") && this.commands.has(event.data?.toolCallId))) void this.readTasks();
+    });
     this.subscriptions.add(off);
     return () => {
+      this.listeners.delete(handler);
       this.subscriptions.delete(off);
       off();
     };
+  }
+  hasTaskCalls() {
+    return typeof this.sdk.rpc?.tasks?.list === "function" && typeof this.sdk.rpc?.tasks?.cancel === "function";
+  }
+  /** Reads the task list again (one read at a time) and tells the listeners when it changed. */
+  async readTasks() {
+    if (!this.hasTaskCalls()) return;
+    if (this.reading) {
+      this.readAgain = true;
+      return;
+    }
+    this.reading = true;
+    try {
+      const key = (tasks) => (tasks ?? []).map((task) => task.id).join();
+      const before = this.tasks && key(this.tasks);
+      do {
+        this.readAgain = false;
+        const listed = (await this.sdk.rpc.tasks.list())?.tasks;
+        if (Array.isArray(listed)) this.tasks = listed.filter((task) => task?.status === "running" || task?.status === "idle");
+      } while (this.readAgain && !this.closed);
+      // Told only when the list is not what it was: what can be stopped may differ now.
+      if (!this.closed && before !== key(this.tasks)) for (const handler of [...this.listeners]) handler({ type: "task.changed", data: {} });
+    } catch {
+      // The list is only a hint: without it, everything is offered, as before it was read.
+    } finally {
+      this.reading = false;
+    }
   }
   // Read only the journal segment belonging to this submission. A tool request or
   // commentary message can precede a crash without being the person's final answer.
@@ -463,6 +518,48 @@ class CopilotSession extends ProviderSession {
   abort() {
     this.current?.stop();
     return this.sdk.abort();
+  }
+  /**
+   * Copilot's own task list can cancel one helper or background shell ("experimental" in its SDK).
+   * Once the list was read, only what it held then is offered.
+   */
+  canStopHelper(id) {
+    if (!this.hasTaskCalls()) return false;
+    if (!this.tasks) return true;
+    const shell = this.commands.get(id);
+    if (shell) return this.tasks.some((task) => task.type === "shell" && String(task.command ?? "").trim() === shell.command);
+    return this.tasks.some((task) => task.type === "agent" && task.toolCallId === id);
+  }
+  /**
+   * Cancels one helper (by the call that started it) or one background shell (by its command: the
+   * list names no call) and leaves the rest of the turn running.
+   */
+  async stopHelper(id) {
+    if (!this.hasTaskCalls()) throw new Error("Botkins couldn't stop it: this version of Copilot can't stop one helper.");
+    const shell = this.commands.get(id);
+    const gone = shell ? "That command already finished." : "That helper already finished.";
+    const because = (error) => new Error("Botkins couldn't stop it: " + String(error?.message ?? error).slice(0, 300));
+    let listed;
+    try {
+      listed = (await this.sdk.rpc.tasks.list())?.tasks ?? [];
+    } catch (error) {
+      throw because(error);
+    }
+    const open = (task) => task?.status === "running" || task?.status === "idle";
+    let found;
+    if (shell) {
+      // The same command may run twice: the one that began nearest to this call.
+      const began = (task) => Math.abs(Date.parse(task.startedAt) - shell.at);
+      found = listed.filter((task) => task.type === "shell" && open(task) && String(task.command ?? "").trim() === shell.command).sort((a, b) => (began(a) || 0) - (began(b) || 0))[0];
+    } else found = listed.find((task) => task.type === "agent" && open(task) && task.toolCallId === id);
+    if (!found) throw new Error(gone);
+    let result;
+    try {
+      result = await this.sdk.rpc.tasks.cancel({ id: found.id });
+    } catch (error) {
+      throw because(error);
+    }
+    if (result?.cancelled === false) throw new Error(gone);
   }
   async close({ discard = false } = {}) {
     if (this.closed) return;

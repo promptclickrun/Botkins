@@ -71,7 +71,8 @@ const VOICE_OPTIONS = {
 
 export async function approvalAction(context, request) {
   context.stderr.write("The bot asks for your approval to:\n  " + shownText(request.title) + "\n");
-  if (request.dispatch) {
+  // A request that holds what the person must read (a Teamwork request's words, a script command's whole script) shows it first.
+  if (request.dispatch || request.detail) {
     if (request.label) context.stderr.write(shownText(request.label) + "\n");
     context.stderr.write(String(request.detail ?? "").split("\n").map(shownText).join("\n") + "\n");
   }
@@ -96,9 +97,25 @@ export async function approvalAction(context, request) {
  * Sends one message and shows the reply as it comes. Returns { reply, status }.
  * A bot that asks for an approval or an answer is answered at the terminal, or refused when there is none.
  */
-async function turn(context, chatId, message, { live }) {
+async function turn(context, chatId, message, { live, typed = false }) {
   const { client, stdout, color } = context;
-  const sent = await client.call("chat.send", chatId, message);
+  // A message that is a script command runs a script on this computer with the words after its name. A message that a person
+  // typed at the prompt is theirs; one that came on the command line (-m) is shown first, and the person says yes (or --yes does).
+  const script = await client.call("chat.scriptCommand", chatId, message);
+  if (script && !typed) {
+    const name = shownText(script.name);
+    context.stderr.write(
+      (script.via
+        ? "This sets up /" + shownText(script.via) + " to run the script command /" + name + " again and again, on this computer, with your account's access, and no model.\n"
+        : "This runs the script command /" + name + " on this computer, with your account's access, and no model.\n") +
+        "The words it gets (in $BOTKINS_ARGS and on standard input): " + (script.args ? JSON.stringify(shownText(script.args)) : "none") + "\nSee its script with `botkins skills show " + shellWord(script.name, "<the command>") + "`.\n",
+    );
+    if (!(await confirm(context, "Run /" + shownText(script.name) + "?"))) {
+      context.note("Nothing was sent.");
+      return { reply: "", status: "Declined" };
+    }
+  }
+  const sent = await client.call("chat.send", chatId, message, ...(script ? [{ agreed: true }] : []));
   let printed = "";
   let seen;
   let answered = new Set();
@@ -133,7 +150,7 @@ async function turn(context, chatId, message, { live }) {
         answer = value ? { action: "answer", value } : { action: "cancel" };
       }
       // A yes carries the mark `{ agreed: true }`, which the service needs: it is given only after the person said yes at the terminal.
-      await client.call("chat.respond", ...(["approve", "today", "remember"].includes(answer.action) ? [request.id, answer, { agreed: true }] : [request.id, answer])).catch((error) => context.note(error.message));
+      await client.call("chat.respond", ...(["approve", "today", "remember"].includes(answer.action) ? [request.id, answer, { agreed: true, ...(request.review && { reviewed: true }) }] : [request.id, answer])).catch((error) => context.note(error.message));
       continue;
     }
     if (!view.working) {
@@ -556,13 +573,14 @@ export const workspace = {
   },
   chat: {
     summary: "Talk to a bot",
-    usage: "botkins chat <bot> [-m <message>] [--chat <id> | --new]",
+    usage: "botkins chat <bot> [-m <message>] [--chat <id> | --new] [--yes]",
     options: {
+      yes: { type: "boolean", about: "With -m: agree to run a script command that the message is, without asking" },
       message: { type: "string", short: "m", value: "text", about: "Send one message, print the reply and return (\"-\" reads it from standard input)" },
       chat: { type: "string", value: "id", about: "Continue this chat instead of Main chat" },
       new: { type: "boolean", about: "Start an ordinary new chat instead of Main chat" },
     },
-    details: "Without -m, a prompt opens: type a message and Enter. Ctrl-C stops a reply; Ctrl-D, or /quit, leaves. The chat is an ordinary one: a paired phone shows it too. When the bot asks for an approval, the request is shown on standard error and you are asked at a terminal. With no terminal the request is refused: no flag approves it.",
+    details: "Without -m, a prompt opens: type a message and Enter. Ctrl-C stops a reply; Ctrl-D, or /quit, leaves. The chat is an ordinary one: a paired phone shows it too. When the bot asks for an approval, the request is shown on standard error and you are asked at a terminal. With no terminal the request is refused: no flag approves it. A message that is a script command (/name words) runs a script on this computer: with -m it is shown, and you are asked first (--yes answers for you when there is no terminal); a line typed at the prompt is yours and is sent.",
     async run(context) {
       if (context.args.length !== 1) throw usage("Name the bot (its name or id).");
       const { client, color } = context;
@@ -594,7 +612,7 @@ export const workspace = {
           working = true;
           rl.pause();
           try {
-            await turn(context, opened.chatId, line, { live: true });
+            await turn(context, opened.chatId, line, { live: true, typed: true });
           } catch (error) {
             context.note(color.red(error.message));
           } finally {

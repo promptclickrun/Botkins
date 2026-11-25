@@ -108,7 +108,8 @@ export const rememberNote = (remember: string) => "Remembering this approval all
 /** The full request is folded under "Full request" when there is a preview, and shown without one. */
 export function detailMode(request: AgentRequest): "none" | "folded" | "open" {
   if (!request.detail) return "none";
-  return request.preview && !request.dispatch ? "folded" : "open";
+  // A request that holds a script is never folded: the person reads all of it before a yes.
+  return request.preview && !request.dispatch && !request.review ? "folded" : "open";
 }
 
 /** A question takes a typed answer when the bot allows one, or when it gives no choices to pick. */

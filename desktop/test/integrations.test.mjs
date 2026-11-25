@@ -273,7 +273,8 @@ test("each bot keeps a MEMORY.md that it reads in every conversation and changes
   const chat = ws.createChat("pip");
   await ws.send(chat, "Hi");
   assert.match(log.configs.get(chat).systemMessage.content, /persistent memory[\s\S]*Your memory is empty so far\./);
-  assert.deepEqual(log.sessions.get(chat).toolNames().filter((n) => n.startsWith("memory_")), ["memory_save", "memory_forget", "memory_read"]);
+  // A session's tools come in order of name, the same on every turn (desktop/session-prompts.mjs).
+  assert.deepEqual(log.sessions.get(chat).toolNames().filter((n) => n.startsWith("memory_")), ["memory_forget", "memory_read", "memory_save"]);
   // The tools work only inside a live turn.
   // As the runtime gets it, the refusal is a result that carries the tool's words for the model to read.
   const dead = log.sessions.get(chat).config().tools.definitions.find((x) => x.name === "memory_save");

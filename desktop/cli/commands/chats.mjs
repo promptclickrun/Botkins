@@ -145,7 +145,7 @@ export const chatsCommands = {
           const { request } = await context.client.call("chat.read", one(context, "Give the chat id from botkins chats list."));
           if (request?.kind !== "permission") throw usage("This chat has no pending approval.");
           const action = await approvalAction(context, request);
-          const result = await context.client.call("chat.respond", request.id, { action }, ...(action === "deny" ? [] : [{ agreed: true }]));
+          const result = await context.client.call("chat.respond", request.id, { action }, ...(action === "deny" ? [] : [{ agreed: true, ...(request.review && { reviewed: true }) }]));
           context.print(result, "Decision recorded.");
         },
       },
@@ -331,6 +331,20 @@ export const chatsCommands = {
         async run(context) {
           if (context.args.length !== 2) throw usage(CHAT + " Then name the message by its number or id.");
           context.print(await context.client.call("chats.unqueue", ...context.args), (done) => "Took the message out of the line of " + named(done) + ".");
+        },
+      },
+      "stop-helper": {
+        summary: "Stop one helper or background command of a turn that works",
+        usage: "botkins chats stop-helper <chat> [<id>]",
+        details: "The turn goes on: only that helper or command stops. With no id, this lists the helpers and background commands of the chat's turn that work now, and which of them the chat's model can stop on its own (Claude Code and GitHub Copilot can, the others stop only with the whole turn: Ctrl-C in `botkins chat`). A helper's id is the id of the step that started it.",
+        async run(context) {
+          const [ref, id, ...more] = context.args;
+          if (!ref || more.length) throw usage(CHAT + " Then name the helper or command by its id, or leave it out to list them.");
+          if (id === undefined) {
+            context.print(await context.client.call("chats.helpers", ref), (list) => (list.length ? table(["ID", "KIND", "STOPPABLE", "NAME"], list.map((item) => [item.id, item.kind, item.stoppable ? "yes" : "no", safe(item.name)])) : "No helper or background command works in this chat."));
+            return;
+          }
+          context.print(await context.client.call("chats.stopHelper", ref, id), (done) => "Stopped " + safe(String(done.item).slice(0, 80)) + " in " + named(done) + ".");
         },
       },
       "send-now": {

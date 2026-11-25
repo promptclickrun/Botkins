@@ -73,7 +73,8 @@ export class Subagents {
 
   /** Prompt guidance shown to top-level turns when host subagents are available. */
   brief(chat, run) {
-    if (chat?.helper || chat?.subagent || run?.panelId) return "";
+    // A panel's chat never has the subagent tools; another chat has them on every turn (tools below).
+    if (chat?.helper || chat?.subagent || chat?.panelId || run?.panelId) return "";
     return (
       "\n\n## Subagents\n" +
       "Use subagent_run to delegate focused tasks to isolated child workers (or pass a `tasks` array to fan out in parallel). " +
@@ -83,16 +84,29 @@ export class Subagents {
     );
   }
 
-  /** Instructions appended inside a child subagent session. */
-  childInstructions(parentBot, { label, readonly, expecting, constraints }) {
+  /**
+   * Instructions appended inside a child subagent session. They are the same for every child of a
+   * bot, so children started side by side share the start of their requests, which a model caches
+   * once for all of them. What differs between children is in the task they are sent (childTask).
+   */
+  childInstructions(parentBot) {
     return (
-      `\n\nYou are an isolated Botkins subagent (${label || "Subagent"}) launched by ${parentBot.name} (${parentBot.role}). ` +
+      `\n\nYou are an isolated Botkins subagent launched by ${parentBot.name} (${parentBot.role}). ` +
       "Complete the assigned task directly and return a concise, factual result for the parent agent. " +
-      (readonly ? "Read-only mode: inspect and report only; do not modify files, run mutating commands, or perform external writes. " : "") +
-      (expecting ? `Expected output: ${expecting}. ` : "") +
-      (constraints ? `Constraints: ${constraints}. ` : "") +
+      "Follow the mode, expected output and constraints given with your task. " +
       "You cannot ask the user questions directly or spawn further subagents; report any missing facts or blockers clearly in your reply."
     );
+  }
+
+  /** A child's first message: its name, mode, expected output and constraints, then the task. */
+  childTask({ label, readonly, expecting, constraints, body }) {
+    const lines = [
+      `Subagent: ${label || "Subagent"}.`,
+      readonly ? "Read-only mode: inspect and report only; do not modify files, run mutating commands, or perform external writes." : "",
+      expecting ? `Expected output: ${expecting}.` : "",
+      constraints ? `Constraints: ${constraints}.` : "",
+    ].filter(Boolean);
+    return lines.join("\n") + "\n\nTask:\n" + body;
   }
 
   /** Tool definitions exposed to a parent turn via Botkins' MCP bridge. */
@@ -305,7 +319,7 @@ export class Subagents {
         subagent: true,
         temporary: true,
         established: false,
-        extraInstructions: this.childInstructions(bot, spec),
+        extraInstructions: this.childInstructions(bot),
         get approvals() {
           return chat.approvals;
         },
@@ -336,7 +350,7 @@ export class Subagents {
         });
 
         const whose = this.ws.speakerLine(chat, run, task, { helping: true });
-        const prompt = (whose ? whose + "\n" : "") + spec.body;
+        const prompt = (whose ? whose + "\n" : "") + this.childTask(spec);
         const { text } = await session.send({ prompt });
         if (over()) throw new Error(record.stoppedByTool ? "Subagent stopped." : "Parent turn stopped.");
         if (!text) throw new Error("Subagent returned an empty reply.");

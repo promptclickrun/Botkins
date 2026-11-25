@@ -61,6 +61,8 @@ const textOf = (content) => (typeof content === "string" ? content : Array.isArr
  */
 export function planRequest(body) {
   const out = { ...body, store: false, stream: true };
+  // The plan's endpoint refuses a cache retention ("Unsupported parameter"); it keeps its own.
+  delete out.prompt_cache_retention;
   if (Array.isArray(out.tools)) out.tools = out.tools.map((tool) => (tool?.type === "function" && typeof tool.strict !== "boolean" ? { ...tool, strict: false } : tool));
   if (Array.isArray(out.input)) {
     const system = out.input.filter((item) => item?.role === "system" && (item.type === "message" || item.type === undefined));
@@ -126,6 +128,12 @@ export function completeOutput(seen = () => {}) {
   });
 }
 
+/** A request's conversation, from its prompt cache key: letters, digits and - _ . : only, 64 at most; "" without one. */
+export function sessionOf(body) {
+  const key = body?.prompt_cache_key;
+  return typeof key === "string" && /^[A-Za-z0-9._:-]{1,64}$/.test(key) ? key : "";
+}
+
 /**
  * Sends one Responses request to the person's ChatGPT plan.
  * @param options.signIn   () => { token, account, expiresAt } (chatgptSignIn).
@@ -134,6 +142,9 @@ export function completeOutput(seen = () => {}) {
  * @returns the endpoint's answer (a fetch Response). Throws PlanError when there is no sign-in.
  */
 export async function chatgptTurn(body, { serviceTier, signIn = chatgptSignIn, renew = async () => {}, fetch: fetcher = globalThis.fetch, version = "", signal, url = CHATGPT_URL } = {}) {
+  // The conversation's cache key (Pi sends its session id) also names the session, as Codex's own
+  // requests do: the endpoint sends a conversation's requests to where its prompt is cached.
+  const session = sessionOf(body);
   const send = (auth, tier) =>
     fetcher(url, {
       method: "POST",
@@ -145,6 +156,7 @@ export async function chatgptTurn(body, { serviceTier, signIn = chatgptSignIn, r
         "openai-beta": "responses=experimental",
         originator: "botkins",
         "user-agent": "Botkins" + (version ? "/" + version : ""),
+        ...(session && { "session-id": session, "x-client-request-id": session }),
       },
       body: JSON.stringify({ ...planRequest(body), ...(tier && { service_tier: tier }) }),
       signal,

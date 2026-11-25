@@ -23,6 +23,7 @@ import { CopilotProvider } from "./providers/copilot/index.mjs";
 import { Integrations } from "./integrations.mjs";
 import { Plugins } from "./plugins.mjs";
 import { pluginTools } from "./plugin-tools.mjs";
+import { commandNames, matchScriptCommand, RESERVED_COMMANDS, runScriptCommand, scriptChoice, scriptCommandTools } from "./script-commands.mjs";
 import { SecureInputs } from "./secure-input.mjs";
 import { updateTools } from "./updates.mjs";
 import { profileContext } from "./bot-profile-files.mjs";
@@ -59,7 +60,7 @@ import { recordActivity } from "./activity.mjs";
 import {
   finishCanvas,
   mainTranscript,
-  forkSystemMessage,
+  earlierConversation,
   forkTranscript,
   mapTodos,
   quotedPrompt,
@@ -84,7 +85,8 @@ import {
 import { Apps } from "./apps.mjs";
 import { createComposio } from "./composio.mjs";
 import { Connects } from "./connects.mjs";
-import { McpApps } from "./mcp-apps.mjs";
+import { McpApps, proxyPrefix } from "./mcp-apps.mjs";
+import { SessionPrompts, contextNote, digest, stableTools } from "./session-prompts.mjs";
 import { reactionTool } from "./reactions.mjs";
 import { ReactionTurns } from "./reaction-turns.mjs";
 import { setReaction } from "./link/message-reactions.mjs";
@@ -322,6 +324,9 @@ export class Workspace {
     this.projects = new Projects(this);
     this.artifacts = new Artifacts(this);
     this.artifactEvents = new ArtifactEvents(this);
+    // Per run: the stops being tried (Workspace.stopHelper) and the function that reads a turn's events.
+    this.stopping = new WeakMap();
+    this.replays = new WeakMap();
     this.artifactEvents.restore(existsSync(this.artifacts.file));
     // Agent access (desktop/access.mjs)
     this.access = new Access(this);
@@ -332,13 +337,20 @@ export class Workspace {
     this.connects = new Connects(this);
     // MCP servers with interactive views run through Botkins' own client, and their views show in the chat (desktop/mcp-apps.mjs).
     this.mcpApps = new McpApps(this, options?.mcpApps);
+    // Each session's system prompt and tools as it began (desktop/session-prompts.mjs). Records of
+    // sessions unused for a month are removed in the background.
+    this.sessionPrompts = new SessionPrompts(join(dir, "session-prompts"));
+    setTimeout(() => this.sessionPrompts.sweep(), 60_000).unref?.();
     // Panels a bot shows beside a chat (desktop/sidepane.mjs).
     this.sidepane = new SidePane(this, options?.sidePane);
     this.templates = new Templates(this);
     for (const run of this.state.runs) {
       if (run.status === "Working") {
-        for (const step of run.steps ?? [])
+        for (const step of run.steps ?? []) {
+          delete step.stoppable;
           if (step.status === "Running") step.status = "Interrupted";
+        }
+        for (const agent of run.agents ?? []) delete agent.stoppable;
         // Teammates that were still working when Botkins closed (desktop/teamwork.mjs).
         for (const ask of run.teamwork ?? []) {
           if (ask.status === "waiting" || ask.status === "working") ask.status = "stopped";
@@ -821,7 +833,7 @@ export class Workspace {
   }
   send(chatId, text, options = {}) {
     if (this.closing) throw new Error("Botkins is closing");
-    const { attachments: files, quote: rawQuote, mentions: rawMentions, voiceId, clientMessageId, author, also: rawAlso, proactiveCheck, merged: rawMerged, ...context } = options;
+    const { attachments: files, quote: rawQuote, mentions: rawMentions, voiceId, clientMessageId, author, also: rawAlso, proactiveCheck, merged: rawMerged, allowScript, ...context } = options;
     // People whose limits apply to this turn beside the chat's maker and the message's writer:
     // someone else wrote text that runs in it (a routine's prompt on a panel that another person
     // refreshes). Members only: the owner narrows nothing.
@@ -876,6 +888,9 @@ export class Workspace {
       chatId,
       ...(chat.main && { forkId: chat.activeFork }),
       ...context,
+      // Only a person's message, a routine's or a task's own prompt, and a schedule that a person made may be a script command.
+      // Anything else that starts a turn (a proactive offer, a space or a panel asking, a retry by a program, the voice desk, a routine's follow-up) treats "/name" as the ordinary text it is.
+      ...(allowScript === true && { allowScript: true }),
       title: context.title || prompt.slice(0, 100),
       time: chat.time,
       status: "Working",
@@ -993,6 +1008,12 @@ export class Workspace {
       // A reaction's prompt is in no message of the chat: a retry takes it from here.
       ...(run.reaction && { message }),
     };
+    // A person's message that is a script command: known now, so that the chat is busy with it from the start (the menu is then asked of the bot's menu session).
+    // Deny by default: only a run that was started with `allowScript` may be a script command (see `send`).
+    if (run.allowScript === true && !run.reaction && !run.panelId && !run.proactive && !run.recovery?.proactiveCheck && !(recovering && run.recovery?.input) && !isGroup(chat)) {
+      const typed = this.scriptCommandCandidate(prompt);
+      if (typed) Object.assign(task, { script: true, typedScript: typed });
+    }
     // A group chat names its first speaker at once, so the UI never shows a nameless typing row.
     if (isGroup(chat)) task.speaker = responders(chat, this.state.bots, prompt)[0]?.id;
     // A new turn counts the plugins' blocks again from none. A recovery or a retry of the same turn comes through here
@@ -1019,6 +1040,7 @@ export class Workspace {
       steer: delivery === "steer",
       ...clientMessageTag(options.clientMessageId),
       ...(options.notify === false && { notify: false }),
+      ...(options.allowScript === true && { allowScript: true }),
       ...(typeof options.voiceId === "string" && options.voiceId.length <= 256 && { voiceId: options.voiceId }),
       text: textField(text, 32000, "message"),
       attachments: validateAttachments(options.attachments),
@@ -1115,6 +1137,7 @@ export class Workspace {
         mentions: next.mentions,
         author: next.author,
         ...(next.notify === false && { notify: false }),
+        ...(next.allowScript === true && !rest.length && { allowScript: true }),
         voiceId: next.voiceId,
         clientMessageId: next.clientMessageId,
         ...(rest.length && { merged: rest }),
@@ -1164,7 +1187,7 @@ export class Workspace {
     }
   }
   /** Sends a failed or stopped turn's message again. */
-  retry(runId) {
+  retry(runId, { allowScript = false } = {}) {
     const run = this.state.runs.find((r) => r.id === runId);
     if (!run) throw new Error("Unknown work item");
     const chat = this.chat(run.chatId);
@@ -1208,6 +1231,8 @@ export class Workspace {
       // A retried routine or task run is still unattended work: it keeps its read-only memory and wiki.
       ...(run.scheduleId != null && { scheduleId: run.scheduleId }),
       ...(run.taskId && { taskId: run.taskId }),
+      // A script command that a person ran is run again only when a person asks again (the window or a phone), never by a program.
+      ...(allowScript === true && run.allowScript === true && { allowScript: true }),
     });
   }
   /** Runs Copilot's native /compact in this chat. */
@@ -1331,10 +1356,17 @@ export class Workspace {
   profileContext(botId) {
     return profileContext(this, botId);
   }
-  /** What a bot is told at the start of a conversation. */
-  instructionsFor(chat, bot, run) {
-    const interactive = !chat.helper && !run?.panelId && !run?.scheduleId && !run?.taskId;
-    return (
+  /**
+   * What a bot is told at the start of a conversation, in parts (desktop/session-prompts.mjs).
+   * `fixed` stays the same while a session lasts, and a change to it starts a new session's prompt:
+   * the guidance, the group, the bot's profile and its own instructions. `live` holds what may
+   * change while it works (its memory, the project, the space, its team); a session is told those
+   * changes in its turn's message. Nothing here depends on the turn: a session's turns (a person's,
+   * a routine's) share one prompt. A panel's own chat and a helper are sessions of their own.
+   */
+  instructionParts(chat, bot) {
+    const interactive = !chat.helper && !chat.panelId;
+    const head =
       "You are " + bot.name + ", " + bot.role + ". You are working in Botkins." +
       (chat.helper ? "" : "\nUse today_* for persistent dashboard panels and today_routine for recurring updates. Confirm actions after the tool succeeds." + ROUTINE_CONFIRM + clarificationMessage(this.state.settings)) +
       (interactive
@@ -1349,20 +1381,36 @@ export class Workspace {
           "\nFor deliverables and previews, prefer accessible native delivery over a raw host path alone: save reusable files, including complete HTML files, in the workspace and link them so they appear in Artifacts, use MEDIA: for images, audio, or video, and use render_card, show_app, side_pane_show, or today_publish when an interactive or visual view fits." +
           "\nIn a chat with more than one person, you can mention a person as @Name to send them a notification when you want their attention." +
           '\nUse side_pane_show with kind "screen" to offer a clickable screen card only for visible browser automation or interactive desktop actions the person would benefit from watching. Writing code or scripts, running shell commands, builds, background checks and fetching web content do not call for screen sharing. Screen access is the person’s choice.'
-        : "") +
-      forkSystemMessage(chat.forkContext) +
-      this.projects.context(chat, bot) +
-      this.spaces.context(chat) +
-      (chat.groupInstructions || "") +
-      this.teamwork.brief(bot, chat) +
-      this.subagents.brief(chat, run) +
-      this.wiki.context() +
-      (chat.extraInstructions || "") +
-      this.profileContext(bot.id) +
-      "\n\nThe user's custom instructions for this bot take precedence over Botkins defaults and editable profile notes. Use the tools and permissions available for this turn.\n" +
-      bot.instructions +
-      (!chat.helper && bot.clarificationInstructions ? "\nFor this bot, ask the person in these situations: " + bot.clarificationInstructions : "")
-    );
+        : "");
+    return {
+      fixed: {
+        head,
+        group: chat.groupInstructions || "",
+        extra: chat.extraInstructions || "",
+        profile: this.profileContext(bot.id),
+        own:
+          "\n\nThe user's custom instructions for this bot take precedence over Botkins defaults and editable profile notes. Use the tools and permissions available for this turn.\n" +
+          bot.instructions +
+          (!chat.helper && bot.clarificationInstructions ? "\nFor this bot, ask the person in these situations: " + bot.clarificationInstructions : ""),
+      },
+      live: {
+        project: this.projects.context(chat, bot),
+        space: this.spaces.context(chat),
+        team: this.teamwork.brief(bot, chat),
+        subagents: this.subagents.brief(chat),
+        wiki: this.wiki.context(),
+        // The bot's memory goes to a session as its `context`, after the instructions.
+        memory: this.memory.context(bot),
+      },
+    };
+  }
+  /** The instructions a session is given, from instructionParts (without the memory, which is the session's `context`). */
+  composeInstructions({ fixed, live }) {
+    return fixed.head + live.project + live.space + fixed.group + live.team + live.subagents + live.wiki + fixed.extra + fixed.profile + fixed.own;
+  }
+  /** What a bot is told at the start of a conversation, as it is now. */
+  instructionsFor(chat, bot) {
+    return this.composeInstructions(this.instructionParts(chat, bot));
   }
   /** Botkins' own tools for one turn. */
   sessionTools(bot, chat, run, task) {
@@ -1377,6 +1425,8 @@ export class Workspace {
     if (chat.helper) return records;
     return [
       ...(access.plugins ? pluginTools(this, bot, chat, run, task) : []),
+      // A script command that a bot proposes: the person is shown the whole script (desktop/script-commands.mjs). The owner's alone.
+      ...(access.member ? [] : scriptCommandTools(this, bot, chat, run, task)),
       ...this.secureInputs.tools(bot, chat, run, task),
       ...updateTools(this.updates, chat, run, task, () => this.active.get(chat.id)),
       ...this.panels.tools(bot, chat, run, task),
@@ -1649,29 +1699,45 @@ export class Workspace {
     const pluginSpec = access.plugins
       ? await this.plugins.session(bot, chat, { skillsOnly: !copilotPlugins })
       : { directories: [], mcpServers: {}, hooks: undefined };
-    // Servers with views (and the Composio tool) are run by Botkins for this turn, when they answer;
-    // their tools come with Botkins' own below, and the harness doesn't get them (desktop/mcp-apps.mjs).
+    // What the session was told when it began, or what it begins with now (desktop/session-prompts.mjs).
+    const prompt = this.sessionPrompt(chat, bot, provider, hosted?.model ?? choice);
+    // Servers with views (and the Composio tool) are run by Botkins, when they answer; their tools
+    // come with Botkins' own below, and the harness doesn't get them (desktop/mcp-apps.mjs). Each
+    // stays on the side it began the session on: one that doesn't answer now isn't handed to the
+    // harness, where its tools would have other names. Its tools say so when they are called.
     const routed = await (routing ?? (access.mcp ? this.mcpApps.prepare(bot) : new Map()));
     const ownServers = access.mcp ? this.integrations.serversFor(bot) : {};
-    for (const name of routed.keys()) delete ownServers[name];
+    // (A server that isn't Botkins' yet, one that wasn't ready when the session began, goes to the
+    // harness until it is; it then stays Botkins', which changes the tool list once.)
+    const routes = prompt.record.routes;
+    const routesBefore = JSON.stringify(routes);
+    for (const name of routed.keys()) routes[name] = "botkins";
+    for (const name of Object.keys(ownServers)) if (routes[name] === "botkins") delete ownServers[name];
+    if (JSON.stringify(routes) !== routesBefore) this.sessionPrompts.save(prompt.key, prompt.record);
     const mcpServers = {
       ...ownServers,
       ...(access.mcp && copilotPlugins ? pluginSpec.mcpServers : {}),
     };
+    const tools = this.stableTools(prompt, [...this.sessionTools(bot, chat, run, task), ...this.mcpApps.tools(bot, chat, run, task, routed)], access.mcp);
     const session = await provider.openSession({
       sessionId: chat.sessionId ?? chat.id,
       established: !!chat.established,
-      hasReplies: !!chat.messages?.some((m) => m.role === "assistant"),
+      // While Botkins still has the conversation to tell the session (tellSession), the provider
+      // isn't to tell it again from the history.
+      hasReplies: !chat.forkContext && !!chat.messages?.some((m) => m.role === "assistant"),
       temporary: !!chat.temporary,
       folder,
       coding: !!projectFolder,
       model: hosted?.model ?? choice,
       ...(hosted && { inference: hosted.inference }),
       approval: chat.approval ?? this.state.settings.approval,
-      instructions: this.instructionsFor(chat, bot, run),
-      // The bot's memory changes often; it is kept apart so a save doesn't reopen the session (desktop/memory.mjs).
-      context: this.memory.context(bot),
-      tools: [...this.sessionTools(bot, chat, run, task), ...this.mcpApps.tools(bot, chat, run, task, routed)],
+      // How long a provider that can choose keeps the prompt cache (Settings › General › Keep prompt cache longer).
+      cacheRetention: this.state.settings.longPromptCache === false ? "short" : "long",
+      // The same on every turn of the session; what changed since is told in the turn's message (tellSession).
+      instructions: prompt.instructions,
+      // The bot's memory, kept apart from the instructions, as the session began with it.
+      context: prompt.record.parts.memory,
+      tools,
       // Skills and MCP servers come from Settings and apply to every bot (desktop/integrations.mjs).
       skills: access.skills ? this.integrations.skillsFor(bot, { member: access.member }) : { directories: [], disabled: [] },
       mcpServers,
@@ -1691,6 +1757,83 @@ export class Workspace {
       if (projectFolder || chat.sessionFolder) chat.sessionFolder = projectFolder || undefined;
       this.save();
     }
+    return this.tellSession(session, chat, prompt, task);
+  }
+  /** A session event that says the session was compacted: its next turn begins from the current prompt (session-prompts.mjs). */
+  compacted(session, event) {
+    if (event?.type === "session.compaction_complete" && !event.agentId && session?.promptKey) this.sessionPrompts.stale(session.promptKey);
+  }
+  /**
+   * The system prompt a session has for this turn (desktop/session-prompts.mjs): the one it began
+   * with, unless it begins now. It begins now when it is new to its provider (a new chat, a
+   * restart, another provider), after a compaction, and when the bot's own instructions, its
+   * profile or the model changed. Returns { key, record, instructions, live, note }: `note` tells
+   * the session what changed in the live parts since it was last told, or is "".
+   */
+  sessionPrompt(chat, bot, provider, model) {
+    const key = provider.id + ":" + (chat.sessionId ?? chat.id);
+    const parts = this.instructionParts(chat, bot);
+    const basis = digest([
+      parts.fixed, provider.id, model?.model ?? "", model?.source ?? "",
+      // A space's panels are listed as the turn's people may see them: other people, another prompt.
+      chat.spaceId ? this.turnPeople(chat).people.toSorted() : null,
+    ]);
+    let record = this.sessionPrompts.get(key);
+    const begins = chat.temporary ? !record : !chat.established;
+    if (!record || begins || record.stale || record.basis !== basis)
+      record = this.sessionPrompts.set(key, { chatId: chat.id, botId: bot.id, basis, parts: parts.live, told: parts.live, tools: [], routes: {} }, { temporary: !!chat.temporary });
+    else this.sessionPrompts.used(key);
+    return { key, record, instructions: this.composeInstructions({ fixed: parts.fixed, live: record.parts }), live: parts.live, note: contextNote(record.told, parts.live) };
+  }
+  /**
+   * The session's tools for this turn, in the order and with the definitions it began with
+   * (session-prompts.mjs stableTools). `servers`: whether the turn may use MCP servers at all; when
+   * it may, a server tool that isn't here is one whose server didn't answer.
+   */
+  stableTools(prompt, current, servers = true) {
+    const { record } = prompt;
+    const prefixes = Object.entries(record.routes).filter(([, side]) => side === "botkins").map(([name]) => [proxyPrefix(name), name]);
+    const { tools, changed } = stableTools(record.tools, current, (name) => {
+      const server = servers && prefixes.find(([prefix]) => name.startsWith(prefix))?.[1];
+      return server
+        ? "The " + server + " server isn't answering right now, so its tools can't be used. Try again later."
+        : name + " isn't available in this turn.";
+    });
+    if (changed) this.sessionPrompts.save(prompt.key, record);
+    return tools;
+  }
+  /**
+   * Tells a session, with its first message of the turn, what it hasn't been told: the
+   * conversation so far when it begins from Botkins' transcript (a fork, a moved or restarted
+   * session), before the message, and what changed in its context, after it. Each is told once:
+   * it counts as told when the message was answered, and is told again when it wasn't.
+   */
+  tellSession(session, chat, prompt, task) {
+    const earlier = chat.forkContext || "";
+    const { note } = prompt;
+    // A compaction rewrites what the session holds, and may leave out what a note told it: the
+    // turn that sees one (executeTurn, memberTurn: compacted) has the next begin from the current prompt.
+    session.promptKey = prompt.key;
+    if ((!earlier && !note) || typeof session.send !== "function") return session;
+    const send = session.send.bind(session);
+    let first = true;
+    session.send = async (message, ...rest) => {
+      if (!first || typeof message?.prompt !== "string") return send(message, ...rest);
+      first = false;
+      const result = await send({ ...message, prompt: (earlier ? earlierConversation(earlier) + "\n\n" : "") + message.prompt + (note ? "\n\n" + note : "") }, ...rest);
+      // A turn stopped while its session started returns nothing, and sent nothing: it is told
+      // again with the next message. (One stopped after it was sent may hear it twice.)
+      if (task?.stopped && !result?.text) return result;
+      if (note) {
+        prompt.record.told = prompt.live;
+        this.sessionPrompts.save(prompt.key, prompt.record);
+      }
+      if (earlier && chat.forkContext === earlier) {
+        delete chat.forkContext;
+        this.save();
+      }
+      return result;
+    };
     return session;
   }
   /**
@@ -1811,7 +1954,24 @@ export class Workspace {
     }
     return target;
   }
-  async catalog(botId, chatId, fresh = false) {
+  /**
+   * The "/" menu of a chat: what its provider's session lists, and the script commands that are on
+   * (desktop/script-commands.mjs). A command or skill that the session has under the same name wins.
+   * `person` is who asks ("owner" or a member's id). The script commands are there when everyone in
+   * the chat may use skills: that person, and the member whose chat it is (a team role's "use" of skills).
+   */
+  async catalog(botId, chatId, fresh = false, person = "owner") {
+    const data = await this.inventory(botId, chatId, fresh);
+    const chat = chatId ? this.state.chats.find((c) => c.id === chatId) : null;
+    if (!Array.isArray(data?.choices)) return data;
+    const team = this.teamOf();
+    if (![person, chat?.createdBy].every((id) => !id || id === "owner" || turnAccess({ memberId: id }, team).skills)) return data;
+    const taken = commandNames(data.choices);
+    const scripts = this.integrations.scriptCommands().filter((c) => c.enabled && !c.unavailable && !taken.has(c.name)).map(scriptChoice);
+    return scripts.length ? { ...data, choices: [...data.choices, ...scripts] } : data;
+  }
+  /** The provider's own menu for a chat (the part of `catalog` that opens a session). */
+  async inventory(botId, chatId, fresh = false) {
     const bot = this.bot(botId);
     const chat = chatId
       ? this.state.chats.find((c) => c.id === chatId && c.botId === botId)
@@ -1822,7 +1982,9 @@ export class Workspace {
     if (!fresh && cached && cached.expires > Date.now()) return cached.data;
     const generation = this.catalogGeneration;
     const active = chatId && this.active.get(chatId);
-    if (active && !active.finishing) {
+    // A script command running has no session to ask: the bot's menu session answers (and the chat's lock is held until it ends).
+    const scripting = active?.script === true;
+    if (active && !active.finishing && !scripting) {
       const read = active.ready.then((s) =>
         s ? s.inventory() : Promise.reject(new Error("Chat stopped.")),
       );
@@ -1836,7 +1998,7 @@ export class Workspace {
     // A chat with a conversation lists its own session's menu. A new chat, or a bot with no chat
     // yet, uses the bot's menu session, so browsing "/" never starts a conversation.
     const target =
-      chat.established && chat.messages?.some((m) => m.role === "assistant") ? chat : this.menuTarget(bot, chatId ? chat : null);
+      chat.established && chat.messages?.some((m) => m.role === "assistant") && !scripting ? chat : this.menuTarget(bot, chatId ? chat : null);
     const data = await this.locked(target.id, async () => {
       const again = this.catalogs.get(key);
       if (!fresh && again && again.expires > Date.now()) return again.data;
@@ -2229,8 +2391,9 @@ export class Workspace {
       session = await this.openSession(view, bot, run, task);
       task.session = session;
       if (task.stopped) return "";
-      unsubscribe = session.on((event) => {
+      unsubscribe = this.listen(session, run, (event) => {
         const { type, data, agentId } = event;
+        this.compacted(session, event);
         if (!event.agentId && !event.data?.parentToolCallId) {
           if (event.type === "tool.execution_start") commitInterim(chat, run, task);
           if (event.type === "assistant.message" && !run.noOutput) {
@@ -2291,6 +2454,93 @@ export class Workspace {
       if (task.session === session) task.session = undefined;
     }
   }
+  /**
+   * The script command that a message asks for, as far as the message and the list of commands tell: { name, args },
+   * or null. Whether a command of the chat's provider has the same name is not known here (it takes the provider's
+   * menu): `runTypedScript` decides that before anything runs.
+   */
+  scriptCommandCandidate(prompt) {
+    const typed = matchScriptCommand(prompt);
+    if (!typed || RESERVED_COMMANDS.has(typed.name)) return null;
+    return this.integrations.scriptCommands().some((c) => c.name === typed.name && c.enabled) ? typed : null;
+  }
+  /**
+   * The script command that a message asks for or sets up: the one it is (`/name words`), or the one a schedule would run
+   * (`/every 1m /name words`, `/after 5m /name`), as { name, args, via? }. A program that sends such a message needs the person's yes.
+   */
+  scriptCommandIn(prompt) {
+    const direct = this.scriptCommandCandidate(prompt);
+    if (direct) return direct;
+    const scheduled = /^\/(every|after)\s+([\s\S]*)$/i.exec(String(prompt ?? "").trim());
+    if (!scheduled) return null;
+    const known = new Set(this.integrations.scriptCommands().map((c) => c.name));
+    for (const match of scheduled[2].matchAll(/(?:^|\s)\/([a-z0-9][a-z0-9-]{0,63})(?=\s|$)/gi)) {
+      const name = match[1].toLowerCase();
+      if (known.has(name) && !RESERVED_COMMANDS.has(name)) return { name, args: scheduled[2].slice(match.index + match[0].length).trim(), via: scheduled[1].toLowerCase() };
+    }
+    return null;
+  }
+  /**
+   * Whether the chat's provider has a command or skill of this name. The menu is read now when it is not at hand (a menu
+   * session answers: no chat session is opened and no model is called). Throws when the menu can't be read.
+   */
+  async providerOwns(chat, bot, name) {
+    return commandNames((await this.inventory(bot.id, chat.id)).choices).has(name);
+  }
+  /**
+   * A name that a script command is saved under must not be a command that any bot's provider has: that one wins in the
+   * menu and when typed, so the script could never run. A provider whose menu can't be read now is left out here; the
+   * check is made again when the command is typed.
+   */
+  async assertScriptName(name, original) {
+    const id = String(name ?? "").trim().replace(/^\//, "").toLowerCase();
+    if (!id || id === original) return;
+    const menus = await Promise.allSettled(this.state.bots.map((bot) => this.inventory(bot.id)));
+    menus.forEach((menu, at) => {
+      if (menu.status === "fulfilled" && commandNames(menu.value.choices).has(id)) throw new Error("/" + id + " is a command of " + this.state.bots[at].name + "'s model provider, which wins over a script command. Choose another name.");
+    });
+  }
+  /**
+   * Runs a typed script command as a turn with no model: busy while it runs, Stop ends it, its output is the reply.
+   * Returns false when the message is not one after all (the chat's provider has a command of that name, which wins),
+   * and the turn then goes on as any message does.
+   */
+  async runTypedScript(chat, bot, run, task, { name, args }) {
+    this.access.assertChat(chat, [bot]);
+    // A refusal is the run's reply, where its result goes (a routine's or a task's), else a plain command message. A scheduled run that is refused failed.
+    const scheduled = run.scheduleId != null || run.taskId != null;
+    const said = (text) => {
+      chat.messages.push(scheduled ? { role: "assistant", text, runId: run.id, time: Date.now() } : { role: "command", plain: true, time: Date.now(), runId: run.id, text });
+      if (scheduled) run.scriptFailure = text.slice(0, 300);
+      return true;
+    };
+    // Running one needs the right to use skills (a team role's "use"): the owner has it, and so does a member whose role has it. It runs as the
+    // computer's user either way. Both people's rights count when two are in a turn (accessForTurn).
+    if (!this.accessForTurn(chat, task).skills) { run.command = name; return said("Your team role can't use skills, so it can't run a script command."); }
+    const command = this.integrations.runnableScript(name);
+    if (!command) {
+      run.command = name;
+      const why = this.integrations.scriptCommands().find((c) => c.name === name)?.unavailable;
+      return said("/" + name + " can't run. " + (why ?? "Open Settings, Skills to look at it."));
+    }
+    // A command of the chat's provider with the same name wins. When its menu can't be read, nothing is guessed.
+    let owned;
+    try {
+      owned = await this.providerOwns(chat, bot, name);
+    } catch (error) {
+      if (task.stopped || this.closing) return true;
+      run.command = name;
+      return said("/" + name + " did not run: Botkins could not read this chat's commands to be sure that /" + name + " is not one of its model provider's (" + error.message + "). Try again.");
+    }
+    if (owned) return false;
+    if (task.stopped || this.closing) return true;
+    run.command = name;
+    if (run.recovery?.commandStarted || (task.recovering && !run.recovery)) throw new Error("Botkins restarted during this command. Check its result before running it again.");
+    (run.recovery ??= {}).commandStarted = true;
+    this.save();
+    await runScriptCommand(this, { chat, bot, run, task, command, args });
+    return true;
+  }
   async executeTurn(chat, bot, prompt, run, task) {
     let session, unsubscribe, proposals;
     const check = run.recovery?.proactiveCheck;
@@ -2301,6 +2551,20 @@ export class Workspace {
       if (check && !this.proactive.current(chat, check.person)) {
         proposals = { candidates: [] };
         return;
+      }
+      // A script command runs its script with no model, and no session is opened for it (desktop/script-commands.mjs).
+      if (task.typedScript) {
+        if (await this.runTypedScript(chat, bot, run, task, task.typedScript)) {
+          if (!task.stopped && !this.closing) {
+            // A routine's or a task's script that fails ends the run as failed, as a routine's script does.
+            if (run.scriptFailure) Object.assign(run, { status: "Needs you", ending: "failed", detail: run.scriptFailure });
+            else run.status = "Completed";
+            delete run.scriptFailure;
+          }
+          return;
+        }
+        // Its provider has a command of that name: the message goes the way every message goes.
+        Object.assign(task, { script: false, typedScript: undefined });
       }
       task.compactRequested = chat.main && !check && prompt.trim() === "/compact";
       session = await this.openSession(chat, bot, run, task);
@@ -2351,7 +2615,8 @@ export class Workspace {
         proposals ??= { candidates: [] };
         return;
       }
-      unsubscribe = session.on((event) => {
+      unsubscribe = this.listen(session, run, (event) => {
+        this.compacted(session, event);
         if (!event.agentId && !event.data?.parentToolCallId) {
           if (event.type === "tool.execution_start") {
             // Text that may still be a [SILENT] answer to a reaction is not kept as a message.
@@ -2397,6 +2662,7 @@ export class Workspace {
           this.save();
         }
         effect = await session.resolvePrompt(prompt, run, chat, this);
+        if (/^\/compact(?:\s|$)/i.test(prompt.trim()) && session.promptKey) this.sessionPrompts.stale(session.promptKey);
       }
       if (task.stopped) return;
       if (effect.mode) await session.setMode(effect.mode, { planModel: chat.planModel });
@@ -2590,6 +2856,92 @@ export class Workspace {
       // Messages sent while this turn ran go next, in order.
       if (this.queues.has(chat.id)) setImmediate(() => this.drain(chat.id));
     }
+  }
+  /**
+   * `session.on` for a turn's run: after each event, the run's `stoppable` marks are brought up to
+   * date. The end of an item whose stop is being tried (Workspace.stopHelper) is held back until
+   * it is known whether the stop worked.
+   */
+  listen(session, run, handler) {
+    const process = (event) => {
+      try {
+        handler(event);
+      } finally {
+        this.syncStoppable(run, session, event);
+      }
+    };
+    this.replays.set(run, process);
+    return session.on((event) => {
+      const ending = /^(subagent\.(completed|failed)|tool\.execution_complete)$/.test(event?.type ?? "");
+      const hold = ending && (this.stopping.get(run) ?? []).find((entry) => entry.ids.has(event.data?.toolCallId));
+      if (hold) hold.held.push(event);
+      else process(event);
+    });
+  }
+  /**
+   * Marks the helpers and background commands of a running turn that the session can stop alone
+   * (`stoppable`, "stop-helper-v1"), and clears the mark on one that ended or can't be stopped.
+   * Only a running helper or background command carries it.
+   */
+  syncStoppable(run, session, event) {
+    if (typeof session?.canStopHelper !== "function" || !/^(subagent\.|tool\.(execution_(start|complete)|backgrounded)|task\.)/.test(event?.type ?? "")) return;
+    const can = (item) => item.status === "Running" && !!session.canStopHelper(item.id);
+    let helpers = false;
+    for (const agent of run.agents ?? []) {
+      if (!!agent.stoppable === can(agent)) continue;
+      if (agent.stoppable) delete agent.stoppable;
+      else agent.stoppable = true;
+      helpers = true;
+    }
+    for (const step of run.steps ?? []) {
+      if (!step.background && !step.stoppable) continue;
+      if (!!step.stoppable === (!!step.background && can(step))) continue;
+      if (step.stoppable) delete step.stoppable;
+      else step.stoppable = true;
+      this.notify({ kind: "tool-step", runId: run.id, stepId: step.id });
+    }
+    if (helpers) this.notify();
+  }
+  /**
+   * Stops one helper or background command of the chat's turn, by its id, and leaves the turn
+   * running. The session does the stopping; this records that the person did.
+   */
+  async stopHelper(chatId, id) {
+    if (typeof id !== "string" || !id) throw new Error("Choose a helper or a command to stop.");
+    const task = this.active.get(chatId);
+    const run = task?.run;
+    if (!task || task.stopped || !run || run.status !== "Working") throw new Error("This chat isn't working on a turn right now.");
+    const helper = run.agents?.find((agent) => agent.id === id);
+    const step = run.steps?.find((item) => item.id === id && (helper || item.background));
+    if (!helper && !step) throw new Error("That isn't a helper or a background command of this turn.");
+    if ((helper ?? step).status !== "Running") throw new Error("That helper already finished.");
+    const session = task.session;
+    if (typeof session?.stopHelper !== "function" || !session.canStopHelper?.(id)) throw new Error("That can't be stopped on its own right now. Stop the whole turn instead.");
+    // While the stop is tried, the end of these items is held: if the harness reports the cancel as
+    // a failure, that is not how they ended; if the stop is refused because they ended, it is.
+    const items = [...(helper ? [helper] : []), ...(run.steps ?? []).filter((item) => item.id === id || (helper && item.agentId === id))].filter((item) => item.status === "Running");
+    const hold = { ids: new Set(items.map((item) => item.id)), held: [] };
+    const holds = this.stopping.get(run) ?? [];
+    if (holds.some((entry) => entry.ids.has(id))) throw new Error("That is being stopped already.");
+    this.stopping.set(run, [...holds, hold]);
+    const release = () => this.stopping.set(run, (this.stopping.get(run) ?? []).filter((entry) => entry !== hold));
+    try {
+      await session.stopHelper(id);
+    } catch (error) {
+      release();
+      // It was not stopped: what ended meanwhile ended as the harness said.
+      for (const event of hold.held) this.replays.get(run)?.(event);
+      throw error;
+    }
+    release();
+    const now = Date.now();
+    for (const item of items) {
+      delete item.stoppable;
+      if (item.status !== "Running") continue;
+      Object.assign(item, { status: "Stopped", finished: now, ...(item === helper && { detail: "Stopped by you" }) });
+    }
+    this.save();
+    this.notify();
   }
   async stop(chatId) {
     this.hostDispatch.stop(chatId);

@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from "react";
-import { Package, Search } from "lucide-react";
+import { Switch } from "glisse";
+import { Package, Search, Trash2 } from "lucide-react";
 import { useAsk } from "./Pages";
 import { shownText } from "../desktop/shown-text.mjs";
-import { Group, SwitchRow, errorText } from "./SettingsRows";
+import { Group, Row, errorText } from "./SettingsRows";
 import { teamCan } from "./teamAccess";
 import type { InstalledPiPackage, PiPackageListing, State } from "./types";
 
@@ -11,6 +12,7 @@ const api = window.botkins;
 export default function MarketPi({ state, refreshed }: { state: State; refreshed: number }) {
   const host = state.remote?.using;
   const supported = !host || host.capabilities.includes("pi-packages-v1");
+  const removable = !host || host.capabilities.includes("pi-packages-remove-v1");
   const [query, setQuery] = useState("");
   const [page, setPage] = useState(1);
   const [listing, setListing] = useState<{ packages: PiPackageListing[]; nextPage?: number }>();
@@ -95,19 +97,58 @@ export default function MarketPi({ state, refreshed }: { state: State; refreshed
     }
   }
 
+  async function remove(pkg: InstalledPiPackage) {
+    setBusy(pkg.name);
+    setError("");
+    try {
+      const ok = await dialogs.ask({
+        title: "Remove " + pkg.name + "@" + pkg.version + "?",
+        body:
+          "It stops loading in every Botkins chat using Pi or OMP, and its files are deleted from " +
+          shownText(host?.name || "this computer") +
+          ". You can install it again from the catalog.",
+        confirm: "Remove",
+        danger: true,
+      });
+      if (!ok || !alive.current) return;
+      await api["piPackages.remove"](pkg.name, pkg.version);
+      setRevision((n) => n + 1);
+    } catch (e) {
+      if (alive.current) setError(errorText(e));
+    } finally {
+      if (alive.current) setBusy("");
+    }
+  }
+
   if (!supported) return <p className="set-status">Update the app on your computer to manage Pi packages.</p>;
   return (
     <>
       <Group title="Installed in Pi" footer="Changes apply on the next turn in every Botkins chat using Pi or OMP.">
         {installed?.map((pkg) => (
-          <SwitchRow
-            key={pkg.name}
-            label={pkg.name}
-            help={pkg.version + " · " + (pkg.enabled ? "On" : "Off")}
-            checked={pkg.enabled}
-            disabled={!!busy || !teamCan(state, "plugins", "manage")}
-            onChange={() => void change(pkg.name, pkg)}
-          />
+          <Row key={pkg.name} label={pkg.name} help={pkg.version + " · " + (pkg.enabled ? "On" : "Off")}>
+            {(id, describedBy) => (
+              <>
+                <Switch
+                  id={id}
+                  aria-describedby={describedBy}
+                  checked={pkg.enabled}
+                  disabled={!!busy || !teamCan(state, "plugins", "manage")}
+                  onCheckedChange={() => void change(pkg.name, pkg)}
+                />
+                {removable && teamCan(state, "plugins", "uninstall") && (
+                  <button
+                    type="button"
+                    className="set-button danger"
+                    aria-label={"Remove " + pkg.name}
+                    disabled={!!busy}
+                    onClick={() => void remove(pkg)}
+                  >
+                    <Trash2 size={14} aria-hidden="true" /> {busy === pkg.name ? "Removing…" : "Remove"}
+                  </button>
+                )}
+              </>
+            )}
+          </Row>
         ))}
         {!installed?.length && (
           <p className="set-status">

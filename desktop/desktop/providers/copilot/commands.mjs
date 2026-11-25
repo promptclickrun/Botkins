@@ -195,7 +195,7 @@ export async function resolvePrompt(wrapper, prompt, run, chat, ws) {
     throw new Error("This Copilot command cannot be scheduled.");
   run.command = item.command;
   if (chat && ["every", "after"].includes(item.command))
-    return scheduledCommand(session, chat, item.command, args.trim());
+    return scheduledCommand(session, chat, item.command, args.trim(), run);
   if (item.command === "model") {
     const parts = args.trim().split(/\s+/).filter(Boolean);
     if (!parts.length)
@@ -401,7 +401,7 @@ export async function resolvePrompt(wrapper, prompt, run, chat, ws) {
 }
 
 // Copilot parses the CLI time expressions. Botkins owns the clock while individual SDK sessions disconnect between turns.
-async function scheduledCommand(session, chat, name, input) {
+async function scheduledCommand(session, chat, name, input, run) {
   const schedules = chat.schedules ?? [];
   if (!input || /^(list|status)$/i.test(input)) {
     return {
@@ -470,6 +470,9 @@ async function scheduledCommand(session, chat, name, input) {
       cron: entry.cron,
       timezone: entry.tz,
       recurring: entry.recurring,
+      // The person's own message made it, so it may run a script command when it is due (desktop/script-commands.mjs); a program's or a model's never.
+      // A routine's or a task's run also carries the mark (for its own prompt), but a schedule it sets up is the bot's, so it doesn't pass on.
+      ...(run?.allowScript === true && run.scheduleId == null && run.taskId == null && { allowScript: true }),
     });
     receipts.push(
       "#" +

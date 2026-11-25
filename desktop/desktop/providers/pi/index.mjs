@@ -15,13 +15,13 @@
 // The person's own Pi setup (~/.pi) is left alone: Pi runs with a folder of Botkins' own
 // (PI_CODING_AGENT_DIR). Only Botkins and explicitly enabled marketplace packages are loaded.
 import { PiPackages } from "./packages.mjs";
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
-import { ModelProvider, ProviderSession } from "../provider.mjs";
+import { ModelProvider, ProviderSession, usageData } from "../provider.mjs";
 import { cliEnv, findBinary, run, versionOf } from "../cli.mjs";
 import { buildInventory, resolvePrompt } from "../commands.mjs";
 import { SessionStore, serversWithTokens, transcriptContext, uuidFor } from "../sessions.mjs";
@@ -334,7 +334,7 @@ class PiSession extends ProviderSession {
     return {
       providers: (spec.inference?.providers ?? []).map(({ name, config }) => ({ name, config })),
       servers,
-      prompt: (spec.instructions ?? "") + (this.bridge && this.planTools().length ? "\n\n" + PLAN_INSTRUCTIONS + "\n\n" : "") + this.skills.instructions + (spec.context ?? "") + this.lost,
+      prompt: (spec.instructions ?? "") + (this.bridge && this.planTools().length ? "\n\n" + PLAN_INSTRUCTIONS + "\n\n" : "") + this.skills.instructions + (spec.context ?? ""),
     };
   }
   /** Pi's plan, the one tool Botkins adds to Pi itself. Pi has no plan of its own (OMP does), and a plan means nothing in a throwaway session. */
@@ -402,7 +402,10 @@ class PiSession extends ProviderSession {
         const files = (attachments ?? []).map((a) => "- " + a.path).join("\n");
         return prompt + (files ? "\n\nAttached:\n" + files : "");
       };
+      // A conversation the harness doesn't hold goes on from Botkins' transcript, told once in the
+      // first message (never in the system prompt, which stays the same on every turn).
       const text =
+        (this.lost ? this.lost + "\n\n" : "") +
         (this.mode === "plan" ? "Plan mode: do not change any file. Work out a plan, show it, and ask before carrying it out.\n\n" : "") +
         withFiles(message.prompt, message.attachments);
       this.emit("user.message", {});
@@ -436,11 +439,8 @@ class PiSession extends ProviderSession {
         this.interrupt();
         throw error;
       }
-      if (this.lost) {
-        // The harness has the conversation in its own session now.
-        this.lost = "";
-        await this.provider.write(live, await this.describe());
-      }
+      // The harness has the conversation in its own session now.
+      this.lost = "";
       const reply = turn.text.trim();
       if (!reply && turn.stopReason === "error") {
         const said = errorText(turn.error) || this.provider.name + " couldn't get an answer from the model.";
@@ -459,6 +459,9 @@ class PiSession extends ProviderSession {
   }
   /** One of Pi's events, as Botkins' (desktop/providers/provider.mjs). */
   event(event) {
+    // Pi compacted the conversation (by itself, near the end of the window): the workspace begins
+    // the session's next turn from its current prompt (desktop/session-prompts.mjs).
+    if (event.type === "compaction_end") this.emit("session.compaction_complete", {});
     const turn = this.turn;
     if (!turn) return;
     switch (event.type) {
@@ -501,7 +504,8 @@ class PiSession extends ProviderSession {
         turn.thinking = null;
         const usage = message.usage;
         if (usage) {
-          this.emit("assistant.usage", { inputTokens: usage.input ?? 0, outputTokens: usage.output ?? 0, cacheReadTokens: usage.cacheRead ?? 0, cacheWriteTokens: usage.cacheWrite ?? 0, model: this.model.model });
+          // pi-ai's `input` is the uncached input for every API it speaks (it takes the cached part out of OpenAI's).
+          this.emit("assistant.usage", usageData({ input: usage.input, output: usage.output, cacheRead: usage.cacheRead, cacheWrite: usage.cacheWrite, model: this.model.model }));
           const window = this.windowOf(this.model.model);
           const used = usage.contextTokens ?? (usage.input ?? 0) + (usage.cacheRead ?? 0) + (usage.cacheWrite ?? 0) + (usage.output ?? 0);
           if (window && used) this.emit("session.usage_info", { currentTokens: used, tokenLimit: window });
@@ -563,6 +567,9 @@ class PiSession extends ProviderSession {
     const { name, server } = toolIdentity(call);
     this.turn.calls?.set(call.toolCallId, { name, server });
     if (server === BRIDGE) return true;
+    // Pi keeps every server Botkins gave it registered, so its tool list stays the same; one this
+    // turn doesn't have (the person writing may not use it) does nothing. (A Pi package's own server isn't Botkins'.)
+    if (server && this.live?.given?.has(server) && !Object.hasOwn(this.spec.mcpServers ?? {}, server)) return false;
     const input = call.input && typeof call.input === "object" ? call.input : {};
     const path = typeof input.path === "string" ? input.path : typeof input.file_path === "string" ? input.file_path : "";
     let request;
@@ -767,7 +774,9 @@ export class PiProvider extends ModelProvider {
     const target = session.target();
     // Both harnesses take connections and package state at start; OMP also takes its isolated MCP config.
     const packages = spec.sourcesOnly ? [] : this.packages.activePaths();
-    const key = hash([spec.folder, described.providers, spec.temporary, packages, ...(this.runtime === OMP_ID ? [described.servers] : [])]);
+    // An hour's prompt cache where a connection can keep one (pi-ai's PI_CACHE_RETENTION, read as each request is made).
+    const retention = spec.cacheRetention === "long" ? "long" : "short";
+    const key = hash([spec.folder, described.providers, spec.temporary, packages, retention, ...(this.runtime === OMP_ID ? [described.servers] : [])]);
     let live = this.live.get(spec.sessionId);
     if (live && (live.key !== key || live.rpc.closed)) {
       this.live.delete(spec.sessionId);
@@ -789,6 +798,11 @@ export class PiProvider extends ModelProvider {
     const remembered = this.sessions.get(spec.sessionId)?.ref;
     const ref = this.runtime === OMP_ID ? remembered : remembered ?? piSessionId(spec.sessionId);
     const dir = join(this.dataDir, "run");
+    // Files left by processes of an earlier run of Botkins (they hold session secrets) go first.
+    if (!this.runCleared) {
+      this.runCleared = true;
+      rmSync(dir, { recursive: true, force: true });
+    }
     mkdirSync(dir, { recursive: true, mode: 0o700 });
     const agentDir = this.agentDir(spec);
     const launchDir = this.runtime === OMP_ID ? join(this.dataDir, "launch", hash(spec.sessionId).slice(0, 24)) : spec.folder;
@@ -796,7 +810,8 @@ export class PiProvider extends ModelProvider {
     live = {
       ref,
       key,
-      file: join(dir, hash(spec.sessionId).slice(0, 24) + ".json"),
+      // A file of this process's own: one let go a moment ago may still be exiting, and removes its own.
+      file: join(dir, hash(spec.sessionId).slice(0, 24) + "-" + randomBytes(4).toString("hex") + ".json"),
       config: join(agentDir, "botkins.yml"),
       agentDir,
       session,
@@ -818,6 +833,8 @@ export class PiProvider extends ModelProvider {
       PI_SKIP_VERSION_CHECK: "1",
       PI_TELEMETRY: "0",
       PI_OFFLINE: "1",
+      // A connection that can't keep a longer cache says so in its models' compat (desktop/harness/index.mjs).
+      PI_CACHE_RETENTION: retention === "long" ? "long" : undefined,
       [this.program.sessionEnv]: live.file,
     }, this.baseEnv);
     const start = launcher(file, args);
@@ -827,6 +844,8 @@ export class PiProvider extends ModelProvider {
     });
     live.rpc.exited.then(() => {
       if (this.live.get(spec.sessionId) === live) this.live.delete(spec.sessionId);
+      // Its own file only: a process let go a moment ago can exit after the next turn's process
+      // started, and that one's file must stay (without it Pi starts with no connections: "Model … not found").
       rmSync(live.file, { force: true });
     });
     this.live.set(spec.sessionId, live);
@@ -849,6 +868,8 @@ export class PiProvider extends ModelProvider {
   }
   /** Writes the files the extension and OMP read, each containing session secrets and user-only. */
   async write(live, described) {
+    // Every server Botkins gave this process (PiSession.permission).
+    live.given = new Set([...(live.given ?? []), ...Object.keys(described.servers ?? {})]);
     mkdirSync(live.agentDir, { recursive: true, mode: 0o700 });
     writeFileSync(live.file, JSON.stringify(described), { mode: 0o600 });
     if (this.runtime === OMP_ID) {

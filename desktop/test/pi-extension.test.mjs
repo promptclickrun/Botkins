@@ -39,3 +39,29 @@ test("the extension sends its own prompt on every run, with no bot instructions 
   const bare = await handlers.before_agent_start({ systemPrompt: PI });
   assert.ok(bare && !bare.systemPrompt.includes("<docs>"), "the section goes even when the bot has no instructions");
 });
+
+test("a server a turn leaves out stays registered, and only a changed server is registered again", async () => {
+  // Taking a server's tools away for a turn and bringing them back would change the tool list the
+  // model is sent (and its order), and with it everything a model caches after the tools.
+  const crm = { url: "https://crm.example/mcp", headers: { Authorization: "Bearer one" }, exposure: "direct" };
+  const docs = { command: "docs-server", args: [], exposure: "direct" };
+  writeFileSync(file, JSON.stringify({ providers: [], servers: { crm, docs }, prompt: "You are Testy." }));
+  const handlers = {};
+  const registered = [];
+  const unregistered = [];
+  botkins({ registerProvider() {}, registerMcpServer: (name, config) => registered.push([name, config.headers?.Authorization ?? null]), unregisterMcpServer: (name) => unregistered.push(name), on: (name, handler) => (handlers[name] = handler) });
+  assert.deepEqual(registered, [["crm", "Bearer one"], ["docs", null]]);
+  // A turn without docs (a member who may not use it): nothing is taken away.
+  writeFileSync(file, JSON.stringify({ providers: [], servers: { crm }, prompt: "You are Testy." }));
+  await handlers.before_agent_start({ systemPrompt: PI });
+  // docs is back, unchanged: nothing is registered again.
+  writeFileSync(file, JSON.stringify({ providers: [], servers: { crm, docs }, prompt: "You are Testy." }));
+  await handlers.before_agent_start({ systemPrompt: PI });
+  assert.deepEqual(unregistered, []);
+  assert.equal(registered.length, 2);
+  // A renewed sign-in token changes crm: it alone is registered again.
+  writeFileSync(file, JSON.stringify({ providers: [], servers: { crm: { ...crm, headers: { Authorization: "Bearer two" } }, docs }, prompt: "You are Testy." }));
+  await handlers.before_agent_start({ systemPrompt: PI });
+  assert.deepEqual(registered.slice(2), [["crm", "Bearer two"]]);
+  writeFileSync(file, JSON.stringify({ providers: [], servers: {}, prompt: "You are Testy." }));
+});

@@ -9,7 +9,11 @@ export const REASONING_LINES = 3;
 
 export type IslandLine =
   | { kind: "step"; key: string; step: Step }
-  | { kind: "thought"; key: string; heading: string; snippet: string; text: string };
+  | { kind: "thought"; key: string; heading: string; snippet: string; text: string }
+  | { kind: "update"; key: string; text: string };
+
+/** What the bot wrote before it moved on, for a finished turn's receipt. */
+export type IslandUpdate = { key: string; at: number; text: string };
 
 /** "12s", "1m 51s" or "1h 4m". */
 export function duration(ms: number) {
@@ -52,7 +56,7 @@ export function thoughtParts(text: string): { heading: string; snippet: string }
  */
 export function islandLines(
   run: { steps?: Step[]; reasoning?: Reasoning[] },
-  { thoughts, keep = () => true }: { thoughts: boolean; keep?: (step: Step) => boolean },
+  { thoughts, keep = () => true, updates = [] }: { thoughts: boolean; keep?: (step: Step) => boolean; updates?: IslandUpdate[] },
 ): IslandLine[] {
   const timed: { at: number; order: number; line: IslandLine }[] = [];
   if (thoughts) {
@@ -61,9 +65,14 @@ export function islandLines(
       timed.push({ at: reasoning.started, order: index, line: { kind: "thought", key: "thought-" + reasoning.id, text: reasoning.text, ...thoughtParts(reasoning.text) } });
     });
   }
+  // A finished turn's updates, where they came. One that came with a step reads first, as in the chat.
   const offset = timed.length;
+  updates.forEach((update, index) => {
+    if (update.text.trim()) timed.push({ at: update.at, order: offset + index, line: { kind: "update", key: "update-" + update.key, text: update.text.trim() } });
+  });
+  const stepsFrom = offset + updates.length;
   (run.steps ?? []).forEach((step, index) => {
-    if (keep(step)) timed.push({ at: step.started, order: offset + index, line: { kind: "step", key: "step-" + step.id, step } });
+    if (keep(step)) timed.push({ at: step.started, order: stepsFrom + index, line: { kind: "step", key: "step-" + step.id, step } });
   });
   // A thought and a step that start together: the thought led to the step.
   return timed.sort((a, b) => a.at - b.at || a.order - b.order).map((item) => item.line);

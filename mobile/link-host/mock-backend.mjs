@@ -290,6 +290,45 @@ export function isAvatarImage(image) {
   return !!match && match[1].length <= AVATAR_MAX_BASE64;
 }
 
+/** The demo's turn with a crew (chat-crew): see the chat's note in `seed`. */
+function crewRun(t) {
+  const start = t - 4 * MIN;
+  const s = (seconds) => start + seconds * 1000;
+  const step = (id, seconds, took, name, label, more = {}) => ({ id, name, label, status: "Done", started: s(seconds), finished: s(seconds + took), ...more });
+  const searcher = "task-searcher";
+  const reader = "task-reader";
+  return {
+    id: "run-crew", chatId: "chat-crew", title: "Why do coupons double-discount at checkout?", time: start, status: "Completed", detail: "",
+    finished: s(134), summary: "Worked for 2m 14s · 14 steps",
+    usage: { input: 18_400, output: 2_100, model: "claude-fable-5-2" },
+    reasoning: [
+      { id: "think-1", text: "**Finding where coupons apply**\nThe checkout route calls applyCoupon before tax. Read it first, and let helpers look at the rest in parallel.", started: s(2), finished: s(6) },
+      { id: "think-2", text: "**Why the test fails**\nThe discount runs twice when the cart has a subscription item. The test run should show where.", started: s(41), finished: s(44) },
+      { id: "think-3", text: "**Fixing and checking**\nApply the coupon once, in coupons.ts, then rerun the tests.", started: s(92), finished: s(95) },
+    ],
+    steps: [
+      step("crew-read-1", 6, 1, "view", "Read checkout.ts", { input: JSON.stringify({ path: "src/checkout.ts" }) }),
+      step(searcher, 8, 60, "task", "Find where discountTotal changes", { input: JSON.stringify({ description: "Find where discountTotal changes", prompt: "Find every place discountTotal is computed or changed. Report the file and line, and whether it runs per item or per cart." }), output: "Two places so far: cart.ts:88 (per cart) and subscription.ts:142 (per item).", status: "Running", finished: undefined, stoppable: true }),
+      step(reader, 9, 21, "task", "Read Stripe's coupon docs", { input: JSON.stringify({ description: "Read Stripe's coupon docs", prompt: "Read Stripe's docs on coupons and say whether a coupon applies once per invoice or per line item." }), output: "Stripe applies a coupon once per invoice, not per line item." }),
+      { id: "crew-dev", name: "bash", label: "npm run dev", status: "Running", started: s(12), background: true, stoppable: true, input: JSON.stringify({ command: "npm run dev", description: "Start the dev server" }), progress: "> shop@2.4.0 dev\n> vite --port 3000\n\n  VITE v6.2.1  ready in 412 ms\n\n  ➜  Local:   http://localhost:3000/\n10:42:07 hmr update /src/coupons.ts\n10:42:31 hmr update /src/checkout.ts\n10:43:02 GET /api/cart 500\n10:43:05 GET /api/cart 200" },
+      step("crew-s1", 10, 3, "grep", "Searched for discountTotal", { agentId: searcher, input: JSON.stringify({ pattern: "discountTotal" }), output: "6 hits" }),
+      step("crew-s2", 14, 3, "view", "Read cart.ts", { agentId: searcher, input: JSON.stringify({ path: "src/cart.ts" }) }),
+      step("crew-s3", 18, 2, "view", "Read coupons.ts", { agentId: searcher, input: JSON.stringify({ path: "src/coupons.ts" }) }),
+      { id: "crew-s4", name: "view", label: "Read subscription.ts", status: "Running", started: s(22), agentId: searcher, input: JSON.stringify({ path: "src/subscription.ts" }) },
+      step("crew-r1", 11, 6, "web_fetch", "Read stripe.com coupons", { agentId: reader, input: JSON.stringify({ url: "https://stripe.com/docs/billing/subscriptions/coupons" }) }),
+      step("crew-r2", 18, 5, "web_search", "Searched the web for coupon proration", { agentId: reader, input: JSON.stringify({ query: "stripe coupon proration" }) }),
+      step("crew-test-1", 45, 6, "bash", "npm test -- checkout", { status: "Failed", input: JSON.stringify({ command: "npm test -- checkout" }), output: "✓ applies a percent coupon\n✓ applies a fixed coupon\n✗ applies a coupon once for subscriptions\n  expected 18.00, received 16.20\n\nTests: 1 failed, 47 passed, 48 total" }),
+      step("crew-read-2", 60, 2, "view", "Read subscription.ts", { input: JSON.stringify({ path: "src/subscription.ts" }) }),
+      step("crew-edit-1", 96, 3, "edit", "Edited coupons.ts", { input: JSON.stringify({ path: "src/coupons.ts", old_string: "total = applyCoupon(total, cart)", new_string: "if (!cart.couponApplied) total = applyCoupon(total, cart)" }) }),
+      step("crew-test-2", 110, 7, "bash", "npm test -- checkout", { input: JSON.stringify({ command: "npm test -- checkout" }), output: "Tests: 48 passed, 48 total" }),
+    ],
+    agents: [
+      { id: searcher, name: "Code searcher", description: "Find where discountTotal changes", status: "Running", started: s(8), prompt: "Find every place discountTotal is computed or changed. Report the file and line, and whether it runs per item or per cart.", intent: "Reading subscription.ts", stoppable: true },
+      { id: reader, name: "Docs reader", description: "Read Stripe's coupon docs", status: "Done", started: s(9), finished: s(30), prompt: "Read Stripe's docs on coupons and say whether a coupon applies once per invoice or per line item.", result: "Stripe applies a coupon once per invoice, not per line item." },
+    ],
+  };
+}
+
 export function seed() {
   const t = now();
   const bots = [
@@ -344,6 +383,17 @@ export function seed() {
         message("assistant", "Here's a draft:\n\n> Botkins is live. Your bots, on every device, from **$10 a seat**. Thanks to @Ben for the numbers.\n\n@Ana, does this read right to you? Nobody named @Zoe is in this chat, so that stays plain.", 30, { runId: "run-team-3" }),
       ],
     },
+    // A turn with a crew ("stop-helper-v1"): two helpers (one still at work, one back with its
+    // answer) and a dev server left running in the background, with thinking and updates between.
+    {
+      id: "chat-crew", botId: "bot-patch", title: "Coupons at checkout", time: t - 2 * MIN,
+      messages: [
+        message("user", "Why do coupons double-discount at checkout?", 4, { runId: "run-crew" }),
+        { role: "assistant", text: "I'll split this up: one helper searches the code, one reads Stripe's docs. I'll start the dev server too.", time: t - 4 * MIN + 9_000, runId: "run-crew", interim: true },
+        { role: "assistant", text: "Found it: the coupon runs twice for subscription carts. Fixing that now.", time: t - 4 * MIN + 70_000, runId: "run-crew", interim: true },
+        message("assistant", "Fixed: coupons now apply once, even for subscription carts. All 48 checkout tests pass.\n\nThe dev server is still running at http://localhost:3000 if you want to try it.", 2, { runId: "run-crew" }),
+      ],
+    },
     // The refreshes of the Pipeline panel, which its Manage menu opens as "Open refresh history".
     { id: "chat-refresh-pipeline", botId: "bot-tally", title: "Pipeline · Refreshes", panelId: "panel-pipeline", time: t - 40 * MIN, messages: [message("assistant", "Refreshed the pipeline: 14 leads, 9 demos, 6 trials, 3 won.", 40)] },
     { id: "chat-blog", botId: "bot-quill", title: "Blog post intro", time: t - 3 * 24 * HOUR, messages: [message("user", "Tighten this intro for me.", 3 * 24 * 60 + 2, { runId: "run-blog" }), message("assistant", "Here's a shorter version that leads with the result.", 3 * 24 * 60, { runId: "run-blog" })] },
@@ -374,6 +424,7 @@ export function seed() {
     run("run-team-3", "chat-team", "Keep it under 200 characters", 34, { summary: "Worked for 6s", steps: [] }),
     run("run-blog", "chat-blog", "Tighten this intro", 3 * 24 * 60 + 2),
     run("run-brief", "chat-routine-brief", "Morning brief", 5 * 60, { trigger: "scheduled", scheduleId: 1 }),
+    crewRun(t),
   ];
   return {
     bots,
@@ -444,6 +495,7 @@ export function seed() {
       autoSummarize: 10,
       proactive: { enabled: true },
       harness: "copilot",
+      longPromptCache: true,
       providers: { copilot: { enabled: true }, codex: { enabled: true }, claude: { enabled: true }, opencode: { enabled: false }, openrouter: { enabled: false }, foundry: { enabled: false }, "openai-api": { enabled: false }, grok: { enabled: false } },
     },
   };
@@ -685,6 +737,8 @@ class MockWiki {
   }
 }
 
+// Names that a script command can't take in the demo (the computer has the full list: desktop/script-commands.mjs).
+const DEMO_RESERVED = new Set(["help", "model", "models", "compact", "btw", "ask", "new", "clear", "init", "review", "plan"]);
 const text = (value, limit, what) => {
   const out = String(value ?? "").trim();
   if (!out) throw new Error("Enter a " + what + ".");
@@ -1436,7 +1490,7 @@ export class MockBackend {
     // "files-v1": a file out and in as text, without a dialog. "folders-v1": the folder browser.
     // "artifacts-v1": what the bots made or were given, from an index the app keeps (here: made up).
     this.capabilities = ["main-chat-v1", "message-reactions-v1", "client-message-id-v1", "voice-turns-v1", "voice-history-v1", "quiet-replies-v1", "routine-delivery-v1", ...(process.env.BOTKINS_DEV_NO_OUTPUT === "off" ? [] : ["routine-no-output-v1"]), "routine-scripts-v1", "routine-models-v1", "routine-silent-v1", "routine-notify-targets-v1", "proactive-agent-v2", "proactive-learning-v1", "proactive-team-v1", "models-v2", "fast-mode-v1", "side-pane-v1", "files-v1", "folders-v1", "project-artifacts-v1", "artifacts-v1", "secure-input-v1", "chat-title-regeneration-v1", ...(process.env.BOTKINS_DEV_USAGE === "off" ? [] : ["provider-usage-v1"])];
-    this.capabilities.push("project-folders-v1", "project-mode-v1", "project-clone-v1", "mark-chats-read-v1");
+    this.capabilities.push("project-folders-v1", "project-mode-v1", "project-clone-v1", "mark-chats-read-v1", "stop-helper-v1");
     if (this.timeline) this.capabilities.push("turn-timeline-v1");
     // "bot-voice-v1": a bot may have a voice of its own. BOTKINS_DEV_BOT_VOICE=off is an older computer.
     this.botVoice = process.env.BOTKINS_DEV_BOT_VOICE !== "off";
@@ -1468,7 +1522,7 @@ export class MockBackend {
     // "agent-templates-v1" (docs/agent-templates.md): made-up templates. Left out with BOTKINS_DEV_AGENTS=off.
     if (process.env.BOTKINS_DEV_AGENTS !== "off") this.capabilities.push("agent-templates-v1");
     // "plugins-v1" (docs/plugins.md): made-up catalogs and installs. One plugin starts installed.
-    this.capabilities.push("pi-packages-v1", "skill-upload-v1", "skills-catalog-v1", "skills-featured-v1", "mcp-catalog-v1");
+    this.capabilities.push("pi-packages-v1", "pi-packages-remove-v1", "skill-upload-v1", "skills-catalog-v1", "skills-featured-v1", "script-commands-v1", "mcp-catalog-v1");
     // Each person's own picture ("people-avatars-v1"): `setMyAvatar`, kept on the team's people.
     this.capabilities.push("people-avatars-v1");
     this.catalogToken = "";
@@ -1528,6 +1582,10 @@ export class MockBackend {
     return { app: "botkins", version: this.updates?.current ?? "0.8.0-demo", platform: process.platform };
   }
   snapshot() {
+    // The script commands, by name, where the link's team rule reads them (state.skills.scripts, as the computer keeps them with their hashes).
+    const scripts = Object.fromEntries(this.skillList.filter((skill) => skill.command === "script").map((skill) => [skill.name, "demo"]));
+    if (Object.keys(scripts).length) this.state.skills = { ...this.state.skills, scripts };
+    else if (this.state.skills?.scripts) { const { scripts: _gone, ...rest } = this.state.skills; this.state.skills = rest; }
     // The installed plugins as a phone sees them: a secret setting says only that it is set.
     if (this.pluginsOn) this.state.plugins = this.plugins.installed.map((record) => this.pluginView(record));
     // Each space with what the link needs to count for a person: its panels and open cards (docs/spaces.md).
@@ -1950,7 +2008,7 @@ export class MockBackend {
       if (!agentId) this.state.intents[id] = label;
       this.changed();
       await this.sleep(ms);
-      if (!live()) return entry;
+      if (!live() || entry.status === "Stopped") return entry;
       Object.assign(entry, { status: "Done", finished: now(), ...(output && { output }) });
       this.changed();
       return entry;
@@ -1961,15 +2019,18 @@ export class MockBackend {
       const helperId = "task-" + randomUUID().slice(0, 8);
       const task = { id: helperId, name: "task", label: description, status: "Running", started: now(), input: JSON.stringify({ description, prompt: asked }, null, 2) };
       run.steps.push(task);
-      const agent = { id: helperId, name, description, status: "Running", started: now(), ...(timeline && { prompt: asked, intent }) };
+      const agent = { id: helperId, name, description, status: "Running", started: now(), ...(timeline && { prompt: asked, intent, stoppable: true }) };
       (run.agents ??= []).push(agent);
       this.changed();
       return (async () => {
         for (const [tool, label, input, ms, output] of work) {
-          if (!live()) break;
+          if (!live() || agent.status === "Stopped") break;
           await step(tool, label, input, ms, output, helperId);
         }
+        // Stopped on its own (stopHelper): it already says so.
+        if (agent.status === "Stopped") return this.changed();
         const finished = now();
+        delete agent.stoppable;
         if (!live()) Object.assign(agent, { status: "Failed", detail: "Stopped with the reply", finished });
         else {
           Object.assign(agent, { status: "Done", finished, ...(timeline && { result }) });
@@ -2340,6 +2401,7 @@ export class MockBackend {
     setPreferences(patch) {
       const { appearance, ...rest } = patch ?? {};
       if ("harness" in rest && !["copilot", "provider", "pi", "omp"].includes(rest.harness)) throw new Error("Choose a harness");
+      if ("longPromptCache" in rest && typeof rest.longPromptCache !== "boolean") throw new Error("Choose on or off");
       if ("autoSummarize" in rest && !(rest.autoSummarize === 0 || (Number.isInteger(rest.autoSummarize) && rest.autoSummarize >= 5 && rest.autoSummarize <= 30))) throw new Error("Choose off, or every 5 to 30 turns.");
       if ("showThinking" in rest && typeof rest.showThinking !== "boolean") throw new Error("Choose whether to show thinking");
       if ("foldThinking" in rest && typeof rest.foldThinking !== "boolean") throw new Error("Choose a thinking display preference");
@@ -2730,6 +2792,33 @@ export class MockBackend {
       }
       this.turn(chat, run, prompt).catch((error) => console.error(error));
     },
+    // One helper or background command of the chat's turn ("stop-helper-v1"): a helper's id is the
+    // id of the step that started it. It ends Stopped and can't be stopped again.
+    stopHelper(chatId, id) {
+      if (typeof id !== "string" || !id) throw new Error("Say which helper or command to stop.");
+      const run = this.state.runs.find((one) => one.chatId === chatId && (one.agents?.some((agent) => agent.id === id) || one.steps?.some((step) => step.id === id)));
+      if (!run) throw new Error("That helper isn't in this chat.");
+      const ended = now();
+      const agent = run.agents?.find((one) => one.id === id);
+      if (agent && agent.status === "Running") {
+        Object.assign(agent, { status: "Stopped", finished: ended });
+        delete agent.stoppable;
+        delete agent.intent;
+      }
+      // The step that started the helper, or the background command itself.
+      for (const step of run.steps ?? []) {
+        if (step.id !== id || step.status !== "Running") continue;
+        Object.assign(step, { status: "Stopped", finished: ended });
+        delete step.stoppable;
+      }
+      // The helper's own steps still under way end with it.
+      if (agent)
+        for (const step of run.steps ?? []) {
+          if (step.agentId !== id || step.status !== "Running") continue;
+          Object.assign(step, { status: "Stopped", finished: ended });
+        }
+      this.changed();
+    },
     stop(id) {
       const turn = this.turns.get(id);
       if (turn) turn.stopped = true;
@@ -2771,17 +2860,21 @@ export class MockBackend {
         bots: this.state.bots.slice(0, 3).map((b) => ({ id: b.id, name: b.name, hint: b.role })),
       };
     },
-    catalog: () => ({
+    catalog() {
+      return {
       choices: [
         { name: "weekly-review", kind: "Skill", command: "/weekly-review", source: "Botkins", description: "Run a weekly review: wins, misses and next steps." },
         { name: "meeting-notes", kind: "Skill", command: "/meeting-notes", source: "Botkins", description: "Turn a transcript into decisions and action items." },
         { name: "compact", kind: "Command", command: "/compact", source: "Botkins", description: "Summarize this chat so far to free up room." },
         { name: "btw", kind: "Command", aliases: ["ask"], command: "/btw", hint: "<question>", duringTurn: true, source: "Botkins", description: "Ask a side question about this chat without adding it to the conversation." },
         { name: "model", kind: "Command", command: "/model", source: "Botkins", description: "Choose the model for this chat.", hint: "[name]", options: [{ name: "auto", description: "Let the app choose" }, { name: "gpt-5.5", description: "GPT-5.5" }] },
+        // The script commands that are on, as the computer lists them (source "Script").
+        ...this.skillList.filter((skill) => skill.command === "script" && !this.state.skills.disabled.includes(skill.name)).map((skill) => ({ name: skill.name, kind: "Command", command: "/" + skill.name, source: "Script", hint: "[arguments]", description: skill.description })),
       ],
       servers: [{ name: "linear", status: "connected" }, { name: "filesystem", status: "connected" }],
       plugins: [],
-    }),
+      };
+    },
     linkPreview: () => null,
     // Wiki. Every change bumps state.wiki.revision.
     wikiTree() {
@@ -3297,7 +3390,8 @@ export class MockBackend {
       const off = new Set(this.state.skills.disabled);
       const { folders, plugins } = this.state.skills;
       return {
-        skills: this.skillList.map(({ instructions: _text, ...skill }) => ({ ...skill, enabled: !off.has(skill.name) })),
+        // A script command's script is read only with `skills.readScript`.
+        skills: this.skillList.map(({ instructions: _text, script: _script, ...skill }) => ({ ...skill, enabled: !off.has(skill.name) })),
         folders: folders.map((folder) => ({ ...folder, missing: false, skills: this.skillList.filter((skill) => skill.folderId === folder.id).length })),
         plugins: plugins.map((plugin) => ({ ...plugin, missing: false })),
       };
@@ -3309,6 +3403,7 @@ export class MockBackend {
     },
     saveSkill({ name, description, instructions, original }) {
       const clean = text(name, 64, "name").toLowerCase().replace(/[^a-z0-9-]+/g, "-");
+      if (this.skillList.find((s) => s.name === original)?.command === "script") throw new Error("This is a script command. Change it as one: its script is shown for a decision.");
       const existing = this.skillList.find((s) => s.name === (original ?? clean));
       if (existing) Object.assign(existing, { name: clean, description, instructions });
       else this.skillList.unshift({ name: clean, description, instructions, path: "/skills/" + clean, origin: "botkins", enabled: true, editable: true });
@@ -3316,6 +3411,27 @@ export class MockBackend {
     },
     removeSkill(name) {
       this.skillList = this.skillList.filter((s) => s.name !== name);
+    },
+    // A script command ("script-commands-v1"): the owner's alone. The demo keeps it in memory and never runs it.
+    "skills.saveScript"({ name, description, script, original }) {
+      const clean = text(name, 64, "name").toLowerCase().replace(/^\//, "");
+      if (!/^[a-z0-9][a-z0-9-]{0,63}$/.test(clean)) throw new Error("Name the command with lowercase letters, numbers and dashes.");
+      if (DEMO_RESERVED.has(clean)) throw new Error("/" + clean + " is a command that Botkins or a model provider already has. Choose another name.");
+      const about = text(description, 600, "description");
+      if (typeof script !== "string" || !script.trim()) throw new Error("Enter the script.");
+      if (script.length > 20000) throw new Error("A script can have up to 20,000 characters.");
+      const before = this.skillList.find((s) => s.name === original);
+      if (original && before?.command !== "script") throw new Error("This isn't a script command. Change it as a skill.");
+      if (clean !== original && this.skillList.some((s) => s.name === clean)) throw new Error("A skill named " + clean + " already exists.");
+      const item = { name: clean, description: about, instructions: "", script, path: "/skills/" + clean, origin: "botkins", enabled: true, editable: true, command: "script" };
+      if (before) Object.assign(before, item);
+      else this.skillList.unshift(item);
+      return clean;
+    },
+    "skills.readScript"(name) {
+      const skill = this.skillList.find((s) => s.name === name && s.command === "script");
+      if (!skill) throw new Error("This isn't a script command that Botkins keeps.");
+      return { name: skill.name, description: skill.description, script: skill.script };
     },
     setSkillEnabled(name, enabled) {
       const off = new Set(this.state.skills.disabled);
@@ -3786,6 +3902,10 @@ export class MockBackend {
       if (pkg?.version !== version) throw new Error("That version isn't installed.");
       this.piPackages.set(name, { name, version, enabled });
       return this.piPackages.get(name);
+    },
+    "piPackages.remove"(name, version) {
+      if (this.piPackages.get(name)?.version !== version) throw new Error("That package version is no longer installed.");
+      this.piPackages.delete(name);
     },
     // Agent templates ("agent-templates-v1", docs/agent-templates.md).
     "agents.browse"({ query, category, marketplace } = {}) {

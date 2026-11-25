@@ -43,8 +43,6 @@ import type { WindowState } from "./hotState";
 import type { ChatFiles, FilePreview } from "./ChatFileLink";
 import {
   HelperChip,
-  HelperDrawer,
-  ActivitySections,
   InterimUpdate,
   LiveLead,
   ReasoningUpdate,
@@ -57,16 +55,19 @@ import {
   duration,
 } from "./ChatActivity";
 import { ActivityIsland, IslandReceipt } from "./ActivityIsland";
+import { ChapterSummary, CrewCard, canStopHelpers, crewCardProps } from "./ActivityInspector";
+import { crewOf, storyChapters, storySteps, type StoryUpdate } from "./activityStory";
 import { QuoteContext } from "./Composer";
 import { MentionChips } from "./MentionMenu";
 import { TeamRail } from "./TeamRail";
 import RequestPanel from "./RequestPanel";
 import { LinkPreviewCard, useReadAloud } from "./Extras";
-import { liveTurnDisplay } from "./liveDisplay";
+import { liveTurnDisplay, updateInChat } from "./liveDisplay";
+import type { IslandUpdate } from "./island";
 import { clearReadingError, readAloud, useReading } from "./voice";
 import ContextDetails from "./ContextDetails";
 import { BotAvatar, activityLabel, botActivity, chatActivity, useOutcome } from "./Avatar";
-import SidePane, { paneAction, useNarrow, usePaneAsk } from "./SidePane";
+import SidePane, { paneAction, useNarrow, usePaneAsk, type Inspect } from "./SidePane";
 import { chatDefault, ModelBadge, modelLabel, useDefaultProvider } from "./ModelPicker";
 import { useModelCatalog } from "./providers";
 import ProjectChanges, { ProjectPicker, modeLabels } from "./ProjectChanges";
@@ -76,7 +77,7 @@ import { PeopleDialog } from "./ChatPeople";
 import { authorName, chatPeopleView, chatPersons, formatTypingLabel, viewerOf } from "./peopleView";
 import { authorOf, messageSide, personColor, startsPersonRun } from "./messageSides";
 import { PersonBadge, useMentionDirectory, type ChatPerson } from "./PersonBadge";
-import type { Bot, Chat, ChatMode, Message, State } from "./types";
+import type { Bot, Chat, ChatMode, Message, Run, State } from "./types";
 import { closed, sessionTodos, TRANSFER_TODOS } from "../desktop/link/session-todos";
 import { CONTINUE_OPEN_STEPS, keptLine, openLine } from "./keep";
 import { orderedRunEvents, type RunTimelineEvent } from "./chatTimeline";
@@ -254,7 +255,7 @@ function ChatViewBody({
   const readingBeginning = useRef(false);
   const [away, setAway] = useState(false);
   const [quotes, setQuotes] = useState<Record<string, string>>({});
-  const [drawer, setDrawer] = useState<"" | "tasks" | "helpers">("");
+  const [drawer, setDrawer] = useState<"" | "tasks">("");
   const reactionDialog = useAsk();
   const screenMenu = useMenu();
   const [menu, setMenu] = useState<{ index: number; message: Message; x: number; y: number }>();
@@ -338,7 +339,8 @@ function ChatViewBody({
   // The to-do chip rides beside the latest turn's fold whenever that fold is sure to be drawn.
   const todoBesideFold = latest && !islandMode && (latest.status === "Working" || foldFinishedSteps) &&
     chat.messages.some((message) => message.role === "user" && message.runId === latest.id && !message.steeredRunId && !message.answer);
-  const agents = latest?.agents ?? [];
+  // The latest turn's helpers and background commands, for the chip above the message box.
+  const latestCrew = useMemo(() => (latest ? crewOf(latest) : null), [latest?.steps, latest?.agents]);
   const lastUserRun = [...chat.messages].reverse().find((m) => m.role === "user" && m.runId)?.runId;
   // What the chat's bot is doing now; when a reply ends, the avatar plays how it went once.
   const activity = chatActivity(state, chat.id);
@@ -357,6 +359,11 @@ function ChatViewBody({
   const [paneDrawer, setPaneDrawer] = useState(false);
   const [pull, setPull] = useState<{ url: string; chatId: string }>();
   const [preview, setPreview] = useState<(FilePreview & { chatId: string })>();
+  // A click on a turn's work: the side pane's Activity or Crew tab on that turn (ActivityInspector.tsx).
+  const [inspect, setInspect] = useState<Inspect & { chatId: string }>();
+  const inspectSeq = useRef(0);
+  // Crew cards the person opened, by turn. Folded is the default: a folded card never repaints.
+  const [crewOpen, setCrewOpen] = useState<ReadonlySet<string>>(() => new Set());
   const panels = chat.pane?.panels ?? [];
   // A group chat has no Details, so its pane is there only once a bot opened a panel.
   const paneAllowed = true;
@@ -381,6 +388,35 @@ function ChatViewBody({
   // One object for as long as the chat and computer are the same: the messages' Markdown is not read again for a new one.
   const showPaneNow = useRef(showPane);
   showPaneNow.current = showPane;
+  const inspectNow = useRef((tab: Inspect["tab"], runId: string, select?: string) => {});
+  inspectNow.current = (tab, runId, select) => {
+    setInspect({ chatId: chat.id, tab, runId, select, seq: ++inspectSeq.current });
+    showPane(true);
+  };
+  // What a click on a turn's line opens: a helper's or background command's step opens Crew on it, anything else Activity.
+  const routeNow = useRef((runId: string, key?: string) => {});
+  routeNow.current = (runId, key) => {
+    const step = key?.startsWith("step-") ? runs.get(runId)?.steps?.find((s) => "step-" + s.id === key) : undefined;
+    if (step?.agentId) return inspectNow.current("crew", runId, step.agentId);
+    if (step?.background) return inspectNow.current("crew", runId, step.id);
+    inspectNow.current("activity", runId, key);
+  };
+  // One function per turn, so the island and its receipt keep theirs and don't draw again.
+  const openers = useRef(new Map<string, (key?: string) => void>());
+  const openerFor = (runId: string) => {
+    let open = openers.current.get(runId);
+    if (!open) openers.current.set(runId, (open = (key?: string) => routeNow.current(runId, key)));
+    return open;
+  };
+  const openMember = useCallback((runId: string, id: string) => inspectNow.current("crew", runId, id), []);
+  const toggleCrew = useCallback((runId: string) => {
+    setCrewOpen((old) => {
+      const next = new Set(old);
+      if (!next.delete(runId)) next.add(runId);
+      return next;
+    });
+  }, []);
+  const canStop = canStopHelpers(state.remote?.using);
   const hostId = state.remote?.using?.id;
   const remoteHost = !!state.remote?.using;
   const files = useMemo(() => ({ chatId: chat.id, botId: bot.id, hostId, remote: remoteHost, preview: (file: FilePreview) => {
@@ -583,8 +619,7 @@ function ChatViewBody({
   }, [notice]);
   useEffect(() => {
     if (drawer === "tasks" && !todos.length) setDrawer("");
-    if (drawer === "helpers" && !agents.length) setDrawer("");
-  }, [drawer, todos.length, agents.length]);
+  }, [drawer, todos.length]);
 
   const quote = quotes[chat.id] || "";
   const setQuote = (q: string | ((current: string) => string)) => setQuotes(p => ({ ...p, [chat.id]: typeof q === "string" ? q : q(p[chat.id] ?? "") }));
@@ -732,8 +767,10 @@ function ChatViewBody({
     // shimmers (T3 Code's look): the running step, or the lead while no step runs in view.
     const onIt = run.status === "Working" && !turnWaits;
     const showStep = (step: NonNullable<typeof run.steps>[number]) => (stepsMode === "open" && !islandMode) || (stepsMode === "failed" && step.status === "Failed");
-    type Event = { kind: RunTimelineEvent["kind"]; at: number; order: number; key: string; body: ReactNode; fold: ReactNode; details: ReactNode };
+    type Event = { kind: RunTimelineEvent["kind"] | "crew"; at: number; order: number; key: string; body: ReactNode; fold: ReactNode; details: ReactNode };
     const events: Event[] = [];
+    // The turn's updates for the island's receipt, where they fold with the thinking once it ended.
+    const receiptUpdates: IslandUpdate[] = [];
     // Older hosts send the currently streaming thought before they publish timed reasoning.
     const orderedRun = live && !run.reasoning?.length && liveThinking?.trim()
       ? { ...run, reasoning: [{ id: "live", text: liveThinking, started: run.time }] } : run;
@@ -741,12 +778,13 @@ function ChatViewBody({
       if (event.kind === "interim" || event.kind === "reasoning") {
         if (!event.value.text.trim()) continue;
         const isReasoning = event.kind === "reasoning";
+        if (!isReasoning && showUpdates) receiptUpdates.push({ key: event.key, at: event.at, text: event.value.text });
         const update = isReasoning
           ? <ReasoningUpdate text={event.value.text} />
           : <InterimUpdate text={event.value.text} />;
         events.push({
           kind: event.kind, at: event.at, order: event.order, key: event.key,
-          body: isReasoning ? (showThinking && thinkingMode === "open" && !islandMode ? update : null) : (showUpdates ? update : null),
+          body: isReasoning ? (showThinking && thinkingMode === "open" && !islandMode ? update : null) : (updateInChat({ live, showUpdates, showThinking, thinkingMode, islandMode }) ? update : null),
           fold: isReasoning ? (showThinking && thinkingMode !== "hidden" ? update : null) : (showUpdates ? update : null),
           details: update,
         });
@@ -757,26 +795,42 @@ function ChatViewBody({
         const marker = <div className="timeline-person">↳ {event.value.answer?.title ? event.value.answer.title + ": " : ""}{event.value.text}</div>;
         events.push({ kind: event.kind, at: event.at, order: event.order, key: event.key, body: timelineMessage(event.value, event.index), fold: marker, details: marker });
       } else {
-        const body = <WorkSteps steps={[event.value]} live={onIt} />;
+        const body = <WorkSteps steps={[event.value]} live={onIt} onOpen={(step) => routeNow.current(run.id, "step-" + step.id)} />;
         events.push({ kind: event.kind, at: event.at, order: event.order, key: event.key, body: showStep(event.value) ? body : null, fold: body, details: body });
       }
     }
-    // Steps are drawn by ActivitySections: tasks, subagents and background work, then tool calls newest first.
+    // The crew card: among the events where the first helper or command started while the turn
+    // runs, and right after the receipt or fold once it ended.
+    const crewInfo = crewCardProps(run);
+    const crewCard = crewInfo && (
+      <CrewCard key={"crew-" + run.id} run={run} line={crewInfo.line} marks={crewInfo.marks} open={crewOpen.has(run.id)} toggle={toggleCrew} openMember={openMember} botName={bot.name} canStop={canStop} />
+    );
+    if (crewInfo && live) {
+      const at = events.findIndex((event) => event.at > crewInfo.crew.at);
+      events.splice(at < 0 ? events.length : at, 0, { kind: "crew", at: crewInfo.crew.at, order: 0, key: "crew-" + run.id, body: crewCard, fold: null, details: null });
+    }
     const activityEvents = events.filter((event) => event.kind !== "reply" && event.kind !== "step");
     // Older records can have a summary and distinct tool names without individual call records.
     const olderWork = !allSteps.length && (run.summary || run.usedTools?.length)
       ? <div className="timeline-legacy-work">{run.summary && <p>{run.summary}</p>}{!!run.usedTools?.length && <ul>{run.usedTools.map((name) => <li key={name}>{name}</li>)}</ul>}</div>
       : null;
-    // The rail keeps every call; Settings › Chat › Steps narrows only what the conversation shows.
-    const eventBody = <><ActivitySections run={run} steps={allSteps} />{olderWork}{activityEvents.map((event) => <Fragment key={event.key}>{event.fold}</Fragment>)}</>;
-    const detailsBody = <><ActivitySections run={run} steps={allSteps} />{olderWork}{activityEvents.map((event) => <Fragment key={event.key}>{event.details}</Fragment>)}</>;
+    // The fold opened in place: the turn's chapters, one line each, and the person's own messages.
+    // Details opens the whole story in the side pane.
+    const eventBody = (
+      <>
+        <FoldChapters run={run} updates={receiptUpdates} thoughts={showThinking} open={openerFor(run.id)} />
+        {olderWork}
+        {activityEvents.filter((event) => event.kind === "person" || event.kind === "command").map((event) => <Fragment key={event.key}>{event.fold}</Fragment>)}
+      </>
+    );
     // Person messages remain in the transcript even when the bot's work is folded. They are
     // part of the conversation, not activity hidden behind the work summary.
     const personBody = events
       .filter((event) => event.kind === "person" || event.kind === "command")
       .map((event) => <Fragment key={event.key}>{event.body}</Fragment>);
     const elapsed = run.finished === undefined ? run.usage?.durationMs : run.finished - run.time;
-    const count = allSteps.length;
+    // The bot's own steps, as the island's receipt and the Activity tab count them: a helper's steps are the crew card's.
+    const count = storySteps(allSteps).length;
     const endingLabel = run.ending === "timed-out" ? "Timed out" : run.ending === "interrupted" ? "Interrupted" : run.ending === "stopped" ? "Stopped" : run.ending === "failed" ? "Needs you" : "";
     const countLabel = count ? count + (count === 1 ? " step" : " steps") : undefined;
     const folded = foldFinishedSteps;
@@ -808,11 +862,11 @@ function ChatViewBody({
         live={live}
         since={run.time}
         body={eventBody}
-        detailsBody={detailsBody}
         todoRail={run === latest && todoBesideFold && todoRail}
         avatar={stillFace(20)}
         count={countLabel}
-        onDetails={() => disclosed()}
+        onDetails={openerFor(run.id)}
+        onToggle={disclosed}
       />
     );
     return (
@@ -824,6 +878,7 @@ function ChatViewBody({
         {/* A finished one-bot turn folds above its answer: the work, then the reply. With the island
             the work folds into a receipt under the answer instead. */}
         {!group && !live && !islandMode && (folded || hasActivity) && fold}
+        {!group && !live && !islandMode && crewCard}
         {/* Botkins gave the bot more turns in this run by itself: said just before the reply it kept going for. */}
         {!group && keptLine(run) && <div className="timeline-kept">{keptLine(run)}</div>}
         {!group && reply.map(({ message, index }) => timelineMessage(message, index))}
@@ -838,7 +893,8 @@ function ChatViewBody({
             <LiveReply updates={updates} files={files} follow={follow} />
           </article>
         )}
-        {islandMode && !live && <IslandReceipt run={orderedRun} thoughts={showThinking} onToggle={disclosed} />}
+        {islandMode && !live && <IslandReceipt run={orderedRun} thoughts={showThinking} updates={receiptUpdates} onToggle={disclosed} onOpen={openerFor(run.id)} />}
+        {islandMode && !live && crewCard}
         {islandMode && live ? (
           <ActivityIsland
             run={orderedRun}
@@ -850,8 +906,10 @@ function ChatViewBody({
             thinking={showThinking && thinkingMode === "open"}
             thoughts={showThinking}
             onToggle={disclosed}
+            onOpen={openerFor(run.id)}
           />
         ) : (live || group) && (live || folded || hasActivity) && fold}
+        {group && !live && crewCard}
         <TeamRail run={run} bots={state.bots} />
         <RunCards run={run} prefill={prefill} pickModel={canManageAgents ? pickModel : undefined} />
         {!live && (failed.includes(run.status) || !!groupFailure) && (
@@ -1394,20 +1452,15 @@ function ChatViewBody({
             </span>
           </div>
         )}
-        {((todoRail && !todoBesideFold) || agents.length > 0 || drawer === "tasks") && (
+        {((todoRail && !todoBesideFold) || !!latestCrew || drawer === "tasks") && (
           <>
             <div className="canvas-chips">
               {/* Composer chips keep the background helpers first. */}
-              {agents.length > 0 && (
-                <HelperChip
-                  agents={agents}
-                  open={drawer === "helpers"}
-                  toggle={() => setDrawer(drawer === "helpers" ? "" : "helpers")}
-                />
+              {latestCrew && latest && (
+                <HelperChip running={latestCrew.running} total={latestCrew.members.length} onOpen={() => openMember(latest.id, latestCrew.members.find((m) => m.status === "Running")?.id ?? latestCrew.members[0].id)} />
               )}
               {!todoBesideFold && todoRail}
             </div>
-            {drawer === "helpers" && <HelperDrawer agents={agents} />}
             {drawer === "tasks" && todos.length > 0 && <TaskDrawer todos={todos} transfer={!busy && todos.some(todo => !closed(todo)) ? () => void window.botkins.send(chat.id, TRANSFER_TODOS).catch(e => setNotice(e.message)) : undefined} />}
           </>
         )}
@@ -1462,10 +1515,16 @@ function ChatViewBody({
       </div>
       {paneShown && narrow && <div className="pane-scrim" aria-hidden="true" onClick={closePane} />}
       {paneShown && (
-        <SidePane key={chat.id} pull={pull?.chatId === chat.id ? pull : undefined} preview={preview?.chatId === chat.id ? preview : undefined} state={state} chat={chat} bot={bot} face={face} group={group} drawer={narrow} close={closePane} openRoutines={openRoutines} openBot={openBot} openChat={openChat} />
+        <SidePane key={chat.id} inspect={inspect?.chatId === chat.id ? inspect : undefined} latestRunId={latest?.id} pull={pull?.chatId === chat.id ? pull : undefined} preview={preview?.chatId === chat.id ? preview : undefined} state={state} chat={chat} bot={bot} face={face} group={group} drawer={narrow} close={closePane} openRoutines={openRoutines} openBot={openBot} openChat={openChat} />
       )}
     </div>
   );
+}
+
+/** A finished turn's fold, opened: its chapters, worked out only while the fold is open. */
+function FoldChapters({ run, updates, thoughts, open }: { run: Run; updates: StoryUpdate[]; thoughts: boolean; open: (key?: string) => void }) {
+  const chapters = useMemo(() => storyChapters(thoughts ? run : { ...run, reasoning: [] }, updates), [run.steps, run.reasoning, thoughts, updates]);
+  return <ChapterSummary chapters={chapters} open={open} />;
 }
 
 /** The window's functions from the page above are made anew on every render; the rows below keep what they were given. */

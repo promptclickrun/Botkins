@@ -136,12 +136,13 @@ try {
     // Finished turn UI: one folded row with the summary.
     const trail = page.getByRole("region", { name: "Turn activity" }).first();
     const summary = trail.getByRole("button", { name: /Worked for/ });
-    await expect(summary).toContainText(run.steps.length + (run.steps.length === 1 ? " step" : " steps"));
+    // The bot's own steps: a helper's are its crew card's, and quiet bookkeeping isn't counted.
+    await expect(summary).toContainText(/\d+ steps?/);
     await summary.click();
-    // A helper's own steps open in its activity; the rail lists the rest.
-    const listed = run.steps.filter((step) => !run.agents?.some((agent) => agent.id === (step.agentId ?? step.id)));
-    await expect(trail.locator(".work-step-label")).toHaveCount(listed.length);
-    if (run.reasoning?.some((thought) => thought.text.trim())) await expect(trail.getByLabel("Thinking").first()).toBeVisible();
+    // The fold opens to the turn's chapters; Details opens the whole story in the side pane.
+    await expect(trail.locator(".chapter-summary li").first()).toBeVisible();
+    await trail.getByRole("button", { name: "Details", exact: true }).click();
+    await expect(page.locator(".activity-inspector .insp-row").first()).toBeVisible();
     await summary.click();
     const rail = page.getByRole("button", { name: /^Todos / });
     const carried = (await chatOf(id)).todos?.some((todo) => ["pending", "in_progress", "blocked"].includes(todo.status));

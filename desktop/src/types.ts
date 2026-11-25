@@ -354,11 +354,16 @@ export type Subagent = {
   started: number;
   finished?: number;
   detail?: string;
+  /** The computer can stop this helper or background command on its own: `stopHelper` ("stop-helper-v1"). Set only while it runs. */
+  stoppable?: boolean;
 };
 export type Usage = {
+  /** Input that was neither read from nor written to the prompt cache. */
   input: number;
   output: number;
   cacheRead?: number;
+  /** Written to the prompt cache. Runs recorded before it was counted have none. */
+  cacheWrite?: number;
   cost?: number;
   model?: string;
   durationMs?: number;
@@ -631,9 +636,13 @@ export type UsageTotals = {
   input: number;
   output: number;
   cacheRead: number;
+  /** Absent from an older computer. */
+  cacheWrite?: number;
   cost: number;
   /** Turns that reported a cost. */
   priced: number;
+  /** Read from cache ÷ (uncached input + read + written), over runs that count it; null when none do, absent from an older computer. */
+  cacheHitRate?: number | null;
 };
 export type UsageReport = {
   days: number;
@@ -962,6 +971,9 @@ declare global {
       /** Creates a skill, or rewrites one of Botkins' own when `original` is its current name. Returns its name. */
       saveSkill(data: { name: string; description: string; instructions: string; original?: string }): Promise<string>;
       removeSkill(name: string): Promise<void>;
+      /** Creates a script command, or rewrites one when `original` is its current name ("script-commands-v1"). Returns its name. */
+      "skills.saveScript"(data: ScriptCommand & { original?: string }): Promise<string>;
+      "skills.readScript"(name: string): Promise<ScriptCommand>;
       setSkillEnabled(name: string, enabled: boolean): Promise<void>;
       /** Asks for a folder: a skill is copied in; a folder of skills or a plugin is linked. null when cancelled. */
       /** A plugin folder is installed as a plugin, switched off (`id`, `enabled: false`); it is never linked as a folder of skills. */
@@ -1009,6 +1021,7 @@ declare global {
       "piPackages.list"(): Promise<InstalledPiPackage[]>;
       "piPackages.install"(name: string, version: string): Promise<InstalledPiPackage>;
       "piPackages.setEnabled"(name: string, version: string, enabled: boolean): Promise<InstalledPiPackage>;
+      "piPackages.remove"(name: string, version: string): Promise<void>;
       "agents.browse"(query?: { query?: string; category?: string; marketplace?: string }): Promise<{ agents: MarketAgent[]; categories: MarketAgentCategory[] }>;
       "agents.template"(id: string): Promise<MarketAgentTemplate>;
       // Marketplace › Apps: the person's Composio apps, through the computer's Composio tool and its sign-in
@@ -1132,6 +1145,8 @@ declare global {
         options?: { clientMessageId?: string; attachments?: Attachment[]; quote?: string; mentions?: MentionInput[]; delivery?: "steer" | "queue" },
       ): Promise<void>;
       stop(id: string): Promise<void>;
+      /** Stops one helper or background command of the chat's turn, by its id (a helper's id is the id of the step that started it). "stop-helper-v1". */
+      stopHelper(chatId: string, id: string): Promise<void>;
       /** The account behind one model provider. Without an id, the default provider (GitHub Copilot). */
       auth(providerId?: string): Promise<AuthStatus>;
       /** Starts that provider's sign-in in the person's browser and resolves when it is done. */
@@ -1448,7 +1463,11 @@ export type SkillInfo = {
   folderId?: string;
   /** Why no bot gets this skill on this computer, as the computer says it ("Needs the botkins command line on this host."). */
   unavailable?: string;
+  /** "script": a slash command that runs a script with no model ("script-commands-v1"). No bot is given it as a skill. */
+  command?: "script";
 };
+/** A script command, whole: what it is for and the script that /name runs ("script-commands-v1"; the owner's alone). */
+export type ScriptCommand = { name: string; description: string; script: string };
 export type SkillFolders = {
   folders: { id: string; path: string; missing: boolean; skills: number }[];
   plugins: { id: string; path: string; missing: boolean }[];
@@ -2035,6 +2054,8 @@ export type Preferences = {
   background?: { keepRunning: boolean; runAtStartup: boolean };
   /** On (the default): a bot in a one-bot chat may ask other bots for help (desktop/teamwork.mjs). */
   teamwork?: boolean;
+  /** On (the default): ask providers that support it to keep a chat's prompt cache for about an hour instead of five minutes. Missing on an older computer. */
+  longPromptCache?: boolean;
   /**
    * Turns between a chat's summaries into a new title, on the Default routines model: 5 to 30, or 0
    * for off (desktop/summaries.mjs). Missing on an older computer.
@@ -2108,6 +2129,8 @@ export type Step = {
   finished?: number;
   /** In a group chat, the member that ran this step. */
   botId?: string;
+  /** The computer can stop this helper or background command on its own: `stopHelper` ("stop-helper-v1"). Set only while it runs. */
+  stoppable?: boolean;
 };
 export type Card = {
   id: string;
@@ -2137,9 +2160,13 @@ export type RequestAnswer = {
   /** A saved credential's reference instead of text: the computer puts the value in. */
   value?: string | CredentialRef;
   content?: Record<string, unknown>;
+  /** Only the in-app request panel sends it, after it showed a `review` request whole (a script command's script). The computer refuses a yes to one without it. */
+  reviewed?: true;
 };
 export type AgentRequest = {
   dispatch?: true;
+  /** Its words (a script command's whole script) are read in the app: never answered from a notification, a card or a gadget. */
+  review?: true;
   nodeJob?: true;
   id: string;
   chatId: string;

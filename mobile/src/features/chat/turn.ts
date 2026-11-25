@@ -14,6 +14,8 @@
 // its calls. Fold finished steps determines whether the work collapses once the turn ends.
 import { isSilentMessage } from "../../../link-host/silent-reply.mjs";
 import type { Message, PanePanel, Reasoning, Run, Step, Subagent } from "@/link/types";
+import { crewOf } from "./activityStory";
+import { crewFace } from "./crew";
 import { type FoldEntry, foldLine, foldParts, liveLine, type StepsChoice, stepCount } from "./fold";
 import { receiptLine } from "./islandModel";
 import { keptLine, openLine } from "./keep";
@@ -65,6 +67,13 @@ export type Item =
   | { kind: "ended"; key: string; run: Run; ending: Ending; /** The newest turn, and nothing under way: Try again is offered. */ retry: boolean }
   /** The computer gave the bot more turns in this run by itself: "↻ Kept going: 3 plan steps were open" (keep.ts). */
   | { kind: "kept"; key: string; run: Run; line: string }
+  /**
+   * The helpers and background commands a turn started (activityStory.ts `crewOf`), as one card. It
+   * holds only what its folded row draws, so a helper's next step doesn't draw the row again; the
+   * open card reads the run itself. While the turn runs it sits where the first of them started;
+   * once it ended, right under the turn's fold or receipt.
+   */
+  | { kind: "crew"; key: string; runId: string; line: string; marks: string[]; live: boolean; /** When the first of them started. */ at: number }
   /** A turn that ended with plan steps open and nothing went on: "Stopped with 2 open steps", with Continue on the newest turn. */
   | { kind: "open"; key: string; run: Run; line: string; /** The newest turn, and nothing under way: Continue is offered. */ again: boolean }
   /** The end of the turn under way: its latest steps and thinking, and the text being written. */
@@ -356,11 +365,19 @@ type Entry =
   | { at: number; order: 0; kind: "thought"; thought: Reasoning; key: string }
   | { at: number; order: 1; kind: "message"; index: number }
   | { at: number; order: 2; kind: "step"; step: Step; key: string }
-  | { at: number; order: 3; kind: "screen"; panel: PanePanel };
+  | { at: number; order: 3; kind: "screen"; panel: PanePanel }
+  | { at: number; order: 4; kind: "crew"; item: Item };
 
 const timeOf = (value: number | undefined) => (typeof value === "number" && Number.isFinite(value) ? value : Number.POSITIVE_INFINITY);
 const clean = (text: string) => text.replace(/^\s+|\s+$/g, "");
 const covered = (reply: string, text: string) => !!reply && reply.includes(clean(text));
+
+/** A turn's crew card, or nothing when it started no helper or background command. */
+export function crewItem(run: Run, live: boolean): (Item & { kind: "crew" }) | undefined {
+  const crew = crewOf(run);
+  if (!crew) return undefined;
+  return { kind: "crew", key: "c:" + run.id, runId: run.id, ...crewFace(crew), live, at: crew.at };
+}
 
 /** The chat's list, oldest first. ChatScreen reverses it for its inverted list. */
 export function chatTimeline(input: TimelineInput): Item[] {
@@ -454,12 +471,17 @@ export function chatTimeline(input: TimelineInput): Item[] {
       placed.add(panel.id);
       entries.push({ at: panel.createdAt, order: 3, kind: "screen", panel });
     }
+    // While the turn runs, its crew card sits where the first helper or command started.
+    const crew = crewItem(run, isLive);
+    if (crew && isLive) entries.push({ at: crew.at, order: 4, kind: "crew", item: crew });
     entries.sort((a, b) => a.at - b.at || a.order - b.order);
 
     // The text this phone noted for the turn, cut where things came (an older computer only).
     const noted = !timeline && !group ? input.marks?.[run.id] : undefined;
     const text = isLive ? (input.live?.stream ?? "") : (noted?.text ?? "");
     const reply = replies.map((i) => messages[i].text).join("\n\n");
+    // Once the turn ended, its updates go with its thinking: in the chat only where the thinking is.
+    const inlineUpdates = openUpdates && (isLive || openThinking);
     let offset = 0;
 
     let steps: Step[] = [];
@@ -484,7 +506,7 @@ export function chatTimeline(input: TimelineInput): Item[] {
     };
     const pushText = (piece: string, unfinished = false) => {
       const said = clean(piece);
-      if (!openUpdates || !said || covered(reply, said)) return;
+      if (!inlineUpdates || !said || covered(reply, said)) return;
       flush();
       parts++;
       items.push({ kind: "text", key: "t" + run.id + ":" + offset, text: said, ...(unfinished && { unfinished: true }) });
@@ -518,7 +540,7 @@ export function chatTimeline(input: TimelineInput): Item[] {
         const message = messages[entry.index];
         // An interim text is drawn as the bot's update (Thinking and updates says how), not as a reply.
         if (message.interim) {
-          if (!openUpdates || !clean(message.text)) continue;
+          if (!inlineUpdates || !clean(message.text)) continue;
           flush();
           parts++;
           items.push({ kind: "text", key: "i" + (from + entry.index), text: clean(message.text) });
@@ -529,6 +551,7 @@ export function chatTimeline(input: TimelineInput): Item[] {
       flush();
       parts++;
       if (entry.kind === "message") items.push(messageItem(entry.index, { end: group && entry.index === replies.at(-1) }));
+      else if (entry.kind === "crew") items.push(entry.item);
       else items.push({ kind: "screen", key: "s" + entry.panel.id, panel: entry.panel });
     }
 
@@ -552,6 +575,7 @@ export function chatTimeline(input: TimelineInput): Item[] {
         (showThinking && run.reasoning?.length) || (showUpdates && inside.some((i) => messages[i].interim))) {
       items.push({ kind: "activity", key: "activity:" + run.id, runId: run.id });
     }
+    if (crew) items.push(crew);
     items.push(...note());
   };
 
@@ -581,8 +605,8 @@ export function chatTimeline(input: TimelineInput): Item[] {
     const fold: FoldEntry[] = [];
     const shown: Item[] = [];
     let offset = 0;
-    // The bot's updates: in the fold, or with the island in the chat where they landed (they never go inside it).
-    const update = (entry: Extract<FoldEntry, { kind: "text" }>) => (island ? shown.push(entry) : fold.push(entry));
+    // The bot's updates fold with its thinking, in the order they came: into the fold, or the island's receipt.
+    const update = (entry: Extract<FoldEntry, { kind: "text" }>) => fold.push(entry);
     const textUpTo = (key: string) => {
       const mark = noted?.marks[key];
       if (mark === undefined || mark <= offset) return;
@@ -599,7 +623,7 @@ export function chatTimeline(input: TimelineInput): Item[] {
         const said = entry.thought.text.trim();
         if (said) fold.push({ kind: "thought", key: entry.key, text: said });
       } else if (entry.kind === "screen") shown.push({ kind: "screen", key: "s" + entry.panel.id, panel: entry.panel });
-      else {
+      else if (entry.kind === "message") {
         const message = messages[entry.index];
         if (message.interim) {
           const said = clean(message.text);
@@ -618,12 +642,8 @@ export function chatTimeline(input: TimelineInput): Item[] {
     const rest = text.slice(offset).replace(/^\s+/, "");
     if (showUpdates && noted && !replies.length && clean(rest)) update({ kind: "text", key: "t" + run.id + ":" + offset, text: clean(rest) });
     if (group) {
-      const said = [...inside, ...replies].filter((i) => !messages[i].interim || island).sort((a, b) => a - b);
-      for (const i of said) {
-        const message = messages[i];
-        if (!message.interim) items.push(messageItem(i, { end: i === replies.at(-1) }));
-        else if (showUpdates && clean(message.text)) items.push({ kind: "text", key: "i" + (from + i), text: clean(message.text) });
-      }
+      const said = [...inside, ...replies].filter((i) => !messages[i].interim).sort((a, b) => a - b);
+      for (const i of said) items.push(messageItem(i, { end: i === replies.at(-1) }));
     } else {
       items.push(...shown, ...kept());
       replies.forEach((i, n) => items.push(messageItem(i, { end: n === replies.length - 1 })));
@@ -636,6 +656,8 @@ export function chatTimeline(input: TimelineInput): Item[] {
       const facts = { took, steps: counted, onlyThinking };
       items.push({ kind: "fold", key: "f:" + run.id, run, entries: fold, live: false, line: island ? receiptLine(facts) : foldLine(facts), ...foldParts(facts), ...(island && { island: true as const }) });
     }
+    const crew = crewItem(run, false);
+    if (crew) items.push(crew);
     items.push(...note());
   };
 

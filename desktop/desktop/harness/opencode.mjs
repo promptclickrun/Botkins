@@ -238,6 +238,12 @@ export class OpenCodeRelay {
     this.servers = new Map();
     // Names a request is using now: two at once never share a tool server.
     this.busy = new Set();
+    // Conversations (cache keys) with a request being answered, sessions still being removed,
+    // conversations whose last session couldn't be removed, and the steps each shared id has had.
+    this.keyed = new Set();
+    this.leaving = new Map();
+    this.unclean = new Set();
+    this.spent = new Map();
     this.projects = new WeakMap();
     this.natives = new Map();
     this.levels = null;
@@ -338,11 +344,21 @@ export class OpenCodeRelay {
     const base = "b" + createHash("sha256").update(JSON.stringify([(body.messages ?? []).filter((m) => m?.role === "system").map((m) => m.content), first?.content ?? null])).digest("hex").slice(0, 6);
     const name = this.reserve(base);
     const names = relayNames(name, tools.map((tool) => tool.function.name));
-    const sessionID = "ses_" + randomBytes(12).toString("hex");
+    // OpenCode names a model's prompt cache after the session (its promptCacheKey) for the services
+    // that take one, so a conversation's requests share one session id, made from its cache key
+    // (Pi sends its own session id). Each request's session is still removed after it; the next
+    // waits for that. A request gets an id of its own when its conversation is being answered
+    // already, or when the last session of that id couldn't be removed.
+    const key = typeof body.prompt_cache_key === "string" && body.prompt_cache_key ? body.prompt_cache_key : "";
+    const shared = !!key && !this.keyed.has(key) && !this.unclean.has(key);
+    if (shared) this.keyed.add(key);
+    const sessionID = shared ? "ses_" + createHash("sha256").update("botkins-relay\0" + key).digest("hex").slice(0, 24) : "ses_" + randomBytes(12).toString("hex");
     let release = () => {};
     let watcher = null;
     let settled = false;
+    let step = null;
     try {
+      if (shared) await this.leaving.get(sessionID);
       if (tools.length) release = await this.offer(api, location, name, tools.map((tool) => ({ name: names.listed(tool.function.name), description: tool.function.description ?? "", parameters: tool.function.parameters ?? { type: "object", properties: {} } })));
       const projectID = await this.project(api, location);
       const { system, messages, prompt } = transcript(body, names, { model, natives: this.natives });
@@ -354,7 +370,7 @@ export class OpenCodeRelay {
       });
       const note = tools.length ? "\n\nThe tools are offered under the names `" + names.prefix + "<tool>`: call `" + names.native(tools[0].function.name) + "` for " + tools[0].function.name + ", and so on." : "";
       if (system || note) await api.put("/api/experimental/session/" + sessionID + "/instructions/entries/botkins", { value: (system + note).trim() });
-      const step = this.follow(sessionID, body, names, emit, () => this.stopSession(sessionID));
+      step = this.follow(sessionID, body, names, emit, () => this.stopSession(sessionID), this.spent.get(sessionID));
       watcher = { sessionId: sessionID, children: new Set(), received: (event) => step.take(event), resync: async () => {}, turn: { reject: (error) => step.fail(error) } };
       this.provider.attach(watcher);
       await this.provider.listen();
@@ -375,12 +391,25 @@ export class OpenCodeRelay {
       if (watcher) this.provider.detach(watcher);
       // Nothing of the request stays in OpenCode: a step still going is stopped first (so a call let
       // go can't start another step), then the calls are let go and the session removed.
-      void (async () => {
+      const leaving = (async () => {
         if (!settled) await this.stopSession(sessionID);
         release();
         this.busy.delete(name);
-        await api.delete("/api/session/" + sessionID).catch(() => {});
+        const removed = await api.delete("/api/session/" + sessionID).then(() => true, () => false);
+        // A session of a shared id that is still there would meet the next request's import: that
+        // conversation's requests get ids of their own from now on.
+        if (shared && !removed) this.unclean.add(key);
       })();
+      if (shared) {
+        // The conversation's next request may use the id again once this session is gone. Events
+        // of this request's steps that come late are never taken for that one's (follow).
+        this.keyed.delete(key);
+        if (step?.steps().length) this.spent.set(sessionID, new Set([...(this.spent.get(sessionID) ?? []), ...step.steps()].slice(-50)));
+        this.leaving.set(sessionID, leaving);
+        void leaving.finally(() => {
+          if (this.leaving.get(sessionID) === leaving) this.leaving.delete(sessionID);
+        });
+      }
     }
   }
   async stopSession(sessionID) {
@@ -392,7 +421,7 @@ export class OpenCodeRelay {
    * reply is whole (and, for a step that called tools, OpenCode has stopped it and said what it
    * used); it rejects when OpenCode reports a failure first.
    */
-  follow(sessionID, body, names, emit, stop) {
+  follow(sessionID, body, names, emit, stop, spent = null) {
     const id = "chatcmpl-" + randomBytes(12).toString("hex");
     const created = Math.floor(Date.now() / 1000);
     const chunk = (delta, finish = null) => emit({ id, object: "chat.completion.chunk", created, model: body.model, choices: [{ index: 0, delta, finish_reason: finish }] });
@@ -451,8 +480,12 @@ export class OpenCodeRelay {
     return {
       done,
       fail,
+      // The step this request took, for the next request of the same session id to leave alone.
+      steps: () => (step ? [step] : []),
       take: ({ type, data }) => {
         if (over || data?.sessionID !== sessionID) return;
+        // An earlier request's step under the same session id (a late event) is never this one's.
+        if (data.assistantMessageID && spent?.has(data.assistantMessageID)) return;
         // Only the first step is this request's: what OpenCode does after it is never the harness's.
         if (data.assistantMessageID) {
           step ??= data.assistantMessageID;

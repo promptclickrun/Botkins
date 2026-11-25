@@ -103,6 +103,21 @@ export const piCommands = {
         summary: "Turn off an installed Pi package",
         run: (c) => change(c, "disable"),
       },
+      remove: {
+        usage: "botkins pi remove <package> [--yes]",
+        summary: "Uninstall a Pi package and delete its files",
+        options: { yes: { type: "boolean", short: "y", about: "Don't ask first" } },
+        async run(context) {
+          const name = packageName(context);
+          const pkg = (await context.client.call("piPackages.list")).find((row) => row.name === name);
+          if (!pkg) throw usage("That Pi package isn't installed. Use botkins pi list.");
+          const source = safe(name) + "@" + safe(pkg.version);
+          context.stderr.write(source + " will be removed from every Botkins chat using Pi or OMP, and its files deleted.\n");
+          if (!(await confirm(context, "Remove " + source + "?"))) return context.note("Not removed.");
+          await context.client.call("piPackages.remove", name, pkg.version);
+          context.print({ name, version: pkg.version, removed: true }, () => "Removed " + source + ".");
+        },
+      },
     },
   },
 };

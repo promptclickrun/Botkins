@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PiPackages } from "../desktop/providers/pi/packages.mjs";
@@ -76,4 +76,34 @@ test("failed installs publish nothing and unsafe sources never reach Pi", async 
   assert.deepEqual(market.list(), []);
   assert.deepEqual(market.activePaths(), []);
   await new PiPackages(options).install(name, version);
+});
+
+test("remove deletes an installed package so it can be installed again", async (t) => {
+  const { market, options, installs } = setup(t);
+  await market.install(name, version);
+  const [path] = market.activePaths();
+  assert.ok(existsSync(path));
+  assert.throws(() => market.remove(name, "1.2.2"), /version/);
+  assert.throws(() => market.remove("../folder", version), /catalog/);
+  market.remove(name, version);
+  assert.equal(existsSync(path), false);
+  assert.deepEqual(market.list(), []);
+  assert.deepEqual(new PiPackages(options).list(), []);
+  assert.throws(() => market.remove(name, version), /no longer installed/);
+  await market.install(name, version);
+  assert.equal(installs.length, 2);
+  assert.deepEqual(market.list(), [{ name, version, enabled: true }]);
+});
+
+test("a package can't be removed while it is installing", async (t) => {
+  const { options } = setup(t);
+  let finish;
+  const market = new PiPackages({ ...options, install: (...args) => new Promise((resolve) => (finish = () => resolve(options.install(...args)))) });
+  const pending = market.install(name, version);
+  while (!finish) await new Promise((r) => setTimeout(r, 1));
+  assert.throws(() => market.remove(name, version), /installing/);
+  finish();
+  await pending;
+  market.remove(name, version);
+  assert.deepEqual(market.list(), []);
 });

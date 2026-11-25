@@ -36,6 +36,7 @@ export function useSkills(stamp: string) {
 /** Where a skill comes from, as a short label. */
 export function skillOrigin(skill: SkillInfo, list?: SkillList) {
   if (skill.origin === "built-in") return "Built in";
+  if (skill.command === "script") return "Script command";
   if (skill.origin !== "folder") return "Botkins";
   const folder = list?.folders.find((f) => f.id === skill.folderId);
   return folder ? folderName(folder.path) : "Linked folder";
@@ -51,8 +52,11 @@ export default function SkillsSettings({
   hostId = "",
   openPlugin,
   initialSkill,
+  scriptsAllowed = true,
 }: {
   stamp: string;
+  /** Whether this computer takes script commands from this person ("script-commands-v1"; the owner's alone). */
+  scriptsAllowed?: boolean;
   initialSkill?: string;
   /** The installed plugins, for the skills that are off with their plugin. */
   plugins?: InstalledPlugin[];
@@ -65,7 +69,7 @@ export default function SkillsSettings({
   const [query, setQuery] = useState("");
   const [note, setNote] = useState("");
   const [error, setError] = useState("");
-  const [editing, setEditing] = useState<{ name?: string } | null>(initialSkill ? {name: initialSkill} : null);
+  const [editing, setEditing] = useState<{ name?: string; script?: boolean } | null>(initialSkill ? {name: initialSkill} : null);
   const [told, setTold] = useState(() => readTold(TOLD));
   /** A plugin folder that "Add from folder…" installed as a plugin just now. */
   const [installed, setInstalled] = useState<{ id: string; name: string; enabled: boolean }>();
@@ -155,6 +159,7 @@ export default function SkillsSettings({
       </button>
       <button type="button" className="set-button primary" aria-haspopup="menu" onClick={e => menu.show(e, "Add skill", [
         { label: "Create skill", run: () => setEditing({}) },
+        ...(scriptsAllowed ? [{ label: "Create script command", run: () => setEditing({ script: true }) }] : []),
         ...(hostId ? [] : [{ label: "Upload skill", run: () => void run(upload) }]),
       ])}>
         <Plus size={14} />
@@ -262,8 +267,8 @@ export default function SkillsSettings({
                 {s.unavailable && <small className="int-note">{s.unavailable}</small>}
               </div>
               <div className="set-control int-trailing">
-                {s.editable && (
-                  <button type="button" className="int-icon" aria-label={"Edit " + s.name} title="Edit" onClick={() => setEditing({ name: s.name })}>
+                {s.editable && (s.command !== "script" || scriptsAllowed) && (
+                  <button type="button" className="int-icon" aria-label={"Edit " + s.name} title="Edit" onClick={() => setEditing({ name: s.name, ...(s.command === "script" && { script: true }) })}>
                     <Pencil size={14} />
                   </button>
                 )}
@@ -344,7 +349,19 @@ export default function SkillsSettings({
           ))}
         </Group>
       )}
-      {editing && (
+      {editing?.script && (
+        <ScriptSheet
+          name={editing.name}
+          close={() => setEditing(null)}
+          saved={(name, created) => {
+            setEditing(null);
+            setError("");
+            setNote(created ? "Created the script command /" + name + "." : "Saved /" + name + ".");
+            void reload();
+          }}
+        />
+      )}
+      {editing && !editing.script && (
         <SkillSheet
           name={editing.name}
           close={() => setEditing(null)}
@@ -440,6 +457,92 @@ function SkillSheet({ name, close, saved }: { name?: string; close: () => void; 
           {...field("instructions")}
         />
         <small className="int-hint">Markdown. Saved as SKILL.md in the skill's folder.</small>
+      </label>
+    </Sheet>
+  );
+}
+
+/**
+ * New script command / Edit script command: a slash command that runs a script on this computer with no model
+ * ("script-commands-v1"). The whole script is in the sheet, and Save is the person's yes to it.
+ */
+function ScriptSheet({ name, close, saved }: { name?: string; close: () => void; saved: (name: string, created: boolean) => void }) {
+  const [draft, setDraft] = useState({ name: name ?? "", description: "", script: "" });
+  const [loading, setLoading] = useState(!!name);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  useEffect(() => {
+    if (!name) return;
+    api["skills.readScript"](name)
+      .then((c) => setDraft({ name: c.name, description: c.description, script: c.script }))
+      .catch((e) => setError(errorText(e)))
+      .finally(() => setLoading(false));
+  }, [name]);
+  const field = (k: keyof typeof draft) => ({
+    value: draft[k],
+    disabled: loading,
+    onChange: (e: { target: { value: string } }) => setDraft((d) => ({ ...d, [k]: e.target.value })),
+  });
+  async function submit() {
+    if (!draft.name.trim() || !draft.description.trim() || !draft.script.trim()) {
+      setError("Fill in the name, what it does and the script.");
+      return;
+    }
+    setBusy(true);
+    setError("");
+    try {
+      const id = await api["skills.saveScript"]({ ...draft, ...(name && { original: name }) });
+      saved(id, !name);
+    } catch (e) {
+      setError(errorText(e));
+      setBusy(false);
+    }
+  }
+  return (
+    <Sheet
+      title={name ? "Edit script command" : "New script command"}
+      wide
+      close={close}
+      submit={() => void submit()}
+      footer={
+        <>
+          {error && (
+            <span className="int-sheet-error" role="alert">
+              {error}
+            </span>
+          )}
+          <button type="button" className="set-button" onClick={close}>
+            Cancel
+          </button>
+          <button className="set-button primary" disabled={busy || loading}>
+            {busy ? "Saving…" : name ? "Save command" : "Create command"}
+          </button>
+        </>
+      }
+    >
+      <label>
+        Name
+        <input required maxLength={64} autoFocus={!name} spellCheck={false} placeholder="deploy-preview" {...field("name")} />
+        <small className="int-hint">Lowercase letters, numbers and dashes. You type it as /name in a chat.</small>
+      </label>
+      <label>
+        What it does
+        <input required maxLength={600} placeholder="Builds the site and opens a preview." {...field("description")} />
+      </label>
+      <label>
+        Script
+        <textarea
+          required
+          className="int-mono-area"
+          rows={12}
+          maxLength={20000}
+          spellCheck={false}
+          placeholder={"echo \"You typed: $BOTKINS_ARGS\""}
+          {...field("script")}
+        />
+        <small className="int-hint">
+          Runs on this computer, with your account's access, each time you type the command. No model reads it. It runs in the chat's project folder, or the bot's own folder, and Stop ends it. The words after the name are in $BOTKINS_ARGS and on standard input.
+        </small>
       </label>
     </Sheet>
   );

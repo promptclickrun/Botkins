@@ -248,7 +248,7 @@ test("artifacts on a project: attach, move to the front, take off, and one that 
   assert.equal(PROJECT_ARTIFACTS, "project-artifacts-v1");
   assert.ok(CAPABILITIES.includes(PROJECT_ARTIFACTS));
   // A paired device hears of it only when the link carries all three calls.
-  const gated = new Set(["message-reactions-v1", "project-folders-v1", "project-mode-v1", "project-clone-v1", "spaces-v1", "voice-history-v1", "voice-turns-v1", "market-refresh-v1", "mcp-apps-v1", "pi-packages-v1", "skill-upload-v1", "skills-catalog-v1", "skills-featured-v1", "mcp-catalog-v1", "chat-title-regeneration-v1", "mark-chats-read-v1"]);
+  const gated = new Set(["message-reactions-v1", "project-folders-v1", "project-mode-v1", "project-clone-v1", "spaces-v1", "voice-history-v1", "voice-turns-v1", "market-refresh-v1", "mcp-apps-v1", "pi-packages-v1", "pi-packages-remove-v1", "skill-upload-v1", "skills-catalog-v1", "skills-featured-v1", "script-commands-v1", "mcp-catalog-v1", "chat-title-regeneration-v1", "mark-chats-read-v1", "stop-helper-v1"]);
   const withArtifacts = CAPABILITIES.filter((name) => !gated.has(name));
   const withoutArtifacts = withArtifacts.filter((name) => name !== PROJECT_ARTIFACTS);
   assert.deepEqual(linkCapabilities(new Set()), withoutArtifacts);
@@ -260,6 +260,8 @@ test("artifacts on a project: attach, move to the front, take off, and one that 
   // Pi packages are named only when the link carries all five marketplace calls.
   assert.equal(linkCapabilities(new Set(PI_PACKAGE_METHODS.slice(1))).includes("pi-packages-v1"), false);
   assert.equal(linkCapabilities(new Set(PI_PACKAGE_METHODS)).includes("pi-packages-v1"), true);
+  assert.equal(linkCapabilities(new Set(PI_PACKAGE_METHODS.filter((call) => call !== "piPackages.remove"))).includes("pi-packages-remove-v1"), false);
+  assert.equal(linkCapabilities(new Set(PI_PACKAGE_METHODS)).includes("pi-packages-remove-v1"), true);
   // ("market-refresh-v1" is named only when the link carries plugins.refresh.)
   assert.ok(linkCapabilities(new Set(["plugins.refresh"])).includes("market-refresh-v1"));
   const files = join(dir, "files");
@@ -374,8 +376,9 @@ test("folder order, fallback, project defaults and a moved session's transcript"
     assert.deepEqual(deleted.slice(count), [id]);
     assert.equal(specs.at(-1).established, false);
     assert.equal(specs.at(-1).folder, folder);
-    assert.match(specs.at(-1).instructions, /Keep my notes/);
-    assert.match(specs.at(-1).instructions, /Notes saved/);
+    // The transcript goes with the session's first message, never in its system prompt.
+    assert.doesNotMatch(specs.at(-1).instructions, /Keep my notes|Notes saved/);
+    assert.match(chat.forkContext, /Keep my notes[\s\S]*Notes saved/);
     assert.ok(!chat.restartSession);
   };
   projects.setChatProject(id, p);

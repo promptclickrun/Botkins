@@ -109,11 +109,18 @@ export function planModel(provider, model) {
  * knows the connection by, and Pi's API for the gateway's path. The ChatGPT path takes the bot's
  * instructions as `instructions`, which Pi sends only when it isn't told to use a developer message.
  */
+// Pi keeps a conversation's prompt cache for an hour (Settings › Keep prompt cache longer, which
+// sets PI_CACHE_RETENTION) on a connection whose models don't say `supportsLongCacheRetention:
+// false`. Measured live (2026-11-25): GitHub Copilot takes the longer cache on all three of its
+// APIs; ChatGPT's plan endpoint refuses the request ("Unsupported parameter:
+// prompt_cache_retention"); Claude Code decides a Claude plan's cache itself. A key provider's
+// host may not know the field, and on a key a longer cache costs more to write: they keep the default.
 export const PI_PLANS = {
-  codex: { name: "botkins-chatgpt", title: "ChatGPT", api: "openai-responses", path: "/chatgpt", compat: { supportsDeveloperRole: false }, speed: true },
+  codex: { name: "botkins-chatgpt", title: "ChatGPT", api: "openai-responses", path: "/chatgpt", compat: { supportsDeveloperRole: false, supportsLongCacheRetention: false }, speed: true },
   claude: { name: "botkins-claude", title: "Claude", api: "anthropic-messages", path: "/claude", speed: true },
-  // The relay reads every system message, and OpenCode keeps no store: Pi is told so.
-  opencode: { name: "botkins-opencode", title: "OpenCode", api: "openai-completions", path: "/opencode", compat: { supportsDeveloperRole: false, supportsStore: false } },
+  // The relay reads every system message, and OpenCode keeps no store: Pi is told so. The relay
+  // names its session after the cache key, which OpenCode makes its own cache key (opencode.mjs).
+  opencode: { name: "botkins-opencode", title: "OpenCode", api: "openai-completions", path: "/opencode", compat: { supportsDeveloperRole: false, supportsStore: false, promptCacheKeyMode: "enabled" } },
 };
 /**
  * GitHub Copilot's connections for Pi and OMP: one for each API Copilot's models speak, since a
@@ -151,7 +158,7 @@ export function piModel(model, compat) {
  */
 export const keyConnection = (id, api) => (api === "responses" ? id + "-responses" : id);
 /** What Pi is told of each key provider's models: the system role (every host takes it), and OpenRouter's reasoning format. */
-const keyCompat = (id) => ({ supportsDeveloperRole: false, ...(id === "openrouter" && { thinkingFormat: "openrouter" }) });
+const keyCompat = (id) => ({ supportsDeveloperRole: false, supportsLongCacheRetention: false, ...(id === "openrouter" && { thinkingFormat: "openrouter" }) });
 
 export class Harness {
   /**

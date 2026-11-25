@@ -54,7 +54,8 @@ test("Main chat keeps its address through compact, provider changes, fork switch
         async inventory() { return buildInventory({ name: id, compact: true }); }
         async compact() { compacted.push(spec.sessionId); }
         resolvePrompt(...args) { return resolvePrompt(this, ...args); }
-        async send({ prompt }) { prompts.push(prompt); return { text: "reply to " + prompt }; }
+        // (It answers the message, the last paragraph: a transcript Botkins sends before one isn't repeated.)
+        async send({ prompt }) { prompts.push(prompt); return { text: "reply to " + prompt.split("\n\n").at(-1) }; }
       }();
     }
   }()));
@@ -83,11 +84,14 @@ test("Main chat keeps its address through compact, provider changes, fork switch
   await ws.setModel("chat", id, { provider: "codex", model: "model" });
   await ws.send(id, "continue");
   assert.equal(opened.at(-1).provider, "codex");
-  assert.match(opened.at(-1).spec.instructions, /earlier-conversation[\s\S]*fork only/);
+  // The fork's conversation comes with the new session's first message, never in its system prompt.
+  assert.doesNotMatch(opened.at(-1).spec.instructions, /earlier-conversation|fork only/);
+  assert.match(prompts.at(-1), /<earlier-conversation>[\s\S]*fork only[\s\S]*<\/earlier-conversation>\n\ncontinue$/);
   await ws.changeMainFork(id, "reset");
   assert.equal(chat.messages.length, 0);
   await ws.send(id, "after reset");
   assert.doesNotMatch(opened.at(-1).spec.instructions, /earlier-conversation|fork only/);
+  assert.doesNotMatch(prompts.at(-1), /earlier-conversation|fork only/);
   assert.notEqual(opened.at(-1).spec.sessionId, forkSession);
   ws = load();
   assert.equal(ws.mainChat("pip"), id);

@@ -120,6 +120,7 @@ export default function RootLayout() {
               <Stack.Screen name="chat/model" options={tall} />
               <Stack.Screen name="chat/activity" options={tall} />
               <Stack.Screen name="chat/helper" options={tall} />
+              <Stack.Screen name="chat/command" options={tall} />
               <Stack.Screen name="chat/context" options={tall} />
               <Stack.Screen name="chat/people" options={half} />
               <Stack.Screen name="chat/changes" options={tall} />

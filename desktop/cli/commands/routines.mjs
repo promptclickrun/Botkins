@@ -147,7 +147,9 @@ const timesLines = (routine, label) => {
 const promptLines = (prompt) => String(prompt).split(/\r?\n/).map((line) => "    " + safe(line.replaceAll("\t", "    ")));
 /** What a routine runs, its model and its prompt, as lines: a script whole, because it runs on the computer. */
 const runLines = (routine) =>
-  routine.script
+  routine.scriptCommand
+    ? ["Runs: the script command /" + safe(routine.scriptCommand.name) + " on this computer, with no model", "Words it gets: " + (routine.scriptCommand.args ? JSON.stringify(safe(routine.scriptCommand.args)) : "none"), "Prompt:", ...promptLines(routine.instructions), "See its script with `botkins skills show " + shellWord(routine.scriptCommand.name, "<the command>") + "`."]
+    : routine.script
     ? [
         "Runs: a script on the computer, with no model" + (routine.followUp ? ", then a follow-up action" : ""),
         "Script:",
@@ -183,7 +185,11 @@ const costLine = (routine) => {
   return minutes ? "Cost: this runs as often as every " + (minutes === 1 ? "minute" : minutes + " minutes") + ". Each run uses one model turn, and a model turn can cost money." : null;
 };
 /** The mark that the person agreed to a fast schedule, for the call that follows the yes. */
-const agreedFast = (routine) => (routine.fastMinutes ? [{ fastSchedule: true }] : []);
+const agreedFast = (routine) => {
+  // A routine that is a script command runs that script with no model: the person's yes (this command asked) goes with the call.
+  const mark = { ...(routine.fastMinutes && { fastSchedule: true }), ...(routine.scriptCommand && { agreed: true }) };
+  return Object.keys(mark).length ? [mark] : [];
+};
 
 /** The routine as it will be, shown before it is saved. */
 const reviewText = (routine, adding) =>
