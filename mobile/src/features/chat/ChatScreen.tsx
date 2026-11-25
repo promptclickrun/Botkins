@@ -15,7 +15,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import type { Bot, ChatSummary, Message, Preferences, Project, QueuedMessage, Run } from "@/link/types";
 import { useChatPrefs } from "@/state/chatPrefs";
 import { activityLabel, type AvatarState, useBot, useBots, useCan, useCapability, useChat, useChatActivity, useModels, usePart, useSettings, useWatchedChat } from "@/state/hooks";
-import { api, attempt, loadEarlier, reactToMessage, watchReasoning } from "@/state/link";
+import { api, attempt, loadEarlier, reactToMessage } from "@/state/link";
 import { effectiveModel, effortLabel, findModel, modelName } from "@/state/models";
 import { type ChatView, pendingSends, showToast, useApp } from "@/state/store";
 import { usePrefs } from "@/state/prefs";
@@ -54,7 +54,7 @@ import { Aside } from "./Aside";
 import { chatTimeline, createTimelineRunSelector, indexMessageOwnership, liveRowVisible, type Item, reuseItems, TIMELINE_V1, underWay } from "./turn";
 import { ProjectPill, projectActions, runProjectChoice, type Side, SideAnswer } from "./ChatProject";
 import { quoteOf, sideQuestionOf } from "./side";
-import { useAppActive } from "@/state/useAppActive";
+import { useWatchedReasoning } from "./useWatchedReasoning";
 import { endSelecting, selectionEnds } from "./selecting";
 import { MessageLink, openLink } from "@/ui/LinkHold";
 import { pullRequestUrl } from "../../../link-host/pr-url.mjs";
@@ -492,11 +492,9 @@ function ChatTimelineList({ chatId, view, pending, runPart, streaming, group, bo
   // the rules). Each change waits a moment again, so a refresh right after the reply lands first.
   const completionPosition = useChatPrefs((prefs) => prefs.completionPosition);
   const onShow = useOnShow();
-  const inFront = useAppActive(onShow);
   const still = useReducedMotion();
   const turnLive = streaming || !!underWay(runPart);
-  const needsReasoning = inFront && turnLive && thinkingPref === "show";
-  useEffect(() => needsReasoning ? watchReasoning(chatId) : undefined, [chatId, needsReasoning]);
+  const inFront = useWatchedReasoning(chatId, onShow && turnLive && thinkingPref === "show");
   useLayoutEffect(() => {
     if (position === "latest") clearTimeout(retry.current);
     if (turnLive && position === "completion") followLatest();

@@ -282,6 +282,20 @@ function useHold(hold: FoldHold | undefined, open: boolean) {
   return { head, whole, toggle };
 }
 
+/** Only the header needs to read the clock while this turn is on screen. */
+function LiveHeader({ bot, label, time, count, inView, waiting, open, onPress }: {
+  bot?: Bot; label: string; time: number; count: number; inView: boolean; waiting: boolean; open: boolean; onPress: () => void;
+}) {
+  const [pausedAt, setPausedAt] = useState<number>();
+  useEffect(() => {
+    if (waiting && pausedAt === undefined) setPausedAt(Date.now());
+    if (!waiting && pausedAt !== undefined) setPausedAt(undefined);
+  }, [waiting, pausedAt]);
+  const now = useElapsedClock(inView && !waiting);
+  const facts = islandFacts((waiting ? pausedAt ?? now : now) - time, count);
+  return <Header label={label} facts={facts} open={open} onPress={onPress} face={<Face bot={bot} waiting={waiting} done={false} />} shimmer={!waiting && inView} tone={waiting ? "warning" : "ink"} hint={open ? "Shows less" : "Shows every step"} />;
+}
+
 /** The island while its turn runs. */
 function LiveIsland({ chatId, bot, group, run, inView, hold, onHeight }: { chatId: string; bot?: Bot; group: boolean; run: Run; inView: boolean; hold?: FoldHold; onHeight?: (height: number) => void }) {
   const { colors, type } = useTheme();
@@ -295,25 +309,23 @@ function LiveIsland({ chatId, bot, group, run, inView, hold, onHeight }: { chatI
   // A request of this chat waits on the person: amber, still, the clock paused.
   const request = useApp((state) => state.parts.live?.requests?.find((entry) => entry.chatId === chatId)?.title);
   const waiting = request !== undefined;
-  const [pausedAt, setPausedAt] = useState<number>();
-  useEffect(() => setPausedAt(waiting ? Date.now() : undefined), [waiting]);
-  const now = useElapsedClock(inView && !waiting);
   const steps = run.steps;
   const reasoning = run.reasoning;
   const waitingStepId = waiting ? steps?.findLast((step) => step.status === "Running")?.id : undefined;
   const wait: Wait | undefined = waiting && !waitingStepId ? { kind: "wait", key: "wait", text: request || "an answer" } : undefined;
-  // Memoized on the run's steps and thoughts: the clock's tick redraws the header only.
+  // Build only the list or preview the person opened.
   const shown = useMemo(() => {
+    if (open || (!stepsOpen && thinkingOpen)) return undefined;
     const lines: Line[] = islandLines({ steps, reasoning }, { steps: stepsOpen, thoughts: thinkingOpen });
     return islandWindow(wait ? [...lines, wait] : lines);
-  }, [steps, reasoning, stepsOpen, thinkingOpen, wait?.text]);
+  }, [open, steps, reasoning, stepsOpen, thinkingOpen, wait?.text]);
   const every = useMemo(() => {
+    if (!open) return [];
     const lines: Line[] = islandLines({ steps, reasoning }, { steps: true, thoughts: thinking !== "hide" });
     return wait ? [...lines, wait] : lines;
-  }, [steps, reasoning, thinking, wait?.text]);
-  const tail = useMemo(() => (!stepsOpen && thinkingOpen ? reasoningTail(reasoning) : undefined), [stepsOpen, thinkingOpen, reasoning]);
+  }, [open, steps, reasoning, thinking, wait?.text]);
+  const tail = useMemo(() => (!open && !stepsOpen && thinkingOpen ? reasoningTail(reasoning) : undefined), [open, stepsOpen, thinkingOpen, reasoning]);
   const label = islandLabel({ name: group ? undefined : bot?.name, waiting, heading: thinkingOpen ? thinkingHeading({ steps, reasoning }) : undefined });
-  const facts = islandFacts((pausedAt ?? now) - run.time, steps?.length ?? 0);
   const helpers = useMemo(() => new Map(run.agents?.map((agent) => [agent.id, agent.name])), [run.agents]);
   const lineHeight = Math.round(type.footnote.lineHeight * Math.min(fontScale, 1.35));
 
@@ -323,7 +335,7 @@ function LiveIsland({ chatId, bot, group, run, inView, hold, onHeight }: { chatI
         waiting={waiting}
         header={
           <View ref={head} collapsable={false}>
-            <Header label={label} facts={facts} open={open} onPress={() => toggle(key)} face={<Face bot={bot} waiting={waiting} done={false} />} shimmer={!waiting} tone={waiting ? "warning" : "ink"} hint={open ? "Shows less" : "Shows every step"} />
+            <LiveHeader bot={bot} label={label} time={run.time} count={steps?.length ?? 0} inView={inView} waiting={waiting} open={open} onPress={() => toggle(key)} />
           </View>
         }
       >
@@ -342,7 +354,7 @@ function LiveIsland({ chatId, bot, group, run, inView, hold, onHeight }: { chatI
             </View>
           )
         ) : (
-          shown.lines.length > 0 && (
+          shown && shown.lines.length > 0 && (
             <View style={{ paddingBottom: 8 }}>
               <LayoutAnimationConfig skipEntering>
                 {shown.lines.map((line) => (
@@ -367,15 +379,14 @@ function Receipt({ chatId, run, line, entries, hold }: { chatId: string; run: Ru
   const open = useOpenIslands((state) => !!state[key]);
   const { head, whole, toggle } = useHold(hold, open);
   const lines = useMemo(
-    () =>
-      entries.flatMap((entry): Line[] =>
+    () => open ? entries.flatMap((entry): Line[] =>
         entry.kind === "step"
           ? [{ kind: "step", key: entry.key, step: entry.step as Step }]
           : entry.kind === "thought"
             ? [{ kind: "thought", key: entry.key, id: entry.key, ...thoughtParts(entry.text) }]
             : [],
-      ),
-    [entries],
+      ) : [],
+    [open, entries],
   );
   if (!open)
     return (

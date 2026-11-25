@@ -14,12 +14,10 @@ import { Group, Loading, Page, space, T, Tap, useOnShow, useTheme } from "@/ui";
 import { RunIcon } from "./bits";
 import { buildNotifyTargetView, runNotifyChip } from "./notifyTargets";
 
-/**
- * One run. Kept as it is while its run is the same object: a bot's every step changes the list, and
- * the computer's edits keep each run that didn't change (the link's `patchedRows`), so a step draws
- * its own row again and leaves the other 39 alone. This list stays mounted under every other tab.
- */
-const RunRow = memo(function RunRow({ run, name, when, chip, pulse }: { run: RunSummary; name?: string; /** How long ago, in the list's words: the list works it out, so the row follows the clock too. */ when: string; /** Who a routine's run tells, in a few words. */ chip: string | null; /** The list is in view, so a run under way may pulse. */ pulse: boolean }) {
+type RunRowProps = { run: RunSummary; name?: string; when: string; chip: string | null; pulse: boolean };
+
+/** A progress update keeps the other runs' references, so their rows can skip this render. */
+const RunRow = memo(function RunRow({ run, name, when, chip, pulse }: RunRowProps) {
   const { colors, control } = useTheme();
   // The icon says how it went; the words say it too when it didn't simply finish.
   const status = run.status === "Completed" ? undefined : run.status === "Needs you" ? "Failed" : run.status;
@@ -80,8 +78,7 @@ export function ActivityList() {
   const allBots = useBots();
   const bots = useMemo(() => new Map<string, Bot>(allBots.map((bot) => [bot.id, bot])), [allBots]);
   const chatBot = useMemo(() => new Map(chats.map((chat) => [chat.id, chat.botId])), [chats]);
-  // A run under way pulses only while this list can be seen and the app is in front: under another
-  // tab or page the pulse ran on for nothing, one loop for every bot at work.
+  // A mounted tab can be covered while its bots keep working.
   const inView = useAppActive(useOnShow());
   if (runs.length === 0)
     return (

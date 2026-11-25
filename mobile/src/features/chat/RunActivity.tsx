@@ -1,12 +1,12 @@
-import { router, useIsFocused, useLocalSearchParams } from "expo-router";
+import { router, useLocalSearchParams } from "expo-router";
 import { Brain, ChevronDown, ChevronRight, CircleDashed, MessageCircle } from "lucide-react-native";
 import { useEffect, useState } from "react";
 import { ActivityIndicator, Text, View } from "react-native";
 import type { Run, Step, StepDetail, TeamAsk } from "@/link/types";
 import { useChatPrefs } from "@/state/chatPrefs";
 import { useBots, useCapability, useModels, useWatchedChat } from "@/state/hooks";
-import { api, watchReasoning } from "@/state/link";
-import { useAppActive } from "@/state/useAppActive";
+import { api } from "@/state/link";
+import { useWatchedReasoning } from "./useWatchedReasoning";
 import { modelName } from "@/state/models";
 import { useApp } from "@/state/store";
 import { compactNumber, duration } from "@/state/time";
@@ -111,8 +111,7 @@ export function StepRow({ step, chatId, runId, startOpen = false, helperName, fo
 function Reasoning({ chatId, run, live, available, startOpen }: { chatId: string; run: Run; live: boolean; available: boolean; startOpen: boolean }) {
   const { colors, type } = useTheme();
   const [open, setOpen] = useState(startOpen);
-  const inFront = useAppActive(useIsFocused());
-  useEffect(() => live && inFront && open ? watchReasoning(chatId) : undefined, [live, inFront, open, chatId]);
+  const inFront = useWatchedReasoning(chatId, live && open);
   if (!available && !run.reasoning?.some((part) => /\S/.test(part.text))) return null;
   const text = open && inFront ? (run.reasoning ?? []).map((part) => part.text.trim()).filter(Boolean).join("\n\n") : "";
   return (

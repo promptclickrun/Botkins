@@ -1,9 +1,9 @@
 import { needsYou } from "@/state/sessionActivity";
 import { NativeTabs } from "expo-router/native-tabs";
-import type { ReactElement } from "react";
+import { type ReactElement, useMemo } from "react";
 import { isChatsPageUnread } from "@/features/chat/unread";
 import { useSpacesOn } from "@/features/spaces/data";
-import { useCan } from "@/state/hooks";
+import { useCan, usePart } from "@/state/hooks";
 import { usePrefs } from "@/state/prefs";
 import { useApp } from "@/state/store";
 import type { TabId } from "@/state/tabs";
@@ -13,8 +13,12 @@ export default function TabsLayout() {
   const theme = useTheme();
   const { colors } = theme;
   const badge = badgeColors(theme);
-  const unread = useApp((state) => state.parts.chats?.filter(isChatsPageUnread).length ?? 0);
-  const waiting = useApp((state) => needsYou(state.parts));
+  const chats = usePart("chats");
+  const tasks = usePart("tasks");
+  const requests = useApp((state) => state.parts.live?.requests.length ?? 0);
+  // Both badges stay mounted across the tabs. New words in a reply change neither list.
+  const unread = useMemo(() => chats?.filter(isChatsPageUnread).length ?? 0, [chats]);
+  const waiting = requests + useMemo(() => needsYou({ tasks }), [tasks]);
   // A computer without spaces, or a member who may not see them, has no Spaces tab.
   const spacesOn = useSpacesOn();
   const spaces = useCan("today", "view") && spacesOn;
