@@ -10,6 +10,8 @@ import { Check, Copy, Image as ImageIcon, Info, Lightbulb, MessageSquareWarning,
 import "./markdown.css";
 import { ChatFileContext, FileLink, pathMarkup, useChatFiles, type ChatFiles } from "./ChatFileLink";
 import { ChatMedia } from "./ChatMedia";
+import { mentionMarkup } from "./mentionTags";
+import { MentionContext, MentionTag, type MentionDirectory } from "./PersonBadge";
 
 const api = window.botkins;
 
@@ -158,6 +160,8 @@ const components: Components = {
     if (marker != null) return <FileLink index={Number(marker)}>{children}</FileLink>;
     const media = node?.properties?.["data-chat-media"] ?? node?.properties?.dataChatMedia;
     if (media != null) return <ChatMedia index={Number(media)} />;
+    const mention = node?.properties?.["data-mention"] ?? node?.properties?.dataMention;
+    if (mention != null) return <MentionTag id={String(mention)}>{children}</MentionTag>;
     return <span {...props}>{children}</span>;
   },
   table: ({ node: _node, ...props }) => (
@@ -196,11 +200,13 @@ export type LinkRenderer = (href: string, children: ReactNode) => ReactNode;
  * other blocks share (a reply that is still arriving, see src/StreamingText.tsx) sit side by side.
  * Unchanged text is not parsed again when what is around it updates.
  */
-export const RichBody = memo(function RichBody({ text, link, files }: { text: string; link?: LinkRenderer; files?: ChatFiles }) {
+export const RichBody = memo(function RichBody({ text, link, files, mentions }: { text: string; link?: LinkRenderer; files?: ChatFiles; mentions?: MentionDirectory }) {
   const found = useChatFiles(text, files);
-  const plugins = useMemo<Options["remarkPlugins"]>(() => found.length
-    ? [...remarkPlugins!, pathMarkup(text, found)]
-    : remarkPlugins, [text, found]);
+  // "@Name" becomes a tag after the file links are found: those go by where each word stands in the text.
+  const tags = !!mentions?.names.length && text.includes("@");
+  const plugins = useMemo<Options["remarkPlugins"]>(() => found.length || tags
+    ? [...remarkPlugins!, ...(found.length ? [pathMarkup(text, found)] : []), ...(tags ? [mentionMarkup(mentions!.names)] : [])]
+    : remarkPlugins, [text, found, tags, mentions]);
   const own = useMemo<Components | undefined>(() => link ? {
     ...components,
     a: (props) => {
@@ -209,11 +215,12 @@ export const RichBody = memo(function RichBody({ text, link, files }: { text: st
       return <InLink.Provider value>{link(href, props.children)}</InLink.Provider>;
     },
   } : undefined, [link]);
-  return (
+  const body = (
     <ChatFileContext.Provider value={{ files, found }}>
       <Markdown components={own ?? components} remarkPlugins={plugins} rehypePlugins={rehypePlugins}>{text}</Markdown>
     </ChatFileContext.Provider>
   );
+  return tags ? <MentionContext.Provider value={mentions!}>{body}</MentionContext.Provider> : body;
 });
 
 /**
@@ -221,6 +228,6 @@ export const RichBody = memo(function RichBody({ text, link, files }: { text: st
  * `link` draws links to other places in the app (the Wiki uses it for its pages); without it, as in
  * chats, such a link is plain text.
  */
-export const RichText = memo(function RichText({ text, link, files }: { text: string; link?: LinkRenderer; files?: ChatFiles }) {
-  return <div className="md"><RichBody text={text} link={link} files={files} /></div>;
+export const RichText = memo(function RichText({ text, link, files, mentions }: { text: string; link?: LinkRenderer; files?: ChatFiles; mentions?: MentionDirectory }) {
+  return <div className="md"><RichBody text={text} link={link} files={files} mentions={mentions} /></div>;
 });

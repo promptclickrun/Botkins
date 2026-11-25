@@ -6,7 +6,7 @@ import { hostname } from "node:os";
 import { join } from "node:path";
 import { b64u, newKeyPair, random, unb64u } from "./crypto.mjs";
 import { DEFAULT_RELAY_URL, newRelayKey, validRelayKey } from "./relay.mjs";
-import { defaultTeam } from "./team.mjs";
+import { cleanAvatars, defaultTeam } from "./team.mjs";
 import { headIds as HEADS } from "./botkin-heads.mjs";
 
 export const DEFAULT_PORT = 47610;
@@ -201,6 +201,8 @@ export class LinkStore {
       spaces: saved.spaces && typeof saved.spaces === "object" && !Array.isArray(saved.spaces) ? saved.spaces : {},
       spaceCopies: Array.isArray(saved.spaceCopies) ? saved.spaceCopies : [],
       linkSharing: saved.linkSharing === true,
+      // Each person's own picture ("setMyAvatar"), by "owner" or a member's id. One that is not a picture is left out.
+      avatars: cleanAvatars(saved.avatars),
       ...(saved.spacesMoved === true && { spacesMoved: true }),
       // The day of the last once-a-day alert about spaces, and when it went (space-alerts.mjs).
       ...(typeof saved.spaceDigest?.day === "string" && { spaceDigest: { day: saved.spaceDigest.day.slice(0, 10), at: Number(saved.spaceDigest.at) || 0 } }),

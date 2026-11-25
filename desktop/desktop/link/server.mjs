@@ -37,7 +37,7 @@ import { Spaces } from "./spaces.mjs";
 import { ChatTyping } from "./typing.mjs";
 import { headCapabilities, cleanLook, deviceKind, LinkStore, personName, SCREEN_MODES } from "./store.mjs";
 import { chatSectionsOf, withChatSections, authorize, chatPeople, cleanGroup, cleanRole, filterParts, ownerParts, inChat, panelOfFrame, panelView, spaceCan, inviteLink, inviteLookup, MAX_CHAT_PEOPLE, newInviteCode, normalizeCode, OWNER, personOf, sharedBotFlags, teamPeople, viewOf, visible, withBotFlags, withChatFlags, hasAction, roleOfMember, seenItemsOf, spacesViewOf } from "./team.mjs";
-import { ownerApprovalChats, privateProactiveChat, withoutProactiveAlerts } from "./team.mjs";
+import { avatarOf, cleanAvatar, ownerApprovalChats, privateProactiveChat, withoutProactiveAlerts } from "./team.mjs";
 import { Failure, searchDirs } from "./tools.mjs";
 import { ASK_BOT_DESCRIPTION, cleanBotVoice, liveContextOf, liveInstructions, Voice } from "./voice.mjs";
 import { Uploads } from "./uploads.mjs";
@@ -82,7 +82,7 @@ const PROFILE_REQUEST_TIMEOUT = 10_000;
 // "maintenance-v1": this copy lets a phone clear the cache and send the computer's own test notification.
 /** The link tells people of notes and changes in their spaces (space-alerts.mjs). Named only while the app has spaces. */
 const SPACE_ALERTS_CAPABILITY = "space-alerts-v1";
-const CAPABILITIES = ["sync-push-v1", "credentials-v1", "screen-v1", "prs-v1", "uploads-v1", "relay-v1", "push-v1", "device-v1", "voice-v1", "devices-v1", "device-person-v1", "maintenance-v1", "teams-v1", "stream-appends-v1", "reasoning-appends-v1", "separate-thinking-v1", "text-streaming-off-v1", "text-chunks-v1", "step-details-v1", "run-step-deltas-v1", "run-summary-deltas-v1", "team-people-v1", "chat-sections-v1", "chat-typing-v1", "activity-bots-v1", "activity-all-v1", "member-rename-v1", "profile-v1", GADGET_CAPABILITY, GADGET_SETTINGS_CAPABILITY, "pr-panel-v1"];
+const CAPABILITIES = ["sync-push-v1", "credentials-v1", "screen-v1", "prs-v1", "uploads-v1", "relay-v1", "push-v1", "device-v1", "voice-v1", "devices-v1", "device-person-v1", "maintenance-v1", "teams-v1", "stream-appends-v1", "reasoning-appends-v1", "separate-thinking-v1", "text-streaming-off-v1", "text-chunks-v1", "step-details-v1", "run-step-deltas-v1", "run-summary-deltas-v1", "team-people-v1", "chat-sections-v1", "chat-typing-v1", "activity-bots-v1", "activity-all-v1", "member-rename-v1", "profile-v1", "people-avatars-v1", GADGET_CAPABILITY, GADGET_SETTINGS_CAPABILITY, "pr-panel-v1"];
 /** A custom view (an html block): the page a bot wrote and its data, at the sizes the desktop app keeps them to. */
 /** Calls that make a chat and answer its id. */
 const MAKES_CHAT = new Set(["createChat", "createGroupChat", "forkChat", "startProjectChat"]);
@@ -1262,6 +1262,25 @@ export class LinkHost extends EventEmitter {
     this.store.set({ team });
     this.teamChanged();
   }
+  /**
+   * Sets or clears one person's own picture ("people-avatars-v1"): "owner" or a member's id, as the caller is.
+   * The picture is checked here (cleanAvatar) whoever sends it. Answers `{ avatar }`, or `{}` when there is none.
+   */
+  setAvatar(person, image) {
+    let avatar;
+    try {
+      avatar = cleanAvatar(image);
+    } catch (error) {
+      throw new Failure(error.message);
+    }
+    const team = this.store.data.team;
+    if (person !== OWNER && !team.members.some((member) => member.id === person)) throw new Failure("That team membership is no longer available.");
+    const { [person]: before, ...avatars } = team.avatars ?? {};
+    if (avatar) avatars[person] = avatar;
+    // An unchanged picture is not saved or sent again.
+    if ((before ?? null) !== avatar) this.setTeam({ ...team, avatars });
+    return avatar ? { avatar } : {};
+  }
   saveRole(role) {
     const clean = cleanRole(role);
     const roles = this.store.data.team.roles.filter((item) => item.id !== clean.id);
@@ -1568,9 +1587,10 @@ export class LinkHost extends EventEmitter {
     // Their invitations and their own view go with them.
     const chats = Object.fromEntries(Object.entries(team.chats ?? {}).map(([id, invited]) => [id, invited.filter((person) => person !== memberId)]).filter(([, invited]) => invited.length));
     const { [memberId]: _gone, ...views } = team.views ?? {};
+    const { [memberId]: _picture, ...avatars } = team.avatars ?? {};
     // Their grants on spaces go; the spaces they made pass to the owner and become private.
     this.typing.forgetPerson(memberId);
-    this.setTeam({ ...this.spaces.withoutMember(team, memberId), members: team.members.filter((item) => item.id !== memberId), chats, views });
+    this.setTeam({ ...this.spaces.withoutMember(team, memberId), members: team.members.filter((item) => item.id !== memberId), chats, views, avatars });
     this.spaceLinks.sync();
     return this.team();
   }
@@ -2209,6 +2229,12 @@ export class LinkHost extends EventEmitter {
       if (args.length !== 1 || typeof args[0] !== "string") throw new Failure("That profile ticket is invalid.");
       return this.bindProfile(principal, await this.redeemProfile(args[0], "bind"), session.deviceId);
     }
+    // A person's own picture: the caller's, whoever the arguments name. A gadget has none.
+    if (method === "setMyAvatar") {
+      if (this.store.device(session.deviceId)?.kind === "gadget") throw new Failure("A gadget has no picture of its own.");
+      if (args.length > 1) throw new Failure("Choose one picture.");
+      return this.setAvatar(personOf(principal), args[0] ?? null);
+    }
     if (method === "link.profile.unbind") {
       if (this.store.device(session.deviceId)?.kind === "gadget") throw new Failure("A gadget cannot unbind a profile.");
       if (args.length !== 1 || typeof args[0] !== "string") throw new Failure("That profile id is invalid.");
@@ -2466,7 +2492,8 @@ export class LinkHost extends EventEmitter {
     const next = { quietLive: null, ...baseParts(state, this.meta(), ownLooks ? {} : this.store.data.looks, { credentials: this.credentials.list(), screen: this.store.data.screen, relay: !!this.relaySettings(), typing: this.typingSnapshot(), ...(this.headless() && { headless: true, display: this.display() }), screenSetBy: this.store.data.screenSetBy }) };
     next.quietLive = quietLive(next.live);
     // These are the parts of an owner device with Admin mode on; one with it off gets a cut of them (viewParts).
-    next.meta.you = { kind: "owner", admin: true };
+    const ownAvatar = avatarOf(this.store.data.team, OWNER);
+    next.meta.you = { kind: "owner", admin: true, ...(ownAvatar && { avatar: ownAvatar }) };
     next.team = this.team();
     // Spaces: the app's own list is never sent. The owner's devices get the owner's view of it;
     // `panels` and `board` stay for an app that doesn't know spaces (every Today's panels).

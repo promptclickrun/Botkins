@@ -72,7 +72,9 @@ import ProjectChanges, { ProjectPicker, modeLabels } from "./ProjectChanges";
 import { blockedBots } from "./access";
 import { FolderKanban, ShieldAlert, UserPlus } from "lucide-react";
 import { PeopleDialog } from "./ChatPeople";
-import { authorName, chatPeopleView, formatTypingLabel } from "./peopleView";
+import { authorName, chatPeopleView, chatPersons, formatTypingLabel, viewerOf } from "./peopleView";
+import { authorOf, messageSide, personColor, startsPersonRun } from "./messageSides";
+import { PersonBadge, useMentionDirectory, type ChatPerson } from "./PersonBadge";
 import type { Bot, Chat, ChatMode, Message, State } from "./types";
 import { closed, sessionTodos, TRANSFER_TODOS } from "../desktop/link/session-todos";
 import { CONTINUE_OPEN_STEPS, keptLine, openLine } from "./keep";
@@ -267,8 +269,30 @@ function ChatViewBody({
   const speaker = group ? state.bots.find((b) => b.id === state.speakers?.[chat.id]) : bot;
   const nameOf = (m: Message) =>
     m.botId ? (state.bots.find((b) => b.id === m.botId)?.name ?? "Removed bot") : bot.name;
-  const messageClass = (message: Message) =>
-    message.role + (message.role === "user" && message.author ? " from-member" : "");
+  // Sides: only the viewer's own messages are on the right. Another person's are on the left, in a
+  // person's tinted bubble, with their name and round picture on the first of a run (src/messageSides.ts).
+  const viewer = viewerOf(state);
+  const { people: chatPeopleList, directory: mentions } = useMentionDirectory(chatPersons(state, chat), group ? members : [bot]);
+  const personOfMessage = (m: Message): ChatPerson => {
+    const id = authorOf(m);
+    return chatPeopleList.find((person) => person.id === id) ?? { id, name: m.author ? authorName(state, m.author) : "Owner" };
+  };
+  const messageClass = (message: Message, list: readonly Message[], index: number) =>
+    messageSide(message, viewer) !== "person"
+      ? message.role
+      : "user from-person person-color-" + personColor(authorOf(message)) + (startsPersonRun(list, index, viewer) ? " starts-run" : "");
+  /** What stands above a person's message: nothing for the viewer's own (a hidden "You"), and another person's name tag and badge on the first of their run. */
+  const personLabel = (m: Message, list: readonly Message[], index: number) => {
+    if (messageSide(m, viewer) !== "person") return <b className="visually-hidden">You</b>;
+    const person = personOfMessage(m);
+    if (!startsPersonRun(list, index, viewer)) return <b className="visually-hidden">{person.name}</b>;
+    return (
+      <>
+        <PersonBadge person={person} size={24} className="person-side-badge" />
+        <b className="person-speaker">{person.name}</b>
+      </>
+    );
+  };
   const project = chat.projectId ? state.projects?.find((p) => p.id === chat.projectId) : undefined;
   const canManageAgents = teamCan(state, "agents", "manage");
   // "Invite" in the header, when the computer in use keeps chat people and the team has someone to invite.
@@ -660,7 +684,7 @@ function ChatViewBody({
   const timelineMessage = (m: Message, index: number) => (
     <article
       id={`message-${chat.id}-${loadedFrom + index}`}
-      className={messageClass(m)}
+      className={messageClass(m, chat.messages, index)}
       key={`timeline-message-${index}`}
       onContextMenu={e => messageMenu(e, m, loadedFrom + index)}
     >
@@ -670,11 +694,11 @@ function ChatViewBody({
           <span className="speaker-name">{m.botId ? nameOf(m) : bot.name}</span>
         </b>
       ) : m.role === "user" ? (
-        <b className={m.author ? "member-speaker" : "visually-hidden"}>{m.author ? authorName(state, m.author) : "You"}</b>
+        personLabel(m, chat.messages, index)
       ) : <b className="command-label">Command output</b>}
       {m.answer && <small className="answer-label">{m.answer.title}</small>}
       {m.quote && <blockquote className="msg-quote">{m.quote}</blockquote>}
-      {m.role === "command" && m.plain ? <pre className="command-output">{m.text}</pre> : <RichText text={m.voiceCaption ?? m.text} files={files} />}
+      {m.role === "command" && m.plain ? <pre className="command-output">{m.text}</pre> : <RichText text={m.voiceCaption ?? m.text} files={files} mentions={mentions} />}
       <Attachments list={m.attachments} />
       {!!m.mentions?.length && (
         <MentionChips
@@ -1080,9 +1104,9 @@ function ChatViewBody({
           )}
           {historic && historic.messages.map((message, i) => historic.from + i < loadedFrom && !isSilentMessage(message) &&
             (!message.interim || (thinkingMode === "open" && (!foldFinishedSteps || !message.runId || !runs.has(message.runId) || runs.get(message.runId)?.status === "Working"))) && (
-            <article key={historic.from + i} id={`message-${chat.id}-${historic.from + i}`} className={messageClass(message)} onContextMenu={e => messageMenu(e, message, historic.from + i)}>
-              {message.author && <b className="member-speaker">{authorName(state, message.author)}</b>}
-              <RichText text={message.text} files={files} />
+            <article key={historic.from + i} id={`message-${chat.id}-${historic.from + i}`} className={messageClass(message, historic.messages, i)} onContextMenu={e => messageMenu(e, message, historic.from + i)}>
+              {message.role === "user" && personLabel(message, historic.messages, i)}
+              <RichText text={message.text} files={files} mentions={mentions} />
               <Attachments list={message.attachments} />
               <Reactions state={state} message={message} botId={chat.botId} />
             </article>
@@ -1101,7 +1125,7 @@ function ChatViewBody({
                 {(m.text || m.role !== "assistant") && (
                   <article
                     id={`message-${chat.id}-${loadedFrom + i}`}
-                    className={messageClass(m)}
+                    className={messageClass(m, chat.messages, i)}
                     onContextMenu={e => messageMenu(e, m, loadedFrom + i)}
                   >
                     {m.interim ? (
@@ -1118,7 +1142,7 @@ function ChatViewBody({
                         </b>
                       )
                     ) : m.role === "user" ? (
-                      <b className={m.author ? "member-speaker" : "visually-hidden"}>{m.author ? authorName(state, m.author) : "You"}</b>
+                      personLabel(m, chat.messages, i)
                     ) : (
                       <b className="command-label">Command output</b>
                     )}
@@ -1127,7 +1151,7 @@ function ChatViewBody({
                       {m.role === "command" && m.plain ? (
                         <pre className="command-output">{m.text}</pre>
                       ) : (
-                        <RichText text={m.voiceCaption ?? m.text} files={files} />
+                        <RichText text={m.voiceCaption ?? m.text} files={files} mentions={mentions} />
                       )}
                       <Attachments list={m.attachments} />
                     {!!m.mentions?.length && (
@@ -1235,9 +1259,9 @@ function ChatViewBody({
             </button>
           ))}
           {pending.map(m => (
-            <article className={messageClass(m)} key={m.clientMessageId} aria-label="Sending message">
+            <article className="user" key={m.clientMessageId} aria-label="Sending message">
               {m.quote && <blockquote className="msg-quote">{m.quote}</blockquote>}
-              <RichText text={m.text} files={files} />
+              <RichText text={m.text} files={files} mentions={mentions} />
               <Attachments list={m.attachments} />
               {!!m.mentions?.length && <MentionChips sent list={m.mentions} />}
             </article>

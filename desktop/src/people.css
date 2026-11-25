@@ -1,0 +1,131 @@
+/* People in a chat: each one's color, their round badge, the name tag above another person's
+   message, and the tag an "@Name" is drawn as (src/PersonBadge.tsx). */
+
+/* Six colors that read on the light and the dark page. A person keeps theirs (from their id). */
+.person-color-0 { --person: #2f6bd8; }
+.person-color-1 { --person: #1b8a5a; }
+.person-color-2 { --person: #8a4fd3; }
+.person-color-3 { --person: #c25e12; }
+.person-color-4 { --person: #c23b78; }
+.person-color-5 { --person: #12838a; }
+:root[data-mode="dark"] .person-color-0 { --person: #7eaaff; }
+:root[data-mode="dark"] .person-color-1 { --person: #5fd09a; }
+:root[data-mode="dark"] .person-color-2 { --person: #bd93ff; }
+:root[data-mode="dark"] .person-color-3 { --person: #f3a35f; }
+:root[data-mode="dark"] .person-color-4 { --person: #f483b6; }
+:root[data-mode="dark"] .person-color-5 { --person: #5fd2d6; }
+
+.person-badge {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  border-radius: 50%;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--person, var(--accent)) 18%, var(--surface));
+  color: var(--person, var(--accent));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--person, var(--accent)) 30%, transparent);
+  font-weight: 600;
+  line-height: 1;
+  user-select: none;
+}
+.person-badge[data-initial]::before {
+  content: attr(data-initial);
+}
+.person-badge img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+/* Another person's message: on the left, in a person's bubble, with room for their badge beside it. */
+article.user.from-person {
+  position: relative;
+  margin-left: 34px;
+  margin-right: auto;
+  /* A run of one person's messages sits close together. */
+  margin-top: -12px;
+}
+article.user.from-person.starts-run {
+  margin-top: 26px;
+}
+article.user.from-person > .person-side-badge {
+  position: absolute;
+  left: -34px;
+  top: 0;
+}
+article.user.from-person > b.person-speaker {
+  position: absolute;
+  left: 2px;
+  top: -22px;
+  margin: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--person);
+  font-size: calc(12px * var(--text-scale));
+  font-weight: 500;
+}
+article.user.from-person > .msg-actions {
+  left: 0;
+  right: auto;
+}
+
+/* "@Name" in a message: a rounded pill with the person's picture or the bot's face. */
+.mention-tag {
+  display: inline-flex;
+  /* The tag's words sit on the line's baseline; the small picture is centered beside them. */
+  align-items: baseline;
+  gap: 4px;
+  padding: 0 7px 0 3px;
+  margin: 0 1px;
+  border-radius: 999px;
+  vertical-align: baseline;
+  line-height: 1.45;
+  font-weight: 500;
+  white-space: nowrap;
+  background: color-mix(in srgb, var(--person, var(--accent)) 14%, transparent);
+  color: color-mix(in srgb, var(--person, var(--accent)) 82%, var(--ink));
+}
+.mention-tag.is-bot {
+  --person: var(--accent);
+}
+.mention-tag > .person-badge,
+.mention-tag > .bot-avatar {
+  align-self: center;
+}
+.mention-tag > .person-badge {
+  box-shadow: none;
+  font-size: 8px !important;
+}
+/* Settings › Profile › Your picture. */
+.your-picture {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 14px 16px;
+}
+.your-picture-body {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+.your-picture-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.your-picture-error {
+  color: var(--danger);
+  font-size: calc(13px * var(--text-scale));
+}
+.your-picture-page {
+  margin-bottom: 8px;
+}
+
+/* In a person's own bubble the tag keeps to the bubble's ink. */
+article.user .mention-tag {
+  background: color-mix(in srgb, var(--bubble-ink, currentColor) 14%, transparent);
+  color: inherit;
+}

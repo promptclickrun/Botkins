@@ -27,6 +27,7 @@ import {
 } from "lucide-react";
 import type { ProfileState, State } from "./types";
 import { Group, errorText } from "./SettingsRows";
+import { YourPicture } from "./YourPicture";
 import { WelcomeFrame, WelcomeLogo } from "./Welcome";
 import {
   canContinueWithoutProfile,
@@ -833,6 +834,8 @@ function SignedInProfile({ state }: { state: State }) {
         </form>
       </Group>
 
+      <YourPicture state={state} />
+
       <Group
         title="Computers"
         footer="Offline computers remain listed and will retry binding when they are reachable."
@@ -1093,15 +1096,21 @@ export default function ProfileSettings({ state }: { state: State }) {
     if (!isSignedIn) setInWizard(true);
   }, [isSignedIn]);
 
+  // "Your picture" is this computer's team's, with or without a hosted profile.
   if (isSignedIn && !inWizard) {
     return <SignedInProfile state={state} />;
   }
 
   return (
-    <ProfileWizard
-      state={state}
-      onComplete={() => setInWizard(false)}
-    />
+    <>
+      <div className="profile-root profile-page your-picture-page">
+        <YourPicture state={state} />
+      </div>
+      <ProfileWizard
+        state={state}
+        onComplete={() => setInWizard(false)}
+      />
+    </>
   );
 }
 

@@ -260,6 +260,8 @@ const POLICY = {
   "link.step": ["agents", "chat"],
   "link.setLook": ["agents", "manage"],
   "link.unpair": ["settings", "view"],
+  // A person sets or clears their own picture, and nobody else's ("people-avatars-v1").
+  setMyAvatar: ["settings", "view"],
   "link.push.register": ["settings", "view"],
   "link.push.prefs": ["settings", "view"],
   "link.push.unregister": ["settings", "view"],
@@ -448,6 +450,8 @@ const SELF_METHODS = new Set([
   "link.sync",
   // A member may always leave: it removes only their own device.
   "link.unpair",
+  // A person's own picture is always theirs to set: the link sets the caller's, never anyone else's.
+  "setMyAvatar",
 ]);
 const BOT_METHODS = new Set(["updateBot", "setBotProactive", "proactiveAct", "setBotFlags", "makePrimary", "reorderBots", "deleteBot", "duplicateBot", "setBotAccess", "setBotIntegrations", "botMemory", "setBotMemory", "saveTemplate", "exportTemplateText", "link.setLook"]);
 const CHAT_METHODS = new Set(["changeMainFork", "setChatFlags", "renameChat", "regenerateChatTitle", "deleteChat", "forkChat", "reactToMessage", "warmChat", "setChatProject", "recordVoiceLine", "send", "stop", "unqueue", "sendNow", "compact", "sideQuestion", "clearApprovals", "mentionables", "link.messages", "link.step", "sidePane", "changeSchedule", "link.voice.live", "link.voice.endLive", "link.team.inviteToChat", "link.team.removeFromChat", "link.chats.setSection", "mcpApps.view", "mcpApps.callTool", "mcpApps.readResource"]);
@@ -882,7 +886,8 @@ export function ownerParts(parts, team, extra = {}) {
   out.bots = (parts.bots ?? []).filter((bot) => !bot.createdBy || used.has(bot.id));
   // What a bot told another person is that person's: the owner is shown who it looks out for, not what it said to them.
   if ("proactive" in parts) out.proactive = ownerProactive(parts.proactive);
-  out.meta = { ...(parts.meta ?? {}), you: { kind: "owner", admin: false } };
+  const ownAvatar = avatarOf(team, OWNER);
+  out.meta = { ...(parts.meta ?? {}), you: { kind: "owner", admin: false, ...(ownAvatar && { avatar: ownAvatar }) } };
   return out;
 }
 
@@ -1079,8 +1084,71 @@ function scrub(value) {
 }
 const emptySkills = { folders: [], plugins: [], disabled: [] };
 
-/** Everyone a chat can be shared with: the owner and each member, by id and name. */
-export const teamPeople = (team, ownerName = "") => [{ id: OWNER, name: ownerName || "Owner" }, ...(team?.members ?? []).map((member) => ({ id: member.id, name: member.name }))];
+/**
+ * A person's own picture, as a person sets it for themselves ("setMyAvatar"): a data URL of a square JPEG or PNG,
+ * 256 pixels wide as a client makes it, and at most 96 KB of base64. The picture's own first bytes must say the
+ * type its URL names, and its own size must be square, from 32 to 512 pixels on a side. Anything else is refused.
+ */
+export const AVATAR_MAX = 96 * 1024;
+const AVATAR_URL = /^data:image\/(jpeg|png);base64,([A-Za-z0-9+/]+={0,2})$/;
+/** The width and height a PNG or JPEG says it has, or null when its bytes are not one. */
+function imageSize(type, bytes) {
+  if (type === "png") {
+    const signature = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+    if (bytes.length < 24 || signature.some((byte, at) => bytes[at] !== byte) || bytes.toString("latin1", 12, 16) !== "IHDR") return null;
+    return { width: bytes.readUInt32BE(16), height: bytes.readUInt32BE(20) };
+  }
+  if (bytes.length < 4 || bytes[0] !== 0xff || bytes[1] !== 0xd8 || bytes[2] !== 0xff) return null;
+  // The frame header (SOF0 to SOF15, apart from the markers that share the numbers) holds the size.
+  let at = 2;
+  while (at + 9 < bytes.length) {
+    if (bytes[at] !== 0xff) return null;
+    const marker = bytes[at + 1];
+    if (marker === 0xff) { at++; continue; }
+    if (marker === 0xd8 || marker === 0x01 || (marker >= 0xd0 && marker <= 0xd7)) { at += 2; continue; }
+    const length = bytes.readUInt16BE(at + 2);
+    if (length < 2) return null;
+    if (marker >= 0xc0 && marker <= 0xcf && marker !== 0xc4 && marker !== 0xc8 && marker !== 0xcc) return { height: bytes.readUInt16BE(at + 5), width: bytes.readUInt16BE(at + 7) };
+    at += 2 + length;
+  }
+  return null;
+}
+/** The picture as it is kept, null to take it away, or an Error with a sentence a person can read. */
+export function cleanAvatar(value) {
+  if (value === null || value === undefined || value === "") return null;
+  if (typeof value !== "string") throw new Error("Choose a picture.");
+  const match = AVATAR_URL.exec(value);
+  if (!match) throw new Error("Use a JPEG or PNG picture.");
+  if (match[2].length > AVATAR_MAX) throw new Error("That picture is too large. Use one of at most 96 KB.");
+  const size = imageSize(match[1], Buffer.from(match[2], "base64"));
+  if (!size) throw new Error("That picture can't be read. Use a JPEG or PNG picture.");
+  if (size.width !== size.height || size.width < 32 || size.width > 512) throw new Error("Use a square picture from 32 to 512 pixels wide.");
+  return value;
+}
+/** The pictures a team keeps, by person ("owner" or a member's id), with any that are not a picture left out. */
+export function cleanAvatars(saved) {
+  const out = {};
+  if (!saved || typeof saved !== "object" || Array.isArray(saved)) return out;
+  for (const [id, value] of Object.entries(saved)) {
+    try {
+      if (typeof id === "string" && id && cleanAvatar(value)) out[id] = value;
+    } catch { /* a picture that is not one is not kept */ }
+  }
+  return out;
+}
+/** A person's own picture, if they set one. */
+export const avatarOf = (team, id) => {
+  const value = team?.avatars && Object.hasOwn(team.avatars, id) ? team.avatars[id] : undefined;
+  return typeof value === "string" && value ? value : undefined;
+};
+/** Who the person is, with their picture when they set one. */
+const personEntry = (team, id, name) => {
+  const avatar = avatarOf(team, id);
+  return { id, name, ...(avatar && { avatar }) };
+};
+
+/** Everyone a chat can be shared with: the owner and each member, by id and name, with each one's own picture. */
+export const teamPeople = (team, ownerName = "") => [personEntry(team, OWNER, ownerName || "Owner"), ...(team?.members ?? []).map((member) => personEntry(team, member.id, member.name))];
 
 export function teamPart(team, forOwner, principal = { kind: "owner" }, ownerName = "", memberDevices) {
   if (forOwner) {
@@ -1251,6 +1319,7 @@ export function filterParts(parts, principal, team, extra = {}) {
     const known = new Set([OWNER, me, ...shared.flatMap((chat) => [chat.createdBy || OWNER, ...(team?.chats?.[chat.id] ?? [])])]);
     out.team.people = out.team.people.filter((person) => known.has(person.id));
   }
-  out.meta = { ...(parts.meta ?? {}), you: { kind: "member", memberId: principal.memberId, name: principal.name } };
+  const ownAvatar = avatarOf(team, principal.memberId);
+  out.meta = { ...(parts.meta ?? {}), you: { kind: "member", memberId: principal.memberId, name: principal.name, ...(ownAvatar && { avatar: ownAvatar }) } };
   return out;
 }

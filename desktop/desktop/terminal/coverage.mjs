@@ -280,6 +280,8 @@ export const WORKSPACE = {
   team: cmd("team show"),
   renameTeam: cmd("team rename"),
   renameTeamMember: cmd("team members rename"),
+  // The owner's own picture ("people-avatars-v1"); `botkins profile picture clear` takes it away.
+  setMyAvatar: cmd("profile picture set"),
   saveTeamRole: cmd("team roles save"),
   deleteTeamRole: cmd("team roles remove"),
   saveTeamGroup: cmd("team groups save"),
@@ -650,6 +652,8 @@ export const CHANGES = {
   "profile.reconnect": null,
   "profile.deleteAccount": null,
   "profile.markMigrationPrompted": null,
+  // The owner's own picture: set or cleared, never the picture.
+  "profile.picture": (args) => (args?.[0] ? "set" : "cleared"),
   // ── Node host (control-node.mjs) ──
   // Logs the node name, project name, grant id, or pause state — never local folder paths.
   "node.setup": (args, value) => value?.name ?? args?.[0],

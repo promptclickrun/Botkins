@@ -22,6 +22,7 @@
 import { basename } from "node:path";
 import { safeName } from "./uploads.mjs";
 import { botVoiceField } from "./voice.mjs";
+import { cleanAvatar } from "./team.mjs";
 
 /**
  * The plugin calls ("plugins-v1"), by their wire names. A rename is a change here and in pluginArgs.
@@ -69,8 +70,8 @@ export const PANEL_STARTS = ["checklist", "tracker", "chart", "table", "notes", 
 export const SPACE_SIZES = { name: 40, prompt: 4000, note: 2000, label: 80, state: 64 * 1024, stateKeys: 200 };
 
 export const REMOTE_METHODS = new Set([
-  // Preferences
-  "setPreferences", "appInfo",
+  // Preferences, and a person's own picture ("people-avatars-v1"): the link sets the caller's, never another person's.
+  "setPreferences", "appInfo", "setMyAvatar",
   // The computer's own updates ("app-update-v1"). Where a release comes from is fixed on the computer:
   // no call takes a version, an address or a channel (appUpdateArgs).
   "appUpdateStatus", "checkAppUpdate", "installAppUpdate", "setAppUpdateAuto",
@@ -477,6 +478,11 @@ export function remoteArgs(method, args, { deviceId, uploads } = {}) {
     if (args.length !== 2 || !clean(args[0]) || Object.keys(args[1]).some((key) => key !== "action"))
       throw new Error("Choose one approval action for this request.");
     return [args[0], { action: args[1].action }];
+  }
+  // A picture is a small square JPEG or PNG as a data URL, or null to take it away (team.mjs, cleanAvatar).
+  if (method === "setMyAvatar") {
+    if (args.length > 1) throw new Error("Choose one picture.");
+    return [cleanAvatar(args[0])];
   }
   if (method === "mainChat" && (args.length !== 1 || !clean(args[0]))) throw new Error("Choose a bot.");
   if (method === "setProactiveChatMode" && (args.length !== 1 || !["main", "new"].includes(args[0]))) throw new Error("Choose Main chat or New chat every time.");
