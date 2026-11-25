@@ -52,6 +52,7 @@ import {
   TaskDrawer,
   TimelineFold,
   WorkSteps,
+  WorkingPill,
   duration,
 } from "./ChatActivity";
 import { QuoteContext } from "./Composer";
@@ -59,6 +60,7 @@ import { MentionChips } from "./MentionMenu";
 import { TeamRail } from "./TeamRail";
 import RequestPanel from "./RequestPanel";
 import { LinkPreviewCard, useReadAloud } from "./Extras";
+import { liveTurnDisplay } from "./liveDisplay";
 import { clearReadingError, readAloud, useReading } from "./voice";
 import ContextDetails from "./ContextDetails";
 import { BotAvatar, activityLabel, botActivity, chatActivity, useOutcome } from "./Avatar";
@@ -277,10 +279,15 @@ function ChatViewBody({
   const busy = busy0(state, chat.id);
   const thinking = state.thinking?.[chat.id];
   const queued = state.queued?.[chat.id] ?? [];
-  const showThinking = state.settings.showThinking !== false;
+  const { showThinking, showUpdates, liveThinking, liveStream, liveIntent } = liveTurnDisplay({
+    settings: state.settings,
+    stream: state.streams[chat.id],
+    thinking,
+    intent: state.intents[chat.id],
+  });
   // Newer preference records use the same three choices as the phone. Keep the older booleans
   // working for profiles and remote hosts created before the setting was split up.
-  const thinkingMode = state.settings.thinking ?? (showThinking ? "open" : "hidden");
+  const thinkingMode = state.settings.thinking ?? (!showThinking ? "hidden" : state.settings.foldThinking === false ? "open" : "folded");
   const stepsMode = state.settings.steps ?? (state.settings.foldTools ? "folded" : "open");
   const foldFinishedSteps = state.settings.foldFinishedSteps ?? state.settings.foldTools !== false;
   const chatRuns = state.runs.filter((r) => r.chatId === chat.id);
@@ -412,7 +419,10 @@ function ChatViewBody({
     if (workingRunId && readingBeginning.current) toBottom();
   }, [workingRunId]);
   // New output follows only while the person is at the bottom.
-  const liveSteps = latest?.status === "Working" ? (latest.steps?.length ?? 0) + (latest.reasoning?.length ?? 0) : 0;
+  const liveSteps =
+    latest?.status === "Working"
+      ? (latest.steps?.length ?? 0) + (showThinking ? (latest.reasoning?.length ?? 0) : 0)
+      : 0;
   const follow = useCallback(() => {
     const el = scroller.current;
     if (stick.current && el) el.scrollTop = el.scrollHeight;
@@ -420,7 +430,7 @@ function ChatViewBody({
   useLayoutEffect(() => {
     follow();
     // A turn that ends, and a teammate row that appears, add rows below the last message too.
-  }, [follow, chat.messages.length, hasText, thinking, liveSteps, requests.length, side?.answer, latest?.status, latest?.teamwork?.length]);
+  }, [follow, chat.messages.length, hasText, liveStream, liveThinking, liveSteps, requests.length, side?.answer, latest?.status, latest?.teamwork?.length]);
   // Rows also change size without any of the above changing: a card loads, a row or the task
   // list is opened. While the view follows the latest, growth is followed too, except just after
   // the person opened something: that stays where it is, and Scroll to latest message shows if the end
@@ -687,18 +697,19 @@ function ChatViewBody({
     type Event = { kind: RunTimelineEvent["kind"]; at: number; order: number; key: string; body: ReactNode; fold: ReactNode; details: ReactNode };
     const events: Event[] = [];
     // Older hosts send the currently streaming thought before they publish timed reasoning.
-    const orderedRun = live && !run.reasoning?.length && thinking?.trim()
-      ? { ...run, reasoning: [{ id: "live", text: thinking, started: run.time }] } : run;
+    const orderedRun = live && !run.reasoning?.length && liveThinking?.trim()
+      ? { ...run, reasoning: [{ id: "live", text: liveThinking, started: run.time }] } : run;
     for (const event of orderedRunEvents(orderedRun, chat.messages, { includeReplies: group, includeHelperSteps: true })) {
       if (event.kind === "interim" || event.kind === "reasoning") {
         if (!event.value.text.trim()) continue;
-        const update = event.kind === "reasoning"
+        const isReasoning = event.kind === "reasoning";
+        const update = isReasoning
           ? <ReasoningUpdate text={event.value.text} />
           : <InterimUpdate text={event.value.text} />;
         events.push({
           kind: event.kind, at: event.at, order: event.order, key: event.key,
-          body: thinkingMode === "open" ? update : null,
-          fold: thinkingMode === "hidden" ? null : update,
+          body: isReasoning ? (showThinking && thinkingMode === "open" ? update : null) : (showUpdates ? update : null),
+          fold: isReasoning ? (showThinking && thinkingMode !== "hidden" ? update : null) : (showUpdates ? update : null),
           details: update,
         });
       } else if (event.kind === "reply") {
@@ -769,7 +780,7 @@ function ChatViewBody({
     return (
       <Fragment key={`timeline-${run.id}`}>
         {initial && timelineMessage(initial.message, initial.index)}
-        {live && <LiveLead avatar={stillFace(28, true)} label={doingNow} thought={thinkingMode === "open" ? state.intents[chat.id]?.trim() : undefined} shimmer={onIt && doingNow !== "Needs you" && !allSteps.some((step) => !step.agentId && step.status === "Running" && showStep(step))} />}
+        {live && <LiveLead avatar={stillFace(28, true)} label={doingNow} thought={showUpdates ? liveIntent.trim() || undefined : undefined} shimmer={onIt && doingNow !== "Needs you" && !allSteps.some((step) => !step.agentId && step.status === "Running" && showStep(step))} />}
         {(live || !folded) && stepsMode === "open" && olderWork}
         {group ? groupTranscript : (live || !folded) ? events.map((event) => <Fragment key={event.key}>{event.body}</Fragment>) : personBody}
         {/* A finished one-bot turn folds above its answer: the work, then the reply. */}
@@ -777,7 +788,7 @@ function ChatViewBody({
         {/* Botkins gave the bot more turns in this run by itself: said just before the reply it kept going for. */}
         {!group && keptLine(run) && <div className="timeline-kept">{keptLine(run)}</div>}
         {!group && reply.map(({ message, index }) => timelineMessage(message, index))}
-        {live && hasText && (
+        {live && hasText && showUpdates && (
           <article className="assistant live">
             {group && currentBot && (
               <b className="speaker">
@@ -1118,35 +1129,59 @@ function ChatViewBody({
           )}
           {busy && !timelineBusy && group && (
             <article className="assistant live">
-              {speaker && (
-                <b className="speaker">
-                  <BotAvatar bot={speaker} state={botActivity(state, speaker.id)} size={22} animated={false} />
-                  <span className="speaker-name">{speaker.name}</span>
-                </b>
-              )}
-              {hasText ? (
-                <LiveReply updates={updates} files={files} follow={follow} />
+              {hasText && showUpdates ? (
+                <>
+                  {speaker && (
+                    <b className="speaker">
+                      <BotAvatar bot={speaker} state={botActivity(state, speaker.id)} size={22} animated={false} />
+                      <span className="speaker-name">{speaker.name}</span>
+                    </b>
+                  )}
+                  <LiveReply updates={updates} files={files} follow={follow} />
+                </>
+              ) : !turnWaits && !state.settings.foldTools && latest?.status === "Working" ? (
+                <WorkingPill startedAt={latest.time} title={speaker?.name ? speaker.name + " is working" : undefined} />
               ) : (
-                <p className="typing" role="status">
-                  {turnWaits ? "Waiting for your response…" : (speaker?.name ?? "The group") + " is typing…"}
-                </p>
+                <>
+                  {speaker && (
+                    <b className="speaker">
+                      <BotAvatar bot={speaker} state={botActivity(state, speaker.id)} size={22} animated={false} />
+                      <span className="speaker-name">{speaker.name}</span>
+                    </b>
+                  )}
+                  <p className={"typing" + (turnWaits ? "" : " shimmer-text")} role="status">
+                    {turnWaits ? "Waiting for your response…" : (speaker?.name ?? "The group") + " is typing…"}
+                  </p>
+                </>
               )}
             </article>
           )}
           {busy && !timelineBusy && !group && (
             <article className="assistant live">
-              {!(chat.messages.at(-1)?.role === "assistant" && chat.messages.at(-1)?.text) && (
-                <b className="speaker">
-                  <BotAvatar bot={bot} state={activity} size={22} animated={false} />
-                  <span className="speaker-name">{bot.name}</span>
-                </b>
-              )}
-              {hasText ? (
-                <LiveReply updates={updates} files={files} follow={follow} />
+              {hasText && showUpdates ? (
+                <>
+                  {!(chat.messages.at(-1)?.role === "assistant" && chat.messages.at(-1)?.text) && (
+                    <b className="speaker">
+                      <BotAvatar bot={bot} state={activity} size={22} animated={false} />
+                      <span className="speaker-name">{bot.name}</span>
+                    </b>
+                  )}
+                  <LiveReply updates={updates} files={files} follow={follow} />
+                </>
+              ) : !turnWaits && !state.settings.foldTools && latest?.status === "Working" ? (
+                <WorkingPill startedAt={latest.time} title={liveIntent || undefined} />
               ) : (
-                <p className="typing" role="status">
-                  {turnWaits ? "Waiting for your response…" : state.intents[chat.id] || "Working…"}
-                </p>
+                <>
+                  {!(chat.messages.at(-1)?.role === "assistant" && chat.messages.at(-1)?.text) && (
+                    <b className="speaker">
+                      <BotAvatar bot={bot} state={activity} size={22} animated={false} />
+                      <span className="speaker-name">{bot.name}</span>
+                    </b>
+                  )}
+                  <p className={"typing" + (turnWaits ? "" : " shimmer-text")} role="status">
+                    {turnWaits ? "Waiting for your response…" : liveIntent || "Working…"}
+                  </p>
+                </>
               )}
             </article>
           )}

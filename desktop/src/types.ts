@@ -291,6 +291,10 @@ export type Run = {
   finished?: number;
   /** Plain-language work summary, e.g. "Ran 3 commands, read 2 files". */
   summary?: string;
+  /** Up to four distinct tool-step kinds used in this run, for Activity feed icon stacks. */
+  stepKinds?: string[];
+  stepCount?: number;
+  failedCount?: number;
   /** In a group chat: who was asked to answer, and members that failed. */
   speakers?: string[];
   failures?: { botId: string; detail: string }[];
@@ -1930,6 +1934,9 @@ export type Preferences = {
   foldFinishedSteps?: boolean;
   foldTools: boolean;
   showThinking: boolean;
+  foldThinking?: boolean;
+  /** Show interim messages and status updates while a bot works. */
+  showUpdates?: boolean;
   /** Show a card for the first web link in a reply. Private and local hosts are never fetched. */
   linkPreviews?: boolean;
   /** Speak each new reply aloud in the open chat. */

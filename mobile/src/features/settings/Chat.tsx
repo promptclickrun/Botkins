@@ -1,4 +1,4 @@
-// Display choices belong to this phone. Automatic chat titles are configured on the computer.
+// How chats show a bot's work and replies on this phone, and the matching choices kept on the computer.
 import { MenuView } from "@react-native-menu/menu";
 import { ChevronsUpDown } from "lucide-react-native";
 import { View } from "react-native";
@@ -15,9 +15,9 @@ const STEPS: { value: ChatPrefs["steps"]; label: string; subtitle: string }[] = 
   { value: "failed", label: "Failed only", subtitle: "Show only failed tool calls in the chat" },
 ];
 const THINKING: { value: ChatPrefs["thinking"]; label: string; subtitle: string }[] = [
-  { value: "folded", label: "Folded", subtitle: "Thinking and updates stay in the working rail" },
-  { value: "show", label: "Open", subtitle: "Show thinking and updates in the chat as they arrive" },
-  { value: "hide", label: "Hidden", subtitle: "Hide thinking and updates in the chat and working rail" },
+  { value: "folded", label: "Folded", subtitle: "Chain of thought stays in the working rail" },
+  { value: "show", label: "Open", subtitle: "Show chain of thought in the chat as it streams" },
+  { value: "hide", label: "Hidden", subtitle: "Not shown while a bot works" },
 ];
 
 /** Auto-summarize: off, or every 5 to 30 turns (the computer's desktop/summaries.mjs). */
@@ -56,7 +56,8 @@ export default function Chat() {
         <Label>What a reply shows</Label>
         <Group>
           <ChoiceMenu title="Steps" subtitle="A bot's work in a turn" value={prefs.steps} options={STEPS} onChange={(steps) => setChatPrefs({ steps })} />
-          <ChoiceMenu title="Thinking and updates" subtitle="Its reasoning and notes while it works" value={prefs.thinking} options={THINKING} onChange={(thinking) => setChatPrefs({ thinking })} />
+          <ChoiceMenu title="Thinking" subtitle="Chain of thought while a bot works" value={prefs.thinking} options={THINKING} onChange={(thinking) => setChatPrefs({ thinking })} />
+          <Row title="Updates" subtitle="Interim messages and status while a bot works" toggled={prefs.updates} onToggle={(updates) => setChatPrefs({ updates })} />
           <Row title="Fold finished steps" subtitle="One line with elapsed time and step count" subtitleLines={2} toggled={prefs.foldFinishedSteps} onToggle={(foldFinishedSteps) => setChatPrefs({ foldFinishedSteps })} />
           <Row title="Text streaming" subtitle="See the reply a few words at a time as it writes" toggled={prefs.textStreaming} onToggle={(textStreaming) => setChatPrefs({ textStreaming })} />
           <Row title="Rich cards" subtitle="Charts, tables and suggested replies" toggled={prefs.richCards} onToggle={(richCards) => setChatPrefs({ richCards })} />
@@ -140,8 +141,22 @@ export default function Chat() {
             onToggle={(showThinking) => void attempt(api.setPreferences({ showThinking }))}
           />
           <Row
-            title="Fold finished steps"
-            subtitle="In its app; here, Steps above decides"
+            title="Fold thinking"
+            subtitle="In its app; off keeps thinking open inline"
+            toggled={settings?.foldThinking ?? true}
+            disabled={!settings || !online || !canManage || settings.showThinking === false}
+            onToggle={(foldThinking) => void attempt(api.setPreferences({ foldThinking }))}
+          />
+          <Row
+            title="Show updates"
+            subtitle="In its app; here, Updates above decides"
+            toggled={settings?.showUpdates ?? true}
+            disabled={!settings || !online || !canManage}
+            onToggle={(showUpdates) => void attempt(api.setPreferences({ showUpdates }))}
+          />
+          <Row
+            title="Fold tool calls"
+            subtitle="In its app; off keeps work groups open inline"
             toggled={settings?.foldTools ?? true}
             disabled={!settings || !online || !canManage}
             onToggle={(foldTools) => void attempt(api.setPreferences({ foldTools }))}

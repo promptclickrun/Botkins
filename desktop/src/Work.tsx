@@ -1,4 +1,6 @@
 import { BriefcaseBusiness, CalendarClock, ChevronRight } from "lucide-react";
+import { formatFeedWork } from "./activityModel";
+import { IconStack } from "./ChatActivity";
 import { dateLabel, type PageActions } from "./Pages";
 import { scheduleSummary, upcomingRuns, whenLabel } from "./Routines";
 import type { Run, State } from "./types";
@@ -59,6 +61,7 @@ export function ActivityPage({
         const kind = category.get(r.id);
         // The status shows as a small dot and word in its status color.
         const tone = kind === "Working" ? "working" : kind === "Completed" ? "done" : kind === "Needs you" ? "needs" : "";
+        const work = formatFeedWork(r);
         return (
           <button className="row work-row" key={r.id} onClick={() => actions.open(r.chatId)}>
             <i className={"work-dot " + tone} aria-hidden="true" />
@@ -69,8 +72,16 @@ export function ActivityPage({
                 <span className={"status-word " + tone}>{kind === "Needs you" && r.status === "Working" ? "Waiting for you" : r.status}</span>
                 {r.trigger === "scheduled" ? " · Scheduled" : r.scheduleId != null ? " · Routine" : ""}
                 {r.skill ? " · /" + r.skill : ""}
-                {r.usedTools?.length ? " · " + r.usedTools.join(", ") : ""}
               </small>
+              {(work.kinds.length > 0 || work.summary) && (
+                <span className={"work-activity" + (tone === "working" ? " live" : "")}>
+                  {work.kinds.length > 0 && <IconStack kinds={work.kinds} size={11} />}
+                  <span className={"work-activity-summary" + (tone === "working" ? " shimmer-text" : "")}>
+                    {work.summary || (work.stepCount === 1 ? "1 step" : work.stepCount + " steps")}
+                  </span>
+                  {work.failedCount > 0 && <span className="work-failed">· {work.failedCount} failed</span>}
+                </span>
+              )}
             </span>
             <time>{dateLabel(r.time)}</time>
             <ChevronRight size={15} />

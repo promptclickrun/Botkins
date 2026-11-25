@@ -1,7 +1,7 @@
 import { router, useIsFocused, useLocalSearchParams } from "expo-router";
 import { Brain, ChevronDown, ChevronRight, CircleDashed, MessageCircle } from "lucide-react-native";
 import { useEffect, useState } from "react";
-import { ActivityIndicator, ScrollView, Text, View } from "react-native";
+import { ActivityIndicator, Text, View } from "react-native";
 import type { Run, Step, StepDetail, TeamAsk } from "@/link/types";
 import { useChatPrefs } from "@/state/chatPrefs";
 import { useBots, useModels, useWatchedChat } from "@/state/hooks";
@@ -9,30 +9,15 @@ import { api, watchReasoning } from "@/state/link";
 import { modelName } from "@/state/models";
 import { useApp } from "@/state/store";
 import { compactNumber, duration } from "@/state/time";
-import { Badge, EmptyState, Group, Label, Markdown, radius, Row, Sheet, space, T, Tap, type Tone, useTheme } from "@/ui";
+import { Badge, EmptyState, Group, Label, Markdown, Row, Sheet, space, T, Tap, type Tone, useTheme } from "@/ui";
 import { activitySteps } from "../../../link-host/activity-steps.mjs";
+import { CommandCard, DiffCard, KindIcon, StepDetailView } from "./ActivityWidgets";
+import { isCodingKind, parseStepInput, stepHeadline } from "./activityModel";
 import { TodoList } from "./TodoList";
 import { StepMark } from "./bits";
 import { helperSheet } from "./HelperRail";
-import { stepLabel } from "./turn";
 
 const STATUS_TONE: Record<string, Tone> = { Working: "accent", Completed: "success", "Needs you": "danger", Stopped: "neutral", Interrupted: "warning" };
-
-function Mono({ label, text }: { label: string; text: string }) {
-  const { colors, type } = useTheme();
-  return (
-    <View style={{ gap: 4 }}>
-      <T variant="caption" color="muted">
-        {label}
-      </T>
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ backgroundColor: colors.sunken, borderRadius: radius.sm }} contentContainerStyle={{ padding: space.md }}>
-        <Text selectable maxFontSizeMultiplier={1.3} style={[type.mono, { color: colors.ink }]}>
-          {text.length > 6000 ? text.slice(0, 6000) + "\n…" : text}
-        </Text>
-      </ScrollView>
-    </View>
-  );
-}
 
 /**
  * One step: its state, its label and how long it took. A tap shows its input and output. A step
@@ -45,7 +30,6 @@ export function StepRow({ step, chatId, runId, startOpen = false, helperName, fo
   const [detail, setDetail] = useState<StepDetail | "failed">();
   const fetches = open && !!step.more && !!chatId && !!runId;
   const stepId = step.id;
-  const spokenLabel = (helperName ? helperName + ": " : "") + stepLabel(step);
   const finished = step.finished;
   useEffect(() => {
     if (!fetches || !chatId || !runId) return;
@@ -59,16 +43,24 @@ export function StepRow({ step, chatId, runId, startOpen = false, helperName, fo
     };
   }, [fetches, chatId, runId, stepId, finished]);
   const read = typeof detail === "object" ? detail : undefined;
-  const input = read?.input ?? step.input;
-  const output = read?.output ?? step.output;
-  const more = follow || !!step.input || !!step.output || !!step.more;
+  const effectiveStep: Step = read ? { ...step, input: read.input ?? step.input, output: read.output ?? step.output } : step;
+  const parsed = parseStepInput(effectiveStep);
+  const coding = isCodingKind(parsed.kind);
+  const headline = (helperName ? helperName + ": " : "") + stepHeadline(effectiveStep, parsed);
+  const more = follow || !!effectiveStep.input || !!effectiveStep.output || !!step.more || !!parsed.command || !!parsed.filePath;
   const took = step.finished ? duration(step.finished - step.started) : undefined;
   const head = (
     <View style={{ minHeight: 52, paddingHorizontal: space.lg, paddingVertical: 10, flexDirection: "row", alignItems: "center", gap: space.md }}>
-      <StepMark status={step.status} />
+      {step.status === "Running" || step.status === "Failed" ? (
+        <StepMark status={step.status} />
+      ) : (
+        <View style={{ width: 24, height: 24, alignItems: "center", justifyContent: "center" }}>
+          <KindIcon kind={parsed.kind} size={17} color={colors.muted} />
+        </View>
+      )}
       <View style={{ flex: 1, minWidth: 0 }}>
-        <T variant="callout" weight="500" numberOfLines={open ? undefined : 2}>
-          {helperName ? helperName + ": " + stepLabel(step) : stepLabel(step)}
+        <T variant="callout" weight="500" color={step.status === "Failed" ? "danger" : "ink"} numberOfLines={open ? undefined : 2}>
+          {headline}
         </T>
         {!open && !!step.progress && step.status === "Running" && (
           <T variant="footnote" color="muted" numberOfLines={1}>
@@ -87,20 +79,27 @@ export function StepRow({ step, chatId, runId, startOpen = false, helperName, fo
   if (!more) return head;
   return (
     <View>
-      <Tap onPress={() => setOpen(!open)} sink={1} feel="select" hitSlop={0} accessibilityLabel={spokenLabel + ", " + step.status} accessibilityState={{ expanded: open }}>
+      <Tap onPress={() => setOpen(!open)} sink={1} feel="select" hitSlop={0} accessibilityLabel={headline + ", " + step.status} accessibilityState={{ expanded: open }}>
         {head}
       </Tap>
       {open && (
         <View style={{ paddingHorizontal: space.lg, paddingBottom: space.lg, gap: space.md }}>
-          {!!input && <Mono label="Input" text={input} />}
-          {!!step.progress && <Mono label="Progress" text={step.progress} />}
-          {!!output && <Mono label="Output" text={output} />}
-          {follow && !input && !step.progress && !output && !fetches && <T variant="footnote" color="muted">{step.status === "Running" ? "Waiting for progress…" : "No additional details."}</T>}
-          {fetches && !detail && <ActivityIndicator color={colors.muted} style={{ alignSelf: "flex-start" }} />}
-          {fetches && detail === "failed" && (
+          {fetches && !detail ? (
+            <ActivityIndicator color={colors.muted} style={{ alignSelf: "flex-start" }} />
+          ) : fetches && detail === "failed" ? (
             <T variant="footnote" color="muted">
               Couldn't read this step from your computer.
             </T>
+          ) : follow && !effectiveStep.input && !effectiveStep.progress && !effectiveStep.output && !parsed.command && !parsed.filePath ? (
+            <T variant="footnote" color="muted">{step.status === "Running" ? "Waiting for progress…" : "No additional details."}</T>
+          ) : coding ? (
+            parsed.kind === "command" ? (
+              <CommandCard step={effectiveStep} parsed={parsed} live={step.status === "Running"} />
+            ) : (
+              <DiffCard step={effectiveStep} parsed={parsed} live={step.status === "Running"} />
+            )
+          ) : (
+            <StepDetailView step={effectiveStep} />
           )}
         </View>
       )}
@@ -126,7 +125,7 @@ function Reasoning({ run, startOpen }: { run: Run; startOpen: boolean }) {
       </Tap>
       {open && (
         <View style={{ paddingHorizontal: space.lg, paddingBottom: space.lg }}>
-          <Text selectable maxFontSizeMultiplier={1.35} style={[type.subhead, { color: colors.muted, fontStyle: "italic" }]}>
+          <Text selectable maxFontSizeMultiplier={1.35} style={[type.subhead, { color: colors.ink2, lineHeight: 22 }]}>
             {text}
           </Text>
         </View>
@@ -148,6 +147,7 @@ export default function RunActivity() {
   const focused = useIsFocused();
   const streamsReplies = useChatPrefs((prefs) => prefs.textStreaming);
   const thinkingMode = useChatPrefs((prefs) => prefs.thinking);
+  const showUpdates = useChatPrefs((prefs) => prefs.updates);
   const needsReasoning = focused && thinkingMode !== "hide" && !streamsReplies && running?.id === runId && running?.status === "Working";
   useEffect(() => needsReasoning ? watchReasoning(chatId) : undefined, [chatId, needsReasoning]);
   const allBots = useBots();
@@ -244,7 +244,7 @@ export default function RunActivity() {
       {/* Hidden omits notes from this rail; Folded and Open retain their complete text here. */}
       {thinkingMode !== "hide" && <Reasoning run={run} startOpen={thinkingMode === "show"} />}
 
-      {thinkingMode !== "hide" && updates.length > 0 && (
+      {showUpdates && updates.length > 0 && (
         <View>
           <Label>{updates.length === 1 ? "1 update" : updates.length + " updates"}</Label>
           <Group>

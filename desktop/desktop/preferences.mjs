@@ -135,6 +135,8 @@ export const defaultSettings = {
   },
   foldTools: true,
   showThinking: true,
+  foldThinking: true,
+  showUpdates: true,
   // Off until the person turns it on: a preview fetches the linked page from this computer.
   linkPreviews: false,
   readAloud: false,
@@ -237,6 +239,16 @@ export function changeSettings(settings, patch) {
       case "showThinking":
         if (typeof value !== "boolean")
           throw new Error("Choose whether to show thinking");
+        next[key] = value;
+        break;
+      case "foldThinking":
+        if (typeof value !== "boolean")
+          throw new Error("Choose a thinking display preference");
+        next[key] = value;
+        break;
+      case "showUpdates":
+        if (typeof value !== "boolean")
+          throw new Error("Choose whether to show updates");
         next[key] = value;
         break;
       case "onboarded":

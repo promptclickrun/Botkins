@@ -6,7 +6,8 @@
 // While the turn runs, its status is the glass capsule over the message box (StatusCapsule.tsx), and
 // its line under the text keeps the fold line's place (FoldRow.tsx). A turn that will fold once it
 // ends keeps room under its text for the reply's row. The work keeps away from the screen's edge
-// (`workWidth`). Thinking and interim texts are `Aside`s. Requests and errors are shown elsewhere.
+// (`workWidth`). Thinking and interim updates are controlled independently (Settings › Chat) and
+// drawn as `Aside`s. Requests and errors are shown elsewhere.
 // The turn's live line shimmers while the bot is on it and nothing waits for the person: the running
 // step, or "Coding" beside the face while no step runs (T3 Code's look, the owner's pick 2026-11-23).
 import { memo } from "react";
@@ -18,6 +19,7 @@ import { useApp } from "@/state/store";
 import { BotAvatar, Markdown, space, T } from "@/ui";
 import { Aside } from "./Aside";
 import { workWidth } from "./bits";
+import { liveTurnDisplay } from "./liveDisplay";
 import { type Item, segmentThinking } from "./turn";
 import { FACE_INDENT, StepLine } from "./WorkRows";
 
@@ -69,6 +71,8 @@ export function WorkPart({ chatId, bot, item }: { chatId: string; bot?: Bot; ite
 
 /** Text the bot wrote before it moved on (an interim message, or a piece noted from an older computer): one of its updates. */
 export function TurnText({ item }: { item: Extract<Item, { kind: "text" }> }) {
+  const showUpdates = useChatPrefs((prefs) => prefs.updates);
+  if (!showUpdates) return null;
   return <Aside kind="update" text={item.text} />;
 }
 
@@ -77,14 +81,16 @@ export function LiveTurn({ chatId, bot, group, bots, item }: { chatId: string; b
   const intent = useApp((state) => state.parts.live?.intents[chatId]);
   const speakerId = useApp((state) => state.parts.live?.speakers[chatId]);
   const thinkingMode = useChatPrefs((prefs) => prefs.thinking);
+  const showUpdates = useChatPrefs((prefs) => prefs.updates);
   const markdown = useChatPrefs((prefs) => prefs.markdown);
   const doing = useDoing(chatId);
   const onIt = useOnIt(chatId);
   const speaker = (speakerId ? bots.get(speakerId) : undefined) ?? bot;
   // Relay chunks are received text, not a typewriter animation. Markdown keeps completed blocks
   // cached while reparsing the active tail; the finished MessageRow performs the exact final parse.
-  const stream = item.text;
-  const thinking = thinkingMode === "show" ? item.thinking : "";
+  const visible = liveTurnDisplay({ stream: item.text, thinking: item.thinking, intent, thinkingMode, showUpdates });
+  const stream = visible.stream;
+  const thinking = thinkingMode === "show" ? visible.thinking ?? "" : "";
   // Timeline rows are already filtered for Folded/Open/Failed; keep the renderer structural.
   const steps = item.steps;
   // The face leads the work: what the bot is doing and its latest thought. A reply with no work has none.
@@ -92,7 +98,7 @@ export function LiveTurn({ chatId, bot, group, bots, item }: { chatId: string; b
   // One live line at a time: a running step shown below, or else what the bot is doing.
   const leadShimmers = onIt && !steps.some((step) => step.status === "Running");
   return (
-    <View style={{ gap: space.md }}>
+    <View style={{ gap: space.sm + 2 }}>
       {group && !!stream && (
         <View style={{ flexDirection: "row", alignItems: "center", gap: space.sm }}>
           <BotAvatar bot={speaker} size={22} state="talking" animated={false} />
@@ -119,10 +125,10 @@ export function LiveTurn({ chatId, bot, group, bots, item }: { chatId: string; b
       ) : stream ? (
         <Markdown text={stream} plain={!markdown} streaming />
       ) : (
-        !item.run && thinkingMode === "show" &&
+        !item.run && (thinkingMode === "show" || (showUpdates && !!visible.intent)) &&
         !lead && (
           <View style={workWidth} accessibilityLiveRegion="polite">
-            <Aside kind="thinking" text={intent ?? ""} bot={speaker} state="thinking" label="Thinking" live shimmer={onIt} />
+            <Aside kind="thinking" text={visible.intent ?? ""} bot={speaker} state="thinking" label="Thinking" live shimmer={onIt} />
           </View>
         )
       )}

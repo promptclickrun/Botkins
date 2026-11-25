@@ -1,5 +1,5 @@
-// How chats look and behave on this phone: steps, thinking, rich cards, Markdown, code, typing and
-// reading aloud. These choices stay on this phone when it connects to another computer.
+// How chats look and behave on this phone: steps, thinking, updates, rich cards, Markdown, code,
+// typing and reading aloud. These choices stay on this phone when it connects to another computer.
 import { type CompletionPosition, completionPositionOf } from "@/features/chat/completion";
 import { settleSteps, type StepsChoice } from "@/features/chat/fold";
 import { type BotTap, botTapOf } from "@/features/chat/habits";
@@ -15,8 +15,10 @@ export type ChatPrefs = {
   steps: StepsChoice;
   /** The person chose `steps`. Until then it is Folded (settleSteps in src/features/chat/fold.ts). */
   stepsPicked?: boolean;
-  /** A bot's live reasoning. */
+  /** A bot's chain of thought (reasoning). */
   thinking: "show" | "folded" | "hide";
+  /** Interim messages and status updates while a bot works. */
+  updates: boolean;
   /** Collapse finished activity into a single expandable line. */
   foldFinishedSteps: boolean;
   /** Cards, charts, tables and suggested replies a bot attaches. Off keeps only a card's title. */
@@ -49,6 +51,7 @@ export const textMode = (on: boolean, route: "direct" | "relay" | null): "live" 
 export const chatPrefDefaults: ChatPrefs = {
   steps: "folded",
   thinking: "folded",
+  updates: true,
   foldFinishedSteps: true,
   richCards: true,
   markdown: true,
@@ -79,6 +82,7 @@ export function loadChatPrefs(): Promise<void> {
           ...chatPrefDefaults, ...read,
           steps,
           thinking: read.thinking === "show" || read.thinking === "hide" ? read.thinking : "folded",
+          updates: typeof read.updates === "boolean" ? read.updates : chatPrefDefaults.updates,
           foldFinishedSteps: typeof read.foldFinishedSteps === "boolean" ? read.foldFinishedSteps : steps !== "show",
           completionPosition: completionPositionOf(read.completionPosition),
           botTap: botTapOf(read.botTap),

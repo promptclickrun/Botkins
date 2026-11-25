@@ -392,10 +392,11 @@ function ChatTimelineList({ chatId, view, pending, runPart, streaming, group, bo
   const timestamps = useChatPrefs(prefs => prefs.timestamps);
   const stepsPref = useChatPrefs((prefs) => prefs.steps);
   const thinkingPref = useChatPrefs((prefs) => prefs.thinking);
+  const updatesPref = useChatPrefs((prefs) => prefs.updates);
   const foldFinishedSteps = useChatPrefs((prefs) => prefs.foldFinishedSteps);
   const streamOpen = useApp((state) => streaming && typeof state.texts[chatId]?.stream === "string");
   const ownership = useMemo(() => indexMessageOwnership(view.messages), [view.messages]);
-  const prefs = useMemo(() => ({ steps: stepsPref, thinking: thinkingPref, foldFinishedSteps }), [stepsPref, thinkingPref, foldFinishedSteps]);
+  const prefs = useMemo(() => ({ steps: stepsPref, thinking: thinkingPref, updates: updatesPref, foldFinishedSteps }), [stepsPref, thinkingPref, updatesPref, foldFinishedSteps]);
   // A new step, steer, or page seals the current text into history using the latest snapshot.
   // Body-only changes reach the active row directly and leave this list untouched.
   const structural = useMemo(() => {

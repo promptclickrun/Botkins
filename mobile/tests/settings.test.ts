@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { REMOTE_METHODS } from "../link-host/methods.mjs";
 import { MockBackend } from "../link-host/mock-backend.mjs";
+import { liveTurnDisplay } from "../src/features/chat/liveDisplay";
 import { clockToDate, dateToClock, desktopFonts, desktopFontShown, everyBotAllowed, grantSummary, isHexColor, isUsualOrder, megabytes, movePlace, PLACES, placeOrder, platformName, shareLine, tokens, usageDays } from "../src/features/settings/computer";
 import { filterSkills, folderName, skillOrigin, skillsIn } from "../src/features/skills/shared";
 import { importText, keyHeaderOf, listText } from "../src/features/tools/shared";
@@ -187,4 +188,36 @@ test("the demo computer keeps a tool's own OAuth client and working folder, neve
 
   const local = await backend.call("saveMcpServer", [{ name: "files", type: "stdio", command: "npx", args: [], env: {}, cwd: "/Users/me/tools" }]);
   assert.equal(backend.state.mcpServers.find((item: { id: string }) => item.id === local).cwd, "/Users/me/tools");
+});
+
+test("thinking and interim updates are controlled independently on phone and computer", async () => {
+  const sample = { stream: "Looking at your calendar…", thinking: "Check conflicts first", intent: "Checking calendar" };
+
+  assert.deepEqual(
+    liveTurnDisplay({ ...sample, thinkingMode: "hide", showUpdates: true }),
+    { thinking: undefined, stream: "Looking at your calendar…", intent: "Checking calendar" },
+  );
+  assert.deepEqual(
+    liveTurnDisplay({ ...sample, thinkingMode: "show", showUpdates: false }),
+    { thinking: "Check conflicts first", stream: "", intent: undefined },
+  );
+  assert.deepEqual(
+    liveTurnDisplay({ ...sample, thinkingMode: "folded", showUpdates: true }),
+    { thinking: "Check conflicts first", stream: "Looking at your calendar…", intent: "Checking calendar" },
+  );
+  assert.deepEqual(
+    liveTurnDisplay({ ...sample, thinkingMode: "hide", showUpdates: false }),
+    { thinking: undefined, stream: "", intent: undefined },
+  );
+
+  const backend = new MockBackend();
+  assert.equal(backend.state.settings.showThinking, true);
+  assert.equal(backend.state.settings.showUpdates, true);
+  await backend.call("setPreferences", [{ showUpdates: false }]);
+  assert.equal(backend.state.settings.showThinking, true);
+  assert.equal(backend.state.settings.showUpdates, false);
+  await backend.call("setPreferences", [{ showThinking: false, showUpdates: true }]);
+  assert.equal(backend.state.settings.showThinking, false);
+  assert.equal(backend.state.settings.showUpdates, true);
+  await assert.rejects(backend.call("setPreferences", [{ showUpdates: "no" }]));
 });
