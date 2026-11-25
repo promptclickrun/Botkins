@@ -49,14 +49,18 @@ function failure(error, passwordAttempts = 0) {
   return new SetupError("unknown", error instanceof Failure ? error.message : "Something went wrong with Proton Pass. Try again.");
 }
 
-export function protonVaults(result) {
+export function protonVaults(result, { verifyIdentity = false } = {}) {
   const rows = Array.isArray(result) ? result : result?.vaults;
   if (!Array.isArray(rows)) throw new Failure("Proton Pass sent back an unexpected vault list.");
   const vaults = rows.map((row) => ({
     id: row?.share_id ?? row?.shareId ?? row?.shareID ?? row?.id,
+    ...(verifyIdentity && { vaultId: row?.vault_id }),
     name: short(row?.name ?? row?.vault_name ?? row?.vaultName),
   }));
   if (vaults.some((vault) => !id(vault.id) || !vault.name) || new Set(vaults.map((v) => v.id)).size !== rows.length) {
+    throw new Failure("Proton Pass sent back an unexpected vault list.");
+  }
+  if (verifyIdentity && (vaults.some((v) => typeof v.vaultId !== "string" || !v.vaultId.trim()) || new Set(vaults.map((v) => v.vaultId)).size !== rows.length)) {
     throw new Failure("Proton Pass sent back an unexpected vault list.");
   }
   return vaults;
@@ -335,14 +339,16 @@ export class ProtonSetup {
   }
 
   async connect(job, cli, env) {
-    const json = async (args) => parseJson(NAME, await this.execute(cli, args, env));
+    const listVaults = async (session) => protonVaults(
+      parseJson(NAME, await this.execute(cli, ["vault", "list", "--output", "json"], session)), { verifyIdentity: true },
+    );
     const identity = await this.account(cli, env);
     const before = this.record();
     this.sameAccount(before, identity);
-    const offered = protonVaults(await json(["vault", "list", "--output", "json"]));
+    const offered = await listVaults(env);
     const suggestions = new Set([...this.linked(), ...(before?.vaults ?? []).map((v) => v.id)]);
     const choice = await this.ask(job, "choose-vaults", job.signal, {
-      vaults: offered.map((v) => ({ ...v, suggested: suggestions.has(v.id) })),
+      vaults: offered.map(({ id, name }) => ({ id, name, suggested: suggestions.has(id) })),
     });
     this.step(job, "setting-up");
     let selected = offered.filter((v) => choice.vaultIds.has(v.id));
@@ -351,7 +357,7 @@ export class ProtonSetup {
       let name = "Botkins";
       if (names.has(name)) name += " " + randomBytes(4).toString("hex");
       await this.execute(cli, ["vault", "create", "--name", name], env);
-      const updated = protonVaults(await json(["vault", "list", "--output", "json"]));
+      const updated = await listVaults(env);
       const newVaults = updated.filter((v) => v.name === name && !offered.some((old) => old.id === v.id));
       if (newVaults.length !== 1) throw new Failure("Botkins couldn't confirm the new Proton Pass vault.");
       selected = [...selected, newVaults[0]];
@@ -373,13 +379,16 @@ export class ProtonSetup {
       await mkdir(agentDir, { mode: 0o700 });
       const auth = this.env(agentDir, sessionKey, { PROTON_PASS_AGENT_REASON: AUDIT_REASON });
       await this.loginAgent(cli, auth, token);
-      const checked = protonVaults(parseJson(NAME, await this.execute(cli, ["vault", "list", "--output", "json"], auth)));
-      if (checked.length !== selected.length || selected.some((vault) => !checked.some((v) => v.id === vault.id))) {
+      // Each principal has its own share ID for the same underlying vault.
+      const checked = await listVaults(auth);
+      const agentShares = new Map(checked.map((vault) => [vault.vaultId, vault.id]));
+      if (agentShares.size !== selected.length || selected.some((vault) => !agentShares.has(vault.vaultId))) {
         throw new Failure("Proton Pass didn't confirm access to exactly the selected vaults. Nothing was connected.");
       }
       job.signal.throwIfAborted();
       if (before?.agent) await this.deleteAgent(cli, env, before.agent);
-      this.update({ agent, ...identity, expiresAt, vaults: selected }, { token, key: sessionKey });
+      const vaults = selected.map(({ id, name, vaultId }) => ({ id, name, agentShareId: agentShares.get(vaultId) }));
+      this.update({ agent, ...identity, expiresAt, vaults }, { token, key: sessionKey });
       saved = true;
       this.lease = this.ctx.now() + LEASE;
       this.revoked = undefined;
@@ -444,16 +453,19 @@ export class ProtonSetup {
     }
   }
 
-  run(args, vaultId) {
+  run(makeArgs, vaultId) {
     return this.gate.run(NAME, async () => {
       const record = this.record();
       if (!record) {
         // TODO(2026-11-24): Remove the legacy session fallback after one Botkins release.
-        return this.ctx.run(NAME, "pass-cli", args, this.ctx.protonLegacyEnv());
+        return this.ctx.run(NAME, "pass-cli", makeArgs(vaultId), this.ctx.protonLegacyEnv());
       }
       if (!record.agent) throw new Failure(SIGN_IN);
       if (this.ctx.now() >= record.expiresAt || this.revoked === record.agent) throw new Failure(EXPIRED);
-      if (vaultId && !record.vaults.some((v) => v.id === vaultId)) throw new Failure(UNSHARED);
+      const vault = vaultId && record.vaults.find((v) => v.id === vaultId);
+      if (vaultId && !vault) throw new Failure(UNSHARED);
+      // Older saved connections verified that both sessions used the same share ID.
+      const args = makeArgs(vault?.agentShareId ?? vaultId);
       if (args[0] === "vault" && args[1] === "list") return JSON.stringify(record.vaults);
       const tool = await this.tool();
       if (!tool) throw new Failure("Install Proton Pass before reading linked credentials.");

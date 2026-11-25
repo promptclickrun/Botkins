@@ -38,7 +38,8 @@ class DemoProtonPass {
 
   record() { return undefined; }
 
-  run(args, vaultId) {
+  run(makeArgs, vaultId) {
+    const args = makeArgs(vaultId);
     const [command, action] = args;
     if (!this.shared || (vaultId && !this.shared.some((vault) => vault.id === vaultId))) throw new Failure("Not shared with Botkins. Share more vaults to use this credential.");
     if (command === "vault") return JSON.stringify(this.shared);
