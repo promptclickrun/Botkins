@@ -89,11 +89,13 @@ export type HtmlFrameProps = {
   fill?: boolean;
   /** Adds horizontal padding in `fill` mode; false when hosted inside a padded Page. */
   inset?: boolean;
+  /** In `fill` mode, room under the page's end for what floats over the frame. */
+  bottom?: number;
   /** The view is a panel's: its saved state. Without it `botkins.state.get()` is {} and `set` is false. */
   state?: FrameState;
 };
 
-export function HtmlFrame({ frame, height, title, onAnswer, fill, inset = true, state }: HtmlFrameProps) {
+export function HtmlFrame({ frame, height, title, onAnswer, fill, inset = true, bottom = 0, state }: HtmlFrameProps) {
   const { colors, dark } = useTheme();
   const supported = usePart("meta")?.capabilities.includes("frames-v1");
   // (The package types its props as `WebViewProps & P` with P undefined by default, which is nothing: P is named here.)
@@ -138,8 +140,8 @@ export function HtmlFrame({ frame, height, title, onAnswer, fill, inset = true, 
   }, [phase, page]);
 
   // The document is built once for a page: a change of theme is told to the page, which stays as it is.
-  const built = useRef<{ page: Loaded; fill: boolean; html: string } | null>(null);
-  if (page && (built.current?.page !== page || built.current.fill !== !!fill)) built.current = { page, fill: !!fill, html: framePage(page.html, page.data, theme, { fill }) };
+  const built = useRef<{ page: Loaded; fill: boolean; bottom: number; html: string } | null>(null);
+  if (page && (built.current?.page !== page || built.current.fill !== !!fill || built.current.bottom !== bottom)) built.current = { page, fill: !!fill, bottom, html: framePage(page.html, page.data, theme, { fill, bottom }) };
   useEffect(() => {
     if (phase === "ready") web.current?.injectJavaScript(frameScript({ type: "theme", ...theme }));
   }, [theme, phase]);
