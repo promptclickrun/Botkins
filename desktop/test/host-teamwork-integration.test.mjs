@@ -64,17 +64,22 @@ test("a trusted device on the destination decides before the target runs and its
   t.after(() => owner.stop());
   owner.start();
   await until(() => parts.bots);
-  const chat = a.workspace.createChat("pip");
+  const targetMain = b.workspace.mainChat("scout");
+  const chat = a.workspace.mainChat("pip");
   const turn = a.workspace.send(chat, "Source chat history stays on Laptop.");
   try {
     const card = await until(() => parts.live?.requests?.find(item => item.dispatch));
     assert.match(card.title, /Pip.*Laptop.*Scout.*Studio/);
     assert.equal(card.detail, "a signed-off question");
+    assert.notEqual(card.chatId, targetMain);
+    assert.equal(b.workspace.chat(card.chatId).hostDispatch, true);
     assert.equal(b.log.sent.length, 0);
     assert.equal(a.workspace.interactions.snapshot().length, 0);
     await owner.call("respond", card.id, { action: "today" });
     await turn;
+    assert.equal(a.workspace.mainChat("pip"), chat);
     assert.equal(a.workspace.chat(chat).messages.at(-1).text, "Studio received a signed-off question");
+    assert.deepEqual(b.workspace.chat(targetMain).messages, []);
     assert.deepEqual(b.log.sent.map(([, body]) => body), ["a signed-off question"]);
     await assert.rejects(owner.call("respond", card.id, { action: "approve" }));
     assert.equal(b.log.sent.length, 1);
