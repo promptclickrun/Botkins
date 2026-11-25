@@ -155,6 +155,7 @@ function ProfileWizard({
       : null,
   );
   const [busy, setBusy] = useState(false);
+  const [openingHost, setOpeningHost] = useState(false);
   const [error, setError] = useState("");
   const [retry, setRetry] = useState<WizardRetry | null>(null);
   const [statusMessage, setStatusMessage] = useState("");
@@ -656,12 +657,12 @@ function ProfileWizard({
                   <strong>Your computers</strong>
                   <small>Open a computer to use its bots here.</small>
                 </div>
-                <ProfileComputersList state={state} showEmpty={false} />
+                <ProfileComputersList state={state} showEmpty={false} onBusyChange={setOpeningHost} />
               </div>
             )}
             {onComplete && (
               <div className="profile-footer end">
-                <button type="button" className="profile-btn-primary" onClick={onComplete}>
+                <button type="button" className="profile-btn-primary" disabled={openingHost} onClick={onComplete}>
                   <span>{inline || migration ? "Continue" : "Manage profile"}</span>
                   <ArrowRight size={15} aria-hidden="true" />
                 </button>
@@ -1243,11 +1244,24 @@ export function ProfileSetupInline({
   );
 }
 
-function ProfileComputersList({ state, showEmpty = true }: { state: State; showEmpty?: boolean }) {
+function ProfileComputersList({
+  state,
+  showEmpty = true,
+  onBusyChange,
+}: {
+  state: State;
+  showEmpty?: boolean;
+  onBusyChange?: (busy: boolean) => void;
+}) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const paired = new Set((state.remote?.hosts ?? []).map((host) => host.id));
   const hosts = state.profile?.hosts ?? [];
+
+  useEffect(() => {
+    onBusyChange?.(busy);
+    return () => onBusyChange?.(false);
+  }, [busy, onBusyChange]);
 
   const connect = async (host: ProfileState["hosts"][number]) => {
     setBusy(true);
