@@ -1028,8 +1028,8 @@ function ChatScreenScreen({ pane: paneId, onLeave: leavePane, onList }: { pane?:
   // second page, and the chat keeps to the first, clear of the fold.
   const project = projects?.find((item) => item.id === chat.projectId);
   const book = shape.pose === "book" && shape.fold && project?.folder && (!paneId || !!onList) ? shape.fold : null;
-  const idleTodoRoom = canChat && hasTodos && !working ? CAPSULE + space.sm : 0;
-  const room = { top: topBar + banners, dock: dock + idleTodoRoom, bottom: dock + idleTodoRoom + (working ? CAPSULE + space.sm : 0) };
+  const todoRoom = canChat && hasTodos ? CAPSULE + space.sm : 0;
+  const room = { top: topBar + banners, dock: dock + todoRoom, bottom: dock + (working || hasTodos ? CAPSULE + space.sm : 0) };
   const column = (
     <MessageLink.Provider value={showPulls ? openMessageLink : openLink}>
     <View style={{ flex: 1, backgroundColor: hasBackdrop ? "transparent" : colors.canvas }}>
