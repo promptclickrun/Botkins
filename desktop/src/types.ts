@@ -2144,6 +2144,8 @@ export type RequestAnswer = {
   /** A saved credential's reference instead of text: the computer puts the value in. */
   value?: string | CredentialRef;
   content?: Record<string, unknown>;
+  /** Only the in-app request panel sends it, after it showed a `review` request whole (a script command's script). The computer refuses a yes to one without it. */
+  reviewed?: true;
 };
 export type AgentRequest = {
   dispatch?: true;

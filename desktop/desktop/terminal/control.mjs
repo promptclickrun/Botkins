@@ -201,7 +201,7 @@ export function controlApi(service) {
       ...(task?.intent && { intent: task.intent }),
       messages,
       count: chat.messages.length,
-      ...(request && { request: { id: request.id, kind: request.kind, title: request.title, ...(request.dispatch && { dispatch: true }), ...((request.dispatch || request.review) && { detail: request.detail, label: request.label }) } }),
+      ...(request && { request: { id: request.id, kind: request.kind, title: request.title, ...(request.dispatch && { dispatch: true }), ...(request.review && { review: true }), ...((request.dispatch || request.review) && { detail: request.detail, label: request.label }) } }),
       run: state().runs.find((run) => run.chatId === chat.id && (!chat.main || run.forkId === chat.activeFork)) ?? null,
     };
   };
@@ -554,7 +554,12 @@ export function controlApi(service) {
       if (["approve", "today", "remember"].includes(answer?.action) && !(mark !== null && typeof mark === "object" && !Array.isArray(mark) && mark.agreed === true))
         throw new ControlError("A yes to a request that waits in a chat needs a yes of the person. Show the request to the person, and give `{ \"agreed\": true }` as the last argument (on the command line, `botkins chat` asks the person at a terminal; no flag gives it).", "NEEDS_YES");
       const asked = workspace.interactions.snapshot().find((entry) => entry.id === String(requestId));
-      await handlers.respond(String(requestId), answer);
+      // A request that holds a script (`review`) is answered with a yes only by a caller that showed all of it: `{ agreed: true, reviewed: true }`
+      // (the command line's `chats approve` and `chat` print the whole script before they ask at a terminal).
+      const yes = ["approve", "today", "remember"].includes(answer?.action);
+      if (asked?.review && yes && mark.reviewed !== true)
+        throw new ControlError("This request holds a script. Show all of it to the person, and give `{ \"agreed\": true, \"reviewed\": true }` as the last argument (`botkins chats approve` shows it and asks at a terminal).", "NEEDS_YES");
+      await handlers.respond(String(requestId), asked?.review && yes ? { ...answer, reviewed: true } : answer);
       return { chatId: asked?.chatId ?? null, kind: asked?.kind ?? null, answered: answer?.action === "deny" || answer?.action === "cancel" ? "no" : "yes" };
     },
 

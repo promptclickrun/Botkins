@@ -618,3 +618,27 @@ test("a routine or a task that is a script command is saved, edited, copied, rea
     assert.equal((await client.call("routines.list")).some((entry) => entry.name === "Ship nightly"), true);
   });
 });
+
+test("the command line answers a request that holds a script only after showing all of it", { skip }, async (t) => {
+  const { botkins, client, running } = await service(t);
+  const ws = running.runtime.workspace;
+  ws.state.settings.autoSummarize = 0;
+  await botkins(["bots", "add", "Nova", "--instructions", "Help."]);
+  const { chatId } = await client.call("chat.open", "Nova");
+  const task = {};
+  ws.active.set(chatId, task);
+  const create = ws.sessionTools(ws.state.bots[0], ws.chat(chatId), { id: "r1" }, task).find((tool) => tool.name === "script_command_create");
+  const waiting = create.handler({ name: "ship", description: "Ships.", script: "echo shipping" });
+  let view;
+  for (let i = 0; i < 100 && !view?.request; i++) { await new Promise((resolve) => setTimeout(resolve, 10)); view = await client.call("chat.read", chatId); }
+  assert.equal(view.request.review, true);
+  assert.ok(view.request.detail.includes("echo shipping"), "the script is in what the command line reads");
+  // A yes with only the person's mark is refused, and so is one without any; the person's no is not.
+  await assert.rejects(() => client.call("chat.respond", view.request.id, { action: "approve" }, { agreed: true }), /holds a script/);
+  await assert.rejects(() => client.call("chat.respond", view.request.id, { action: "approve" }), /needs a yes/i);
+  // `chats approve` prints the whole script, and with a terminal that says yes it sends the mark that it showed it.
+  const shown = await botkins(["chats", "approve", chatId], { tty: true, input: "y\n" });
+  assert.ok(shown.err.includes("echo shipping"), "the script was shown");
+  assert.equal(await waiting, "Saved. The person can now type /ship in any chat.");
+  ws.active.delete(chatId);
+});

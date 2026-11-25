@@ -97,6 +97,11 @@ export class Interactions {
       !["approve", "deny", "remember", "cancel"].includes(answer.action) && !(view.dispatch && answer.action === "today")
     )
       throw new Error("Unknown approval response");
+    // A request whose script is the point (a script command, desktop/script-commands.mjs) is approved only by an answer that says its whole text was shown:
+    // the in-app request panel of the window and of the phone say so after they showed it. A notification's button, a Live Activity's, a gadget and a link
+    // that opens the phone never do, so none of them can approve one.
+    if (view.review && ["approve", "today", "remember"].includes(answer.action) && answer.reviewed !== true)
+      throw new Error("This approval holds a script that has to be read first. Open the request in the app, where all of it is shown, and answer it there.");
     if (answer.action === "remember" && !view.remember && !view.dispatch)
       throw new Error("This approval cannot be remembered.");
     if (

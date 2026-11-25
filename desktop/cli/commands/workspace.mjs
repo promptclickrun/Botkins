@@ -150,7 +150,7 @@ async function turn(context, chatId, message, { live, typed = false }) {
         answer = value ? { action: "answer", value } : { action: "cancel" };
       }
       // A yes carries the mark `{ agreed: true }`, which the service needs: it is given only after the person said yes at the terminal.
-      await client.call("chat.respond", ...(["approve", "today", "remember"].includes(answer.action) ? [request.id, answer, { agreed: true }] : [request.id, answer])).catch((error) => context.note(error.message));
+      await client.call("chat.respond", ...(["approve", "today", "remember"].includes(answer.action) ? [request.id, answer, { agreed: true, ...(request.review && { reviewed: true }) }] : [request.id, answer])).catch((error) => context.note(error.message));
       continue;
     }
     if (!view.working) {

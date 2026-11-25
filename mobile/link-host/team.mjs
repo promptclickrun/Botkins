@@ -979,7 +979,7 @@ export function authorize(principal, team, method, args = [], lookups = {}) {
   if (lookups.gadget) {
     // The readers stringify the chat id. Check exactly the chat they would open.
     const chatId = ["link.messages", "link.step", "link.push.activity"].includes(method) ? String(args[0]) : chatIdOf(method, args, lookups);
-    if ((method === "respond" && lookup("request", args[0], lookups)?.dispatch) || lookup("chat", chatId, lookups)?.hostDispatch)
+    if ((method === "respond" && (lookup("request", args[0], lookups)?.dispatch || lookup("request", args[0], lookups)?.review)) || lookup("chat", chatId, lookups)?.hostDispatch)
       return "Open the Teamwork request on the owner's computer or paired phone.";
   }
   if (principal?.kind === "owner") return "";

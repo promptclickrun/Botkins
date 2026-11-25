@@ -9,6 +9,9 @@ import { LinkHost } from "../link-host/index.mjs";
 import { MockBackend } from "../link-host/mock-backend.mjs";
 import { authorize } from "../link-host/team.mjs";
 import { askDetail, askOf } from "../link-host/cards.mjs";
+import { remoteArgs } from "../link-host/methods.mjs";
+import { mustBeRead } from "../src/features/open/review";
+import { detailMode } from "../src/features/chat/request/logic";
 import { pair, LinkClient, type FetchLike } from "../src/link/client";
 import type { ScriptCommand, SkillInfo } from "../src/link/types";
 import { botSkills, isScript, scriptName, scriptProblems, skillOrigin, SCRIPT_LIMIT } from "../src/features/skills/shared";
@@ -90,4 +93,22 @@ test("a request that holds a script is read in the app: no Allow once from a not
   assert.equal(askOf(request), "open");
   assert.equal(askDetail(request).k, "open");
   assert.equal(askOf({ ...request, review: undefined }), "approve", "an ordinary approval keeps its buttons");
+});
+
+test("a request that holds a script is opened from a notification, never answered from it, and its panel shows it whole", () => {
+  const requests = [{ id: "a", review: true as const }, { id: "b" }];
+  assert.equal(mustBeRead(requests, "a"), true);
+  assert.equal(mustBeRead(requests, "b"), false);
+  assert.equal(mustBeRead(requests, "gone"), false);
+  assert.equal(mustBeRead(undefined, "a"), false);
+  const request = { id: "a", chatId: "c", botId: "b", kind: "permission", title: "t", preview: "p", detail: "the script" } as Parameters<typeof detailMode>[0];
+  assert.equal(detailMode(request), "folded");
+  assert.equal(detailMode({ ...request, review: true }), "open", "never folded");
+});
+
+test("the computer lets `reviewed: true` through with a yes, and nothing else the panel did not send", () => {
+  assert.deepEqual(remoteArgs("respond", ["q", { action: "approve", reviewed: true }]), ["q", { action: "approve", reviewed: true }]);
+  assert.deepEqual(remoteArgs("respond", ["q", { action: "deny" }]), ["q", { action: "deny" }]);
+  assert.throws(() => remoteArgs("respond", ["q", { action: "approve", reviewed: 1 }]), /one approval action/);
+  assert.throws(() => remoteArgs("respond", ["q", { action: "approve", other: true }]), /one approval action/);
 });

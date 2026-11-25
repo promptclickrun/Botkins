@@ -907,3 +907,49 @@ test("the window and a paired device are a person: what they send, or send again
     ["r1", { allowScript: true }],
   ]);
 });
+
+test("a yes to a request that holds a script is taken only from the request panel that showed it", async (t) => {
+  const { ws } = setup(t);
+  const chat = ws.createChat("pip");
+  const task = {};
+  ws.active.set(chat, task);
+  const create = ws.sessionTools(ws.bot("pip"), ws.chat(chat), { id: "r1" }, task).find((tool) => tool.name === "script_command_create");
+  const ask = async (name, answer) => {
+    const waiting = create.handler({ name, description: "d", script: "echo " + name });
+    for (let i = 0; i < 50 && !ws.interactions.snapshot().length; i++) await tick(5);
+    const [view] = ws.interactions.snapshot();
+    assert.equal(view.review, true);
+    // Answers that are not a yes need nothing.
+    if (answer === "deny") ws.interactions.respond(view.id, { action: "deny" });
+    else {
+      for (const action of ["approve", "remember"]) assert.throws(() => ws.interactions.respond(view.id, { action }), /has to be read first/, action);
+      assert.throws(() => ws.interactions.respond(view.id, { action: "approve", reviewed: false }), /has to be read first/);
+      assert.equal(ws.interactions.snapshot().length, 1, "still waiting");
+      ws.interactions.respond(view.id, { action: "approve", reviewed: true });
+    }
+    return waiting;
+  };
+  assert.equal(await ask("one", "deny"), "The person declined.");
+  assert.equal(ws.integrations.scriptCommands().length, 0);
+  assert.match(await ask("two", "yes"), /^Saved\./);
+  assert.deepEqual(ws.integrations.scriptCommands().map((c) => c.name), ["two"]);
+  // An ordinary approval is unchanged.
+  const waiting = ws.interactions.request(ws.chat(chat), task, { kind: "permission", title: "Run ls?", preview: "ls" });
+  ws.interactions.respond(ws.interactions.snapshot()[0].id, { action: "approve" });
+  assert.deepEqual(await waiting, { action: "approve" });
+});
+
+test("a gadget cannot answer a request that holds a script, and the link lets only `reviewed: true` through with a yes", async () => {
+  const gadget = { kind: "member", memberId: "m_g" };
+  const team = { members: [{ id: "m_g", groupId: "g" }], groups: [{ id: "g", roleId: "r" }], roles: [{ id: "r", bots: "all", perms: { agents: ["view", "chat"] } }] };
+  const lookups = (request) => ({ gadget: true, request: () => request, chat: () => ({ id: "c", botId: "pip" }), bot: () => ({ id: "pip" }) });
+  const refusal = (request) => authorize(gadget, team, "respond", ["q1", { action: "approve" }], lookups(request));
+  assert.match(refusal({ id: "q1", review: true, chatId: "c" }), /Teamwork request|owner's computer or paired phone/);
+  assert.match(refusal({ id: "q1", dispatch: true, chatId: "c" }), /Teamwork request|owner's computer or paired phone/);
+  assert.doesNotMatch(refusal({ id: "q1", chatId: "c" }) || "", /Teamwork request/);
+  const { remoteArgs } = await import("../desktop/desktop/link/methods.mjs").catch(() => import("../desktop/link/methods.mjs"));
+  assert.deepEqual(remoteArgs("respond", ["q1", { action: "approve", reviewed: true }]), ["q1", { action: "approve", reviewed: true }]);
+  assert.deepEqual(remoteArgs("respond", ["q1", { action: "approve" }]), ["q1", { action: "approve" }]);
+  assert.throws(() => remoteArgs("respond", ["q1", { action: "approve", reviewed: "yes" }]), /one approval action/);
+  assert.throws(() => remoteArgs("respond", ["q1", { action: "approve", reviewed: true, extra: 1 }]), /one approval action/);
+});
