@@ -131,10 +131,17 @@ test("a new desktop opens a linked host directly from profile onboarding", async
     );
     await page
       .getByRole("button", {
-        name: /set up profile|sign in or create|create or sign in|create or use a profile/i,
+        name: /^set up(?: a)? profile$|^set up$/i,
       })
       .first()
       .click();
+    await page
+      .getByRole("button", {
+        name: /^set up(?: a)? profile$|sign in or create|create or sign in|create or use a profile/i,
+      })
+      .first()
+      .click();
+    await page.getByRole("button", { name: /^continue$/i }).first().click();
     await expect
       .poll(() => page.evaluate(async () => !!(await window.botkins.profileStatus()).pending))
       .toBe(true);

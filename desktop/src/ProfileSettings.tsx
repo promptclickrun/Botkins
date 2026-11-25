@@ -650,6 +650,15 @@ function ProfileWizard({
                 {doneProfile.email && <small>{doneProfile.email}</small>}
               </span>
             </div>
+            {inline && (state.profile?.hosts?.length ?? 0) > 0 && (
+              <div className="profile-done-hosts">
+                <div className="profile-done-hosts-head">
+                  <strong>Your computers</strong>
+                  <small>Open a computer to use its bots here.</small>
+                </div>
+                <ProfileComputersList state={state} showEmpty={false} />
+              </div>
+            )}
             {onComplete && (
               <div className="profile-footer end">
                 <button type="button" className="profile-btn-primary" onClick={onComplete}>
@@ -1118,9 +1127,23 @@ export function ProfileSetupInline({
   const isSignedIn = Boolean(state.profile?.signedIn);
   const pendingId = state.profile?.pending?.id ?? null;
   const [expanded, setExpanded] = useState(() => !isSignedIn && (migration || Boolean(pendingId)));
+  const [optOutBusy, setOptOutBusy] = useState(false);
+  const [optOutError, setOptOutError] = useState("");
   const seenPendingIdRef = useRef<string | null>(pendingId);
   const setupButtonRef = useRef<HTMLButtonElement>(null);
   const restoreFocusRef = useRef(false);
+
+  const handleOptOut = useCallback(async () => {
+    setOptOutBusy(true);
+    setOptOutError("");
+    try {
+      await window.botkins.profileOptOut();
+    } catch (e) {
+      setOptOutError(errorText(e));
+    } finally {
+      setOptOutBusy(false);
+    }
+  }, []);
 
   // Auto-expand only when a newly seen pending attempt id arrives, not after an explicit collapse.
   useEffect(() => {
@@ -1159,22 +1182,43 @@ export function ProfileSetupInline({
     return (
       <div className="profile-root">
         <div className="profile-teaser">
-          <span className="profile-teaser-icon" aria-hidden="true">
-            <UserRound size={20} />
-          </span>
-          <div className="profile-teaser-body">
-            <span className="profile-teaser-title">
-              <strong>Set up a profile</strong>
-              <span className="profile-optional-pill">Optional</span>
+          <div className="profile-teaser-head">
+            <span className="profile-teaser-icon" aria-hidden="true">
+              <UserRound size={20} />
             </span>
-            <small>Find and reconnect your computers across devices. Local bots stay here.</small>
+            <div className="profile-teaser-body">
+              <span className="profile-teaser-title">
+                <strong>Set up a profile</strong>
+                <span className="profile-optional-pill">Optional</span>
+              </span>
+              <small>Find and reconnect your computers across devices. Local bots stay here.</small>
+            </div>
           </div>
+          {optOutError && (
+            <ProfileAlert
+              message={optOutError}
+              onRetry={() => void handleOptOut()}
+              retryDisabled={optOutBusy}
+            />
+          )}
           <div className="profile-teaser-actions">
+            <button
+              type="button"
+              className="profile-btn-quiet"
+              disabled={optOutBusy}
+              onClick={() => void handleOptOut()}
+            >
+              Continue without a profile
+            </button>
             <button
               ref={setupButtonRef}
               type="button"
               className="profile-btn-secondary"
-              onClick={() => setExpanded(true)}
+              disabled={optOutBusy}
+              onClick={() => {
+                setOptOutError("");
+                setExpanded(true);
+              }}
             >
               <span>Set up</span>
               <ChevronRight size={15} aria-hidden="true" />
@@ -1199,12 +1243,11 @@ export function ProfileSetupInline({
   );
 }
 
-function ProfileComputersInline({ state }: { state: State }) {
+function ProfileComputersList({ state, showEmpty = true }: { state: State; showEmpty?: boolean }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const paired = new Set((state.remote?.hosts ?? []).map((host) => host.id));
   const hosts = state.profile?.hosts ?? [];
-  const identity = state.profile?.profile;
 
   const connect = async (host: ProfileState["hosts"][number]) => {
     setBusy(true);
@@ -1220,6 +1263,57 @@ function ProfileComputersInline({ state }: { state: State }) {
     }
   };
 
+  if (!hosts.length && !showEmpty) return null;
+
+  return (
+    <>
+      {hosts.length ? (
+        hosts.map((host) => (
+          <div className="set-row" key={host.serverId}>
+            <div className="profile-row-main">
+              <span className="profile-row-icon is-accent" aria-hidden="true">
+                <Monitor size={16} />
+              </span>
+              <div className="set-label">
+                <span className="set-name">{host.name}</span>
+                <small>
+                  {paired.has(host.serverId) ? "Paired on this device" : "Listed in profile · may be offline"}
+                </small>
+              </div>
+            </div>
+            <div className="set-control">
+              <button
+                type="button"
+                className="set-button primary"
+                disabled={busy}
+                onClick={() => void connect(host)}
+              >
+                Open
+              </button>
+            </div>
+          </div>
+        ))
+      ) : (
+        <div className="profile-empty-row">
+          <span className="profile-row-icon" aria-hidden="true">
+            <Monitor size={16} />
+          </span>
+          <span>No profile computers are listed yet.</span>
+        </div>
+      )}
+
+      {error && (
+        <div style={{ padding: "0 14px 12px" }}>
+          <ProfileAlert message={error} />
+        </div>
+      )}
+    </>
+  );
+}
+
+function ProfileComputersInline({ state }: { state: State }) {
+  const identity = state.profile?.profile;
+
   return (
     <div className="profile-root">
       <div className="profile-inline-card">
@@ -1234,46 +1328,7 @@ function ProfileComputersInline({ state }: { state: State }) {
           <span className="set-pill ok">Signed in</span>
         </div>
 
-        {hosts.length ? (
-          hosts.map((host) => (
-            <div className="set-row" key={host.serverId}>
-              <div className="profile-row-main">
-                <span className="profile-row-icon is-accent" aria-hidden="true">
-                  <Monitor size={16} />
-                </span>
-                <div className="set-label">
-                  <span className="set-name">{host.name}</span>
-                  <small>
-                    {paired.has(host.serverId) ? "Paired on this device" : "Listed in profile · may be offline"}
-                  </small>
-                </div>
-              </div>
-              <div className="set-control">
-                <button
-                  type="button"
-                  className="set-button primary"
-                  disabled={busy}
-                  onClick={() => void connect(host)}
-                >
-                  Open
-                </button>
-              </div>
-            </div>
-          ))
-        ) : (
-          <div className="profile-empty-row">
-            <span className="profile-row-icon" aria-hidden="true">
-              <Monitor size={16} />
-            </span>
-            <span>No profile computers are listed yet.</span>
-          </div>
-        )}
-
-        {error && (
-          <div style={{ padding: "0 14px 12px" }}>
-            <ProfileAlert message={error} />
-          </div>
-        )}
+        <ProfileComputersList state={state} />
 
         <div className="profile-inline-foot">
           Choose a listed computer to open its bots here, or pick a setup option below.

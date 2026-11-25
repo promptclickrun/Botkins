@@ -35,9 +35,8 @@
   width: 100%;
   margin: 18px 0 6px;
   padding: 14px 16px;
-  display: flex;
-  align-items: center;
-  gap: 14px;
+  display: grid;
+  gap: 12px;
   border-radius: var(--radius-lg);
   background: var(--surface);
   border: 1px solid var(--line);
@@ -46,6 +45,13 @@
 
 .profile-teaser:hover {
   border-color: var(--line-strong);
+}
+
+.profile-teaser-head {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-width: 0;
 }
 
 .profile-teaser-icon {
@@ -89,8 +95,9 @@
 .profile-teaser-actions {
   display: flex;
   align-items: center;
-  gap: 6px;
-  flex: none;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
 }
 
 .profile-optional-pill {
@@ -696,6 +703,33 @@
   color: var(--muted);
 }
 
+.profile-done-hosts {
+  width: 100%;
+  text-align: left;
+  border-radius: var(--radius);
+  background: var(--canvas);
+  border: 1px solid var(--line);
+  overflow: hidden;
+}
+
+.profile-done-hosts-head {
+  display: grid;
+  gap: 1px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--line);
+}
+
+.profile-done-hosts-head strong {
+  font-size: calc(13px * var(--text-scale));
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.profile-done-hosts-head small {
+  font-size: calc(12px * var(--text-scale));
+  color: var(--muted);
+}
+
 /* ------------------------------------------------------------ signed-in inline computers */
 .profile-inline-card {
   width: 100%;
@@ -1054,13 +1088,6 @@
 }
 
 @media (max-width: 560px) {
-  .profile-teaser {
-    flex-wrap: wrap;
-  }
-  .profile-teaser-actions {
-    width: 100%;
-    justify-content: flex-end;
-  }
   .profile-step-label {
     display: none;
   }
