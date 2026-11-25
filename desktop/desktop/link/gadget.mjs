@@ -633,7 +633,8 @@ export class Gadgets {
     }
     // A turn under way takes the words as a steer, as the apps' message boxes do.
     const busy = (state.streams && Object.hasOwn(state.streams, chatId)) || false;
-    await host.backend.call("send", [chatId, words, busy ? { delivery: "steer" } : {}], { principal });
+    // A gadget's words are spoken and transcribed: never a script command (desktop/script-commands.mjs, `gadget` in device-call.mjs).
+    await host.backend.call("send", [chatId, words, busy ? { delivery: "steer" } : {}], { principal, gadget: true });
     host.dirty = true;
     host.changed();
     return { chatId };

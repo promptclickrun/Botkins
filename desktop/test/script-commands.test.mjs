@@ -786,11 +786,14 @@ test("a bot that makes or changes a task that runs a script command asks the per
   const approve = botTools(ws);
   await approve.tools.get("task_update").handler({ id: made.id, status: "ready" });
   assert.equal(ws.tasks.get(made.id).status, "ready");
-  // Work that nobody watches can only leave one in Later (no card), and cannot change one.
+  // Work that nobody watches can't make one (not even in Later, from where the person could ready it without seeing the script), nor change one.
   const unattended = botTools(ws, { run: { id: "r2", scheduleId: 1 } });
-  const later = JSON.parse(await unattended.tools.get("task_create").handler({ title: "Deploy", details: "/deploy at night", bot: "Pip", status: "ready" }));
-  assert.equal(later.status, "later");
+  const before = ws.tasks.all.length;
+  await assert.rejects(() => unattended.tools.get("task_create").handler({ title: "Deploy", details: "/deploy at night", bot: "Pip", status: "ready" }), /only be made with the person there/);
+  assert.equal(ws.tasks.all.length, before, "nothing was saved");
   assert.equal(unattended.views.length, 0);
+  // A plain task is still a suggestion in Later.
+  assert.equal(JSON.parse(await unattended.tools.get("task_create").handler({ title: "Tidy up", details: "Sort the notes.", status: "ready" })).status, "later");
   await assert.rejects(() => unattended.tools.get("task_update").handler({ id: made.id, details: "/deploy sneaky" }), /only be changed with the person there/);
   assert.equal(ws.tasks.get(made.id).body, "/deploy now");
 });
@@ -870,6 +873,12 @@ test("a chat's schedule runs a script command only when a person made it", { ski
   assert.equal(ws.state.runs[0].scheduleId, made.id);
   // Both are in the chat as work that was scheduled, and the script's output is the run's reply.
   assert.match(ws.chat(chat).messages.findLast((message) => message.role === "assistant" && message.runId === ws.state.runs[0].id).text, /^$|./);
+  // A schedule that a routine's run sets up is the bot's, even though the routine's own prompt may run a script: it sends text.
+  const other = ws.createChat("pip");
+  await ws.send(other, "/every 1m /deploy from-a-routine", { allowScript: true, scheduleId: "routine-x" });
+  const fromRoutine = ws.chat(other).schedules?.find((entry) => /from-a-routine/.test(entry.prompt));
+  assert.ok(fromRoutine, "the routine's /every made a schedule");
+  assert.equal(fromRoutine.allowScript, undefined, "it doesn't inherit the routine's mark");
 });
 
 test("only the places that mean a person may mark a message as one: the code names them", () => {
@@ -1005,4 +1014,14 @@ test("a yes names which command it replaces, and the card lists what already typ
   const { tools, views } = botTools(ws, { answer: { action: "deny" } });
   assert.equal(await tools.get("script_command_create").handler(fields), "The person declined.");
   assert.match(views[0].detail, /Also runs on \(saving this makes each of these run the script\):\n- Routine Nightly/);
+});
+
+test("a gadget's words are never a script command", async () => {
+  const { deviceCall } = await import("../desktop/device-call.mjs");
+  const sent = [];
+  const call = deviceCall({ workspace: { state: { skills: {} } }, handlers: { send: (...args) => sent.push(args) }, folders: {} });
+  await call("send", ["c1", "/deploy now", {}], { principal: { kind: "owner" }, gadget: true });
+  await call("send", ["c1", "/deploy now", {}], { principal: { kind: "owner" } });
+  assert.equal(sent[0][2]?.allowScript, undefined, "a gadget's send is plain text");
+  assert.equal(sent[1][2]?.allowScript, true, "a phone's send is the person's");
 });

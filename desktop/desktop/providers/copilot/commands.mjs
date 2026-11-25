@@ -471,7 +471,8 @@ async function scheduledCommand(session, chat, name, input, run) {
       timezone: entry.tz,
       recurring: entry.recurring,
       // The person's own message made it, so it may run a script command when it is due (desktop/script-commands.mjs); a program's or a model's never.
-      ...(run?.allowScript === true && { allowScript: true }),
+      // A routine's or a task's run also carries the mark (for its own prompt), but a schedule it sets up is the bot's, so it doesn't pass on.
+      ...(run?.allowScript === true && run.scheduleId == null && run.taskId == null && { allowScript: true }),
     });
     receipts.push(
       "#" +

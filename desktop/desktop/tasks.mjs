@@ -206,7 +206,9 @@ export class Tasks {
           const unattended = !!(run.scheduleId || run.taskId);
           // (Work that nobody watches can only leave it in Later, which runs nothing: the person moves it from there and sees it.)
           const invocation = scriptInvocation(this.ws, (details && String(details).trim()) || title || "");
-          if (invocation && !unattended && !(await approved(invocation, ["Task: " + shownText(title), "Status: " + (status ?? "later") + (name ? ", for " + shownText(name) : ""), ...(status === "ready" && name ? ["It starts by itself when " + shownText(name) + " is free."] : [])]))) return "The person declined.";
+          // A task that runs a script command waits for the person's yes, so work nobody watches can't make one, even in Later.
+          if (invocation && unattended) throw new Error("A task that runs a script command can only be made with the person there. Ask them to.");
+          if (invocation && !(await approved(invocation, ["Task: " + shownText(title), "Status: " + (status ?? "later") + (name ? ", for " + shownText(name) : ""), ...(status === "ready" && name ? ["It starts by itself when " + shownText(name) + " is free."] : [])]))) return "The person declined.";
           const id = this.save({ title, body: details, botId: botByName(name), priority, status: unattended ? "later" : status }, bot.id);
           created++;
           return view(this.get(id));

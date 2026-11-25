@@ -1530,6 +1530,10 @@ export class MockBackend {
     return { app: "botkins", version: this.updates?.current ?? "0.8.0-demo", platform: process.platform };
   }
   snapshot() {
+    // The script commands, by name, where the link's team rule reads them (state.skills.scripts, as the computer keeps them with their hashes).
+    const scripts = Object.fromEntries(this.skillList.filter((skill) => skill.command === "script").map((skill) => [skill.name, "demo"]));
+    if (Object.keys(scripts).length) this.state.skills = { ...this.state.skills, scripts };
+    else if (this.state.skills?.scripts) { const { scripts: _gone, ...rest } = this.state.skills; this.state.skills = rest; }
     // The installed plugins as a phone sees them: a secret setting says only that it is set.
     if (this.pluginsOn) this.state.plugins = this.plugins.installed.map((record) => this.pluginView(record));
     // Each space with what the link needs to count for a person: its panels and open cards (docs/spaces.md).

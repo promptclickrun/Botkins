@@ -58,6 +58,8 @@ test("the demo computer saves, reads, lists and removes a script command, and pu
   const { skills } = await client.call<{ skills: SkillInfo[] }>("skills");
   const listed = skills.find((s) => s.name === "deploy-preview");
   assert.equal(listed?.command, "script");
+  // The demo keeps the script commands where the link's team rule reads them, as the computer does.
+  assert.ok(Object.hasOwn(backend.snapshot().skills?.scripts ?? {}, "deploy-preview"));
   assert.doesNotMatch(JSON.stringify(skills), /BOTKINS_ARGS/);
   // The menu lists it as a command from "Script".
   const menu = await client.call<{ choices: { name: string; kind: string; source: string; description: string }[] }>("catalog", "pip");

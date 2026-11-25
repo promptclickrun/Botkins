@@ -40,7 +40,8 @@ export function asPerson(name, args) {
 export function deviceCall({ workspace, handlers, folders }) {
   return async (name, args, context = {}) => {
     // A paired device is a person (the owner, or a member whose role the computer checked before this call).
-    const checked = asPerson(name, await deviceArgs(folders, name, args));
+    // A gadget's send is a person's words too, but spoken and transcribed: it never runs a script command.
+    const checked = context.gadget ? await deviceArgs(folders, name, args) : asPerson(name, await deviceArgs(folders, name, args));
     const principal = context.principal;
     const member = principal?.kind === "member" ? { memberId: principal.memberId, name: principal.name } : null;
     // A request is gone once it is answered, so its chat is read before the answer goes in.
