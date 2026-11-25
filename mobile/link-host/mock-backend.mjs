@@ -1468,7 +1468,7 @@ export class MockBackend {
     // "agent-templates-v1" (docs/agent-templates.md): made-up templates. Left out with BOTKINS_DEV_AGENTS=off.
     if (process.env.BOTKINS_DEV_AGENTS !== "off") this.capabilities.push("agent-templates-v1");
     // "plugins-v1" (docs/plugins.md): made-up catalogs and installs. One plugin starts installed.
-    this.capabilities.push("pi-packages-v1", "skill-upload-v1", "skills-catalog-v1", "skills-featured-v1", "mcp-catalog-v1");
+    this.capabilities.push("pi-packages-v1", "pi-packages-remove-v1", "skill-upload-v1", "skills-catalog-v1", "skills-featured-v1", "mcp-catalog-v1");
     // Each person's own picture ("people-avatars-v1"): `setMyAvatar`, kept on the team's people.
     this.capabilities.push("people-avatars-v1");
     this.catalogToken = "";
@@ -3786,6 +3786,10 @@ export class MockBackend {
       if (pkg?.version !== version) throw new Error("That version isn't installed.");
       this.piPackages.set(name, { name, version, enabled });
       return this.piPackages.get(name);
+    },
+    "piPackages.remove"(name, version) {
+      if (this.piPackages.get(name)?.version !== version) throw new Error("That package version is no longer installed.");
+      this.piPackages.delete(name);
     },
     // Agent templates ("agent-templates-v1", docs/agent-templates.md).
     "agents.browse"({ query, category, marketplace } = {}) {

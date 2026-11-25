@@ -182,20 +182,26 @@ test("while a turn runs, Open keeps its steps and thoughts out of the chat: the 
   assert.equal(liveRowVisible(live, { stream: "", thinking: "" }, working, OPEN), false, "no row of its own for thinking: that is in the island");
 });
 
-test("updates off: they stay out of the chat, and still never go into the island", () => {
+test("updates off: they stay out of the chat and out of the island", () => {
   const items = chatTimeline(input({ messages: [ask, update], running: working, live: { stream: "" }, prefs: { ...OPEN, updates: false } }));
   assert.deepEqual(shape(items), ["user:" + ask.text, "island*:Working… · 5 steps"]);
 });
 
-test("a finished turn folds into the receipt under the answer, with updates left where they landed and only steps and thoughts inside", () => {
+test("a finished turn folds into the receipt under the answer, its updates inside with the thinking, in the order they happened", () => {
   const done = run({ ...working, status: "Completed", finished: at(42), steps: working.steps?.map((s) => ({ ...s, status: "Done", finished: s.started + 1000 })) });
   const steer: Message = { role: "user", text: "Aisle seat please", steeredRunId: "r1", time: at(5.5) };
   const answer: Message = { role: "assistant", text: "Alta Air 214 is the pick.", runId: "r1", time: at(41) };
   const items = chatTimeline(input({ messages: [ask, update, steer, answer], runs: { r1: done } }));
-  assert.deepEqual(shape(items), ["user:" + ask.text, "text:" + update.text, "user:Aisle seat please", "assistant:" + answer.text, "receipt:Worked 42s · 5 steps"]);
+  assert.deepEqual(shape(items), ["user:" + ask.text, "user:Aisle seat please", "assistant:" + answer.text, "receipt:Worked 42s · 5 steps"]);
   const receipt = items.at(-1);
   assert.ok(receipt?.kind === "fold");
-  assert.deepEqual(receipt.entries.map((entry) => entry.kind + ":" + entry.key), ["thought:r:t1", "step:s:a", "step:s:b", "step:s:c", "step:s:d", "step:s:e"]);
+  assert.deepEqual(receipt.entries.map((entry) => entry.kind + ":" + entry.key), ["thought:r:t1", "step:s:a", "step:s:b", "step:s:c", "text:i1", "step:s:d", "step:s:e"]);
+
+  // Updates off: they stay out of the receipt too.
+  const quiet = chatTimeline(input({ messages: [ask, update, answer], runs: { r1: done }, prefs: { ...OPEN, updates: false } }));
+  const quietReceipt = quiet.at(-1);
+  assert.ok(quietReceipt?.kind === "fold");
+  assert.equal(quietReceipt.entries.some((entry) => entry.kind === "text"), false);
 
   // "Fold finished steps" off doesn't matter with the island: it always becomes the receipt.
   const unfolded = chatTimeline(input({ messages: [ask, update, answer], runs: { r1: done }, prefs: { ...OPEN, foldFinishedSteps: false } }));
@@ -208,6 +214,20 @@ test("Folded and Failed only draw as they did: no island", () => {
   const failing = run({ ...working, steps: [...(working.steps ?? []).slice(0, 4), step("x", 7, { status: "Failed" })] });
   const failed = chatTimeline(input({ messages: [ask], running: failing, live: { stream: "" }, prefs: { steps: "failed", thinking: "hide", foldFinishedSteps: true } }));
   assert.deepEqual(shape(failed), ["user:" + ask.text, "live:x|", "fold*:Working… · 5 steps"]);
+});
+
+test("without the island, a finished turn's updates stay in the chat only where its thinking does", () => {
+  const done = run({ ...working, status: "Completed", finished: at(42), steps: working.steps?.map((s) => ({ ...s, status: "Done", finished: s.started + 1000 })) });
+  const answer: Message = { role: "assistant", text: "Alta Air 214 is the pick.", runId: "r1", time: at(41) };
+  const prefs: TurnPrefs = { steps: "folded", thinking: "folded", foldFinishedSteps: false, updates: true };
+  // While it runs the update is in the chat; once it ended it goes with the folded thinking, into the turn's activity.
+  const running = chatTimeline(input({ messages: [ask, update], running: working, live: { stream: "" }, prefs }));
+  assert.ok(shape(running).includes("text:" + update.text));
+  const ended = chatTimeline(input({ messages: [ask, update, answer], runs: { r1: done }, prefs }));
+  assert.deepEqual(shape(ended), ["user:" + ask.text, "assistant:" + answer.text, "activity"]);
+  // Thinking in the chat: the update stays there with it.
+  const open = chatTimeline(input({ messages: [ask, update, answer], runs: { r1: done }, prefs: { ...prefs, thinking: "show" } }));
+  assert.ok(shape(open).includes("text:" + update.text));
 });
 
 test("Thinking Open with Failed only: failed steps stay in the chat and the thinking is in the island", () => {

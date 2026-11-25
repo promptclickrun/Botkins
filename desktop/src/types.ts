@@ -1009,6 +1009,7 @@ declare global {
       "piPackages.list"(): Promise<InstalledPiPackage[]>;
       "piPackages.install"(name: string, version: string): Promise<InstalledPiPackage>;
       "piPackages.setEnabled"(name: string, version: string, enabled: boolean): Promise<InstalledPiPackage>;
+      "piPackages.remove"(name: string, version: string): Promise<void>;
       "agents.browse"(query?: { query?: string; category?: string; marketplace?: string }): Promise<{ agents: MarketAgent[]; categories: MarketAgentCategory[] }>;
       "agents.template"(id: string): Promise<MarketAgentTemplate>;
       // Marketplace › Apps: the person's Composio apps, through the computer's Composio tool and its sign-in

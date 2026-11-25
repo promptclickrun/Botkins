@@ -14,7 +14,7 @@
 // native driver); the running row is drawn in ink, still. New lines rise in with Reanimated layout
 // animations on the UI thread, which follow the phone's Reduce Motion.
 import { router } from "expo-router";
-import { Brain, Check, ChevronDown, ChevronRight, ChevronUp, Hand, X } from "lucide-react-native";
+import { Brain, Check, ChevronDown, ChevronRight, ChevronUp, Hand, MessageSquareText, X } from "lucide-react-native";
 import { type ComponentRef, memo, type ReactNode, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { type NativeScrollEvent, type NativeSyntheticEvent, ScrollView, StyleSheet, Text, useWindowDimensions, View } from "react-native";
 import Animated, { FadeInDown, LayoutAnimationConfig, LinearTransition, ReduceMotion } from "react-native-reanimated";
@@ -58,7 +58,9 @@ function flip(key: string) {
 }
 
 type Wait = { kind: "wait"; key: string; text: string };
-type Line = IslandLine | Wait;
+/** What the bot wrote before it moved on: in the receipt once the turn ended, with its thinking. */
+type Update = { kind: "update"; key: string; text: string };
+type Line = IslandLine | Wait | Update;
 
 const openStep = (chatId: string, runId: string, stepId?: string) => router.push({ pathname: "/chat/activity", params: stepId ? { chatId, runId, stepId } : { chatId, runId } });
 
@@ -120,6 +122,18 @@ const LineRow = memo(function LineRow({ line, waitingStepId, list, helperName }:
         <T variant="subhead" weight="500" color="warning" numberOfLines={1} style={{ flex: 1 }}>
           {"Waiting for you: " + line.text}
         </T>
+      </View>
+    );
+  if (line.kind === "update")
+    return (
+      <View accessible accessibilityLabel={"Update: " + line.text} style={{ height, flexDirection: "row", alignItems: "center", gap: 8 }}>
+        <View style={{ width: FACE, alignItems: "center" }}>
+          <MessageSquareText size={14} color={colors.muted} strokeWidth={2.2} />
+        </View>
+        <T variant="subhead" color="muted" numberOfLines={1} style={{ flex: 1 }}>
+          {line.text.replace(/\s+/g, " ")}
+        </T>
+        {list && <ChevronRight size={12} color={colors.faint} strokeWidth={2.6} />}
       </View>
     );
   if (line.kind === "thought")
@@ -384,7 +398,9 @@ function Receipt({ chatId, run, line, entries, hold }: { chatId: string; run: Ru
           ? [{ kind: "step", key: entry.key, step: entry.step as Step }]
           : entry.kind === "thought"
             ? [{ kind: "thought", key: entry.key, id: entry.key, ...thoughtParts(entry.text) }]
-            : [],
+            : entry.kind === "text"
+              ? [{ kind: "update", key: entry.key, text: entry.text }]
+              : [],
       ) : [],
     [open, entries],
   );

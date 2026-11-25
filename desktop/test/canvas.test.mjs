@@ -12,7 +12,7 @@ import {
   workSummary,
 } from "../desktop/canvas.mjs";
 import { changeSettings, defaultSettings } from "../desktop/preferences.mjs";
-import { liveTurnDisplay } from "../src/liveDisplay.ts";
+import { liveTurnDisplay, updateInChat } from "../src/liveDisplay.ts";
 
 /** A fake Copilot session: `script(emit, options)` runs during send. */
 function fakeSession(script) {
@@ -409,4 +409,14 @@ test("liveTurnDisplay gates chain of thought and interim updates independently",
     liveTurnDisplay({ settings: { showThinking: true }, ...sample }).liveStream,
     "Checking calendar…",
   );
+});
+
+test("a finished turn's updates stay in the chat only where its thinking does", () => {
+  const open = { showUpdates: true, showThinking: true, thinkingMode: "open", islandMode: false };
+  assert.equal(updateInChat({ ...open, live: true, thinkingMode: "folded" }), true, "while the turn runs, updates are in the chat");
+  assert.equal(updateInChat({ ...open, live: true, showUpdates: false }), false);
+  assert.equal(updateInChat({ ...open, live: false }), true, "thinking open in the chat: the updates stay with it");
+  assert.equal(updateInChat({ ...open, live: false, islandMode: true }), false, "the island's receipt holds both");
+  assert.equal(updateInChat({ ...open, live: false, thinkingMode: "folded" }), false, "folded thinking: the updates fold with it");
+  assert.equal(updateInChat({ ...open, live: false, showThinking: false }), false);
 });
