@@ -1,21 +1,23 @@
 import { router } from "expo-router";
 import type { BoardItem } from "@/link/types";
-import { api, attempt } from "@/state/link";
+import { api, attempt, boundApi } from "@/state/link";
 import { useChatPrefs } from "@/state/chatPrefs";
 import { showToast, useApp } from "@/state/store";
 import { boardMessage } from "./compose";
 import { chatForTap } from "./habits";
-import { allUnreadChats, botUnreadChats, MARK_CHATS_READ_CAPABILITY, runMarkChatsRead } from "./unread";
+import { allUnreadChats, botUnreadChats, chatsPageUnreadChats, MARK_CHATS_READ_CAPABILITY, runMarkChatsRead } from "./unread";
 
 async function clearChats(ids: string[], { quiet = false }: { quiet?: boolean } = {}) {
   if (ids.length === 0) return;
+  const { api: bound, isCurrent } = boundApi();
   const hasBatch = useApp.getState().parts.meta?.capabilities.includes(MARK_CHATS_READ_CAPABILITY) ?? false;
   const result = await runMarkChatsRead(ids, {
     hasBatch,
-    markChatsRead: (list) => api.markChatsRead(list),
-    setChatFlags: (id, flags) => api.setChatFlags(id, flags),
+    isCurrent,
+    markChatsRead: (list) => bound.markChatsRead(list),
+    setChatFlags: (id, flags) => bound.setChatFlags(id, flags),
   });
-  if (!result.ok && !quiet) {
+  if (!result.ok && !quiet && isCurrent()) {
     showToast(result.error instanceof Error && result.error.message ? result.error.message : "Couldn't mark as read.", "error");
   }
 }
@@ -27,10 +29,17 @@ export async function markBotRead(botId: string, options?: { quiet?: boolean }) 
   await clearChats(ids, options);
 }
 
-/** Marks every non-archived, non-panel unread chat as read. */
+/** Marks every non-archived, non-panel unread chat across bots as read (matches Home bot dots / desktop side menu). */
 export async function markAllChatsRead() {
   const chats = useApp.getState().parts.chats ?? [];
   const ids = allUnreadChats(chats).map((chat) => chat.id);
+  await clearChats(ids);
+}
+
+/** Marks every unread chat on the Chats page as read (matches desktop Chats page, including panel and routine chats). */
+export async function markChatsPageRead() {
+  const chats = useApp.getState().parts.chats ?? [];
+  const ids = chatsPageUnreadChats(chats).map((chat) => chat.id);
   await clearChats(ids);
 }
 

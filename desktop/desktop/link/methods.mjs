@@ -144,6 +144,8 @@ const WIKI_SCOPES = ["all", "project", "page"];
 export const MAX_ARTIFACT_CHUNK = 512 * 1024;
 /** How many paths of one message the app is asked about at once. */
 export const MAX_RESOLVE_PATHS = 20;
+/** How many chat ids one `markChatsRead` call may carry. */
+export const MAX_MARK_CHATS_READ = 2000;
 const MAX_THUMBNAIL = 512;
 const ARTIFACT_KINDS = ["files", "media"];
 // A path as it stands in a message, or an artifact's id: text of a sensible length that never climbs.
@@ -466,7 +468,7 @@ function catalogArgs(method, args) {
  */
 export function remoteArgs(method, args, { deviceId, uploads } = {}) {
   if (method === "markChatsRead") {
-    if (args.length !== 1 || !Array.isArray(args[0]) || args[0].length > 2000 || !args[0].every((id) => clean(id))) {
+    if (args.length !== 1 || !Array.isArray(args[0]) || args[0].length > MAX_MARK_CHATS_READ || !args[0].every((id) => clean(id))) {
       throw new Error("Choose valid chats to mark as read.");
     }
     return [[...new Set(args[0])]];

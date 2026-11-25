@@ -1,8 +1,9 @@
 import { needsYou } from "@/state/sessionActivity";
 import { NativeTabs } from "expo-router/native-tabs";
 import type { ReactElement } from "react";
+import { isChatsPageUnread } from "@/features/chat/unread";
 import { useSpacesOn } from "@/features/spaces/data";
-import { isConversation, useCan } from "@/state/hooks";
+import { useCan } from "@/state/hooks";
 import { usePrefs } from "@/state/prefs";
 import { useApp } from "@/state/store";
 import type { TabId } from "@/state/tabs";
@@ -12,7 +13,7 @@ export default function TabsLayout() {
   const theme = useTheme();
   const { colors } = theme;
   const badge = badgeColors(theme);
-  const unread = useApp((state) => state.parts.chats?.filter((chat) => chat.unread && isConversation(chat)).length ?? 0);
+  const unread = useApp((state) => state.parts.chats?.filter(isChatsPageUnread).length ?? 0);
   const waiting = useApp((state) => needsYou(state.parts));
   // A computer without spaces, or a member who may not see them, has no Spaces tab.
   const spacesOn = useSpacesOn();
