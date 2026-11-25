@@ -287,18 +287,60 @@ test("Stop ends a running script and everything it started, and it has no time l
   await again;
 });
 
-test("a team member's message does not run a script command", { skip: !unix }, async (t) => {
+/** A team with a member whose role may use skills, and one whose role may only read them. */
+const TEAM = {
+  members: [{ id: "m_use", groupId: "g1", name: "Uma" }, { id: "m_read", groupId: "g2", name: "Rey" }],
+  groups: [{ id: "g1", roleId: "r1" }, { id: "g2", roleId: "r2" }],
+  roles: [{ id: "r1", bots: "all", perms: { agents: ["view", "chat"], skills: ["read", "use"] } }, { id: "r2", bots: "all", perms: { agents: ["view", "chat"], skills: ["read"] } }],
+};
+
+test("a team member whose role may use skills runs a script command, and one whose role may not is told so", { skip: !unix }, async (t) => {
   const { ws, seen } = setup(t);
-  save(ws, "touchy", "touch ran");
+  ws.teamOf = () => TEAM;
+  save(ws, "touchy", "echo ran-for-$BOTKINS_ARGS > ran.txt; echo done");
   const chat = ws.createChat("pip");
-  await ws.send(chat, "/touchy", { author: { memberId: "m_avery", name: "Avery" } });
-  assert.deepEqual(commandMessages(ws, chat).map((m) => m.text), ["Only the computer's owner can run a script command."]);
-  assert.equal(existsSync(join(ws.dir, "files", "pip", "ran")), false);
-  assert.deepEqual(seen.created, []);
-  // And a member's chat does not either, even when the owner types in it.
-  const theirs = ws.createChat("pip", "Theirs", undefined, "m_avery");
-  await ws.send(theirs, "/touchy");
-  assert.match(commandMessages(ws, theirs)[0].text, /Only the computer's owner/);
+  const ran = join(ws.dir, "files", "pip", "ran.txt");
+  // A role that has skills "use" (the default Guest role has it): it runs, as the computer's user.
+  await ws.send(chat, "/touchy first", { author: { memberId: "m_use", name: "Uma" } });
+  assert.deepEqual(commandMessages(ws, chat).map((m) => m.text), ["done"]);
+  assert.equal(readFileSync(ran, "utf8"), "ran-for-first\n");
+  assert.deepEqual(seen.sent, [], "no model");
+  // A role that has only skills "read" does not.
+  rmSync(ran);
+  await ws.send(chat, "/touchy second", { author: { memberId: "m_read", name: "Rey" } });
+  assert.equal(commandMessages(ws, chat)[1].text, "Your team role can't use skills, so it can't run a script command.");
+  assert.equal(existsSync(ran), false);
+  // The member whose chat it is counts too: the owner typing in a chat of a member who can't use skills runs nothing, and in one of a member who can, runs it.
+  const theirs = ws.createChat("pip", "Theirs", undefined, "m_read");
+  await ws.send(theirs, "/touchy third");
+  assert.match(commandMessages(ws, theirs)[0].text, /Your team role can't use skills/);
+  const usable = ws.createChat("pip", "Usable", undefined, "m_use");
+  await ws.send(usable, "/touchy fourth");
+  assert.deepEqual(commandMessages(ws, usable).map((m) => m.text), ["done"]);
+  // A member who is not on the team at all has no right to.
+  await ws.send(chat, "/touchy fifth", { author: { memberId: "m_gone", name: "Gone" } });
+  assert.match(commandMessages(ws, chat)[2].text, /Your team role can't use skills/);
+});
+
+test("a member's menu lists script commands when their role may use skills", async (t) => {
+  const { ws } = setup(t);
+  ws.teamOf = () => TEAM;
+  save(ws, "hello", "echo hi", "Says hi.");
+  const names = async (...args) => (await ws.catalog(...args)).choices.filter((c) => c.source === "Script").map((c) => c.name);
+  assert.deepEqual(await names("pip"), ["hello"], "the owner's");
+  assert.deepEqual(await names("pip", undefined, false, "m_use"), ["hello"]);
+  assert.deepEqual(await names("pip", undefined, false, "m_read"), []);
+  // The chat's own member counts too.
+  const theirs = ws.createChat("pip", "Theirs", undefined, "m_read");
+  assert.deepEqual(await names("pip", theirs, false, "owner"), []);
+  const usable = ws.createChat("pip", "Usable", undefined, "m_use");
+  assert.deepEqual(await names("pip", usable, false, "m_use"), ["hello"]);
+  // The link says who asks: a member's call to `catalog` carries their id.
+  const { deviceCall } = await import("../desktop/device-call.mjs");
+  const asked = [];
+  const call = deviceCall({ workspace: ws, handlers: { catalog: (...args) => (asked.push(args), []) }, folders: {} });
+  await call("catalog", ["pip", undefined, false], { principal: { kind: "member", memberId: "m_use", name: "Uma" } });
+  assert.deepEqual(asked[0], ["pip", undefined, false, "m_use"]);
 });
 
 test("a command that is off, changed or reserved is not run as one, and a turn nobody watches does not run one", { skip: !unix }, async (t) => {
@@ -568,4 +610,177 @@ test("a script does not get Botkins' own secrets or the usual credential variabl
   assert.ok(text.includes("BOTKINS_CHAT_ID=" + chat));
   assert.equal(scriptRevision({ name: "a", description: "d", script: "x" }), scriptRevision({ name: "A", description: " d ", script: "x" }), "the revision is of the cleaned fields");
   assert.notEqual(scriptRevision({ name: "a", description: "d", script: "x" }), scriptRevision({ name: "a", description: "d", script: "y" }));
+});
+
+const T0 = Date.UTC(2026, 10, 17, 12);
+const DAILY = { kind: "daily", time: "09:00" };
+
+test("a routine whose prompt is a script command runs it with no model, and its output is delivered as a routine's result is", { skip: !unix }, async (t) => {
+  const { ws, seen } = setup(t);
+  save(ws, "nightly", 'echo "args=[$BOTKINS_ARGS]"; echo "[SILENT]"; echo "{\\"wakeAgent\\": false}"');
+  const id = ws.panels.routines.create({ botId: "pip", name: "Nightly", prompt: "/nightly --full run", cadence: DAILY, deliver: { to: "feed" } }, T0);
+  await ws.panels.routines.run(id);
+  const run = ws.state.runs[0];
+  assert.equal(run.status, "Completed");
+  assert.equal(run.command, "nightly");
+  assert.deepEqual(run.script, { exitCode: 0 });
+  assert.deepEqual(seen.sent, [], "no model turn");
+  assert.deepEqual(seen.created.filter((name) => !name.startsWith("menu-")), [], "no session of the routine's chat");
+  // The output is the run's reply, [SILENT] and wakeAgent have no meaning in it, and it went where the routine's results go.
+  const reply = ws.chat(id).messages.findLast((message) => message.role === "assistant" && message.runId === run.id);
+  assert.equal(reply.text, 'args=[--full run]\n[SILENT]\n{"wakeAgent": false}');
+  assert.equal(run.silent, undefined);
+  assert.equal(run.noOutput, undefined);
+  assert.equal(ws.board.items[0].source, "Nightly");
+  assert.match(ws.board.items[0].title + (ws.board.items[0].body ?? ""), /args=\[--full run\]/);
+  // A script that fails ends the run as failed and delivers nothing.
+  save(ws, "broken", "echo partial; exit 4");
+  const bad = ws.panels.routines.create({ botId: "pip", name: "Broken", prompt: "/broken", cadence: DAILY, deliver: { to: "feed" } }, T0);
+  const before = ws.board.items.length;
+  await ws.panels.routines.run(bad);
+  assert.equal(ws.state.runs[0].status, "Needs you");
+  assert.equal(ws.state.runs[0].detail, "/broken failed (exit code 4).");
+  assert.match(ws.chat(bad).messages.findLast((message) => message.role === "assistant").text, /^partial\n\nExit code 4\.$/);
+  assert.equal(ws.board.items.length, before);
+  // A routine that delivers nowhere runs it and keeps no reply.
+  const quiet = ws.panels.routines.create({ botId: "pip", name: "Quiet", prompt: "/nightly", cadence: DAILY, deliver: { to: "none" } }, T0);
+  await ws.panels.routines.run(quiet);
+  assert.equal(ws.state.runs[0].status, "Completed");
+  assert.equal(ws.chat(quiet).messages.some((message) => message.role === "assistant"), false);
+  // The checks hold: a script that was changed on disk is not run, and says so as the run's result.
+  writeFileSync(join(ws.integrations.skillsDir, "nightly", SCRIPT_FILE), "echo changed");
+  await ws.panels.routines.run(id);
+  assert.equal(ws.state.runs[0].status, "Needs you");
+  assert.match(ws.chat(id).messages.findLast((message) => message.role === "assistant").text, /^\/nightly can't run\. The script was changed outside Botkins/);
+  // A routine made by a member whose role may not use skills does not run it.
+  ws.teamOf = () => TEAM;
+  const theirs = ws.panels.routines.create({ botId: "pip", name: "Theirs", prompt: "/broken", cadence: DAILY }, T0, "m_read");
+  await ws.panels.routines.run(theirs);
+  assert.match(ws.chat(theirs).messages.findLast((message) => message.role === "assistant").text, /Your team role can't use skills/);
+});
+
+test("a task whose details are a script command runs it with no model, and its output is the task's result", { skip: !unix }, async (t) => {
+  const { ws, seen } = setup(t);
+  save(ws, "deploy", 'echo "deploying $BOTKINS_ARGS"');
+  const id = ws.tasks.save({ title: "Deploy it", body: "/deploy to staging", botId: "pip", status: "later" });
+  ws.tasks.start(id);
+  const task = ws.tasks.get(id);
+  assert.equal(task.status, "working");
+  await ws.active.get(task.chatId).done;
+  assert.equal(ws.tasks.get(id).status, "review");
+  assert.equal(ws.tasks.get(id).result, "deploying to staging");
+  assert.deepEqual(seen.sent, [], "no model turn");
+  assert.equal(ws.state.runs[0].taskId, id);
+  // The title alone, when there are no details.
+  const titled = ws.tasks.save({ title: "/deploy now", botId: "pip", status: "later" });
+  ws.tasks.start(titled);
+  await ws.active.get(ws.tasks.get(titled).chatId).done;
+  assert.equal(ws.tasks.get(titled).result, "deploying now");
+  // A script that fails blocks the task with the reason.
+  save(ws, "broken", "echo no; exit 2");
+  const bad = ws.tasks.save({ title: "Broken", body: "/broken", botId: "pip", status: "later" });
+  ws.tasks.start(bad);
+  await ws.active.get(ws.tasks.get(bad).chatId).done;
+  assert.equal(ws.tasks.get(bad).status, "blocked");
+  assert.equal(ws.tasks.get(bad).problem, "/broken failed (exit code 2).");
+  // A task that is not a script command is a model's turn, as it was.
+  const plain = ws.tasks.save({ title: "Write", body: "Write the notes.", botId: "pip", status: "later" });
+  ws.tasks.start(plain);
+  await ws.active.get(ws.tasks.get(plain).chatId)?.done;
+  assert.equal(seen.sent.length, 1);
+  assert.match(seen.sent[0], /Work on this task/);
+});
+
+/** The tools of a bot's turn, with the card answered as `answer` says. */
+function botTools(ws, { run = { id: "run" }, answer = { action: "approve" } } = {}) {
+  const views = [];
+  ws.interactions.request = async (_chat, _task, view) => (views.push(view), answer);
+  const chat = ws.createChat("pip");
+  const task = {};
+  ws.active.set(chat, task);
+  const tools = new Map(ws.sessionTools(ws.bot("pip"), ws.chat(chat), run, task).map((tool) => [tool.name, tool]));
+  return { tools, views, chat, task };
+}
+
+test("a bot that makes or changes a routine that runs a script command asks the person first, in a card that is read in the app", async (t) => {
+  const { ws } = setup(t);
+  save(ws, "deploy", "echo deploying", "Deploys.");
+  const declined = botTools(ws, { answer: { action: "deny" } });
+  const made = { name: "Deploys", instructions: "/deploy --prod", cadence: "daily", time: "09:00" };
+  assert.equal(await declined.tools.get("routine_create").handler(made), "The person declined.");
+  assert.equal(ws.panels.routines.list("pip").length, 0, "nothing was saved");
+  const [card] = declined.views;
+  assert.equal(card.review, true, "only opens the app");
+  assert.equal(askOf({ ...card, id: "q" }), "open");
+  assert.equal(card.title, "Let a routine run the script command /deploy?");
+  for (const text of ["Routine: Deploys", "When: daily 09:00", "/deploy on this computer", '"--prod"', "echo deploying"]) assert.ok(card.detail.includes(text), text);
+  // A yes saves it.
+  const yes = botTools(ws);
+  const created = JSON.parse(await yes.tools.get("routine_create").handler(made));
+  assert.equal(ws.panels.routines.list("pip").length, 1);
+  assert.equal(yes.views.length, 1);
+  // A routine that is not a script command has no card.
+  const plain = botTools(ws);
+  await plain.tools.get("routine_create").handler({ name: "Plain", instructions: "Remind me to stretch.", cadence: "daily", time: "10:00" });
+  assert.equal(plain.views.length, 0);
+  // A change to the routine's prompt (to or from a script command) asks; a change that leaves a prompt that is no script command does not.
+  const change = botTools(ws, { answer: { action: "deny" } });
+  assert.equal(await change.tools.get("routine_update").handler({ id: created.id, instructions: "/deploy --other" }), "The person declined.");
+  assert.equal(ws.panels.routines.find(created.id).entry.prompt, "/deploy --prod");
+  assert.equal(change.views.length, 1);
+  assert.match(change.views[0].detail, /"--other"/);
+  const quiet = botTools(ws);
+  await quiet.tools.get("routine_update").handler({ id: ws.panels.routines.list("pip").find(({ entry }) => entry.name === "Plain").chat.id, instructions: "Remind me to walk." });
+  assert.equal(quiet.views.length, 0);
+  // An existing routine that invokes it is asked about when its schedule is changed too.
+  const when = botTools(ws, { answer: { action: "deny" } });
+  assert.equal(await when.tools.get("routine_update").handler({ id: created.id, cadence: "weekdays", time: "07:00" }), "The person declined.");
+  assert.match(when.views[0].detail, /When: weekdays 07:00/);
+  // The turn ends before the answer: nothing is saved.
+  // Work that nobody watches cannot make or change one: there is nobody to ask.
+  const unattended = botTools(ws, { run: { id: "r3", scheduleId: 1 } });
+  await assert.rejects(() => unattended.tools.get("routine_update").handler({ id: created.id, instructions: "/deploy sneaky" }), /only be made or changed with the person there/);
+  assert.equal(ws.panels.routines.find(created.id).entry.prompt, "/deploy --prod");
+  const gone = botTools(ws);
+  ws.interactions.request = async () => (gone.task.stopped = true, { action: "approve" });
+  await assert.rejects(() => gone.tools.get("routine_create").handler({ ...made, name: "Late" }), /This turn has ended/);
+  assert.equal(ws.panels.routines.list("pip").some(({ entry }) => entry.name === "Late"), false);
+});
+
+test("a bot that makes or changes a task that runs a script command asks the person first", async (t) => {
+  const { ws } = setup(t);
+  save(ws, "deploy", "echo deploying");
+  const declined = botTools(ws, { answer: { action: "deny" } });
+  assert.equal(await declined.tools.get("task_create").handler({ title: "Deploy", details: "/deploy now", bot: "Pip", status: "ready" }), "The person declined.");
+  assert.equal(ws.tasks.all.length, 0);
+  const [card] = declined.views;
+  assert.equal(card.review, true);
+  assert.equal(card.title, "Let a task run the script command /deploy?");
+  for (const text of ["Task: Deploy", "Status: ready, for Pip", "It starts by itself when Pip is free.", '"now"', "echo deploying"]) assert.ok(card.detail.includes(text), text);
+  const yes = botTools(ws);
+  const made = JSON.parse(await yes.tools.get("task_create").handler({ title: "Deploy", details: "/deploy now", bot: "Pip", status: "later" }));
+  assert.equal(ws.tasks.get(made.id).body, "/deploy now");
+  // A task that is not a script command has no card, and the title counts when there are no details.
+  const plain = botTools(ws);
+  await plain.tools.get("task_create").handler({ title: "Write the notes" });
+  assert.equal(plain.views.length, 0);
+  const titled = botTools(ws, { answer: { action: "deny" } });
+  assert.equal(await titled.tools.get("task_create").handler({ title: "/deploy soon" }), "The person declined.");
+  // Changing it, or making it ready, asks.
+  const change = botTools(ws, { answer: { action: "deny" } });
+  assert.equal(await change.tools.get("task_update").handler({ id: made.id, details: "/deploy elsewhere" }), "The person declined.");
+  assert.equal(ws.tasks.get(made.id).body, "/deploy now");
+  assert.equal(await change.tools.get("task_update").handler({ id: made.id, status: "ready" }), "The person declined.");
+  assert.equal(ws.tasks.get(made.id).status, "later");
+  assert.equal(change.views.length, 2);
+  const approve = botTools(ws);
+  await approve.tools.get("task_update").handler({ id: made.id, status: "ready" });
+  assert.equal(ws.tasks.get(made.id).status, "ready");
+  // Work that nobody watches can only leave one in Later (no card), and cannot change one.
+  const unattended = botTools(ws, { run: { id: "r2", scheduleId: 1 } });
+  const later = JSON.parse(await unattended.tools.get("task_create").handler({ title: "Deploy", details: "/deploy at night", bot: "Pip", status: "ready" }));
+  assert.equal(later.status, "later");
+  assert.equal(unattended.views.length, 0);
+  await assert.rejects(() => unattended.tools.get("task_update").handler({ id: made.id, details: "/deploy sneaky" }), /only be changed with the person there/);
+  assert.equal(ws.tasks.get(made.id).body, "/deploy now");
 });

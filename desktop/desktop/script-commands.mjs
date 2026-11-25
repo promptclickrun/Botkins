@@ -18,8 +18,11 @@
 //   - A person saves one in Settings or on the phone, or with `botkins skills add-script`, which
 //     shows the whole script first and needs a yes. A bot proposes one with `script_command_create`:
 //     a card shows the whole script and nothing is written until the person approves.
-//   - Only the computer's owner creates or runs one. A turn that runs for nobody (a routine, a
-//     reaction, a panel refresh, a task) and a team member's turn do not run one.
+//   - Only the computer's owner creates, changes or removes one. Running one needs the right to use
+//     skills (a team role's "use" of skills; the owner has it): a team member's chat runs it as the
+//     computer's user, as the owner's does. A routine run or a task whose prompt is `/<name> words`
+//     runs it too, with the same checks; a reaction, a panel refresh and a proactive check do not.
+//     A bot that makes or changes a routine or a task that invokes one asks the person first (below).
 // A script command has no time limit: the person can press Stop (desktop/AGENTS.md).
 import { createHash } from "node:crypto";
 import { mkdirSync } from "node:fs";
@@ -108,6 +111,47 @@ export function matchScriptCommand(prompt) {
   return match ? { name: match[1].toLowerCase(), args: (match[2] ?? "").trim() } : null;
 }
 
+/**
+ * The script command that a text invokes (`/name words`), if Botkins keeps one of that name: { name, args }, else null. A name
+ * that is reserved is a provider's command, not this. Used for what is scheduled (a routine's prompt, a task's text).
+ */
+export function scriptInvocation(ws, text) {
+  const typed = matchScriptCommand(text);
+  if (!typed || RESERVED_COMMANDS.has(typed.name)) return null;
+  return ws.integrations.scriptCommands().some((command) => command.name === typed.name) ? typed : null;
+}
+
+/** What a person is told of an invocation before it may be scheduled: the command, its words, and its whole script. */
+export function invocationLines(ws, { name, args }) {
+  let script;
+  try {
+    script = ws.integrations.readScriptCommand(name).script;
+  } catch (error) {
+    script = null;
+  }
+  return [
+    "This runs the script command /" + name + " on this computer, with your account's access, and no model. No model reads it or runs it.",
+    "The words it gets (in $BOTKINS_ARGS and on standard input): " + (args ? JSON.stringify(shownText(args)) : "none"),
+    ...(script === null ? ["Its script can't be read now."] : ["", "Its script:", shownScript(script)]),
+  ];
+}
+
+/**
+ * A bot asks for a routine or a task that invokes a script command: the person is shown what runs and when, in a card that is
+ * read in the app (`review`: never answered from a notification, a card or a gadget), and nothing is saved until they approve.
+ * Resolves true on a yes. `what` is the title, `about` the lines that say which routine or task and when.
+ */
+export async function askToSchedule(ws, { bot, chat, task, invocation, what, about }) {
+  const decision = await ws.interactions.request(chat, task, {
+    botId: bot.id,
+    kind: "permission",
+    review: true,
+    title: what,
+    detail: [...about, "", ...invocationLines(ws, invocation)].join("\n"),
+  });
+  return decision.action === "approve";
+}
+
 /** What a script command adds to the "/" menu: one choice, as the menu's own choices are. */
 export const scriptChoice = ({ name, description }) => ({
   name,
@@ -162,7 +206,16 @@ export async function runScriptCommand(ws, { chat, bot, run, task, command, args
   // Botkins is quitting: the run is picked up again when it opens (and says it can't be run again).
   if (ws.closing) return;
   run.script = { exitCode: result.exitCode };
-  chat.messages.push({ role: "command", plain: true, time: Date.now(), runId: run.id, text: scriptReply(command.name, result).slice(0, 128000) });
+  const reply = scriptReply(command.name, result).slice(0, 128000);
+  if (run.scheduleId == null && run.taskId == null) {
+    chat.messages.push({ role: "command", plain: true, time: Date.now(), runId: run.id, text: reply });
+    return;
+  }
+  // A routine's run or a task: its output is the run's reply, and goes where a routine's or a task's result goes (desktop/routines.mjs
+  // `deliver`, desktop/tasks.mjs `finished`). A script that fails ends the run as failed, as a routine's script does. There is no
+  // [SILENT] and no wakeAgent here: the output is the result.
+  if (!run.noOutput) chat.messages.push({ role: "assistant", text: reply, runId: run.id, time: Date.now() });
+  if (!task.stopped && (result.exitCode !== 0 || result.error)) run.scriptFailure = "/" + command.name + (result.error ? " could not start: " + result.error : result.exitCode === null ? " was ended." : " failed (exit code " + result.exitCode + ").");
 }
 
 const REFUSED = "The person declined.";

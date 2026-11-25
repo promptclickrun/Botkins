@@ -155,7 +155,7 @@ const POLICY = {
   skills: ["skills", "read"],
   readSkill: ["skills", "read"],
   "skills.upload": ["skills", "create"],
-  // A script command runs on the owner's computer, so only the owner reads or saves one ("script-commands-v1").
+  // A script command runs on the owner's computer, so only the owner reads its script or saves one ("script-commands-v1"). Running one is a member's too when their role may use skills (turnAccess, desktop/team-turn.mjs).
   "skills.saveScript": "owner",
   "skills.readScript": "owner",
   "skillsCatalog.search": ["skills", "read"],

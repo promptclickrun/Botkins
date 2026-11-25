@@ -3,6 +3,8 @@
 import { randomUUID } from "node:crypto";
 import { defineTool } from "./providers/provider.mjs";
 import { textField } from "./panels.mjs";
+import { askToSchedule, scriptInvocation } from "./script-commands.mjs";
+import { shownText } from "./shown-text.mjs";
 
 export const LANES = ["later", "ready", "working", "review", "blocked", "done"];
 export const PRIORITIES = ["low", "normal", "high", "urgent"];
@@ -97,6 +99,15 @@ export class Tasks {
       "You don't change this task's status: when your reply ends the task moves to Review by itself, with your reply as its result, and the person marks it done."
     );
   }
+  /**
+   * The script command that a task is: its details (else its title) are `/<name> words` of a command that Botkins keeps. It then runs
+   * that script with no model, and its output is the task's result (desktop/script-commands.mjs). { name, args, text } or null.
+   */
+  invocation(task) {
+    const text = (task.body?.trim() || task.title || "").trim();
+    const found = scriptInvocation(this.ws, text);
+    return found && { ...found, text };
+  }
   /** Starts a task in its own chat. Called by the dispatcher or by Start now. */
   start(id) {
     const task = this.get(id);
@@ -108,7 +119,7 @@ export class Tasks {
     const chatId = reuse ? task.chatId : this.ws.createChat(task.botId, "Task · " + task.title.slice(0, 80));
     let turn;
     try {
-      turn = this.ws.send(chatId, this.prompt(task), { taskId: task.id, title: "Task · " + task.title.slice(0, 90) });
+      turn = this.ws.send(chatId, this.invocation(task)?.text ?? this.prompt(task), { taskId: task.id, title: "Task · " + task.title.slice(0, 90) });
     } catch (error) {
       Object.assign(task, { chatId, status: "blocked", problem: error.message, updatedAt: Date.now() });
       this.ws.save();
@@ -153,12 +164,23 @@ export class Tasks {
         parameters: { type: "object", properties, required, additionalProperties: false },
         skipPermission: true,
         defer: "never",
-        handler: (args) => {
+        handler: async (args) => {
           if (task.stopped || this.ws.closing || !run || this.ws.active.get(chat.id) !== task)
             throw new Error("This turn is no longer active");
-          return JSON.stringify(handler(args));
+          const result = await handler(args);
+          // A plain sentence (the person declined) goes as it is.
+          return typeof result === "string" ? result : JSON.stringify(result);
         },
       });
+    const stillActive = () => {
+      if (task.stopped || task.ended || this.ws.closing || this.ws.active.get(chat.id) !== task) throw new Error("This turn has ended.");
+    };
+    /** A task that invokes a script command is not saved on a bot's word: the person sees the command, its words and the task, and decides. */
+    const approved = async (invocation, about) => {
+      const yes = await askToSchedule(this.ws, { bot, chat, task, invocation, what: "Let a task run the script command /" + invocation.name + "?", about });
+      stillActive();
+      return yes;
+    };
     const botByName = (name) => {
       if (!name) return null;
       const match = this.ws.state.bots.find((b) => b.name.toLowerCase() === String(name).toLowerCase());
@@ -175,12 +197,15 @@ export class Tasks {
         "Create a Task Board job (not an in-chat update_plan checklist); status \"ready\" with a bot automatically starts background work when that bot is free, while \"later\" queues it for the person. Give it to a bot by name (yourself or another bot) or leave it for anyone. Use this when the person asks you to track, queue or delegate work. Tasks added during a routine or another task always wait in Later for the person.",
         { title: string, details: string, bot: string, priority: { type: "string", enum: PRIORITIES }, status: { type: "string", enum: ["later", "ready"] } },
         ["title"],
-        ({ title, details, bot: name, priority, status }) => {
+        async ({ title, details, bot: name, priority, status }) => {
           if (created >= PER_TURN) throw new Error("Create at most ten tasks per reply.");
           if (this.all.filter((t) => !["done", "archived"].includes(t.status)).length >= MAX_OPEN)
             throw new Error("The task board is full. Ask the person to finish or archive some tasks.");
           // Work that runs without the person (a routine or another task) can only suggest tasks: they wait in Later.
           const unattended = !!(run.scheduleId || run.taskId);
+          // (Work that nobody watches can only leave it in Later, which runs nothing: the person moves it from there and sees it.)
+          const invocation = scriptInvocation(this.ws, (details && String(details).trim()) || title || "");
+          if (invocation && !unattended && !(await approved(invocation, ["Task: " + shownText(title), "Status: " + (status ?? "later") + (name ? ", for " + shownText(name) : ""), ...(status === "ready" && name ? ["It starts by itself when " + shownText(name) + " is free."] : [])]))) return "The person declined.";
           const id = this.save({ title, body: details, botId: botByName(name), priority, status: unattended ? "later" : status }, bot.id);
           created++;
           return view(this.get(id));
@@ -199,7 +224,7 @@ export class Tasks {
           "The task you are working on right now needs no status from you: it moves to Review by itself when your reply ends, with your reply as its result, and the person marks it done. Its title and details stay as the person wrote them.",
         { id: string, title: string, details: string, priority: { type: "string", enum: PRIORITIES }, status: { type: "string", enum: ["later", "ready", "review", "done", "archived"] } },
         ["id"],
-        ({ id, title, details, priority, status }) => {
+        async ({ id, title, details, priority, status }) => {
           const t = this.get(id);
           if (t.botId !== bot.id && t.createdBy !== bot.id) throw new Error("You can only change your own tasks.");
           // The task being worked on keeps the person's wording, and its status is the board's to
@@ -216,6 +241,13 @@ export class Tasks {
             // The note comes first, and what happens next is said beside the status, so a bot that
             // reads only `status: "working"` doesn't take its request for ignored.
             return { note: notes.join(" "), ...view(t), next: "review, when your reply ends" };
+          }
+          // A task whose text is a script command, as it would be after this change: a bot changes it, or readies it, only with the person's yes.
+          const after = { title: title !== undefined ? title : t.title, body: details !== undefined ? body(details) : t.body };
+          const invocation = (title !== undefined || details !== undefined || status === "ready") && scriptInvocation(this.ws, (after.body && after.body.trim()) || after.title || "");
+          if (invocation) {
+            if (run.scheduleId || run.taskId) throw new Error("A task that runs a script command can only be changed with the person there. Ask them to.");
+            if (!(await approved(invocation, ["Task: " + shownText(after.title), "Change: " + [title !== undefined && "title", details !== undefined && "details", status && "status " + status].filter(Boolean).join(", ")]))) return "The person declined.";
           }
           if (title !== undefined || details !== undefined || priority !== undefined) {
             if (t.status === "working" && t.id !== run.taskId) throw new Error("That task is running.");

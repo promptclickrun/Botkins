@@ -10,6 +10,7 @@
 import { nextTime } from "../panels.mjs";
 import { compileCadence, deliveryField, describeCadence, notifyField, slowEnough } from "../routines.mjs";
 import { ControlError } from "./socket.mjs";
+import { invocationOf, needsScriptYes } from "./script-yes.mjs";
 
 const text = (value, max, what) => {
   if (typeof value !== "string" || !value.trim() || value.length > max) throw new ControlError("Give " + what + ".", "BAD_ARGUMENT");
@@ -124,6 +125,8 @@ export function routinesApi({ workspace, handlers, bot, selection }) {
     next: nextRuns(entry, 3),
     ...(fastOf(entry) && { fastMinutes: fastOf(entry) }),
     ...(deliverChat(entry.deliver) && { deliverChat: deliverChat(entry.deliver) }),
+    // A routine whose prompt is a script command of Botkins' runs that script, with no model.
+    ...(!entry.script && invocationOf(workspace, entry.prompt) && { scriptCommand: invocationOf(workspace, entry.prompt) }),
   });
 
   /** A schedule made in a chat. */
@@ -236,6 +239,7 @@ export function routinesApi({ workspace, handlers, bot, selection }) {
         botId: owner,
         instructions: fields.prompt,
         ...(fields.script && { script: fields.script, followUp: fields.followUp === true }),
+        ...(!fields.script && invocationOf(workspace, fields.prompt) && { scriptCommand: invocationOf(workspace, fields.prompt) }),
         // Left out when the routine has no model of its own.
         ...(finalModel && { model: modelWords(finalModel) }),
         cadence: describeCadence(fields.cadence),
@@ -292,6 +296,7 @@ export function routinesApi({ workspace, handlers, bot, selection }) {
     async "routines.add"([data, mark]) {
       const { app, review } = await plan(null, data, Date.now());
       if (review.fastMinutes && !agreed(mark)) throw needsAgreement(review.fastMinutes);
+      if (review.scriptCommand) needsScriptYes(workspace, review.instructions, mark, "This routine");
       const id = await handlers.createRoutine(app);
       return view(routine(id));
     },
@@ -300,6 +305,7 @@ export function routinesApi({ workspace, handlers, bot, selection }) {
       const found = routine(ref);
       const { app, review } = await plan(found, patch, Date.now());
       if (review.fastMinutes && !agreed(mark)) throw needsAgreement(review.fastMinutes);
+      if (review.scriptCommand) needsScriptYes(workspace, review.instructions, mark, "This routine");
       await handlers.updateRoutine(found.chat.id, app);
       return view(routine(found.chat.id));
     },
@@ -315,6 +321,7 @@ export function routinesApi({ workspace, handlers, bot, selection }) {
       // The copy runs the schedule of the routine, so a fast one is a new fast routine.
       const fast = fastOf(found.entry);
       if (fast && !agreed(mark)) throw needsAgreement(fast);
+      if (!found.entry.script) needsScriptYes(workspace, found.entry.prompt, mark, "The copy of this routine");
       const target = other === undefined || other === null ? found.chat.botId : bot(other).id;
       const renamed = name === undefined || name === null ? undefined : text(name, 80, "a name of up to 80 characters");
       const id = await handlers.duplicateRoutine(found.chat.id, target);

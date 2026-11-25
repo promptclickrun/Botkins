@@ -38,6 +38,8 @@ export function deviceCall({ workspace, handlers, folders }) {
     // An answer to a question that outlived its turn becomes the answerer's next message, so it says who they are.
     const callArgs = member && name === "send" ? [checked[0], checked[1], { ...(checked[2] ?? {}), author: member }] : name === "respond" ? [checked[0], checked[1], member?.memberId ?? "owner"] : checked;
     if (name === "recordVoiceLine") return handlers[name](checked[0], checked[1], checked[2], checked[3], member, checked[4]);
+    // A member's menu lists the script commands only when their role may use skills ("script-commands-v1").
+    if (member && name === "catalog") return handlers.catalog(checked[0], checked[1], checked[2], member.memberId);
     if (member) {
       // The fork can contain private history. Stamp its creator before the first save or snapshot.
       if (name === "forkChat") return workspace.forkChat(checked[0], checked[1], member.memberId);

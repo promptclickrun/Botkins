@@ -993,7 +993,8 @@ export class Workspace {
       ...(run.reaction && { message }),
     };
     // A person's message that is a script command: known now, so that the chat is busy with it from the start (the menu is then asked of the bot's menu session).
-    if (!run.reaction && run.scheduleId == null && !run.panelId && !run.taskId && !run.recovery?.proactiveCheck && !(recovering && run.recovery?.input) && !isGroup(chat)) {
+    // A routine's run and a task may run one too (not a reaction, a panel refresh or a proactive check: they have no prompt of the person's).
+    if (!run.reaction && !run.panelId && !run.proactive && !run.recovery?.proactiveCheck && !(recovering && run.recovery?.input) && !isGroup(chat)) {
       const typed = this.scriptCommandCandidate(prompt);
       if (typed) Object.assign(task, { script: true, typedScript: typed });
     }
@@ -1818,12 +1819,15 @@ export class Workspace {
   /**
    * The "/" menu of a chat: what its provider's session lists, and the script commands that are on
    * (desktop/script-commands.mjs). A command or skill that the session has under the same name wins.
-   * A chat that a team member started has no script commands in its menu: they are the owner's.
+   * `person` is who asks ("owner" or a member's id). The script commands are there when everyone in
+   * the chat may use skills: that person, and the member whose chat it is (a team role's "use" of skills).
    */
-  async catalog(botId, chatId, fresh = false) {
+  async catalog(botId, chatId, fresh = false, person = "owner") {
     const data = await this.inventory(botId, chatId, fresh);
     const chat = chatId ? this.state.chats.find((c) => c.id === chatId) : null;
-    if (!Array.isArray(data?.choices) || chat?.createdBy) return data;
+    if (!Array.isArray(data?.choices)) return data;
+    const team = this.teamOf();
+    if (![person, chat?.createdBy].every((id) => !id || id === "owner" || turnAccess({ memberId: id }, team).skills)) return data;
     const taken = commandNames(data.choices);
     const scripts = this.integrations.scriptCommands().filter((c) => c.enabled && !c.unavailable && !taken.has(c.name)).map(scriptChoice);
     return scripts.length ? { ...data, choices: [...data.choices, ...scripts] } : data;
@@ -2347,9 +2351,16 @@ export class Workspace {
    */
   async runTypedScript(chat, bot, run, task, { name, args }) {
     this.access.assertChat(chat, [bot]);
-    const said = (text) => (chat.messages.push({ role: "command", plain: true, time: Date.now(), runId: run.id, text }), true);
-    // The owner's alone: a turn that a team member wrote, or that runs in a member's chat, runs nothing on this computer.
-    if (this.accessForTurn(chat, task).member) { run.command = name; return said("Only the computer's owner can run a script command."); }
+    // A refusal is the run's reply, where its result goes (a routine's or a task's), else a plain command message. A scheduled run that is refused failed.
+    const scheduled = run.scheduleId != null || run.taskId != null;
+    const said = (text) => {
+      chat.messages.push(scheduled ? { role: "assistant", text, runId: run.id, time: Date.now() } : { role: "command", plain: true, time: Date.now(), runId: run.id, text });
+      if (scheduled) run.scriptFailure = text.slice(0, 300);
+      return true;
+    };
+    // Running one needs the right to use skills (a team role's "use"): the owner has it, and so does a member whose role has it. It runs as the
+    // computer's user either way. Both people's rights count when two are in a turn (accessForTurn).
+    if (!this.accessForTurn(chat, task).skills) { run.command = name; return said("Your team role can't use skills, so it can't run a script command."); }
     const command = this.integrations.runnableScript(name);
     if (!command) {
       run.command = name;
@@ -2388,7 +2399,12 @@ export class Workspace {
       // A script command runs its script with no model, and no session is opened for it (desktop/script-commands.mjs).
       if (task.typedScript) {
         if (await this.runTypedScript(chat, bot, run, task, task.typedScript)) {
-          if (!task.stopped && !this.closing) run.status = "Completed";
+          if (!task.stopped && !this.closing) {
+            // A routine's or a task's script that fails ends the run as failed, as a routine's script does.
+            if (run.scriptFailure) Object.assign(run, { status: "Needs you", ending: "failed", detail: run.scriptFailure });
+            else run.status = "Completed";
+            delete run.scriptFailure;
+          }
           return;
         }
         // Its provider has a command of that name: the message goes the way every message goes.

@@ -8,6 +8,8 @@ import { randomUUID } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { defineTool } from "./providers/provider.mjs";
+import { askToSchedule, scriptInvocation } from "./script-commands.mjs";
+import { shownText } from "./shown-text.mjs";
 import { validateSelection } from "./preferences.mjs";
 import { runScript, scriptEnding, sleepsAgent, SCRIPT_LENGTH } from "./routine-script.mjs";
 import { CronExpressionParser } from "cron-parser";
@@ -697,7 +699,9 @@ export class Routines {
         handler: async (args) => {
           if (task.stopped || ws.closing || !run || ws.active.get(chat.id) !== task)
             throw new Error("This turn is no longer active");
-          return JSON.stringify(await handler(args));
+          const result = await handler(args);
+          // A plain sentence (the person declined) goes as it is.
+          return typeof result === "string" ? result : JSON.stringify(result);
         },
       });
     const str = { type: "string" };
@@ -742,6 +746,17 @@ export class Routines {
     const maker = task?.author?.memberId ?? chat.createdBy;
     const actor = personOf(maker);
     const here = (deliver) => (deliver?.to === "chat" && deliver.chatId === undefined && !chatProblem(chat, bot.id, ws, actor) ? { ...deliver, chatId: chat.id } : deliver);
+    const stillActive = () => {
+      if (task.stopped || task.ended || ws.closing || ws.active.get(chat.id) !== task) throw new Error("This turn has ended.");
+    };
+    /** A routine that invokes a script command: a card read in the app, and a yes (desktop/script-commands.mjs). Throws when nobody is there. */
+    const approved = async (invocation, about) => {
+      if (run?.scheduleId != null || run?.taskId || run?.panelId) throw new Error("A routine that runs a script command can only be made or changed with the person there. Ask them to.");
+      const yes = await askToSchedule(ws, { bot, chat, task, invocation, what: "Let a routine run the script command /" + invocation.name + "?", about });
+      stillActive();
+      return yes;
+    };
+    const whenWords = (a) => [a.cadence, a.time, a.days?.join(", "), a.date, a.cron, a.timezone].filter(Boolean).map((word) => shownText(String(word))).join(" ") || "as it is";
     const cadenceOf = (a) =>
       a.cadence ? { kind: a.cadence, time: a.time, days: a.days, date: a.date, cron: a.cron } : undefined;
     const id = { id: { type: "string", description: "Routine id from routine_list" } };
@@ -810,9 +825,12 @@ export class Routines {
             "Resolve relative dates from the current runtime date and the person's or routine's timezone.",
           { name: str, instructions: str, ...cadenceProps, ...deliverProp, ...notifyProp },
           ["name", "instructions", "cadence"],
-          (a) => {
+          async (a) => {
             if (this.list(bot.id).length >= 25) throw new Error("You already have 25 routines. Ask the person which to remove first.");
             const cadence = cadenceOf(a);
+            // A routine that runs a script command is not saved on a bot's word: the person sees what runs and when, and decides.
+            const invocation = scriptInvocation(ws, a.instructions);
+            if (invocation && !(await approved(invocation, ["Routine: " + shownText(a.name), "When: " + whenWords(a)]))) return "The person declined.";
             if (cadence?.kind === "cron" && !slowEnough(cadence.cron))
               throw new Error("Bots can't create routines that run more often than every 15 minutes. The person can set that up under Routines.");
             const warnings = [];
@@ -833,8 +851,11 @@ export class Routines {
         "Change one of your routines: its name, instructions, schedule, where its result goes (deliver), or who it notifies (notify / notifyTargets). Supply only what changes; a new schedule needs cadence and its fields.",
         { ...id, name: str, instructions: str, ...cadenceProps, ...deliverProp, ...notifyProp },
         ["id"],
-        (a) => {
-          owned(a.id);
+        async (a) => {
+          const { entry: before } = owned(a.id);
+          // The routine as it will be: a change to a routine that runs a script command (or makes it run one) is the person's to see.
+          const invocation = !before.script && scriptInvocation(ws, a.instructions !== undefined ? a.instructions : before.prompt);
+          if (invocation && !(await approved(invocation, ["Routine: " + shownText(a.name ?? before.name), "Change: " + (Object.keys(a).filter((key) => key !== "id").join(", ") || "none"), ...(a.cadence ? ["When: " + whenWords(a)] : [])]))) return "The person declined.";
           const warnings = [];
           const notifyTargets = a.notify === true && a.notifyTargets === undefined ? null : a.notifyTargets;
           const entry = this.update(

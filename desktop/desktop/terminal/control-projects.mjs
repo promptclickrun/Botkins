@@ -14,6 +14,7 @@ import { relative, sep } from "node:path";
 import { LANES, PRIORITIES } from "../tasks.mjs";
 import { PROJECT_COLORS } from "../projects.mjs";
 import { ControlError } from "./socket.mjs";
+import { needsScriptYes } from "./script-yes.mjs";
 
 const text = (value, max, what) => {
   if (typeof value !== "string" || !value.trim() || value.length > max) throw new ControlError("Give " + what + ".", "BAD_ARGUMENT");
@@ -302,8 +303,10 @@ export function projectsApi({ workspace, handlers, bot }) {
     },
     "tasks.get": ([ref]) => taskView(task(ref)),
     /** A new task: { title, details?, bot?, priority?, status? }. A task that is Ready and has a bot starts by itself. */
-    async "tasks.add"([data = {}]) {
+    async "tasks.add"([data = {}, mark]) {
       if (!data || typeof data !== "object" || Array.isArray(data)) throw new ControlError("Give the task a title.", "BAD_ARGUMENT");
+      // A task that is a script command runs that script with no model (desktop/script-commands.mjs): the person agrees first.
+      needsScriptYes(workspace, (typeof data.details === "string" && data.details.trim()) || data.title, mark, "This task");
       const id = await handlers.saveTask({
         title: data.title,
         body: data.details,
@@ -314,10 +317,12 @@ export function projectsApi({ workspace, handlers, bot }) {
       return taskView(task(id));
     },
     /** Changes { title?, details?, bot? (null for no bot), priority? }. The app's save takes the whole task, so what is not given is as it was. */
-    async "tasks.edit"([ref, patch = {}]) {
+    async "tasks.edit"([ref, patch = {}, mark]) {
       const found = task(ref);
       if (!patch || typeof patch !== "object" || Array.isArray(patch)) throw new ControlError("Give what to change.", "BAD_ARGUMENT");
       if (!["title", "details", "bot", "priority"].some((key) => patch[key] !== undefined)) throw new ControlError("Give what to change.", "BAD_ARGUMENT");
+      const after = { title: patch.title ?? found.title, body: patch.details ?? found.body };
+      needsScriptYes(workspace, (typeof after.body === "string" && after.body.trim()) || after.title, mark, "This task");
       await handlers.saveTask({
         id: found.id,
         title: patch.title ?? found.title,
@@ -327,15 +332,17 @@ export function projectsApi({ workspace, handlers, bot }) {
       });
       return taskView(task(found.id));
     },
-    async "tasks.move"([ref, status]) {
+    async "tasks.move"([ref, status, mark]) {
       const found = task(ref);
+      if (status === "ready") needsScriptYes(workspace, found.body?.trim() || found.title, mark, "This task");
       await handlers.moveTask(found.id, oneOf([...LANES, "archived"], status, "A status"));
       return taskView(task(found.id));
     },
     /** Starts the task now, in its own chat: a turn of its bot's model. A task that is working already is left as it is (`already: true`). */
-    async "tasks.start"([ref]) {
+    async "tasks.start"([ref, mark]) {
       const found = task(ref);
       const already = found.status === "working";
+      if (!already) needsScriptYes(workspace, found.body?.trim() || found.title, mark, "This task");
       await handlers.startTask(found.id);
       return { ...taskView(task(found.id)), ...(already && { already: true }) };
     },

@@ -831,8 +831,8 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
     deleteTodo: (projectId, todoId) => workspace.projects.deleteTodo(projectId, todoId),
     moveTodo: (projectId, todoId, delta) => workspace.projects.moveTodo(projectId, todoId, delta),
     setBotAccess: (botId, access) => workspace.access.setBotAccess(botId, access),
-    catalog: (botId, chatId, refresh) =>
-      workspace.catalog(botId, chatId, refresh),
+    catalog: (botId, chatId, refresh, person) =>
+      workspace.catalog(botId, chatId, refresh, person),
     // A panel's calls are for a person ("owner" for this window; a paired device's is handed in
     // by desktop/device-call.mjs), who has to be able to change the panel's space.
     changePanel: (id, action, person = "owner") => {
