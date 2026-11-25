@@ -35,10 +35,10 @@ export function Aside({ kind, text, live, bot, state, label, shimmer = false }: 
   const { colors } = useTheme();
   const mode = useChatPrefs((prefs) => prefs.thinking);
   const markdown = useChatPrefs((prefs) => prefs.markdown);
-  const [open, setOpen] = useState(mode === "show");
-  // A setting change must not leave an already-mounted update in its old preview state. Open is
-  // intentionally full and readable; Folded keeps the compact tail until the person expands it.
-  useEffect(() => setOpen(mode === "show"), [mode]);
+  const [open, setOpen] = useState(kind === "update" ? true : mode === "show");
+  // A setting change must not leave an already-mounted update in its old preview state. Updates
+  // open in full when shown; Folded thinking keeps the compact tail until the person expands it.
+  useEffect(() => setOpen(kind === "update" ? true : mode === "show"), [kind, mode]);
   const toggle = () => setOpen(!open);
 
   if (kind === "update") {

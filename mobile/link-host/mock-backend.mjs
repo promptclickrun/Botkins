@@ -403,6 +403,8 @@ export function seed() {
       appearance: { theme: "system", lightBackground: "cream", darkBackground: "charcoal", bubble: "theme", colorTheme: "ink", themePicked: false, font: "system", fontPicked: false, textSize: "default", avatarAnimations: true },
       foldTools: true,
       showThinking: true,
+      foldThinking: true,
+      showUpdates: true,
       linkPreviews: false,
       readAloud: false,
       onboarded: true,
@@ -2256,6 +2258,9 @@ export class MockBackend {
       const { appearance, ...rest } = patch ?? {};
       if ("harness" in rest && !["copilot", "provider", "pi", "omp"].includes(rest.harness)) throw new Error("Choose a harness");
       if ("autoSummarize" in rest && !(rest.autoSummarize === 0 || (Number.isInteger(rest.autoSummarize) && rest.autoSummarize >= 5 && rest.autoSummarize <= 30))) throw new Error("Choose off, or every 5 to 30 turns.");
+      if ("showThinking" in rest && typeof rest.showThinking !== "boolean") throw new Error("Choose whether to show thinking");
+      if ("foldThinking" in rest && typeof rest.foldThinking !== "boolean") throw new Error("Choose a thinking display preference");
+      if ("showUpdates" in rest && typeof rest.showUpdates !== "boolean") throw new Error("Choose whether to show updates");
       if (typeof rest.clarificationInstructions === "string" && rest.clarificationInstructions.length > 4000) throw new Error("Keep the instructions under 4,000 characters.");
       if (appearance?.bubble !== undefined && !(appearance.bubble === "theme" || /^#[0-9a-f]{6}$/i.test(appearance.bubble))) throw new Error("Invalid appearance choice");
       if (appearance?.avatarAnimations !== undefined && typeof appearance.avatarAnimations !== "boolean") throw new Error("Invalid appearance choice");

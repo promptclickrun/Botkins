@@ -323,6 +323,59 @@ export function AppearanceSettings({ settings, change, fail }: Props) {
         />
       </Group>
       <Group title="Conversations">
+        <div className="set-row">
+          <div className="set-label">
+            <span className="set-name">Tool calls</span>
+            <small>{settings.foldTools ? "Folded summaries with compact coding cards." : "Inline expandable work groups on the canvas."}</small>
+          </div>
+          <div className="set-control">
+            <Choices
+              label="Tool calls"
+              value={settings.foldTools ? "fold" : "open"}
+              options={[
+                { id: "fold", name: "Fold" },
+                { id: "open", name: "Open" },
+              ]}
+              onChange={(v) => toggle({ foldTools: v === "fold" })}
+            />
+          </div>
+        </div>
+        <div className="set-row">
+          <div className="set-label">
+            <span className="set-name">Thinking</span>
+            <small>
+              {settings.showThinking === false
+                ? "Hidden in conversations."
+                : settings.foldThinking === false
+                  ? "Shown open inline above replies."
+                  : "Folded into a quiet summary line."}
+            </small>
+          </div>
+          <div className="set-control">
+            <Choices
+              label="Thinking"
+              value={settings.showThinking === false ? "hide" : settings.foldThinking === false ? "open" : "fold"}
+              options={[
+                { id: "fold", name: "Fold" },
+                { id: "open", name: "Open" },
+                { id: "hide", name: "Hide" },
+              ]}
+              onChange={(v) =>
+                toggle(
+                  v === "hide"
+                    ? { showThinking: false }
+                    : { showThinking: true, foldThinking: v === "fold" },
+                )
+              }
+            />
+          </div>
+        </div>
+        <SwitchRow
+          label="Show updates"
+          help="Shows interim messages and status updates before the final reply."
+          checked={settings.showUpdates !== false}
+          onChange={(on) => toggle({ showUpdates: on })}
+        />
         <SwitchRow
           label="Show link previews"
           help="Fetches the first link in a reply, never a private or local one."

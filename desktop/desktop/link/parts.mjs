@@ -4,6 +4,7 @@
 
 import { interned } from "./json-cache.mjs";
 import { isBackgroundStep } from "./activity-steps.mjs";
+import { formatFeedWork } from "./activityModel.mjs";
 
 const PREVIEW = 160;
 const STEP_TEXT = 4000;
@@ -43,6 +44,7 @@ function chatSummary(chat) {
 }
 
 function runSummary(run) {
+  const work = formatFeedWork(run);
   return {
     id: run.id,
     chatId: run.chatId,
@@ -52,7 +54,10 @@ function runSummary(run) {
     ...(run.detail && { detail: clip(run.detail, 400) }),
     ...(run.trigger && { trigger: run.trigger }),
     ...(run.finished && { finished: run.finished }),
-    ...(run.summary && { summary: run.summary }),
+    ...(work.summary && { summary: work.summary }),
+    ...(work.kinds.length > 0 && { stepKinds: work.kinds }),
+    ...(work.stepCount > 0 && { stepCount: work.stepCount }),
+    ...(work.failedCount > 0 && { failedCount: work.failedCount }),
     ...(run.panelId && { panelId: run.panelId }),
     ...(run.scheduleId != null && { scheduleId: run.scheduleId }),
     ...(run.notifyTargets && { notifyTargets: run.notifyTargets }),
