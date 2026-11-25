@@ -83,8 +83,25 @@ export function thoughtHeading(text: string): { heading: string; snippet: string
   return { heading: line.slice(0, cut > 20 ? cut : 56) + "…", snippet: line.slice(cut > 20 ? cut + 1 : 56) };
 }
 
+const SHELL = /^(bash|powershell|shell|terminal|run_command)$/i;
+
+/**
+ * A command the bot left running in the background. Saved runs from before the `background` flag
+ * say so only in the command's arguments (the computer's link/activity-steps.mjs reads them alike).
+ */
+export function isBackground(step: StoryStep): boolean {
+  if (step.background) return true;
+  if (!step.input || step.source || !SHELL.test(step.name)) return false;
+  try {
+    const args = JSON.parse(step.input);
+    return args?.run_in_background === true || args?.mode === "async" || args?.detach === true;
+  } catch {
+    return false;
+  }
+}
+
 /** The bot's own steps for the story: not a helper's, not a background command's, and not quiet bookkeeping. */
-export const storySteps = <S extends StoryStep>(steps: S[] | undefined): S[] => (steps ?? []).filter((step) => !step.agentId && !step.background && !!classifyStep(step));
+export const storySteps = <S extends StoryStep>(steps: S[] | undefined): S[] => (steps ?? []).filter((step) => !step.agentId && !isBackground(step) && !!classifyStep(step));
 
 function countKinds(steps: StoryStep[]): { kind: StepKind; count: number }[] {
   const counts = new Map<StepKind, number>();
@@ -171,6 +188,18 @@ export type Crew<S extends StoryStep = StoryStep> = {
   steps: number;
 };
 
+/** A helper's answer in one line: its first sentence that isn't a heading, without Markdown marks. */
+function firstSentence(text?: string): string | undefined {
+  const lines = (text ?? "")
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const line = lines.find((each) => !/^#{1,6}\s/.test(each)) ?? lines[0];
+  if (!line) return undefined;
+  const plain = flat(line.replace(/^([-*+]|\d+[.)])\s+/, ""));
+  return /^(.{12,}?[.!?])(\s|$)/.exec(plain)?.[1] ?? plain;
+}
+
 const lastLine = (text?: string) =>
   (text ?? "")
     .split("\n")
@@ -184,13 +213,13 @@ export const isLive = (status: string) => status === "Running";
 /**
  * The helpers and background commands a turn started, in the order they started, or null when it
  * started none. A helper's line is what it says it is doing while it runs, and what it came back
- * with once it ended; a command's is its newest line of output.
+ * with once it ended (its first sentence); a command's is its newest line of output.
  */
 export function crewOf<S extends StoryStep>(run: StoryRun<S>): Crew<S> | null {
   const steps = run.steps ?? [];
   const helpers = (run.agents ?? []).map((helper): CrewMember<S> => {
     const live = isLive(helper.status);
-    const done = !live ? lastLine(helper.result) ?? lastLine(helper.detail) : undefined;
+    const done = !live ? firstSentence(helper.result) ?? firstSentence(helper.detail) : undefined;
     return {
       kind: "helper",
       id: helper.id,
@@ -206,7 +235,7 @@ export function crewOf<S extends StoryStep>(run: StoryRun<S>): Crew<S> | null {
     };
   });
   const commands = steps
-    .filter((step) => step.background)
+    .filter(isBackground)
     .map((step): CrewMember<S> => {
       const parsed = parseStepInput(step);
       const name = parsed.command?.split("\n")[0]?.trim() || parsed.description || step.label || step.name;
@@ -267,7 +296,7 @@ export function crewLanes<S extends StoryStep>(run: StoryRun<S>, now: number, bo
   const at = (time: number) => Math.min(1, Math.max(0, (time - start) / span));
   const botEnd = run.finished ?? now;
   const waits = (run.steps ?? [])
-    .filter((step) => !step.agentId && !step.background && classifyStep(step) === "helper")
+    .filter((step) => !step.agentId && !isBackground(step) && classifyStep(step) === "helper")
     .map((step) => ({ from: at(step.started), to: at(step.finished ?? botEnd) }))
     .filter((wait) => wait.to > wait.from)
     .sort((a, b) => a.from - b.from);

@@ -17,7 +17,7 @@ import { showToast, useApp } from "@/state/store";
 import { Badge, Button, EmptyState, Label, radius, Sheet, space, T, type Tone, useOnShow, useTheme } from "@/ui";
 import { openLink } from "@/ui/LinkHold";
 import { parseStepInput } from "./activityModel";
-import { clockOffset, commandOf, linkLabel, outputLinks, outputTail, whyThought } from "./crew";
+import { clockOffset, commandOf, linkLabel, onComputer, outputLinks, outputTail, whyThought } from "./crew";
 import { confirmStop, Elapsed, STOP_HELPER, useRun } from "./CrewCard";
 import { useWatchedReasoning } from "./useWatchedReasoning";
 
@@ -116,9 +116,15 @@ export default function CommandActivity() {
 
       {links.length > 0 && (
         <View style={{ flexDirection: "row", flexWrap: "wrap", gap: space.sm }}>
-          {links.map((url) => (
-            <Button key={url} title={linkLabel(url)} icon={ExternalLink} variant="secondary" size="sm" onPress={() => openLink(url)} accessibilityLabel={"Open " + linkLabel(url)} />
-          ))}
+          {links.map((url) =>
+            onComputer(url) ? (
+              <T key={url} variant="footnote" color="muted" selectable>
+                {linkLabel(url) + " · on your computer"}
+              </T>
+            ) : (
+              <Button key={url} title={linkLabel(url)} icon={ExternalLink} variant="secondary" size="sm" onPress={() => openLink(url)} accessibilityLabel={"Open " + linkLabel(url)} />
+            ),
+          )}
         </View>
       )}
 

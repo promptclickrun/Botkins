@@ -100,6 +100,19 @@ export function outputLinks(text: string | undefined, max = 4): string[] {
   return found;
 }
 
+/**
+ * The address is on your computer itself (localhost, 127.0.0.1, ::1): on the phone that would be
+ * the phone, so the sheet shows it as text instead of opening it.
+ */
+export function onComputer(url: string): boolean {
+  try {
+    const host = new URL(url).hostname.replace(/^\[|\]$/g, "").toLowerCase();
+    return host === "localhost" || host === "::1" || host === "0.0.0.0" || /^127\./.test(host);
+  } catch {
+    return false;
+  }
+}
+
 /** "localhost:3000" for a button, from "http://localhost:3000/". */
 export const linkLabel = (url: string) => url.replace(/^https?:\/\//i, "").replace(/\/$/, "");
 

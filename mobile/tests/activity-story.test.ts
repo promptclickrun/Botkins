@@ -74,7 +74,7 @@ test("the crew: helpers and background commands in the order they started, with 
   const run: StoryRun = {
     time: at(0),
     agents: [
-      { id: "task-2", name: "Docs reader", status: "Done", started: at(12), finished: at(33), result: "Notes\nStripe applies a coupon once per invoice" },
+      { id: "task-2", name: "Docs reader", status: "Done", started: at(12), finished: at(33), result: "## Notes\n\n**Stripe applies a coupon once per invoice.** It never stacks.\n- one\n- two" },
       { id: "task-1", name: "Code searcher", status: "Running", started: at(11), intent: "Reading subscription.ts", stoppable: true },
     ],
     steps: [
@@ -91,12 +91,16 @@ test("the crew: helpers and background commands in the order they started, with 
     [
       ["command", "npm run dev", "ready on localhost:3000", null, true],
       ["helper", "Code searcher", "Reading subscription.ts", null, true],
-      ["helper", "Docs reader", null, "Stripe applies a coupon once per invoice", false],
+      ["helper", "Docs reader", null, "Stripe applies a coupon once per invoice.", false],
     ],
   );
   assert.deepEqual([crew.at, crew.running, crew.failed, crew.steps], [at(5), 2, 0, 3]);
   assert.equal(crewLine(crew), "2 helpers · 1 command · 2 working");
   assert.equal(crewOf({ time: at(0), steps: [step("a", 1)] }), null, "no helpers, no crew");
+  // A saved run from before the flag says "background" only in its input.
+  const old = crewOf({ time: at(0), steps: [step("o", 1, { name: "bash", label: "bash", input: JSON.stringify({ command: "npm run dev", run_in_background: true }) })] });
+  assert.deepEqual(old?.members.map((m) => [m.kind, m.name]), [["command", "npm run dev"]]);
+  assert.deepEqual(storyChapters({ time: at(0), steps: [step("o", 1, { name: "bash", label: "bash", input: JSON.stringify({ command: "x", mode: "async" }) })] }), [], "and stays out of the story");
 });
 
 test("the crew's folded line once it ended, and Stop only for one still running that the computer can stop", () => {

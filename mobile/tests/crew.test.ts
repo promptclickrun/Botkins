@@ -6,7 +6,7 @@ import { test } from "node:test";
 import { MockBackend } from "../link-host/mock-backend.mjs";
 import type { Message, Run, Step, Subagent } from "../src/link/types";
 import { crewLine, crewOf, storyChapters } from "../src/features/chat/activityStory";
-import { clockOffset, countLine, crewFace, failedTail, linkLabel, openChapters, outputLinks, outputTail, whyThought } from "../src/features/chat/crew";
+import { clockOffset, countLine, crewFace, failedTail, linkLabel, onComputer, openChapters, outputLinks, outputTail, whyThought } from "../src/features/chat/crew";
 import { railLabel, runningCommands } from "../src/features/chat/helpers";
 import { chatTimeline, type Item, reuseItems, type TimelineInput } from "../src/features/chat/turn";
 
@@ -141,6 +141,8 @@ test("links a command printed: web addresses and local ports, once each, in orde
   assert.deepEqual(outputLinks(out, 10).at(-1), "http://localhost:5173");
   assert.deepEqual(outputLinks("no links here, port 3000"), []);
   assert.deepEqual(outputLinks(undefined), []);
+  // On the phone, localhost is the phone: those addresses are your computer's, so they aren't opened here.
+  assert.deepEqual(["http://localhost:3000/", "http://127.0.0.1:8080/api", "http://[::1]:5000/", "https://vite.dev/guide/", "http://localhost.example.com/"].map(onComputer), [true, true, true, false, false]);
   assert.equal(linkLabel("http://localhost:3000/"), "localhost:3000");
 });
 
