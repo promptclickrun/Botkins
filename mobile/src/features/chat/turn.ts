@@ -460,6 +460,8 @@ export function chatTimeline(input: TimelineInput): Item[] {
     const noted = !timeline && !group ? input.marks?.[run.id] : undefined;
     const text = isLive ? (input.live?.stream ?? "") : (noted?.text ?? "");
     const reply = replies.map((i) => messages[i].text).join("\n\n");
+    // Once the turn ended, its updates go with its thinking: in the chat only where the thinking is.
+    const inlineUpdates = openUpdates && (isLive || openThinking);
     let offset = 0;
 
     let steps: Step[] = [];
@@ -484,7 +486,7 @@ export function chatTimeline(input: TimelineInput): Item[] {
     };
     const pushText = (piece: string, unfinished = false) => {
       const said = clean(piece);
-      if (!openUpdates || !said || covered(reply, said)) return;
+      if (!inlineUpdates || !said || covered(reply, said)) return;
       flush();
       parts++;
       items.push({ kind: "text", key: "t" + run.id + ":" + offset, text: said, ...(unfinished && { unfinished: true }) });
@@ -518,7 +520,7 @@ export function chatTimeline(input: TimelineInput): Item[] {
         const message = messages[entry.index];
         // An interim text is drawn as the bot's update (Thinking and updates says how), not as a reply.
         if (message.interim) {
-          if (!openUpdates || !clean(message.text)) continue;
+          if (!inlineUpdates || !clean(message.text)) continue;
           flush();
           parts++;
           items.push({ kind: "text", key: "i" + (from + entry.index), text: clean(message.text) });
@@ -581,8 +583,8 @@ export function chatTimeline(input: TimelineInput): Item[] {
     const fold: FoldEntry[] = [];
     const shown: Item[] = [];
     let offset = 0;
-    // The bot's updates: in the fold, or with the island in the chat where they landed (they never go inside it).
-    const update = (entry: Extract<FoldEntry, { kind: "text" }>) => (island ? shown.push(entry) : fold.push(entry));
+    // The bot's updates fold with its thinking, in the order they came: into the fold, or the island's receipt.
+    const update = (entry: Extract<FoldEntry, { kind: "text" }>) => fold.push(entry);
     const textUpTo = (key: string) => {
       const mark = noted?.marks[key];
       if (mark === undefined || mark <= offset) return;
@@ -618,12 +620,8 @@ export function chatTimeline(input: TimelineInput): Item[] {
     const rest = text.slice(offset).replace(/^\s+/, "");
     if (showUpdates && noted && !replies.length && clean(rest)) update({ kind: "text", key: "t" + run.id + ":" + offset, text: clean(rest) });
     if (group) {
-      const said = [...inside, ...replies].filter((i) => !messages[i].interim || island).sort((a, b) => a - b);
-      for (const i of said) {
-        const message = messages[i];
-        if (!message.interim) items.push(messageItem(i, { end: i === replies.at(-1) }));
-        else if (showUpdates && clean(message.text)) items.push({ kind: "text", key: "i" + (from + i), text: clean(message.text) });
-      }
+      const said = [...inside, ...replies].filter((i) => !messages[i].interim).sort((a, b) => a - b);
+      for (const i of said) items.push(messageItem(i, { end: i === replies.at(-1) }));
     } else {
       items.push(...shown, ...kept());
       replies.forEach((i, n) => items.push(messageItem(i, { end: n === replies.length - 1 })));

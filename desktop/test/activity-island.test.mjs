@@ -90,3 +90,15 @@ test("Open is the default for Steps and Thinking unless the person picked", () =
   assert.equal(settleChatDisplay({ thinking: "folded" }, false).thinking, "hidden");
   assert.equal(settleChatDisplay({ thinking: "open", thinkingPicked: true }, false).thinking, "open");
 });
+
+test("a finished turn's receipt holds its updates with the thinking, in the order they happened", () => {
+  const run = { steps: [step("a", 10), step("b", 30)], reasoning: [thought("t1", 5, "**Planning** First the files.")] };
+  const updates = [{ key: "u1", at: 20, text: "Found the config.\n\nChecking the tests next." }];
+  const lines = islandLines(run, { thoughts: true, updates });
+  assert.deepEqual(lines.map((line) => line.key), ["thought-t1", "step-a", "update-u1", "step-b"]);
+  assert.equal(lines[2].kind, "update");
+  assert.equal(lines[2].text, "Found the config.\n\nChecking the tests next.");
+  assert.deepEqual(islandLines(run, { thoughts: false, updates }).map((line) => line.kind), ["step", "update", "step"], "updates follow their own setting");
+  assert.deepEqual(islandLines(run, { thoughts: true, updates: [{ key: "blank", at: 1, text: "  " }] }).map((line) => line.kind), ["thought", "step", "step"]);
+  assert.deepEqual(islandLines(run, { thoughts: false, updates: [{ key: "tie", at: 30, text: "Next the tests." }] }).map((line) => line.key), ["step-a", "update-tie", "step-b"], "an update that came with a step reads first");
+});

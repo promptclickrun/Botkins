@@ -4,7 +4,8 @@
 // thought it is on), the time and step count, and a window of the newest 4 lines (tool steps and
 // thought rows, in the order they happened), or with Thinking alone the last 3 lines of the
 // reasoning. A tap lists every line in the card. Once the turn ends it folds into a receipt under
-// the answer ("✓ Worked 42s · 9 steps"). Updates never go inside: they stay in the chat.
+// the answer ("✓ Worked 42s · 9 steps"). While the turn runs its updates stay in the chat; once it
+// ended they fold into the receipt with the thinking, in the order they came.
 // No React Native imports, so tests/island.test.ts runs it. Island.tsx draws it.
 import type { Reasoning, Run, Step } from "@/link/types";
 import { spentTime, stepCount } from "./fold";

@@ -62,7 +62,8 @@ import { MentionChips } from "./MentionMenu";
 import { TeamRail } from "./TeamRail";
 import RequestPanel from "./RequestPanel";
 import { LinkPreviewCard, useReadAloud } from "./Extras";
-import { liveTurnDisplay } from "./liveDisplay";
+import { liveTurnDisplay, updateInChat } from "./liveDisplay";
+import type { IslandUpdate } from "./island";
 import { clearReadingError, readAloud, useReading } from "./voice";
 import ContextDetails from "./ContextDetails";
 import { BotAvatar, activityLabel, botActivity, chatActivity, useOutcome } from "./Avatar";
@@ -734,6 +735,8 @@ function ChatViewBody({
     const showStep = (step: NonNullable<typeof run.steps>[number]) => (stepsMode === "open" && !islandMode) || (stepsMode === "failed" && step.status === "Failed");
     type Event = { kind: RunTimelineEvent["kind"]; at: number; order: number; key: string; body: ReactNode; fold: ReactNode; details: ReactNode };
     const events: Event[] = [];
+    // The turn's updates for the island's receipt, where they fold with the thinking once it ended.
+    const receiptUpdates: IslandUpdate[] = [];
     // Older hosts send the currently streaming thought before they publish timed reasoning.
     const orderedRun = live && !run.reasoning?.length && liveThinking?.trim()
       ? { ...run, reasoning: [{ id: "live", text: liveThinking, started: run.time }] } : run;
@@ -741,12 +744,13 @@ function ChatViewBody({
       if (event.kind === "interim" || event.kind === "reasoning") {
         if (!event.value.text.trim()) continue;
         const isReasoning = event.kind === "reasoning";
+        if (!isReasoning && showUpdates) receiptUpdates.push({ key: event.key, at: event.at, text: event.value.text });
         const update = isReasoning
           ? <ReasoningUpdate text={event.value.text} />
           : <InterimUpdate text={event.value.text} />;
         events.push({
           kind: event.kind, at: event.at, order: event.order, key: event.key,
-          body: isReasoning ? (showThinking && thinkingMode === "open" && !islandMode ? update : null) : (showUpdates ? update : null),
+          body: isReasoning ? (showThinking && thinkingMode === "open" && !islandMode ? update : null) : (updateInChat({ live, showUpdates, showThinking, thinkingMode, islandMode }) ? update : null),
           fold: isReasoning ? (showThinking && thinkingMode !== "hidden" ? update : null) : (showUpdates ? update : null),
           details: update,
         });
@@ -838,7 +842,7 @@ function ChatViewBody({
             <LiveReply updates={updates} files={files} follow={follow} />
           </article>
         )}
-        {islandMode && !live && <IslandReceipt run={orderedRun} thoughts={showThinking} onToggle={disclosed} />}
+        {islandMode && !live && <IslandReceipt run={orderedRun} thoughts={showThinking} updates={receiptUpdates} onToggle={disclosed} />}
         {islandMode && live ? (
           <ActivityIsland
             run={orderedRun}

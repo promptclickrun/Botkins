@@ -7,11 +7,11 @@
 // the clock is its own small component that ticks once a second only while the bot works, and
 // only the header's label shimmers (Shimmer.tsx, which pauses off screen).
 import { memo, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { Brain, Check, ChevronRight, ChevronUp, Hand, X } from "lucide-react";
+import { Brain, Check, ChevronRight, ChevronUp, Hand, MessageSquareText, X } from "lucide-react";
 import { StepDetailBody, stepIcon, useNow } from "./ChatActivity";
 import { Shimmer } from "./Shimmer";
 import { classifyStep, stepHeadline } from "./activityModel";
-import { type IslandLine, islandLabel, islandLines, islandMeta, islandWindow, reasoningTail, receiptLabel } from "./island";
+import { type IslandLine, type IslandUpdate, islandLabel, islandLines, islandMeta, islandWindow, reasoningTail, receiptLabel } from "./island";
 import type { Run, Step } from "./types";
 import "./island.css";
 
@@ -31,6 +31,14 @@ function Line({ line }: { line: IslandLine | WaitLine }) {
       <div className="island-row wait">
         <span className="island-icon" aria-hidden="true"><Hand size={14} /></span>
         <span className="island-text">{line.text}</span>
+      </div>
+    );
+  }
+  if (line.kind === "update") {
+    return (
+      <div className="island-row update">
+        <span className="island-icon" aria-hidden="true"><MessageSquareText size={14} /></span>
+        <span className="island-text">{line.text.replace(/\s+/g, " ")}</span>
       </div>
     );
   }
@@ -81,7 +89,7 @@ function FullList({ lines, close, onToggle }: { lines: IslandLine[]; close: () =
               {line.kind === "step" && <span className="island-seconds">{stepSeconds(line.step)}</span>}
               <ChevronRight size={13} className="island-item-chevron" aria-hidden="true" />
             </summary>
-            {line.kind === "step" ? <StepDetailBody step={line.step} /> : <p className="island-thought">{line.snippet || line.heading}</p>}
+            {line.kind === "step" ? <StepDetailBody step={line.step} /> : <p className="island-thought">{line.kind === "update" ? line.text : line.snippet || line.heading}</p>}
           </details>
         ))}
       </div>
@@ -91,6 +99,11 @@ function FullList({ lines, close, onToggle }: { lines: IslandLine[]; close: () =
       </button>
     </>
   );
+}
+
+/** The chat makes the receipt's updates afresh on each draw: the receipt draws again only when they changed. */
+function sameUpdates(a: IslandUpdate[] = [], b: IslandUpdate[] = []) {
+  return a.length === b.length && a.every((update, i) => update.key === b[i].key && update.at === b[i].at && update.text === b[i].text);
 }
 
 /** Opening the card brings all of it into view, above the message box (`scroll-margin` in island.css). */
@@ -183,10 +196,10 @@ export const ActivityIsland = memo(function ActivityIsland({ run, who, avatar, w
 
 /** A finished turn's island, folded into a receipt under the answer: "Worked 42s · 9 steps".
  * Clicking it opens the same full list in place. */
-export const IslandReceipt = memo(function IslandReceipt({ run, thoughts, onToggle }: { run: Run; thoughts: boolean; onToggle?: () => void }) {
+export const IslandReceipt = memo(function IslandReceipt({ run, thoughts, updates, onToggle }: { run: Run; thoughts: boolean; /** What the bot wrote before it moved on: it folds in here with the thinking. */ updates?: IslandUpdate[]; onToggle?: () => void }) {
   const [open, setOpen] = useState(false);
   const card = useRef<HTMLElement>(null);
-  const all = useMemo(() => islandLines(run, { thoughts, keep: shown }), [run.steps, run.reasoning, thoughts]);
+  const all = useMemo(() => islandLines(run, { thoughts, keep: shown, updates }), [run.steps, run.reasoning, thoughts, updates]);
   useLayoutEffect(() => {
     if (open) reveal(card.current);
   }, [open]);
@@ -218,4 +231,4 @@ export const IslandReceipt = memo(function IslandReceipt({ run, thoughts, onTogg
       <FullList lines={all} close={toggle} onToggle={onToggle} />
     </section>
   );
-});
+}, (a, b) => a.run === b.run && a.thoughts === b.thoughts && a.onToggle === b.onToggle && sameUpdates(a.updates, b.updates));
