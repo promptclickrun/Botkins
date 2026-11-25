@@ -12,7 +12,7 @@ function standIn(path: string, exports: unknown) {
   load.cache[id] = replacement;
 }
 
-test("old display choices migrate once and finished folding stays independent after restart", async () => {
+test("Open is the default for Steps and Thinking unless picked, and picks survive a restart", async () => {
   let stored = "";
   standIn("react-native", { Platform: { OS: "ios", isPad: false } });
   standIn("../src/state/keep", {
@@ -28,27 +28,36 @@ test("old display choices migrate once and finished folding stays independent af
   }
   const defaults = (await restart()).useChatPrefs.getState();
   assert.equal(defaults.foldFinishedSteps, true);
-  assert.equal(defaults.steps, "folded");
-  assert.equal(defaults.thinking, "folded");
+  assert.equal(defaults.steps, "show", "Open, the island, is the default for Steps");
+  assert.equal(defaults.thinking, "show", "and for Thinking");
 
+  // A pick is kept across restarts, and marks itself picked.
   const fresh = await restart();
-  fresh.setChatPrefs({ steps: "show" });
+  fresh.setChatPrefs({ steps: "folded", thinking: "folded" });
   await Promise.resolve();
   const picked = (await restart()).useChatPrefs.getState();
-  assert.deepEqual([picked.steps, picked.foldFinishedSteps], ["show", true]);
+  assert.deepEqual([picked.steps, picked.stepsPicked, picked.thinking, picked.thinkingPicked], ["folded", true, "folded", true]);
 
+  // Saved before the island: unpicked Steps and the old default Thinking (Folded) become Open.
+  stored = JSON.stringify({ steps: "folded", thinking: "folded", updates: true, foldFinishedSteps: true });
+  const before = (await restart()).useChatPrefs.getState();
+  assert.deepEqual([before.steps, before.thinking], ["show", "show"]);
+  // Hidden and Open thinking were never defaults, so they were the person's choice and stay.
   stored = JSON.stringify({ steps: "show", stepsPicked: true, thinking: "hide" });
   const prefs = await restart();
-  assert.equal(prefs.useChatPrefs.getState().foldFinishedSteps, false);
   assert.equal(prefs.useChatPrefs.getState().thinking, "hide");
-  prefs.setChatPrefs({ foldFinishedSteps: true });
+  assert.equal(prefs.useChatPrefs.getState().foldFinishedSteps, true, "Open folds into the island's receipt now");
+  prefs.setChatPrefs({ foldFinishedSteps: false });
   prefs.setChatPrefs({ steps: "show" });
   await Promise.resolve();
-  assert.equal((await restart()).useChatPrefs.getState().foldFinishedSteps, true);
+  assert.equal((await restart()).useChatPrefs.getState().foldFinishedSteps, false);
 
   stored = JSON.stringify({ steps: "hide", stepsPicked: true, thinking: "unexpected" });
   const oldHidden = (await restart()).useChatPrefs.getState();
-  assert.deepEqual([oldHidden.steps, oldHidden.thinking, oldHidden.foldFinishedSteps], ["folded", "folded", true]);
+  assert.deepEqual([oldHidden.steps, oldHidden.thinking, oldHidden.foldFinishedSteps], ["folded", "show", true]);
   stored = JSON.stringify({ steps: "show", foldFinishedSteps: "no" });
   assert.equal((await restart()).useChatPrefs.getState().foldFinishedSteps, true);
+  // A picked Folded thinking stays Folded.
+  stored = JSON.stringify({ thinking: "folded", thinkingPicked: true });
+  assert.equal((await restart()).useChatPrefs.getState().thinking, "folded");
 });

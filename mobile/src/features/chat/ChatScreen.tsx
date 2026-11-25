@@ -45,6 +45,8 @@ import { LiveTurn, TurnText, WorkPart } from "./LiveTurn";
 import { CAPSULE, StatusCapsule } from "./StatusCapsule";
 import { EndedNote, KeptNote, OpenNote, type MessageActions, MessageRow, UserBubble, WorkLine } from "./Messages";
 import { type FoldHold, FoldRow } from "./FoldRow";
+import { Island } from "./Island";
+import { capsuleShown, islandOn } from "./islandModel";
 import { Aside } from "./Aside";
 import { chatTimeline, createTimelineRunSelector, indexMessageOwnership, liveRowVisible, resolveLiveBody, type Item, reuseItems, TIMELINE_V1, underWay } from "./turn";
 import { ProjectPill, projectActions, runProjectChoice, type Side, SideAnswer } from "./ChatProject";
@@ -328,6 +330,8 @@ const TimelineRow = memo(function TimelineRow({ item, chatId, group, bot, bots, 
     <KeptNote line={item.line} />
   ) : item.kind === "open" ? (
     <OpenNote line={item.line} again={item.again} onSend={sendText} />
+  ) : item.kind === "fold" && item.island ? (
+    <Island chatId={chatId} bot={group ? bots.get(item.run.speakers?.at(-1) ?? "") : bot} group={group} item={item} inView={inView} hold={holdFold} onHeight={item.live ? viewport.islandHeight : undefined} />
   ) : item.kind === "fold" ? (
     <FoldRow chatId={chatId} bot={group ? bots.get(item.run.speakers?.at(-1) ?? "") : bot} group={group} item={item} hold={holdFold} />
   ) : item.kind === "thought" ? (
@@ -341,7 +345,9 @@ const TimelineRow = memo(function TimelineRow({ item, chatId, group, bot, bots, 
 });
 
 /** Keep text and legacy turn marks at the list that orders them with messages and steps. */
-function ChatTimelineList({ chatId, view, pending, runPart, streaming, group, bot, bots, at, list, position, setPosition, followLatest, sendText, draftText, messageActions, openPanel, emptyView, room}: RowProps & {
+function ChatTimelineList({ chatId, view, pending, runPart, streaming, group, bot, bots, at, list, position, setPosition, followLatest, sendText, draftText, messageActions, openPanel, emptyView, room, viewport }: RowProps & {
+  /** Which rows are on screen: the screen reads it too, to show the capsule only while the island is away. */
+  viewport: ReturnType<typeof createChatViewport>;
   view: ChatView;
   pending: (Message & { clientMessageId: string })[];
   runPart?: Run | null;
@@ -362,7 +368,6 @@ function ChatTimelineList({ chatId, view, pending, runPart, streaming, group, bo
   // The newest message is out of view: the button that goes back to it shows.
   const away = useRef(false);
   const [awayNow, setAway] = useState(false);
-  const [viewport] = useState(createChatViewport);
   // Where a message being scrolled to sits once it is there: 0.5 is the middle; 1 its top at the top (the list is inverted).
   const viewPosition = useRef(0.5);
   // How far from the list's edge it sits: a reply shown from its beginning clears the bar and banners over the list (room.top).
@@ -404,7 +409,10 @@ function ChatTimelineList({ chatId, view, pending, runPart, streaming, group, bo
   const foldFinishedSteps = useChatPrefs((prefs) => prefs.foldFinishedSteps);
   const streamOpen = useApp((state) => streaming && typeof state.texts[chatId]?.stream === "string");
   const ownership = useMemo(() => indexMessageOwnership(view.messages), [view.messages]);
-  const prefs = useMemo(() => ({ steps: stepsPref, thinking: thinkingPref, updates: updatesPref, foldFinishedSteps }), [stepsPref, thinkingPref, updatesPref, foldFinishedSteps]);
+  const prefs = useMemo(() => {
+    const choices = { steps: stepsPref, thinking: thinkingPref, updates: updatesPref, foldFinishedSteps };
+    return { ...choices, island: islandOn(choices) };
+  }, [stepsPref, thinkingPref, updatesPref, foldFinishedSteps]);
   // A new step, steer, or page seals the current text into history using the latest snapshot.
   // Body-only changes reach the active row directly and leave this list untouched.
   const structural = useMemo(() => {
@@ -420,7 +428,7 @@ function ChatTimelineList({ chatId, view, pending, runPart, streaming, group, bo
       marks, timeline, group, prefs, ownership,
       screens: panesOn ? view.pane?.panels?.filter((panel) => panel.kind === "screen") : undefined,
       // Whole-reply mode can receive reasoning before it receives any reply text.
-      livePlaceholder: streamOpen || (!!underWay(runPart) && prefs.thinking === "show"),
+      livePlaceholder: streamOpen || (!!underWay(runPart) && prefs.thinking === "show" && !prefs.island),
     });
   }, [chatId, view, runPart, markPositions, timeline, group, panesOn, prefs, ownership, streamOpen]);
   const liveItem = useMemo(() => structural.find((item) => item.kind === "live"), [structural]);
@@ -529,6 +537,9 @@ function ChatTimelineList({ chatId, view, pending, runPart, streaming, group, bo
   // optimistic messages and steps that arrive before the stream, need that room in the inset.
   const hasStatusRow = !pending.length && data[0]?.kind === "fold" && data[0].live;
   const listBottom = hasStatusRow ? room.dock : room.bottom;
+  // The live island as the newest row: the screen shows the capsule once it is scrolled under the message box.
+  const islandNewest = hasStatusRow && data[0]?.kind === "fold" && !!data[0].island;
+  useEffect(() => viewport.trackIsland(islandNewest), [viewport, islandNewest]);
   const finishDrag = (offset: number) => {
     if (position === "history" && offset <= HIDE_AT) followLatest();
   };
@@ -546,6 +557,7 @@ function ChatTimelineList({ chatId, view, pending, runPart, streaming, group, bo
           // below), and the button offers the way back.
           onScroll={(event) => {
             scrolled.current = event.nativeEvent.contentOffset.y;
+            viewport.scrolled(event.nativeEvent.contentOffset.y);
             const next = showsAt(event.nativeEvent.contentOffset.y, away.current);
             if (next !== away.current) {
               away.current = next;
@@ -652,6 +664,14 @@ function ChatScreenScreen({ pane: paneId, onLeave: leavePane, onList }: { pane?:
   const queued = useApp((state) => state.parts.live?.queued[chatId]);
   const steerable = useApp((state) => !!state.parts.live?.steerable?.[chatId]);
   const working = streaming || !!turnRun;
+  // With the island (Steps or Thinking Open) the capsule shows only while the island is scrolled out of view.
+  const [viewport] = useState(createChatViewport);
+  const island = useChatPrefs(islandOn);
+  // Worked out against the message box while the island is the newest row; else by the list's viewability.
+  const islandAbove = useStore(viewport.island);
+  const islandRow = useStore(viewport.rows, (rows) => !!turnRun && rows.has("f:" + turnRun.id));
+  const islandInView = islandAbove ?? islandRow;
+  const showCapsule = capsuleShown({ working, island: island && !!turnRun, islandInView });
   const group = !!chat?.botIds && chat.botIds.length > 1;
   const canChat = useCan("agents", "chat");
 
@@ -1010,7 +1030,7 @@ function ChatScreenScreen({ pane: paneId, onLeave: leavePane, onList }: { pane?:
           <ChatTimelineList
             chatId={chatId} view={view ?? EMPTY_CHAT} pending={pending} runPart={runPart} streaming={streaming} group={group} bot={bot} bots={bots}
             at={at} list={list} position={position} setPosition={setPosition} followLatest={followLatest} sendText={sendText} draftText={draftText} messageActions={messageActions} openPanel={pane.show}
-            room={room}
+            room={room} viewport={viewport}
             emptyView={empty && (
               <View style={{ flex: 1, paddingTop: room.top, paddingBottom: room.bottom }}>
                 <Hello chat={chat} bot={bot} bots={bots} projects={projects} settings={settings} onPick={pick} />
@@ -1029,7 +1049,7 @@ function ChatScreenScreen({ pane: paneId, onLeave: leavePane, onList }: { pane?:
         <Fade edge="bottom" cover={dock} />
         {canChat && (working || hasTodos) && (
           <View pointerEvents="box-none" style={{ position: "absolute", left: space.sm, right: space.sm, bottom: dock + space.sm, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: space.sm }}>
-            {working && <StatusCapsule chatId={chatId} bot={bot} group={group} bots={bots} run={turnRun} />}
+            {showCapsule && <StatusCapsule chatId={chatId} bot={bot} group={group} bots={bots} run={turnRun} />}
             {hasTodos && <Chip label={todoLabel(todos)} selected={todoOpen} onPress={() => setTodoDrawerChat(todoOpen ? undefined : chatId)} />}
           </View>
         )}

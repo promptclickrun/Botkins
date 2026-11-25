@@ -19,6 +19,7 @@ import { useApp } from "@/state/store";
 import { BotAvatar, Markdown, space, T } from "@/ui";
 import { Aside } from "./Aside";
 import { workWidth } from "./bits";
+import { islandOn } from "./islandModel";
 import { liveTurnDisplay } from "./liveDisplay";
 import { type Item, segmentThinking } from "./turn";
 import { FACE_INDENT, StepLine } from "./WorkRows";
@@ -90,13 +91,15 @@ export function LiveTurn({ chatId, bot, group, bots, item }: { chatId: string; b
   // cached while reparsing the active tail; the finished MessageRow performs the exact final parse.
   const visible = liveTurnDisplay({ stream: item.text, thinking: item.thinking, intent, thinkingMode, showUpdates });
   const stream = visible.stream;
-  const thinking = thinkingMode === "show" ? visible.thinking ?? "" : "";
+  // Once the computer has started the run, Open's thinking is in the island under this row (Island.tsx).
+  const inIsland = useChatPrefs(islandOn) && !!item.run;
+  const thinking = thinkingMode === "show" && !inIsland ? visible.thinking ?? "" : "";
   // Timeline rows are already filtered for Folded/Open/Failed; keep the renderer structural.
   const steps = item.steps;
   // The face leads the work: what the bot is doing and its latest thought. A reply with no work has none.
   const lead = !!thinking || steps.length > 0;
-  // One live line at a time: a running step shown below, or else what the bot is doing.
-  const leadShimmers = onIt && !steps.some((step) => step.status === "Running");
+  // One live line at a time: a running step shown below, or else what the bot is doing. The island's header has it when there is one.
+  const leadShimmers = onIt && !inIsland && !steps.some((step) => step.status === "Running");
   return (
     <View style={{ gap: space.sm + 2 }}>
       {group && !!stream && (

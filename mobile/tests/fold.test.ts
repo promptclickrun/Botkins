@@ -59,10 +59,11 @@ const ask: Message = { role: "user", text: "Do the thing", runId: "r1", time: at
 
 // ── The setting ──────────────────────────────────────────────────────────────────────────────────
 
-test("everyone moves to Folded once; a choice made after that is kept, and the old Summary reads as Folded", () => {
-  assert.equal(settleSteps({}), "folded");
-  assert.equal(settleSteps({ steps: "show" }), "folded", "a choice saved before the flag was the old default, not a pick");
-  assert.equal(settleSteps({ steps: "hide" }), "folded");
+test("Steps is Open (the island) unless the person picked; a picked choice is kept, and the old Summary reads as Folded", () => {
+  assert.equal(settleSteps({}), "show");
+  assert.equal(settleSteps({ steps: "folded" }), "show", "Folded saved without the flag was the old default, not a pick");
+  assert.equal(settleSteps({ steps: "hide" }), "show");
+  assert.equal(settleSteps({ steps: "folded", stepsPicked: true }), "folded", "a person who picked Folded keeps it");
   assert.equal(settleSteps({ steps: "show", stepsPicked: true }), "show");
   assert.equal(settleSteps({ steps: "failed", stepsPicked: true }), "failed");
   assert.equal(settleSteps({ steps: "hide", stepsPicked: true }), "folded");
