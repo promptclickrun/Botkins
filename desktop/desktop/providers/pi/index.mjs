@@ -203,7 +203,7 @@ export class PiRpc {
   request(command, timeoutMs = 60000) {
     const id = "bk-" + this.next++;
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
+      const timer = timeoutMs > 0 && setTimeout(() => {
         this.pending.delete(id);
         reject(new Error(this.name + " took too long to answer."));
       }, timeoutMs);
@@ -292,6 +292,7 @@ export class PiRpc {
 }
 
 class PiSession extends ProviderSession {
+  get interruptsForSteering() { return this.provider.runtime === PI_ID; }
   constructor(provider, spec) {
     super();
     this.provider = provider;
@@ -367,9 +368,8 @@ class PiSession extends ProviderSession {
    * Sends one message. There is no time limit: the person stops a turn that runs long, and Pi's
    * process ending ends the turn (PiRpc tells the turn). `timeoutMs` is for a caller with nobody
    * to stop it, such as a background summary. `onReady(deliver)` is called once the harness is
-   * working on it: `deliver({ prompt, attachments })` steers the turn (Pi's and OMP's `steer`,
-   * delivered after the tool calls under way and before the model's next request) and resolves to
-   * whether the harness took it.
+   * working on it. Pi interrupts the old operation and admits the new instruction on the same
+   * session. OMP uses its native steering queue.
    */
   async send(message, timeoutMs, onReady) {
     if (this.turn || this.sending) throw new Error("This conversation is already working.");
@@ -386,12 +386,20 @@ class PiSession extends ProviderSession {
       // One listener for the whole turn; a run started again for a late steer waits on a new settle.
       let settle = () => {};
       let fail = () => {};
-      const nextSettle = () => new Promise((resolve, reject) => ((settle = resolve), (fail = reject)));
+      const nextSettle = () => {
+        const next = Promise.withResolvers();
+        settle = next.resolve;
+        fail = next.reject;
+        // A process can exit while the prompt acknowledgement is still outstanding.
+        next.promise.catch(() => {});
+        return next.promise;
+      };
       let settled = nextSettle();
       const timer = timeoutMs > 0 && setTimeout(() => fail(new Error(this.provider.name + " took too long to answer.")), timeoutMs);
       const off = rpc.on((event) => {
         if (event.type === "botkins_exit") return fail(event.error);
-        this.event(event);
+        if (turn.buffer) turn.buffer.push(event);
+        else this.event(event);
         if (this.provider.settled(event) || (event.type === "prompt_result" && event.agentInvoked === false)) settle(event);
       });
       stop = () => {
@@ -418,7 +426,9 @@ class PiSession extends ProviderSession {
       try {
         const answer = await rpc.request({ type: "prompt", message: text }, 30000);
         // An extension command can finish inside prompt() without starting an agent turn.
-        if (answer?.disposition !== "handled") {
+        if (answer?.disposition !== "handled" && this.interruptsForSteering && onReady) {
+          await this.runSteerablePi(rpc, turn, settled, nextSettle, withFiles, onReady);
+        } else if (answer?.disposition !== "handled") {
           onReady?.(deliver);
           await settled;
           // A steer the harness took as the run was ending, but never delivered, goes as one more
@@ -455,6 +465,70 @@ class PiSession extends ProviderSession {
       this.turn = null;
       this.sending = false;
       this.provider.touch(this.spec.sessionId);
+    }
+  }
+  /** The caller serializes user submissions. Keep the turn open across the old settle, the
+   * abort acknowledgement (Pi is now idle), and the replacement's own settle. */
+  async runSteerablePi(rpc, turn, settled, nextSettle, withFiles, onReady) {
+    const pending = [];
+    let aborting = null;
+    let running = true;
+    let current;
+    const active = () => this.turn === turn && !turn.ended && !this.stopRequested && !this.closed;
+    const interruptForInput = () => {
+      if (!running || aborting || !pending.length || !active()) return;
+      // A refused abort leaves the original operation running. Preserve the input for the
+      // workspace's ordinary queue. A dead RPC also rejects the outstanding settle.
+      turn.redirected = true;
+      aborting = rpc.request({ type: "abort" }, 0).catch(error => {
+        for (const item of pending.splice(0)) item.ack.reject(error);
+        aborting = null;
+      });
+      this.spec.handlers?.cancelForSteer?.();
+    };
+    if (!active()) this.interrupt();
+    onReady(({ prompt, attachments }) => {
+      if (!active()) return false;
+      const ack = Promise.withResolvers();
+      pending.push({ text: withFiles(prompt, attachments), ack });
+      interruptForInput();
+      return ack.promise;
+    });
+    try {
+      for (;;) {
+        await settled;
+        if (aborting) await aborting;
+        if (!active() || !pending.length) break;
+        current = pending.shift();
+        aborting = null;
+        running = false;
+        settled = nextSettle();
+        // A fast Pi can send the new prompt acknowledgement and reply in a single stdout
+        // chunk. Let the workspace commit the user's message before surfacing those deltas.
+        turn.buffer = [];
+        const answer = await rpc.request({ type: "prompt", message: current.text }, 0);
+        current.ack.resolve(true);
+        current = null;
+        await Promise.resolve();
+        this.stopRows(turn);
+        Object.assign(turn, { text: "", gap: false, thinking: null, error: null, stopReason: null });
+        const early = turn.buffer;
+        delete turn.buffer;
+        for (const event of early) this.event(event);
+        running = answer?.disposition !== "handled";
+        if (!running) settled = Promise.resolve();
+        else if (!active()) this.interrupt();
+        else interruptForInput();
+      }
+    } catch (error) {
+      // The interrupted prompt may already have changed files. Workspace recovery must never
+      // replay it just because the process was lost while admitting the new instruction.
+      if (turn.redirected && error?.code === "BOTKINS_PROVIDER_EXIT") throw new Error("Pi stopped during redirection.", { cause: error });
+      throw error;
+    } finally {
+      turn.ended = true;
+      current?.ack.resolve(false);
+      for (const item of pending) item.ack.resolve(false);
     }
   }
   /** One of Pi's events, as Botkins' (desktop/providers/provider.mjs). */
