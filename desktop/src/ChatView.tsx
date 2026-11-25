@@ -55,6 +55,7 @@ import {
   WorkingPill,
   duration,
 } from "./ChatActivity";
+import { ActivityIsland, IslandReceipt } from "./ActivityIsland";
 import { QuoteContext } from "./Composer";
 import { MentionChips } from "./MentionMenu";
 import { TeamRail } from "./TeamRail";
@@ -280,17 +281,22 @@ function ChatViewBody({
   const busy = busy0(state, chat.id);
   const thinking = state.thinking?.[chat.id];
   const queued = state.queued?.[chat.id] ?? [];
+  // Newer preference records use the same three choices as the phone. Keep the older booleans
+  // working for profiles and remote hosts created before the setting was split up. The window
+  // settles them (chatDisplay.ts), so `thinking` already carries an older `showThinking: false`.
+  const thinkingMode = state.settings.thinking ?? (state.settings.showThinking === false ? "hidden" : state.settings.foldThinking === false ? "open" : "folded");
+  const stepsMode = state.settings.steps ?? (state.settings.foldTools ? "folded" : "open");
+  // Updates are their own switch: they land in the chat whatever Thinking is set to.
   const { showThinking, showUpdates, liveThinking, liveStream, liveIntent } = liveTurnDisplay({
-    settings: state.settings,
+    settings: { showThinking: thinkingMode !== "hidden", showUpdates: state.settings.showUpdates },
     stream: state.streams[chat.id],
     thinking,
     intent: state.intents[chat.id],
   });
-  // Newer preference records use the same three choices as the phone. Keep the older booleans
-  // working for profiles and remote hosts created before the setting was split up.
-  const thinkingMode = state.settings.thinking ?? (!showThinking ? "hidden" : state.settings.foldThinking === false ? "open" : "folded");
-  const stepsMode = state.settings.steps ?? (state.settings.foldTools ? "folded" : "open");
   const foldFinishedSteps = state.settings.foldFinishedSteps ?? state.settings.foldTools !== false;
+  // Steps or Thinking set to Open: a one-bot turn's work shows in the activity island
+  // (ActivityIsland.tsx) instead of row by row. A group chat keeps its rows, one bot after another.
+  const islandMode = !group && (stepsMode === "open" || (showThinking && thinkingMode === "open"));
   const chatRuns = state.runs.filter((r) => r.chatId === chat.id);
   const runs = new Map(chatRuns.map((r) => [r.id, r]));
   const latest = chat.main ? chatRuns.find(run => run.forkId === chat.activeFork) : chatRuns[0];
@@ -300,7 +306,7 @@ function ChatViewBody({
   const todos = sessionTodos(latest?.todos, chat.todos ?? chatRuns.find((run) => run.todos)?.todos) ?? [];
   const todoRail = todos.length > 0 && <TaskChip todos={todos} open={drawer === "tasks"} toggle={() => setDrawer(drawer === "tasks" ? "" : "tasks")} />;
   // The to-do chip rides beside the latest turn's fold whenever that fold is sure to be drawn.
-  const todoBesideFold = latest && (latest.status === "Working" || foldFinishedSteps) &&
+  const todoBesideFold = latest && !islandMode && (latest.status === "Working" || foldFinishedSteps) &&
     chat.messages.some((message) => message.role === "user" && message.runId === latest.id && !message.steeredRunId && !message.answer);
   const agents = latest?.agents ?? [];
   const lastUserRun = [...chat.messages].reverse().find((m) => m.role === "user" && m.runId)?.runId;
@@ -695,7 +701,7 @@ function ChatViewBody({
     // The bot is on its work now: the turn runs and nothing waits for the person. Its live line
     // shimmers (T3 Code's look): the running step, or the lead while no step runs in view.
     const onIt = run.status === "Working" && !turnWaits;
-    const showStep = (step: NonNullable<typeof run.steps>[number]) => stepsMode === "open" || (stepsMode === "failed" && step.status === "Failed");
+    const showStep = (step: NonNullable<typeof run.steps>[number]) => (stepsMode === "open" && !islandMode) || (stepsMode === "failed" && step.status === "Failed");
     type Event = { kind: RunTimelineEvent["kind"]; at: number; order: number; key: string; body: ReactNode; fold: ReactNode; details: ReactNode };
     const events: Event[] = [];
     // Older hosts send the currently streaming thought before they publish timed reasoning.
@@ -710,7 +716,7 @@ function ChatViewBody({
           : <InterimUpdate text={event.value.text} />;
         events.push({
           kind: event.kind, at: event.at, order: event.order, key: event.key,
-          body: isReasoning ? (showThinking && thinkingMode === "open" ? update : null) : (showUpdates ? update : null),
+          body: isReasoning ? (showThinking && thinkingMode === "open" && !islandMode ? update : null) : (showUpdates ? update : null),
           fold: isReasoning ? (showThinking && thinkingMode !== "hidden" ? update : null) : (showUpdates ? update : null),
           details: update,
         });
@@ -782,11 +788,12 @@ function ChatViewBody({
     return (
       <Fragment key={`timeline-${run.id}`}>
         {initial && timelineMessage(initial.message, initial.index)}
-        {live && <LiveLead avatar={stillFace(28, true)} label={doingNow} thought={showUpdates ? liveIntent.trim() || undefined : undefined} shimmer={onIt && doingNow !== "Needs you" && !allSteps.some((step) => !step.agentId && step.status === "Running" && showStep(step))} />}
+        {live && !islandMode && <LiveLead avatar={stillFace(28, true)} label={doingNow} thought={showUpdates ? liveIntent.trim() || undefined : undefined} shimmer={onIt && doingNow !== "Needs you" && !allSteps.some((step) => !step.agentId && step.status === "Running" && showStep(step))} />}
         {(live || !folded) && stepsMode === "open" && olderWork}
-        {group ? groupTranscript : (live || !folded) ? events.map((event) => <Fragment key={event.key}>{event.body}</Fragment>) : personBody}
-        {/* A finished one-bot turn folds above its answer: the work, then the reply. */}
-        {!group && !live && (folded || hasActivity) && fold}
+        {group ? groupTranscript : (live || !folded || islandMode) ? events.map((event) => <Fragment key={event.key}>{event.body}</Fragment>) : personBody}
+        {/* A finished one-bot turn folds above its answer: the work, then the reply. With the island
+            the work folds into a receipt under the answer instead. */}
+        {!group && !live && !islandMode && (folded || hasActivity) && fold}
         {/* Botkins gave the bot more turns in this run by itself: said just before the reply it kept going for. */}
         {!group && keptLine(run) && <div className="timeline-kept">{keptLine(run)}</div>}
         {!group && reply.map(({ message, index }) => timelineMessage(message, index))}
@@ -801,7 +808,20 @@ function ChatViewBody({
             <LiveReply updates={updates} files={files} follow={follow} />
           </article>
         )}
-        {(live || group) && (live || folded || hasActivity) && fold}
+        {islandMode && !live && <IslandReceipt run={orderedRun} thoughts={showThinking} onToggle={disclosed} />}
+        {islandMode && live ? (
+          <ActivityIsland
+            run={orderedRun}
+            who={who}
+            avatar={stillFace(20)}
+            waiting={turnWaits}
+            waitingFor={requests.find((request) => !request.detached)?.title}
+            steps={stepsMode === "open"}
+            thinking={showThinking && thinkingMode === "open"}
+            thoughts={showThinking}
+            onToggle={disclosed}
+          />
+        ) : (live || group) && (live || folded || hasActivity) && fold}
         <TeamRail run={run} bots={state.bots} />
         <RunCards run={run} prefill={prefill} pickModel={canManageAgents ? pickModel : undefined} />
         {!live && (failed.includes(run.status) || !!groupFailure) && (

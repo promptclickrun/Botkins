@@ -54,14 +54,10 @@ import {
 import { Block } from "./Today";
 import type { Run, Step, Subagent, Todo } from "./types";
 
-/** "12s", "1m 51s" or "1h 4m". */
-export function duration(ms: number) {
-  const s = Math.max(1, Math.round(ms / 1000));
-  if (s < 60) return s + "s";
-  const m = Math.floor(s / 60);
-  if (m < 60) return m + "m " + (s % 60) + "s";
-  return Math.floor(m / 60) + "h " + (m % 60) + "m";
-}
+import { duration } from "./island";
+
+/** "12s", "1m 51s" or "1h 4m" (island.ts, where the island's own tests can reach it). */
+export { duration };
 
 /** The current time, ticking once a second only while `active`. */
 export function useNow(active: boolean) {
@@ -290,7 +286,7 @@ function DiffLinesView({ lines, truncated }: { lines: NonNullable<ParsedStepInpu
   );
 }
 
-function StepDetailBody({ step, parsed = parseStepInput(step) }: { step: Step; parsed?: ParsedStepInput }) {
+export function StepDetailBody({ step, parsed = parseStepInput(step) }: { step: Step; parsed?: ParsedStepInput }) {
   const output = (step.output || "").trim();
   const progress = (step.progress || "").trim();
   if (parsed.command) {
@@ -404,7 +400,7 @@ const KIND_ICONS: Record<string, typeof Wrench> = {
 };
 
 /** The icon for what a step did: a server's tool, or a kind without its own icon, is a wrench. */
-function stepIcon(step: Step) {
+export function stepIcon(step: Step) {
   if (step.source) return Wrench;
   return KIND_ICONS[toolKind(step.name) ?? ""] ?? Wrench;
 }

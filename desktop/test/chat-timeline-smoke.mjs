@@ -88,7 +88,7 @@ try {
   const display = (steps, thinking, foldFinishedSteps) => page.evaluate((choices) => {
     localStorage.setItem("botkins.chatDisplay", JSON.stringify(choices));
     window.dispatchEvent(new Event("botkins.chatDisplay"));
-  }, { steps, stepsPicked: true, thinking, foldFinishedSteps });
+  }, { steps, stepsPicked: true, thinking, thinkingPicked: true, foldFinishedSteps });
   const current = await page.evaluate(() => window.botkins.snapshot());
   const publish = () => app.evaluate(({ BrowserWindow }, snapshot) => BrowserWindow.getAllWindows()[0].webContents.send("changed", snapshot), current);
   await display("folded", "hidden", true);
@@ -188,7 +188,8 @@ try {
   await expect(column).not.toContainText(titles[0]);
   await expect(column).not.toContainText(firstThought);
   await expect(column).not.toContainText(secondThought);
-  await expect(column).not.toContainText(interim);
+  // Updates are their own switch: they stay in the chat whatever Steps and Thinking are set to.
+  await expect(column).toContainText(interim);
   await rail.click();
   for (const title of [...titles, firstThought, secondThought, interim]) await expect(column).toContainText(title);
   const closeRail = async () => {
@@ -198,18 +199,30 @@ try {
   };
   await closeRail();
   await display("open", "open", false);
-  await expect(column.locator(".work-step-label")).toHaveText(titles);
-  assert.ok(inOrder(await column.innerText(), [firstThought, interim, titles[0], secondThought, "Continue with the second file", ...titles.slice(1)]), "live activity follows event order");
+  // Open is the activity island: the newest four lines in one card, updates still in the chat,
+  // and every line in order once its header is clicked open.
+  const island = column.getByRole("region", { name: "Turn status" });
+  await expect(island.locator(".island-window .island-row")).toHaveCount(4);
+  await expect(island.locator(".island-window")).toHaveClass(/clipped/);
+  await expect(column).toContainText(interim);
+  await expect(column.locator(".work-step-label")).toHaveCount(0);
+  await island.locator(".island-head").click();
+  await expect(island.locator(".island-head")).toHaveAttribute("aria-expanded", "true");
+  assert.ok(inOrder(await island.locator(".island-list").innerText(), ["Read the workspace before writing", titles[0], "Now check the second file", ...titles.slice(1)]), "the island lists every line in event order");
+  await island.getByRole("button", { name: "Show less" }).click();
+  await expect(island.locator(".island-head")).toHaveAttribute("aria-expanded", "false");
   run.status = "Completed";
   run.finished = now + 40;
   chat.messages.push(final);
   await publish();
   await expect(column).toContainText("All done.");
-  await expect(column.locator(".work-step-label")).toHaveText(titles);
-  await expect(rail).toBeVisible();
+  // The finished island folds into a receipt under the answer.
+  await expect(column.locator(".island-rc")).toContainText("6 steps");
+  assert.ok(inOrder(await column.innerText(), ["All done.", "Worked"]), "the receipt is under the answer");
+  await expect(rail).toHaveCount(0);
   await display("failed", "hidden", false);
   await expect(column.locator(".work-step-label")).toHaveText(["Failed check"]);
-  await expect(column).not.toContainText(interim);
+  await expect(column).toContainText(interim);
   await expect(column).not.toContainText(firstThought);
   await rail.click();
   for (const title of titles) await expect(column).toContainText(title);
@@ -231,8 +244,8 @@ try {
   delete run.finished;
   await display("open", "open", false);
   await publish();
-  await expect(column.locator(".work-step-label")).toHaveText(titles);
-  await expect(rail).toHaveCount(1);
+  await expect(column.getByRole("region", { name: "Turn status" })).toHaveCount(1);
+  await expect(column.locator(".island-head")).toHaveCount(1);
   await display("folded", "folded", true);
   // A group turn has one run but several speakers. Each final reply must stay in the message
   // order around the shared activity, and the run's current speaker owns the live/status avatar.

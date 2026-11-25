@@ -372,7 +372,7 @@ export default function Settings({
           )}
           {section === "sidebar" && <SidebarSettings settings={state.settings} spaces={hasSpaces(state)} fail={fail} />}
           {section === "chats" && <>
-            <ChatDisplaySettings settings={settings} chatMode={state.proactive?.chatMode} fail={fail} />
+            <ChatDisplaySettings settings={{ ...settings, showUpdates: preferences.showUpdates }} change={changePreferences} chatMode={state.proactive?.chatMode} fail={fail} />
             {(!memberHost || teamCan(state, "settings", "manage")) && <>
               <SummarySettings settings={preferences} change={changePreferences} fail={fail} />
               <BehaviorSettings settings={preferences} change={changePreferences} fail={fail} />

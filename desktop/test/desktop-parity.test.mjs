@@ -5,8 +5,8 @@ import { settleChatDisplay } from "../src/chatDisplay.ts";
 import { leftEmpty, newChatToReuse } from "../src/emptyChat.ts";
 import { commitInterim, finishReply } from "../desktop/transcript.mjs";
 
-test("old profiles migrate to Folded once and keep later explicit choices", () => {
-  assert.equal(settleChatDisplay({steps:"every"}, false).steps, "folded");
+test("old unpicked Steps defaults become Open and later explicit choices stay", () => {
+  assert.equal(settleChatDisplay({steps:"every"}, false).steps, "open");
   assert.equal(settleChatDisplay({steps:"every"}, false).foldFinishedSteps, true);
   assert.equal(settleChatDisplay({steps:"hidden"}, true).steps, "folded");
   assert.equal(settleChatDisplay({}, false).thinking, "hidden");
