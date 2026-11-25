@@ -11,26 +11,13 @@ import { headlessHost } from "../desktop/host/headless.mjs";
 import { createRuntime } from "../desktop/runtime.mjs";
 import { performSecureUse } from "../desktop/secure-input.mjs";
 import { seedBots } from "./starter.mjs";
+import { modelReply } from "./fixtures/pi-model-response.mjs";
 
 const waitMs = Number(process.env.PI_SECURE_ANSWER_DELAY_MS ?? 65000);
 const form = { operation: "https_form", url: "https://example.org/sign-in", title: "Sign in", fields: [
   { key: "username", label: "User name", kind: "text" }, { key: "password", label: "Password", kind: "password" },
   { key: "code", label: "Optional code", kind: "code", optional: true },
 ] };
-
-function modelReply(id, name, args) {
-  const item = name ? { id: "fc_" + id, call_id: "call_" + id, type: "function_call", name, arguments: JSON.stringify(args), status: "completed" }
-    : { id: "msg_" + id, type: "message", role: "assistant", content: [{ type: "output_text", text: "Done", annotations: [] }], status: "completed" };
-  const response = { id: "resp_" + id, status: "in_progress", output: [] };
-  const event = (type, data) => "event: " + type + "\ndata: " + JSON.stringify({ type, ...data }) + "\n\n";
-  const body = event("response.created", { response }) +
-    event("response.output_item.added", { output_index: 0, item: { ...item, status: "in_progress", ...(name ? { arguments: "" } : { content: [] }) } }) +
-    (name ? event("response.function_call_arguments.delta", { output_index: 0, item_id: item.id, delta: item.arguments })
-      : event("response.output_text.delta", { output_index: 0, item_id: item.id, content_index: 0, delta: "Done" })) +
-    event("response.output_item.done", { output_index: 0, item }) +
-    event("response.completed", { response: { ...response, status: "completed", output: [item], usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 } } });
-  return new Response(body, { headers: { "content-type": "text/event-stream" } });
-}
 
 test("real Pi applies the completed secure prompt exactly once", { timeout: waitMs + 30000 }, async t => {
   const dataDir = mkdtempSync(join(tmpdir(), "botkins-pi-secure-"));

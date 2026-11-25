@@ -1,0 +1,120 @@
+#!/bin/sh
+# Installs the Linux programs used by the managed desktop. --check only probes availability.
+set -eu
+case ${1:-} in ""|--check) ;; *) echo "usage: install-tools [--check]" >&2; exit 64 ;; esac
+system_path=/usr/sbin:/usr/bin:/sbin:/bin:/usr/local/sbin:/usr/local/bin:/opt/google/chrome:/run/current-system/sw/bin
+if [ -x /usr/bin/id ]; then uid=$(/usr/bin/id -u); else uid=$(/run/current-system/sw/bin/id -u); fi
+if [ "$uid" = 0 ]; then
+  PATH=$system_path
+else
+  profile=$HOME/.local/share/botkins-desktop-tools
+  PATH=$profile/bin:${PATH:-$system_path}:$HOME/.nix-profile/bin:/nix/var/nix/profiles/default/bin:$system_path
+fi
+export PATH
+has() { for tool in "$@"; do command -v "$tool" >/dev/null 2>&1 && return 0; done; return 1; }
+native_browser() {
+  for binary in google-chrome chromium firefox-esr firefox chromium-browser; do
+    executable=$(command -v "$binary") || continue
+    case "$executable" in
+      /snap/*|/var/lib/snapd/snap/*) continue ;;
+      /usr/bin/firefox|/usr/bin/chromium|/usr/bin/chromium-browser)
+        # Ubuntu's transitional packages are launchers for snaps, which cannot start under
+        # the service's NoNewPrivileges restriction. A native package or Nix binary can.
+        if [ -x /usr/bin/dpkg-query ] && /usr/bin/dpkg-query -W -f='${Version}' "$binary" 2>/dev/null | grep -q snap; then continue; fi ;;
+    esac
+    return 0
+  done
+  return 1
+}
+ready() {
+  for tool in Xvfb xvfb-run xauth xdpyinfo xprop hsetroot openbox dbus-run-session xdotool ffmpeg; do has "$tool" || return 1; done
+  has xterm lxterminal xfce4-terminal && has pcmanfm thunar mc && native_browser
+}
+if ready; then exit 0; fi
+[ "${1:-}" != --check ] || exit 1
+[ "${BOTKINS_DESKTOP:-auto}" != off ] || exit 0
+
+# Nix can install the complete stack for a single user without sudo or system package changes.
+if [ "$uid" != 0 ] && has nix; then
+  mkdir -p "$(dirname "$profile")"
+  if nix --extra-experimental-features 'nix-command flakes' profile install --profile "$profile" \
+      nixpkgs#xvfb nixpkgs#xvfb-run nixpkgs#xauth nixpkgs#xdpyinfo nixpkgs#xprop \
+      nixpkgs#hsetroot nixpkgs#openbox nixpkgs#dbus nixpkgs#xdotool nixpkgs#ffmpeg \
+      nixpkgs#xterm nixpkgs#pcmanfm nixpkgs#chromium </dev/null && ready; then exit 0; fi
+fi
+admin_input() {
+  if [ "$uid" = 0 ]; then /usr/bin/env -i PATH="$system_path" DEBIAN_FRONTEND=noninteractive "$@"
+  else /usr/bin/sudo -n -- "$@"; fi
+}
+admin() { admin_input "$@" </dev/null; }
+
+# Mozilla's native ESR package works under the systemd service's sandbox and receives updates
+# through APT. Ubuntu's own firefox package is a snap transition; firefox-esr has a distinct name.
+# https://support.mozilla.org/en-US/kb/install-firefox-linux
+mozilla_repository() (
+  fingerprint=35BAA0B33E9EB396F59CA838C0BA5CE6DC6315A3
+  checksum=3ecc63922b7795eb23fdc449ff9396f9114cb3cf186d6f5b53ad4cc3ebfbb11f
+  key=/etc/apt/keyrings/botkins-mozilla.asc
+  cached=/var/cache/apt/archives/partial/botkins-mozilla-$checksum.asc
+  source=/etc/apt/sources.list.d/botkins-mozilla.list
+  line="deb [signed-by=$key,$fingerprint] https://packages.mozilla.org/apt mozilla main"
+  if [ -e "$source" ] && [ "$(cat "$source")" != "$line" ]; then
+    echo "$source has a different configuration. Leave it in place and have an administrator configure the Mozilla repository." >&2
+    exit 1
+  fi
+  admin /usr/bin/install -d -m 0755 /etc/apt/keyrings || exit 1
+  if [ ! -e "$key" ]; then
+    # APT acquires the pinned key in its own protected cache. No path owned by the installing
+    # user is passed to a privileged copy, package install, or shell.
+    admin /usr/lib/apt/apt-helper download-file https://packages.mozilla.org/apt/repo-signing-key.gpg "$cached" "SHA256:$checksum" || exit 1
+    admin /usr/bin/install -m 0644 "$cached" "$key" || exit 1
+  fi
+  actual=$(/usr/bin/sha256sum "$key") || exit 1
+  [ "${actual%% *}" = "$checksum" ] || { echo "The Mozilla APT signing key does not match its pinned checksum." >&2; exit 1; }
+  if [ ! -e "$source" ]; then
+    # Stage the fixed entry in a root-owned file and verify its contents before APT can see it.
+    tmp=$(admin /usr/bin/mktemp /etc/apt/sources.list.d/.botkins-mozilla.XXXXXXXX) || exit 1
+    trap 'admin /usr/bin/rm -f -- "$tmp"' EXIT
+    printf '%s\n' "$line" | admin_input /usr/bin/tee "$tmp" >/dev/null || exit 1
+    [ "$(admin /usr/bin/cat "$tmp")" = "$line" ] || exit 1
+    admin /usr/bin/chmod 0644 "$tmp" && admin /usr/bin/mv -T -- "$tmp" "$source" || exit 1
+  fi
+  admin /usr/bin/apt-get -o DPkg::Lock::Timeout=120 -o Acquire::Retries=2 update -q
+)
+debian_packages="xvfb xauth x11-utils xdotool ffmpeg openbox hsetroot dbus-daemon xterm pcmanfm fonts-dejavu-core"
+if [ "$uid" != 0 ] && [ ! -x /usr/bin/sudo ]; then
+  echo "The private desktop needs Linux display packages. On Debian: sudo apt-get install $debian_packages chromium. A user-owned Nix profile also works." >&2
+  exit 1
+fi
+if [ -x /usr/bin/apt-get ]; then
+  # No user-selected script or downloaded file is ever passed to sudo.
+  if ! admin /usr/bin/apt-get -o DPkg::Lock::Timeout=120 -o Acquire::Retries=2 update -q; then
+    echo "To provision the desktop, have an administrator install $debian_packages and a browser, or install them with Nix." >&2
+    exit 1
+  fi
+  browser=""
+  if ! native_browser; then
+    candidate() { LC_ALL=C /usr/bin/apt-cache policy "$1" | awk '$1 == "Candidate:" && $2 != "(none)" && $2 !~ /snap/ { found=1 } END { exit !found }'; }
+    if candidate chromium; then browser=chromium
+    elif candidate google-chrome-stable; then browser=google-chrome-stable
+    elif candidate firefox-esr; then browser=firefox-esr
+    elif candidate firefox; then browser=firefox
+    else
+      # Leave the rest of the desktop available if this computer cannot reach Mozilla.
+      admin /usr/bin/apt-get -o DPkg::Lock::Timeout=120 install -y --no-install-recommends $debian_packages
+      debian_packages=""
+      mozilla_repository || exit 1
+      browser=firefox-esr
+    fi
+  fi
+  # Package lists are fixed above. All packages are verified by the system package manager.
+  admin /usr/bin/apt-get -o DPkg::Lock::Timeout=120 install -y --no-install-recommends $debian_packages $browser
+elif [ -x /usr/bin/dnf ]; then
+  admin /usr/bin/dnf -y install /usr/bin/Xvfb /usr/bin/xvfb-run /usr/bin/xdpyinfo /usr/bin/xprop /usr/bin/xauth /usr/bin/dbus-run-session /usr/bin/ffmpeg xdotool hsetroot openbox xterm pcmanfm chromium
+elif [ -x /usr/bin/pacman ]; then
+  admin /usr/bin/pacman -S --needed --noconfirm xorg-server-xvfb xorg-xauth xorg-xdpyinfo xorg-xprop xdotool ffmpeg openbox hsetroot dbus xterm pcmanfm chromium ttf-dejavu
+fi
+if ! ready; then
+  echo "The desktop needs Xvfb, xvfb-run, xauth, xdpyinfo, xprop, hsetroot, Openbox, dbus-run-session, xdotool, ffmpeg, a terminal, a file manager and a browser. Install them with your package manager, then restart Botkins." >&2
+  exit 1
+fi

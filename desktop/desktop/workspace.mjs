@@ -514,7 +514,7 @@ export class Workspace {
             id,
             list.filter(item => {
               const task = this.active.get(id);
-              return item.id !== task?.delivering && !(item.steer && task?.deliverSteer && !item.text.startsWith("/"));
+              return task?.session?.interruptsForSteering || (item.id !== task?.delivering && !(item.steer && task?.deliverSteer && !item.text.startsWith("/")));
             }).map(({ id, text, attachments, clientMessageId }) => ({
               ...clientMessageTag(clientMessageId),
               id,
@@ -1115,6 +1115,7 @@ export class Workspace {
     const list = this.queues.get(chatId) ?? [];
     const index = list.findIndex(q => q.id === itemId);
     if (index < 0) return;
+    delete list[index].heldAfterStop;
     list[index].steer = true;
     list.unshift(...list.splice(index, 1));
     this.save();
@@ -1127,9 +1128,13 @@ export class Workspace {
     const list = this.queues.get(chatId);
     const chat = this.state.chats.find((c) => c.id === chatId);
     // Messages from one person that wait together are read in one turn; someone else's keeps its own turn, in order.
-    const { first: next, rest } = list ? takeBatch(list, (item) => this.canSend(chat, item)) : {};
-    if (!list?.length) this.queues.delete(chatId);
+    const ready = list?.filter(item => !item.heldAfterStop);
+    const { first: next, rest } = ready ? takeBatch(ready, (item) => this.canSend(chat, item)) : {};
     if (!next) return;
+    const consumed = new Set([next, ...rest]);
+    const remaining = list.filter(item => !consumed.has(item));
+    if (remaining.length) this.queues.set(chatId, remaining);
+    else this.queues.delete(chatId);
     try {
       this.send(chatId, next.text, {
         attachments: next.attachments,
@@ -1656,6 +1661,7 @@ export class Workspace {
       else delete chat.restartSession;
     }
     const handlers = run && {
+      cancelForSteer: () => this.interactions.cancel(chat.id),
       permission: (request) => this.interactions.permission(chat, task, request),
       question: (request) => {
         if (task.stopped) throw new Error("No active turn");
@@ -2948,6 +2954,16 @@ export class Workspace {
     const task = this.active.get(chatId);
     if (task) {
       task.stopped = true;
+      // Pi has to leave its current operation before it can admit a steer. Stop wins that
+      // race. Keep the person's unsent text in the queue, where Send now can release it.
+      if (task.session?.interruptsForSteering) {
+        for (const item of this.queues.get(chatId) ?? []) {
+          if (item.steer && !item.text.startsWith("/")) {
+            item.steer = false;
+            item.heldAfterStop = true;
+          }
+        }
+      }
       if (task.run) task.run.stopRequested = true;
       this.save();
       this.interactions.cancel(chatId);

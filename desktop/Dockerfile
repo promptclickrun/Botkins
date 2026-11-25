@@ -1,7 +1,7 @@
 # Botkins on a server.
 #
 # The default image (the last stage, `terminal`) is the terminal host: the whole workspace and
-# the phone link in one small Node service, with no Electron and no display. It is what
+# the phone link in one Node service, with a private Linux desktop. It is what
 # `docker compose up` runs. See docs/terminal.md.
 #
 # The stages before it are the earlier headless setup, kept for a phone that should see and
@@ -23,6 +23,7 @@ RUN apt-get update \
     hsetroot \
     xterm \
     mc \
+    pcmanfm \
     xdotool \
     x11-utils \
     xauth \
@@ -141,15 +142,18 @@ CMD ["/usr/local/bin/botkins-headless-host"]
 FROM botkins AS workspace
 CMD ["/usr/local/bin/botkins-display-workspace"]
 
-# The terminal host: plain Node, nothing of a desktop. This is the default image.
+# The terminal host with its private desktop. This is the default image.
 FROM node:24-bookworm-slim AS terminal
 
 ENV DEBIAN_FRONTEND=noninteractive
 
 # Certificates for the providers and the relay, git for bots that work in a project folder, and
-# tini so the service is stopped properly and the tools it starts are reaped.
+# tini so the service is stopped properly and the tools it starts are reaped. Firefox can run
+# on hosts where Docker's namespace restrictions prevent Chromium from starting its sandbox.
 RUN apt-get update \
   && apt-get install -y --no-install-recommends ca-certificates git tini \
+    xvfb xauth x11-utils xdotool ffmpeg openbox hsetroot dbus-daemon xterm pcmanfm \
+    chromium firefox-esr fonts-dejavu-core fonts-liberation \
   && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /opt/botkins
@@ -163,6 +167,7 @@ RUN npm ci --omit=dev --ignore-scripts --no-audit --no-fund \
   && npm cache clean --force
 COPY cli ./cli
 COPY desktop ./desktop
+COPY docker/desktop ./docker/desktop
 COPY design/botkins-kit/customize.js ./design/botkins-kit/customize.js
 COPY design/botkins-kit/motion ./design/botkins-kit/motion
 COPY design/botkins-kit/avatars ./design/botkins-kit/avatars

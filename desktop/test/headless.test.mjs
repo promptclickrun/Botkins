@@ -1,6 +1,6 @@
 import { test as nodeTest } from "node:test";
 import assert from "node:assert/strict";
-import { generateKeyPairSync, sign } from "node:crypto";
+import { generateKeyPairSync, randomUUID, sign } from "node:crypto";
 import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
@@ -42,6 +42,30 @@ function stubWorkspace() {
   };
   return { backend, state, displays, calls, contexts, changed: () => change() };
 }
+
+test("a negotiated video stream crosses the workspace socket and ends when the authority closes it", async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "bk-video-"));
+  const socket = join(dir, "workspace.sock");
+  const fixture = stubWorkspace();
+  const mimeType = 'video/mp4; codecs="avc1.42C01F"';
+  let releases = 0;
+  fixture.backend.screen.openVideo = async ({ display }) => {
+    assert.equal(display, "1");
+    return { mimeType, read: async () => Buffer.from("fragment"), close: () => releases++ };
+  };
+  const actions = workspaceActions(fixture.backend, () => {});
+  const close = await listenWorkspace(socket, actions.dispatch);
+  t.after(() => { actions.unsubscribe(); close(); rmSync(dir, { recursive: true, force: true }); });
+  const { backend, refresh } = headlessBackend((method, args) => workspaceRequest(socket, method, args), "test");
+  await refresh();
+  const controller = new AbortController();
+  const stream = await backend.screen.openVideo({ display: "1", signal: controller.signal, mimeTypes: [mimeType], fps: 30, maxWidth: 1280 });
+  assert.equal(stream.mimeType, mimeType);
+  assert.deepEqual(await stream.read(), Buffer.from("fragment"));
+  controller.abort();
+  for (let n = 0; n < 30 && !releases; n++) await delay(10);
+  assert.equal(releases, 1);
+});
 
 test("the split workspace gets only the matching vault names for a private owner's chat", async t => {
   const dir = mkdtempSync(join(tmpdir(), "bk-names-"));
@@ -210,7 +234,12 @@ test("with BOTKINS_RELAY_OWN a phone that only has the server's own relay sets t
   const relayUrl = "http://127.0.0.1:" + relay.address().port;
   const dir = mkdtempSync(join(tmpdir(), "bk-"));
   const owner = join(dir, "owner", "pairing.json");
-  const actions = workspaceActions(stubWorkspace().backend, () => {});
+  const fixture = stubWorkspace();
+  const mimeType = 'video/mp4; codecs="avc1.42C01F"';
+  fixture.backend.screen.openVideo = async () => ({
+    mimeType, read: async () => Buffer.from("encoded desktop"), close() {},
+  });
+  const actions = workspaceActions(fixture.backend, () => {});
   const socket = join(dir, "backend.sock");
   const close = await listenWorkspace(socket, actions.dispatch);
   const start = (own) =>
@@ -252,12 +281,18 @@ test("with BOTKINS_RELAY_OWN a phone that only has the server's own relay sets t
     assert.ok(parts.meta.capabilities.includes("screen-grant-v1") && parts.meta.capabilities.includes("screen-grant-relay-v1"));
     assert.deepEqual(parts.host.display, { available: true, kind: "xvfb" });
     assert.equal((await phone.call("link.screen.info")).canView, false);
+    const stream = randomUUID();
+    const startVideo = () => phone.call("link.screen.video.open", stream, { display: "1", fps: 30, maxWidth: 1280, mimeTypes: [mimeType] });
+    await assert.rejects(startVideo(), /off/);
     const { ticket } = await phone.call("link.screen.grant.begin", "view");
     const challenge = JSON.stringify(["botkins-screen-grant-v1", pairing.serverId, pairing.deviceId, "view", ticket]);
     assert.deepEqual(await phone.call("link.screen.grant.confirm", ticket, sign("sha256", Buffer.from(challenge), key.privateKey).toString("base64url")), { screen: "view" });
     const shot = await phone.call("link.screen.frame", { display: "1" });
     assert.equal(shot.jpeg, Buffer.from([0xff, 0xd8, 0xff, 0xd9]).toString("base64"));
+    assert.deepEqual(await startVideo(), { mimeType });
+    assert.equal(Buffer.from(await phone.call("link.screen.video.read", stream, 0), "base64").toString(), "encoded desktop");
     assert.deepEqual(await phone.call("link.screen.revoke"), { screen: "off" });
+    await assert.rejects(phone.call("link.screen.video.read", stream, 1), /off/);
     phone.stop();
     await stop(child);
 

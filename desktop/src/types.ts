@@ -1,4 +1,4 @@
-import type { Calls } from "../desktop/remote/client/types";
+import type { Calls, ScreenFrame, ScreenInfo, ScreenInput } from "../desktop/remote/client/types";
 import type { CallToolResult, ReadResourceResult } from "@modelcontextprotocol/client";
 import type { SpaceContent, SpaceNotify, SpaceShareInput, SpaceStart, SpaceSummary } from "./spaces";
 import type { HotMessage } from "./hotState";
@@ -368,6 +368,18 @@ export type Usage = {
   model?: string;
   durationMs?: number;
 };
+export type ComputerScreenInfo = ScreenInfo & { video?: boolean; superKey?: boolean };
+export type ComputerScreenInput = ScreenInput | { type: "key"; key: string; modifiers: ("cmd" | "ctrl" | "alt" | "shift" | "super")[] };
+type ComputerScreenCalls = {
+  start(): ComputerScreenInfo;
+  frame(options: { display: string; maxWidth: number; quality: number; after?: number }): ScreenFrame;
+  openVideo(options: { display: string; maxWidth: number; fps: number; mimeTypes: string[] }): { mimeType: string };
+  readVideo(sequence: number): string;
+  closeVideo(): void;
+  input(display: string, events: ComputerScreenInput[]): void;
+  stop(): void;
+};
+
 /** Another computer's Botkins this app is paired to (desktop/remotehosts.mjs). Nothing of its credential is here. */
 export type RemoteHost = {
   id: string;
@@ -1262,6 +1274,7 @@ declare global {
       sidePane(chatId: string, action: "select" | "remove" | "pin" | "unpin" | "closed" | "opened", panelId?: string | null): Promise<void>;
       /** The computers this app is paired to, and the one in use. */
       remoteHosts(): Promise<NonNullable<State["remote"]>>;
+      remoteScreen<K extends keyof ComputerScreenCalls>(hostId: string, viewerId: string, action: K, ...args: Parameters<ComputerScreenCalls[K]>): Promise<ReturnType<ComputerScreenCalls[K]>>;
       /** Pairs with another computer: its pairing link, or its address and the code it shows. */
       pairRemoteHost(input: { link?: string; address?: string; code?: string }): Promise<{ id: string; name: string }>;
       /** Finds a team from a ten-character code or Botkins join link. */

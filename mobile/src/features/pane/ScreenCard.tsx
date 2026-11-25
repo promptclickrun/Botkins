@@ -1,13 +1,14 @@
-// The newest screen card takes one still while visible. Tapping opens the live pane.
-// Older cards keep their own still. Cards never send input or keep the phone awake.
-import { useState } from "react";
+// A tap on the picture opens the side pane. Its newest visible card can also play in place
+// or open the dedicated, owner-checked controller for the same computer and display.
+import { Monitor, Pause, Play } from "lucide-react-native";
+import { useEffect, useState } from "react";
 import { StyleSheet, useWindowDimensions, View, type ViewStyle } from "react-native";
 import type { PanePanel } from "@/link/types";
 import { useApp } from "@/state/store";
 import { useScreenKey } from "@/features/pane/watching";
 import { api, attempt } from "@/state/link";
-import { HoldMenu, radius, space, T, Tap, useTheme } from "@/ui";
-import { GateCover, gateLabel, ScreenPicture, useLiveScreen } from "./LiveScreen";
+import { Button, HoldMenu, radius, space, T, Tap, useTheme } from "@/ui";
+import { GateCover, gateHasAction, gateLabel, ScreenPicture, useLiveScreen } from "./LiveScreen";
 import { cardRole, cardSize, screenLabel, WORDS } from "./screenLive";
 
 export type ScreenCardProps = {
@@ -34,7 +35,11 @@ function Card({ chatId, panel, onOpen, inView }: ScreenCardProps) {
   const pane = useApp((state) => state.chats[chatId]?.pane);
   const role = cardRole(loaded, pane, panel.id);
 
-  const screen = useLiveScreen("card", { role, visible: inView });
+  const [playing, setPlaying] = useState(false);
+  const screen = useLiveScreen("card", { role, visible: inView, playing });
+  useEffect(() => {
+    if (playing && !screen.canPlay) setPlaying(false);
+  }, [playing, screen.canPlay]);
 
   const [width, setWidth] = useState(0);
   const { height: windowHeight } = useWindowDimensions();
@@ -65,7 +70,7 @@ function Card({ chatId, panel, onOpen, inView }: ScreenCardProps) {
           </Tap>
         ) : (
           // Covered, its "Show screen" is a button of its own; otherwise the card reads as one line.
-          <View style={box} accessible={screen.gate.kind !== "covered"} accessibilityLabel={label}>
+          <View style={box} accessible={!gateHasAction(screen.gate)} accessibilityLabel={label}>
             {content}
           </View>
         )}
@@ -75,10 +80,17 @@ function Card({ chatId, panel, onOpen, inView }: ScreenCardProps) {
           {panel.title || WORDS.title}
         </T>
       </View>
+      {!!screen.viewerLabel && (
+        <View style={styles.actions}>
+          <Button title={screen.viewerLabel} icon={Monitor} variant="secondary" size="sm" onPress={screen.openViewer} />
+          {screen.canPlay && <Button title={playing ? "Pause live view" : "Watch live"} icon={playing ? Pause : Play} variant="ghost" size="sm" onPress={() => setPlaying(!playing)} />}
+        </View>
+      )}
     </View>
   );
 }
 
 const styles = StyleSheet.create({
   caption: { flexDirection: "row", alignItems: "center", gap: space.sm, paddingHorizontal: space.xs },
+  actions: { flexDirection: "row", alignItems: "center", gap: space.sm, flexWrap: "wrap" },
 });

@@ -1,6 +1,6 @@
 # Run Botkins from a terminal
 
-The terminal host is Botkins as a service on a computer with no screen. It needs no desktop, no Electron and no display. You install it, configure it and operate it with one command, `botkins`. A phone pairs with it and uses your bots the same way it does with the desktop app.
+The terminal host runs Botkins as a service. You install, configure and operate it with the `botkins` command. A paired phone can use your bots and, on Linux, view and control a private desktop.
 
 It runs on Linux (x64 and ARM64, with systemd) and on macOS. A small virtual machine with 1 vCPU and 1 GB of memory is sufficient.
 
@@ -56,6 +56,8 @@ curl -fsSL https://github.com/promptclickrun/Botkins/releases/latest/download/in
 | `--version <x.y.z>` | Install this release. |
 | `--no-service` | Install the program only. |
 | `--no-start` | Install the service, but do not start it. |
+| `--screen` | Prefer a private Linux desktop even when the service already has a personal X11 display. |
+| `--no-screen` | Skip desktop provisioning and disable private desktop startup for this service. |
 | `--bundle-node` | Download Node.js for Botkins although the computer has one. |
 | `--checksum-only` | Skip the signature check. The checksum check stays. |
 
@@ -915,7 +917,7 @@ docker compose up -d
 docker compose exec botkins botkins pair
 ```
 
-Compose uses the image that each release publishes, `ghcr.io/promptclickrun/botkins`. It is the terminal host: one small Node service, with no display. The data is in the volume `botkins-data`.
+Compose uses the release image `ghcr.io/promptclickrun/botkins`. The terminal host starts its own virtual Linux desktop inside the container. The workspace, pairings and desktop files live in the `botkins-data` volume. Set `BOTKINS_DESKTOP=off` in `.env` to run the service without starting its desktop.
 
 - To use one release, set `BOTKINS_VERSION` in `.env`, for example `BOTKINS_VERSION=0.17.0`. Without it, Compose uses the latest release.
 - To build the image from this checkout, run `docker compose up -d --build`.
@@ -931,20 +933,27 @@ BOTKINS_PAIR_ADDRESS=192.168.1.20
 
 To keep the host key out of the data volume, give it as a Compose secret. The comments in `docker-compose.yml` show the lines.
 
-The earlier setup, with an Electron workspace on a virtual display, is still there for a phone that must see and control a screen. Start it with `docker compose --profile display up -d host workspace`. The command names the two services, because a `docker compose up` without them also starts the terminal host. See [the display setup](../desktop/README.md). The two setups keep separate data. Run only one of them.
+The separate Electron workspace is available through `docker compose --profile display up -d host workspace`. It has its own workspace and phone-link volumes. Name both services when starting that setup. [Electron display setup](../desktop/README.md)
 
 ### A screen without Docker
 
-On Linux, the terminal host shows a phone an X11 display that is already running: Xvnc, Xvfb, or Xorg with the dummy driver. Give the service `DISPLAY` and, when the X server needs one, `XAUTHORITY`. In a systemd unit, add `Environment=DISPLAY=:20` and `Environment=XAUTHORITY=/path/to/Xauthority`. The computer needs `xdotool` and either `ffmpeg` or ImageMagick (`import`). Then the phone's screen settings offer **View only** and **View and control**. A phone sets the level only on the server's own network, unless `relay.own` is on. The [Azure deployment](../../deploy/azure/README.md) sets all of this up. X11 asks for no permission. Anyone who can open the display can read it and type into it, so keep its authority file private.
-
-For a fresh Debian VM, install the screen tools and a browser, then start Botkins on a private virtual display as the service user:
+The normal Linux installer provisions the desktop on a new server. In an existing signed installation, updating to this release provisions the desktop in the same workspace.
 
 ```sh
-sudo apt-get install chromium xvfb xauth xdotool ffmpeg
-xvfb-run -a -s "-screen 0 1440x900x24 -nolisten tcp" botkins serve
+curl -fsSL https://github.com/promptclickrun/Botkins/releases/latest/download/install.sh | sudo sh
 ```
 
-For an existing systemd service, put the same wrapper in a service override (`systemctl edit botkins.service`, or `systemctl --user edit botkins.service` for a user service). Under `[Service]`, clear `ExecStart=` and set it again to `/usr/bin/xvfb-run -a -s "-screen 0 1440x900x24 -nolisten tcp"` followed by the **existing service command and arguments** from `systemctl cat botkins.service`. Restart the service. Xvfb and Chromium then run under the service’s account and share its private temporary directory. The Compose display workspace already includes Chromium.
+Botkins starts Xvfb, Openbox and its centered wallpaper under the service account. The display accepts local connections with a fresh private X authority cookie. Its home folder, `display/home` in the service data directory, keeps files and the desktop browser profile between starts.
+
+On the paired phone, open **Settings › Screen** and choose **View only** or **View and control**. The phone asks you to confirm the grant. A phone can change the level on the host's own network, or through the server's own relay when `relay.own` is on.
+
+With control enabled, tap or right-click the background for Terminal, Files, Browser and the window list. The window list restores minimized windows. Use **Alt+Tab** to switch windows, **Ctrl+Esc** or **Super+Space** to open the menu over an app, and **Ctrl+Alt+D** or **Super+D** to show the desktop. The same shortcuts work in the default Docker workspace.
+
+The service recognizes an older Botkins-owned Xvnc or Xvfb and opens the new desktop on a fresh display. A personal X11 or Wayland session keeps its own window manager. The virtual screen, workspace and each phone’s saved access level have independent lifetimes.
+
+Debian and Ubuntu use APT for the display tools and a browser. Fedora and Arch use their system package managers. A user install reuses installed tools, can install them into a private Nix profile, and can use an administrator’s existing passwordless package-manager permission. If a host lacks these facilities, its service continues running and names the missing tools. On Debian an administrator can run `sudo apt-get install xvfb xauth x11-utils xdotool ffmpeg hsetroot openbox dbus-daemon xterm pcmanfm chromium`, then restart Botkins.
+
+Use `BOTKINS_DESKTOP=managed` to give a service with a personal display its own separate desktop. Use `BOTKINS_DESKTOP=off` to disable private desktop startup. For an installed service, put the variable on an `Environment=` line under `[Service]` in `systemctl edit botkins.service` (or `systemctl --user edit botkins.service` for a user service), then restart Botkins. The Azure deployment has its own Screen access setting. [Botkins on Azure](../../deploy/azure/README.md)
 
 In a private owner chat, ask the bot to open the login page and use a saved credential. Its `browser_form` tool opens or inspects the page on the host screen and returns the site, path and visible field keys. The secure request lets you pick the saved password and approve the destination. Botkins fills the fields in that browser. You can finish the login on the screen and close the browser from the same chat. The browser uses a temporary profile and a private pipe. The bot needs no Python environment, pip package or WebSocket script.
 
@@ -1058,7 +1067,7 @@ This does not protect against a person who is root on the computer while it runs
 
 ## What stays in the desktop app
 
-The terminal host has no window and no screen. These features report "… is not available on this host." A phone and the terminal get that sentence, and nothing else fails.
+The terminal host runs the workspace without an Electron window. These features depend on the host and its display.
 
 - Viewing and controlling the screen from a phone, unless the service has an X11 display. See [A screen without Docker](#a-screen-without-docker).
 - Unlocking a password manager, choosing one of its items, linking a saved credential to a field of it, and using a saved credential by reference. The owner agreed to this on 2026-11-21: "nothing that reaches a saved secret runs from the command line, so unlocking a password manager and using a saved credential by reference stay in the window and on the phone." These need a person at the app, because the terminal host's socket cannot know that a person is there.

@@ -242,6 +242,20 @@ The host's app reads the same registry without a session, for its own Settings â
 - `link.removeDevice(id)`, `link.renameDevice(id, name)`, `link.setDevicePerson(id, person)`.
 - Events: `"paired"` (with the device) and `"status"` (after any change).
 
+## Control computer
+
+An owner first calls `link.screen.info({ pointer: true })`. Check `canView` before displaying the screen and `canControl` before sending input. An optional `pointer` gives the display id and normalized X/Y coordinates at the start of trackpad control. Use the `super` modifier only when the host advertises `superKey`.
+
+When `info.video` is true, negotiate encoded video over the same encrypted connection used for input. Use a fresh UUID for each display or quality selection.
+
+| Call | Response |
+| --- | --- |
+| `link.screen.video.open(id, { display, maxWidth, fps, mimeTypes })` | `{ mimeType }` with one of the decoder's offered formats |
+| `link.screen.video.read(id, sequence)` | The next contiguous bytes, base64 encoded. Start at sequence zero. Repeating the latest read returns the same bytes. |
+| `link.screen.video.close(id)` | Releases this encoder. A close for an earlier session cannot close a later one. |
+
+The host can send fragmented MP4 with H.264 or WebM with VP8. Append each chunk to one decoder for the lifetime of the session. Wait for a decoded picture before enabling controls. Hosts without a compatible encoder and clients without a compatible decoder use `link.screen.frame`. Closing the viewer, revoking its screen access, or losing its pairing ends capture. A reader that disappears expires automatically.
+
 ## The screen's level, set from a phone (`screen-grant-v1`)
 
 What paired devices may do with a host's screen is one setting: `"off"`, `"view"` or `"control"`. A host with a window sets it in its own Settings â€º Phone, and no client can change it. A **headless host** (a server with no window) has nobody at a window, so there, and only there, a phone may set it. It is the one call that widens what clients can do, and it asks for more than a paired session.

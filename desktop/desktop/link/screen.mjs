@@ -17,6 +17,8 @@ import { join } from "node:path";
 import { cleanEvents, injectorFor, macScript, MAX_EXPANDED, NEED_ACCESSIBILITY } from "./input.mjs";
 import { Failure, runTool, toolEnv } from "./tools.mjs";
 
+import { VideoStreams, VIDEO_FORMATS } from "./video.mjs";
+
 export const MODES = ["off", "view", "control"];
 const NEED_RECORDING = "Allow screen recording for this app in System Settings › Privacy & Security.";
 const NO_VIEWING = "Viewing the screen isn't available in this app yet.";
@@ -31,6 +33,7 @@ const MAX_SIZES = 8; // remember cursors only, never cached pictures
 const MAX_JPEG = 3 * 1024 * 1024;
 
 const clamp = (value, low, high, fallback) => (typeof value === "number" && Number.isFinite(value) ? Math.min(high, Math.max(low, Math.round(value))) : fallback);
+const clampFraction = value => Math.max(0, Math.min(1, value));
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /** The size of a JPEG, read from its header. */
@@ -102,6 +105,7 @@ export class Screen {
     this.readers = new Set(); // frame requests, including those still looking up the display
     this.connections = new WeakMap(); // relay requests share one disconnect promise per connection
     this.shots = new Map(); // display → one capture lane, a cursor per recent size and quality
+    this.video = new VideoStreams();
     this.viewing = new Map(); // deviceId → { since, timer }
     this.displayCache = null;
     this.queue = Promise.resolve();
@@ -154,7 +158,7 @@ export class Screen {
 
   // ── What the phone is told about the screen ────────────────────────────────────────────────
 
-  async info() {
+  async info(includePointer = false) {
     const mode = this.mode();
     const off = (problem) => ({ mode, displays: [], canView: false, canControl: false, problem });
     if (mode === "off") return off("Screen sharing is off. Turn it on in the app on your computer.");
@@ -169,9 +173,60 @@ export class Screen {
     const permissions = await this.lookup(source);
     if (permissions.screenRecording === false) return { mode, displays, canView: false, canControl: false, problem: NEED_RECORDING };
     const canView = displays.length > 0;
-    if (mode !== "control") return { mode, displays, canView, canControl: false, ...(!canView && { problem: "No display was found." }) };
+    const video = canView && typeof source.openVideo === "function" ? { video: true } : {};
+    if (mode !== "control") return { mode, displays, canView, ...video, canControl: false, ...(!canView && { problem: "No display was found." }) };
     const problem = (await this.controlProblem()) ?? (permissions.accessibility ? null : NEED_ACCESSIBILITY);
-    return { mode, displays, canView, canControl: canView && !problem, ...(problem && { problem }) };
+    let pointer;
+    if (includePointer && canView && !problem && source.pointer) {
+      const at = await source.pointer().catch(() => null);
+      if (this.mode() === "control" && displays.some(item => item.id === at?.display) &&
+          Number.isFinite(at.x) && Number.isFinite(at.y)) {
+        pointer = { display: at.display, x: clampFraction(at.x), y: clampFraction(at.y) };
+      }
+    }
+    const superKey = (this.platform === "linux" || this.platform === "win32") && (!this.override || source.superKey === true);
+    return { mode, displays, canView, ...video, ...(pointer && { pointer }), ...(superKey && { superKey: true }), canControl: canView && !problem, ...(problem && { problem }) };
+  }
+
+  /** Interactive viewing shares the same pairing, screen permission and viewer indicator as stills. */
+  async openVideo(deviceId, id, options) {
+    this.stillAllowed(deviceId);
+    const source = this.source();
+    const mimeTypes = VIDEO_FORMATS.filter(type => Array.isArray(options?.mimeTypes) && options.mimeTypes.includes(type));
+    if (!source?.openVideo || !mimeTypes.length) throw new Failure("No compatible desktop video format is available.");
+    const check = () => this.stillAllowed(deviceId);
+    const opened = await this.video.open(deviceId, id, async signal => {
+      const display = await this.pick(options?.display);
+      const permissions = await this.lookup(source);
+      if (permissions.screenRecording === false) throw new Failure(NEED_RECORDING);
+      signal.throwIfAborted();
+      check();
+      this.watch(deviceId, 15_000);
+      const media = await source.openVideo({
+        display: display.id, maxWidth: clamp(options.maxWidth, 480, 1920, 1280),
+        fps: clamp(options.fps, 5, 60, 30), mimeTypes, signal,
+      });
+      if (!mimeTypes.includes(media.mimeType)) {
+        media.close();
+        throw new Failure("No compatible desktop video format is available.");
+      }
+      return media;
+    });
+    check();
+    this.watch(deviceId);
+    return opened;
+  }
+
+  async readVideo(deviceId, id, seq) {
+    this.stillAllowed(deviceId);
+    const bytes = await this.video.read(deviceId, id, seq);
+    this.stillAllowed(deviceId);
+    this.watch(deviceId);
+    return bytes;
+  }
+
+  closeVideo(deviceId, id) {
+    if (typeof id === "string") this.video.close(deviceId, id);
   }
 
   // ── Pictures ───────────────────────────────────────────────────────────────────────────────
@@ -284,7 +339,7 @@ export class Screen {
   // ── Viewers ────────────────────────────────────────────────────────────────────────────────
 
   /** A device asked for a frame: it is viewing until 5 seconds pass without another. */
-  watch(deviceId) {
+  watch(deviceId, lifetime = this.idleMs) {
     let viewer = this.viewing.get(deviceId);
     if (viewer) clearTimeout(viewer.timer);
     else {
@@ -299,7 +354,7 @@ export class Screen {
       } catch (error) {
         this.log("screen: " + (error?.message ?? error));
       }
-    }, this.idleMs);
+    }, lifetime);
     viewer.timer.unref?.();
   }
   stop(deviceId) {
@@ -307,6 +362,7 @@ export class Screen {
     this.endViewer(deviceId);
   }
   endViewer(deviceId) {
+    this.video.close(deviceId);
     // A phone that lets go of the screen lets go of the mouse button too.
     this.cancelInput(deviceId);
     const viewer = this.viewing.get(deviceId);
@@ -316,6 +372,7 @@ export class Screen {
     this.emit(deviceId, false);
   }
   stopAll() {
+    this.video.closeAll();
     this.readers.clear();
     for (const id of [...this.viewing.keys()]) this.stop(id);
     this.cancelInput();
@@ -346,7 +403,7 @@ export class Screen {
     if (!held || (deviceId && held.deviceId !== deviceId)) return;
     this.held = null;
     const inject = this.override ?? injectorFor(this.platform, this.dirs).inject;
-    if (inject) await inject({ display: held.display, displays: [held.display], events: [{ type: "up", x: held.x, y: held.y }] });
+    if (inject) await inject({ release: true, display: held.display, displays: [held.display], events: [{ type: "up", x: held.x, y: held.y }] });
   }
 
   // ── Input ──────────────────────────────────────────────────────────────────────────────────
@@ -382,7 +439,8 @@ export class Screen {
     const inject = this.override ?? injectorFor(this.platform, this.dirs).inject;
     const displays = await this.displays();
     check();
-    await inject({ display, displays, events: clean.events });
+    const bounds = this.source()?.inputBounds?.(display.id);
+    await inject({ display, displays, ...(bounds && { bounds }), events: clean.events });
     this.noteInput(display.id);
     const last = clean.events.findLast((e) => e.x !== undefined);
     this.held = clean.pressed && last ? { deviceId, display, x: last.x, y: last.y } : null;

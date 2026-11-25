@@ -14,11 +14,8 @@ export const chrome = {
 } as const;
 
 export type QualityId = "sharp" | "balanced" | "saver";
-export const QUALITY: Record<QualityId, { title: string; maxWidth: number; quality: number }> = {
-  sharp: { title: "Sharp", maxWidth: 1600, quality: 70 },
-  balanced: { title: "Balanced", maxWidth: 1280, quality: 60 },
-  saver: { title: "Data saver", maxWidth: 800, quality: 45 },
+export const QUALITY: Record<QualityId, { title: string; fps: number; maxWidth: number; quality: number }> = {
+  sharp: { title: "Sharp", fps: 60, maxWidth: 1600, quality: 70 },
+  balanced: { title: "Balanced", fps: 30, maxWidth: 1280, quality: 60 },
+  saver: { title: "Data saver", fps: 15, maxWidth: 800, quality: 45 },
 };
-
-/** How long the floating bar stays after the last touch. */
-export const BAR_HIDE_MS = 3000;

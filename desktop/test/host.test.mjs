@@ -81,7 +81,7 @@ test("only the desktop app's own files load Electron, and its host is checked wh
     .filter((file) => /from "electron"|require\("electron"\)|import\("electron"\)/.test(readFileSync(new URL(file.split(sep).join("/"), root), "utf8")))
     .map((file) => file.split(sep).join("/"))
     .sort();
-  assert.deepEqual(loaders, ["app-preload.cjs", "app-window.mjs", "host/electron.mjs", "main.mjs", "preload.cjs", "start.mjs"]);
+  assert.deepEqual(loaders, ["app-preload.cjs", "app-window.mjs", "host/electron.mjs", "host/screen-recorder.cjs", "main.mjs", "preload.cjs", "start.mjs"]);
 });
 
 test("the headless host refuses what needs a desktop, and does the rest", async () => {

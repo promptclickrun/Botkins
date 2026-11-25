@@ -1,10 +1,9 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  Openbox settings of a display Botkins starts itself: the Docker workspace and the Azure
-  server's virtual display. botkins-desktop passes this file to Openbox as its config file. It is never
-  used on a person's own desktop.
+  Openbox settings for the virtual displays that Botkins provisions. botkins-desktop passes
+  this file to Openbox when starting its window manager.
 
-  One desktop, the Botkins theme, the usual title bar buttons, a right-click menu on the
+  One desktop, the Botkins theme, the usual title bar buttons, an application and window menu on the
   background, and nothing that quits or reconfigures the window manager.
 -->
 <openbox_config xmlns="http://openbox.org/3.4/rc" xmlns:xi="http://www.w3.org/2001/XInclude">
@@ -119,6 +118,18 @@
     </keybind>
     <keybind key="A-F4">
       <action name="Close"/>
+    </keybind>
+    <keybind key="W-space">
+      <action name="ShowMenu"><menu>root-menu</menu></action>
+    </keybind>
+    <keybind key="W-d">
+      <action name="ToggleShowDesktop"/>
+    </keybind>
+    <keybind key="C-Escape">
+      <action name="ShowMenu"><menu>root-menu</menu></action>
+    </keybind>
+    <keybind key="C-A-d">
+      <action name="ToggleShowDesktop"/>
     </keybind>
   </keyboard>
 
@@ -247,7 +258,7 @@
     </context>
 
     <context name="Root">
-      <!-- A right-click on the background (a phone sends one as rightClick) opens the Botkins menu. -->
+      <!-- Both a tap and a right-click on the background open the Botkins menu. -->
       <mousebind button="Right" action="Press">
         <action name="ShowMenu">
           <menu>root-menu</menu>
@@ -259,7 +270,7 @@
         </action>
       </mousebind>
       <mousebind button="Left" action="Press">
-        <action name="UnfocusAll"/>
+        <action name="ShowMenu"><menu>root-menu</menu></action>
       </mousebind>
     </context>
   </mouse>

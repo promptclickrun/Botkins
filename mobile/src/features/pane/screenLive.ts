@@ -9,7 +9,7 @@ export const SCREEN_CAPABILITY = "screen-v1";
 /** Where the picture is shown: a card in the chat's list, or the side pane's screen tab. */
 export type Place = "card" | "pane";
 export type Route = "direct" | "relay" | null;
-/** Cards take one still per visible visit. Only the live pane schedules another sample. */
+/** JPEG fallbacks. A still card takes one picture, while a playing card or pane follows the desktop. */
 export type FeedPlan = { maxWidth: number; quality: number; gapMs?: number };
 export const PLANS: Record<Place, { direct: FeedPlan; relay: FeedPlan }> = {
   card: { direct: { maxWidth: 640, quality: 45 }, relay: { maxWidth: 480, quality: 40 } },
@@ -22,6 +22,7 @@ export type Owner = "unasked" | "checking" | "open" | "locked";
 export type Gate =
   /** The computer hasn't said what it can do yet. */
   | { kind: "waiting" }
+  | { kind: "member" }
   /** The app on the computer has no screen. */
   | { kind: "update" }
   /** Phones may not see the screen. `headless`: the level is set from a phone, on the computer's page. */
@@ -31,8 +32,9 @@ export type Gate =
   | { kind: "open" };
 
 /** Which gate applies, in order: the app on the computer, the screen's level, then the owner check. */
-export function screenGate({ capabilities, host, owner }: { capabilities: readonly string[] | undefined; host: HostPart | undefined; owner: Owner }): Gate {
+export function screenGate({ capabilities, host, owner, member }: { capabilities: readonly string[] | undefined; host: HostPart | undefined; owner: Owner; member?: boolean }): Gate {
   if (!capabilities) return { kind: "waiting" };
+  if (member) return { kind: "member" };
   if (!capabilities.includes(SCREEN_CAPABILITY)) return { kind: "update" };
   // No host part reads as off, as Settings › Screen reads it.
   if (!host || host.screen === "off") return { kind: "off", headless: host?.headless === true };
@@ -64,6 +66,7 @@ export const WORDS = {
   title: "Your computer's screen",
   covered: "Your computer's screen",
   show: "Show screen",
+  member: "Only the computer's owner can see its screen.",
   update: "Update the app on your computer",
   off: (headless: boolean) => (headless ? "Screen is off. Turn it on in Settings, on this computer's page, under Screen." : "Screen is off. Turn it on in the app on your computer, under Phone."),
   away: "Can't reach your computer",
@@ -73,9 +76,9 @@ export const WORDS = {
   older: "Shown again below",
   gone: "The screen is no longer shown",
   live: "Live",
-  /** The pane's button to Settings › Screen, when the computer lets phones use its pointer and keyboard, and when it doesn't. */
-  control: "Use pointer and keyboard",
-  watch: "Open full screen",
+  /** The shortcut from the card or pane into the full viewer. */
+  control: "Control computer",
+  watch: "View computer",
 } as const;
 
 /**

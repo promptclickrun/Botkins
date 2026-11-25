@@ -507,6 +507,20 @@ export async function readScreenFrame(computer: string, options: Parameters<Call
   return client.callWithSignal<ScreenFrame>("link.screen.frame", signal, options);
 }
 
+/** A decoder session and its cleanup belong to the computer that opened it. */
+export function desktopVideoLink(computer: string, id: string, signal: AbortSignal) {
+  const host = client;
+  if (!host || useApp.getState().pairing?.serverId !== computer) throw new LinkError("offline", "The computer changed.");
+  return {
+    open: (options: Parameters<Calls["link.screen.video.open"]>[1]) =>
+      host.callWithSignal<{ mimeType: string }>("link.screen.video.open", signal, id, options),
+    read: (seq: number) => host.callWithSignal<string>("link.screen.video.read", signal, id, seq),
+    close: () => {
+      if (client === host && host.state === "online") void host.call("link.screen.video.close", id).catch(() => {});
+    },
+  };
+}
+
 /** A final button-up may follow an in-flight call. Bind it to this computer at viewer creation. */
 export function screenInputSender() {
   const host = client;

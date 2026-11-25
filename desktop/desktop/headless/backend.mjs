@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
 import { REMOTE_METHODS } from "../link/methods.mjs";
 import { handSpaceEvents } from "./space-events.mjs";
@@ -144,6 +145,9 @@ export function headlessBackend(rawRequest, version, { team = () => null, log = 
   let snapshot = { bots: [], chats: [], runs: [], settings: {} };
   let revision = null;
   let available = false;
+  let hasVideo = false;
+  let superKey = false;
+  let hasPointer = false;
   // Set when the list of capabilities was dropped: the next look asks for a whole answer, so a
   // workspace that comes back with the same epoch still sends its list.
   let needList = false;
@@ -175,6 +179,27 @@ export function headlessBackend(rawRequest, version, { team = () => null, log = 
     } catch (error) {
       const olderWorkspace = error?.message === UNKNOWN_ACTION && !ANSWERED_BY_CURRENT.has(args[0]);
       if ((unreached(error) || olderWorkspace) && dropPromises()) changes.emit("change");
+      throw error;
+    }
+  }
+  async function openWorkspaceVideo({ signal, ...options }) {
+    const id = randomUUID();
+    let seq = 0;
+    let closed = false;
+    function close() {
+      if (closed) return;
+      closed = true;
+      signal.removeEventListener("abort", close);
+      void request("videoClose", [id]).catch(() => {});
+    }
+    signal.throwIfAborted();
+    signal.addEventListener("abort", close, { once: true });
+    try {
+      const { mimeType } = await request("videoOpen", [id, options]);
+      signal.throwIfAborted();
+      return { mimeType, close, read: async () => Buffer.from(await request("videoRead", [id, seq++]), "base64") };
+    } catch (error) {
+      close();
       throw error;
     }
   }
@@ -211,8 +236,11 @@ export function headlessBackend(rawRequest, version, { team = () => null, log = 
     frames: { page: (id) => request("framePage", [id]), chatFor: (id) => request("frameChat", [id]) },
     extras: { adoptMcpSignIn: (...args) => request("adoptMcpSignIn", args) },
     screen: {
+      get superKey() { return available && superKey; },
+      get openVideo() { return available && hasVideo ? openWorkspaceVideo : undefined; },
       displays: () => request("displays"),
       permissions: () => request("permissions"),
+      get pointer() { return available && hasPointer ? () => request("pointer") : undefined; },
       async capture(options) {
         const shot = await request("capture", [options]);
         return { ...shot, jpeg: Buffer.from(shot.jpeg, "base64") };
@@ -256,6 +284,9 @@ export function headlessBackend(rawRequest, version, { team = () => null, log = 
         }
         revision = next.version;
         available = next.display === true;
+        hasVideo = next.video === true;
+        superKey = next.superKey === true;
+        hasPointer = next.pointer === true;
         // What people did in a space since the last look (a workspace from before this sends none). The snapshot above is already
         // the one that holds it. Handed over before the change is told, so that nothing that listens there can lose it.
         handSpaceEvents(next.spaceEvents, spaceEvent);

@@ -1,44 +1,56 @@
 // The picture of the computer's screen, the pointer drawn over it, and the touch surface.
-import { type ReactNode, useEffect, useState } from "react";
+import { type ReactNode, useLayoutEffect, useMemo, useState } from "react";
 import { StyleSheet, View } from "react-native";
 import { GestureDetector, useManualGesture } from "react-native-gesture-handler";
 import Animated, { useAnimatedStyle, useSharedValue } from "react-native-reanimated";
 import Svg, { Path } from "react-native-svg";
 import { chrome } from "./chrome";
-import { type Fit, fitPicture, type GestureValues, NO_FIT, type ScreenGestures } from "./gestures";
+import { type Fit, fitPicture, type GestureValues, NO_FIT, type PointerMode, type ScreenGestures } from "./gestures";
 import { PictureSlots } from "./Picture";
 import type { Pictures, SlotName } from "./useFeed";
 
 const ARROW = 24;
+const ZOOM_ACTIONS = [{ name: "increment", label: "Zoom in" }, { name: "decrement", label: "Zoom out" }];
+const CONTROL_ACTIONS = [...ZOOM_ACTIONS, { name: "activate", label: "Click" }, { name: "rightClick", label: "Right-click" },
+  { name: "moveLeft", label: "Move pointer left" }, { name: "moveRight", label: "Move pointer right" },
+  { name: "moveUp", label: "Move pointer up" }, { name: "moveDown", label: "Move pointer down" }];
 
 export function Stage({
   pictures,
+  video,
   size,
   display,
   gestures,
   values,
-  showPointer,
+  control,
+  mode,
+  name,
   drawn,
   children,
 }: {
-  pictures: Pictures;
+  pictures?: Pictures;
+  video: ReactNode;
   /** The picture's size in pixels. */
   size: { width: number; height: number } | null;
   /** The display's size, for scrolling distances. */
   display: { width: number; height: number } | null;
   gestures: ScreenGestures;
   values: GestureValues;
-  showPointer: boolean;
+  control: boolean;
+  mode: PointerMode;
+  name: string;
   drawn: (slot: SlotName, id: number, promote?: boolean) => void;
   children?: ReactNode;
 }) {
   const [box, setBox] = useState({ width: 0, height: 0 });
-  const fit = fitPicture(box, size);
+  const width = size?.width ?? 0;
+  const height = size?.height ?? 0;
+  const fit = useMemo(() => fitPicture(box, { width, height }), [box, width, height]);
   const fitValue = useSharedValue<Fit>(NO_FIT);
 
   const displayWidth = display?.width ?? size?.width ?? 1;
   const displayHeight = display?.height ?? size?.height ?? 1;
-  useEffect(() => {
+  useLayoutEffect(() => {
     gestures.layout(fit, { width: displayWidth, height: displayHeight });
     fitValue.value = fit;
   }, [gestures, fitValue, fit, displayWidth, displayHeight]);
@@ -70,15 +82,19 @@ export function Stage({
         collapsable={false}
         style={styles.fill}
         onLayout={({ nativeEvent }) => setBox({ width: nativeEvent.layout.width, height: nativeEvent.layout.height })}
-        accessibilityLabel="Your computer's screen"
-        accessibilityHint="Use one finger to move the pointer and tap to click."
+        accessible
+        accessibilityRole="adjustable"
+        accessibilityLabel={"Screen of " + name}
+        accessibilityHint={!control ? "Pinch to zoom. Use three fingers to pan." : mode === "trackpad" ? "Slide a finger to move the pointer. Tap to click." : "Tap to click at your finger. Slide to drag."}
+        accessibilityActions={control ? CONTROL_ACTIONS : ZOOM_ACTIONS}
+        onAccessibilityAction={event => gestures.accessibilityAction(event.nativeEvent.actionName)}
       >
         {fit.imageWidth > 0 && (
           <Animated.View style={[{ position: "absolute", left: fit.left, top: fit.top, width: fit.imageWidth, height: fit.imageHeight }, zoomed]} pointerEvents="none">
-            <PictureSlots pictures={pictures} drawn={drawn} />
+            {video ?? (pictures && <PictureSlots pictures={pictures} drawn={drawn} />)}
           </Animated.View>
         )}
-        {showPointer && (
+        {control && mode === "trackpad" && !video && (
           <Animated.View style={[styles.pointer, pointer]} pointerEvents="none">
             <Svg width={ARROW} height={ARROW} viewBox="0 0 24 24">
               <Path d="M2 2 L2 19.5 L6.6 15.2 L9.9 22.4 L13 21 L9.8 13.9 L16.2 13.9 Z" fill={chrome.ink} stroke={chrome.inkOn} strokeWidth={1.4} strokeLinejoin="round" />

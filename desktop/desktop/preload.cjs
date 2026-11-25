@@ -281,6 +281,7 @@ for (const name of [
   "usage",
   "providerUsage",
   "sidePane",
+  "remoteScreen",
   "exportTemplateText",
   "importTemplateText",
   "exportUsageText",

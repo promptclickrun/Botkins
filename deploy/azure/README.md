@@ -12,7 +12,7 @@ You don't need an SSH key, and nothing has to download to your phone.
 
 ## Screen access
 
-Without Screen access, the server has no screen. Your phone still does everything else: bots, chats, tasks, tools, the wiki and settings.
+New deployments provision the virtual desktop by default. You can turn off **Screen access** during deployment to run the workspace without a screen.
 
 With **Screen access**, the server also gets a virtual screen with Google Chrome. Your phone can see that screen and control it. Use it when a bot opens a sign-in page that you must finish, or when you want to watch a bot work in the browser.
 
@@ -25,10 +25,10 @@ The level starts at **Off**. Every paired phone can see the screen while the lev
 
 To change Screen access later, run `botkins-server screen on` or `botkins-server screen off` (see [Manage the server](#manage-the-server)). Paired phones stay paired, and your bots and chats stay.
 
-From the command line, the choice is the parameter `screenAccess`:
+To deploy without the desktop, set `screenAccess` to false.
 
 ```sh
-az deployment group create -g <group> --template-file azuredeploy.json --parameters screenAccess=true
+az deployment group create -g <group> --template-file azuredeploy.json --parameters screenAccess=false
 ```
 
 ## What it makes
@@ -45,7 +45,7 @@ On the VM, without Docker:
 | `botkins-relay` | The relay that phones connect through. It listens only on the VM itself. |
 | `caddy` | HTTPS for the relay. It gets a certificate from Let's Encrypt, or from ZeroSSL if you gave a certificate email. |
 | `botkins-display` | With Screen access only: the virtual screen (Xvfb, 1440×900). |
-| `botkins-desktop` | With Screen access only: the Botkins desktop on that screen. The kit's dark background with the Botkins mark, and Openbox with the Botkins theme. Right-click the background for Botkins, Terminal and Files. |
+| `botkins-desktop` | The Botkins desktop on the virtual screen. Tap or right-click the background for Terminal, Files, Browser and the window list. Use Ctrl+Alt+D to show the desktop. |
 
 The port of the phone link is not open to the internet. Phones reach the server only through its relay.
 

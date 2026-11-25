@@ -2,9 +2,7 @@
 # The Botkins desktop on a display that Botkins started itself: the kit's dark canvas with the
 # Botkins mark in the middle, and Openbox with the Botkins theme and menu.
 #
-# Only two places run it, each right after it starts its own Xvfb:
-#   desktop/docker/workspace-entrypoint.sh            the Docker display workspace
-#   deploy/azure/systemd/botkins-desktop.service      the Azure server's display, :20
+# The terminal host, Docker display workspace and Azure display start it on their own Xvfb.
 #
 # It never touches a display that a person owns. It does nothing unless the caller says the
 # display is Botkins' own (BOTKINS_DESKTOP_MANAGED=1), and it leaves the display alone when a

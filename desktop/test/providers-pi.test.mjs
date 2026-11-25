@@ -248,32 +248,55 @@ test("warming a chat starts its Pi ahead of the message, and the message uses th
   await provider.stop();
 });
 
-test("a message written during a turn steers it: Pi takes it before its next step", { skip }, async () => {
+test("an explicit steer interrupts Pi and sends just the replacement and its files on the same conversation", { skip }, async (t) => {
   const { provider, seen } = setup();
+  t.after(() => provider.stop());
   const session = await provider.openSession(spec());
   let deliver;
-  const reply = session.send({ prompt: "slow work" }, undefined, (steer) => (deliver = steer));
-  while (!deliver) await new Promise((resolve) => setTimeout(resolve, 5));
-  assert.equal(await deliver({ prompt: "use tabs", attachments: [{ path: "/tmp/a.txt" }] }), true, "the harness took it");
-  const { text } = await reply;
-  assert.match(text, /\| steer: use tabs\n\nAttached:\n- \/tmp\/a\.txt/, "delivered inside the same turn");
-  assert.ok(seen().some((entry) => entry.command?.type === "steer"));
-  assert.equal(seen().filter((entry) => entry.command?.type === "prompt").length, 1, "no second prompt");
-  assert.equal(await deliver({ prompt: "too late" }), false, "a finished turn takes no steer");
-  await provider.stop();
+  const reply = session.send({ prompt: "slow work" }, undefined, steer => { deliver = steer; });
+  await until(() => deliver);
+  assert.equal(await deliver({ prompt: "use tabs", attachments: [{ path: "/tmp/a.txt" }] }), true);
+  assert.equal((await reply).text, "echo: use tabs\n\nAttached:\n- /tmp/a.txt");
+  assert.deepEqual(seen().map(e => e.command).filter(c => ["abort","prompt","steer"].includes(c?.type)).map(c => [c.type, c.message]), [
+    ["prompt", "slow work"], ["abort", undefined], ["prompt", "use tabs\n\nAttached:\n- /tmp/a.txt"],
+  ]);
+  assert.equal(await deliver({ prompt: "too late" }), false);
 });
 
-test("a steer Pi took but never delivered before the run ended goes as one more prompt in the turn", { skip }, async () => {
+test("a late abort acknowledgement and early replacement settle retain each accepted steer exactly once", { skip }, async (t) => {
   const { provider, seen } = setup();
+  t.after(() => provider.stop());
   const session = await provider.openSession(spec());
+  await session.warm();
+  const { rpc } = session.live;
+  const request = rpc.request.bind(rpc);
+  const idle = Promise.withResolvers(), release = Promise.withResolvers();
+  let gated = false;
+  t.mock.method(rpc, "request", async (command, deadline) => {
+    const reply = await request(command, deadline);
+    if (command.type === "abort" && !gated) {
+      gated = true;
+      await idle.promise;
+      await release.promise;
+    }
+    return reply;
+  });
+  rpc.on(event => { if (event.type === "agent_settled") idle.resolve(); });
   let deliver;
-  const reply = session.send({ prompt: "slow late" }, undefined, (steer) => (deliver = steer));
-  while (!deliver) await new Promise((resolve) => setTimeout(resolve, 5));
-  await deliver({ prompt: "use tabs" });
-  const { text } = await reply;
-  assert.match(text, /echo: use tabs/, "nothing the person wrote is dropped");
-  assert.ok(seen().some((entry) => entry.command?.type === "clear_queue"));
-  await provider.stop();
+  const reply = session.send({ prompt: "slow late" }, undefined, steer => { deliver = steer; });
+  await until(() => deliver);
+  const first = watching(deliver({ prompt: "first correction" }));
+  const second = watching(deliver({ prompt: "second correction" }));
+  await idle.promise;
+  assert.equal(first.seen.state, "pending", "the original settle is not an admission");
+  assert.equal(second.seen.state, "pending");
+  assert.equal(seen().filter(e => e.command?.type === "prompt").length, 1);
+  release.resolve();
+  await Promise.all([first.done, second.done]);
+  assert.equal(first.seen.value, true);
+  assert.equal(second.seen.value, true);
+  assert.equal((await reply).text, "echo: second correction");
+  assert.deepEqual(seen().filter(e => e.command?.type === "prompt").map(e => e.command.message), ["slow late", "first correction", "second correction"]);
 });
 
 test("a conversation Pi never held goes on from Botkins' transcript", { skip }, async () => {

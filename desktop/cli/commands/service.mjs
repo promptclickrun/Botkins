@@ -148,13 +148,19 @@ export const service = {
       process.umask(0o077);
       const trial = context.options.trial === true || context.env.BOTKINS_TRIAL === "1";
       const { terminalUpdates } = await import("../../desktop/terminal/updates.mjs").catch(() => ({}));
-      const running = await startService({ paths: context.paths, version: context.version, trial, reach: true, out: context.env.BOTKINS_QUIET === "1" ? undefined : (line) => context.stdout.write(line), console: true, updates: terminalUpdates, env: context.env });
+      const { startManagedDesktop } = await import("../../desktop/terminal/managed-desktop.mjs");
+      const desktop = await startManagedDesktop({ paths: context.paths, env: context.env, trial, note: context.note });
+      const running = await startService({ paths: context.paths, version: context.version, trial, reach: true, out: context.env.BOTKINS_QUIET === "1" ? undefined : (line) => context.stdout.write(line), console: true, updates: terminalUpdates, env: context.env }).catch(async error => {
+        await desktop?.stop();
+        throw error;
+      });
       return new Promise((resolve) => {
         let asked = false;
         // The service has saved its work and closed what it had open. The process ends now, even
         // if something a provider's library started is still there: a service manager that asked
         // for a stop gets one, with a clean exit, and never has to kill it.
-        const leave = (code) => {
+        const leave = async (code) => {
+          await desktop?.stop();
           resolve(code);
           setTimeout(() => process.exit(code), 100).unref();
         };

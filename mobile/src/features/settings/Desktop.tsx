@@ -1,5 +1,5 @@
 import { router } from "expo-router";
-import { Eraser, HardDrive, LogIn, MonitorCog, MonitorSmartphone, QrCode, RefreshCw, SquareSlash, Unplug } from "lucide-react-native";
+import { Eraser, HardDrive, LogIn, MonitorCog, MonitorSmartphone, QrCode, RefreshCw, ScreenShare, SquareSlash, Unplug } from "lucide-react-native";
 import { useEffect, useState } from "react";
 import { Alert, View } from "react-native";
 import { isRelayHost } from "@/link/relay";
@@ -134,6 +134,7 @@ export default function Desktop() {
 
       {/* The other computers and teams, and adding one, are one page of their own. */}
       <Group>
+        {!member && <Row leading={<IconTile icon={ScreenShare} color={brand.tide} />} title="Control computer" chevron onPress={() => router.push("/remote")} />}
         <Row leading={<IconTile icon={MonitorSmartphone} color={brand.tide} />} title="Computers and teams" value={others ? String(count) : undefined} chevron onPress={() => router.push("/settings/computers")} />
       </Group>
 

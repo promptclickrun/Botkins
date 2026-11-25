@@ -18,6 +18,8 @@
 #   --version <x.y.z>      install this release instead of the latest
 #   --no-service           install the program, and leave the service to `botkins service install`
 #   --no-start             install the service without starting it
+#   --screen               Linux: use a private desktop even if a personal display is supplied
+#   --no-screen            skip private desktop setup and turn off its automatic startup
 #   --run-as <user>        macOS, whole computer: the user the service runs as (default: who ran sudo)
 #   --bundle-node          download Node.js for Botkins alone even when the computer has a new enough one
 #   --checksum-only        skip the signature check when GnuPG is not installed (the checksum is still checked)
@@ -33,6 +35,8 @@ scope=""
 version=""
 service=1
 start=1
+screen=auto
+[ "${BOTKINS_DESKTOP:-}" != off ] || screen=off
 run_as=""
 bundle_node=0
 checksum_only=0
@@ -50,12 +54,14 @@ while [ $# -gt 0 ]; do
     --version) need_value "$@"; version=${2#v}; shift ;;
     --no-service) service=0 ;;
     --no-start) start=0 ;;
+    --screen) screen=managed ;;
+    --no-screen) screen=off ;;
     --run-as) need_value "$@"; run_as=$2; shift ;;
     --bundle-node) bundle_node=1 ;;
     --checksum-only) checksum_only=1 ;;
     --release-url) need_value "$@"; release_url=${2%/}; shift ;;
     --release-fingerprint) need_value "$@"; fingerprint=$(printf '%s' "$2" | tr -d ' ' | tr 'abcdef' 'ABCDEF'); shift ;;
-    -h|--help) sed -n '2,27p' "$0" 2>/dev/null | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,/^set -eu/{ /^#/p; }' "$0" 2>/dev/null | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) fail "Unknown option $1. See --help." ;;
   esac
   shift
@@ -73,6 +79,7 @@ case $(uname -m) in
   aarch64|arm64) arch=arm64 ;;
   *) fail "There is no Botkins build for $(uname -m)." ;;
 esac
+if [ "$screen" = managed ] && [ "$system" != linux ]; then fail "--screen requires Linux."; fi
 uid=$(id -u)
 if [ -z "$scope" ]; then
   if [ "$uid" -eq 0 ]; then scope=system; else scope=user; fi
@@ -228,6 +235,23 @@ else
   rm -rf "$prefix/.install"
 fi
 [ -x "$prefix/$name/bin/botkins" ] || fail "The release is missing its launcher. Nothing was changed."
+provision=$screen
+if [ "$system" = linux ] && [ "$screen" = auto ] && command -v systemctl >/dev/null; then
+  if [ "$scope" = user ]; then set -- --user; else set --; fi
+  # Respect an existing systemd override as well as a flag on this install.
+  if systemctl "$@" show botkins.service --property=Environment --value 2>/dev/null | grep -Eq '(^| )"?BOTKINS_DESKTOP=off"?( |$)'; then provision=off; fi
+fi
+if [ "$system" = linux ] && [ "$provision" != off ]; then
+  if [ -f "$prefix/$name/docker/desktop/install-tools" ]; then
+    # Run only the helper inside the archive that was just verified, including on a user install.
+    tar -xzOf "$work/$archive" "$name/docker/desktop/install-tools" > "$work/install-tools"
+    if ! sh "$work/install-tools"; then
+      say "Botkins will start without a private desktop until its display packages are available."
+    fi
+  elif [ "$screen" = managed ]; then
+    fail "This release predates the private Linux desktop. Use a newer release with --screen."
+  fi
+fi
 # `current` names the version in use. (-n: replace the link itself, never write inside what it points at.)
 ln -sfn "$name" "$prefix/current"
 if [ "$scope" = system ]; then
@@ -243,6 +267,9 @@ say "Installed $("$bin_dir/botkins" --version 2>/dev/null || echo "$version") as
 
 if [ "$service" -eq 1 ]; then
   set -- service install "--$scope"
+  if [ "$system" = linux ]; then
+    case $screen in managed) set -- "$@" --screen ;; off) [ ! -f "$prefix/$name/docker/desktop/install-tools" ] || set -- "$@" --no-screen ;; esac
+  fi
   [ "$start" -eq 1 ] || set -- "$@" --no-start
   if [ "$scope" = system ] && [ "$system" = macos ]; then
     set -- "$@" --run-as "${run_as:-${SUDO_USER:-}}"

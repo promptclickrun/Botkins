@@ -4,6 +4,7 @@ import type { ScreenInput } from "@/link/types";
 
 export class InputSender {
   private display = "";
+  private generation = 0;
   private queue: ScreenInput[] = [];
   private inFlight: Promise<void> | null = null;
   private pressed: { x: number; y: number } | null = null;
@@ -18,7 +19,32 @@ export class InputSender {
   setDisplay(display: string) {
     if (display === this.display) return;
     this.discard();
+    this.generation++;
     this.display = display;
+  }
+
+  /** Reading the phone's clipboard can involve a system prompt. Only its original viewer may paste. */
+  async paste(read: () => Promise<string>) {
+    if (this.closed || !this.display) return;
+    const generation = this.generation;
+    let text: string | undefined;
+    try {
+      text = await read();
+    } catch {
+      // Never put a native clipboard error or its contents in a notice.
+    }
+    if (this.closed || generation !== this.generation) return;
+    if (text === undefined) return "Couldn't read the phone's clipboard.";
+    if (!text) return "The phone's clipboard is empty.";
+    // The host accepts up to 2,000 UTF-16 code units. Keep a cut emoji whole.
+    const piece = text.length <= 2000 ? text : text.slice(0, 2000).replace(/[\uD800-\uDBFF]$/, "");
+    // The host expands line breaks and tabs into keys. Make them explicit so long multiline
+    // pastes follow the same bounded, ordered batches as keyboard input.
+    for (const part of piece.replace(/\r\n?/g, "\n").split(/([\n\t])/)) {
+      if (part === "\n" || part === "\t") this.push({ type: "key", key: part === "\n" ? "enter" : "tab" });
+      else if (part) this.push({ type: "text", text: part });
+    }
+    return piece.length === text.length ? "Sent clipboard text" : "Sent the first " + piece.length.toLocaleString() + " characters";
   }
 
   push(event: ScreenInput) {
@@ -46,9 +72,9 @@ export class InputSender {
     if (this.frame !== null || this.inFlight || this.closed) return;
     this.frame = requestAnimationFrame(() => {
       this.frame = null;
-      const events = this.queue.filter(event => event.type !== "scroll" || event.dx !== 0 || event.dy !== 0);
-      this.queue = [];
+      const events = this.queue.splice(0, 64).filter(event => event.type !== "scroll" || event.dx !== 0 || event.dy !== 0);
       if (events.length) this.dispatch(this.display, events);
+      else if (this.queue.length) this.schedule();
     });
   }
 

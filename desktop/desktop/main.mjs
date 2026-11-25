@@ -260,6 +260,7 @@ function openWindow() {
   lastBeforeInputKey = null;
   win.webContents.on("did-start-navigation", (_event, _url, isInPlace, isMainFrame) => {
     if (isMainFrame && !isInPlace) {
+      remote?.stopScreen();
       panelOpenFrames = new Set();
       lastBeforeInputKey = null;
     }
@@ -285,6 +286,7 @@ function openWindow() {
     }
   });
   win.on("closed", () => {
+    remote?.stopScreen();
     panelOpenFrames = new Set();
     lastBeforeInputKey = null;
     win = null;
@@ -292,6 +294,9 @@ function openWindow() {
   });
   for (const change of ["show", "hide", "restore", "minimize"]) win.on(change, windowPush.visibilityChanged);
   win.on("show", syncTray);
+  win.webContents.on("render-process-gone", () => remote?.stopScreen());
+  win.on("hide", () => remote?.stopScreen());
+  win.on("minimize", () => remote?.stopScreen());
   win.on("hide", syncTray);
   for (const change of ["focus", "blur", "show", "hide"]) win.on(change, tellWatching);
   win.loadFile(html);
@@ -305,10 +310,11 @@ app.on("open-url", (event, url) => {
 if (!app.requestSingleInstanceLock()) app.quit();
 else
   app.whenReady().then(async () => {
+    const windowReady = Promise.withResolvers();
     // Opening Botkins while it runs shows its window. A second start by the computer at sign-in stays quiet.
     app.on("second-instance", (_event, argv) => {
       const url = teamUrlFrom(argv);
-      if (!url && !argv.includes(HIDDEN_FLAG)) showWindow();
+      if (!url && !argv.includes(HIDDEN_FLAG)) void windowReady.promise.then(showWindow);
       if (url) openTeamJoin(url);
     });
     app.on("activate", showWindow);
@@ -510,6 +516,10 @@ else
       },
       // Other computers' Botkins this app uses (Settings › Computers and teams, the first launch and the switcher). A phone can't make these calls.
       remoteHosts: () => ({ using: remote.inUse(), hosts: remote.list() }),
+      remoteScreen: (hostId, viewerId, operation, ...args) => {
+        if (operation === "start" && hostId === runtime.link.status().serverId) throw new Error("This is the computer you are using. Choose This computer to manage screen sharing.");
+        return remote.screenRequest(hostId, viewerId, operation, ...args);
+      },
       pairRemoteHost: async (input) => {
         const result = await remote.pair({ link: input?.link, address: input?.address, code: input?.code, name: profile.status().profile?.name });
         if (profile.token()) void profile.bindRemote(result.id).catch((error) => console.error("Profile bind:", error.message));
@@ -661,8 +671,10 @@ else
     } catch (error) {
       console.error("Run at startup:", error.message);
     }
-    // Started by the computer at sign-in: no window, only the icon. Any other start opens the window.
+    // The managed desktop and login items start quietly. A menu request that arrived during
+    // startup can open the window once the renderer's handlers and the workspace are ready.
     if (!startedHidden()) openWindow();
+    windowReady.resolve();
     syncTray();
     // The control socket, and the `botkins` command for a bot's shell (desktop/terminal/reach.mjs). A trial
     // run (tests, a development copy) has none, except the workspace of the two-container host, which is

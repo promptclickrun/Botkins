@@ -81,14 +81,14 @@ Pair the phone app, and your team goes with you.
 - **Take the primary Botkin to your Watch.** See its latest conversation and avatar, talk live through the paired iPhone, and hear replies on Watch.
 - **Let bots use your phone, if you allow it.** Calendar, contacts, Health, location, photos and Apple Music. You choose Off, Read, or Read and interact for each one.
 - **Open from Shortcuts.** Open Botkins, open a selected Botkin's latest or new chat, send a background prompt, or start a voice chat.
-- **See your computer's screen.** View only, or view and control. Face ID checks it is you.
+- **Control computer.** Open the live desktop from Home or a screen your bot shows in chat. Use the trackpad, touch, keyboard, and clipboard with an owner check and the access level you choose.
 - **Use it away from home.** Turn on the relay, and your phone reaches your computer from any network.
 
 ### Use Botkins anywhere
 
 - **macOS, Windows and Linux.** Signed and notarized on Mac. Updates check GitHub Releases.
 - **Headless servers.** Run Botkins as a service on a computer with no screen, and use it from your phone. One command installs it, and `botkins` operates it from a terminal. See [Run Botkins from a terminal](desktop/docs/terminal.md).
-- **One-click Azure.** Deploy a VM that runs Botkins with its own relay, then open the pairing link it returns on your phone. It works from a phone, with no SSH key. Turn on **Screen access** to also get a virtual screen with Chrome that you can see and control from your phone. See [Botkins on Azure](deploy/azure/README.md).
+- **One-click Azure.** Deploy a VM that runs Botkins with its own relay, then open the pairing link it returns on your phone. It works from a phone, with no SSH key. New deployments include a virtual desktop with Chrome that you can see and control after granting access on your phone. See [Botkins on Azure](deploy/azure/README.md).
 
   [![Deploy to Azure](https://aka.ms/deploytoazurebutton)](https://portal.azure.com/#create/Microsoft.Template/uri/https%3A%2F%2Fraw.githubusercontent.com%2Fpromptclickrun%2FBotkins%2Fmain%2Fdeploy%2Fazure%2Fazuredeploy.json/createUIDefinitionUri/https%3A%2F%2Fraw.githubusercontent.com%2Fpromptclickrun%2FBotkins%2Fmain%2Fdeploy%2Fazure%2FcreateUiDefinition.json)
 - **Bring your hosts to another device.** Set up an optional Botkins profile, then sign in on another phone or desktop with a passkey and a trusted-device approval or email code. Botkins links the computers and teams you configure. You can also continue with local pairing and set up a profile later.

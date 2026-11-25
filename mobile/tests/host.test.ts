@@ -915,7 +915,7 @@ test("clicks and typing need control mode, and bad actions are refused whole or 
     [[{ type: "key", key: "F13" }], /isn't valid/],
     [[{ type: "key", key: "ab" }], /isn't valid/],
     [[{ type: "key", key: "\u0007" }], /isn't valid/],
-    [[{ type: "key", key: "a", modifiers: ["super"] }], /isn't valid/],
+    [[{ type: "key", key: "a", modifiers: ["hyper"] }], /isn't valid/],
     [[{ type: "key", key: "a", modifiers: "cmd" }], /isn't valid/],
     [[{ type: "text", text: "x".repeat(2001) }], /2,000/],
     [[{ type: "text", text: 5 }], /2,000/],
@@ -973,6 +973,13 @@ test("what a phone sends is tidied the same way for every system", () => {
     ["key", "--clearmodifiers", "ctrl+shift+c"],
     ["key", "--clearmodifiers", "period"],
     ["type", "--delay", "0", "--clearmodifiers", "--", "é"],
+  ]);
+});
+
+test("the system modifier sends Super on Linux and preserves older phones' command shortcuts", () => {
+  const events = cleanEvents([{ type: "key", key: "d", modifiers: ["super"] }, { type: "key", key: "c", modifiers: ["cmd"] }]).events;
+  assert.deepEqual(xdotoolCommands(events, { width: 640, height: 480 }), [
+    ["key", "--clearmodifiers", "Super_L+d"], ["key", "--clearmodifiers", "ctrl+c"],
   ]);
 });
 

@@ -119,6 +119,40 @@ function client(t, { protect = null, device = { name: "Laptop", platform: "darwi
   t.after(() => remote.stop());
   return { remote, file, make, changes: () => changes };
 }
+
+test("a desktop viewer stays on its paired host, respects that host's grant, and releases held input on switching away", async t => {
+  const a = await host(t);
+  const b = client(t);
+  const { id } = await b.remote.pair({ address: a.address, code: a.link.startPairing().code });
+  b.remote.use(id);
+  await until("connected", () => b.remote.inUse()?.state === "online");
+  const input = [];
+  const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0xd9]);
+  let closed = 0;
+  a.link.backend.screen = {
+    displays: async () => [{ id: "1", width: 100, height: 100, primary: true }], permissions: async () => ({ screenRecording: true, accessibility: true }),
+    capture: async () => ({ width: 100, height: 100, jpeg }),
+    openVideo: async ({ mimeTypes }) => ({ mimeType: mimeTypes[0], read: async () => Buffer.from("encoded"), close: () => closed++ }),
+  };
+  a.link.screen.override = async job => input.push(...job.events);
+  const viewer = crypto.randomUUID();
+  const call = (op, ...args) => b.remote.screenRequest(id, viewer, op, ...args);
+  assert.equal(typeof b.remote.screenRequest, "function");
+  await assert.rejects(b.remote.screenRequest("other", viewer, "start"), /computer/i);
+  await assert.rejects(call("input", "1", []), /viewer/i);
+  a.link.setScreenMode("view");
+  assert.equal((await call("start")).canControl, false);
+  assert.equal((await call("frame", { display: "1" })).jpeg, jpeg.toString("base64"));
+  await assert.rejects(call("input", "1", [{ type: "click", x: 0.5, y: 0.5 }]), /control/i);
+  await assert.rejects(call("grant.confirm"), /action/i);
+  a.link.setScreenMode("control");
+  await call("openVideo", { display: "1", mimeTypes: ['video/webm; codecs="vp8"'] });
+  assert.equal(await call("readVideo", 0), Buffer.from("encoded").toString("base64"));
+  await call("input", "1", [{ type: "down", x: 0.5, y: 0.5 }]);
+  b.remote.use(null);
+  await assert.rejects(call("input", "1", []), /computer/i);
+  await until("the old host to release the drag and its encoder", () => input.at(-1)?.type === "up" && closed > 0);
+});
 const until = async (what, check, ms = 15000) => {
   const limit = Date.now() + ms;
   for (;;) {
@@ -303,7 +337,7 @@ test("using a host shows its bots and chats, sends the window's calls there, and
   await assert.rejects(b.remote.call("startPhonePairing", []), /can only be done on .* itself/);
   await assert.rejects(b.remote.call("exportUsage", [30]), /can only be done on .* itself/);
   assert.deepEqual(await b.remote.call("usage", [30]), { days: 30 });
-  for (const name of ["snapshot", "viewing", "remoteHosts", "pairRemoteHost", "useRemoteHost", "forgetRemoteHost"]) assert.ok(HERE.has(name), name + " runs on this computer whichever host is shown");
+  for (const name of ["snapshot", "viewing", "remoteHosts", "remoteScreen", "pairRemoteHost", "useRemoteHost", "forgetRemoteHost"]) assert.ok(HERE.has(name), name + " runs on this computer whichever host is shown");
   // Back to this computer: the host's state is let go of.
   assert.equal(b.remote.use(null), null);
   assert.deepEqual([b.remote.inUse(), b.remote.state, b.remote.snapshot().bots], [null, "idle", []]);
