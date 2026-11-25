@@ -353,6 +353,7 @@ When the bot asks for an approval in `botkins chat`, the command shows the reque
 
 ```sh
 botkins chats list
+botkins chats search "browser extension" --since 2026-11-01
 botkins chats rename "Quarterly plan" "Plan for the third quarter"
 botkins chats flags "Plan for" --pin
 botkins chats regenerate-title "Plan for"
@@ -369,6 +370,7 @@ botkins chats delete "Fork of Plan" --yes
 ```
 
 - **A chat is named by its id or by its title.** The title can be all of it or the start of it, when only one chat starts so. When more than one chat matches, the command lists them with their ids. `botkins chats list` shows ids and titles, and `--json` gives each chat's flags, project, mode and section too. A title is text that someone wrote, so in text form it is made safe before it is printed.
+- **`chats search <words>…`** searches what was said in every chat, on every harness, the same search a bot has as `session_search`. Every word must appear; a "quoted phrase" stays whole. `--bot`, `--chat`, `--since`, `--before`, `--role` and `--limit` narrow it. Each result names the chat, the message's index and a snippet.
 - **`chats regenerate-title <chat>`** uses the same summarizer as **Regenerate title** in the chat menu. It works even with auto-summarize off and doesn't add a turn or change the automatic naming setting.
 - **Delete cannot be undone, so it asks first.** `botkins chats delete <chat>` shows the chat and asks. With no terminal it fails and names `--yes`. A chat that is working is refused: stop it first. Deleting a section is asked the same way, but it keeps its chats.
 - **Three commands start a turn of a model.** `chats retry` sends the message of a stopped or failed turn again, `chats compact` asks the model to summarize the conversation, and `chats aside` asks a side question, as `/btw` does on the phone. Each uses the chat's provider and counts against its plan. `chats aside` does not add the question or the answer to the chat. `chats send-now` can start one too, when the chat is free. `chats retry <chat>` sends the chat's latest turn again (`botkins chats show <chat> --json` names it in `latestTurn`), and refuses a chat that is working.

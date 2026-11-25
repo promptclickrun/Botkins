@@ -138,6 +138,38 @@ export const chatsCommands = {
           );
         },
       },
+      search: {
+        summary: "Search the messages of every chat, on every harness",
+        usage: "botkins chats search <words>… [--bot <bot>] [--chat <chat>] [--since <date>] [--before <date>] [--role user|assistant] [--limit <n>]",
+        details: "Every word must appear in a message; put a phrase in quotes to keep it whole. Results are best and newest first, with the chat, the message's index and a snippet.",
+        options: {
+          bot: { type: "string", value: "bot", about: "Only this bot's chats" },
+          chat: { type: "string", value: "chat", about: "Only this chat" },
+          since: { type: "string", value: "date", about: "Only messages from this ISO 8601 date on" },
+          before: { type: "string", value: "date", about: "Only messages before this ISO 8601 date" },
+          role: { type: "string", value: "user|assistant", about: "Only the person's messages, or only the bots'" },
+          limit: { type: "string", value: "n", about: "How many results (1 to 30, default 10)" },
+        },
+        async run(context) {
+          if (!context.args.length) throw usage("Give some words to search for.");
+          const o = context.options;
+          const limit = o.limit === undefined ? undefined : Number(o.limit);
+          if (limit !== undefined && !(Number.isInteger(limit) && limit >= 1 && limit <= 30)) throw usage("--limit is a number from 1 to 30.");
+          const found = await context.client.call("chats.search", context.args.join(" "), {
+            ...(o.bot !== undefined && { bot: o.bot }),
+            ...(o.chat !== undefined && { chat: o.chat }),
+            ...(o.since !== undefined && { since: o.since }),
+            ...(o.before !== undefined && { before: o.before }),
+            ...(o.role !== undefined && { role: o.role }),
+            ...(limit !== undefined && { limit }),
+          });
+          context.print(found, (r) =>
+            r.results.length
+              ? r.results.map((hit) => safe(hit.title) + "  (" + hit.chatId + " #" + hit.index + ", " + hit.role + (hit.time ? ", " + ago(Date.parse(hit.time)) : "") + ")\n  " + safe(hit.snippet)).join("\n\n") + "\n\n" + r.matches + " matching message" + (r.matches === 1 ? "" : "s") + " in " + r.chats + " chat" + (r.chats === 1 ? "" : "s") + "."
+              : "No messages match.",
+          );
+        },
+      },
       approve: {
         summary: "Review and answer a pending permission on this computer",
         usage: "botkins chats approve <chat-id>",
