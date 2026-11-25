@@ -640,7 +640,11 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
     readSkill: (name) => workspace.integrations.readSkill(name),
     saveSkill: (data) => workspace.integrations.saveSkill(data ?? {}),
     // A script command ("script-commands-v1", desktop/script-commands.mjs): the owner's alone. Its script is read and written whole.
-    "skills.saveScript": (data) => workspace.integrations.saveScriptCommand(data ?? {}),
+    "skills.saveScript": async (data) => {
+      // A name that a model provider's own command has can never run: it is refused here, not later (workspace.assertScriptName).
+      await workspace.assertScriptName(data?.name, data?.original);
+      return workspace.integrations.saveScriptCommand(data ?? {});
+    },
     "skills.readScript": (name) => workspace.integrations.readScriptCommand(name),
     removeSkill: (name) => workspace.integrations.removeSkill(name),
     setSkillEnabled: (name, enabled) => workspace.integrations.setSkillEnabled(name, enabled === true),

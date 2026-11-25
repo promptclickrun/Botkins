@@ -8,6 +8,7 @@ import test from "node:test";
 import { LinkHost } from "../link-host/index.mjs";
 import { MockBackend } from "../link-host/mock-backend.mjs";
 import { authorize } from "../link-host/team.mjs";
+import { askDetail, askOf } from "../link-host/cards.mjs";
 import { pair, LinkClient, type FetchLike } from "../src/link/client";
 import type { ScriptCommand, SkillInfo } from "../src/link/types";
 import { botSkills, isScript, scriptName, scriptProblems, skillOrigin, SCRIPT_LIMIT } from "../src/features/skills/shared";
@@ -82,4 +83,11 @@ test("only the owner reads or saves a script command, and the link files are the
   for (const file of ["team.mjs", "methods.mjs"]) {
     assert.equal(readFileSync(new URL("../link-host/" + file, import.meta.url), "utf8"), readFileSync(new URL("../../desktop/desktop/link/" + file, import.meta.url), "utf8"), file);
   }
+});
+
+test("a request that holds a script is read in the app: no Allow once from a notification or a card", () => {
+  const request = { id: "q", chatId: "c", kind: "permission", title: "Add the script command /tidy?", detail: "Script:\necho tidy", review: true };
+  assert.equal(askOf(request), "open");
+  assert.equal(askDetail(request).k, "open");
+  assert.equal(askOf({ ...request, review: undefined }), "approve", "an ordinary approval keeps its buttons");
 });

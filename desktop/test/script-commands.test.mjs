@@ -1,14 +1,16 @@
 // Script commands (desktop/script-commands.mjs): a slash command that runs a script with no model.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Workspace } from "./starter.mjs";
 import { tempDir, tick } from "./fake-copilot.mjs";
 import { authorize } from "../desktop/link/team.mjs";
 import { enabledSkills } from "../desktop/providers/skills.mjs";
-import { RESERVED_COMMANDS, SCRIPT_FILE, cleanScriptCommand, commandKind, matchScriptCommand, scriptCommandTools, shownScript } from "../desktop/script-commands.mjs";
+import { RESERVED_COMMANDS, SCRIPT_FILE, cleanScriptCommand, commandKind, hashScript, matchScriptCommand, scriptCommandTools, scriptRevision, scrubbedEnvironment, shownScript } from "../desktop/script-commands.mjs";
+import { askDetail, askOf } from "../desktop/link/cards.mjs";
+import { gadgetPart } from "../desktop/link/gadget.mjs";
 import { desktopCommands } from "../desktop/providers/copilot/commands.mjs";
 import { SCRIPT_LENGTH } from "../desktop/routine-script.mjs";
 
@@ -20,7 +22,7 @@ function setup(t, { commands = [] } = {}) {
   const dir = tempDir(t, "botkins-script-commands-");
   const seen = { created: [], configs: [], sent: [] };
   const rpc = {
-    commands: { list: async () => ({ commands }) },
+    commands: { list: async () => (commands === "fail" ? Promise.reject(new Error("the provider is down")) : { commands }) },
     skills: { ensureLoaded: async () => {}, list: async () => ({ skills: [] }) },
     plugins: { list: async () => ({ plugins: [] }) },
     mcp: { list: async () => ({ servers: [] }) },
@@ -203,7 +205,8 @@ test("typing a script command runs its script with no model and no session, and 
   save(ws, "hello", 'exec 2>&1; echo "hi from $BOTKINS_COMMAND"; echo "warn" >&2; echo "chat=$BOTKINS_CHAT_ID"; pwd; test -z "$BOTKINS_ROUTINE" && echo not-a-routine');
   const chat = ws.createChat("pip");
   await ws.send(chat, "/hello");
-  assert.deepEqual(seen.created, [], "no session was opened");
+  // The menu is read to be sure that the chat's provider has no command of that name (a menu session, not the chat's, and no model).
+  assert.deepEqual(seen.created.filter((id) => !id.startsWith("menu-")), [], "the chat's own session was not opened");
   assert.deepEqual(seen.sent, [], "no model turn");
   const [reply] = commandMessages(ws, chat);
   assert.equal(reply.plain, true);
@@ -420,4 +423,149 @@ test("a script with no time limit runs to its end, gets its input and is not mar
   // A routine's script keeps its limit and its mark.
   const routine = runScript('echo "routine=[$BOTKINS_ROUTINE]"');
   assert.equal((await routine.done).output, "routine=[1]\n");
+});
+
+test("a link in a command's folder is never written through, and the registry holds the hash of the approved script", { skip: !unix }, (t) => {
+  const { ws, dir } = setup(t);
+  save(ws, "linky", "echo one");
+  const folder = join(ws.integrations.skillsDir, "linky");
+  const victim = join(dir, "zshrc");
+  writeFileSync(victim, "precious");
+  const change = (script = "echo two") => ws.integrations.saveScriptCommand({ name: "linky", description: "d", script, original: "linky" });
+  // `run` made a link to a file of the person's: a save does not write to it, and says so.
+  rmSync(join(folder, SCRIPT_FILE));
+  symlinkSync(victim, join(folder, SCRIPT_FILE));
+  assert.throws(() => change(), /run is a link/);
+  assert.equal(readFileSync(victim, "utf8"), "precious");
+  assert.equal(ws.integrations.runnableScript("linky"), null, "a command whose script is a link is not run");
+  // The same for SKILL.md, and for a link to nowhere (a read of it gave nothing, and its hash was the hash of "null").
+  rmSync(join(folder, SCRIPT_FILE));
+  writeFileSync(join(folder, SCRIPT_FILE), "echo one");
+  rmSync(join(folder, "SKILL.md"));
+  symlinkSync(victim, join(folder, "SKILL.md"));
+  assert.throws(() => change(), /SKILL\.md is a link/);
+  rmSync(join(folder, SCRIPT_FILE));
+  symlinkSync(join(dir, "nowhere"), join(folder, SCRIPT_FILE));
+  rmSync(join(folder, "SKILL.md"));
+  writeFileSync(join(folder, "SKILL.md"), "x");
+  assert.throws(() => change(), /run is a link/);
+  assert.equal(existsSync(join(dir, "nowhere")), false, "a link to nowhere is not made into a file");
+  assert.equal(readFileSync(victim, "utf8"), "precious");
+  // The folder itself a link.
+  const elsewhere = join(dir, "elsewhere");
+  mkdirSync(elsewhere);
+  symlinkSync(elsewhere, join(ws.integrations.skillsDir, "dirlink"));
+  assert.throws(() => save(ws, "dirlink"), /folder is a link/);
+  assert.deepEqual(readFileSync(join(dir, "zshrc"), "utf8"), "precious");
+  assert.equal(existsSync(join(elsewhere, SCRIPT_FILE)), false);
+  // With the links taken away it saves, as plain files, and the registry has the hash of the script that was given.
+  rmSync(join(folder, SCRIPT_FILE));
+  change("echo three");
+  assert.equal(ws.state.skills.scripts.linky, hashScript("echo three"));
+  assert.equal(readFileSync(join(folder, SCRIPT_FILE), "utf8"), "echo three");
+  assert.equal(ws.integrations.runnableScript("linky").script, "echo three");
+  // A script that is not well formed text is refused: what is written would not be what was approved.
+  assert.throws(() => change("echo \ud800"), /broken character/);
+});
+
+test("the card of a bot's script command is read in the app: never answered from a notification, a card or a gadget", async (t) => {
+  const { ws } = setup(t);
+  const views = [];
+  ws.interactions.request = async (_chat, _task, view) => (views.push(view), { action: "deny" });
+  const chat = ws.createChat("pip");
+  const task = {};
+  ws.active.set(chat, task);
+  const create = ws.sessionTools(ws.bot("pip"), ws.chat(chat), { id: "r" }, task).find((tool) => tool.name === "script_command_create");
+  await create.handler({ name: "tidy", description: "Tidies.", script: "echo tidy" });
+  const request = { ...views[0], id: "q1", chatId: chat };
+  assert.equal(request.review, true);
+  assert.equal(askOf(request), "open", "no Allow once away from the app");
+  assert.equal(askDetail(request).k, "open");
+  assert.equal(askDetail(request).rm, undefined);
+  // An ordinary approval still has its buttons.
+  assert.equal(askOf({ id: "q2", kind: "permission", title: "Run ls?", preview: "ls" }), "approve");
+  // A gadget does not show it as a request that it could answer.
+  const device = { name: "Desk", gadget: {} };
+  const live = (extra) => ({ requests: [{ id: "q1", chatId: "c1", kind: "permission", title: "Add the script command /tidy?", ...extra }] });
+  assert.equal(gadgetPart({ device, chat: { id: "c1", title: "t", messages: [] }, live: live({}) }).phase, "request");
+  const part = gadgetPart({ device, chat: { id: "c1", title: "t", messages: [] }, live: live({ review: true }) });
+  assert.notEqual(part.phase, "request");
+  assert.equal(part.request, undefined);
+  // The phone's copies are the same files.
+  for (const file of ["cards.mjs", "push.mjs", "gadget.mjs"]) assert.deepEqual(read("../desktop/link/" + file), read("../../mobile/link-host/" + file), file);
+});
+
+test("a name that a provider's command has is refused when saving, and a cold or changed menu is read before a typed command runs", { skip: !unix }, async (t) => {
+  const commands = [{ name: "clash", description: "A provider's own.", kind: "builtin" }];
+  const { ws } = setup(t, { commands });
+  // Saving: the window's and the phone's call, and a bot's tool (before any card).
+  await assert.rejects(() => ws.assertScriptName("clash"), /command of Pip's model provider/);
+  await assert.rejects(() => ws.assertScriptName("/Clash"), /command of Pip's/);
+  await ws.assertScriptName("fresh-name");
+  await ws.assertScriptName("clash", "clash"); // a command that is being changed keeps its name
+  const views = [];
+  ws.interactions.request = async (_chat, _task, view) => (views.push(view), { action: "approve" });
+  const chat = ws.createChat("pip");
+  const task = {};
+  ws.active.set(chat, task);
+  const create = ws.sessionTools(ws.bot("pip"), ws.chat(chat), { id: "r" }, task).find((tool) => tool.name === "script_command_create");
+  await assert.rejects(() => create.handler({ name: "clash", description: "x", script: "true" }), /command of Pip's model provider/);
+  assert.equal(views.length, 0);
+  ws.active.delete(chat);
+  // Typing, with the menu not read yet: a command saved some other way (here, before the provider had it) loses.
+  save(ws, "clash", "touch ran-clash");
+  ws.clearCatalogs();
+  assert.equal(ws.catalogs.size, 0, "a cold menu");
+  const typed = ws.createChat("pip");
+  await ws.send(typed, "/clash now");
+  assert.equal(existsSync(join(ws.dir, "files", "pip", "ran-clash")), false, "the provider's command won");
+  assert.equal(ws.state.runs[0].script, undefined);
+  assert.deepEqual(commandMessages(ws, typed).filter((m) => /ran|can't run/.test(m.text)), []);
+  // A menu that was read before the provider got a command, and has expired, is read again.
+  save(ws, "late", "touch ran-late");
+  await ws.catalog("pip");
+  commands.push({ name: "late", description: "Added by an update.", kind: "builtin" });
+  for (const entry of ws.catalogs.values()) entry.expires = 0;
+  await ws.send(typed, "/late");
+  assert.equal(existsSync(join(ws.dir, "files", "pip", "ran-late")), false);
+  // A menu that can't be read decides nothing: the script is not run, and the message says why.
+  const failing = setup(t, { commands: "fail" });
+  save(failing.ws, "calm", "touch ran-calm");
+  const there = failing.ws.createChat("pip");
+  await failing.ws.send(there, "/calm");
+  assert.equal(existsSync(join(failing.ws.dir, "files", "pip", "ran-calm")), false);
+  assert.match(commandMessages(failing.ws, there)[0].text, /^\/calm did not run: Botkins could not read this chat's commands to be sure.*the provider is down.*Try again\.$/);
+  // With the menu readable, and no command of that name, it runs.
+  const clear = setup(t, { commands: [] });
+  save(clear.ws, "calm", "touch ran-calm");
+  const here = clear.ws.createChat("pip");
+  await clear.ws.send(here, "/calm");
+  assert.equal(existsSync(join(clear.ws.dir, "files", "pip", "ran-calm")), true);
+});
+
+test("a script does not get Botkins' own secrets or the usual credential variables", { skip: !unix }, async (t) => {
+  const kept = scrubbedEnvironment({ PATH: "/bin", HOME: "/h", SHELL: "/bin/sh", LANG: "C", USER: "u", LC_ALL: "C", SSH_AUTH_SOCK: "/agent", GIT_AUTHOR_NAME: "n", BOTKINS_SOCKET: "/s", BOTKINS_DATA_DIR: "/d" });
+  assert.deepEqual(Object.keys(kept), ["PATH", "HOME", "SHELL", "LANG", "USER", "LC_ALL", "SSH_AUTH_SOCK", "GIT_AUTHOR_NAME", "BOTKINS_SOCKET", "BOTKINS_DATA_DIR"]);
+  const dropped = ["GITHUB_TOKEN", "NPM_TOKEN", "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "AWS_SECRET_ACCESS_KEY", "AWS_ACCESS_KEY_ID", "AWS_SESSION_TOKEN", "DB_PASSWORD", "CLIENT_SECRET", "BOTKINS_KEY_FILE", "BOTKINS_LINK_CIPHER", "BOTKINS_GIT_BEARER", "BOTKINS_PI_SESSION", "AUTHORIZATION", "STRIPE_KEY"];
+  assert.deepEqual(Object.keys(scrubbedEnvironment(Object.fromEntries(dropped.map((name) => [name, "x"])))), []);
+  // And in a real run: what the script prints of its environment.
+  const { ws } = setup(t);
+  const before = { ...process.env };
+  Object.assign(process.env, { GITHUB_TOKEN: "ghp_secret", BOTKINS_KEY_FILE: "/keys", MY_DB_PASSWORD: "hunter2" });
+  t.after(() => {
+    for (const name of ["GITHUB_TOKEN", "BOTKINS_KEY_FILE", "MY_DB_PASSWORD"]) delete process.env[name];
+    Object.assign(process.env, before);
+  });
+  save(ws, "envy", "env");
+  const chat = ws.createChat("pip");
+  await ws.send(chat, "/envy some words");
+  const text = commandMessages(ws, chat)[0].text;
+  assert.doesNotMatch(text, /ghp_secret|\/keys|hunter2|GITHUB_TOKEN|BOTKINS_KEY_FILE|MY_DB_PASSWORD/);
+  assert.match(text, /^PATH=/m);
+  assert.match(text, /^HOME=/m);
+  assert.match(text, /^BOTKINS_ARGS=some words$/m);
+  assert.match(text, /^BOTKINS_COMMAND=envy$/m);
+  assert.ok(text.includes("BOTKINS_CHAT_ID=" + chat));
+  assert.equal(scriptRevision({ name: "a", description: "d", script: "x" }), scriptRevision({ name: "A", description: " d ", script: "x" }), "the revision is of the cleaned fields");
+  assert.notEqual(scriptRevision({ name: "a", description: "d", script: "x" }), scriptRevision({ name: "a", description: "d", script: "y" }));
 });

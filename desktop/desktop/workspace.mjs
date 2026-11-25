@@ -23,7 +23,7 @@ import { CopilotProvider } from "./providers/copilot/index.mjs";
 import { Integrations } from "./integrations.mjs";
 import { Plugins } from "./plugins.mjs";
 import { pluginTools } from "./plugin-tools.mjs";
-import { matchScriptCommand, RESERVED_COMMANDS, runScriptCommand, scriptChoice, scriptCommandTools } from "./script-commands.mjs";
+import { commandNames, matchScriptCommand, RESERVED_COMMANDS, runScriptCommand, scriptChoice, scriptCommandTools } from "./script-commands.mjs";
 import { SecureInputs } from "./secure-input.mjs";
 import { updateTools } from "./updates.mjs";
 import { profileContext } from "./bot-profile-files.mjs";
@@ -994,7 +994,7 @@ export class Workspace {
     };
     // A person's message that is a script command: known now, so that the chat is busy with it from the start (the menu is then asked of the bot's menu session).
     if (!run.reaction && run.scheduleId == null && !run.panelId && !run.taskId && !run.recovery?.proactiveCheck && !(recovering && run.recovery?.input) && !isGroup(chat)) {
-      const typed = this.scriptCommandFor(chat, bot, prompt);
+      const typed = this.scriptCommandCandidate(prompt);
       if (typed) Object.assign(task, { script: true, typedScript: typed });
     }
     // A group chat names its first speaker at once, so the UI never shows a nameless typing row.
@@ -1824,7 +1824,7 @@ export class Workspace {
     const data = await this.inventory(botId, chatId, fresh);
     const chat = chatId ? this.state.chats.find((c) => c.id === chatId) : null;
     if (!Array.isArray(data?.choices) || chat?.createdBy) return data;
-    const taken = new Set(data.choices.flatMap((c) => [c.name, c.command, ...(c.aliases ?? [])].map((word) => String(word).toLowerCase())));
+    const taken = commandNames(data.choices);
     const scripts = this.integrations.scriptCommands().filter((c) => c.enabled && !c.unavailable && !taken.has(c.name)).map(scriptChoice);
     return scripts.length ? { ...data, choices: [...data.choices, ...scripts] } : data;
   }
@@ -2311,33 +2311,68 @@ export class Workspace {
     }
   }
   /**
-   * The script command that a person's message asks for: { name, args }, or null when the message
-   * is not one. The "/" menu's own commands win a clash (`catalog`): the names that Botkins and the
-   * providers are known to have, and anything in the chat's last menu.
+   * The script command that a message asks for, as far as the message and the list of commands tell: { name, args },
+   * or null. Whether a command of the chat's provider has the same name is not known here (it takes the provider's
+   * menu): `runTypedScript` decides that before anything runs.
    */
-  scriptCommandFor(chat, bot, prompt) {
+  scriptCommandCandidate(prompt) {
     const typed = matchScriptCommand(prompt);
     if (!typed || RESERVED_COMMANDS.has(typed.name)) return null;
-    const menu = this.catalogs.get(chat.id) ?? this.catalogs.get(bot.id);
-    if (menu?.data?.choices?.some((c) => [c.name, c.command, ...(c.aliases ?? [])].some((word) => String(word).toLowerCase() === typed.name))) return null;
     return this.integrations.scriptCommands().some((c) => c.name === typed.name && c.enabled) ? typed : null;
   }
-  /** Runs a typed script command as a turn with no model: busy while it runs, Stop ends it, its output is the reply. */
+  /**
+   * Whether the chat's provider has a command or skill of this name. The menu is read now when it is not at hand (a menu
+   * session answers: no chat session is opened and no model is called). Throws when the menu can't be read.
+   */
+  async providerOwns(chat, bot, name) {
+    return commandNames((await this.inventory(bot.id, chat.id)).choices).has(name);
+  }
+  /**
+   * A name that a script command is saved under must not be a command that any bot's provider has: that one wins in the
+   * menu and when typed, so the script could never run. A provider whose menu can't be read now is left out here; the
+   * check is made again when the command is typed.
+   */
+  async assertScriptName(name, original) {
+    const id = String(name ?? "").trim().replace(/^\//, "").toLowerCase();
+    if (!id || id === original) return;
+    const menus = await Promise.allSettled(this.state.bots.map((bot) => this.inventory(bot.id)));
+    menus.forEach((menu, at) => {
+      if (menu.status === "fulfilled" && commandNames(menu.value.choices).has(id)) throw new Error("/" + id + " is a command of " + this.state.bots[at].name + "'s model provider, which wins over a script command. Choose another name.");
+    });
+  }
+  /**
+   * Runs a typed script command as a turn with no model: busy while it runs, Stop ends it, its output is the reply.
+   * Returns false when the message is not one after all (the chat's provider has a command of that name, which wins),
+   * and the turn then goes on as any message does.
+   */
   async runTypedScript(chat, bot, run, task, { name, args }) {
     this.access.assertChat(chat, [bot]);
-    const said = (text) => chat.messages.push({ role: "command", plain: true, time: Date.now(), runId: run.id, text });
-    run.command = name;
+    const said = (text) => (chat.messages.push({ role: "command", plain: true, time: Date.now(), runId: run.id, text }), true);
     // The owner's alone: a turn that a team member wrote, or that runs in a member's chat, runs nothing on this computer.
-    if (this.accessForTurn(chat, task).member) return said("Only the computer's owner can run a script command.");
+    if (this.accessForTurn(chat, task).member) { run.command = name; return said("Only the computer's owner can run a script command."); }
     const command = this.integrations.runnableScript(name);
     if (!command) {
+      run.command = name;
       const why = this.integrations.scriptCommands().find((c) => c.name === name)?.unavailable;
       return said("/" + name + " can't run. " + (why ?? "Open Settings, Skills to look at it."));
     }
+    // A command of the chat's provider with the same name wins. When its menu can't be read, nothing is guessed.
+    let owned;
+    try {
+      owned = await this.providerOwns(chat, bot, name);
+    } catch (error) {
+      if (task.stopped || this.closing) return true;
+      run.command = name;
+      return said("/" + name + " did not run: Botkins could not read this chat's commands to be sure that /" + name + " is not one of its model provider's (" + error.message + "). Try again.");
+    }
+    if (owned) return false;
+    if (task.stopped || this.closing) return true;
+    run.command = name;
     if (run.recovery?.commandStarted || (task.recovering && !run.recovery)) throw new Error("Botkins restarted during this command. Check its result before running it again.");
     (run.recovery ??= {}).commandStarted = true;
     this.save();
     await runScriptCommand(this, { chat, bot, run, task, command, args });
+    return true;
   }
   async executeTurn(chat, bot, prompt, run, task) {
     let session, unsubscribe, proposals;
@@ -2352,9 +2387,12 @@ export class Workspace {
       }
       // A script command runs its script with no model, and no session is opened for it (desktop/script-commands.mjs).
       if (task.typedScript) {
-        await this.runTypedScript(chat, bot, run, task, task.typedScript);
-        if (!task.stopped && !this.closing) run.status = "Completed";
-        return;
+        if (await this.runTypedScript(chat, bot, run, task, task.typedScript)) {
+          if (!task.stopped && !this.closing) run.status = "Completed";
+          return;
+        }
+        // Its provider has a command of that name: the message goes the way every message goes.
+        Object.assign(task, { script: false, typedScript: undefined });
       }
       task.compactRequested = chat.main && !check && prompt.trim() === "/compact";
       session = await this.openSession(chat, bot, run, task);

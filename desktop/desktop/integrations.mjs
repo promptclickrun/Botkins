@@ -171,6 +171,21 @@ export function parseServers(json, baseDir, sealFor) {
   });
 }
 
+/**
+ * Writes a file as a new plain file: to a file of its own beside it, then moved over the name. A link at the name is
+ * replaced and never followed, so what it pointed to is not written.
+ */
+function writeFilePlain(path, content, mode) {
+  const temporary = path + "." + randomUUID().slice(0, 8) + ".tmp";
+  try {
+    writeFileSync(temporary, content, { flag: "wx", mode });
+    renameSync(temporary, path);
+  } catch (error) {
+    rmSync(temporary, { force: true });
+    throw error;
+  }
+}
+
 const skillFile = ({ name, description, instructions }) =>
   "---\nname: " + name + "\ndescription: " + JSON.stringify(description) + "\n---\n\n" + instructions.trim() + "\n";
 
@@ -734,18 +749,22 @@ export class Integrations {
     mkdirSync(this.skillsDir, { recursive: true });
     if (lstatSync(this.skillsDir, { throwIfNoEntry: false })?.isSymbolicLink()) throw new Error("The Botkins skills folder cannot be a symbolic link.");
     const dir = join(this.skillsDir, id);
+    // Nothing is followed or changed until every place that is written to is known to be a plain folder and plain files:
+    // a bot with a shell could have made `run` a link to a file of the person's, and a write would follow it.
+    for (const place of [current, dir]) if (place && lstatSync(place, { throwIfNoEntry: false })?.isSymbolicLink()) throw new Error("This command's folder is a link. Botkins does not write through links.");
     if (current && current !== dir) renameSync(current, dir);
-    if (lstatSync(dir, { throwIfNoEntry: false })?.isSymbolicLink()) throw new Error("This command's folder is a link.");
     mkdirSync(dir, { recursive: true });
-    writeFileSync(join(dir, "SKILL.md"), scriptSkillFile(fields));
-    writeFileSync(join(dir, SCRIPT_FILE), fields.script, { mode: 0o600 });
+    for (const file of ["SKILL.md", SCRIPT_FILE]) if (lstatSync(join(dir, file), { throwIfNoEntry: false })?.isSymbolicLink()) throw new Error("This command's " + file + " is a link. Botkins does not write through links. Remove the link and save again.");
+    writeFilePlain(join(dir, "SKILL.md"), scriptSkillFile(fields), 0o644);
+    writeFilePlain(join(dir, SCRIPT_FILE), fields.script, 0o600);
     const scripts = (this.skillState.scripts ??= {});
     if (original && original !== id) {
       delete scripts[original];
       this.skillState.disabled = this.skillState.disabled.map((n) => (n === original ? id : n));
       for (const bot of this.ws.state.bots) if (bot.skillsOff) bot.skillsOff = bot.skillsOff.map((n) => (n === original ? id : n));
     }
-    scripts[id] = hashScript(this.scriptText(dir));
+    // The hash is of the script that was approved (the string), not of what a read of the disk gives back.
+    scripts[id] = hashScript(fields.script);
     this.changed();
     return id;
   }

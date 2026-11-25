@@ -389,7 +389,7 @@ export class Push {
     for (const device of targets) {
       // A request only the owner can answer (an approval, a secure input) goes to the owner's devices
       // whoever's chat it is: nobody else can unblock the bot. Any other goes to the chat's people.
-      if (request.dispatch && device.kind === "gadget") continue;
+      if ((request.dispatch || request.review) && device.kind === "gadget") continue;
       const ownerOnly = request.kind === "permission" || request.kind === "secure";
       if (ownerOnly ? !!device.memberId : !this.maySeeChat(device, chat)) continue;
       if (!this.wants(device, "requests") || this.present(device.id, request.chatId)) continue;

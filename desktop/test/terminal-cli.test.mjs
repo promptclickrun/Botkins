@@ -274,7 +274,7 @@ test("one message is sent and its reply printed, and a script gets the reply as 
     { working: true, stream: "Hello there", messages: [], count: 1, seen: "b", run: null },
     { working: false, stream: "", messages: [{ index: 1, role: "assistant", text: "Hello there, Sam." }], count: 2, seen: "c", run: { status: "Completed" } },
   ];
-  const answers = { "chat.main": { chatId: "c1", bot: { id: "b1", name: "Nova" } }, "chat.send": { chatId: "c1", after: 0 }, "chat.read": () => reads.shift() };
+  const answers = { "chat.main": { chatId: "c1", bot: { id: "b1", name: "Nova" } }, "chat.scriptCommand": null, "chat.send": { chatId: "c1", after: 0 }, "chat.read": () => reads.shift() };
   const live = await botkins(["chat", "Nova", "-m", "Hi"], { service: fakeService(answers) });
   assert.deepEqual([live.exit, live.out], [EXIT.ok, "Hello there\nHello there, Sam.\n"]);
   reads.push({ working: false, stream: "", messages: [{ index: 1, role: "assistant", text: "Done." }], count: 2, seen: "c", run: { status: "Completed" } });

@@ -201,7 +201,7 @@ export function controlApi(service) {
       ...(task?.intent && { intent: task.intent }),
       messages,
       count: chat.messages.length,
-      ...(request && { request: { id: request.id, kind: request.kind, title: request.title, ...(request.dispatch && { dispatch: true, detail: request.detail, label: request.label }) } }),
+      ...(request && { request: { id: request.id, kind: request.kind, title: request.title, ...(request.dispatch && { dispatch: true }), ...((request.dispatch || request.review) && { detail: request.detail, label: request.label }) } }),
       run: state().runs.find((run) => run.chatId === chat.id && (!chat.main || run.forkId === chat.activeFork)) ?? null,
     };
   };
@@ -503,9 +503,22 @@ export function controlApi(service) {
       const only = ref ? bot(ref).id : null;
       return state().chats.filter((chat) => !chat.temporary && (!only || chat.botId === only)).map((chat) => ({ id: chat.id, title: chat.title, botId: chat.botId, bot: state().bots.find((entry) => entry.id === chat.botId)?.name ?? null, messages: chat.messages.length, working: workspace.active.has(chat.id) }));
     },
-    "chat.send": ([chatId, message]) => {
+    /** The script command that a message would run, { name, args }, or null. The command line shows it to the person before it sends one. */
+    "chat.scriptCommand": ([chatId, message]) => {
+      workspace.chat(String(chatId));
+      return typeof message === "string" ? workspace.scriptCommandCandidate(message) : null;
+    },
+    /**
+     * A message that is a script command runs a script on this computer with the words after the name, which a bot's shell
+     * could choose. So it is sent only with `{ agreed: true }` as the last argument: the caller showed the person the
+     * command and its words and got a yes (the command line asks at a terminal, or takes --yes).
+     */
+    "chat.send": ([chatId, message, mark]) => {
       const chat = workspace.chat(String(chatId));
       const before = chat.messages.length;
+      const script = typeof message === "string" ? workspace.scriptCommandCandidate(message) : null;
+      if (script && !(mark !== null && typeof mark === "object" && !Array.isArray(mark) && mark.agreed === true))
+        throw new ControlError("/" + script.name + " is a script command: it runs a script on this computer with the words after its name. Show the person the command and its words, and give `{ \"agreed\": true }` as the last argument (on the command line, `botkins chat` asks at a terminal, or takes --yes).", "NEEDS_YES");
       handlers.send(chat.id, text(message, 200_000, "a message"), { delivery: "queue" });
       return { chatId: chat.id, after: before };
     },

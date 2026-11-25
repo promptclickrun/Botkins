@@ -56,6 +56,32 @@ export const SCRIPT_NAME = /^[a-z0-9][a-z0-9-]{0,63}$/;
 /** The SHA-256 of a script, as hex. */
 export const hashScript = (script) => createHash("sha256").update(String(script)).digest("hex");
 
+/**
+ * The revision that a yes is for: a hash of the command's cleaned name, description and script. The command line
+ * prints it with the script, and the socket saves nothing unless the caller names this exact one
+ * (`botkins skills add-script --yes --revision <it>`), so a yes is for the script that was shown.
+ */
+export const scriptRevision = (fields) => {
+  const { name, description, script } = cleanScriptCommand(fields);
+  return createHash("sha256").update(JSON.stringify(["script-command-v1", name, description, script])).digest("hex");
+};
+
+/** The names (lower case) that a menu's choices take: commands and skills, with their aliases. A tool takes none: it is called as `tool:<name>`. */
+export const commandNames = (choices) =>
+  new Set((choices ?? []).filter((c) => c?.kind !== "Tool" && c?.source !== "Script").flatMap((c) => [c.name, c.command, ...(c.aliases ?? [])]).filter((word) => typeof word === "string").map((word) => word.replace(/^\//, "").toLowerCase()));
+
+// What a script is not handed from Botkins' own environment: anything that looks like a secret, and every BOTKINS_ value
+// but the two that say where Botkins is (a script may run `botkins`). The person's login shell still reads their own profile.
+const SECRET_NAME = /(^|_)(TOKEN|SECRET|PASSWORD|PASSWD|PASSPHRASE|CREDENTIALS?|COOKIE|BEARER|AUTH(ORIZATION)?|PRIVATE_?KEY|API_?KEY|ACCESS_?KEY|SECRET_?KEY|SIGNING_?KEY|ENCRYPTION_?KEY|SESSION_?KEY|KEYCHAIN)S?($|_)|^NPM_CONFIG__AUTH$|_KEY$/i;
+const KEEP_BOTKINS = new Set(["BOTKINS_SOCKET", "BOTKINS_DATA_DIR"]);
+// A path to the person's ssh agent is not a key (a script that runs git over ssh needs it).
+const KEEP_NAMES = new Set(["SSH_AUTH_SOCK"]);
+export function scrubbedEnvironment(env = process.env) {
+  return Object.fromEntries(
+    Object.entries(env).filter(([name, value]) => typeof value === "string" && (name.startsWith("BOTKINS_") ? KEEP_BOTKINS.has(name) : KEEP_NAMES.has(name) || !SECRET_NAME.test(name))),
+  );
+}
+
 /** The value of `command:` in a SKILL.md header, lower case; "" when there is none. */
 export function commandKind(source) {
   const header = /^---\r?\n([\s\S]*?)\r?\n---/.exec(String(source));
@@ -123,7 +149,7 @@ export async function runScriptCommand(ws, { chat, bot, run, task, command, args
     timeoutMs: null,
     routine: false,
     input: args,
-    env: { ...process.env, BOTKINS_COMMAND: command.name, BOTKINS_ARGS: args, BOTKINS_CHAT_ID: chat.id },
+    env: { ...scrubbedEnvironment(process.env), BOTKINS_COMMAND: command.name, BOTKINS_ARGS: args, BOTKINS_CHAT_ID: chat.id },
   });
   // Quitting Botkins ends it, as it ends a routine's script.
   ws.panels.routines.scripts.add(script);
@@ -151,6 +177,7 @@ export function cleanScriptCommand({ name, description, script }) {
   if (typeof script !== "string" || !script.trim()) throw new Error("Enter the script.");
   if (script.length > SCRIPT_LENGTH) throw new Error("A script can have up to " + SCRIPT_LENGTH.toLocaleString("en-US") + " characters.");
   if (script.includes("\0")) throw new Error("A script can't have a null character.");
+  if (typeof script.isWellFormed === "function" && !script.isWellFormed()) throw new Error("A script can't have a broken character (an unpaired surrogate).");
   return { name: id, description: about, script };
 }
 
@@ -197,9 +224,14 @@ export function scriptCommandTools(ws, bot, chat, run, task) {
         const existing = ws.integrations.scriptCommands().find((item) => item.name === fields.name);
         // A name that another skill has is not taken over.
         if (!existing && ws.integrations.skills().some((skill) => skill.name === fields.name)) throw new Error("A skill named " + fields.name + " already exists. Choose another name.");
+        // A name that a model provider's own command has is refused before the person is asked.
+        await ws.assertScriptName(fields.name, existing?.name);
+        active();
         const decision = await ws.interactions.request(chat, task, {
           botId: bot.id,
           kind: "permission",
+          // The script is only in the detail: it is read in the app, never answered from a notification, a card or a gadget (desktop/link/cards.mjs).
+          review: true,
           title: (existing ? "Change the script command /" : "Add the script command /") + fields.name + "?",
           detail:
             "This script runs on this computer, with your account's access, each time you type /" + fields.name + " in a chat. No model reads it or runs it. It has no time limit; Stop ends it.\n\n" +

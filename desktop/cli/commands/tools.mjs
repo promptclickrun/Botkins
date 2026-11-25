@@ -645,14 +645,16 @@ export const tools = {
       },
       "add-script": {
         summary: "Add or change a script command: a slash command that runs a script with no model",
-        usage: "botkins skills add-script <name> --description <text> (--script <text> | --script-file <path>) [--yes]",
+        usage: "botkins skills add-script <name> --description <text> (--script <text> | --script-file <path>) [--yes --revision <hash>]",
+        asks: "--yes --revision",
         options: {
           description: { type: "string", value: "text", about: "One line that says what the command does (shown in the / menu)" },
           script: { type: "string", value: "text", about: "The script (up to 20,000 characters)" },
           "script-file": { type: "string", value: "path", about: "Read the script from a file (\"-\" reads standard input)" },
+          revision: { type: "string", value: "hash", about: "The revision of the script that was shown (printed with it); needed with --yes" },
           ...YES,
         },
-        details: "A script command is a slash command that runs a script on this computer, with no model: type /<name> some words in any chat. The script runs in your login shell (PowerShell on Windows), in the chat's project folder or the bot's own folder, and has no time limit: Stop ends it. The words after the name are in $BOTKINS_ARGS and on standard input, never part of the command. Only you add one: this shows the whole script first and asks. With no terminal it needs --yes. A name that a script command has already is changed, and its old script is gone. No bot is offered it as a skill.",
+        details: "A script command is a slash command that runs a script on this computer, with no model: type /<name> some words in any chat. The script runs in your login shell (PowerShell on Windows), in the chat's project folder or the bot's own folder, and has no time limit: Stop ends it. The words after the name are in $BOTKINS_ARGS and on standard input, never part of the command. Only a person adds one, so this shows the whole script and its revision first, on standard error, and asks (y/N at a terminal). With no terminal, run it once without --yes to read the script and its revision, show them to the person, and run it again with --yes --revision <the revision>: a yes is for that script only, and a changed script needs the new revision. A name that a script command has already is changed, and its old script is gone. No bot is offered it as a skill.",
         async run(context) {
           const name = one(context, "Give the command a name (lowercase letters, numbers and dashes).");
           const o = context.options;
@@ -660,23 +662,27 @@ export const tools = {
           if ((o.script === undefined) === (o["script-file"] === undefined)) throw usage("Give --script or --script-file, one of them.");
           const script = o.script ?? (await textFrom(context, o["script-file"], "script file"));
           if (!script.trim()) throw usage("The script is empty.");
-          const existing = (await skillResult(context, "skills.list")).skills.find((skill) => skill.name === name);
+          // The computer cleans the fields and gives the revision that a yes names (and refuses a name that a model provider has).
+          const review = await skillResult(context, "skills.review", { name, description: o.description, script });
           show(
             context,
             [
-              (existing?.command === "script" ? "This changes the script command /" : "This adds a script command: /") + safe(name),
-              "It runs this script on this computer, with your account's access, each time you type /" + safe(name) + " in a chat. No model reads it or runs it. It has no time limit; Stop ends it.",
-              "For: " + safe(o.description),
+              (review.existing ? "This changes the script command /" : "This adds a script command: /") + safe(review.name),
+              "It runs this script on this computer, with your account's access, each time you type /" + safe(review.name) + " in a chat. No model reads it or runs it. It has no time limit; Stop ends it.",
+              "For: " + safe(review.description),
               "Script:",
-              ...script.split(/\r?\n/).map((line) => "    " + safe(line.replaceAll("\t", "    "))),
+              ...review.script.split(/\r?\n/).map((line) => "    " + safe(line.replaceAll("\t", "    "))),
+              "Revision: " + review.revision,
             ].join("\n"),
           );
+          if (o.yes && o.revision === undefined) throw usage("--yes needs --revision " + review.revision + ": the revision of the script that was shown. A yes is for that script only.");
+          if (o.revision !== undefined && o.revision !== review.revision) throw usage("The revision is not the one of this script (" + review.revision + "). Show the person this script, and give its revision.");
           if (!(await confirm(context, "Save this script command?"))) {
             context.note("Nothing was saved.");
             return EXIT.failed;
           }
           context.print(
-            await skillResult(context, "skills.saveScript", { name, description: o.description, script, ...(existing?.command === "script" && { original: existing.name }) }),
+            await skillResult(context, "skills.saveScript", { name: review.name, description: review.description, script: review.script, ...(review.existing && { original: review.name }) }, { agreed: true, revision: review.revision }),
             (skill) => "Saved /" + safe(skill.name) + ". Type it in any chat. No bot is offered it as a skill.",
           );
         },

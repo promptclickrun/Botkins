@@ -2147,6 +2147,8 @@ export type RequestAnswer = {
 };
 export type AgentRequest = {
   dispatch?: true;
+  /** Its words (a script command's whole script) are read in the app: never answered from a notification, a card or a gadget. */
+  review?: true;
   nodeJob?: true;
   id: string;
   chatId: string;
