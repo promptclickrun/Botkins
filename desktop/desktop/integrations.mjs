@@ -895,7 +895,8 @@ export class Integrations {
     const added = plans.map((plan) => plan.name);
     // A folder that was imported over a script command, or under its name, is not that command (desktop/script-commands.mjs).
     if (this.skillState.scripts) {
-      for (const plan of plans) delete this.skillState.scripts[plan.name];
+      // (By the name of the command that was there, which the imported skill may spell another way, and by the imported one's own.)
+      for (const plan of plans) for (const name of [plan.existing?.name, plan.name]) if (name) delete this.skillState.scripts[name];
       if (!Object.keys(this.skillState.scripts).length) delete this.skillState.scripts;
     }
     for (const [id, name] of Object.entries(this.skillState.catalog ?? {})) if (added.includes(name) || plans.some(plan => plan.existing?.name === name)) delete this.skillState.catalog[id];

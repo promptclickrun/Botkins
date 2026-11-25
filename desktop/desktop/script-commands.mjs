@@ -66,7 +66,10 @@ export const hashScript = (script) => createHash("sha256").update(String(script)
  */
 export const scriptRevision = (fields) => {
   const { name, description, script } = cleanScriptCommand(fields);
-  return createHash("sha256").update(JSON.stringify(["script-command-v1", name, description, script])).digest("hex");
+  // `original` (the command that this one replaces, when it replaces one) is part of what the yes is for: a yes for a new /deploy
+  // can't be used to overwrite another command, and a yes for a change of one can't be used for another.
+  const original = typeof fields.original === "string" && fields.original.trim() ? fields.original.trim() : null;
+  return createHash("sha256").update(JSON.stringify(["script-command-v1", name, description, script, original])).digest("hex");
 };
 
 /** The names (lower case) that a menu's choices take: commands and skills, with their aliases. A tool takes none: it is called as `tool:<name>`. */
@@ -119,6 +122,27 @@ export function scriptInvocation(ws, text) {
   const typed = matchScriptCommand(text);
   if (!typed || RESERVED_COMMANDS.has(typed.name)) return null;
   return ws.integrations.scriptCommands().some((command) => command.name === typed.name) ? typed : null;
+}
+
+/**
+ * What already invokes the script command `name`: each routine and chat schedule whose prompt is `/name …`, and each task that is, as
+ * lines for a person to read. A command that is made (or changed) arms all of these, so the card that asks says so.
+ */
+export function whatRuns(ws, name) {
+  const invokes = (text) => matchScriptCommand(text)?.name === name;
+  const lines = [];
+  for (const { chat, entry } of ws.panels.routines.list()) {
+    if (!entry.script && invokes(entry.prompt)) lines.push("Routine " + shownText(entry.name) + ", " + shownText(ws.panels.routines.view(chat, entry).cadence) + (entry.enabled === false ? " (paused)" : "") + ": " + shownText(String(entry.prompt).slice(0, 200)));
+  }
+  for (const chat of ws.state.chats) {
+    for (const entry of chat.schedules ?? []) {
+      if (!entry.routine && invokes(entry.prompt)) lines.push("A schedule in the chat " + shownText(chat.title ?? "") + ": " + shownText(String(entry.prompt).slice(0, 200)) + (entry.recurring ? ", repeating" : ", once"));
+    }
+  }
+  for (const task of ws.tasks?.all ?? []) {
+    if (!["done", "archived"].includes(task.status) && invokes(task.body?.trim() || task.title)) lines.push("Task " + shownText(task.title) + " (" + task.status + ")");
+  }
+  return lines;
 }
 
 /** What a person is told of an invocation before it may be scheduled: the command, its words, and its whole script. */
@@ -288,7 +312,10 @@ export function scriptCommandTools(ws, bot, chat, run, task) {
           title: (existing ? "Change the script command /" : "Add the script command /") + fields.name + "?",
           detail:
             "This script runs on this computer, with your account's access, each time you type /" + fields.name + " in a chat. No model reads it or runs it. It has no time limit; Stop ends it.\n\n" +
-            "Command: /" + fields.name + "\nFor: " + shownText(fields.description) + "\nRuns in: the chat's project folder, or the bot's own folder\n\nScript:\n" + shownScript(fields.script),
+            "Command: /" + fields.name + "\nFor: " + shownText(fields.description) + "\nRuns in: the chat's project folder, or the bot's own folder" +
+            // What is already set up to type it: saving the command arms each of these.
+            (whatRuns(ws, fields.name).length ? "\n\nAlso runs on (saving this makes each of these run the script):\n" + whatRuns(ws, fields.name).map((line) => "- " + line).join("\n") : "") +
+            "\n\nScript:\n" + shownScript(fields.script),
         });
         active();
         if (decision.action !== "approve") return REFUSED;

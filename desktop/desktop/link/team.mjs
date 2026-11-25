@@ -1015,6 +1015,17 @@ export function authorize(principal, team, method, args = [], lookups = {}) {
   else if (method === "saveSkill" && args[0]?.original) action = "manage";
   else if (method === "setChatFlags" && isMarkReadOnly(args[1])) action = "view";
   if (!hasAction(role.perms, scope, action)) return "Your team role can't do that.";
+  // A script command runs on the owner's computer, so only the owner removes, switches off, replaces or edits one ("script-commands-v1"),
+  // whatever a role may do with other skills. `scriptCommand` names the ones Botkins keeps. (The app checks again, by name, for any call
+  // from a paired device: desktop/device-call.mjs.)
+  const scriptNamed = (name) => typeof name === "string" && !!lookup("scriptCommand", name, lookups);
+  if (
+    ((method === "removeSkill" || method === "setSkillEnabled") && scriptNamed(args[0])) ||
+    (method === "saveSkill" && (scriptNamed(args[0]?.name) || scriptNamed(args[0]?.original))) ||
+    (method === "skills.upload" && Array.isArray(args[0]?.replace) && args[0].replace.some(scriptNamed)) ||
+    (method === "skillsCatalog.install" && Array.isArray(args[1]) && args[1].some(scriptNamed))
+  )
+    return "Only the owner can remove, turn off, replace or edit a script command.";
   // A routine's script runs on the owner's computer, so only the owner writes or changes one ("routine-scripts-v1").
   if ((method === "createRoutine" && args[0]?.script != null) || (method === "updateRoutine" && args[1]?.script !== undefined)) return "Only the owner can add or change a routine's script.";
   if (((method === "skills.upload" && args[0]?.replace?.length) || (method === "skillsCatalog.install" && args[1]?.length)) && !hasAction(role.perms, "skills", "manage")) return "Your team role cannot replace skills.";

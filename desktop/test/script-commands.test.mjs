@@ -953,3 +953,56 @@ test("a gadget cannot answer a request that holds a script, and the link lets on
   assert.throws(() => remoteArgs("respond", ["q1", { action: "approve", reviewed: "yes" }]), /one approval action/);
   assert.throws(() => remoteArgs("respond", ["q1", { action: "approve", reviewed: true, extra: 1 }]), /one approval action/);
 });
+
+test("only the owner removes, switches off, replaces or edits a script command, whatever a member may do to other skills", () => {
+  const team = { members: [{ id: "m_a", groupId: "g" }], groups: [{ id: "g", roleId: "r" }], roles: [{ id: "r", bots: "all", perms: { skills: ["read", "use", "create", "manage", "delete"] } }] };
+  const member = { kind: "member", memberId: "m_a" };
+  const owner = { kind: "owner" };
+  const lookups = { scriptCommand: (name) => name === "deploy" };
+  const calls = [
+    ["removeSkill", ["deploy"]],
+    ["setSkillEnabled", ["deploy", false]],
+    ["saveSkill", [{ name: "deploy", description: "x", instructions: "y" }]],
+    ["saveSkill", [{ original: "deploy", name: "other", description: "x", instructions: "y" }]],
+    ["skills.upload", [{ name: "deploy.zip", data: "x", replace: ["deploy"] }]],
+    ["skillsCatalog.install", ["some-id", ["deploy"]]],
+  ];
+  for (const [method, args] of calls) {
+    assert.match(authorize(member, team, method, args, lookups), /Only the owner can remove, turn off, replace or edit a script command/, method);
+    assert.equal(authorize(owner, team, method, args, lookups), "", "the owner may: " + method);
+  }
+  // Other skills are the role's, as before.
+  assert.equal(authorize(member, team, "removeSkill", ["notes"], lookups), "");
+  assert.equal(authorize(member, team, "setSkillEnabled", ["notes", false], lookups), "");
+});
+
+test("a member's call from a paired device can't remove or switch off a script command, even past the link", async (t) => {
+  const { ws } = setup(t);
+  save(ws, "deploy", "echo deploying", "Deploys.");
+  const { deviceCall } = await import("../desktop/device-call.mjs");
+  const removed = [];
+  const handlers = { removeSkill: (name) => removed.push(name), setSkillEnabled: (name) => removed.push(name) };
+  const call = deviceCall({ workspace: ws, handlers, folders: {} });
+  assert.equal(typeof call, "function");
+  const principal = { kind: "member", memberId: "m_a" };
+  for (const [name, args] of [["removeSkill", ["deploy"]], ["setSkillEnabled", ["deploy", false]]]) {
+    await assert.rejects(call(name, args, { principal }), /Only the owner can remove, turn off or replace a script command/, name);
+  }
+  assert.deepEqual(removed, []);
+  // The owner's own call goes through.
+  await call("setSkillEnabled", ["deploy", false], { principal: { kind: "owner" } });
+  assert.deepEqual(removed, ["deploy"]);
+});
+
+test("a yes names which command it replaces, and the card lists what already types the command", async (t) => {
+  const { ws } = setup(t);
+  const fields = { name: "deploy", description: "Deploys.", script: "echo deploying" };
+  assert.notEqual(scriptRevision(fields), scriptRevision({ ...fields, original: "other" }), "a yes for a new /deploy isn't a yes to overwrite /other");
+  assert.notEqual(scriptRevision({ ...fields, original: "a" }), scriptRevision({ ...fields, original: "b" }));
+  assert.equal(scriptRevision({ ...fields, original: "  " }), scriptRevision(fields));
+  // A routine a bot set up before the command existed: approving the command arms it, so the card says so.
+  ws.panels.routines.create({ botId: "pip", name: "Nightly", prompt: "/deploy --prod", cadence: { kind: "daily", time: "09:00" } }, Date.UTC(2026, 10, 17, 12));
+  const { tools, views } = botTools(ws, { answer: { action: "deny" } });
+  assert.equal(await tools.get("script_command_create").handler(fields), "The person declined.");
+  assert.match(views[0].detail, /Also runs on \(saving this makes each of these run the script\):\n- Routine Nightly/);
+});

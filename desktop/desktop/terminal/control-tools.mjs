@@ -9,7 +9,7 @@
 // A secret (an environment value, a header's value, a client secret) goes in through these calls
 // and never comes out: every answer names the keys that have a value, not the values.
 import { parseServers } from "../integrations.mjs";
-import { cleanScriptCommand, scriptRevision } from "../script-commands.mjs";
+import { cleanScriptCommand, scriptRevision, whatRuns } from "../script-commands.mjs";
 import { thingForLog } from "./coverage.mjs";
 import { ControlError } from "./socket.mjs";
 
@@ -269,7 +269,7 @@ export function toolsApi({ workspace, handlers, bot, signIns, log }) {
       const fields = cleanScriptCommand(data);
       const existing = skillList().skills.find((entry) => entry.name === fields.name)?.command === "script";
       await workspace.assertScriptName(fields.name, existing ? fields.name : undefined);
-      return { ...fields, existing, revision: scriptRevision(fields) };
+      return { ...fields, existing, ...(existing && { original: fields.name }), revision: scriptRevision({ ...fields, ...(existing && { original: fields.name }) }), ...(whatRuns(workspace, fields.name).length && { alsoRunsOn: whatRuns(workspace, fields.name) }) };
     },
     /**
      * A script command, or with `original` a change to one: { name, description, script, original? }. It runs on this computer

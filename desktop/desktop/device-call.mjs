@@ -51,6 +51,12 @@ export function deviceCall({ workspace, handlers, folders }) {
     // An answer to a question that outlived its turn becomes the answerer's next message, so it says who they are.
     const callArgs = member && name === "send" ? [checked[0], checked[1], { ...(checked[2] ?? {}), author: member }] : name === "respond" ? [checked[0], checked[1], member?.memberId ?? "owner"] : checked;
     if (name === "recordVoiceLine") return handlers[name](checked[0], checked[1], checked[2], checked[3], member, checked[4]);
+    // A script command is the owner's to remove, turn off or replace, whatever a member's role lets them do to a skill (desktop/script-commands.mjs).
+    if (member) {
+      const names = name === "removeSkill" || name === "setSkillEnabled" ? [checked[0]] : name === "skills.upload" ? checked[0]?.replace : name === "skillsCatalog.install" ? checked[1] : [];
+      const scripts = workspace.state.skills?.scripts ?? {};
+      if (Array.isArray(names) && names.some((skill) => typeof skill === "string" && Object.hasOwn(scripts, skill))) throw new Error("Only the owner can remove, turn off or replace a script command.");
+    }
     // A member's menu lists the script commands only when their role may use skills ("script-commands-v1").
     if (member && name === "catalog") return handlers.catalog(checked[0], checked[1], checked[2], member.memberId);
     if (member) {

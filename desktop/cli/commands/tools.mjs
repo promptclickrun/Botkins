@@ -672,6 +672,7 @@ export const tools = {
               "For: " + safe(review.description),
               "Script:",
               ...review.script.split(/\r?\n/).map((line) => "    " + safe(line.replaceAll("\t", "    "))),
+              ...(review.alsoRunsOn?.length ? ["Also runs on (saving this makes each of these run the script):", ...review.alsoRunsOn.map((line) => "  - " + line)] : []),
               "Revision: " + review.revision,
             ].join("\n"),
           );
