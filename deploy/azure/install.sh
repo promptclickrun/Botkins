@@ -241,8 +241,13 @@ if [ "$MODE" = screen ]; then
     curl -fsSL https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb -o /tmp/google-chrome.deb
     apt install /tmp/google-chrome.deb
     rm -f /tmp/google-chrome.deb
-  elif [ "$ARCH" != amd64 ] && ! command -v chromium >/dev/null; then
-    apt install netsurf-gtk
+  elif [ "$ARCH" != amd64 ]; then
+    # Use the same signed release's sandboxed browser as a regular Linux host.
+    if [ -f /opt/botkins/current/docker/desktop/install-tools ]; then
+      BOTKINS_DESKTOP=managed /bin/sh /opt/botkins/current/docker/desktop/install-tools
+    elif ! command -v chromium >/dev/null; then
+      apt install netsurf-gtk
+    fi
   fi
   install -d -o botkins -g botkins -m 0700 /var/lib/botkins/display
   install -d -o botkins -g botkins -m 0700 /var/lib/botkins/display/home

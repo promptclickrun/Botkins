@@ -61,12 +61,12 @@ fi
 
 # This container started the display above, so it gets the Botkins desktop: the kit's background,
 # and Openbox with the Botkins theme and menu (restarted if it stops). See docker/desktop.
+export BOTKINS_WORKSPACE_APP_DIR="$(pwd -P)"
 BOTKINS_DESKTOP_MANAGED=1 /usr/local/share/botkins-desktop/botkins-desktop >/tmp/botkins-openbox.log 2>&1 &
 wm_pid=$!
 
-# Use the normal Electron entry point with a virtual display. This intentionally does
-# not use the host's process or filesystem and does not enable Electron's Node mode.
+# Keep the workspace running behind its desktop. Open Botkins in the menu shows its window.
 unset ELECTRON_RUN_AS_NODE
-node scripts/start.cjs >/tmp/botkins-electron.log 2>&1 &
+node scripts/start.cjs --hidden >/tmp/botkins-electron.log 2>&1 &
 app_pid=$!
 wait "$app_pid"

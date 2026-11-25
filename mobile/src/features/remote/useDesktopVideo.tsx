@@ -13,6 +13,7 @@ type Stats = { width: number; height: number; fps: number };
 type Report = { status: "starting" | "live" | "fallback"; stats: Stats | null; error?: string };
 type Options = { enabled: boolean; computer?: string; display?: string; quality: QualityId; owner?: ScreenFeedOwner };
 type Player = { computer: string; display: string; quality: QualityId; owner: ScreenFeedOwner; report: (update: Report) => void };
+const MAX_BASE64_LENGTH = Math.ceil(256 * 1024 / 3) * 4;
 const first: Report = { status: "starting", stats: null };
 
 export function useDesktopVideo({ enabled, computer, display, quality, owner = "Remote" }: Options) {
@@ -87,7 +88,7 @@ function DesktopPlayer({ computer, display, quality, owner, report }: Player) {
         reading = true;
         const bytes = await link.read(seq++);
         reading = false;
-        if (typeof bytes !== "string" || !bytes.length || bytes.length > 349528) return fail();
+        if (typeof bytes !== "string" || !bytes.length || bytes.length > MAX_BASE64_LENGTH) return fail();
         post("bytes", bytes);
       } else if (type === "playing" && opened && value?.width > 0 && value?.height > 0) {
         clearTimeout(startup);

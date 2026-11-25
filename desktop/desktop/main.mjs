@@ -310,10 +310,11 @@ app.on("open-url", (event, url) => {
 if (!app.requestSingleInstanceLock()) app.quit();
 else
   app.whenReady().then(async () => {
+    const windowReady = Promise.withResolvers();
     // Opening Botkins while it runs shows its window. A second start by the computer at sign-in stays quiet.
     app.on("second-instance", (_event, argv) => {
       const url = teamUrlFrom(argv);
-      if (!url && !argv.includes(HIDDEN_FLAG)) showWindow();
+      if (!url && !argv.includes(HIDDEN_FLAG)) void windowReady.promise.then(showWindow);
       if (url) openTeamJoin(url);
     });
     app.on("activate", showWindow);
@@ -670,8 +671,10 @@ else
     } catch (error) {
       console.error("Run at startup:", error.message);
     }
-    // Started by the computer at sign-in: no window, only the icon. Any other start opens the window.
+    // The managed desktop and login items start quietly. A menu request that arrived during
+    // startup can open the window once the renderer's handlers and the workspace are ready.
     if (!startedHidden()) openWindow();
+    windowReady.resolve();
     syncTray();
     // The control socket, and the `botkins` command for a bot's shell (desktop/terminal/reach.mjs). A trial
     // run (tests, a development copy) has none, except the workspace of the two-container host, which is

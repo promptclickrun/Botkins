@@ -37,6 +37,12 @@ term() { # <title> [command...]
 
 case "${1:-}" in
   botkins)
+    # The split workspace starts with no window. Its regular launcher asks the running
+    # Electron instance to show the existing workspace, including after its window was closed.
+    if [ -n "${BOTKINS_WORKSPACE_APP_DIR:-}" ]; then
+      cd "$BOTKINS_WORKSPACE_APP_DIR" || exit 1
+      exec node scripts/start.cjs
+    fi
     win=$(xdotool search --class '^botkins(-desktop)?$' 2>/dev/null | head -n 1)
     if [ -n "$win" ]; then exec xdotool windowactivate "$win"; fi
     if command -v botkins >/dev/null; then

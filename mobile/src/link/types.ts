@@ -432,7 +432,19 @@ export type HostPart = {
 /** A ticket to turn the screen on: the phone signs it and sends it back within the minute it lasts. */
 export type ScreenTicket = { ticket: string; expiresAt: number };
 export type ScreenDisplay = { id: string; label: string; width: number; height: number; primary: boolean };
-export type ScreenInfo = { video?: boolean; superKey?: boolean; pointer?: { display: string; x: number; y: number }; mode: ScreenMode; displays: ScreenDisplay[]; canView: boolean; canControl: boolean; /** Why it can't, in one line ("Allow screen recording for Botkins on your computer"). */ problem?: string };
+export type ScreenInfo = {
+  mode: ScreenMode;
+  displays: ScreenDisplay[];
+  canView: boolean;
+  canControl: boolean;
+  /** The host offers a continuous encoded stream on this connection. */
+  video?: boolean;
+  /** The host accepts the Windows/Super modifier as a distinct key. */
+  superKey?: boolean;
+  pointer?: { display: string; x: number; y: number };
+  /** The host's explanation when viewing or input is unavailable. */
+  problem?: string;
+};
 /** One picture of a display. `jpeg` (base64) is left out when nothing changed since frame `after`. */
 export type ScreenFrame = { seq: number; display: string; width: number; height: number; jpeg?: string };
 /** Positions are fractions (0 to 1) of the display, so the picture's size doesn't matter. */

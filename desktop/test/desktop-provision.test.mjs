@@ -1,5 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import { prepareDesktopUpdate, waitForDesktopProvision } from "../desktop/terminal/desktop-provision.mjs";
 
 function fixture({ effective = "", installed = false, active = false } = {}) {
@@ -44,4 +46,25 @@ test("the new service waits for a slow install already running outside the old u
     return { code: 0, stdout: states.shift() };
   }, pause: async () => { pauses++; } });
   assert.equal(pauses, 2);
+});
+
+test("a host with only NetSurf and Epiphany still needs a full browser; native Firefox satisfies the repeat check", { skip: process.platform !== "linux" }, () => {
+  const script = fileURLToPath(new URL("../docker/desktop/install-tools", import.meta.url));
+  // Exercise the real read-only check. Model the executables on the two fresh Ubuntu hosts
+  // without letting unrelated software installed on this test machine change the outcome.
+  const check = `
+    command() {
+      if [ "$1" != -v ]; then builtin command "$@"; return; fi
+      case "$2" in
+        Xvfb|xvfb-run|xauth|xdpyinfo|xprop|hsetroot|openbox|dbus-run-session|xdotool|ffmpeg|xterm|pcmanfm|epiphany|netsurf-gtk) echo "/usr/bin/$2";;
+        firefox-esr) [ "$modern" = yes ] && echo /usr/bin/firefox-esr;;
+        *) return 1;;
+      esac
+    }
+    modern=$2
+    . "$1" --check
+  `;
+  const probe = modern => spawnSync("/bin/bash", ["-c", check, "probe", script, modern], { encoding: "utf8" });
+  assert.equal(probe("no").status, 1);
+  assert.equal(probe("yes").status, 0);
 });

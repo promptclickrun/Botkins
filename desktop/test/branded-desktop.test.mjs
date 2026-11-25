@@ -2,8 +2,9 @@
 // Botkins starts itself. A managed display gets the brand; a display a person owns is never changed.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { chmodSync, existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { once } from "node:events";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -187,6 +188,71 @@ test("a managed session authenticates a new X display, renders the mark and swit
   assert.notEqual(x("xdpyinfo").status, 0, "stopping the service closes its display");
 });
 
+test("the split workspace starts at its desktop, its Open Botkins menu restores the app, and an ordinary launch shows its window", async t => {
+  const tools = ["Xvfb", "openbox", "xdotool", "xprop", "hsetroot"];
+  if (process.platform !== "linux" || tools.some(name => spawnSync("sh", ["-c", 'command -v "$1"', "sh", name]).status !== 0)) return t.skip("Requires the X11 desktop tools");
+  async function until(check, message) {
+    const end = Date.now() + 15_000;
+    while (Date.now() < end) {
+      if (check()) return;
+      await delay(50);
+    }
+    assert.fail(message);
+  }
+  const dir = mkdtempSync(join(tmpdir(), "bk-split-window-"));
+  let app, wm;
+  const server = spawn("Xvfb", ["-displayfd", "1", "-screen", "0", "1024x768x24", "-noreset", "-nolisten", "tcp"], { stdio: ["ignore", "pipe", "ignore"] });
+  const exited = once(server, "exit");
+  const stop = async child => {
+    if (!child || child.exitCode !== null || child.signalCode) return;
+    const ended = once(child, "exit");
+    process.kill(-child.pid, "SIGTERM");
+    await ended;
+  };
+  t.after(async () => {
+    await stop(app); await stop(wm);
+    server.kill(); await exited;
+    rmSync(dir, { recursive: true, force: true, maxRetries: 5 });
+  });
+  const [number] = await once(server.stdout, "data", { signal: AbortSignal.timeout(10_000) });
+  const env = { ...process.env, HOME: dir, DISPLAY: ":" + String(number).trim(), XDG_SESSION_TYPE: "x11", XDG_RUNTIME_DIR: dir,
+    XDG_CONFIG_HOME: join(dir, "config"), XDG_CACHE_HOME: join(dir, "cache"), BOTKINS_DATA_DIR: join(dir, "managed"),
+    BOTKINS_WORKSPACE_SOCKET: join(dir, "backend.sock"), BOTKINS_WORKSPACE_APP_DIR: desktopDir, ELECTRON_DISABLE_SANDBOX: "1" };
+  delete env.ELECTRON_RUN_AS_NODE;
+  delete env.XAUTHORITY;
+  delete env.DBUS_SESSION_BUS_ADDRESS;
+  delete env.WAYLAND_DISPLAY;
+  const x = (file, args) => spawnSync(file, args, { env, timeout: 2000, encoding: "utf8" });
+  const openWindows = () => (x("xprop", ["-root", "_NET_CLIENT_LIST"]).stdout?.match(/0x[0-9a-f]+/gi) ?? [])
+    .filter(id => /Botkins/i.test(x("xprop", ["-id", id, "_NET_WM_NAME"]).stdout));
+  const launch = (args, environment) => spawn(process.execPath, ["scripts/start.cjs", ...args], { env: environment, cwd: desktopDir, detached: true, stdio: "ignore" });
+  wm = spawn(join(kit, "botkins-desktop"), [], { env: { ...env, BOTKINS_DESKTOP_MANAGED: "1" }, detached: true, stdio: "ignore" });
+  await until(() => /0x[1-9a-f]/i.test(x("xprop", ["-root", "_NET_SUPPORTING_WM_CHECK"]).stdout), "Openbox did not start");
+
+  app = launch(["--hidden"], env);
+  await until(() => existsSync(join(env.BOTKINS_DATA_DIR, "run", "botkins.sock")), "the split Electron workspace did not finish starting");
+  assert.deepEqual(openWindows(), [], "Botkins covered its idle desktop");
+  x("xdotool", ["key", "super+space"]);
+  await delay(150);
+  x("xdotool", ["key", "Home", "Return"]);
+  await until(() => openWindows().length === 1, "Open Botkins did not show the workspace window");
+  const [first] = openWindows();
+  x("xdotool", ["windowminimize", first]);
+  await until(() => /Iconic/.test(x("xprop", ["-id", first, "WM_STATE"]).stdout), "could not minimize the workspace");
+  x("xdotool", ["key", "super+space"]);
+  await delay(150);
+  x("xdotool", ["key", "Home", "Return"]);
+  await until(() => /Normal/.test(x("xprop", ["-id", first, "WM_STATE"]).stdout), "Open Botkins did not restore the same window");
+
+  await stop(app);
+  await until(() => openWindows().length === 0, "the split workspace did not exit");
+  const ordinary = { ...env, BOTKINS_DATA_DIR: join(dir, "ordinary") };
+  delete ordinary.BOTKINS_WORKSPACE_SOCKET;
+  delete ordinary.BOTKINS_WORKSPACE_APP_DIR;
+  app = launch([], ordinary);
+  await until(() => openWindows().length === 1, "an ordinary start did not show Botkins");
+});
+
 test("the Docker workspace and the Azure display, which Botkins starts, run the kit", () => {
   const dockerfile = read(join(desktopDir, "Dockerfile"));
   assert.match(dockerfile, /^COPY docker\/desktop \/usr\/local\/share\/botkins-desktop$/m);
@@ -195,6 +261,8 @@ test("the Docker workspace and the Azure display, which Botkins starts, run the 
   const xvfb = entrypoint.indexOf("Xvfb \"$DISPLAY\"");
   const desktop = entrypoint.indexOf("BOTKINS_DESKTOP_MANAGED=1 /usr/local/share/botkins-desktop/botkins-desktop");
   assert.ok(xvfb > 0 && desktop > xvfb, "the workspace starts its own Xvfb, then the Botkins desktop on it");
+  assert.match(entrypoint.slice(xvfb, desktop), /export BOTKINS_WORKSPACE_APP_DIR=/, "the workspace gives its menu the app to reopen");
+  assert.match(entrypoint, /^node scripts\/start\.cjs --hidden\s/m, "the split workspace starts quietly behind its desktop");
   // It refuses a display that already answers, and brands only while its own Xvfb is alive.
   const taken = entrypoint.indexOf("if xdpyinfo -display \"$DISPLAY\" >/dev/null 2>&1; then");
   assert.ok(taken > 0 && taken < xvfb, "a display that already answers is refused before Xvfb starts");
