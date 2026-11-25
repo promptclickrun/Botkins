@@ -5,30 +5,42 @@
 //   (settings.harnessPicked) is kept; while nobody chose, a default whose program isn't on this
 //   computer gives way to the next in the order (Harness.effective).
 //   "copilot"   One harness for every plan. The Copilot runtime runs the turn, and the model's own
-//               plan answers the model requests: GitHub Copilot's models as always, a ChatGPT plan
-//               and a Claude plan through the gateway (gateway.mjs). Skills, tools, MCP servers
-//               and their sign-ins, plugins and approvals are then the same whichever model a chat
-//               uses, because one program carries them.
+//               plan answers the model requests: GitHub Copilot's models as always, and a ChatGPT
+//               plan, a Claude plan and OpenCode's models through the gateway (gateway.mjs).
+//               Skills, tools, MCP servers and their sign-ins, plugins and approvals are then the
+//               same whichever model a chat uses, because one program carries them.
 //   "provider"  Each provider's own tool runs the turn, as before: Codex for ChatGPT, Claude Code
-//               for Claude, the Copilot runtime for GitHub Copilot.
+//               for Claude, the Copilot runtime for GitHub Copilot, OpenCode for its models.
 //   "pi"        Pi (pi.dev, desktop/providers/pi) runs the turns of ChatGPT and Claude plan
-//               models, and the plan answers through the same gateway. GitHub Copilot's models
-//               stay on the Copilot runtime, which their plan needs.
-//   "omp"       OMP (omp.sh), the enhanced Pi harness, runs the same plan models through the
-//               same gateway and Botkins safety layer.
+//               models, GitHub Copilot's models and OpenCode's models, each answered through the
+//               same gateway.
+//   "omp"       OMP (omp.sh), the enhanced Pi harness, runs the same models through the same
+//               gateway and Botkins safety layer.
+//
+// How the gateway reaches each provider's models (no sign-in ever reaches a harness):
+//   ChatGPT   the person's ChatGPT plan, with Codex's sign-in (chatgpt.mjs)
+//   Claude    the person's Claude plan, one turn of Claude Code at a time (claude.mjs)
+//   Copilot   GitHub Copilot's model API, signed with headers a Copilot runtime of Botkins' own
+//             lends (providers/copilot/relay.mjs, copilot.mjs); Botkins never reads the keychain.
+//             Copilot's "auto" model is chosen inside the runtime, so it stays on the runtime.
+//   OpenCode  one model step of an OpenCode session that can do nothing else (opencode.mjs);
+//             OpenCode keeps its sign-ins.
 //
 // OpenRouter, Azure Foundry and an OpenAI endpoint (desktop/providers/keyed) are model endpoints
 // with no program of their own, so a harness always runs their turns: Pi or OMP when one of
 // those is chosen, Pi (else OMP) when "provider" is chosen, the Copilot runtime when "copilot"
 // is. The person's key stays in the gateway (gateway.mjs, /key/<provider>).
 //
-// OpenCode and the ACP agents are whole agents, not model endpoints, so they always run
-// themselves, whichever is chosen.
+// The ACP agents (desktop/providers/acp) are whole agents with no model endpoint of their own:
+// the Agent Client Protocol carries prompts and tool calls of the agent's own loop, never one
+// model request, so they always run themselves, whichever is chosen.
 import { join } from "node:path";
 import { Gateway } from "./gateway.mjs";
+import { OpenCodeRelay } from "./opencode.mjs";
 import { chatgptSignIn } from "./chatgpt.mjs";
 import { friendlyModel } from "../modelnames.mjs";
 import { KEYED, KEYED_IDS } from "../providers/keyed/config.mjs";
+import { copilotApi } from "../providers/copilot/relay.mjs";
 
 export const HARNESSES = ["pi", "provider", "copilot", "omp"];
 export const DEFAULT_HARNESS = "pi";
@@ -51,9 +63,12 @@ const PI_COMPATIBLE = new Set([PI, OMP]);
  * the name the runtime knows the connection by, and the format it speaks to the gateway.
  */
 export const PLANS = {
-  codex: { name: "chatgpt", type: "openai", wireApi: "responses", path: "/chatgpt" },
-  claude: { name: "claude", type: "anthropic", path: "/claude" },
+  codex: { name: "chatgpt", type: "openai", wireApi: "responses", path: "/chatgpt", speed: true },
+  claude: { name: "claude", type: "anthropic", path: "/claude", speed: true },
+  opencode: { name: "opencode", type: "openai", wireApi: "completions", path: "/opencode" },
 };
+/** Copilot's model that the runtime itself chooses a model for: only the runtime can run it. */
+export const COPILOT_AUTO = "auto";
 
 /**
  * A plan's model as the Copilot runtime is told of it. The runtime can't look these models up, and
@@ -95,16 +110,29 @@ export function planModel(provider, model) {
  * instructions as `instructions`, which Pi sends only when it isn't told to use a developer message.
  */
 export const PI_PLANS = {
-  codex: { name: "botkins-chatgpt", title: "ChatGPT", api: "openai-responses", path: "/chatgpt", compat: { supportsDeveloperRole: false } },
-  claude: { name: "botkins-claude", title: "Claude", api: "anthropic-messages", path: "/claude" },
+  codex: { name: "botkins-chatgpt", title: "ChatGPT", api: "openai-responses", path: "/chatgpt", compat: { supportsDeveloperRole: false }, speed: true },
+  claude: { name: "botkins-claude", title: "Claude", api: "anthropic-messages", path: "/claude", speed: true },
+  // The relay reads every system message, and OpenCode keeps no store: Pi is told so.
+  opencode: { name: "botkins-opencode", title: "OpenCode", api: "openai-completions", path: "/opencode", compat: { supportsDeveloperRole: false, supportsStore: false } },
+};
+/**
+ * GitHub Copilot's connections for Pi and OMP: one for each API Copilot's models speak, since a
+ * connection has one (copilotApi in providers/copilot/relay.mjs says which a model speaks).
+ */
+export const COPILOT_CONNECTIONS = {
+  messages: { name: "botkins-copilot-claude", title: "GitHub Copilot (Claude)", api: "anthropic-messages" },
+  responses: { name: "botkins-copilot", title: "GitHub Copilot", api: "openai-responses", authHeader: true },
+  completions: { name: "botkins-copilot-chat", title: "GitHub Copilot (Chat Completions)", api: "openai-completions", authHeader: true, compat: { supportsDeveloperRole: false, supportsStore: false } },
 };
 /**
  * A plan's model as Pi is told of it. Pi needs a window and a reply size; a model that states
- * neither gets Pi's own defaults. Pi reads `compat` from each model, not from its connection.
+ * neither gets Pi's own defaults. Pi reads `compat` from each model, not from its connection. A
+ * model that thinks only adaptively says so, or Pi asks it for a thinking budget it refuses.
  */
 export function piModel(model, compat) {
+  const told = model.adaptiveThinking ? { ...compat, forceAdaptiveThinking: true } : compat;
   return {
-    ...(compat && { compat }),
+    ...(told && { compat: told }),
     id: model.id,
     name: model.name ?? friendlyModel(model.id),
     reasoning: (model.efforts?.length ?? 0) > 0,
@@ -151,9 +179,18 @@ export class Harness {
         },
         chatgpt: codex && { signIn: () => chatgptSignIn(), renew: () => codex.renewSignIn?.() },
         keyed: (id) => this.providers.byId.get(id)?.connection?.() ?? null,
+        copilot: () => this.host?.relay?.() ?? null,
+        opencode: () => this.opencodeRelay(),
         claude: claude && (async () => ({ file: await claude.locate(), env: await claude.env(), cwd: join(dir, "harness", "claude"), bridge, report: (modelUsage) => claude.noteLimits?.(modelUsage) })),
         log: (line) => console.error(line),
       });
+  }
+  /** OpenCode's models for another harness (opencode.mjs), when this app has OpenCode. */
+  opencodeRelay() {
+    const provider = this.providers.byId.get("opencode");
+    if (!provider || typeof provider.server !== "function") return null;
+    this.relayed ??= new OpenCodeRelay({ provider, bridge: this.bridge, dir: join(this.dir, "harness", "opencode"), log: (line) => console.error(line) });
+    return this.relayed;
   }
   /** The Copilot runtime, when this app has it. */
   get host() {
@@ -174,10 +211,6 @@ export class Harness {
   get omp() {
     return this.providers.byId.get(OMP) ?? null;
   }
-  /**
-   * Which harness runs a selection's turns when it isn't the model's own provider: "copilot" (the
-   * Copilot runtime), "pi", "omp", or null. Only a plan the gateway carries can be run by another.
-   */
   /**
    * The harness that runs turns: the person's choice, or while nobody chose, the default, or the
    * next in the order when the default's program isn't on this computer (as far as `checkPrograms`
@@ -202,14 +235,30 @@ export class Harness {
     ).then(() => {});
     return this.checking;
   }
+  /**
+   * Which harness runs a selection's turns when it isn't the model's own provider: "copilot" (the
+   * Copilot runtime), "pi", "omp", or null (the provider runs them itself).
+   *   ChatGPT, Claude, OpenCode  the chosen harness; "provider" leaves each to its own program
+   *   GitHub Copilot             Pi or OMP when chosen; its own runtime otherwise (that is the
+   *                              "copilot" harness), and always for its "auto" model
+   *   a key provider             always a harness (keyedVia)
+   *   an ACP agent               itself: it is a whole agent, with no model endpoint
+   */
   via(selection) {
     const owner = this.providers.for(selection);
     const choice = this.effective();
     if (KEYED_IDS.includes(owner.id)) return this.keyedVia(choice);
+    if (owner.id === HOST) return this.copilotVia(choice, selection);
     if (!Object.hasOwn(PLANS, owner.id)) return null;
     if (choice === "copilot" && this.host && owner !== this.host) return HOST;
     if (PI_COMPATIBLE.has(choice) && this.providers.byId.has(choice)) return choice;
     return null;
+  }
+  /** GitHub Copilot's models go to Pi or OMP when one is chosen and the runtime can lend its sign-in. */
+  copilotVia(choice, selection) {
+    if (!PI_COMPATIBLE.has(choice) || !this.providers.byId.has(choice)) return null;
+    if (selection.model === COPILOT_AUTO || typeof this.host?.relay !== "function" || !this.host.relay()) return null;
+    return choice;
   }
   /**
    * The route of a key provider's turns. They have no program, so every choice has one: Pi or OMP
@@ -262,6 +311,13 @@ export class Harness {
     /** The connection that serves the selected model, when its provider is a key provider. */
     const keySource = () => keyConnection(owner.id, owner.apiFor?.(selection.model) ?? listed(owner.id).find((model) => model.id === selection.model)?.api ?? "completions");
     if (PI_COMPATIBLE.has(route)) {
+      // GitHub Copilot's models, by the API each speaks (COPILOT_CONNECTIONS). The selected model's
+      // API is looked up in GitHub's own list when it is a Copilot model; the others go by what was
+      // last looked up, else by their names.
+      const copilot = this.copilotRelay();
+      const copilotModels = copilot ? listed(HOST).filter((model) => model.id !== COPILOT_AUTO) : [];
+      const apis = copilotModels.length ? await this.copilotApis(owner.id === HOST ? selection.model : null) : new Map();
+      const apiOf = (id) => apis.get(id) ?? copilotApi(id);
       // Pi and OMP are given a connection for each plan that has models, with those models.
       const providers = [
         ...Object.entries(PI_PLANS)
@@ -269,7 +325,15 @@ export class Harness {
           .filter(({ models }) => models.length)
           .map(({ each, models }) => ({
             name: each.name,
-            config: { name: each.title, baseUrl: base + each.path + speedPath, api: each.api, apiKey: this.gateway.secret, ...(each.api === "openai-responses" && { authHeader: true }), models: models.map((model) => piModel(model, each.compat)) },
+            config: { name: each.title, baseUrl: base + each.path + (each.speed ? speedPath : ""), api: each.api, apiKey: this.gateway.secret, ...(each.api !== "anthropic-messages" && { authHeader: true }), models: models.map((model) => piModel(model, each.compat)) },
+          })),
+        // Copilot's connections: Pi's own header carries this run's secret; the gateway signs the request.
+        ...Object.entries(COPILOT_CONNECTIONS)
+          .map(([api, each]) => ({ each, models: copilotModels.filter((model) => apiOf(model.id) === api) }))
+          .filter(({ models }) => models.length)
+          .map(({ each, models }) => ({
+            name: each.name,
+            config: { name: each.title, baseUrl: base + "/copilot", api: each.api, apiKey: this.gateway.secret, ...(each.authHeader && { authHeader: true }), models: models.map((model) => piModel(model, each.compat)) },
           })),
         // A key provider's connection to the gateway: Pi's own Bearer header carries this run's secret, never the key.
         ...keyed().map((group) => ({
@@ -277,8 +341,9 @@ export class Harness {
           config: { name: group.title, baseUrl: base + "/key/" + group.id, api: group.api === "responses" ? "openai-responses" : "openai-completions", apiKey: this.gateway.secret, authHeader: true, models: group.models.map((model) => piModel(model, keyCompat(group.id))) },
         })),
       ];
+      const source = keyedOwner ? "botkins-" + keySource() : owner.id === HOST ? COPILOT_CONNECTIONS[apiOf(selection.model)].name : PI_PLANS[owner.id].name;
       return {
-        model: { model: selection.model, source: keyedOwner ? "botkins-" + keySource() : PI_PLANS[owner.id].name, ...(selection.reasoningEffort && { reasoningEffort: selection.reasoningEffort }) },
+        model: { model: selection.model, source, ...(selection.reasoningEffort && { reasoningEffort: selection.reasoningEffort }) },
         inference: { providers },
       };
     }
@@ -294,14 +359,36 @@ export class Harness {
         providers: [
           ...Object.values(PLANS)
             .filter((each) => named.has(each.name))
-            .map((each) => ({ name: each.name, type: each.type, ...(each.wireApi && { wireApi: each.wireApi }), baseUrl: base + each.path + speedPath, bearerToken: this.gateway.secret })),
+            .map((each) => ({ name: each.name, type: each.type, ...(each.wireApi && { wireApi: each.wireApi }), baseUrl: base + each.path + (each.speed ? speedPath : ""), bearerToken: this.gateway.secret })),
           ...groups.map((group) => ({ name: group.connection, type: "openai", wireApi: group.api, baseUrl: base + "/key/" + group.id, bearerToken: this.gateway.secret })),
         ],
         models,
       },
     };
   }
+  /** The Copilot relay (providers/copilot/relay.mjs), when the Copilot runtime can lend its sign-in. */
+  copilotRelay() {
+    return typeof this.host?.relay === "function" ? this.host.relay() : null;
+  }
+  /**
+   * Which API each Copilot model speaks, as GitHub lists it: looked up (and waited for, up to a
+   * few seconds) when `model`, a Copilot model, is the one a chat uses; else what was last looked
+   * up. Copilot's own names say the rest (copilotApi).
+   */
+  async copilotApis(model) {
+    const relay = this.copilotRelay();
+    if (!relay) return new Map();
+    if (!model) return relay.endpointList?.map ?? new Map();
+    let timer;
+    const late = new Promise((resolve) => (timer = setTimeout(() => resolve(relay.endpointList?.map ?? new Map()), 8000)));
+    try {
+      return await Promise.race([relay.endpoints(model), late]);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
   stop() {
+    void this.relayed?.stop();
     return this.gateway.stop();
   }
 }

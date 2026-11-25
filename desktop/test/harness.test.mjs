@@ -1327,9 +1327,19 @@ test("each gateway has a secret of its own, and stopping it closes the port", as
 // ---- The Harness: which program runs a model selection ----
 
 /** A registry of made-up providers, as desktop/providers/index.mjs offers it to the Harness. */
-function registry({ ids = ["copilot", "codex", "claude", "opencode"], models = async () => [] } = {}) {
-  const byId = new Map(ids.map((id) => [id, { id }]));
+function registry({ ids = ["copilot", "codex", "claude", "opencode"], models = async () => [], relay = null } = {}) {
+  // `relay`: the Copilot runtime can lend its sign-in (true for a stand-in that does, or the stand-in itself).
+  const lender = relay === true ? fakeRelay() : relay;
+  const byId = new Map(ids.map((id) => [id, id === "copilot" && lender ? { id, relay: () => lender } : { id }]));
   return { byId, for: (selection) => byId.get(selection.provider), models };
+}
+/** A stand-in Copilot relay (providers/copilot/relay.mjs): what GitHub lists, and what it lends. */
+function fakeRelay({ apis = new Map(), lent = { url: "http://127.0.0.1:9/responses", headers: { authorization: "Bearer gho_secret" }, at: Date.now() } } = {}) {
+  const relay = { asked: [], endpointList: null, forgot: 0 };
+  relay.endpoints = async (model) => (relay.asked.push(model), (relay.endpointList = { map: apis, at: Date.now() }), apis);
+  relay.credentials = async () => lent;
+  relay.forget = () => void relay.forgot++;
+  return relay;
 }
 const standIn = () => {
   const gate = { stopped: 0, started: 0, secret: "s", start: async () => (gate.started++, "http://127.0.0.1:1"), stop: () => void gate.stopped++ };
@@ -1355,14 +1365,15 @@ test("the Copilot runtime hosts a ChatGPT or Claude selection when the choice is
   for (const choice of [() => undefined, () => "something else"]) assert.equal(harness(providers, choice).hosts({ provider: "codex", model: "gpt-6-astra" }), false);
 });
 
-test("the Copilot runtime does not host its own models, OpenCode, or anything when the choice is provider", () => {
+test("the Copilot runtime does not host its own models, and hosts OpenCode's; with provider it hosts nothing", () => {
   const providers = registry();
   const one = harness(providers);
   assert.equal(one.hosts({ provider: "copilot", model: "gpt-5" }), false, "its own models run themselves");
-  assert.equal(one.hosts({ provider: "opencode", model: "x" }), false, "OpenCode is a whole agent");
+  assert.equal(one.hosts({ provider: "opencode", model: "google/gemini" }), true, "OpenCode's models answer through the gateway");
   const own = harness(providers, () => "provider");
   assert.equal(own.hosts({ provider: "codex", model: "gpt-6-astra" }), false);
   assert.equal(own.hosts({ provider: "claude", model: "opus" }), false);
+  assert.equal(own.hosts({ provider: "opencode", model: "google/gemini" }), false);
 });
 
 test("without a Copilot runtime nothing is hosted", () => {
@@ -1380,30 +1391,35 @@ test("runner gives the Copilot runtime for a hosted selection and the model's ow
   assert.equal(one.runner({ provider: "codex", model: "gpt-6-astra" }), providers.byId.get("copilot"));
   assert.equal(one.runner({ provider: "claude", model: "opus" }), providers.byId.get("copilot"));
   assert.equal(one.runner({ provider: "copilot", model: "gpt-5" }), providers.byId.get("copilot"));
-  assert.equal(one.runner({ provider: "opencode", model: "x" }), providers.byId.get("opencode"));
+  assert.equal(one.runner({ provider: "opencode", model: "x" }), providers.byId.get("copilot"));
   assert.equal(harness(providers, () => "provider").runner({ provider: "claude", model: "opus" }), providers.byId.get("claude"));
+  assert.equal(harness(providers, () => "provider").runner({ provider: "opencode", model: "x" }), providers.byId.get("opencode"));
 });
 
-test("with Pi chosen, Pi runs ChatGPT and Claude plan models, and every other model runs as before", () => {
-  const providers = registry({ ids: ["copilot", "codex", "claude", "opencode", "pi"] });
+test("with Pi chosen, Pi runs every provider's models it can reach; an ACP agent and Copilot's Auto run themselves", () => {
+  const providers = registry({ ids: ["copilot", "codex", "claude", "opencode", "pi", "grok"], relay: true });
   const pi = harness(providers, () => "pi");
-  assert.equal(pi.via({ provider: "codex", model: "gpt-6-astra" }), "pi");
-  assert.equal(pi.via({ provider: "claude", model: "opus" }), "pi");
-  assert.equal(pi.runner({ provider: "codex", model: "gpt-6-astra" }), providers.byId.get("pi"));
-  assert.equal(pi.runner({ provider: "claude", model: "opus" }), providers.byId.get("pi"));
-  // GitHub Copilot's plan needs its own runtime; OpenCode is a whole agent.
-  assert.equal(pi.runner({ provider: "copilot", model: "gpt-5" }), providers.byId.get("copilot"));
-  assert.equal(pi.runner({ provider: "opencode", model: "x" }), providers.byId.get("opencode"));
+  for (const provider of ["codex", "claude", "copilot", "opencode"]) {
+    assert.equal(pi.via({ provider, model: "m" }), "pi", provider);
+    assert.equal(pi.runner({ provider, model: "m" }), providers.byId.get("pi"), provider);
+  }
+  assert.equal(pi.runner({ provider: "copilot", model: "auto" }), providers.byId.get("copilot"), "the runtime picks Auto's model");
+  assert.equal(pi.runner({ provider: "grok", model: "grok-5" }), providers.byId.get("grok"), "an ACP agent is a whole agent");
   assert.equal(pi.hosts({ provider: "codex", model: "gpt-6-astra" }), false, "the Copilot runtime hosts nothing then");
+  // A Copilot runtime that can't lend its sign-in (a test runtime) keeps its models.
+  const lender = harness(registry({ ids: ["copilot", "pi"] }), () => "pi");
+  assert.equal(lender.runner({ provider: "copilot", model: "gpt-5" }), lender.providers.byId.get("copilot"));
   // A recovered turn names where it ran.
   assert.equal(harness(providers).runner({ provider: "claude", model: "opus" }, "pi"), providers.byId.get("pi"));
   // An app without Pi runs each provider's own.
-  const without = harness(registry(), () => "pi");
-  assert.equal(without.via({ provider: "codex", model: "gpt-6-astra" }), null);
-  assert.equal(without.runner({ provider: "codex", model: "gpt-6-astra" }), without.providers.byId.get("codex"));
+  const without = harness(registry({ relay: true }), () => "pi");
+  for (const provider of ["codex", "copilot", "opencode"]) {
+    assert.equal(without.via({ provider, model: "m" }), null, provider);
+    assert.equal(without.runner({ provider, model: "m" }), without.providers.byId.get(provider), provider);
+  }
 });
 
-test("with OMP chosen, OMP runs ChatGPT and Claude plan models through the same gateway contract", async () => {
+test("with OMP chosen, OMP runs the plan models through the same gateway contract", async () => {
   const providers = registry({ ids: ["copilot", "codex", "claude", "opencode", "omp"], models: async () => CATALOG });
   const one = harness(providers, () => "omp");
   assert.equal(one.via({ provider: "codex", model: "gpt-6-astra" }), "omp");

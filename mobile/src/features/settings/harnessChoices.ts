@@ -5,10 +5,10 @@ export type Harness = NonNullable<Preferences["harness"]>;
 
 // The same choices, names and words as Settings › General › Harness on the computer.
 export const HARNESSES: { value: Harness; title: string; subtitle: string }[] = [
-  { value: "pi", title: "Pi", subtitle: "Pi for ChatGPT and Claude plans" },
+  { value: "pi", title: "Pi", subtitle: "Pi for every model and plan" },
   { value: "provider", title: "Provider default", subtitle: "Codex for ChatGPT, Claude Code for Claude" },
   { value: "copilot", title: "Copilot SDK", subtitle: "One harness for every model and plan" },
-  { value: "omp", title: "OMP", subtitle: "Enhanced Pi harness for ChatGPT and Claude plans" },
+  { value: "omp", title: "OMP", subtitle: "Enhanced Pi harness for every model and plan" },
 ];
 export const harnessName = (value: Preferences["harness"]) => HARNESSES.find((harness) => harness.value === value)?.title;
 

@@ -258,7 +258,7 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
     ...ACP_AGENTS.map((agent) => new AcpProvider({ ...agent, dataDir: join(dataDir, agent.id), bridge, version: host.version })),
     // OpenRouter, Azure Foundry and an OpenAI endpoint, on a key kept in the vault (desktop/providers/keyed). Off until set up.
     ...keyedProviders({ dataDir: join(dataDir, "keyed"), vault: () => workspace?.vault }),
-    // Pi-compatible harnesses for the ChatGPT and Claude plans, not model providers.
+    // Pi-compatible harnesses for the other providers' models (desktop/harness), not model providers.
     pi,
     new OmpProvider({ dataDir: join(dataDir, "omp"), bridge, packages: pi.packages }),
   ];

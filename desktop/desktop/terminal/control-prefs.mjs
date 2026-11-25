@@ -71,8 +71,8 @@ export const PREFERENCES = {
 export const HARNESS_ABOUT = {
   copilot: "One harness runs every chat, and each plan answers its own model requests",
   provider: "Each provider's own tool runs its chats",
-  pi: "The Pi program runs the chats of ChatGPT and Claude plan models (the default)",
-  omp: "The OMP program runs the chats of ChatGPT and Claude plan models with Pi-compatible tools and OMP improvements",
+  pi: "The Pi program runs the chats of GitHub Copilot, ChatGPT, Claude, OpenCode and key-provider models (the default)",
+  omp: "The OMP program runs the chats of GitHub Copilot, ChatGPT, Claude, OpenCode and key-provider models with Pi-compatible tools and OMP improvements",
 };
 /** The levels of "approval", from the one that asks the most to the one that asks nothing: a later one is looser. */
 export const APPROVAL_ORDER = ["ask", "read", "assisted", "all"];

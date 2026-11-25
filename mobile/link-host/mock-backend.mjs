@@ -197,8 +197,8 @@ const PROVIDERS = [
 
 // The harnesses that are programs of their own, absent until the phone installs them.
 const HARNESS_TOOLS = [
-  { id: "pi", name: "Pi", description: "The Pi coding agent, as the harness for ChatGPT and Claude plans.", harness: true, enabled: true, default: false, installed: false, connected: false, signIn: null, signOut: false, install: { url: "https://pi.dev", command: "curl -fsSL https://pi.dev/install.sh | sh" }, message: "Install Pi on your computer to use it as the harness." },
-  { id: "omp", name: "OMP", description: "OMP, the enhanced Pi coding agent, as the harness for ChatGPT and Claude plans.", harness: true, enabled: true, default: false, installed: false, connected: false, signIn: null, signOut: false, install: { url: "https://omp.sh", command: "curl -fsSL https://omp.sh/install | sh" }, message: "Install OMP on your computer to use it as the harness." },
+  { id: "pi", name: "Pi", description: "The Pi coding agent, as the harness for GitHub Copilot, ChatGPT, Claude and OpenCode models.", harness: true, enabled: true, default: false, installed: false, connected: false, signIn: null, signOut: false, install: { url: "https://pi.dev", command: "curl -fsSL https://pi.dev/install.sh | sh" }, message: "Install Pi on your computer to use it as the harness." },
+  { id: "omp", name: "OMP", description: "OMP, the enhanced Pi coding agent, as the harness for GitHub Copilot, ChatGPT, Claude and OpenCode models.", harness: true, enabled: true, default: false, installed: false, connected: false, signIn: null, signOut: false, install: { url: "https://omp.sh", command: "curl -fsSL https://omp.sh/install | sh" }, message: "Install OMP on your computer to use it as the harness." },
 ];
 
 const SKILLS = [
