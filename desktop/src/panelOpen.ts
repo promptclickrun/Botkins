@@ -2,7 +2,6 @@
 // window/DOM imports so unit tests can import it directly under Node.
 
 export const PANEL_FULLSCREEN_SUFFIX = "panel.fullscreen";
-export const FRAME_KEY_EVENT = "botkins-frame-key";
 
 export type StorageLike = {
   getItem(key: string): string | null;
@@ -20,10 +19,10 @@ export type PanelKeyEvent = {
   defaultPrevented?: boolean;
 };
 
-export type OpenedPanelKeyAction = "restore" | "close" | "toggle" | null;
 export type PanelFullscreenSource = "toggle" | "escape" | "initial";
 export type PanelCancelAction = "restore" | "close" | "ignore";
-export type FrameKeyKind = "toggle" | "escape";
+export type TrustedFrameKeyKind = "toggle" | "escape";
+export type TrustedFrameKeyAction = "toggle" | "restore" | null;
 
 const defaultStorage = (): StorageLike | null => (typeof localStorage === "undefined" ? null : localStorage);
 
@@ -62,12 +61,10 @@ export function isPanelFullscreenShortcut(e: PanelKeyEvent): boolean {
   return !!(e.metaKey || e.ctrlKey) && !!e.shiftKey && !e.altKey && e.key.toLowerCase() === "f";
 }
 
-/** Keyboard action for an opened panel: Esc restores full screen before closing; Cmd/Ctrl+Shift+F toggles. */
-export function openedPanelKeyAction(e: PanelKeyEvent, fullscreen: boolean): OpenedPanelKeyAction {
-  if (e.repeat || e.isComposing || e.defaultPrevented) return null;
-  if (e.key === "Escape" && !e.metaKey && !e.ctrlKey && !e.altKey) return fullscreen ? "restore" : "close";
-  if (isPanelFullscreenShortcut(e)) return "toggle";
-  return null;
+/** Whether a dialog keydown is an auto-repeated Escape whose default must be suppressed. */
+export function isRepeatedPanelEscape(e: PanelKeyEvent): boolean {
+  if (!e.repeat || e.isComposing || e.defaultPrevented) return false;
+  return e.key === "Escape" && !e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey;
 }
 
 /** Decides how an opened panel's <dialog> handles a native `cancel` event. */
@@ -76,9 +73,9 @@ export function panelCancelAction(fullscreen: boolean, isOwnTarget: boolean): Pa
   return fullscreen ? "restore" : "close";
 }
 
-/** Maps a key message forwarded from a focused sandboxed frame to an opened-panel action. */
-export function frameKeyAction(kind: unknown, fullscreen: boolean): OpenedPanelKeyAction {
+/** Maps a trusted main-process key event from a focused panel iframe to an opened-panel action. */
+export function trustedFrameKeyAction(kind: unknown, fullscreen: boolean): TrustedFrameKeyAction {
   if (kind === "toggle") return "toggle";
-  if (kind === "escape") return fullscreen ? "restore" : "close";
+  if (kind === "escape") return fullscreen ? "restore" : null;
   return null;
 }

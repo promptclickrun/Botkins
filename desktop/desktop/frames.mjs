@@ -114,19 +114,20 @@ const BRIDGE = String.raw`(() => {
     },
     true,
   );
-  // Forward only the opened-panel full-screen shortcut and Escape after the page's own controls
-  // have had a chance to handle them.
-  addEventListener("keydown", (event) => {
-    if (!event.isTrusted || event.repeat || event.isComposing || event.defaultPrevented) return;
-    const isToggle = (event.metaKey || event.ctrlKey) && event.shiftKey && !event.altKey && event.key.toLowerCase() === "f";
-    const isEscape = event.key === "Escape" && !event.metaKey && !event.ctrlKey && !event.altKey;
-    if (!isToggle && !isEscape) return;
-    if (isEscape && event.target && event.target.closest && event.target.closest("dialog[open]")) return;
-    event.preventDefault();
-    post("key", { key: isToggle ? "toggle" : "escape" });
-  });
   post("ready");
 })();`;
+
+/**
+ * Classifies an Electron `before-input-event` key press for an opened panel's focused frame.
+ * Returns "toggle" for Cmd/Ctrl+Shift+F, "escape" for plain Escape, or null otherwise.
+ * Ignores keyUp, auto-repeat, and IME composition.
+ */
+export function panelKeyFromInput(input) {
+  if (!input || input.type !== "keyDown" || input.isAutoRepeat || input.isComposing) return null;
+  if (input.key === "Escape" && !input.meta && !input.control && !input.alt && !input.shift) return "escape";
+  if ((input.meta || input.control) && input.shift && !input.alt && String(input.key ?? "").toLowerCase() === "f") return "toggle";
+  return null;
+}
 
 const BASE_STYLE =
   // The Ink theme in light, until the app sends the colors in use (src/HtmlFrame.tsx).

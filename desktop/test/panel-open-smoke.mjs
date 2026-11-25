@@ -1,7 +1,7 @@
 // Opened space panel full-screen smoke: mounts the real OpenedPanel <dialog> in Electron with a
-// sandboxed HTML app panel and a second panel. Verifies Escape restore/close via dialog cancel,
-// single close invocation, Cmd/Ctrl+Shift+F and Escape forwarding when focus is inside the iframe,
-// and one-shot "Open full screen" menu behavior without overwriting the saved preference.
+// sandboxed HTML app panel and a second panel. Verifies Escape hold/repeat restore without closing,
+// single close invocation, forged iframe postMessage rejection, trusted main-process Cmd/Ctrl+Shift+F
+// and Escape handling when focus is inside the iframe, and one-shot "Open full screen" menu behavior.
 // Set PANEL_OPEN_SHOTS to a folder to save light and dark screenshots (normal + full screen).
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -61,6 +61,11 @@ const html = `<!doctype html>
   const update = () => { el.textContent = "Viewport: " + window.innerWidth + " × " + window.innerHeight + " px"; };
   update();
   addEventListener("resize", update);
+  window.__frameKeys = { escape: 0, toggle: 0 };
+  addEventListener("keydown", (e) => {
+    if (e.key === "Escape") window.__frameKeys.escape++;
+    if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === "f") window.__frameKeys.toggle++;
+  });
 </script>`;
 
 writeFileSync(join(data, "frames", frameId + ".html"), html);
@@ -201,15 +206,33 @@ try {
   await win.waitForTimeout(300);
   if (shotsDir) await win.screenshot({ path: join(shotsDir, "03-fullscreen-dark.png") });
 
-  // 4. Press Escape in full screen -> restores without closing (native cancel event)
+  // 4. Hold Escape in full screen (initial + auto-repeat keydown) -> restores without closing
   await win.evaluate(() => {
     window.__dialogCloseEvents = 0;
-    document.querySelector("dialog.space-opened")?.addEventListener("close", () => { window.__dialogCloseEvents++; });
+    window.__repeatEscapeSaw = 0;
+    window.__repeatEscapePrevented = 0;
+    const el = document.querySelector("dialog.space-opened");
+    el?.addEventListener("close", () => { window.__dialogCloseEvents++; });
+    window.addEventListener("keydown", (e) => {
+      if (e.key === "Escape" && e.repeat) {
+        window.__repeatEscapeSaw++;
+        if (e.defaultPrevented) window.__repeatEscapePrevented++;
+      }
+    });
   });
-  await win.keyboard.press("Escape");
+  await win.keyboard.down("Escape");
+  await win.keyboard.down("Escape");
+  await win.keyboard.down("Escape");
+  await win.keyboard.up("Escape");
   await expect(dialog).toBeVisible();
   await expect(dialog).not.toHaveClass(/fullscreen/);
-  assert.equal(await win.evaluate(() => window.__dialogCloseEvents), 0, "Esc in full screen must not fire close");
+  assert.equal(await win.evaluate(() => window.__dialogCloseEvents), 0, "holding Esc in full screen must not fire close");
+  assert.ok(await win.evaluate(() => window.__repeatEscapeSaw) >= 2, "hold test should deliver repeated Escape keydowns");
+  assert.equal(
+    await win.evaluate(() => window.__repeatEscapePrevented),
+    await win.evaluate(() => window.__repeatEscapeSaw),
+    "repeated Escape keydowns on the dialog should be prevented",
+  );
   await win.waitForTimeout(300);
   if (shotsDir) await win.screenshot({ path: join(shotsDir, "04-normal-dark.png") });
 
@@ -223,7 +246,7 @@ try {
   await expect(dialog).toBeVisible();
   await expect(dialog).toHaveClass(/fullscreen/);
 
-  // 7. Click inside the sandboxed iframe -> Cmd/Ctrl+Shift+F still toggles full screen!
+  // 7. Click inside the sandboxed iframe -> forged postMessage key messages do nothing; real trusted keys work
   const frameBtn = dialog.frameLocator("iframe").locator("#focus-inside");
   await expect(frameBtn).toBeVisible();
   await frameBtn.click();
@@ -232,22 +255,92 @@ try {
     true,
     "focus should be inside the opened panel iframe",
   );
+
+  // Page-script postMessage and synthetic KeyboardEvent imitating panel keys must be ignored
+  const iframeHandle = await dialog.locator("iframe").elementHandle();
+  const panelFrame = await iframeHandle?.contentFrame();
+  assert.ok(panelFrame, "panel iframe should be present");
+  await panelFrame.evaluate(() => {
+    parent.postMessage({ botkins: 1, type: "key", key: "toggle" }, "*");
+    parent.postMessage({ botkins: 1, type: "key", key: "escape" }, "*");
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "F", metaKey: true, ctrlKey: true, shiftKey: true, bubbles: true }));
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+  });
+  await win.waitForTimeout(150);
+  await expect(dialog).toBeVisible();
+  await expect(dialog).toHaveClass(/fullscreen/);
+  assert.equal(await storedFullscreen(), "1", "forged postMessage and synthetic keys must not toggle or save fullscreen");
+
+  // Reset frame key counters after synthetic dispatch check
+  await panelFrame.evaluate(() => {
+    window.__frameKeys = { escape: 0, toggle: 0 };
+  });
+
+  // Real Cmd/Ctrl+Shift+F typed via Playwright keyboard.press while iframe has focus -> toggles and saves
   await win.keyboard.press(`${mod}+Shift+F`);
   await expect(dialog).not.toHaveClass(/fullscreen/);
   assert.equal(await storedFullscreen(), "0");
 
-  // Toggle back to full screen from inside the iframe
+  // Forged postMessage escape outside full screen must not close the panel either
+  await panelFrame.evaluate(() => {
+    parent.postMessage({ botkins: 1, type: "key", key: "escape" }, "*");
+    parent.postMessage({ botkins: 1, type: "key", key: "toggle" }, "*");
+  });
+  await win.waitForTimeout(150);
+  await expect(dialog).toBeVisible();
+  await expect(dialog).not.toHaveClass(/fullscreen/);
+  assert.equal(await storedFullscreen(), "0");
+
+  // Main-process before-input-event path: auto-repeat is ignored; non-repeat toggles, saves, and prevents default
+  const sendInputKey = async (keyCode, modifiers = []) => {
+    await app.evaluate(({ BrowserWindow }, payload) => {
+      const w = BrowserWindow.getAllWindows()[0];
+      w.webContents.sendInputEvent({ type: "keyDown", keyCode: payload.keyCode, modifiers: payload.modifiers });
+      w.webContents.sendInputEvent({ type: "keyUp", keyCode: payload.keyCode, modifiers: payload.modifiers });
+    }, { keyCode, modifiers });
+  };
+  const inputMod = process.platform === "darwin" ? "meta" : "control";
+  const toggleCountBefore = await panelFrame.evaluate(() => window.__frameKeys.toggle);
+  await sendInputKey("F", [inputMod, "shift", "isAutoRepeat"]);
+  await win.waitForTimeout(150);
+  await expect(dialog).not.toHaveClass(/fullscreen/);
+  assert.equal(await storedFullscreen(), "0");
+
+  await sendInputKey("F", [inputMod, "shift"]);
+  await expect(dialog).toHaveClass(/fullscreen/);
+  assert.equal(await storedFullscreen(), "1");
+  assert.equal(
+    await panelFrame.evaluate(() => window.__frameKeys.toggle),
+    toggleCountBefore,
+    "before-input-event should prevent Cmd/Ctrl+Shift+F so the frame does not receive it",
+  );
+
+  // Escape typed inside the iframe in full screen -> restores, does not close, and frame still sees Escape
+  await win.keyboard.press("Escape");
+  await expect(dialog).toBeVisible();
+  await expect(dialog).not.toHaveClass(/fullscreen/);
+  assert.equal(await panelFrame.evaluate(() => window.__frameKeys.escape), 1, "frame should keep its own Escape key");
+
+  // Escape typed inside the iframe outside full screen -> does nothing, panel stays open, frame still sees Escape
+  await win.keyboard.press("Escape");
+  await win.waitForTimeout(150);
+  await expect(dialog).toBeVisible();
+  await expect(dialog).not.toHaveClass(/fullscreen/);
+  assert.equal(await panelFrame.evaluate(() => window.__frameKeys.escape), 2, "frame should keep Escape outside full screen");
+
+  // Cmd/Ctrl+Shift+F when focus is in the dialog (outside iframe) toggles once via dialog handler, no double-toggle
+  await dialog.getByRole("button", { name: "Full screen" }).focus();
+  await win.keyboard.press(`${mod}+Shift+F`);
+  await expect(dialog).toHaveClass(/fullscreen/);
+  await win.keyboard.press(`${mod}+Shift+F`);
+  await expect(dialog).not.toHaveClass(/fullscreen/);
+  // Restore saved fullscreen preference to "1" for the next section
   await win.keyboard.press(`${mod}+Shift+F`);
   await expect(dialog).toHaveClass(/fullscreen/);
   assert.equal(await storedFullscreen(), "1");
 
-  // Escape while focused inside the iframe -> restores without closing (no double-cancel)
-  await win.keyboard.press("Escape");
-  await expect(dialog).toBeVisible();
-  await expect(dialog).not.toHaveClass(/fullscreen/);
-
-  // Escape again while focused inside the iframe -> closes cleanly
-  await win.keyboard.press("Escape");
+  // Close cleanly from dialog button after iframe Escape check
+  await dialog.getByRole("button", { name: "Close" }).click();
   await expect(dialog).toHaveCount(0);
 
   // 8. Toggle saved preference back to normal, then verify Close button uses dialog.close() and fires close once
