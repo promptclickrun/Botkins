@@ -1,6 +1,5 @@
 // Typing on the computer: a hidden text field takes the phone's keyboard, and a bar of keys the
 // phone's keyboard lacks sits above it (Esc, Tab, sticky modifiers, arrows, Delete, Paste).
-import * as Clipboard from "expo-clipboard";
 import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, ClipboardPaste, KeyboardOff, type LucideIcon } from "lucide-react-native";
 import { type ComponentRef, type RefObject, useRef, useState } from "react";
 import { ScrollView, StyleSheet, TextInput, View } from "react-native";
@@ -8,23 +7,22 @@ import type { ScreenInput } from "@/link/types";
 import { space, T, Tap } from "@/ui";
 import { chrome } from "./chrome";
 
-type Modifier = "cmd" | "ctrl" | "alt" | "shift";
 type KeyEvent = Extract<ScreenInput, { type: "key" }>;
+export type Modifier = NonNullable<KeyEvent["modifiers"]>[number];
 
 /** The hidden field starts with these invisible characters, so a backspace always changes it. */
 const SEED = "​".repeat(8);
 /** The hidden field starts over once it holds this much. */
 const MAX_HELD = 200;
-const MAX_PASTE = 2000;
 export const KEY_BAR_HEIGHT = 52;
 
 /** What changed between two versions of the field: characters taken away, and text put in. */
 function difference(before: string, after: string) {
+  const old = Array.from(before), next = Array.from(after);
   let head = 0;
-  while (head < before.length && head < after.length && before[head] === after[head]) head++;
-  let tail = 0;
-  while (tail < before.length - head && tail < after.length - head && before[before.length - 1 - tail] === after[after.length - 1 - tail]) tail++;
-  return { removed: before.length - head - tail, added: after.slice(head, after.length - tail) };
+  while (head < old.length && head < next.length && old[head] === next[head]) head++;
+  // The remote caret is at the end. An IME can revise earlier letters while keeping a suffix.
+  return { removed: old.length - head, added: next.slice(head).join("") };
 }
 
 export function HiddenInput({ inputRef, send, modifiers, release, onFocus, onBlur }: { inputRef: RefObject<ComponentRef<typeof TextInput> | null>; send: (event: ScreenInput) => void; modifiers: Modifier[]; release: () => void; onFocus: () => void; onBlur: () => void }) {
@@ -75,6 +73,8 @@ export function HiddenInput({ inputRef, send, modifiers, release, onFocus, onBlu
       autoCorrect={false}
       autoCapitalize="none"
       autoComplete="off"
+      importantForAutofill="no"
+      textContentType="none"
       spellCheck={false}
       smartInsertDelete={false}
       keyboardAppearance="dark"
@@ -88,32 +88,31 @@ export function HiddenInput({ inputRef, send, modifiers, release, onFocus, onBlu
 
 export function KeyBar({
   platform,
+  superKey,
   modifiers,
   toggle,
   send,
   release,
+  paste,
   hide,
   bottom,
 }: {
   platform: string | undefined;
+  superKey: boolean;
   modifiers: Modifier[];
   toggle: (modifier: Modifier) => void;
   send: (event: ScreenInput) => void;
   release: () => void;
+  paste: () => void;
   hide: () => void;
   bottom: number;
 }) {
   const mac = platform === "darwin";
+  const windows = platform === "win32";
 
   function key(name: string) {
     send(modifiers.length ? { type: "key", key: name, modifiers } : { type: "key", key: name });
     if (modifiers.length) release();
-  }
-
-  async function paste() {
-    const text = (await Clipboard.getStringAsync().catch(() => "")).slice(0, MAX_PASTE);
-    if (text) send({ type: "text", text });
-    release();
   }
 
   return (
@@ -124,14 +123,15 @@ export function KeyBar({
         <Key title="Tab" label="Tab" onPress={() => key("tab")} />
         <Key title={mac ? "⌃ Ctrl" : "Ctrl"} label="Control" on={modifiers.includes("ctrl")} onPress={() => toggle("ctrl")} />
         <Key title={mac ? "⌥ Option" : "Alt"} label={mac ? "Option" : "Alt"} on={modifiers.includes("alt")} onPress={() => toggle("alt")} />
-        <Key title={mac ? "⌘ Cmd" : "Win"} label={mac ? "Command" : "Windows key"} on={modifiers.includes("cmd")} onPress={() => toggle("cmd")} />
+        {mac && <Key title="⌘ Cmd" label="Command" on={modifiers.includes("cmd")} onPress={() => toggle("cmd")} />}
+        {!mac && superKey && <Key title={windows ? "Win" : "Super"} label={windows ? "Windows key" : "Super"} on={modifiers.includes("super")} onPress={() => toggle("super")} />}
         <Key title="⇧ Shift" label="Shift" on={modifiers.includes("shift")} onPress={() => toggle("shift")} />
         <Key icon={ArrowLeft} label="Left arrow" onPress={() => key("left")} />
         <Key icon={ArrowUp} label="Up arrow" onPress={() => key("up")} />
         <Key icon={ArrowDown} label="Down arrow" onPress={() => key("down")} />
         <Key icon={ArrowRight} label="Right arrow" onPress={() => key("right")} />
         <Key title="Delete" label="Forward delete" onPress={() => key("delete")} />
-        <Key icon={ClipboardPaste} title="Paste" label="Paste the phone's clipboard" onPress={() => void paste()} />
+        <Key icon={ClipboardPaste} title="Paste" label="Paste from phone" onPress={paste} />
       </ScrollView>
     </View>
   );
@@ -161,5 +161,5 @@ const styles = StyleSheet.create({
   hidden: { position: "absolute", left: 0, bottom: 0, width: 1, height: 1, opacity: 0 },
   bar: { position: "absolute", left: 0, right: 0, height: KEY_BAR_HEIGHT, backgroundColor: chrome.glass, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: chrome.glassLine, justifyContent: "center" },
   keys: { paddingHorizontal: space.sm, gap: 6, alignItems: "center" },
-  key: { minWidth: 44, height: 40, paddingHorizontal: 12, borderRadius: 10, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6 },
+  key: { minWidth: 44, height: 44, paddingHorizontal: 12, borderRadius: 10, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6 },
 });

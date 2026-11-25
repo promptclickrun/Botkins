@@ -14,6 +14,7 @@ type ActiveFeed = {
 };
 
 /** Settings › Screen, then the side pane, then a chat card's single still. */
+export type ScreenFeedOwner = "Remote" | "PaneScreen" | "ScreenCard";
 const RANK: Record<string, number> = { Remote: 3, PaneScreen: 2, ScreenCard: 1 };
 
 const activeFeeds = new Map<string, ActiveFeed>();
@@ -65,6 +66,7 @@ export function whenScreenFeedFree(hostId: string, wake: () => void): () => void
   const held = waiting;
   return () => {
     held.delete(wake);
+    if (!held.size && freeWaiters.get(key) === held) freeWaiters.delete(key);
   };
 }
 

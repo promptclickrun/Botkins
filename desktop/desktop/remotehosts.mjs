@@ -50,6 +50,7 @@ export const HERE = new Set([
   "closeArtifactMedia",
   "openSignIn",
   "remoteHosts",
+  "remoteScreen",
   "pairRemoteHost",
   "takeTeamJoin",
   "findTeamInvite",
@@ -603,7 +604,10 @@ export class RemoteHosts {
     }
   }
   stop() {
-    this.client?.stop();
+    const client = this.client;
+    const stoppingScreen = this.stopScreen();
+    if (stoppingScreen) void stoppingScreen.finally(() => client?.stop());
+    else client?.stop();
     this.client = null;
     this.parts = {};
     this.state = "idle";
@@ -667,6 +671,54 @@ export class RemoteHosts {
   }
   wake() {
     this.client?.wake();
+  }
+  /** End only this window's viewer. A later viewer on the same paired device waits for the old stop. */
+  stopScreen() {
+    const viewer = this.screenViewer;
+    if (!viewer) return this.screenStops?.get(this.current);
+    this.screenViewer = null;
+    viewer.abort.abort();
+    this.screenStops ??= new Map();
+    const previous = this.screenStops.get(viewer.hostId);
+    const stopping = Promise.resolve(previous).then(() => viewer.client.callWithSignal("link.screen.stop", AbortSignal.timeout(5000))).catch(() => {});
+    this.screenStops.set(viewer.hostId, stopping);
+    stopping.finally(() => { if (this.screenStops.get(viewer.hostId) === stopping) this.screenStops.delete(viewer.hostId); });
+    return stopping;
+  }
+
+  async screenRequest(hostId, id, operation, ...args) {
+    const client = this.client;
+    if (!client || hostId !== this.current) throw new Error("That computer is no longer selected.");
+    if (this.find(hostId).member) throw new Error("Only an owner device can view this computer.");
+    if (typeof id !== "string" || !/^[a-f\d]{8}-(?:[a-f\d]{4}-){3}[a-f\d]{12}$/i.test(id)) throw new Error("Invalid screen viewer.");
+    if (operation === "start") {
+      const previous = this.stopScreen();
+      const viewer = { hostId, id, client, abort: new AbortController() };
+      this.screenViewer = viewer;
+      try {
+        await previous;
+        viewer.abort.signal.throwIfAborted();
+        return await client.callWithSignal("link.screen.info", viewer.abort.signal);
+      } catch (error) {
+        if (this.screenViewer === viewer) this.stopScreen();
+        throw error;
+      }
+    }
+    const viewer = this.screenViewer;
+    if (!viewer || id !== viewer.id || viewer.client !== client) {
+      if (operation === "stop") return;
+      throw new Error("This screen viewer has closed.");
+    }
+    const call = (method, ...values) => client.callWithSignal(method, viewer.abort.signal, ...values);
+    switch (operation) {
+      case "stop": return this.stopScreen();
+      case "frame": return call("link.screen.frame", args[0]);
+      case "openVideo": return call("link.screen.video.open", id, args[0]);
+      case "readVideo": return call("link.screen.video.read", id, args[0]);
+      case "closeVideo": return call("link.screen.video.close", id);
+      case "input": return call("link.screen.input", args[0], args[1]);
+      default: throw new Error("Unknown screen viewer action.");
+    }
   }
   snapshot(own) {
     return snapshotOf(this.parts, own);

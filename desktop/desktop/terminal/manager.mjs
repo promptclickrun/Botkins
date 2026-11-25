@@ -104,14 +104,19 @@ export function serviceManager({ command, platform = process.platform, uid = pro
    * @param options.encryptedKey  Linux, the whole computer: encrypt the host key to this machine with systemd-creds.
    * @returns { kind, scope, file, dataDir, user, key }
    */
-  async function install({ scope = uid === 0 ? "system" : "user", dataDir, runAs, allowPaths = [], encryptedKey = false, start = true } = {}) {
+  async function install({ scope = uid === 0 ? "system" : "user", dataDir, runAs, allowPaths = [], encryptedKey = false, screen, prepareDesktop, start = true } = {}) {
     if (!["system", "user"].includes(scope)) throw new Error("A service is installed for the whole computer (--system) or for one person (--user).");
     if (scope === "system" && uid !== 0) throw Object.assign(new Error("Installing for the whole computer needs root. Run it with sudo, or install for yourself with `botkins service install --user`."), { code: "NEEDS_ROOT" });
-    const result = kind === "launchd" ? await installLaunchd({ scope, dataDir, runAs, start }) : scope === "system" ? await installSystem({ dataDir, runAs, allowPaths, encryptedKey, start }) : await installUser({ dataDir, start });
+    if (screen && kind === "launchd") throw new Error("The private virtual desktop requires Linux.");
+    const previous = kind === "systemd" ? /^Environment="?BOTKINS_DESKTOP=(managed|off|auto)"?$/m.exec(read(files.systemd[scope]) || "")?.[1] : null;
+    const mode = screen === undefined ? previous : screen ? "managed" : "off";
+    const desktopEnv = mode ? { BOTKINS_DESKTOP: mode } : {};
+    if (kind === "systemd" && mode !== "off") await prepareDesktop?.(mode, scope);
+    const result = kind === "launchd" ? await installLaunchd({ scope, dataDir, runAs, start }) : scope === "system" ? await installSystem({ dataDir, runAs, allowPaths, encryptedKey, desktopEnv, start }) : await installUser({ dataDir, desktopEnv, start });
     return { kind, scope, ...result };
   }
 
-  async function installSystem({ dataDir = systemRoot("linux"), runAs = SERVICE_USER, allowPaths, encryptedKey, start }) {
+  async function installSystem({ dataDir = systemRoot("linux"), runAs = SERVICE_USER, allowPaths, encryptedKey, desktopEnv, start }) {
     const account = runAs;
     const accountHome = dataDir + "/home";
     // The service's own user: no password, no shell, its home inside the data folder.
@@ -168,7 +173,7 @@ export function serviceManager({ command, platform = process.platform, uid = pro
       rmSync(at(KEY_FILE));
       key = { encrypted };
     }
-    write(files.systemd.system, systemUnit({ command, dataDir, user: account, home: accountHome, key, allowPaths }), 0o644);
+    write(files.systemd.system, systemUnit({ command, dataDir, user: account, home: accountHome, key, allowPaths, env: desktopEnv }), 0o644);
     for (const [name, text] of Object.entries(updateUnits({ command, dataDir }))) write("/etc/systemd/system/" + name, text, 0o644);
     write(INSTALL_RECORD, installRecordText({ dataDir, user: account, command }), 0o644);
     await must("systemctl", ["daemon-reload"], "Reloading systemd");
@@ -180,10 +185,10 @@ export function serviceManager({ command, platform = process.platform, uid = pro
     return { file: files.systemd.system, dataDir, user: account, key: keyNote ?? (key.encrypted ? "encrypted with systemd-creds (" + key.encrypted + "), handed over as a systemd credential" : "root-only key file (" + KEY_FILE + "), handed over as a systemd credential") };
   }
 
-  async function installUser({ dataDir = userRoot({ platform: "linux", env, home }), start }) {
+  async function installUser({ dataDir = userRoot({ platform: "linux", env, home }), desktopEnv, start }) {
     const keyFile = join(env.XDG_CONFIG_HOME || join(home, ".config"), "botkins", "host.key");
     mkdirSync(at(dataDir), { recursive: true, mode: 0o700 });
-    write(files.systemd.user, userUnit({ command, dataDir, keyFile, env: ownPath() }), 0o644);
+    write(files.systemd.user, userUnit({ command, dataDir, keyFile, env: { ...ownPath(), ...desktopEnv } }), 0o644);
     await must(...systemctl("user")(["daemon-reload"]), "Reloading systemd");
     await must(...systemctl("user")(["enable", UNIT]), "Enabling the service");
     // Lingering keeps a person's services running while they are signed out, and starts them with the computer.

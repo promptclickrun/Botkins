@@ -1,8 +1,11 @@
 // `botkins service …`: the service as the computer's own (systemd on Linux, launchd on macOS).
 import { existsSync, lstatSync, realpathSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { serviceManager } from "../../desktop/terminal/manager.mjs";
+import { wantsManagedDesktop } from "../../desktop/terminal/desktop-policy.mjs";
+import { notRootOwned } from "../../desktop/terminal/update-install.mjs";
 import { CliError, EXIT, table } from "../output.mjs";
 import { confirm } from "./input.mjs";
 
@@ -25,6 +28,22 @@ export function ownCommand({ entry = fileURLToPath(new URL("../botkins.mjs", imp
 }
 
 const manager = (context) => serviceManager({ command: ownCommand(), env: context.env, say: (line) => context.note(line) });
+
+function installDesktopTools(context, mode, scope) {
+  if (context.env.BOTKINS_INSTALLER === "1") return;
+  // System services do not inherit the graphical login from the terminal running the installer.
+  const env = scope === "user" ? { ...context.env } : { BOTKINS_DESKTOP: context.env.BOTKINS_DESKTOP };
+  if (mode) env.BOTKINS_DESKTOP = mode;
+  if (!wantsManagedDesktop(env)) return;
+  const helper = fileURLToPath(new URL("../../docker/desktop/install-tools", import.meta.url));
+  const file = existsSync(helper) && lstatSync(helper);
+  if (!file || !file.isFile() || (process.getuid() === 0 && (file.uid !== 0 || file.mode & 0o022 || notRootOwned(dirname(helper))))) {
+    context.note("Install the private desktop packages with the signed Linux installer or your system package manager.");
+    return;
+  }
+  const result = spawnSync("/bin/sh", [helper], { env: { ...context.env, ...env }, stdio: ["ignore", 2, 2] });
+  if (result.status !== 0) context.note("Botkins can start without a desktop until the display packages are available.");
+}
 const fail = (error) => {
   throw new CliError(error.message, error.code === "NEEDS_ROOT" ? EXIT.denied : EXIT.failed, error.code);
 };
@@ -44,22 +63,25 @@ export const install = {
     commands: {
       install: {
         summary: "Install the service and start it",
-        usage: "botkins service install [--system | --user] [--run-as <user>] [--allow-path <dir>]… [--encrypted-key] [--no-start]",
+        usage: "botkins service install [--system | --user] [--run-as <user>] [--allow-path <dir>]… [--encrypted-key] [--screen | --no-screen] [--no-start]",
         options: {
           system: { type: "boolean", about: "For the whole computer (needs root). The default as root" },
           user: { type: "boolean", about: "For you alone, kept running while you are signed out. The default otherwise" },
           "run-as": { type: "string", value: "user", about: "The user the whole computer's service runs as (Linux: botkins, made when missing)" },
           "allow-path": { type: "string", multiple: true, value: "dir", about: "Linux, whole computer: one more folder bots may write to, such as a project folder" },
           "encrypted-key": { type: "boolean", about: "Linux, whole computer: encrypt the host key to this machine with systemd-creds (its TPM when it has one)" },
+          screen: { type: "boolean", about: "Linux: prefer a private Botkins desktop even when a personal display is supplied" },
+          "no-screen": { type: "boolean", about: "Disable private desktop startup on this Linux service" },
           "no-start": { type: "boolean", about: "Write the service's files without starting it" },
         },
         details: "Installing again is safe: the service's files are written anew, and the data folder, the paired phones and the host key are left as they are.",
         async run(context) {
           const { options } = context;
           if (options.system && options.user) throw new CliError("Choose --system or --user.", EXIT.usage);
+          if (options.screen && options["no-screen"]) throw new CliError("Choose --screen or --no-screen.", EXIT.usage);
           const result = await manager(context)
             // A data folder named on purpose (--data-dir, or BOTKINS_DATA_DIR) is the one the service is installed on.
-            .install({ ...(options.system && { scope: "system" }), ...(options.user && { scope: "user" }), ...(context.paths.scope === "custom" && { dataDir: context.paths.root }), runAs: options["run-as"], allowPaths: options["allow-path"] ?? [], encryptedKey: options["encrypted-key"] === true, start: options["no-start"] !== true })
+            .install({ ...(options.system && { scope: "system" }), ...(options.user && { scope: "user" }), ...(context.paths.scope === "custom" && { dataDir: context.paths.root }), runAs: options["run-as"], allowPaths: options["allow-path"] ?? [], encryptedKey: options["encrypted-key"] === true, screen: options["no-screen"] ? false : options.screen, prepareDesktop: (mode, scope) => installDesktopTools(context, mode, scope), start: options["no-start"] !== true })
             .catch(fail);
           context.print(result, () =>
             [
@@ -94,6 +116,10 @@ export const install = {
         async run(context) {
           const { options } = context;
           const result = await manager(context).refresh({ write: options.check !== true, restart: options["no-restart"] !== true }).catch(fail);
+          if (!options.check && result.kind === "systemd") {
+            const { prepareDesktopUpdate } = await import("../../desktop/terminal/desktop-provision.mjs");
+            await prepareDesktopUpdate(result).catch(fail);
+          }
           // A file with a setting of the person's own that a new text would lose is not replaced.
           const kept = result.kept.length ? "\nLeft as " + (result.kept.length === 1 ? "it is" : "they are") + ", because of settings that `botkins service install` did not write:\n" + result.kept.map((entry) => "  " + entry.file + ": " + entry.lines.slice(0, 3).join("; ") + (entry.lines.length > 3 ? "; and " + (entry.lines.length - 3) + " more" : "")).join("\n") : "";
           context.print(result, (!result.changed.length ? (result.kept.length ? "No other file of the service needs writing for Botkins " + context.version + "." : "The service's files are up to date with Botkins " + context.version + ".") : options.check ? "Not up to date with Botkins " + context.version + ":\n" + result.changed.map((path) => "  " + path).join("\n") + "\nWrite them with `" + (result.scope === "system" ? "sudo " : "") + "botkins service refresh`." : "Written for Botkins " + context.version + " (what was there is beside each, as <name>.bak):\n" + result.changed.map((path) => "  " + path).join("\n") + (options["no-restart"] && result.kind === "systemd" ? "\nRestart the service to run it with them: `botkins service restart`." : "")) + kept);

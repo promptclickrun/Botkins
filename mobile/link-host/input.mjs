@@ -14,7 +14,7 @@ export const MAX_EVENTS = 64;
 export const MAX_EXPANDED = 256;
 export const MAX_TEXT = 2000;
 export const KEYS = ["enter", "tab", "escape", "backspace", "delete", "space", "up", "down", "left", "right", "home", "end", "pageup", "pagedown"];
-export const MODIFIERS = ["cmd", "ctrl", "alt", "shift"];
+export const MODIFIERS = ["cmd", "ctrl", "alt", "shift", "super"];
 const POINTER = ["move", "down", "up", "click", "doubleClick", "rightClick"];
 const SCROLL_MAX = 1000;
 export const NEED_ACCESSIBILITY = "Allow accessibility for this app in System Settings › Privacy & Security.";
@@ -93,7 +93,7 @@ ObjC.import("CoreGraphics");
 ObjC.import("Foundation");
 ObjC.bindFunction("CGEventKeyboardSetUnicodeString", ["void", ["void *", "unsigned long", "void *"]]);
 
-var FLAG = { cmd: 0x100000, ctrl: 0x40000, alt: 0x80000, shift: 0x20000 };
+var FLAG = { cmd: 0x100000, super: 0x100000, ctrl: 0x40000, alt: 0x80000, shift: 0x20000 };
 var NAMED = { enter: 36, tab: 48, space: 49, backspace: 51, escape: 53, "delete": 117, home: 115, end: 119, pageup: 116, pagedown: 121, left: 123, right: 124, down: 125, up: 126 };
 var CODE = { a: 0, s: 1, d: 2, f: 3, h: 4, g: 5, z: 6, x: 7, c: 8, v: 9, b: 11, q: 12, w: 13, e: 14, r: 15, y: 16, t: 17,
   "1": 18, "2": 19, "3": 20, "4": 21, "6": 22, "5": 23, "=": 24, "9": 25, "7": 26, "-": 27, "8": 28, "0": 29, "]": 30,
@@ -247,7 +247,7 @@ $screens = @([System.Windows.Forms.Screen]::AllScreens | Sort-Object @{ Expressi
 $index = [Math]::Min([Math]::Max([int]$job.display, 1), $screens.Count) - 1
 $b = $screens[$index].Bounds
 $named = @{ enter = 0x0D; tab = 0x09; escape = 0x1B; backspace = 0x08; delete = 0x2E; space = 0x20; left = 0x25; up = 0x26; right = 0x27; down = 0x28; home = 0x24; end = 0x23; pageup = 0x21; pagedown = 0x22 }
-$mods = @{ cmd = 0x11; ctrl = 0x11; alt = 0x12; shift = 0x10 }
+$mods = @{ super = 0x5B; cmd = 0x11; ctrl = 0x11; alt = 0x12; shift = 0x10 }
 function MoveTo($e) {
   [void][BotkinsInput]::SetCursorPos([int]($b.X + [Math]::Min($e.x * $b.Width, $b.Width - 1)), [int]($b.Y + [Math]::Min($e.y * $b.Height, $b.Height - 1)))
 }
@@ -315,11 +315,11 @@ function windowsInjector(dirs) {
 
 const XKEYS = { enter: "Return", tab: "Tab", escape: "Escape", backspace: "BackSpace", delete: "Delete", space: "space", up: "Up", down: "Down", left: "Left", right: "Right", home: "Home", end: "End", pageup: "Prior", pagedown: "Next" };
 const XPUNCT = { ".": "period", ",": "comma", "-": "minus", "=": "equal", "/": "slash", ";": "semicolon", "'": "apostrophe", "`": "grave", "[": "bracketleft", "]": "bracketright", "\\": "backslash" };
-const XMODS = { cmd: "ctrl", ctrl: "ctrl", alt: "alt", shift: "shift" };
+const XMODS = { super: "Super_L", cmd: "ctrl", ctrl: "ctrl", alt: "alt", shift: "shift" };
 
 /** The xdotool commands (argument lists) for tidied events on a screen of `width` by `height` pixels. */
-export function xdotoolCommands(events, { width, height }) {
-  const px = (e) => [String(Math.round(e.x * (width - 1))), String(Math.round(e.y * (height - 1)))];
+export function xdotoolCommands(events, { x = 0, y = 0, width, height }) {
+  const px = (e) => [String(x + Math.round(e.x * (width - 1))), String(y + Math.round(e.y * (height - 1)))];
   const commands = [];
   for (const e of events) {
     if (e.type === "move") commands.push(["mousemove", ...px(e)]);
@@ -344,12 +344,14 @@ export function xdotoolCommands(events, { width, height }) {
 }
 
 function linuxInjector(dirs) {
-  return async ({ events }) => {
+  return async ({ events, bounds, display, displays, release }) => {
     const xdotool = findTool("xdotool", dirs);
     const env = toolEnv(dirs, Object.fromEntries(["DISPLAY", "XAUTHORITY"].filter((name) => process.env[name]).map((name) => [name, process.env[name]])));
-    const [width, height] = String(await runTool("xdotool", xdotool, ["getdisplaygeometry"], { env, timeout: 5000 })).trim().split(/\s+/).map(Number);
-    if (!(width > 0 && height > 0)) throw new Failure("xdotool didn't give the screen's size.");
-    for (const args of xdotoolCommands(events, { width, height })) await runTool("xdotool", xdotool, args, { env, timeout: 10_000 });
+    // Forced release must also work after the display was unplugged.
+    if (release) return runTool("xdotool", xdotool, ["mouseup", "1"], { env, timeout: 5000 });
+    const target = bounds ?? (displays?.length === 1 ? display : null);
+    if (!(target?.width > 0 && target.height > 0)) throw new Failure("The selected X11 monitor could not be located.");
+    for (const args of xdotoolCommands(events, target)) await runTool("xdotool", xdotool, args, { env, timeout: 10_000 });
   };
 }
 

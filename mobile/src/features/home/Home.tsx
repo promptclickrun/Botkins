@@ -3,7 +3,7 @@
 // the list too. Filters show pinned or hidden bots. Under "All" a bot can be dragged to another place
 // or group (BotBoard.tsx), into Pinned to pin it; a still hold opens its menu.
 import { type Href, router, useScrollToTop } from "expo-router";
-import { ChevronDown, ChevronUp, MailOpen, Plus, Settings, Sunrise } from "lucide-react-native";
+import { ChevronDown, ChevronUp, MailOpen, Plus, ScreenShare, Settings, Sunrise } from "lucide-react-native";
 import { type ReactNode, useEffect, useMemo, useState } from "react";
 import { ScrollView, useWindowDimensions, View } from "react-native";
 import Animated, { FadeIn, useAnimatedRef, useAnimatedScrollHandler, useSharedValue } from "react-native-reanimated";
@@ -271,6 +271,7 @@ export default function Home() {
   const online = link === "online";
   const computer = useApp((state) => state.pairing?.name) ?? "Computer";
   const adminOn = useApp((state) => state.parts.meta?.you?.kind === "owner" && state.parts.meta.you.admin === true);
+  const showComputer = useApp(state => state.parts.meta?.you?.kind !== "member" && state.parts.meta?.capabilities.includes("screen-v1"));
   const computerOrder = usePrefs(prefs => prefs.computerOrder);
   const computers = useApp((state) => state.pairings);
   const directoryHosts = useProfileHosts();
@@ -360,6 +361,7 @@ export default function Home() {
           <ServerLinkStatus />
         </View>
         <View style={{ flexDirection: "row", alignItems: "center", gap: space.sm }}>
+          {showComputer && <IconButton icon={ScreenShare} label="Control computer" variant="soft" size={44} onPress={() => router.push("/remote")} />}
           {canView && hasUnread && <IconButton icon={MailOpen} label="Mark all as read" variant="soft" size={44} onPress={() => void markAllChatsRead()} />}
           {canCreate && <IconButton icon={Plus} label="New bot" variant="soft" size={44} onPress={() => router.push("/bot/new")} />}
           <SettingsButton />

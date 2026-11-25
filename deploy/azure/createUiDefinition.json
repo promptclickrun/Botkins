@@ -40,7 +40,7 @@
         "name": "screenAccess",
         "type": "Microsoft.Common.CheckBox",
         "label": "Screen access",
-        "defaultValue": false,
+        "defaultValue": true,
         "toolTip": "Adds a virtual screen with Google Chrome. Your phone can see it and control it, for example to finish a sign-in page that a bot opened. You can change this later with `botkins-server screen on` or `off`."
       },
       {

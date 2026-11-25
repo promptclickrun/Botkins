@@ -2,7 +2,7 @@
 // never a port another process can connect to. Only fixed Botkins operations use it.
 import { spawn } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { findTool, toolEnv } from "../link/tools.mjs";
@@ -11,7 +11,7 @@ import { bindForm, callInPage, fillPageFields, inspectForm } from "../webviewer.
 
 const closed = () => new Error("Open the sign-in page in this chat’s screen browser first.");
 const unavailable = () => new Error("Chromium did not answer. Check that the Botkins service can open its X11 display and run sandboxed Chromium.");
-const systemDirs = ["/usr/bin", "/usr/local/bin", "/opt/google/chrome", "/snap/bin"];
+const systemDirs = ["/usr/bin", "/usr/local/bin", "/opt/google/chrome", join(homedir(), ".local", "share", "botkins-desktop-tools", "bin"), "/snap/bin"];
 
 export function screenBrowserExecutable(dirs = systemDirs) {
   // Ubuntu runners also install a standalone Chromium snapshot. Prefer the Chrome

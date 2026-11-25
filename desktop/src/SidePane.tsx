@@ -9,6 +9,7 @@ import { PullRequestPanel } from "./PullRequestPanel";
 import ChatSide from "./ChatSide";
 import HtmlFrame from "./HtmlFrame";
 import { ScreenPanel } from "./ScreenSettings";
+import { ComputerScreenGate } from "./ComputerScreen";
 import { AddToProjectDialog, canAddToProject } from "./ProjectExtras";
 import { ActivityPanel, CrewPanel, canStopHelpers, type InspectTarget } from "./ActivityInspector";
 import { crewOf, storySteps, type StoryUpdate } from "./activityStory";
@@ -109,6 +110,7 @@ export default function SidePane({
   group,
   drawer,
   close,
+  openComputer,
   openRoutines,
   openBot,
   openChat,
@@ -128,6 +130,7 @@ export default function SidePane({
   drawer: boolean;
   /** The person closes the pane. */
   close: () => void;
+  openComputer: () => void;
   openRoutines?: (target: { id?: string; botId?: string }) => void;
   openBot?: () => void;
   openChat?: (id: string, messageIndex?: number) => void;
@@ -358,7 +361,7 @@ export default function SidePane({
                   </div>
                 ) : null
               ) : (
-                <ScreenPanel state={state} />
+                state.remote?.using ? <ComputerScreenGate host={state.remote.using} open={openComputer} /> : <ScreenPanel state={state} />
               )}
             </Body>
           ) : null,

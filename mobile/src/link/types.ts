@@ -432,7 +432,7 @@ export type HostPart = {
 /** A ticket to turn the screen on: the phone signs it and sends it back within the minute it lasts. */
 export type ScreenTicket = { ticket: string; expiresAt: number };
 export type ScreenDisplay = { id: string; label: string; width: number; height: number; primary: boolean };
-export type ScreenInfo = { mode: ScreenMode; displays: ScreenDisplay[]; canView: boolean; canControl: boolean; /** Why it can't, in one line ("Allow screen recording for Botkins on your computer"). */ problem?: string };
+export type ScreenInfo = { video?: boolean; superKey?: boolean; pointer?: { display: string; x: number; y: number }; mode: ScreenMode; displays: ScreenDisplay[]; canView: boolean; canControl: boolean; /** Why it can't, in one line ("Allow screen recording for Botkins on your computer"). */ problem?: string };
 /** One picture of a display. `jpeg` (base64) is left out when nothing changed since frame `after`. */
 export type ScreenFrame = { seq: number; display: string; width: number; height: number; jpeg?: string };
 /** Positions are fractions (0 to 1) of the display, so the picture's size doesn't matter. */
@@ -440,7 +440,7 @@ export type ScreenInput =
   | { type: "move" | "down" | "up" | "click" | "doubleClick" | "rightClick"; x: number; y: number }
   | { type: "scroll"; x: number; y: number; dx: number; dy: number }
   | { type: "text"; text: string }
-  | { type: "key"; key: string; modifiers?: ("cmd" | "ctrl" | "alt" | "shift")[] };
+  | { type: "key"; key: string; modifiers?: ("cmd" | "ctrl" | "alt" | "shift" | "super")[] };
 
 export type ChatMode = "default" | "plan" | "yolo";
 export type Cadence =
@@ -2086,7 +2086,10 @@ export type Calls = {
   "link.credentials.item"(manager: PasswordManagerId, vaultId: string, itemId: string): PasswordManagerItem;
   /** Links a field of a password manager item as a credential. Returns the new credential's id. */
   "link.credentials.link"(input: { manager: PasswordManagerId; vaultId: string; itemId: string; fieldId: string; name: string }): string;
-  "link.screen.info"(): ScreenInfo;
+  "link.screen.video.open"(id: string, options: { display: string; maxWidth: number; fps: number; mimeTypes: string[] }): { mimeType: string };
+  "link.screen.video.read"(id: string, sequence: number): string;
+  "link.screen.video.close"(id: string): void;
+  "link.screen.info"(options?: { pointer?: boolean }): ScreenInfo;
   /** The newest picture of a display. With `after`, waits a moment for a change and leaves `jpeg` out when there is none. */
   "link.screen.frame"(options: { display?: string; maxWidth?: number; quality?: number; after?: number; wait?: boolean }): ScreenFrame;
   "link.screen.input"(display: string, events: ScreenInput[]): void;

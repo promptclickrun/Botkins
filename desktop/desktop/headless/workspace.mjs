@@ -1,6 +1,7 @@
 // This runs in Electron's workspace container. There is deliberately no reference
 // to the public LinkHost, its pairing file, a display grant, or an owner signer.
 import { randomUUID } from "node:crypto";
+import { VideoStreams } from "../link/video.mjs";
 import { injectorFor } from "../link/input.mjs";
 import { REMOTE_METHODS } from "../link/methods.mjs";
 import { callContext } from "./backend.mjs";
@@ -9,6 +10,7 @@ import { listenWorkspace } from "./transport.mjs";
 
 export function workspaceActions(backend, inject) {
   const epoch = randomUUID();
+  const video = new VideoStreams();
   let revision = 0;
   const unsubscribe = backend.subscribe(() => revision++);
   const actions = {
@@ -21,6 +23,9 @@ export function workspaceActions(backend, inject) {
       const spaceEvents = backend.takeSpaceEvents?.(LOOK_LIMIT) ?? [];
       const loginLookups = backend.loginLookups?.requests();
       return {
+        superKey: true,
+        ...(backend.screen.pointer && { pointer: true }),
+        ...(backend.screen.openVideo && { video: true }),
         version, display: displays.some((d) => d.width > 0 && d.height > 0),
         team: backend.teamCut?.heard(teamRev) ?? null,
         ...(spaceEvents.length && { spaceEvents }),
@@ -57,18 +62,25 @@ export function workspaceActions(backend, inject) {
     adoptMcpSignIn: (...args) => backend.extras.adoptMcpSignIn(...args),
     displays: () => backend.screen.displays(),
     permissions: () => backend.screen.permissions(),
+    pointer: () => backend.screen.pointer?.() ?? null,
     async capture(options) {
       const shot = await backend.screen.capture(options);
       return { ...shot, jpeg: shot.jpeg.toString("base64") };
     },
-    input: (batch) => inject(batch),
+    videoOpen: (id, options) => video.open(id, id, signal => backend.screen.openVideo({ ...options, signal })),
+    videoRead: (id, seq) => video.read(id, id, seq),
+    videoClose: id => video.close(id, id),
+    input: (batch) => {
+      const bounds = !batch.release && backend.screen.inputBounds?.(batch.display.id);
+      return inject(bounds ? { ...batch, bounds } : batch);
+    },
   };
   return {
     dispatch(method, args) {
       if (!Object.hasOwn(actions, method)) throw new Error("Unknown workspace action.");
       return actions[method](...args);
     },
-    unsubscribe,
+    unsubscribe() { video.closeAll(); unsubscribe(); },
   };
 }
 

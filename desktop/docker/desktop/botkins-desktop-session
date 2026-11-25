@@ -1,0 +1,28 @@
+#!/bin/sh
+# xvfb-run invokes this only after its new, cookie-protected Xvfb has started.
+# Its caller owns stdin. Closing that pipe also ends the desktop if the caller crashes.
+set -eu
+[ "${BOTKINS_DESKTOP_MANAGED:-}" = 1 ] || exit 1
+# Check the server behind this number owns our cookie even if another X server was
+# racing xvfb-run for a free display. A user-supplied screen never gets the kit.
+read -r server_pid < "/tmp/.X${DISPLAY#:}-lock"
+[ "$(cat "/proc/$server_pid/comm")" = Xvfb ] || exit 1
+tr '\000' '\n' < "/proc/$server_pid/cmdline" | grep -Fxq -- "$XAUTHORITY" || exit 1
+kit=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+export XDG_RUNTIME_DIR="${XAUTHORITY%/*}/runtime"
+mkdir -m 700 "$XDG_RUNTIME_DIR"
+"$kit/botkins-desktop" </dev/null >&2 &
+desktop=$!
+trap 'kill "$desktop" 2>/dev/null || :; wait "$desktop" 2>/dev/null || :' EXIT
+trap 'exit 0' INT TERM
+
+# A published display is ready for both capture and input, with its decorations and menu.
+i=0
+until xprop -root -notype _NET_SUPPORTING_WM_CHECK 2>/dev/null | grep -q 'window id # 0x'; do
+  kill -0 "$desktop" 2>/dev/null || exit 1
+  i=$((i+1))
+  [ "$i" -lt 100 ] || exit 1
+  sleep 0.1
+done
+printf '%s\t%s\n' "$DISPLAY" "$XAUTHORITY"
+read -r stop || :

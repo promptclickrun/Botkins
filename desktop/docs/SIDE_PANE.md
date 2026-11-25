@@ -74,7 +74,9 @@ Existing standalone local paths in chat become clickable after a main-process ch
 | `rich_ui` | The stored page in the app's sandboxed frame (`HtmlFrame`): scripts only, no network, the same rules as an html block. Its answers go to this chat's message box. | A sheet with the same view the phone already shows for custom views (`link.frame`). |
 | `table` | A table that scrolls in both directions. Cells are plain text. | A sheet with the table. |
 | `web` | The website viewer: a guest page with its own in-memory storage, no access to the app, http and https only, no local-network addresses, no new windows, no downloads, no permissions. A bar shows the address, with back, forward, reload and "Open in browser". | The system's in-app browser (a Safari sheet) on the address. |
-| `screen` | The Screen panel: whether a phone may view or control this computer's screen, with the same switch and the same system permission rows as Settings › Phone. A bot can only show it. | The phone's own Screen view, behind its own gate. |
+| `screen` | On this computer, shows the sharing choices from Settings › Phone. On another paired computer, **Open computer** opens that host's viewer. | Opens the phone's Desktop viewer when the person chooses to watch. |
+
+On a paired desktop, the person can open the viewer from the Screen tab or the computer card in chat. Showing the tab or offering the card leaves capture off. The viewer uses the selected host's authenticated screen link and plays its live video, with JPEG frames available for older hosts. It starts in view mode. When the host permits control, the person can select **Control** to click, drag, scroll or type. Escape leaves control. Closing the viewer, hiding the window or changing computers stops the session and releases held input. Only a paired owner device can use the viewer.
 
 ## The tools a bot gets
 

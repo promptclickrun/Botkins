@@ -17,7 +17,7 @@ Environment=XAUTHORITY=/var/lib/botkins/display/Xauthority
 Environment=BOTKINS_DESKTOP_MANAGED=1
 # The menu's terminal and file manager open here. They can't write Botkins' data.
 Environment=HOME=/var/lib/botkins/display/home
-ExecStart=/usr/local/share/botkins-desktop/botkins-desktop
+ExecStart=/usr/bin/dbus-run-session -- /usr/local/share/botkins-desktop/botkins-desktop
 Restart=on-failure
 RestartSec=5
 

@@ -506,3 +506,32 @@
 .pr-panel { overflow: auto; height: 100%; box-sizing: border-box; padding: 16px; overflow-wrap: anywhere; }
 .pr-panel h3 { margin: 22px 0 8px; }
 .pr-panel .textbutton { white-space: normal; text-align: left; }
+.wiki-dialog.computer-view {
+  width: min(1120px, 94vw);
+  max-width: 94vw;
+  padding: 0;
+  overflow: hidden;
+}
+.computer-view > header, .computer-view > footer {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 10px 14px;
+}
+.computer-view > header h2 { flex: 1; margin: 0; }
+.computer-view .set-button, .pane-screen > .set-button { display: inline-flex; align-items: center; gap: 6px; }
+.computer-view [aria-pressed=true] { color: var(--accent); }
+.computer-stage {
+  position: relative;
+  width: 100%;
+  height: min(70vh, 700px);
+  overflow: hidden;
+  background: #151515;
+  color: white;
+  outline-offset: -2px;
+  overscroll-behavior: contain;
+}
+.computer-stage.controlling { touch-action: none; }
+.computer-stage video, .computer-stage img { width: 100%; height: 100%; object-fit: contain; pointer-events: none; user-select: none; }
+.computer-stage > p { position: absolute; inset: 0; display: grid; place-items: center; margin: 0; }

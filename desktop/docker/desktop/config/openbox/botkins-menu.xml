@@ -1,8 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  The right-click menu of a display Botkins starts itself. Each entry runs botkins-desktop-open,
-  which botkins-desktop puts on PATH. The programs it opens (xdotool, xterm, mc) are installed
-  with the display: desktop/Dockerfile and deploy/azure/install.sh.
+  Application and window menu on the private desktop. The kit puts botkins-desktop-open on PATH.
 -->
 <openbox_menu xmlns="http://openbox.org/3.4/menu">
   <menu id="root-menu" label="Botkins">
@@ -22,5 +20,13 @@
         <command>botkins-desktop-open files</command>
       </action>
     </item>
+    <item label="Browser">
+      <action name="Execute">
+        <command>botkins-desktop-open browser</command>
+      </action>
+    </item>
+    <separator/>
+    <menu id="client-list-combined-menu"/>
+    <item label="Show desktop"><action name="ToggleShowDesktop"/></item>
   </menu>
 </openbox_menu>

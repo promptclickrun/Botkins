@@ -166,7 +166,7 @@ function BotDetail({ bot }: { bot: Bot }) {
       </Group>
 
       {(canManage || canArrange || !member) && <Group>
-        {!member && <Row leading={<IconTile icon={ScreenShare} color={brand.tide} />} title="Screen" subtitle={"Watch " + bot.name + " work on your computer"} chevron onPress={() => router.push("/remote")} />}
+        {!member && <Row leading={<IconTile icon={ScreenShare} color={brand.tide} />} title="Control computer" subtitle={"Watch " + bot.name + " work on your computer"} chevron onPress={() => router.push("/remote")} />}
         {canArrange && <Row leading={<IconTile icon={Pin} color={colors.ink2} />} title="Pinned" toggled={!!bot.pinned} onToggle={(pinned) => void attempt(api.setBotFlags(bot.id, { pinned }))} />}
         {canManage && !member && sections && (
           <MenuView title="Move to section" actions={moveToSection(bot, sections).subactions ?? []} onPressAction={({ nativeEvent }) => runSectionChoice(bot, nativeEvent.event, prompt.ask)}>

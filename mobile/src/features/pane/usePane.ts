@@ -1,6 +1,6 @@
 // What a chat's screen does about its side pane: it opens the sheet when a bot asks (and only
 // then), closes it when a bot asks for that, and offers the tabs that are there.
-import { type Href, router } from "expo-router";
+import { type Href, router, usePathname } from "expo-router";
 import { useEffect, useRef } from "react";
 import { usePart, useWatchedChat } from "@/state/hooks";
 import { api } from "@/state/link";
@@ -23,12 +23,15 @@ export const paneClosed = () => {
 };
 
 export function usePane(chatId: string, onText: (text: string) => void) {
+  const controlling = usePathname() === "/remote";
   const supported = usePart("meta")?.capabilities.includes("side-pane-v1");
   const pane = useWatchedChat(chatId)?.pane;
   const handled = useRef<number | undefined>(undefined);
   const active = usePart("live")?.active;
   useEffect(() => {
-    if (!supported || !pane) return;
+    // The full viewer can sit over either the receipt or the sheet. An agent's close/select
+    // belongs to its panel, so apply it after the person returns from the controller.
+    if (controlling || !supported || !pane) return;
     // The turn that asked is still under way when this chat has one running.
     const next = paneMove(pane, handled.current, () => !!active?.includes(chatId) || useApp.getState().running[chatId]?.status === "Working");
     handled.current = next.handled;
@@ -40,7 +43,7 @@ export function usePane(chatId: string, onText: (text: string) => void) {
       }
     } else if (open?.chatId !== chatId) router.push(sheet(chatId, next.move.open));
     else router.setParams({ panel: next.move.open });
-  }, [supported, pane, chatId, active]);
+  }, [controlling, supported, pane, chatId, active]);
 
   // Text a view in the pane handed over goes to this chat's message box.
   const inbox = usePaneInbox();

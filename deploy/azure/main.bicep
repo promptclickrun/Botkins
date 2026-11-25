@@ -16,7 +16,7 @@ param location string = resourceGroup().location
 param vmName string = 'botkins'
 
 @description('Screen access. On: the server also gets a virtual display with Google Chrome, and a paired phone can see and control it. Off: bots, chats and tools work the same, and there is no screen to see.')
-param screenAccess bool = false
+param screenAccess bool = true
 
 @description('The VM size. 2 vCPUs and 4 GB is enough, with or without Screen access.')
 @allowed([

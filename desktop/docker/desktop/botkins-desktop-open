@@ -2,9 +2,7 @@
 # What the Botkins desktop's menu opens:
 #   botkins   brings the Botkins window forward; with no window (the terminal host on a server),
 #             a terminal with `botkins status`
-#   terminal  a terminal in the kit's colors
-#   files     Midnight Commander, a file manager, in that terminal
-# xterm, mc and xdotool are installed with the display (desktop/Dockerfile, deploy/azure/install.sh).
+#   terminal, files, browser   real applications on this display
 set -u
 
 # The service account's login shell is nologin. A terminal needs a real one.
@@ -12,24 +10,60 @@ case "${SHELL:-}" in
   ""|*nologin|*/false) if [ -x /bin/bash ]; then SHELL=/bin/bash; else SHELL=/bin/sh; fi ;;
 esac
 export SHELL
+if [ -n "${BOTKINS_DATA_DIR:-}" ] && [ -x "$BOTKINS_DATA_DIR/run/bin/botkins" ]; then
+  export PATH="$BOTKINS_DATA_DIR/run/bin:$PATH"
+fi
 cd "${HOME:-/}" 2>/dev/null || cd /
+
+missing() {
+  if command -v xmessage >/dev/null; then exec xmessage -center -buttons OK "$1"; fi
+  echo "$1" >&2
+  exit 1
+}
 
 term() { # <title> [command...]
   title=$1; shift
-  exec xterm -title "$title" -class Botkins-Terminal -geometry 110x32 \
-    -fa 'DejaVu Sans Mono' -fs 11 -bg '#251E1A' -fg '#FFF0D6' -cr '#EF9E78' "$@"
+  [ "$#" -gt 0 ] || set -- "$SHELL"
+  if command -v xterm >/dev/null; then
+    exec xterm -title "$title" -class Botkins-Terminal -geometry 100x30 \
+      -fa 'DejaVu Sans Mono' -fs 11 -bg '#251E1A' -fg '#FFF0D6' -cr '#EF9E78' -e "$@"
+  elif command -v lxterminal >/dev/null; then
+    exec lxterminal --no-remote --title="$title" -e "$@"
+  elif command -v xfce4-terminal >/dev/null; then
+    exec xfce4-terminal --disable-server --title="$title" -x "$@"
+  fi
+  missing "Install xterm or LXTerminal to open a terminal on this desktop."
 }
 
 case "${1:-}" in
   botkins)
-    win=$(xdotool search --onlyvisible --class --classname '^botkins(-desktop)?$' 2>/dev/null | head -n 1)
+    win=$(xdotool search --class '^botkins(-desktop)?$' 2>/dev/null | head -n 1)
     if [ -n "$win" ]; then exec xdotool windowactivate "$win"; fi
     if command -v botkins >/dev/null; then
-      term Botkins -e "$SHELL" -c 'botkins status; echo; exec "$SHELL"'
+      term Botkins "$SHELL" -c 'botkins status; echo; exec "$SHELL"'
     fi
     term Terminal
     ;;
   terminal) term Terminal ;;
-  files) term Files -e mc ;;
-  *) echo "usage: botkins-desktop-open botkins|terminal|files" >&2; exit 64 ;;
+  files)
+    if command -v pcmanfm >/dev/null; then exec pcmanfm --no-desktop "$HOME"; fi
+    if command -v thunar >/dev/null; then exec thunar "$HOME"; fi
+    if command -v mc >/dev/null; then term Files mc; fi
+    missing "Install PCManFM, Thunar or Midnight Commander to browse files."
+    ;;
+  browser)
+    for browser in google-chrome chromium chromium-browser; do
+      if command -v "$browser" >/dev/null; then
+        "$browser" --ozone-platform=x11 --user-data-dir="$HOME/.config/botkins-browser" --no-first-run --no-default-browser-check --new-window about:blank && exit 0
+        break
+      fi
+    done
+    for browser in firefox-esr firefox; do
+      if command -v "$browser" >/dev/null; then exec "$browser" --new-window about:blank; fi
+    done
+    if command -v epiphany >/dev/null; then epiphany --new-window about:blank && exit 0; fi
+    if command -v netsurf-gtk >/dev/null; then exec netsurf-gtk about:blank; fi
+    missing "Install a browser that can run under this service account."
+    ;;
+  *) echo "usage: botkins-desktop-open botkins|terminal|files|browser" >&2; exit 64 ;;
 esac

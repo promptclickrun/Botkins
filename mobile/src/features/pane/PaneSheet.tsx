@@ -133,7 +133,7 @@ function BotPaneSheet() {
         </T>
       )}
       <View style={{ flex: 1 }}>
-        <Body key={panel.id + ":" + panel.updatedAt} panel={panel} chatId={chatId} />
+        <Body key={panel.kind === "screen" ? panel.id : panel.id + ":" + panel.updatedAt} panel={panel} chatId={chatId} />
       </View>
     </Sheet>
   );

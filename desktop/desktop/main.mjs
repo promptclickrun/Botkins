@@ -260,6 +260,7 @@ function openWindow() {
   lastBeforeInputKey = null;
   win.webContents.on("did-start-navigation", (_event, _url, isInPlace, isMainFrame) => {
     if (isMainFrame && !isInPlace) {
+      remote?.stopScreen();
       panelOpenFrames = new Set();
       lastBeforeInputKey = null;
     }
@@ -285,6 +286,7 @@ function openWindow() {
     }
   });
   win.on("closed", () => {
+    remote?.stopScreen();
     panelOpenFrames = new Set();
     lastBeforeInputKey = null;
     win = null;
@@ -292,6 +294,9 @@ function openWindow() {
   });
   for (const change of ["show", "hide", "restore", "minimize"]) win.on(change, windowPush.visibilityChanged);
   win.on("show", syncTray);
+  win.webContents.on("render-process-gone", () => remote?.stopScreen());
+  win.on("hide", () => remote?.stopScreen());
+  win.on("minimize", () => remote?.stopScreen());
   win.on("hide", syncTray);
   for (const change of ["focus", "blur", "show", "hide"]) win.on(change, tellWatching);
   win.loadFile(html);
@@ -510,6 +515,10 @@ else
       },
       // Other computers' Botkins this app uses (Settings › Computers and teams, the first launch and the switcher). A phone can't make these calls.
       remoteHosts: () => ({ using: remote.inUse(), hosts: remote.list() }),
+      remoteScreen: (hostId, viewerId, operation, ...args) => {
+        if (operation === "start" && hostId === runtime.link.status().serverId) throw new Error("This is the computer you are using. Choose This computer to manage screen sharing.");
+        return remote.screenRequest(hostId, viewerId, operation, ...args);
+      },
       pairRemoteHost: async (input) => {
         const result = await remote.pair({ link: input?.link, address: input?.address, code: input?.code, name: profile.status().profile?.name });
         if (profile.token()) void profile.bindRemote(result.id).catch((error) => console.error("Profile bind:", error.message));

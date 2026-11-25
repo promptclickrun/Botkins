@@ -72,4 +72,19 @@ if ! grep -q '"running":true' "$status" || ! grep -q "\"version\":\"$version\"" 
   cat "$status" >&2
   exit 1
 fi
-echo "The image reports $version, its command list names each area, and its service runs."
+# Older tags without a smoke script use this one as a fallback.
+if ! jq -e 'any(.areas[].commands[]?.options[]?; .name == "--no-screen")' "$list" >/dev/null; then
+  echo "The image reports $version, its command list names each area, and its service runs."
+  exit 0
+fi
+if ! docker exec "$name" sh -ec '
+  set -- /tmp/xvfb-run.*/Xauthority
+  [ "$#" -eq 1 ] && [ -r "$1" ]
+  export XAUTHORITY=$1
+  address=$(xauth list | cut -d" " -f1 | head -n1)
+  DISPLAY=:${address##*:} xprop -root -notype _NET_SUPPORTING_WM_CHECK | grep -q "window id #"
+'; then
+  echo "The default workspace did not start its private desktop." >&2
+  exit 1
+fi
+echo "The image reports $version, its command list names each area, and its workspace and desktop run."

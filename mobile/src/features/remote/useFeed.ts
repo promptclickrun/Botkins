@@ -8,7 +8,7 @@ import { readScreenFrame } from "@/state/link";
 import { useApp } from "@/state/store";
 import { useAppActive } from "@/state/useAppActive";
 import { holdScreen } from "@/features/pane/watching";
-import { claimScreenFeed, whenScreenFeedFree } from "./feedRegistry";
+import { claimScreenFeed, type ScreenFeedOwner, whenScreenFeedFree } from "./feedRegistry";
 import { type FeedState, runScreenFeed } from "./screenFeed";
 
 export type SlotName = "a" | "b";
@@ -22,7 +22,7 @@ const DRAW_WAIT_MS = 1500;
  * `gapMs` is the least time from one ask to the next (default 0: ask again as soon as an answer is
  * in, as Settings › Screen does). The pane paces its samples, and a chat card takes just one.
  */
-export function useFeed({ enabled, display, maxWidth, quality, gapMs = 0, once = false }: { enabled: boolean; display: string | undefined; maxWidth: number; quality: number; gapMs?: number; once?: boolean }) {
+export function useFeed({ enabled, display, maxWidth, quality, gapMs = 0, once = false, owner = once ? "ScreenCard" : gapMs > 0 ? "PaneScreen" : "Remote" }: { enabled: boolean; display: string | undefined; maxWidth: number; quality: number; gapMs?: number; once?: boolean; owner?: ScreenFeedOwner }) {
   const [pictures, setPictures] = useState<Pictures>({ a: null, b: null, front: "a" });
   const [state, setState] = useState<FeedState>("starting");
   const [error, setError] = useState<string | null>(null);
@@ -44,7 +44,7 @@ export function useFeed({ enabled, display, maxWidth, quality, gapMs = 0, once =
       unwait?.();
       unwait = whenScreenFeedFree(computer, () => setRun((n) => n + 1));
     };
-    const releaseFeed = claimScreenFeed(computer, display, once ? "ScreenCard" : gapMs > 0 ? "PaneScreen" : "Remote", () => {
+    const releaseFeed = claimScreenFeed(computer, display, owner, () => {
       controller.abort();
       waitTurn();
     });
@@ -98,7 +98,7 @@ export function useFeed({ enabled, display, maxWidth, quality, gapMs = 0, once =
       waiting.current?.finish(false);
       stop();
     };
-  }, [active, computer, display, maxWidth, quality, gapMs, once, run]);
+  }, [active, computer, display, maxWidth, quality, gapMs, once, owner, run]);
 
   /** The image in `slot` was drawn (or failed to load, with `promote` false). */
   function drawn(slot: SlotName, id: number, promote = true) {

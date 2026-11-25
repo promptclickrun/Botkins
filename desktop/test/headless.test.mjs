@@ -43,6 +43,30 @@ function stubWorkspace() {
   return { backend, state, displays, calls, contexts, changed: () => change() };
 }
 
+test("a negotiated video stream crosses the workspace socket and ends when the authority closes it", async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "bk-video-"));
+  const socket = join(dir, "workspace.sock");
+  const fixture = stubWorkspace();
+  const mimeType = 'video/mp4; codecs="avc1.42C01F"';
+  let releases = 0;
+  fixture.backend.screen.openVideo = async ({ display }) => {
+    assert.equal(display, "1");
+    return { mimeType, read: async () => Buffer.from("fragment"), close: () => releases++ };
+  };
+  const actions = workspaceActions(fixture.backend, () => {});
+  const close = await listenWorkspace(socket, actions.dispatch);
+  t.after(() => { actions.unsubscribe(); close(); rmSync(dir, { recursive: true, force: true }); });
+  const { backend, refresh } = headlessBackend((method, args) => workspaceRequest(socket, method, args), "test");
+  await refresh();
+  const controller = new AbortController();
+  const stream = await backend.screen.openVideo({ display: "1", signal: controller.signal, mimeTypes: [mimeType], fps: 30, maxWidth: 1280 });
+  assert.equal(stream.mimeType, mimeType);
+  assert.deepEqual(await stream.read(), Buffer.from("fragment"));
+  controller.abort();
+  for (let n = 0; n < 30 && !releases; n++) await delay(10);
+  assert.equal(releases, 1);
+});
+
 test("the split workspace gets only the matching vault names for a private owner's chat", async t => {
   const dir = mkdtempSync(join(tmpdir(), "bk-names-"));
   t.after(() => rmSync(dir, { recursive: true, force: true }));

@@ -19,6 +19,7 @@ import {
   session,
   shell,
   systemPreferences,
+  WebContentsView,
 } from "electron";
 import { randomUUID } from "node:crypto";
 import { rm, writeFile } from "node:fs/promises";
@@ -30,6 +31,7 @@ import { desktopUpdates } from "../mac-update.mjs";
 import { screenAdapter } from "../screenshare.mjs";
 import { releasePage } from "../updates.mjs";
 import { checkHost } from "./index.mjs";
+import { electronVideoRecorder } from "./electron-video.mjs";
 
 /** Prints a document to PDF in a hidden window that runs no scripts and loads nothing from anywhere. */
 async function pdfOf(html) {
@@ -161,7 +163,8 @@ export function electronHost({ window, showWindow, viewing, fillSecurePage, star
     notifications: Notification,
     images: nativeImage,
     // Pictures of the screen for a phone that may watch it (desktop/screenshare.mjs).
-    screen: screenAdapter({ screen, desktopCapturer, systemPreferences, openExternal: (url) => shell.openExternal(url) }),
+    screen: screenAdapter({ screen, desktopCapturer, systemPreferences,
+      recordVideo: electronVideoRecorder({ WebContentsView, session, screen }), openExternal: (url) => shell.openExternal(url) }),
     shell: {
       openExternal: (url) => shell.openExternal(url),
       openPath: (path) => shell.openPath(path),

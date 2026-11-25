@@ -68,6 +68,7 @@ import { clearReadingError, readAloud, useReading } from "./voice";
 import ContextDetails from "./ContextDetails";
 import { BotAvatar, activityLabel, botActivity, chatActivity, useOutcome } from "./Avatar";
 import SidePane, { paneAction, useNarrow, usePaneAsk, type Inspect } from "./SidePane";
+import ComputerScreen from "./ComputerScreen";
 import { chatDefault, ModelBadge, modelLabel, useDefaultProvider } from "./ModelPicker";
 import { useModelCatalog } from "./providers";
 import ProjectChanges, { ProjectPicker, modeLabels } from "./ProjectChanges";
@@ -418,6 +419,15 @@ function ChatViewBody({
   }, []);
   const canStop = canStopHelpers(state.remote?.using);
   const hostId = state.remote?.using?.id;
+  const computer = state.remote?.using;
+  const [watching, setWatching] = useState<{ hostId: string; chatId: string } | null>(null);
+  const closeComputer = useCallback(() => setWatching(null), []);
+  const openComputer = () => {
+    if (computer && !computer.member && computer.state === "online") setWatching({ hostId: computer.id, chatId: chat.id });
+  };
+  useEffect(() => {
+    if (!onScreen || computer?.state !== "online" || watching?.hostId !== hostId || watching?.chatId !== chat.id) setWatching(null);
+  }, [onScreen, computer?.state, hostId, chat.id, watching]);
   const remoteHost = !!state.remote?.using;
   const files = useMemo(() => ({ chatId: chat.id, botId: bot.id, hostId, remote: remoteHost, preview: (file: FilePreview) => {
     setPull(undefined);
@@ -1310,6 +1320,7 @@ function ChatViewBody({
           )}
           {panels.filter(panel => panel.kind === "screen").map(panel => (
             <button key={panel.id} className="screen-card" onClick={() => {
+              openComputer();
               setPull(undefined);
               setPreview(undefined);
               paneAction(chat.id, "select", panel.id);
@@ -1515,8 +1526,10 @@ function ChatViewBody({
       </div>
       {paneShown && narrow && <div className="pane-scrim" aria-hidden="true" onClick={closePane} />}
       {paneShown && (
-        <SidePane key={chat.id} inspect={inspect?.chatId === chat.id ? inspect : undefined} latestRunId={latest?.id} pull={pull?.chatId === chat.id ? pull : undefined} preview={preview?.chatId === chat.id ? preview : undefined} state={state} chat={chat} bot={bot} face={face} group={group} drawer={narrow} close={closePane} openRoutines={openRoutines} openBot={openBot} openChat={openChat} />
+        <SidePane key={chat.id} inspect={inspect?.chatId === chat.id ? inspect : undefined} latestRunId={latest?.id} pull={pull?.chatId === chat.id ? pull : undefined} preview={preview?.chatId === chat.id ? preview : undefined} state={state} chat={chat} bot={bot} face={face} group={group} drawer={narrow} close={closePane} openComputer={openComputer} openRoutines={openRoutines} openBot={openBot} openChat={openChat} />
       )}
+      {computer && !computer.member && computer.state === "online" && onScreen && watching?.hostId === computer.id && watching.chatId === chat.id &&
+        <ComputerScreen key={computer.id + "/" + chat.id} host={computer} close={closeComputer} />}
     </div>
   );
 }

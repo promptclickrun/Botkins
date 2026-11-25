@@ -1,13 +1,13 @@
 name: botkins
 
-# `docker compose up -d` runs the terminal host: Botkins as one small Node service, with no display.
+# `docker compose up -d` runs the terminal host with its own Botkins desktop.
 # It uses the image each release publishes (ghcr.io/promptclickrun/botkins). BOTKINS_VERSION picks
 # a release ("0.17.0"); without it, the latest. `docker compose up -d --build` builds this checkout
 # instead. To update: `docker compose pull && docker compose up -d`.
 # Pair a phone with `docker compose exec botkins botkins pair`. See docs/terminal.md.
 #
 # `docker compose --profile display up -d host workspace` runs the earlier setup instead, for a phone that should
-# see and control a screen: the `host` and `workspace` services (desktop/README.md). The two
+# use the full Electron workspace: the `host` and `workspace` services (desktop/README.md). The two
 # setups keep separate data; run one of them.
 services:
   botkins:
@@ -19,6 +19,7 @@ services:
     user: "10001:10001"
     environment:
       BOTKINS_DATA_DIR: /var/lib/botkins
+      BOTKINS_DESKTOP: "${BOTKINS_DESKTOP:-auto}"
       # A container's own address is not one a phone can reach: the pairing code offers this one.
       # Set it to the server's address on your network, or its public name (no port).
       BOTKINS_PAIR_ADDRESS: "${BOTKINS_PAIR_ADDRESS:-127.0.0.1}"
@@ -36,6 +37,7 @@ services:
     read_only: true
     tmpfs:
       - /tmp:rw,nosuid,nodev,size=256m
+    shm_size: 256m
     security_opt:
       - no-new-privileges:true
     cap_drop:

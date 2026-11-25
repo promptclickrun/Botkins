@@ -209,7 +209,8 @@ done
 # ── Botkins ──────────────────────────────────────────────────────────────────────────────────
 if ! command -v botkins >/dev/null || [ "$deployment" -eq 1 ] || [ "$update" -eq 1 ]; then
   say "Installing the latest Botkins release"
-  sh "$SRC/desktop/install/install.sh" --no-start
+  # Azure provisions its own screen below, according to the deployment setting.
+  sh "$SRC/desktop/install/install.sh" --no-start --no-screen
 fi
 say "Configuring Botkins"
 # Stopped, the command writes the settings itself, with the release just installed. A running older
@@ -233,14 +234,15 @@ install -d -m 0755 /etc/systemd/system/botkins.service.d
 install -m 0644 "$SRC/deploy/azure/systemd/botkins.service.d/50-azure.conf" /etc/systemd/system/botkins.service.d/
 if [ "$MODE" = screen ]; then
   say "Installing the virtual display and Google Chrome"
-  # x11-utils: xdpyinfo and xprop. openbox, hsetroot, xterm and mc: the Botkins desktop and the
-  # programs its menu opens.
-  apt install xvfb xauth xdotool ffmpeg x11-utils openbox hsetroot xterm mc fonts-dejavu-core
+  # X11 capture and input, the branded desktop and its native applications.
+  apt install xvfb xauth xdotool ffmpeg x11-utils openbox hsetroot dbus-daemon xterm pcmanfm mc fonts-dejavu-core
   if [ "$ARCH" = amd64 ] && [ ! -x /usr/bin/google-chrome ]; then
     # Chrome's package also adds Google's repository, so it gets updates.
     curl -fsSL https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb -o /tmp/google-chrome.deb
     apt install /tmp/google-chrome.deb
     rm -f /tmp/google-chrome.deb
+  elif [ "$ARCH" != amd64 ] && ! command -v chromium >/dev/null; then
+    apt install netsurf-gtk
   fi
   install -d -o botkins -g botkins -m 0700 /var/lib/botkins/display
   install -d -o botkins -g botkins -m 0700 /var/lib/botkins/display/home

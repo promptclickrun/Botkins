@@ -120,7 +120,7 @@ test("installing for the whole computer makes the user, the folders, a root-only
   const manager = serviceManager({ command, platform: "linux", uid: 0, home: "/root", user: "root", env: {}, run, root, say: (line) => said.push(line), own: (path, uid, gid) => owned.push([path.slice(root.length), uid, gid]) });
   assert.equal(manager.installed(), null);
   assert.deepEqual(await manager.status(), { installed: false, active: false, enabled: false });
-  const result = await manager.install({ allowPaths: ["/srv/projects"] });
+  const result = await manager.install({ allowPaths: ["/srv/projects"], screen: true });
   assert.deepEqual([result.kind, result.scope, result.file, result.dataDir, result.user], ["systemd", "system", "/etc/systemd/system/botkins.service", "/var/lib/botkins", "botkins"]);
   assert.match(result.key, /root-only key file \(\/etc\/botkins\/host\.key\)/);
   assert.deepEqual(calls, [
@@ -144,6 +144,7 @@ test("installing for the whole computer makes the user, the folders, a root-only
   const key = readFileSync(root + "/etc/botkins/host.key");
   assert.equal(keyFrom(key).length, 32);
   const unit = readFileSync(root + "/etc/systemd/system/botkins.service", "utf8");
+  assert.match(unit, /^Environment=BOTKINS_DESKTOP=managed$/m);
   assert.match(unit, /^LoadCredential=botkins-key:\/etc\/botkins\/host\.key$/m);
   assert.match(unit, /^ReadWritePaths=\/var\/lib\/botkins \/srv\/projects$/m);
   assert.ok(existsSync(root + "/etc/systemd/system/botkins-update.service") && existsSync(root + "/etc/systemd/system/botkins-update.path"));
@@ -153,6 +154,7 @@ test("installing for the whole computer makes the user, the folders, a root-only
   calls.length = 0;
   owned.length = 0;
   await manager.install({ start: false });
+  assert.match(readFileSync(root + "/etc/systemd/system/botkins.service", "utf8"), /^Environment=BOTKINS_DESKTOP=managed$/m, "reinstall keeps the private screen choice");
   assert.deepEqual(readFileSync(root + "/etc/botkins/host.key"), key);
   assert.ok(!calls.some((call) => call.startsWith("useradd") || call.includes("restart")));
   // What the computer's service manager says is passed on.
@@ -238,7 +240,8 @@ test("one person's install needs no root, lingers, and says so when lingering ca
   const home = "/home/sam";
   const { calls, run } = tools({ "loginctl enable-linger": { code: 1, stderr: "Access denied" } });
   const manager = serviceManager({ command: ["/home/sam/.local/share/botkins-terminal/current/bin/botkins"], platform: "linux", uid: 1000, home, user: "sam", env: { PATH: "/home/sam/.volta/bin:/usr/bin" }, run, root });
-  const result = await manager.install();
+  const result = await manager.install({ screen: true });
+  assert.match(readFileSync(root + result.file, "utf8"), /^Environment=BOTKINS_DESKTOP=managed$/m);
   assert.deepEqual([result.scope, result.file, result.dataDir], ["user", "/home/sam/.config/systemd/user/botkins.service", "/home/sam/.local/share/botkins"]);
   assert.match(result.note, /sudo loginctl enable-linger sam/);
   assert.deepEqual(calls, ["systemctl --user daemon-reload", "systemctl --user enable botkins.service", "loginctl enable-linger sam", "systemctl --user restart botkins.service"]);

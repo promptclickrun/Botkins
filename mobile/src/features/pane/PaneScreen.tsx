@@ -1,14 +1,13 @@
 // The side pane's screen tab: the computer's screen, live, as large as the tab allows, and under it
-// the way to Settings › Screen to use the pointer and keyboard (it keeps its own check). The tab
+// a shortcut to Control computer to use the pointer and keyboard. The tab
 // itself only shows: it sends no input and doesn't keep the phone awake.
-import { router } from "expo-router";
 import { useState } from "react";
 import { StyleSheet, View } from "react-native";
 import { fitPicture } from "@/features/remote/gestures";
 import { useScreenKey } from "@/features/pane/watching";
 import { Button, radius, space, useOnShow, useTheme } from "@/ui";
-import { GateCover, gateLabel, ScreenPicture, useLiveScreen } from "./LiveScreen";
-import { screenLabel, WORDS } from "./screenLive";
+import { GateCover, gateHasAction, gateLabel, ScreenPicture, useLiveScreen } from "./LiveScreen";
+import { screenLabel } from "./screenLive";
 
 export function PaneScreen() {
   const host = useScreenKey();
@@ -23,14 +22,13 @@ function ScreenTab() {
   // The picture's proportions, fitted in the tab and centered.
   const fit = fitPicture(box, { width: screen.ratio * 1000, height: 1000 });
   const open = screen.gate.kind === "open";
-  const control = screen.mode === "control" && screen.info?.canControl !== false;
 
   return (
     <View style={{ flex: 1, paddingHorizontal: space.lg, paddingBottom: space.lg, gap: space.md }}>
       <View style={{ flex: 1 }} onLayout={({ nativeEvent }) => setBox({ width: nativeEvent.layout.width, height: nativeEvent.layout.height })}>
         {fit.imageWidth > 0 && (
           <View
-            accessible={screen.gate.kind !== "covered"}
+            accessible={!gateHasAction(screen.gate)}
             accessibilityLabel={open ? screenLabel("pane", screen.look) : gateLabel(screen.gate)}
             style={{
               position: "absolute",
@@ -49,7 +47,7 @@ function ScreenTab() {
           </View>
         )}
       </View>
-      {open && <Button title={control ? WORDS.control : WORDS.watch} wide onPress={() => router.push("/remote")} />}
+      {!!screen.viewerLabel && <Button title={screen.viewerLabel} wide onPress={screen.openViewer} />}
     </View>
   );
 }

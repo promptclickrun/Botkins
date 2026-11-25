@@ -1,17 +1,15 @@
 // What fingers on the picture mean. One state machine reads raw touches (from a manual gesture
-// in Stage.tsx) and turns them into pointer events for the computer, zoom and pan of the picture,
-// and a few requests of the screen itself (show the bar). It runs on the JS thread; the zoom and
-// the drawn pointer are written to shared values so the UI thread draws them.
+// in Stage.tsx) and turns them into pointer events for the computer, zoom and pan. It writes the
+// viewport and pointer into shared values that the UI thread draws.
 //
 // Trackpad mode (the default): one finger slides the pointer (relative, with gentle acceleration);
 // a tap clicks at the pointer; a second tap soon after double-clicks; tap, then hold or slide,
 // drags; a long press or a two-finger tap right-clicks; a two-finger drag scrolls.
 // Touch mode: a tap clicks under the finger; a long press right-clicks; a one-finger drag drags;
 // a two-finger drag scrolls.
-// Both: pinch zooms 1x to 5x; while zoomed a two-finger drag pans instead of scrolling; a
-// two-finger double tap resets the zoom; a three-finger tap shows the bar.
+// Both: pinch zooms 1x to 5x, three fingers pan and a two-finger double tap resets the zoom.
 import type { GestureTouchEvent } from "react-native-gesture-handler";
-import { type SharedValue, withTiming } from "react-native-reanimated";
+import type { SharedValue } from "react-native-reanimated";
 import type { ScreenInput } from "@/link/types";
 
 /** How far a finger may wander and still count as a tap, in points. */
@@ -28,8 +26,6 @@ export const DOUBLE_TAP_REACH = 44;
 export const PINCH_SLOP = 24;
 export const MIN_ZOOM = 1;
 export const MAX_ZOOM = 5;
-/** When the bar is hidden, a tap this close to the bottom edge brings it back, in points. */
-export const BOTTOM_EDGE = 56;
 /** Trackpad pointer speed: screen points of pointer per point of finger, before acceleration. */
 export const POINTER_SPEED = 1;
 /** Finger speed (points per ms) above which the pointer speeds up. */
@@ -73,15 +69,14 @@ export type GestureOutput = {
   clicked: () => void;
   /** A drag started (for a haptic). */
   grabbed: () => void;
-  showBar: () => void;
-  /** A finger touched or left the picture. */
-  touched: () => void;
 };
 
 type Phase =
   | "idle"
   /** One finger, not yet a tap, a slide or a hold. */
   | "one"
+  /** Direct touch began in the letterbox. A second finger can still start a pinch. */
+  | "outside"
   /** Trackpad: sliding the pointer. */
   | "pointer"
   /** The mouse button is down. */
@@ -93,8 +88,8 @@ type Phase =
   | "scroll"
   /** Two fingers zoom and pan the picture. */
   | "zoom"
-  /** Three or more fingers. */
-  | "many"
+  /** Three fingers move the viewport, including while a pointer is available. */
+  | "three"
   /** Ignore the rest of this touch (a long press fired, or fingers came and went). */
   | "spent";
 
@@ -104,11 +99,12 @@ const distance = (a: Point, b: Point) => Math.hypot(a.x - b.x, a.y - b.y);
 export class ScreenGestures {
   private mode: PointerMode = "trackpad";
   private control = false;
-  private barHidden = false;
   private fit: Fit = NO_FIT;
   private display = { width: 1, height: 1 };
   private view = { scale: 1, x: 0, y: 0 };
   private pointer: Point = { x: 0.5, y: 0.5 };
+  private selected?: string;
+  private pointers = new Map<string, Point>();
 
   private touches = new Map<number, Point>();
   private phase: Phase = "idle";
@@ -117,11 +113,9 @@ export class ScreenGestures {
   private most = 0;
   /** This touch follows a tap closely: a double tap, or (trackpad) the start of a drag. */
   private second = false;
-  /** This touch began at the bottom edge while the bar was hidden. */
-  private edge = false;
   private lastTap: { x: number; y: number; t: number } | null = null;
   private lastTwoTap = 0;
-  private two = { distance: 0, center: { x: 0, y: 0 }, last: { x: 0, y: 0 }, scale: 1, x: 0, y: 0, t: 0, lifted: false };
+  private two = { distance: 0, center: { x: 0, y: 0 }, last: { x: 0, y: 0 }, scale: 1, x: 0, y: 0, t: 0 };
 
   private holdTimer: ReturnType<typeof setTimeout> | undefined;
   private dragTimer: ReturnType<typeof setTimeout> | undefined;
@@ -132,12 +126,25 @@ export class ScreenGestures {
     private out: GestureOutput,
   ) {}
 
-  configure(options: { mode: PointerMode; control: boolean; barHidden: boolean; out: GestureOutput }) {
+  configure(options: { mode: PointerMode; control: boolean; out: GestureOutput }) {
     if (options.mode !== this.mode || options.control !== this.control) this.abandon();
     this.mode = options.mode;
     this.control = options.control;
-    this.barHidden = options.barHidden;
     this.out = options.out;
+  }
+
+  /** Start at the host cursor when known and keep each display's position through a switch. */
+  selectDisplay(id: string, initial?: Point) {
+    if (id === this.selected) return;
+    this.abandon();
+    if (this.selected) this.pointers.set(this.selected, this.pointer);
+    this.selected = id;
+    const at = this.pointers.get(id) ?? initial;
+    this.pointer = at && Number.isFinite(at.x) && Number.isFinite(at.y)
+      ? { x: clamp(at.x, 0, 1), y: clamp(at.y, 0, 1) } : { x: 0.5, y: 0.5 };
+    this.values.pointerX.value = this.pointer.x;
+    this.values.pointerY.value = this.pointer.y;
+    this.resetZoom();
   }
 
   /** The stage and the picture changed size. `display` is the computer's display in pixels. */
@@ -149,17 +156,36 @@ export class ScreenGestures {
 
   /** Back to 1x, centered. */
   resetZoom() {
-    this.view = { scale: 1, x: 0, y: 0 };
-    this.values.scale.value = withTiming(1, { duration: 200 });
-    this.values.x.value = withTiming(0, { duration: 200 });
-    this.values.y.value = withTiming(0, { duration: 200 });
+    this.setView({ scale: 1, x: 0, y: 0 });
+  }
+
+  /** VoiceOver and TalkBack provide the same viewport and pointer without raw multi-touch. */
+  accessibilityAction(name: string) {
+    if (name === "increment" || name === "decrement") {
+      this.setView({ ...this.view, scale: this.view.scale * (name === "increment" ? 1.5 : 1 / 1.5) });
+      return;
+    }
+    if (!this.control) return;
+    if (name === "activate" || name === "rightClick") {
+      this.out.send({ type: name === "activate" ? "click" : "rightClick", ...this.pointer });
+      this.out.clicked();
+      return;
+    }
+    const step = 0.05 / this.view.scale;
+    let { x, y } = this.pointer;
+    switch (name) {
+      case "moveLeft": x -= step; break;
+      case "moveRight": x += step; break;
+      case "moveUp": y -= step; break;
+      case "moveDown": y += step; break;
+      default: return;
+    }
+    this.movePointer(x, y);
   }
 
   /** Lets go of everything: timers, and a held mouse button. */
   dispose() {
     this.abandon();
-    clearTimeout(this.rightTimer);
-    this.rightTimer = undefined;
   }
 
   // Touches.
@@ -168,8 +194,7 @@ export class ScreenGestures {
     const now = Date.now();
     for (const touch of event.changedTouches) this.touches.set(touch.id, { x: touch.x, y: touch.y });
     const count = this.touches.size;
-    this.most = Math.max(this.most, count);
-    this.out.touched();
+    this.most = this.phase === "idle" ? count : Math.max(this.most, count);
 
     if (count === 1 && (this.phase === "idle" || this.phase === "spent")) {
       const p = this.touches.values().next().value as Point;
@@ -177,10 +202,14 @@ export class ScreenGestures {
       this.most = 1;
       this.start = { x: p.x, y: p.y, t: now };
       this.last = { ...this.start };
-      this.edge = this.barHidden && p.y > this.fit.height - BOTTOM_EDGE;
+      if (this.control && this.mode === "touch" && !this.insidePicture(p)) {
+        this.phase = "outside";
+        this.lastTap = null;
+        return;
+      }
       const tap = this.lastTap;
       this.second = !!tap && now - tap.t < DOUBLE_TAP_MS && distance(tap, p) < DOUBLE_TAP_REACH * (this.mode === "trackpad" ? 2 : 1);
-      if (this.control && !this.edge) {
+      if (this.control) {
         if (this.second && this.mode === "trackpad") this.dragTimer = setTimeout(() => this.dragHeld(), DRAG_HOLD_MS);
         else this.holdTimer = setTimeout(() => this.held(), HOLD_MS);
       }
@@ -190,7 +219,7 @@ export class ScreenGestures {
     if (count === 2) {
       this.clearOneTimers();
       if (this.phase === "drag") this.release();
-      if (this.phase === "one" || this.phase === "pointer" || this.phase === "pan" || this.phase === "drag") this.beginTwo(now);
+      if (this.phase === "idle" || this.phase === "one" || this.phase === "outside" || this.phase === "pointer" || this.phase === "pan" || this.phase === "drag") this.beginTwo(now);
       else this.phase = "spent";
       return;
     }
@@ -198,7 +227,8 @@ export class ScreenGestures {
     if (count >= 3) {
       this.clearOneTimers();
       if (this.phase === "drag") this.release();
-      this.phase = this.phase === "two" || this.phase === "one" || this.phase === "many" ? "many" : "spent";
+      this.phase = count === 3 ? "three" : "spent";
+      this.last = { ...this.centroid(), t: now };
     }
   }
 
@@ -245,6 +275,10 @@ export class ScreenGestures {
         if (p) this.pan(p);
         return;
       }
+      case "three": {
+        if (this.touches.size === 3) this.pan(this.centroid());
+        return;
+      }
       case "two": {
         if (this.touches.size < 2) {
           // One of the two lifted; a slide of the other is not a two-finger tap.
@@ -257,14 +291,14 @@ export class ScreenGestures {
         const spread = distance(a, b);
         if (Math.abs(spread - this.two.distance) > PINCH_SLOP) {
           this.phase = "zoom";
-          this.rebaseTwo(center, spread);
+          this.zoomTo(center, spread);
         } else if (distance(center, this.two.center) > TAP_SLOP) {
-          if (this.view.scale > 1.01) {
-            this.phase = "zoom";
-            this.rebaseTwo(center, spread);
-          } else if (this.control) {
+          if (this.control) {
             this.phase = "scroll";
             this.scroll(center);
+          } else if (this.view.scale > 1.01) {
+            this.phase = "zoom";
+            this.zoomTo(center, spread);
           } else this.phase = "spent";
         }
         this.two.last = center;
@@ -295,24 +329,18 @@ export class ScreenGestures {
     for (const id of lifted) this.touches.delete(id);
 
     if (this.touches.size > 0) {
-      if (this.phase === "scroll" || this.phase === "zoom") this.phase = "spent";
-      else if (this.phase === "two") this.two.lifted = true;
+      if (this.phase === "scroll" || this.phase === "zoom" || this.phase === "three") this.phase = "spent";
+      else if (this.phase === "two") this.two.last = this.first()!;
       return;
     }
 
     this.clearOneTimers();
     const phase = this.phase;
     this.phase = "idle";
-    this.out.touched();
 
     switch (phase) {
       case "one": {
         const p = lastFinger ?? this.start;
-        if (this.edge) {
-          this.out.showBar();
-          this.lastTap = null;
-          return;
-        }
         if (!this.control) return;
         const at = this.mode === "trackpad" ? this.pointer : this.toDisplay(this.start);
         if (this.second) {
@@ -326,14 +354,12 @@ export class ScreenGestures {
         return;
       }
       case "drag":
+        if (lastFinger) this.last = { ...lastFinger, t: now };
         this.release();
         this.lastTap = null;
         return;
       case "two":
         if (this.most === 2 && now - this.two.t < HOLD_MS) this.twoFingerTap(now);
-        return;
-      case "many":
-        if (this.most === 3 && now - this.start.t < HOLD_MS) this.out.showBar();
         return;
       default:
         return;
@@ -373,7 +399,7 @@ export class ScreenGestures {
       return;
     }
     this.lastTwoTap = now;
-    if (!this.control) return;
+    if (!this.control || (this.mode === "touch" && !this.insidePicture(this.two.center))) return;
     const at = this.mode === "trackpad" ? this.pointer : this.toDisplay(this.two.center);
     const rightClick = () => {
       this.rightTimer = undefined;
@@ -406,7 +432,11 @@ export class ScreenGestures {
     const gain = POINTER_SPEED + Math.min(ACCEL_MAX, Math.max(0, speed - ACCEL_FROM) * ACCEL_RATE);
     const width = Math.max(1, this.fit.imageWidth * this.view.scale);
     const height = Math.max(1, this.fit.imageHeight * this.view.scale);
-    this.pointer = { x: clamp(this.pointer.x + (dx * gain) / width, 0, 1), y: clamp(this.pointer.y + (dy * gain) / height, 0, 1) };
+    this.movePointer(this.pointer.x + (dx * gain) / width, this.pointer.y + (dy * gain) / height);
+  }
+
+  private movePointer(x: number, y: number) {
+    this.pointer = { x: clamp(x, 0, 1), y: clamp(y, 0, 1) };
     this.values.pointerX.value = this.pointer.x;
     this.values.pointerY.value = this.pointer.y;
     this.followPointer();
@@ -452,11 +482,7 @@ export class ScreenGestures {
     const [a, b] = this.pair();
     const center = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
     this.phase = "two";
-    this.two = { distance: distance(a, b), center, last: center, scale: this.view.scale, x: this.view.x, y: this.view.y, t: now, lifted: false };
-  }
-
-  private rebaseTwo(center: Point, spread: number) {
-    this.two = { ...this.two, distance: Math.max(1, spread), center, last: center, scale: this.view.scale, x: this.view.x, y: this.view.y };
+    this.two = { distance: distance(a, b), center, last: center, scale: this.view.scale, x: this.view.x, y: this.view.y, t: now };
   }
 
   /** Pinch and pan: the point of the picture under the fingers' center stays under it. */
@@ -483,20 +509,42 @@ export class ScreenGestures {
   }
 
   /** A point on the stage as fractions of the display, through the zoom. */
-  private toDisplay(p: Point): Point {
+  private fractions(p: Point): Point {
     const f = this.fit;
-    if (f.imageWidth <= 0 || f.imageHeight <= 0) return { x: 0.5, y: 0.5 };
     const cx = f.width / 2;
     const cy = f.height / 2;
     const x = cx + (p.x - cx - this.view.x) / this.view.scale;
     const y = cy + (p.y - cy - this.view.y) / this.view.scale;
-    return { x: clamp((x - f.left) / f.imageWidth, 0, 1), y: clamp((y - f.top) / f.imageHeight, 0, 1) };
+    return { x: (x - f.left) / f.imageWidth, y: (y - f.top) / f.imageHeight };
+  }
+
+  private insidePicture(p: Point) {
+    const at = this.fractions(p);
+    return at.x >= 0 && at.x <= 1 && at.y >= 0 && at.y <= 1;
+  }
+
+  private toDisplay(p: Point): Point {
+    if (this.fit.imageWidth <= 0 || this.fit.imageHeight <= 0) return this.pointer;
+    const at = this.fractions(p);
+    this.pointer = { x: clamp(at.x, 0, 1), y: clamp(at.y, 0, 1) };
+    this.values.pointerX.value = this.pointer.x;
+    this.values.pointerY.value = this.pointer.y;
+    return this.pointer;
   }
 
   // Bookkeeping.
 
   private first(): Point | undefined {
     return this.touches.values().next().value;
+  }
+
+  private centroid(): Point {
+    let x = 0, y = 0;
+    for (const point of this.touches.values()) {
+      x += point.x;
+      y += point.y;
+    }
+    return { x: x / this.touches.size, y: y / this.touches.size };
   }
 
   private pair(): [Point, Point] {
@@ -515,6 +563,9 @@ export class ScreenGestures {
 
   private abandon() {
     this.clearOneTimers();
+    clearTimeout(this.rightTimer);
+    this.rightTimer = undefined;
+    this.lastTwoTap = 0;
     if (this.phase === "drag") this.release();
     this.touches.clear();
     this.phase = "idle";
