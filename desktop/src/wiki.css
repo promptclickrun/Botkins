@@ -1,5 +1,7 @@
 /* The Wiki section (src/Wiki.tsx). Colors come from the tokens in tokens.css; every rule is scoped
-   under .wiki, .wiki-dialog or a wiki- class so the app's global element styles don't leak in. */
+   under .wiki, .wiki-dialog or a wiki- class so the app's global element styles don't leak in.
+   Pages are built from the shared parts in ui.css (.page, .group, .group-row, .icon-tile, .btn);
+   this file only adds what is the Wiki's own. */
 
 .wiki-frame {
   flex: 1;
@@ -11,7 +13,7 @@
   flex: 1;
   min-width: 0;
   display: grid;
-  grid-template-columns: 224px minmax(0, 1fr);
+  grid-template-columns: 232px minmax(0, 1fr);
   grid-template-rows: minmax(0, 1fr);
   font-size: calc(14px * var(--text-scale));
 }
@@ -28,62 +30,29 @@
   color: var(--muted);
   font-size: calc(13px * var(--text-scale));
 }
-.wiki-pad {
-  padding: 8px 0;
-}
 
-/* ------------------------------------------------------------------ side menu */
+/* ------------------------------------------------------------------ the Wiki's own menu */
+/* One calm column beside the page: no rule or fill of its own, rows drawn like the app's side menu. */
 .wiki-nav {
   display: flex;
   flex-direction: column;
   min-height: 0;
-  border-right: 1px solid var(--line);
+  padding-top: 18px;
 }
-.wiki-nav-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 14px 12px 8px 16px;
-}
-.wiki-nav-head h2 {
-  font-size: calc(17px * var(--text-scale));
-}
-.wiki-search {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  margin: 0 10px 8px;
-  padding: 0 9px;
-  height: 34px;
-  border-radius: var(--radius-sm);
-  background: var(--sunken);
-  color: var(--muted);
-}
-.wiki-search:focus-within {
-  box-shadow: 0 0 0 2px var(--accent);
-}
-.wiki-search input {
-  flex: 1;
-  min-width: 0;
-  border: 0;
-  padding: 0;
-  background: transparent;
-  font-size: calc(13px * var(--text-scale));
-  color: var(--ink);
-}
-.wiki-search input:focus-visible {
-  outline: none;
+.wiki .wiki-nav .wiki-search-field.lg-input {
+  width: auto;
+  margin: 0 12px 10px;
 }
 .wiki-nav-scroll {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  padding: 2px 8px 10px;
+  padding: 2px 10px 10px;
 }
 .wiki-nav-scroll hr {
   border: 0;
-  border-top: 1px solid var(--line);
-  margin: 8px 6px;
+  height: 0;
+  margin: 10px 0;
 }
 .wiki-nav-list {
   list-style: none;
@@ -92,36 +61,28 @@
   display: grid;
   gap: 1px;
 }
-.wiki-nav-item {
+.wiki .wiki-nav-item {
   width: 100%;
-  min-height: 30px;
+  min-height: 32px;
   justify-content: flex-start;
-  gap: 8px;
-  padding: 4px 8px;
+  gap: 11px;
+  padding: 6px 10px;
   border-radius: var(--radius-sm);
   font-size: calc(14px * var(--text-scale));
+  font-weight: 400;
   text-align: left;
   color: var(--ink-2);
 }
-.wiki-nav-item:hover,
-.wiki-folder-toggle:hover,
-.wiki-icon-button:hover,
-.wiki-tool:hover,
-.wiki-row:hover,
-.wiki-related-link:hover,
-.wiki-record:hover,
-.wiki-section-card:hover,
-.wiki-bot-action:hover,
-.wiki-crumbs button:hover {
-  filter: none;
-}
 .wiki-nav-item > svg {
+  flex: none;
   color: var(--muted);
 }
-.wiki-nav-item[aria-current="page"] {
+.wiki .wiki-nav-item[aria-current="page"] {
   background: var(--active);
   color: var(--ink);
-  font-weight: 600;
+}
+.wiki-nav-item[aria-current="page"] > svg {
+  color: var(--ink);
 }
 .wiki-nav-name {
   flex: 1;
@@ -134,13 +95,13 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 14px 4px 4px 8px;
+  padding: 16px 0 4px 10px;
   font-size: calc(12px * var(--text-scale));
   font-weight: 600;
   color: var(--muted);
 }
 .wiki-nav-empty {
-  padding: 4px 8px 4px calc(30px + var(--depth, 0) * 14px);
+  padding: 5px 10px 5px calc(32px + var(--depth, 0) * 14px);
   font-size: calc(13px * var(--text-scale));
   color: var(--faint);
 }
@@ -150,13 +111,16 @@
   align-items: center;
   padding-left: calc(var(--depth, 0) * 14px);
 }
-.wiki-folder-toggle {
+.wiki .wiki-folder-toggle {
+  position: absolute;
+  left: calc(4px + var(--depth, 0) * 14px);
+  z-index: 1;
   flex: none;
   width: 22px;
   height: 26px;
+  padding: 0;
   border-radius: var(--radius-sm);
   color: var(--faint);
-  padding: 0;
 }
 .wiki-chevron {
   transition: transform 0.15s;
@@ -164,10 +128,9 @@
 .wiki-folder-toggle[aria-expanded="true"] .wiki-chevron {
   transform: rotate(90deg);
 }
-.wiki-folder-name {
-  padding-left: 4px;
-  padding-right: 32px;
-  font-weight: 600;
+.wiki .wiki-nav-item.wiki-folder-name {
+  padding-left: 30px;
+  padding-right: 34px;
 }
 .wiki-count {
   flex: none;
@@ -175,21 +138,22 @@
   color: var(--faint);
   font-variant-numeric: tabular-nums;
 }
-.wiki-folder > .wiki-nav-list .wiki-nav-item {
-  padding-left: calc(30px + var(--depth, 0) * 14px);
-  font-size: calc(14px * var(--text-scale));
+.wiki .wiki-folder > .wiki-nav-list .wiki-nav-item {
+  padding-left: calc(32px + var(--depth, 0) * 14px);
 }
-.wiki-folder > .wiki-nav-list .wiki-folder .wiki-nav-item.wiki-folder-name {
-  padding-left: 4px;
+.wiki .wiki-folder > .wiki-nav-list .wiki-folder .wiki-nav-item.wiki-folder-name {
+  padding-left: 30px;
 }
 .wiki .wiki-row-menu {
   position: absolute;
-  right: 2px;
+  right: 4px;
   top: 50%;
   translate: 0 -50%;
   width: 26px;
   height: 26px;
   padding: 0;
+  border-radius: var(--radius-sm);
+  color: var(--muted);
   opacity: 0;
 }
 .wiki-folder-row:hover .wiki-row-menu,
@@ -202,78 +166,80 @@
 }
 .wiki-nav-foot {
   display: flex;
-  gap: 6px;
-  padding: 10px;
+  gap: 4px;
+  padding: 8px 10px 12px;
 }
-.wiki .wiki-nav-foot .secondary {
+.wiki .wiki-nav-foot .btn {
   flex: 1 1 0;
   min-width: 0;
-  gap: 5px;
-  padding: 6px 4px;
-  font-size: calc(13px * var(--text-scale));
-  white-space: nowrap;
-  background: transparent;
-  border-color: transparent;
+  gap: 6px;
+  padding: 0 6px;
   color: var(--ink-2);
 }
-.wiki .wiki-nav-foot .secondary:hover {
-  background: var(--hover);
+.wiki .wiki-nav-foot .btn:disabled {
+  opacity: 0.5;
 }
-.wiki-icon-button {
-  width: 30px;
-  height: 30px;
-  padding: 0;
-  border-radius: var(--radius-sm);
-  color: var(--muted);
-  flex: none;
-}
-.wiki-icon-button.small {
+.wiki .wiki-icon-button.small {
   width: 24px;
   height: 24px;
+  border-radius: 7px;
 }
 .wiki-icon-button:disabled {
   opacity: 0.45;
 }
 
 /* ------------------------------------------------------------------ main */
+/* The views are .page columns of their own; the pane only scrolls. */
 .wiki-main {
   min-width: 0;
   min-height: 0;
   overflow: auto;
-  padding: 18px clamp(20px, 2.6vw, 40px) 48px;
   container: wikimain / inline-size;
 }
-.wiki-main > * {
-  max-width: 1040px;
-  margin-left: auto;
-  margin-right: auto;
+.wiki-banners {
+  box-sizing: border-box;
+  width: 100%;
+  max-width: calc(var(--page-max) + 2 * var(--page-pad-x));
+  margin: 0 auto;
+  padding: 20px var(--page-pad-x) 0;
+  display: grid;
+  gap: 10px;
+}
+.wiki-banners.narrow {
+  --page-max: 720px;
+}
+.wiki-banners + .page {
+  padding-top: 16px;
 }
 .wiki-back {
   display: none;
+  justify-self: start;
   gap: 4px;
-  padding: 4px 6px 4px 2px;
-  margin-bottom: 8px;
+  padding: 4px 8px 4px 2px;
   border-radius: var(--radius-sm);
   font-size: calc(13px * var(--text-scale));
   color: var(--muted);
 }
 .wiki-notice {
+  margin: 0 4px;
   font-size: calc(13px * var(--text-scale));
   color: var(--muted);
-  margin-bottom: 10px;
 }
 .wiki-banner {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
   gap: 8px 12px;
-  margin: 0 auto 14px;
-  padding: 10px 14px;
-  border-radius: var(--radius);
-  background: var(--surface);
+  margin: 0;
+  padding: 12px 16px;
+  border-radius: 14px;
+  background: var(--card);
   font-size: calc(13px * var(--text-scale));
+  line-height: 1.45;
+  color: var(--ink-2);
 }
 .wiki-banner > svg {
+  flex: none;
   color: var(--muted);
 }
 .wiki-banner > span:first-child {
@@ -281,6 +247,7 @@
 }
 .wiki-banner.warn {
   background: var(--warning-soft);
+  color: var(--ink);
 }
 .wiki-banner.warn > svg {
   color: var(--warning);
@@ -290,27 +257,17 @@
   flex-wrap: wrap;
   gap: 6px;
 }
-.wiki .secondary,
-.wiki-dialog .secondary {
-  gap: 6px;
-  padding: 6px 10px;
-  font-size: calc(13px * var(--text-scale));
-  border-radius: var(--radius-sm);
-  border-color: transparent;
-  background: var(--surface);
-}
-.wiki .primary {
-  gap: 6px;
-  padding: 7px 13px;
-  white-space: nowrap;
-  flex: none;
-}
-.wiki .primary:disabled,
-.wiki .secondary:disabled {
-  opacity: 0.55;
+.wiki .btn:disabled,
+.wiki-dialog .btn:disabled {
+  opacity: 0.5;
 }
 
-/* Breadcrumb and the actions beside it. */
+/* ------------------------------------------------------------------ a page */
+/* A reading column about 720px wide: breadcrumb and actions, the article, then Related. */
+.wiki-page.page {
+  --page-max: 720px;
+  gap: 18px;
+}
 .wiki-page-head {
   display: flex;
   align-items: center;
@@ -318,7 +275,10 @@
   flex-wrap: wrap;
   gap: 8px 14px;
   min-height: 34px;
-  margin-bottom: 14px;
+}
+.wiki .wiki-crumbs {
+  display: block;
+  min-width: 0;
 }
 .wiki-crumbs ol {
   list-style: none;
@@ -337,51 +297,51 @@
   align-items: center;
   gap: 2px;
   min-width: 0;
+  color: var(--faint);
 }
-.wiki-crumbs button {
-  padding: 2px 5px;
-  border-radius: var(--radius-sm);
+.wiki .wiki-crumbs button {
+  padding: 3px 6px;
+  gap: 0;
+  border-radius: 7px;
+  font-size: calc(13px * var(--text-scale));
   color: var(--muted);
 }
-.wiki-crumbs [aria-current="page"] {
-  padding: 2px 5px;
+.wiki .wiki-crumbs button:hover {
   color: var(--ink);
+}
+.wiki-crumbs [aria-current="page"] {
+  padding: 3px 6px;
+  color: var(--ink-2);
   font-weight: 600;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   max-width: 36ch;
 }
-.wiki-section-view > .wiki-crumbs {
-  margin-bottom: 14px;
-}
 .wiki-actions {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 4px;
   flex-wrap: wrap;
   margin-left: auto;
 }
-.wiki-updated {
+.wiki-actions .btn.quiet {
+  color: var(--ink-2);
+}
+.wiki-actions .wiki-updated {
+  margin-right: 6px;
   font-size: calc(13px * var(--text-scale));
   color: var(--muted);
-  margin-right: 4px;
   white-space: nowrap;
 }
-
-/* The page and its Related rail. */
 .wiki-page-body {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 200px;
-  gap: 40px;
-  align-items: start;
+  display: flex;
+  flex-direction: column;
+  gap: 36px;
+  min-width: 0;
 }
-.wiki-page-body.single {
-  grid-template-columns: minmax(0, 1fr);
-}
-/* The article reads in a comfortable column, its headings in the serif. */
+/* The article: the page's first heading is the page title, a quiet line of facts sits under it. */
 .wiki-article {
-  max-width: 700px;
   min-width: 0;
   padding: 0;
   margin: 0;
@@ -399,6 +359,11 @@
 }
 .wiki-article .md h1 {
   font-size: calc(30px * var(--text-scale));
+  letter-spacing: -0.4px;
+}
+.wiki-article > .md:first-child > h1:first-child {
+  margin: 0;
+  line-height: 1.2;
 }
 .wiki-article .md > h1:first-child + * {
   margin-top: 10px;
@@ -411,6 +376,23 @@
 }
 .wiki-article .md > * + :is(h2, h3, h4) {
   margin-top: 28px;
+}
+.wiki-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 6px;
+  margin: 6px 0 18px;
+  font-size: calc(13px * var(--text-scale));
+  line-height: 1.45;
+  color: var(--muted);
+}
+.wiki-meta > span + span::before {
+  content: "·";
+  margin-right: 6px;
+  color: var(--faint);
+}
+.wiki-article > .wiki-meta:first-child {
+  margin-top: 0;
 }
 .wiki-article a.wiki-link,
 .wiki-article .md a {
@@ -431,283 +413,257 @@
   color: var(--muted);
 }
 
+/* Related: group cards after the article, two side by side when there is room. */
 .wiki-related {
-  position: sticky;
-  top: 0;
   display: grid;
-  gap: 18px;
-  font-size: calc(13px * var(--text-scale));
+  grid-template-columns: repeat(auto-fill, minmax(min(280px, 100%), 1fr));
+  gap: 22px 18px;
+  align-items: start;
   min-width: 0;
+  padding-top: 22px;
+  border-top: 1px solid var(--line);
 }
-.wiki-related > section {
-  margin-top: 0;
+.wiki-related:empty {
+  display: none;
 }
-.wiki-related-block h3 {
-  margin: 0 0 6px;
-  font-size: calc(12px * var(--text-scale));
-  font-weight: 600;
-  color: var(--muted);
-}
-.wiki-related-block ul {
+.wiki-related-block > .group,
+.wiki-related-block > ul.group {
   list-style: none;
   margin: 0;
   padding: 0;
 }
-.wiki-related-block .wiki-muted {
-  font-size: calc(13px * var(--text-scale));
+.wiki-related-block > .group-foot {
+  margin-top: 0;
 }
-.wiki-related-group + .wiki-related-group {
-  margin-top: 6px;
+.wiki .wiki-related-row {
+  min-height: 46px;
+  padding-top: 8px;
+  padding-bottom: 8px;
 }
-.wiki-related-section {
+.wiki-related-row:hover {
+  background: var(--hover);
+}
+/* The title's button covers the whole row, so the row is one target while its name stays the title. */
+.wiki .wiki-related-link {
   display: block;
-  padding: 0 6px 1px;
-  font-size: calc(12px * var(--text-scale));
-  color: var(--faint);
-}
-.wiki-related-link {
-  width: 100%;
-  justify-content: flex-start;
-  gap: 6px;
-  padding: 3px 6px;
-  border-radius: var(--radius-sm);
+  max-width: 100%;
+  padding: 0;
+  border-radius: 0;
+  background: none;
   text-align: left;
-  font-size: calc(13px * var(--text-scale));
-  line-height: 1.35;
-  color: var(--ink-2);
-}
-.wiki-related-link.missing {
-  color: var(--muted);
-}
-.wiki-record {
-  width: 100%;
-  justify-content: flex-start;
-  gap: 8px;
-  padding: 3px 6px;
-  border-radius: var(--radius-sm);
-  font-size: calc(13px * var(--text-scale));
-  text-align: left;
-  color: var(--ink-2);
-}
-.wiki-record span {
-  flex: 1;
-  min-width: 0;
-  font-weight: 600;
-}
-.wiki-record svg {
-  color: var(--muted);
-}
-
-/* ------------------------------------------------------------------ home and lists */
-.wiki-home-head {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 16px;
-  margin-bottom: 18px;
-}
-.wiki-home-head h1,
-.wiki-view-title {
-  font-family: var(--font-display);
-  font-size: calc(28px * var(--text-scale));
-  line-height: 1.2;
-  font-weight: 700;
-}
-.wiki-home-head p {
-  margin-top: 4px;
-}
-.wiki-view-title {
-  font-size: calc(20px * var(--text-scale));
-  margin-bottom: 12px;
-}
-.wiki-suggest {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 12px 16px;
-  margin-bottom: 22px;
-  border-radius: var(--radius);
-  background: var(--surface);
-}
-.wiki-suggest > svg {
-  color: var(--muted);
-}
-.wiki-suggest > div {
-  flex: 1;
-  min-width: 0;
-}
-.wiki-suggest strong {
   font-size: calc(14px * var(--text-scale));
   font-weight: 600;
+  color: var(--ink);
+  cursor: default;
 }
-.wiki-suggest small {
-  font-size: calc(13px * var(--text-scale));
-  margin-top: 1px;
+.wiki .wiki-related-link:hover {
+  background: none;
 }
-.wiki-block {
-  margin-top: 0;
+.wiki-related-link::after {
+  content: "";
+  position: absolute;
+  inset: 0;
 }
-.wiki-block + .wiki-block {
-  margin-top: 30px;
+.wiki-related-link:focus-visible {
+  outline: none;
 }
-.wiki-block h2 {
-  font-size: calc(17px * var(--text-scale));
-  margin-bottom: 8px;
+.wiki-related-row:has(.wiki-related-link:focus-visible) {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
 }
-.wiki-section-grid {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
-  gap: 8px;
-}
-.wiki-section-card {
-  width: 100%;
-  justify-content: flex-start;
-  gap: 10px;
-  padding: 12px 14px;
-  border-radius: var(--radius);
-  background: var(--surface);
-  text-align: left;
-}
-.wiki-section-card:hover {
-  background: color-mix(in srgb, var(--ink) 4%, var(--surface));
-}
-.wiki-section-card > span:last-child {
-  min-width: 0;
-}
-.wiki-section-card strong {
-  font-family: var(--font-display);
-  font-size: calc(15px * var(--text-scale));
-  font-weight: 700;
-}
-.wiki-section-card small {
-  font-size: calc(12px * var(--text-scale));
-}
-.wiki-section-icon {
-  display: grid;
-  place-items: center;
-  width: 24px;
-  height: 30px;
+.wiki .wiki-related-link.missing {
+  font-weight: 500;
   color: var(--muted);
+}
+.wiki-related-section {
+  font-size: calc(12.5px * var(--text-scale));
+}
+
+/* ------------------------------------------------------------------ home, sections and search */
+.wiki-home-head .page-actions .btn,
+.wiki-section-view .page-actions .btn {
   flex: none;
 }
-/* Page lists: plain rows on the canvas, separated by space. */
+.wiki-section-top {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.wiki-section-top .wiki-crumbs {
+  margin-left: -6px;
+}
+.wiki .wiki-view-title {
+  overflow-wrap: anywhere;
+}
 .wiki-rows {
   list-style: none;
   margin: 0;
   padding: 0;
 }
-.wiki-rows.folders {
-  margin-bottom: 14px;
+/* A row's hairline sits between list items too, not only between sibling rows. */
+.wiki-rows > li + li > .group-row::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: var(--row-inset);
+  right: 0;
+  height: 1px;
+  background: var(--line);
+  pointer-events: none;
 }
-.wiki-row {
-  width: 100%;
-  justify-content: flex-start;
-  align-items: center;
-  gap: 12px;
-  padding: 9px 8px;
-  text-align: left;
-  border-radius: var(--radius-sm);
-}
-.wiki-row > svg {
-  color: var(--muted);
-}
-.wiki-row-text {
-  flex: 1;
-  min-width: 0;
-}
-.wiki-row-text strong {
-  font-size: calc(15px * var(--text-scale));
-  font-weight: 600;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.wiki-row-text small {
-  font-size: calc(13px * var(--text-scale));
-  color: var(--muted);
-  margin-top: 1px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.wiki-rows > li {
+  position: relative;
 }
 .wiki-row-meta {
-  flex: none;
-  display: grid;
-  justify-items: end;
-  gap: 1px;
-  font-size: calc(12px * var(--text-scale));
-  color: var(--muted);
+  font-variant-numeric: tabular-nums;
 }
-.wiki-row-meta time {
+.wiki-row-meta span {
+  white-space: nowrap;
+}
+.wiki .wiki-more-row {
+  min-height: 46px;
+}
+.wiki-more-row .row-sub {
+  color: var(--ink-2);
+}
+/* Sections sit two side by side on a wide page, each a label over a card of its newest pages. */
+.wiki-section-grid {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(340px, 100%), 1fr));
+  gap: 24px 20px;
+  align-items: start;
+}
+.wiki .wiki-section-card {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 8px;
+  max-width: 100%;
+  margin: 0 -6px;
+  padding: 2px 6px;
+  border-radius: 7px;
+  font: inherit;
+  color: inherit;
+  letter-spacing: inherit;
+  text-transform: uppercase;
+}
+.wiki-section-card:hover {
+  color: var(--ink);
+}
+.wiki-section-count {
   font-size: calc(12px * var(--text-scale));
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--faint);
 }
 .wiki-empty {
   display: grid;
   justify-items: center;
   gap: 10px;
-  padding: 34px 16px;
+  padding: 30px 16px;
   text-align: center;
   color: var(--muted);
 }
 .wiki-empty p {
+  margin: 0;
   font-size: calc(14px * var(--text-scale));
 }
-.wiki-bot-actions {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
-  gap: 8px;
+.wiki-suggest .group-row {
+  min-height: 60px;
 }
-.wiki-bot-action {
-  justify-content: flex-start;
-  gap: 10px;
-  padding: 12px 14px;
-  border-radius: var(--radius);
-  background: var(--surface);
-  text-align: left;
-}
-.wiki-bot-action:hover {
-  background: color-mix(in srgb, var(--ink) 4%, var(--surface));
-}
-.wiki-bot-action > svg {
-  color: var(--muted);
-}
-.wiki-bot-action strong {
-  font-size: calc(14px * var(--text-scale));
+.wiki-suggest .row-title {
   font-weight: 600;
-}
-.wiki-bot-action small {
-  font-size: calc(12px * var(--text-scale));
 }
 
 /* ------------------------------------------------------------------ dialogs */
-/* Dialogs float on the surface with the large radius. */
+/* Dialogs read like a Settings sheet: a title, a line of help, then the fields as rows of one card. */
 .wiki-dialog {
-  width: min(440px, 92vw);
-  background: var(--surface);
-  border-radius: var(--radius-lg);
+  width: min(460px, 92vw);
+  padding: 22px 24px 20px;
+  background: var(--canvas);
+  border-radius: 20px;
+  box-shadow: var(--shadow), inset 0 0 0 1px var(--line);
 }
 .wiki-dialog h2 {
-  margin-bottom: 4px;
+  margin: 0 0 4px;
+  font-family: var(--font-display);
+  font-size: calc(20px * var(--text-scale));
+  line-height: 1.25;
+  font-weight: 700;
+  letter-spacing: -0.2px;
 }
 .wiki-dialog p {
-  font-size: calc(14px * var(--text-scale));
+  margin: 0 0 16px;
+  font-size: calc(13.5px * var(--text-scale));
+  line-height: 1.45;
+  color: var(--muted);
 }
-.wiki-dialog form label input,
-.wiki-dialog form label select {
-  width: 100%;
+.wiki-dialog .group {
+  background: var(--card);
+}
+.wiki-form-group {
+  margin: 0;
+}
+.wiki-dialog form label.wiki-form-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 0;
+  min-height: 48px;
+  padding: 6px 8px 6px 16px;
+  font-size: calc(14px * var(--text-scale));
+  font-weight: 500;
+}
+.wiki-form-name {
+  flex: none;
+  width: 92px;
+  color: var(--ink);
+}
+.wiki-dialog form label.wiki-form-row :is(input, select) {
+  flex: 1 1 auto;
+  min-width: 0;
+  width: auto;
+  height: 34px;
+  margin: 0;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--ink);
+  font-size: calc(14px * var(--text-scale));
   font-weight: 400;
+}
+.wiki-dialog form label.wiki-form-row :is(input, select):hover {
+  background: var(--hover);
+}
+.wiki-dialog form label.wiki-form-row :is(input, select):focus-visible {
+  background: var(--canvas);
+  outline: 2px solid var(--accent);
+  outline-offset: 0;
+}
+.wiki-dialog .group-foot {
+  display: block;
+  margin-top: 8px;
 }
 .wiki-hint {
   font-weight: 400;
   font-size: calc(12px * var(--text-scale));
+  color: var(--muted);
   overflow-wrap: anywhere;
 }
 .wiki-form-error {
   color: var(--danger);
   font-size: calc(13px * var(--text-scale));
+}
+.wiki-dialog p.wiki-form-error {
+  margin: 10px 4px 0;
+  color: var(--danger);
+}
+.wiki-dialog .ask-actions {
+  margin-top: 20px;
 }
 .wiki-dialog-head {
   display: flex;
@@ -722,15 +678,15 @@
   display: grid;
   grid-template-columns: 230px minmax(0, 1fr);
   gap: 14px;
-  margin-top: 12px;
+  margin-top: 4px;
   min-height: 0;
 }
 .wiki-history-list {
   list-style: none;
   margin: 0;
   padding: 4px;
-  border-radius: var(--radius);
-  background: var(--sunken);
+  border-radius: 14px;
+  background: var(--card);
   max-height: min(52vh, 440px);
   overflow-y: auto;
 }
@@ -740,8 +696,8 @@
   justify-content: start;
   justify-items: start;
   gap: 1px;
-  padding: 7px 9px;
-  border-radius: var(--radius-sm);
+  padding: 7px 10px;
+  border-radius: 10px;
   text-align: left;
   font-size: calc(13px * var(--text-scale));
 }
@@ -753,10 +709,11 @@
 }
 .wiki-history-list small {
   font-size: calc(12px * var(--text-scale));
+  color: var(--muted);
 }
 .wiki-history-preview {
   border: 1px solid var(--line);
-  border-radius: var(--radius);
+  border-radius: 14px;
   padding: 14px 16px;
   max-height: min(52vh, 440px);
   overflow: auto;
@@ -768,21 +725,8 @@
 
 /* ------------------------------------------------------------------ narrow windows */
 @container wikimain (max-width: 620px) {
-  .wiki-page-body {
-    grid-template-columns: minmax(0, 1fr);
-    gap: 26px;
-  }
-  .wiki-related {
-    position: static;
-    grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
-    padding-top: 16px;
-    border-top: 1px solid var(--line);
-  }
   .wiki-ask span {
     display: none;
-  }
-  .wiki-ask {
-    padding: 7px 8px;
   }
 }
 @container wiki (max-width: 640px) {
@@ -797,7 +741,6 @@
     overflow-y: auto;
   }
   .wiki:not(.showing) .wiki-nav {
-    border-right: 0;
     border-bottom: 1px solid var(--line);
   }
   .wiki:not(.showing) .wiki-nav-scroll,
@@ -812,6 +755,19 @@
     grid-template-columns: 1fr;
   }
 }
+@container wiki (max-width: 900px) {
+  .wiki {
+    grid-template-columns: 210px minmax(0, 1fr);
+  }
+  .wiki-main {
+    --page-pad-x: 24px;
+  }
+}
+@container wiki (max-width: 640px) {
+  .wiki {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
 @media (max-width: 760px) {
   .wiki-history-body {
     grid-template-columns: 1fr;
@@ -823,15 +779,6 @@
 }
 
 /* ------------------------------------------------------------------ Export… (src/WikiExport.tsx) */
-.wiki-home-actions {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex: none;
-}
-.wiki-home-actions .primary {
-  margin: 0;
-}
 .wiki-dialog.wiki-export {
   width: min(560px, 94vw);
 }
@@ -856,18 +803,24 @@
   padding: 0;
   border: 0;
 }
+/* Each part's legend reads as a group label, as in Settings. */
 .wiki-export-field legend {
   display: flex;
   align-items: baseline;
   gap: 8px;
   width: 100%;
-  padding: 0;
+  padding: 0 4px;
   margin-bottom: 8px;
-  font-size: calc(13px * var(--text-scale));
-  font-weight: 600;
+  font-size: calc(12px * var(--text-scale));
+  font-weight: 700;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+  color: var(--muted);
 }
 .wiki-export-count {
   margin-left: auto;
+  letter-spacing: 0;
+  text-transform: none;
   font-size: calc(12px * var(--text-scale));
   font-weight: 400;
   color: var(--muted);
@@ -949,8 +902,8 @@
   margin: 0;
   padding: 4px;
   list-style: none;
-  border-radius: var(--radius-sm);
-  background: var(--sunken);
+  border-radius: 14px;
+  background: var(--card);
   overflow-y: auto;
   overscroll-behavior: contain;
 }
@@ -1046,8 +999,8 @@
   row-gap: 0;
   margin: 0;
   padding: 7px 10px;
-  border-radius: var(--radius-sm);
-  background: var(--sunken);
+  border-radius: 12px;
+  background: var(--card);
   font-size: calc(13px * var(--text-scale));
   font-weight: 600;
   cursor: pointer;
@@ -1116,10 +1069,8 @@
   .wiki-export-format small {
     display: none;
   }
-  .wiki-export .ask-actions .secondary,
-  .wiki-export .ask-actions .primary {
-    padding-top: 6px;
-    padding-bottom: 6px;
+  .wiki-export .ask-actions .btn {
+    height: 30px;
   }
 }
 .wiki-export-ext {
@@ -1135,4 +1086,10 @@
     font-weight: 400;
     color: var(--muted);
   }
+}
+
+/* The app's older rule spaces out sibling sections; the Wiki's pages space theirs with .page gaps. */
+.wiki section.page-section + section.page-section,
+.wiki .wiki-related > section + section {
+  margin-top: 0;
 }

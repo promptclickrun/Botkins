@@ -134,7 +134,7 @@ export default function TeamSettings({ state, initialView = "requests" }: { stat
   const actions: Actions = { busy, fail, run, team, update };
   return (
     <div className="int-section team-settings">
-      <Group title="Team name">
+      <Group title="Team">
         <form
           className="set-row team-name-row"
           onSubmit={(event) => {
@@ -158,9 +158,8 @@ export default function TeamSettings({ state, initialView = "requests" }: { stat
             </button>
           </div>
         </form>
-      </Group>
-      {state.adminMode !== undefined && (
-        <Group>
+        {/* Admin mode is a row of the same card: one card for the team itself. */}
+        {state.adminMode !== undefined && (
           <SwitchRow
             label="Admin mode"
             help="See every member's spaces, bots and chats."
@@ -178,8 +177,8 @@ export default function TeamSettings({ state, initialView = "requests" }: { stat
               });
             }}
           />
-        </Group>
-      )}
+        )}
+      </Group>
       {team.linkSharing !== undefined && (
         <Group title="Spaces">
           <SwitchRow

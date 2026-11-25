@@ -419,7 +419,7 @@ try {
   const here = process.platform === "win32" ? fontList.filter((f) => f.id === "botkins" || f.windows).map((f) => f.windowsName ?? f.name) : fontList.filter((f) => f.id === "botkins" || f.mac).map((f) => f.name);
   assert.deepEqual(await fontChoice.locator("option").allTextContents(), here);
   assert.equal(await fontChoice.inputValue(), "system");
-  const families = () => page.evaluate(() => [getComputedStyle(document.body).fontFamily, getComputedStyle(document.querySelector("dialog[open] h2")).fontFamily]);
+  const families = () => page.evaluate(() => [getComputedStyle(document.body).fontFamily, getComputedStyle(document.querySelector(".settings-host h2")).fontFamily]);
   for (const family of await families()) assert.match(family, process.platform === "win32" ? /^"Segoe UI"/ : /^-apple-system/);
   await fontChoice.selectOption("lora");
   await page.locator('html[data-font="lora"]').waitFor();

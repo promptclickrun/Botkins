@@ -22,7 +22,7 @@ try {
   let page = await home(app);
   page.on("pageerror", (e) => console.error(e.message));
   await page.getByRole("heading", { name: "Home", exact: true }).waitFor({timeout:3000});
-  await page.locator(".heroface .bot-avatar").waitFor();
+  await page.locator(".botcard .bot-avatar").first().waitFor();
   await page.getByRole("button", { name: "Add bot", exact: true }).click();
   await page.getByLabel("Name", { exact: true }).fill("Nova");
   await page.getByLabel("Role", { exact: true }).fill("Editor");

@@ -18,10 +18,10 @@ test("every call the new controls make is one a phone may make", () => {
 
 test("the side menu's order is made whole, and a place moves one step at a time", () => {
   assert.deepEqual(placeOrder(undefined), [...PLACES]);
-  assert.deepEqual(placeOrder(["Wiki", "Nope", "Home", "Wiki"]), ["Wiki", "Home", "Today", "Chats", "Work"]);
+  assert.deepEqual(placeOrder(["Wiki", "Nope", "Home", "Wiki"]), ["Wiki", "Home", "Today", "Chats", "Work", "Market"]);
   const order = placeOrder();
-  assert.deepEqual(movePlace(order, "Today", -1), ["Today", "Home", "Chats", "Work", "Wiki"]);
-  assert.deepEqual(movePlace(order, "Wiki", 1), order);
+  assert.deepEqual(movePlace(order, "Today", -1), ["Today", "Home", "Chats", "Work", "Wiki", "Market"]);
+  assert.deepEqual(movePlace(order, "Market", 1), order);
   assert.deepEqual(movePlace(order, "Home", -1), order);
   assert.equal(isUsualOrder(order), true);
   assert.equal(isUsualOrder(movePlace(order, "Chats", 1)), false);

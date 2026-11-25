@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState, type HTMLAttributes, type ReactNode } from "react";
-import { Button } from "glisse";
 import {
   ArrowRight,
   CalendarClock,
@@ -478,20 +477,25 @@ export default function Today({
     if (!hiddenCount) showHidden(false);
   }, [hiddenCount]);
   return (
-    <>
-      <div className="titleline">
-        <h1>Today</h1>
-        <Button variant="filled" className="lg-compact" icon={<Plus size={16} />} onClick={() => setCreating(true)}>
-          Create panel
-        </Button>
+    <div className="page wide today-page">
+      <div className="page-head">
+        <div className="page-heading">
+          <h1 className="page-title">Today</h1>
+        </div>
+        <div className="page-actions">
+          <button className="btn primary" onClick={() => setCreating(true)}>
+            <Plus size={16} />
+            Create panel
+          </button>
+        </div>
       </div>
       {board}
       {hiddenCount > 0 && (
-        <div className="filters">
-          <button aria-pressed={!hidden} onClick={() => showHidden(false)}>
+        <div className="chip-row">
+          <button className="chip" aria-pressed={!hidden} onClick={() => showHidden(false)}>
             On Today
           </button>
-          <button aria-pressed={hidden} onClick={() => showHidden(true)}>
+          <button className="chip" aria-pressed={hidden} onClick={() => showHidden(true)}>
             Hidden · {hiddenCount}
           </button>
         </div>
@@ -503,7 +507,7 @@ export default function Today({
           </span>
           <h2>{hidden ? "No hidden panels" : "Build your first panel"}</h2>
           <p>Ask a bot for a briefing, a table or a chart, kept fresh on a schedule.</p>
-          <button className="textbutton" onClick={() => setCreating(true)}>
+          <button className="btn primary" onClick={() => setCreating(true)}>
             Ask a bot <ArrowRight size={16} />
           </button>
         </div>
@@ -566,6 +570,6 @@ export default function Today({
         )}
         {err && <p role="alert">{err}</p>}
       </dialog>
-    </>
+    </div>
   );
 }

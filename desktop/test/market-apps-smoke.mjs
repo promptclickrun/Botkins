@@ -23,8 +23,9 @@ const app = await _electron.launch({ args: binary ? [] : ["."], executablePath: 
 const errors = [];
 let page;
 async function openApps() {
-  await page.locator("aside .brand").getByRole("button", { name: "Marketplace", exact: true }).click();
-  const dialog = page.locator("dialog.settings-window");
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "Settings" });
+  await dialog.getByRole("tab", { name: "Marketplace", exact: true }).click();
   await dialog.getByRole("heading", { name: "Marketplace", exact: true }).waitFor();
   await dialog.getByRole("tab", { name: "Apps", exact: true }).click();
   return dialog;

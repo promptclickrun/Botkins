@@ -141,9 +141,10 @@ try {
     await settings.getByRole("button", { name: "Close dialog" }).click();
     await expect(settings).toBeHidden();
     await expect(page.locator(".admin-tag")).toHaveCount(1);
-    await expect(page.getByRole("button", { name: "Admin mode", exact: true })).toBeVisible();
-    // The tag opens Settings › Team, where the switch turns it off again.
-    await page.getByRole("button", { name: "Admin mode", exact: true }).click();
+    // The computer row's menu has Admin mode, which opens Settings › Team, where the switch turns it off again.
+    await page.getByRole("button", { name: /^Computer: / }).click();
+    await expect(page.getByRole("menuitem", { name: /^Admin mode/ })).toBeVisible();
+    await page.getByRole("menuitem", { name: /^Admin mode/ }).click();
     await expect(adminSwitch).toBeChecked();
     await adminSwitch.uncheck();
     await expect.poll(view).toBe(false);

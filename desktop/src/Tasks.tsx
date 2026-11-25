@@ -1,18 +1,18 @@
 import { useEffect, useRef, useState } from "react";
-import { Check, MessageCircle, Play, Plus, RotateCcw, Trash2, X } from "lucide-react";
+import { Check, ChevronRight, MessageCircle, Play, Plus, RotateCcw, Trash2, X } from "lucide-react";
 import { Button } from "glisse";
 import { BotAvatar } from "./Avatar";
 import { RichText } from "./RichText";
 import type { BotTask, State, TaskPriority, TaskStatus } from "./types";
-import { WorkBar, type WorkNav } from "./WorkBar";
+import { Folded, WorkBar, WorkNeeds, type WorkNav } from "./WorkBar";
 import "./tasks.css";
 
 const api = window.botkins;
+// The phone's sections, top to bottom. Needs you (review or stuck) is drawn by WorkNeeds above them.
 const lanes: { status: TaskStatus; label: string; hint: string }[] = [
-  { status: "later", label: "Later", hint: "Not scheduled yet." },
-  { status: "ready", label: "Ready", hint: "Starts when its bot is free." },
   { status: "working", label: "Working", hint: "A bot is on it." },
-  { status: "review", label: "Needs you", hint: "Review or unblock." },
+  { status: "ready", label: "Ready", hint: "Starts when its bot is free." },
+  { status: "later", label: "Later", hint: "Not scheduled yet." },
   { status: "done", label: "Done", hint: "Approved." },
 ];
 const laneOf = (t: BotTask): TaskStatus => (t.status === "blocked" ? "review" : (t.status as TaskStatus));
@@ -48,62 +48,79 @@ export default function TasksPage({
       fail(e);
     }
   }
+  const row = (t: BotTask) => {
+    const bot = state.bots.find((b) => b.id === t.botId);
+    return (
+      <button
+        key={t.id}
+        type="button"
+        className={"group-row task-card priority-" + t.priority + (t.status === "blocked" ? " blocked" : "")}
+        draggable={t.status !== "working"}
+        onDragStart={() => setDragged(t.id)}
+        onDragEnd={() => setDragged("")}
+        onClick={() => setEditing(t)}
+      >
+        {bot ? <BotAvatar bot={bot} size={36} state={t.status === "working" ? "thinking" : "idle"} /> : <span className="work-avatar-blank" aria-hidden="true" />}
+        <span className="row-main">
+          <span className="row-title">{t.title}</span>
+          <span className="row-sub task-meta">
+            {bot?.name ?? "Anyone"}
+            {t.priority !== "normal" && (
+              <>
+                {" · "}
+                <em>{t.priority}</em>
+              </>
+            )}
+          </span>
+        </span>
+        <ChevronRight size={15} className="row-chevron" aria-hidden="true" />
+      </button>
+    );
+  };
   return (
-    <div className="tasks-page">
-      <WorkBar work={work} tab="Tasks" add={{ label: "New task", run: () => setEditing({ status: "ready" }) }} />
-      <p className="muted tasks-intro">A Ready task starts when its bot is free. Finished ones wait here for you.</p>
-      <div className="task-lanes">
-        {lanes.map((lane) => {
-          const items = tasks.filter((t) => laneOf(t) === lane.status);
-          const droppable = ["later", "ready", "done"].includes(lane.status);
-          return (
-            <section
-              key={lane.status}
-              className={"task-lane" + (dragged && droppable ? " drop" : "")}
-              aria-label={lane.label}
-              onDragOver={(e) => droppable && dragged && e.preventDefault()}
-              onDrop={(e) => {
-                e.preventDefault();
-                if (droppable && dragged) void act(() => api.moveTask(dragged, lane.status));
-                setDragged("");
-              }}
-            >
-              <div className="lane-head">
-                <strong>{lane.label}</strong>
-                <span className="count">{items.length}</span>
-              </div>
-              <small className="lane-hint">{lane.hint}</small>
-              {items.map((t) => {
-                const bot = state.bots.find((b) => b.id === t.botId);
-                return (
-                  <button
-                    key={t.id}
-                    className={"task-card priority-" + t.priority + (t.status === "blocked" ? " blocked" : "")}
-                    draggable={t.status !== "working"}
-                    onDragStart={() => setDragged(t.id)}
-                    onDragEnd={() => setDragged("")}
-                    onClick={() => setEditing(t)}
-                  >
-                    <strong>{t.title}</strong>
-                    <span className="task-meta">
-                      {bot ? <BotAvatar bot={bot} size={20} state={t.status === "working" ? "thinking" : "idle"} /> : null}
-                      <small>{bot?.name ?? "Anyone"}</small>
-                      {t.priority !== "normal" && <em>{t.priority}</em>}
-                    </span>
-                    {t.status === "blocked" && <small className="task-problem">Stuck · {t.problem}</small>}
-                    {t.status === "review" && <small className="task-review">Ready for review</small>}
-                  </button>
-                );
-              })}
-              {(lane.status === "later" || lane.status === "ready") && (
-                <button className="textbutton lane-add" onClick={() => setEditing({ status: lane.status as "later" | "ready" })}>
-                  <Plus size={14} /> Add
+    <div className="page work-page tasks-page">
+      <WorkBar work={work} tab="Tasks" add={{ label: "New task", run: () => setEditing({ status: "ready" }) }} lede="A Ready task starts when its bot is free. Finished ones wait here for you." />
+      <WorkNeeds state={state} openChat={openChat} openTask={(t) => setEditing(t)} fail={fail} />
+      {lanes.map((lane) => {
+        const items = tasks
+          .filter((t) => laneOf(t) === lane.status)
+          .sort((a, b) => (lane.status === "done" ? b.updatedAt - a.updatedAt : 0));
+        const droppable = ["later", "ready", "done"].includes(lane.status);
+        const adds = lane.status === "later" || lane.status === "ready";
+        // Working and Done show only when they hold something, or Done while a task is dragged to it.
+        if (!items.length && !adds && !(dragged && droppable)) return null;
+        return (
+          <section
+            key={lane.status}
+            className={"page-section task-lane" + (dragged && droppable ? " drop" : "")}
+            aria-label={lane.label}
+            onDragOver={(e) => droppable && dragged && e.preventDefault()}
+            onDrop={(e) => {
+              e.preventDefault();
+              if (droppable && dragged) void act(() => api.moveTask(dragged, lane.status));
+              setDragged("");
+            }}
+          >
+            <h2 className="group-label">
+              {lane.label} · {items.length}
+            </h2>
+            <div className="group work-avatars">
+              {/* Done keeps its newest few in view; the rest fold away, as the phone's done toggle does. */}
+              <Folded rows={items.map(row)} limit={lane.status === "done" ? 3 : 8} />
+              {adds && (
+                <button type="button" className="group-row lane-add" onClick={() => setEditing({ status: lane.status as "later" | "ready" })}>
+                  <span className="lane-add-icon" aria-hidden="true">
+                    <Plus size={16} />
+                  </span>
+                  Add
                 </button>
               )}
-            </section>
-          );
-        })}
-      </div>
+              {!items.length && !adds && <div className="group-row row-sub">Drop here</div>}
+            </div>
+            <p className="group-foot">{lane.hint}</p>
+          </section>
+        );
+      })}
       <dialog ref={dialog} onCancel={() => setEditing(null)} className="task-dialog">
         {editing && (
           <form
