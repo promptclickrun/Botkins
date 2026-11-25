@@ -28,6 +28,7 @@ import { updateTools } from "./updates.mjs";
 import { profileContext } from "./bot-profile-files.mjs";
 import { Memory } from "./memory.mjs";
 import { Teamwork, helperSessionId } from "./teamwork.mjs";
+import { Subagents } from "./subagents.mjs";
 import { Mentions } from "./mentions.mjs";
 import { Summaries } from "./summaries.mjs";
 import { Wiki } from "./wiki.mjs";
@@ -304,6 +305,7 @@ export class Workspace {
     this.plugins = new Plugins(this);
     this.memory = new Memory(this);
     this.teamwork = new Teamwork(this);
+    this.subagents = new Subagents(this);
     this.mentions = new Mentions(this);
     // Auto-summarize: a chat is named from its first message, then again every few turns (desktop/summaries.mjs).
     this.summaries = new Summaries(this);
@@ -1353,6 +1355,7 @@ export class Workspace {
       this.spaces.context(chat) +
       (chat.groupInstructions || "") +
       this.teamwork.brief(bot, chat) +
+      this.subagents.brief(chat, run) +
       this.wiki.context() +
       (chat.extraInstructions || "") +
       this.profileContext(bot.id) +
@@ -1396,6 +1399,7 @@ export class Workspace {
             ...this.sidepane.tools(bot, chat, run, task),
             ...this.tasks.tools(bot, chat, run, task),
             ...this.teamwork.tools(bot, chat, run, task),
+            ...this.subagents.tools(bot, chat, run, task),
           ]),
     ];
   }
@@ -1548,9 +1552,9 @@ export class Workspace {
   async openSession(chat, bot, run, task) {
     // A bot without access to the chat's project gets no session there (desktop/access.mjs).
     this.access.assertChat(chat, [bot]);
-    // A coding chat works in its project's folder; other chats in the bot's own folder.
+    // A coding chat works in its project's folder; a subagent may override cwd; other chats use the bot's folder.
     const projectFolder = this.projects.folderFor(chat);
-    let folder = projectFolder;
+    let folder = (chat.subagent && chat.folder) || projectFolder;
     if (!folder) {
       folder = join(this.dir, "files", bot.id);
       mkdirSync(folder, { recursive: true });
@@ -2084,6 +2088,7 @@ export class Workspace {
       for (const step of run.steps ?? [])
         if (step.status === "Running") step.status = "Interrupted";
       finishCanvas(run);
+      this.subagents.releaseRun(run.id);
       run.finished = Date.now();
       chat.time = Date.now();
       if (run.status !== "Stopped" && !run.silent) chat.unread = true;
@@ -2550,6 +2555,7 @@ export class Workspace {
       for (const step of run.steps ?? [])
         if (step.status === "Running") step.status = "Interrupted";
       finishCanvas(run);
+      this.subagents.releaseRun(run.id);
       run.finished = Date.now();
       chat.time = Date.now();
       if (run.panelId) {
