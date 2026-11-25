@@ -102,9 +102,9 @@ export function watchSnapshotOf({ state, revision, voice = {}, chatId }: WatchSn
   const pairing = state.pairing;
   const bots = state.parts.bots ?? [];
   const primary = bots.find((bot) => !bot.hidden);
-  const found = primary ? chatForTap(state.parts.chats ?? [], primary.id, "latest") : null;
+  const selectedId = chatId ?? (primary ? chatForTap(state.parts.chats ?? [], primary.id, "latest")?.id : undefined);
   const summary = state.parts.chats?.find((chat) =>
-    chat.id === (chatId ?? found?.id) &&
+    chat.id === selectedId &&
     !!primary &&
     chat.botId === primary.id &&
     !chat.botIds &&

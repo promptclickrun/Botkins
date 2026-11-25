@@ -9,9 +9,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
-  renameSync,
   rmSync,
-  writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -93,7 +91,7 @@ import { Proactive } from "./proactive.mjs";
 import { Reminders } from "./reminders.mjs";
 import { proposalsFrom } from "./proactive-learning.mjs";
 import { Templates } from "./templates.mjs";
-import { readWorkspace } from "./workspace-file.mjs";
+import { readWorkspace, WorkspaceWriter } from "./workspace-file.mjs";
 import { Access } from "./access.mjs";
 import { memberCanSpaces, narrower, personName, speakerContext, speakerPrompt, turnAccess } from "./team-turn.mjs";
 import { Spaces } from "./spaces.mjs";
@@ -184,6 +182,7 @@ export class Workspace {
     // The port a sign-in's answer comes back on. Tests pass 0 for any free port.
     this.oauthPort = options?.oauthPort;
     this.file = join(dir, "workspace.json");
+    this.writer = new WorkspaceWriter(this.file);
     this.dir = dir;
     this.providers =
       providers instanceof Providers ? providers : new Providers([new CopilotProvider({ connect: providers })]);
@@ -381,19 +380,20 @@ export class Workspace {
     return turns;
   }
 
-  /**
-   * Writes the state soon instead of now, for the turn's hot path: a turn's steps and streamed
-   * text change it many times a second, and each write stringifies the whole state on the main
-   * process (about 18 ms at 3 MB and 260 ms at 50 MB, measured 2026-11-23), which stalled the
-   * harness running in this process and the approvals it waits on. The window hears at once; the
-   * disk gets one write within SAVE_SOON_MS. Any `save()` meanwhile writes it all and takes its
-   * place; the turn's end saves, and so do quitting and the process's exit (`flushSave`).
-   * Use `save()` for anything recovery or safety reads after a crash.
-   */
-  saveSoon() {
+  // Known live changes checkpoint the working turns. Other callers and orderly shutdowns
+  // keep the full-save contract. A synchronous save supersedes either kind of pending write.
+  saveSoon(run) {
+    if (!this.writer.mark(run)) this.fullSavePending = true;
     this.notify();
     if (this.saveTimer) return;
-    this.saveTimer = setTimeout(() => this.save(), SAVE_SOON_MS);
+    this.saveTimer = setTimeout(() => {
+      if (this.fullSavePending) return this.save();
+      const artifactRevision = this.artifacts.revision;
+      this.artifacts.batch(() => this.writer.checkpoint(chat => this.artifactEvents.messages(chat)));
+      this.saveTimer = null;
+      unsaved.delete(this);
+      if (this.artifacts.revision !== artifactRevision) this.notify();
+    }, SAVE_SOON_MS);
     this.saveTimer.unref?.();
     unsaved.add(this);
     if (!exitHooked) {
@@ -403,12 +403,13 @@ export class Workspace {
       });
     }
   }
-  /** Writes now if a `saveSoon` is waiting. */
+  /** Fold a pending or published checkpoint back into the full file on orderly shutdown. */
   flushSave() {
-    if (this.saveTimer) this.save();
+    if (this.saveTimer || this.writer.written.size) this.save();
   }
   save() {
     if (this.batchingSave) return;
+    this.fullSavePending = false;
     if (this.saveTimer) {
       clearTimeout(this.saveTimer);
       this.saveTimer = null;
@@ -422,10 +423,7 @@ export class Workspace {
       this.queues.size || detachedQuestions.length
         ? { ...this.state, ...(this.queues.size && { pendingMessages: Object.fromEntries(this.queues) }), ...(detachedQuestions.length && { detachedQuestions }) }
         : this.state;
-    writeFileSync(this.file + ".tmp", JSON.stringify(persisted), {
-      mode: 0o600,
-    });
-    renameSync(this.file + ".tmp", this.file);
+    this.writer.save(persisted, this.active);
     this.notify();
   }
   snapshot() {
@@ -786,7 +784,10 @@ export class Workspace {
   recordVoiceLine(chatId, id, text, final, author, options) {
     if (!recordVoiceLine(this.chat(chatId), id, text, final, author, options)) return;
     if (final) this.save();
-    else this.notify();
+    else {
+      this.writer.voiceChanged(this.active.get(chatId)?.run, id);
+      this.notify();
+    }
   }
   send(chatId, text, options = {}) {
     if (this.closing) throw new Error("Botkins is closing");
@@ -1836,13 +1837,14 @@ export class Workspace {
       task.sourceText = (task.sourceText || "") + (data.deltaContent || "");
     }
     if (data?.deltaContent?.trim()) task.streamTime ??= Date.now();
+    const previous = task.stream;
     appendStream(task, data);
     if (!this.revealReaction(run, task)) return;
     if (run.recovery) run.recovery.draft = task.stream;
     if (run.recovery && Date.now() >= (task.nextCheckpoint ?? 0)) {
       task.nextCheckpoint = Date.now() + 2000;
-      this.saveSoon();
-    } else this.notify();
+      this.saveSoon(run);
+    } else this.notify({ kind: "stream-append", chatId: run.chatId, previous, body: task.stream });
   }
 
   /**
@@ -2036,7 +2038,7 @@ export class Workspace {
     run.todos = mapTodos(result);
     // A late read still belongs in its turn's activity, but the latest turn owns the rail.
     if (this.state.runs.find((item) => item.chatId === chat.id)?.id === run.id) chat.todos = run.todos;
-    this.saveSoon();
+    this.saveSoon(run);
   }
 
   // Compare with this session's actual store: a prewarm, a restart, or switching back to a
@@ -2190,11 +2192,11 @@ export class Workspace {
           }
           this.notify();
         } else {
-          recordActivity(run, event, this.notify);
+          recordActivity(run, event, () => this.notify({ kind: "tool-step", runId: run.id, stepId: data.toolCallId }));
           const step = data?.toolCallId && run.steps?.find((s) => s.id === data.toolCallId);
           if (step) {
             step.botId ??= bot.id;
-            if (type === "tool.execution_start" || type === "tool.execution_complete") this.saveSoon();
+            if (type === "tool.execution_start" || type === "tool.execution_complete") this.saveSoon(run);
           }
         }
       });
@@ -2287,8 +2289,8 @@ export class Workspace {
           this.readSessionTodos(session, chat, run, task);
         } else if (recordCanvas(run, chat, task, this.metered(event, run.model ?? chosen))) this.notify();
         else recordActivity(run, event, () => {
-          if (event.type === "tool.execution_start" || event.type === "tool.execution_complete") this.saveSoon();
-          else this.notify();
+          if (event.type === "tool.execution_start" || event.type === "tool.execution_complete") this.saveSoon(run);
+          else this.notify({ kind: "tool-step", runId: run.id, stepId: event.data.toolCallId });
         });
       });
       if (task.stopped) return;

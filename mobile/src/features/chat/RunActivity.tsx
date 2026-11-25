@@ -4,8 +4,9 @@ import { useEffect, useState } from "react";
 import { ActivityIndicator, Text, View } from "react-native";
 import type { Run, Step, StepDetail, TeamAsk } from "@/link/types";
 import { useChatPrefs } from "@/state/chatPrefs";
-import { useBots, useModels, useWatchedChat } from "@/state/hooks";
+import { useBots, useCapability, useModels, useWatchedChat } from "@/state/hooks";
 import { api, watchReasoning } from "@/state/link";
+import { useAppActive } from "@/state/useAppActive";
 import { modelName } from "@/state/models";
 import { useApp } from "@/state/store";
 import { compactNumber, duration } from "@/state/time";
@@ -107,11 +108,13 @@ export function StepRow({ step, chatId, runId, startOpen = false, helperName, fo
   );
 }
 
-function Reasoning({ run, startOpen }: { run: Run; startOpen: boolean }) {
+function Reasoning({ chatId, run, live, available, startOpen }: { chatId: string; run: Run; live: boolean; available: boolean; startOpen: boolean }) {
   const { colors, type } = useTheme();
   const [open, setOpen] = useState(startOpen);
-  const text = (run.reasoning ?? []).map((part) => part.text.trim()).filter(Boolean).join("\n\n");
-  if (!text) return null;
+  const inFront = useAppActive(useIsFocused());
+  useEffect(() => live && inFront && open ? watchReasoning(chatId) : undefined, [live, inFront, open, chatId]);
+  if (!available && !run.reasoning?.some((part) => /\S/.test(part.text))) return null;
+  const text = open && inFront ? (run.reasoning ?? []).map((part) => part.text.trim()).filter(Boolean).join("\n\n") : "";
   return (
     <Group>
       <Tap onPress={() => setOpen(!open)} sink={1} feel="select" hitSlop={0} accessibilityLabel={open ? "Hide thinking" : "Show thinking"} accessibilityState={{ expanded: open }}>
@@ -126,7 +129,7 @@ function Reasoning({ run, startOpen }: { run: Run; startOpen: boolean }) {
       {open && (
         <View style={{ paddingHorizontal: space.lg, paddingBottom: space.lg }}>
           <Text selectable maxFontSizeMultiplier={1.35} style={[type.subhead, { color: colors.ink2, lineHeight: 22 }]}>
-            {text}
+            {text || (live ? "Waiting for thinking…" : "")}
           </Text>
         </View>
       )}
@@ -144,12 +147,12 @@ export default function RunActivity() {
   const saved = useApp((state) => state.chats[chatId]?.runs[runId]);
   const running = useApp((state) => state.running[chatId]);
   const run = running?.id === runId ? running : saved;
-  const focused = useIsFocused();
-  const streamsReplies = useChatPrefs((prefs) => prefs.textStreaming);
   const thinkingMode = useChatPrefs((prefs) => prefs.thinking);
   const showUpdates = useChatPrefs((prefs) => prefs.updates);
-  const needsReasoning = focused && thinkingMode !== "hide" && !streamsReplies && running?.id === runId && running?.status === "Working";
-  useEffect(() => needsReasoning ? watchReasoning(chatId) : undefined, [chatId, needsReasoning]);
+  // Earlier hosts don't advertise retained thoughts on their compact run. Keep the
+  // disclosure available there so opening it can fetch whatever they already hold.
+  const reportsThinking = useCapability("separate-thinking-v1");
+  const live = running?.id === runId && running?.status === "Working";
   const allBots = useBots();
   const models = useModels();
   const markdown = useChatPrefs((prefs) => prefs.markdown);
@@ -242,7 +245,7 @@ export default function RunActivity() {
       )}
 
       {/* Hidden omits notes from this rail; Folded and Open retain their complete text here. */}
-      {thinkingMode !== "hide" && <Reasoning run={run} startOpen={thinkingMode === "show"} />}
+      {thinkingMode !== "hide" && <Reasoning key={run.id + thinkingMode} chatId={chatId} run={run} live={live} available={live && (!!run.hasReasoning || !reportsThinking)} startOpen={thinkingMode === "show"} />}
 
       {showUpdates && updates.length > 0 && (
         <View>

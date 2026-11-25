@@ -9,7 +9,7 @@ import type { ProfileHost } from "./profile";
 import { normalizeCode } from "./pairing";
 import { isRelayHost } from "./relay";
 import { sha256 } from "@noble/hashes/sha2.js";
-import type { ReasoningDelta, ReasoningView } from "./types";
+import type { ReasoningDelta, ReasoningView, Run, RunSummary, Step } from "./types";
 
 const PREFIX = "/botkins/v1/";
 export const PROTOCOL = 1;
@@ -426,7 +426,44 @@ class Retry extends Error {}
 
 // Same preview as the host. The portable client is bundled independently of the host modules.
 function reasoningPreview(items: ReasoningView["items"], botId?: string) {
-  return items.filter(item => item.text && (!botId || item.botId === botId)).map(item => item.text).join("\n\n").slice(-4000);
+  const tail = [];
+  let remaining = 4000;
+  for (let index = items.length - 1; index >= 0 && remaining; index--) {
+    const item = items[index];
+    if (!item.text || (botId && item.botId !== botId)) continue;
+    if (tail.length) {
+      const separator = "\n\n".slice(-remaining);
+      tail.push(separator);
+      remaining -= separator.length;
+      if (!remaining) break;
+    }
+    const suffix = item.text.slice(-remaining);
+    tail.push(suffix);
+    remaining -= suffix.length;
+  }
+  return tail.reverse().join("");
+}
+
+type RowPatch<T> = { base: number; set?: T[]; remove?: string[]; order?: string[] };
+type RunStepPatch = RowPatch<Step> & { patch: "steps"; run: string; metadata?: Omit<Run, "steps"> };
+type RunSummaryPatch = RowPatch<RunSummary> & { patch: "summaries" };
+
+function patchedRows<T extends { id: string }>(held: T[], patch: RowPatch<T>): T[] | null {
+  if (!patch.set?.length && !patch.remove?.length && !patch.order) return held;
+  const byId = new Map(held.map(row => [row.id, row]));
+  for (const id of patch.remove ?? []) if (!byId.delete(id)) return null;
+  for (const row of patch.set ?? []) byId.set(row.id, row);
+  if (!patch.order) return [...byId.values()];
+  if (patch.order.length !== byId.size || new Set(patch.order).size !== byId.size || patch.order.some(id => !byId.has(id))) return null;
+  return patch.order.map(id => byId.get(id)!);
+}
+
+/** Reconstruct the phone's existing run shape, retaining references to all untouched steps. */
+function patchedRun(held: Run, patch: RunStepPatch): Run | null {
+  if (held.id !== patch.run || held.status !== "Working" || !Array.isArray(held.steps)) return null;
+  if (patch.metadata && (patch.metadata.id !== held.id || patch.metadata.chatId !== held.chatId || patch.metadata.status !== "Working")) return null;
+  const steps = patchedRows(held.steps, patch);
+  return steps && { ...(patch.metadata ?? held), steps };
 }
 
 type PreviewSource = { run: string; botId?: string };
@@ -437,11 +474,17 @@ type TextDelta = { id: string; stream: Append; thinking: Append; preview?: Previ
 export type LinkOptions = {
   /** Opt in to boolean live indicators and expanded text:<chatId> parts for watched chats. */
   streamAppends?: boolean;
+  /** Request detailed reasoning only for explicit consumers, independently of reply streaming. */
+  separateThinking?: boolean;
   /**
    * Ask for steps without their long input and output ("step-details-v1"): such a step says
    * `more: true`, and `link.step` reads it when it is opened. A computer without it sends them whole.
    */
   lightSteps?: boolean;
+  /** Negotiate incremental working-run steps with a compatible host. Requires lightSteps. */
+  runStepDeltas?: boolean;
+  /** Receive keyed edits to the visible run summary list ("run-summary-deltas-v1"). */
+  runSummaryDeltas?: boolean;
   fetch: FetchLike;
   /** Parts that changed on the computer, by name. A chat's detail is "chat:<id>", its running turn "run:<id>". */
   onParts(parts: Record<string, unknown>): void;
@@ -491,6 +534,10 @@ export class LinkClient {
   private reasonings = new Map<string, ReasoningView>();
   private supportsAppends: boolean | undefined;
   private supportsReasoning: boolean | undefined;
+  private supportsStepDeltas: boolean | undefined;
+  private supportsSummaryDeltas: boolean | undefined;
+  private summaryBase?: { version: number; rows: RunSummary[] };
+  private runBases = new Map<string, { version: number; run: Run }>();
   private receivedFullLive = false;
   /** What the last sync asked for, as the option said it and as it was sent. */
   private sentMode: TextMode = "live";
@@ -534,9 +581,10 @@ export class LinkClient {
   }
 
   /** Starts following the computer. Keeps trying while it can't be reached. */
-  start() {
+  start({ resting = false }: { resting?: boolean } = {}) {
     if (this.running) return;
     this.running = true;
+    this.resting = resting;
     this.lifetime ??= {};
     this.scheduleProbe();
     void this.follow(this.lifetime);
@@ -798,6 +846,10 @@ export class LinkClient {
         this.epoch = reply.epoch;
         this.supportsAppends = undefined;
         this.supportsReasoning = undefined;
+        this.supportsStepDeltas = undefined;
+        this.supportsSummaryDeltas = undefined;
+        this.summaryBase = undefined;
+        this.runBases.clear();
         this.supportsPush = false;
         this.supportsChunks = undefined;
         this.have = {};
@@ -907,6 +959,48 @@ export class LinkClient {
       cleared["reasoning:" + chat] = null;
     }
     if (Object.keys(cleared).length) this.options.onParts(cleared);
+  }
+
+  private retryRunSync(): never {
+    // A part of this poll or pushed frame was lost. Replay everything in this batch from a fresh
+    // baseline, including any text cursor or reasoning already expanded before the failure.
+    this.have = {};
+    this.runBases.clear();
+    this.summaryBase = undefined;
+    this.texts.clear();
+    this.reasonings.clear();
+    throw new Retry();
+  }
+
+  private expandRunSummaries(parts: Record<string, unknown>, versions: Record<string, number>) {
+    if (!Object.hasOwn(parts, "runs")) return;
+    const wire = parts.runs as RunSummary[] | RunSummaryPatch;
+    let rows: RunSummary[];
+    if (Array.isArray(wire)) rows = wire;
+    else {
+      const base = this.summaryBase;
+      if (wire.patch !== "summaries" || !base || base.version !== wire.base || this.have.runs !== wire.base) this.retryRunSync();
+      rows = patchedRows(base.rows, wire) ?? this.retryRunSync();
+      parts.runs = rows;
+    }
+    this.summaryBase = { version: versions.runs!, rows };
+  }
+
+  private expandRunSteps(parts: Record<string, unknown>, versions: Record<string, number>) {
+    for (const [name, value] of Object.entries(parts)) {
+      if (!name.startsWith("run:")) continue;
+      const chat = name.slice(4);
+      const wire = value as RunStepPatch | Run | null;
+      let run: Run | null;
+      if (wire && "patch" in wire && wire.patch === "steps") {
+        const base = this.runBases.get(chat);
+        run = base && this.have[name] === wire.base && base.version === wire.base ? patchedRun(base.run, wire) : null;
+        if (!run) this.retryRunSync();
+        parts[name] = run;
+      } else run = wire as Run | null;
+      if (run?.status === "Working" && Array.isArray(run.steps)) this.runBases.set(chat, { version: versions[name]!, run });
+      else this.runBases.delete(chat);
+    }
   }
 
   private expandReasoning(parts: Record<string, unknown>) {
@@ -1051,8 +1145,14 @@ export class LinkClient {
           watching.slice(0, 4).every((id) => id.length > 0 && id.length <= 128);
         const appends = requestText ? { appends: this.cursors() } : {};
         const requestReasoning = requestText && this.supportsReasoning !== false;
-        const reasoningWatch = requestReasoning ? [...new Set([...detailed, ...(text !== "whole" ? watching.slice(0, 4) : [])])].slice(0, 4) : [];
+        const reasoningWatch = requestReasoning ? [...new Set([...detailed, ...(!this.options.separateThinking && text !== "whole" ? watching.slice(0, 4) : [])])].slice(0, 4) : [];
         this.releaseReasoning(reasoningWatch);
+        for (const chat of this.runBases.keys()) if (!watching.includes(chat) && !reasoningWatch.includes(chat)) {
+          this.runBases.delete(chat);
+          delete this.have["run:" + chat];
+        }
+        const requestSummaryDeltas = this.options.runSummaryDeltas && this.supportsSummaryDeltas !== false;
+        const requestStepDeltas = this.options.runStepDeltas && this.options.lightSteps && this.supportsStepDeltas !== false;
         if (poll.signal.aborted) continue;
         const push = !quick && routeOf(session) === "relay" && this.supportsPush &&
           "supportsPush" in this.options.fetch && this.options.fetch.supportsPush === true;
@@ -1063,15 +1163,21 @@ export class LinkClient {
           if (this.lifetime !== lifetime || poll.signal.aborted) return;
           if (news.epoch !== this.epoch) {
             this.epoch = news.epoch;
+            this.runBases.clear();
+            this.summaryBase = undefined;
             this.have = {};
           }
-          if (this.options.streamAppends && (watching !== this.watching || detailed !== this.reasoningWatching)) return;
+          if ((this.options.streamAppends || this.options.runStepDeltas) && (watching !== this.watching || detailed !== this.reasoningWatching)) return;
           if (news.v) {
             const meta = news.parts.meta as { capabilities?: string[] } | undefined;
             if (meta) {
               this.supportsPush = meta.capabilities?.includes("sync-push-v1") === true;
               this.supportsChunks = meta.capabilities?.includes("text-chunks-v1") === true;
+              this.supportsStepDeltas = meta.capabilities?.includes("run-step-deltas-v1") === true;
+              this.supportsSummaryDeltas = meta.capabilities?.includes("run-summary-deltas-v1") === true;
             }
+            if (requestSummaryDeltas && this.supportsSummaryDeltas) this.expandRunSummaries(news.parts, news.v);
+            if (requestStepDeltas && this.supportsStepDeltas) this.expandRunSteps(news.parts, news.v);
             if (this.options.streamAppends) this.expandText(news.parts, watching.slice(0, 4), requestText);
             if (this.options.streamAppends) this.expandReasoning(news.parts);
             if (requestReasoning && text !== "whole") this.publishThinkingPreviews(news.parts, watching);
@@ -1080,7 +1186,7 @@ export class LinkClient {
           }
           this.options.onSync?.();
         };
-        const args = { epoch: this.epoch, have: this.have, watch: watching, ...appends, ...(requestReasoning && { reasoningWatch }), ...(text !== "live" && { text: text === "chunks" ? "chunks" : false }), ...(this.options.lightSteps && { steps: "light" }), ...(!push && { wait: quick ? 0 : 25_000 }) };
+        const args = { epoch: this.epoch, have: this.have, watch: watching, ...appends, ...(requestReasoning && { reasoningWatch, ...(this.options.separateThinking && { separateThinking: true }) }), ...(text !== "live" && { text: text === "chunks" ? "chunks" : false }), ...(this.options.lightSteps && { steps: "light" }), ...(requestStepDeltas && { runSteps: "delta" }), ...(requestSummaryDeltas && { runSummaries: "delta" }), ...(!push && { wait: quick ? 0 : 25_000 }) };
         if (push) this.pushSession = session;
         const pollLedger = trackResource("poll", "LinkClient:sync", push ? "link.follow" : "link.sync", this.pairing.serverId);
         let news: SyncNews;

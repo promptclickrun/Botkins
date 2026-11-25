@@ -1,6 +1,7 @@
 // The fields Botkins reads from workspace.json. The loader runs before any part can save or
 // publish the workspace. Settings, messages and other user content keep their own formats.
-import { lstatSync, readFileSync, writeFileSync } from "node:fs";
+import { createHash, randomUUID } from "node:crypto";
+import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { botAccess } from "./access.mjs";
 
@@ -13,6 +14,108 @@ const projectFields = new Set([
   "folders", "mode",
   "path", // migrateProject reads the folder from this field in early files.
 ]);
+
+function writeAtomic(file, text) {
+  writeFileSync(file + ".tmp", text, { mode: 0o600 });
+  renameSync(file + ".tmp", file);
+}
+
+const digest = text => createHash("sha256").update(text).digest("hex");
+const checkpointDir = file => join(dirname(file), "turn-checkpoints");
+const checkpointPath = (dir, base, runId) =>
+  join(dir, digest(JSON.stringify([base, runId])) + ".json");
+
+// Checkpoints belong to one full save. A crash after replacing workspace.json but before
+// removing old checkpoints cannot replay an older draft over a stopped or deleted run.
+export class WorkspaceWriter {
+  constructor(file) {
+    this.file = file;
+    this.directory = checkpointDir(file);
+    this.turns = new Map();
+    this.dirty = new Set();
+    this.written = new Set();
+    if (existsSync(this.directory)) {
+      for (const name of readdirSync(this.directory)) {
+        if (/^[a-f0-9]{64}\.json(?:\.tmp)?$/.test(name)) this.written.add(join(this.directory, name));
+      }
+    }
+  }
+
+  save(state, active) {
+    const base = active.size ? randomUUID() : null;
+    const turns = new Map();
+    for (const chat of active.size ? state.chats : []) {
+      const run = active.get(chat.id)?.run;
+      if (run?.status !== "Working") continue;
+      // Tool boundaries append interim messages. The last row of the full save may also
+      // change in place while recording speech or finishing an interim reply.
+      const last = chat.messages.at(-1);
+      const from = last && (last.voicePartial || last.interim) ? chat.messages.length - 1 : chat.messages.length;
+      turns.set(run, { chat, from, file: checkpointPath(this.directory, base, run.id) });
+    }
+    writeAtomic(this.file, JSON.stringify(turns.size ? { ...state, turnCheckpointBase: base } : state));
+    this.turns = turns;
+    this.dirty.clear();
+    for (const file of this.written) rmSync(file, { force: true });
+    this.written.clear();
+  }
+
+  mark(run) {
+    if (!this.turns.has(run)) return false;
+    this.dirty.add(run);
+    return true;
+  }
+
+  // A partial voice transcript can revise an older utterance or insert it before its reply.
+  // The next checkpoint must replace the suffix starting at that row, including any shifted rows.
+  voiceChanged(run, voiceId) {
+    const turn = this.turns.get(run);
+    if (!turn || !turn.from) return;
+    const index = turn.chat.messages.findLastIndex(message => message.voiceId === voiceId);
+    turn.from = Math.min(turn.from, Math.max(0, index));
+  }
+
+  checkpoint(indexMessages) {
+    mkdirSync(this.directory, { recursive: true, mode: 0o700 });
+    for (const run of this.dirty) {
+      const { chat, from, file } = this.turns.get(run);
+      indexMessages(chat);
+      const { messages, ...fields } = chat;
+      const data = JSON.stringify({ run, chat: fields, from, messages: messages.slice(from) });
+      writeAtomic(file, `{"digest":"${digest(data)}","data":${data}}`);
+      this.written.add(file);
+      this.dirty.delete(run);
+    }
+  }
+}
+
+function restoreCheckpoints(file, state) {
+  const base = state.turnCheckpointBase;
+  delete state.turnCheckpointBase;
+  if (!base) return;
+  const directory = checkpointDir(file);
+  for (const [index, existing] of state.runs.entries()) {
+    if (existing.status !== "Working") continue;
+    let saved;
+    try {
+      const record = JSON.parse(readFileSync(checkpointPath(directory, base, existing.id), "utf8"));
+      // Treat damaged optional progress as a missed checkpoint; the full save remains authoritative.
+      if (!record?.data || record.digest !== digest(JSON.stringify(record.data))) continue;
+      saved = record.data;
+    } catch (error) {
+      if (error.code === "ENOENT" || error instanceof SyntaxError) continue;
+      throw error;
+    }
+    const chatIndex = state.chats.findIndex(chat => chat.id === existing.chatId);
+    const chat = state.chats[chatIndex];
+    if (!chat || saved?.run?.id !== existing.id || saved.run.chatId !== existing.chatId ||
+        saved.run.status !== "Working" || saved.chat?.id !== chat.id || saved.chat.botId !== chat.botId ||
+        !Number.isSafeInteger(saved.from) || saved.from < 0 || saved.from > chat.messages.length ||
+        !Array.isArray(saved.messages) || !saved.messages.every(message => typeof message?.role === "string")) continue;
+    state.runs[index] = saved.run;
+    state.chats[chatIndex] = { ...saved.chat, messages: chat.messages.slice(0, saved.from).concat(saved.messages) };
+  }
+}
 
 /** Preserve sections outside the current format before the next workspace save drops them. */
 function archiveSections(dir, sections) {
@@ -75,6 +178,7 @@ function takeExtras(record, supported) {
 const grantFields = new Set(["all", "projects"]);
 export function readWorkspace(file) {
   const state = JSON.parse(readFileSync(file, "utf8"));
+  restoreCheckpoints(file, state);
   const sections = takeExtras(state, workspaceFields);
   const recovery = {};
   if (sections.length) {

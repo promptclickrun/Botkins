@@ -44,7 +44,13 @@ export type HotRun = { id: string; rest?: Record<string, unknown>; order?: strin
  * A hot message. It applies to the whole state numbered `base` (every whole state carries its `seq`,
  * and a hot message does not change it), and to nothing else. `fields` holds the top-level fields that changed: null removes one.
  */
-export type HotMessage = { base: number; seq: number; fields?: Record<string, unknown>; runs?: HotRun[] };
+export type HotMessage = {
+  base: number;
+  seq: number;
+  fields?: Record<string, unknown>;
+  appends?: { name: "streams" | "thinking"; chat: string; from: number; add: string }[];
+  runs?: HotRun[];
+};
 
 function mergeRun(prev: Run, patch: HotRun): Run | null {
   const { steps: prevSteps, ...prevRest } = prev;
@@ -89,6 +95,16 @@ export function applyHot(state: State, hot: HotMessage): State | null {
       next[name] = shared;
       changed = true;
     }
+  }
+  for (const { name, chat, from, add } of hot.appends ?? []) {
+    let map = next[name] as Record<string, string>;
+    if (!map || !Object.hasOwn(map, chat)) return null;
+    const previous = map[chat];
+    if (from !== 0 && previous.length !== from) return null;
+    if (map === state[name]) map = { ...map };
+    map[chat] = from === 0 ? add : previous + add;
+    next[name] = map;
+    changed = true;
   }
   if (hot.runs?.length) {
     let runs = state.runs;
@@ -157,7 +173,7 @@ export class WindowState {
     this.seq = hot.seq;
     if (next === prev) return true;
     const before = prev.streams, after = next.streams;
-    const textOnly = before !== after && prev.runs === next.runs && Object.keys(hot.fields ?? {}).every(key => key === "streams")
+    const textOnly = before !== after && prev.thinking === next.thinking && prev.runs === next.runs && Object.keys(hot.fields ?? {}).every(key => key === "streams")
       && Object.keys(before).length === Object.keys(after).length
       && Object.keys(before).every(id => Object.hasOwn(after, id) && !!before[id] === !!after[id]);
     this.publish(next, !textOnly, next.queued !== prev.queued ? observeQueue : undefined);

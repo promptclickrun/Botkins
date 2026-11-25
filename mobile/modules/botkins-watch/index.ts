@@ -9,6 +9,7 @@ export type WatchReachability = { reachable: boolean; paired: boolean; installed
 type Native = {
   start(): Promise<void>;
   update(snapshot: string): Promise<void>;
+  updateProgress?(snapshot: string): Promise<void>;
   clear(): Promise<void>;
   voiceStarted(sessionId: string, inputRate: number, outputRate: number): Promise<void>;
   voiceEnded(sessionId: string, reason: string | null): Promise<void>;

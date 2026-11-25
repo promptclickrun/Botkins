@@ -114,6 +114,14 @@ legacy devices and future devices remain independent. Removing a team member rem
 membership and profile grant. Profile proofs and `statusKey` never appear in `status().devices`,
 paired events or client device lists.
 
+### Incremental tool steps (`run-step-deltas-v1`)
+
+A client can add `runSteps: "delta"` alongside `steps: "light"` to its sync or follow request. A host advertising this capability seeds each watched `run:<chatId>` with a complete authorized run. Later it may send the same named part as `{ patch: "steps", run, base, set?, remove?, order?, metadata? }`. `run` is the working run ID. `base` must match the previously applied version of that part. `set` contains changed or new step objects keyed by their existing IDs. Remove the IDs in `remove`, apply the upserts in order (new IDs append), then use the optional `order` as the complete list of remaining IDs. When present, `metadata` replaces every run field except the steps. Advance the part version from the enclosing `v` after applying the update. A mismatched base or run ID requires a fresh snapshot, requested by omitting the acknowledged version. A full run or null always replaces the previous value. The host computes every patch from the same access-filtered light representation it would otherwise send in full. Clients and hosts that omit the option continue to exchange full runs.
+
+### Incremental run summaries (`run-summary-deltas-v1`)
+
+A client may independently send `runSummaries: "delta"` on sync or follow. After the initial full `runs` list, the host can return `{ patch: "summaries", base, set?, remove?, order? }` in that part. Rows are identified by run ID and use the same remove, upsert and ordering rules as tool steps. The list contains only the runs visible to the requesting device. A complete array, including an empty one when access changes, replaces all prior rows. A version mismatch requires the client to omit its acknowledgement and fetch a fresh list.
+
 ### Light steps (`step-details-v1`)
 
 Most of a long turn's bytes are the inputs and outputs of its steps, and a chat shows them only when a step is opened. A client that sends `steps: "light"` in the `link.sync` argument gets `chat:<id>` and `run:<id>` with light steps: a step keeps its `input` and `output` only when each is at most 400 characters, when the step is a question the bot asked (`ask_user`, `ask`), or when it started a helper. Any other step comes without them and says `more: true`. `link.messages` answers in the form the session follows in.
@@ -130,7 +138,9 @@ With appends, `live.streams` and `live.thinking` map chat IDs to booleans. A key
 
 ### Reasoning appends (`reasoning-appends-v1`)
 
-A host with `reasoning-appends-v1` accepts `reasoningWatch` in `link.sync`, an array of up to four chat IDs. Sending the field selects the compact working-run format. Older clients omit it and receive their usual snapshots. New phones request reasoning for the chats they stream. In whole-reply mode they send an empty list until Activity opens, then call `LinkClient.watchReasoning` for the visible chat. Full step inputs and outputs remain available through the existing step-detail call. Callers that request full steps receive them directly.
+A host with `reasoning-appends-v1` accepts `reasoningWatch` in `link.sync`, an array of up to four chat IDs. Sending the field selects the compact working-run format. Older clients omit it and receive their usual snapshots. The phone requests reasoning when a visible chat shows open thinking or when the person expands thinking in Activity. A folded disclosure can request the complete current reasoning at any time. A backgrounded or covered chat releases its watch. Interim updates have their own display setting. Full step inputs and outputs remain available through the existing step-detail call. Callers that request full steps receive them directly.
+
+A host advertising `separate-thinking-v1` accepts `separateThinking: true` with a valid `reasoningWatch`. Watched chats outside that list receive reply-only text with an independent cursor. A growing thought cannot reset the reply cursor. A compact working run with retained thoughts carries `hasReasoning: true`, so Activity can offer to open it. Clients that omit the flag retain the existing text stream format.
 
 A working run's reasoning travels in a separate `reasoning:<chatId>` part for each permitted chat. It contains `{run, items, reset?, remove?, order?}`. An item carries its ID, timing, optional bot ID, UTF-16 offset `from`, and suffix `add`. The host compares its current snapshot with the last one sent on that session when the phone acknowledges its version in `have`. New or rewritten items start at zero. Order and removal changes carry their affected IDs. A missing acknowledgment or new session receives a fresh snapshot with `reset: true`. A null part clears the working reasoning. Completed runs keep the authoritative detail supplied by the computer.
 

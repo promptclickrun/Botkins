@@ -323,7 +323,7 @@ export const lightPart = (part) => (!part ? part : Array.isArray(part.runs) ? { 
 export function compactWorkingRun(run, light = true) {
   if (!run || run.status !== "Working") return run;
   const { reasoning: _reasoning, ...rest } = light ? lightRun(run) : run;
-  return rest;
+  return _reasoning?.length ? { ...rest, hasReasoning: true } : rest;
 }
 
 /** One step's input and output, as a client that holds light steps asks for them. Null when the step is gone. */

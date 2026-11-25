@@ -646,6 +646,8 @@ export type Run = RunSummary & {
   /** Tools with an MCP App view that ran in this turn. */
   mcpApps?: McpAppCard[];
   options?: { label: string; prompt: string; description?: string }[];
+  /** The active run has reasoning available when its detail is opened. */
+  hasReasoning?: boolean;
   reasoning?: Reasoning[];
   todos?: Todo[];
   agents?: Subagent[];
@@ -1133,6 +1135,8 @@ export type UsageReport = {
  * "project-artifacts-v1" (artifacts attached to a project: `Project.artifacts` and three calls).
  * "sync-push-v1" (sealed sync updates on an open relay request),
  * "stream-appends-v1" (boolean live indicators and cursor-based reply and thinking text for watched chats).
+ * "run-summary-deltas-v1" (incremental visible run summaries with runSummaries: "delta").
+ * "run-step-deltas-v1" (incremental working-run steps for a client that requests light steps and runSteps: "delta").
  * "step-details-v1" (steps without their long input and output for a client that asks; `link.step` reads one).
  * "turn-timeline-v1" (a turn in the order it happened: text before a step, a steer or a request
  * as interim messages, answers to requests as messages, a time on every reply, each helper's own

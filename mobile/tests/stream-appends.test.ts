@@ -6,6 +6,7 @@ import { test, type TestContext } from "node:test";
 import { setTimeout as sleep } from "node:timers/promises";
 import { LinkHost } from "../link-host/index.mjs";
 import { MockBackend } from "../link-host/mock-backend.mjs";
+import { reasoningPreview } from "../link-host/reasoning-preview.mjs";
 import { compactWorkingRun, reasoningDelta } from "../link-host/parts.mjs";
 import { checkJoin, LinkClient, type LinkOptions, pair, startJoin } from "../src/link/client";
 import { applyParts, useApp } from "../src/state/store";
@@ -156,6 +157,59 @@ test("legacy sync and invalid opt-ins retain the full live bytes", async (t) => 
   assert.equal(expired.parts[key].stream.from, 0);
   const oversized = await sync({ [id]: { id: quiet.parts[key].id, stream: 500, thinking: 4 } });
   assert.equal(oversized.parts[key].thinking.from, 0);
+});
+
+test("a folded chat keeps reply deltas while its hidden reasoning rolls, and can reopen current detail", async (t) => {
+  const { backend, link, phone } = await setup(t);
+  const id = backend.state.chats[0].id;
+  const latest: Record<string, any> = {};
+  const events: Record<string, unknown>[] = [];
+  const client = await phone(true, (news) => { Object.assign(latest, news); events.push(news); }, { separateThinking: true, lightSteps: true });
+  const thought = { id: "t", started: 1, text: "r".repeat(4800) };
+  const textKey = "text:" + id, detailKey = "reasoning:" + id;
+  backend.state.streams[id] = "first";
+  backend.state.thinking[id] = thought.text.slice(-4000);
+  backend.state.runs = [{ id: "run-demand", chatId: id, status: "Working", reasoning: [thought] }];
+  backend.changed();
+  client.watch([id]);
+  client.start();
+  await until(() => latest[textKey]?.stream === "first");
+  assert.ok(latest["run:" + id].hasReasoning);
+  assert.equal(latest[textKey].thinking, "");
+  assert.equal(latest[detailKey], undefined);
+  const received = events.length;
+  thought.text += " more";
+  backend.state.thinking[id] = thought.text.slice(-4000);
+  backend.changed();
+  await sleep(300);
+  assert.ok(events.slice(received).every((event) => !(detailKey in event || textKey in event)), "a hidden thought alone did not publish text");
+  assert.ok(!link.reasoningParts.has(id));
+  backend.state.streams[id] += " reply";
+  backend.changed();
+  await until(() => latest[textKey]?.stream === "first reply");
+
+  client.watchReasoning([id]);
+  await until(() => latest[detailKey]?.items?.[0]?.text === thought.text);
+  assert.equal(latest[textKey].thinking, thought.text.slice(-4000));
+  client.watchReasoning([]);
+  await until(() => latest[detailKey] === null && latest[textKey]?.thinking === "");
+  thought.text += " while closed";
+  backend.state.thinking[id] = thought.text.slice(-4000);
+  backend.changed();
+  client.watchReasoning([id]);
+  await until(() => latest[detailKey]?.items?.[0]?.text === thought.text);
+  assert.equal(latest[textKey].stream, "first reply");
+});
+
+test("bounded thinking previews preserve separators and skip unrelated speakers", () => {
+  for (const lastLength of [0, 1, 3998, 3999, 4000, 4001]) {
+    const items = [{ text: "old".repeat(2000), botId: "one" }, { text: "other", botId: "two" },
+      { text: "", botId: "one" }, { text: "z".repeat(lastLength), botId: "one" }];
+    for (const speaker of [undefined, "one", "two", "missing"]) {
+      const reference = items.filter(({ text, botId }) => text && (!speaker || botId === speaker)).map(({ text }) => text).join("\n\n").slice(-4000);
+      assert.equal(reasoningPreview(items, speaker), reference);
+    }
+  }
 });
 
 test("negotiated reasoning appends do not replay a working run", async (t) => {
@@ -706,4 +760,107 @@ test("a team member who asks for appends gets indicators and text for their own 
   assert.ok(!parts["chat:" + other], "no messages for a chat that is not theirs");
   assert.ok(!("quietLive" in parts), "the computer's own indicators are never sent by that name");
   assert.ok(!sent.some((batch) => batch.includes("secret")), "nothing of the other chat was ever sent");
+});
+
+test("the phone applies step patches in order, keeps earlier rows and recovers a missing base", async (t) => {
+  const { backend, link, phone } = await setup(t);
+  const id = backend.state.chats.find((chat) => !chat.botIds).id;
+  const key = "run:" + id;
+  const raw: any[] = [];
+  const rawSummaries: any[] = [];
+  let corrupt = false;
+  let corruptSummary = false;
+  const news = link.news.bind(link);
+  link.news = (...args) => {
+    const result = news(...args);
+    if (typeof result?.text !== "string") return result;
+    const message = JSON.parse(result.text);
+    if (key in message.parts) raw.push(message.parts[key]);
+    if ("runs" in message.parts) rawSummaries.push(message.parts.runs);
+    if (corrupt && message.parts[key]?.patch === "steps") {
+      corrupt = false;
+      message.parts[key].base = -1;
+      result.text = JSON.stringify(message);
+    }
+    if (corruptSummary && message.parts.runs?.patch === "summaries") {
+      corruptSummary = false;
+      message.parts.runs.base = -1;
+      result.text = JSON.stringify(message);
+    }
+    return result;
+  };
+  const steps = Array.from({ length: 20 }, (_, index) => ({ id: "s" + index, name: "shell", label: "Read", status: "Done", started: index }));
+  const run = { id: "step-test", chatId: id, title: "First", status: "Working", steps, reasoning: [{ id: "why", text: "thought", started: 10 }] };
+  backend.state.runs = [run, ...Array.from({ length: 20 }, (_, index) => ({ id: "earlier-" + index, chatId: id, title: "Earlier run " + index, status: "Completed", time: index }))];
+  backend.changed();
+  const client = await phone(true, applyParts, { lightSteps: true, runStepDeltas: true, runSummaryDeltas: true });
+  client.watch([id]);
+  client.start();
+  const current = () => useApp.getState().running[id];
+  await until(() => current()?.id === run.id && current()?.steps?.length === 20);
+  const stable = current()!.steps![0];
+  const stableSummary = useApp.getState().parts.runs![1];
+  assert.equal(raw[0].steps.length, 20);
+  run.steps[19].label = "Updated";
+  backend.changed();
+  await until(() => current()?.steps?.[19]?.label === "Updated");
+  assert.equal(raw.at(-1).patch, "steps");
+  assert.strictEqual(current()!.steps![0], stable);
+  assert.equal(current()!.reasoning![0]!.text, "thought");
+  run.title = "Changed";
+  run.steps.splice(4, 1);
+  run.steps.reverse();
+  backend.changed();
+  await until(() => current()?.title === "Changed");
+  assert.deepEqual(current()!.steps!.map(row => row.id), steps.map(row => row.id));
+  assert.strictEqual(useApp.getState().parts.runs![1], stableSummary);
+  assert.equal(useApp.getState().parts.runs![0]?.title, "Changed");
+  backend.state.runs.splice(3, 1);
+  backend.state.runs.unshift(backend.state.runs.pop());
+  backend.changed();
+  await until(() => useApp.getState().parts.runs?.[0]?.id === "earlier-19");
+  assert.deepEqual(useApp.getState().parts.runs!.map(row => row.id), backend.state.runs.map(row => row.id));
+  corruptSummary = true;
+  backend.state.runs[0].title = "Changed historical run";
+  backend.changed();
+  await until(() => useApp.getState().parts.runs?.[0]?.title === "Changed historical run");
+  assert.equal(corruptSummary, false);
+  assert.ok(Array.isArray(rawSummaries.at(-1)), "the client recovered the run list from a fresh snapshot");
+  corrupt = true;
+  run.steps.push({ id: "last", name: "shell", label: "Last", status: "Running", started: 25 });
+  backend.changed();
+  await until(() => current()?.steps?.at(-1)?.id === "last");
+  assert.equal(corrupt, false);
+  assert.ok(Array.isArray(raw.at(-1).steps), "client retried without the corrupt patch's base");
+  assert.equal(current()!.reasoning![0]!.text, "thought");
+  run.status = "Completed";
+  backend.changed();
+  await until(() => current()?.status === "Completed" || !current());
+  assert.ok(raw.at(-1)?.patch === undefined, "completion is a fresh authoritative snapshot");
+});
+
+test("a phone requesting step deltas consumes full runs from older hosts", async (t) => {
+  const { backend, link, phone } = await setup(t);
+  const meta = link.meta.bind(link);
+  link.meta = () => { const value = meta(); return { ...value, capabilities: value.capabilities.filter(name => name !== "run-step-deltas-v1" && name !== "run-summary-deltas-v1") }; };
+  const sync = link.sync.bind(link);
+  const requests: any[] = [];
+  link.sync = (session, args, ...rest) => {
+    requests.push([args.runSteps, args.runSummaries]);
+    const { runSteps, runSummaries, ...legacy } = args;
+    return sync(session, legacy, ...rest);
+  };
+  const id = backend.state.chats[0].id;
+  const run = { id: "old-host-run", chatId: id, status: "Working", steps: [{ id: "a", status: "Running" }] };
+  backend.state.runs = [run];
+  backend.changed();
+  const client = await phone(true, applyParts, { lightSteps: true, runStepDeltas: true, runSummaryDeltas: true });
+  client.watch([id]);
+  client.start();
+  await until(() => useApp.getState().running[id]?.id === run.id && requests.length > 1);
+  assert.deepEqual(requests[0], ["delta", "delta"]);
+  assert.deepEqual(requests[1], [undefined, undefined]);
+  run.steps[0].status = "Done";
+  backend.changed();
+  await until(() => useApp.getState().running[id]?.steps?.[0]?.status === "Done");
 });
