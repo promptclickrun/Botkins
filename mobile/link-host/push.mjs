@@ -153,8 +153,8 @@ export class Push {
       if (other && (other.token === clean.token || (clean.start && other.start === clean.start))) this.store.setPush(device.id, null);
     }
     // The newest version this phone was told about stays: registering again doesn't tell it twice.
-    this.store.setPush(deviceId, { ...clean, prefs: cleanPrefs(prefs, before?.prefs), activities: before?.activities ?? {}, ...(before?.updateSeen && { updateSeen: before.updateSeen }) });
-    this.changed();
+    // The same registration again (a phone that asks often) writes nothing and wakes no phone.
+    if (this.store.setPush(deviceId, { ...clean, prefs: cleanPrefs(prefs, before?.prefs), activities: before?.activities ?? {}, ...(before?.updateSeen && { updateSeen: before.updateSeen }) })) this.changed();
   }
   setPrefs(deviceId, prefs) {
     const record = this.store.push(deviceId);

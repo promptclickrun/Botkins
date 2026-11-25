@@ -47,6 +47,29 @@ function fakeRelay() {
   return { relay, sent, bodies, answers, fail: (code: number) => (status = code) };
 }
 
+test("registering the same address again writes nothing and wakes no phone", async () => {
+  const { link, call, until, done, paired, parts } = await setup();
+  try {
+    const store = (link as any).store;
+    await call("link.push.register", { token: TOKEN, env: "production", start: START, cards: "all" });
+    await until(() => !!parts.phones[paired.deviceId].push, "the first registration");
+    let saves = 0;
+    const save = store.save.bind(store);
+    store.save = () => {
+      saves++;
+      save();
+    };
+    const version = (link as any).version;
+    for (let i = 0; i < 5; i++) await call("link.push.register", { token: TOKEN, env: "production", start: START, cards: "all" });
+    assert.equal(saves, 0, "an unchanged registration is not saved");
+    assert.equal((link as any).version, version, "nor sent to phones again");
+    await call("link.push.register", { token: TOKEN, env: "sandbox", start: START, cards: "all" });
+    assert.equal(saves, 1, "a real change is saved");
+  } finally {
+    await done();
+  }
+});
+
 /** A computer with one paired phone and the stand-in relay. */
 async function setup(speed = 0.05) {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), "botkins-push-")));

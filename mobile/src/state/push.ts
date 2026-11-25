@@ -26,6 +26,7 @@ import { botsWithWork, hasWork, MAX_CARDS, phoneCard } from "./cards";
 import { answerPendingAsks } from "./device";
 import { api, attempt, chatOnScreen, syncForPush, onChatOnScreen, restIfAway, switchComputer, tellOthers } from "./link";
 import { useApp } from "./store";
+import { createRegistrar } from "./pushRegistrar";
 
 const KEY = "botkins.push.v1";
 const TASK = "botkins-push";
@@ -96,44 +97,63 @@ function within<T>(work: Promise<T>, ms: number, message: string): Promise<T> {
 }
 
 let startToken: string | undefined;
-let registered = ""; // what the computer was last told, so it is told once
 
-/** Tells the computer where Apple delivers for this phone. Quiet when nothing changed. */
-async function register(force = false) {
-  const { pairing, pairings, link, parts } = useApp.getState();
-  // A computer that still holds this phone's address after notifications were turned off (the phone
-  // was using another computer then) is told now.
-  if (native && pairing && link === "online" && canPush() && !usePush.getState().wanted && parts.phones?.[pairing.deviceId]?.push) {
-    void api["link.push.unregister"]().catch(() => {});
-    return;
-  }
-  if (!native || !pairing || link !== "online" || !usePush.getState().wanted || !canPush()) return;
-  try {
+/**
+ * Tells the computer where Apple delivers for this phone. Quiet when nothing changed. A token that
+ * arrives through the push token listener is passed in as `given`: asking iOS for it again would
+ * fire that listener again (src/state/pushRegistrar.ts has why).
+ */
+const registrar = createRegistrar({
+  async prepare() {
+    const { pairing, pairings, link, parts } = useApp.getState();
+    // A computer that still holds this phone's address after notifications were turned off (the phone
+    // was using another computer then) is told now.
+    if (native && pairing && link === "online" && canPush() && !usePush.getState().wanted && parts.phones?.[pairing.deviceId]?.push) {
+      void api["link.push.unregister"]().catch(() => {});
+      return false;
+    }
+    if (!native || !pairing || link !== "online" || !usePush.getState().wanted || !canPush()) return false;
     const permission = await native.Notifications.getPermissionsAsync();
     if (!permission.granted) {
       usePush.setState({ status: permission.canAskAgain ? "off" : "denied" });
-      return;
+      return false;
     }
     // The notification extension opens sealed alerts with these keys, one for each paired computer,
     // so an alert from a computer the phone is not using now opens too. Each is derived from its
     // pairing and never leaves the phone.
     await saveKeys(pairings);
-    const token = await within(native.Notifications.getDevicePushTokenAsync(), 15_000, "Apple didn't give this phone an address for notifications. Check the connection and try again.");
-    if (token.type !== "ios" || typeof token.data !== "string") return;
-    // Only a development build can say it is on Apple's test service: its signing profile says
-    // "development". A build from TestFlight or the App Store carries no profile to read (the answer
-    // is null) and is always on production.
-    const env = (await Application.getIosPushNotificationServiceEnvironmentAsync()) === "development" ? "sandbox" : "production";
+    return true;
+  },
+  async osToken() {
+    const token = await within(native!.Notifications.getDevicePushTokenAsync(), 15_000, "Apple didn't give this phone an address for notifications. Check the connection and try again.");
+    return token.type === "ios" && typeof token.data === "string" ? token.data : null;
+  },
+  async said(token) {
+    const { pairing } = useApp.getState();
+    return [pairing?.serverId, pairing?.deviceId, token, await pushEnv(), startToken ?? "", cardMode()].join();
+  },
+  async send(token) {
     const cards = cardMode();
-    const said = [pairing.serverId, pairing.deviceId, token.data, env, startToken ?? "", cards].join();
-    if (said === registered && !force) return;
-    await api["link.push.register"]({ token: token.data, env, ...(startToken && { start: startToken }), ...(cards && { cards }) });
-    registered = said;
+    await api["link.push.register"]({ token, env: await pushEnv(), ...(startToken && { start: startToken }), ...(cards && { cards }) });
+  },
+  sent() {
     usePush.setState({ status: "on", problem: null });
     tellPresence();
-  } catch (error) {
+  },
+  failed(error) {
     usePush.setState({ problem: error instanceof Error ? error.message : "Notifications could not be set up." });
-  }
+  },
+});
+
+// Only a development build can say it is on Apple's test service: its signing profile says
+// "development". A build from TestFlight or the App Store carries no profile to read (the answer
+// is null) and is always on production.
+async function pushEnv() {
+  return (await Application.getIosPushNotificationServiceEnvironmentAsync()) === "development" ? "sandbox" : "production";
+}
+
+function register(force = false, given?: string) {
+  return registrar.register(force, given);
 }
 
 /** Turns notifications on: asks iOS when it has to, then tells the computer. Resolves to how it went. */
@@ -153,7 +173,7 @@ export async function enablePush(): Promise<PushStatus> {
 
 export async function disablePush() {
   usePush.setState({ wanted: false, status: native ? "off" : "unsupported", problem: null });
-  registered = "";
+  registrar.reset();
   void keep(KEY, JSON.stringify({ wanted: false })).catch(() => {});
   await saveKeys([]).catch(() => {});
   if (useApp.getState().link === "online") await api["link.push.unregister"]().catch(() => {});
@@ -590,7 +610,11 @@ export async function startPush() {
   openFrom(Notifications.getLastNotificationResponse());
   void setCategories();
   startAnswers();
-  Notifications.addPushTokenListener(() => void register(true));
+  // iOS hands over the token here, also as the answer to our own request for it. It is used as
+  // given; asking for it again from here would fire this listener again, in a loop.
+  Notifications.addPushTokenListener((token) => {
+    if (token.type === "ios" && typeof token.data === "string") void register(false, token.data);
+  });
   void Notifications.registerTaskAsync(TASK).catch(() => {});
 
   Activities?.addListener("token", ({ chatId, token }) => {
