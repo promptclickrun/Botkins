@@ -8,6 +8,7 @@
 import { PendingRequests } from "./pending.ts";
 import { DurableObject } from "cloudflare:workers";
 import { HOST_GROUP_LENGTH, HOST_PROTOCOL, HOST_PROTOCOL_V3, PHONE_PROTOCOL, hex, hostProof, hostProofV3, networkOf, sha256, unhex } from "./pure.ts";
+import { handleFeedback } from "./feedback.ts";
 import { handlePush } from "./push.ts";
 import { spaceFrame, spacePage } from "./space.ts";
 import spaceFrameScript from "./space-frame.js.txt";
@@ -139,6 +140,8 @@ export default {
     const limited = (env.RATE_LIMITS as string) !== "off";
     // Push notifications: its own checks, in ./push.ts. It counts against the network limit first.
     if (url.pathname === "/v1/push") return handlePush(request, env, limited, network);
+    // Bug reports and feature requests become GitHub issues: its own checks, in ./feedback.ts.
+    if (url.pathname === "/v1/feedback") return handleFeedback(request, env, limited, network);
     const space = SPACE_ROUTE.exec(url.pathname);
     if (space) return handleSpace(request, env, limited, network, space[1]!);
     const invite = INVITE_ROUTE.exec(url.pathname);

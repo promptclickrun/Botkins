@@ -83,7 +83,7 @@ const PROFILE_REQUEST_TIMEOUT = 10_000;
 // "maintenance-v1": this copy lets a phone clear the cache and send the computer's own test notification.
 /** The link tells people of notes and changes in their spaces (space-alerts.mjs). Named only while the app has spaces. */
 const SPACE_ALERTS_CAPABILITY = "space-alerts-v1";
-const CAPABILITIES = ["sync-push-v1", "credentials-v1", "screen-v1", "prs-v1", "uploads-v1", "relay-v1", "push-v1", "device-v1", "voice-v1", "devices-v1", "device-person-v1", "maintenance-v1", "teams-v1", "stream-appends-v1", "reasoning-appends-v1", "separate-thinking-v1", "text-streaming-off-v1", "text-chunks-v1", "text-watch-v1", "step-details-v1", "run-step-deltas-v1", "run-summary-deltas-v1", "team-people-v1", "chat-sections-v1", "chat-typing-v1", "activity-bots-v1", "activity-all-v1", "member-rename-v1", "profile-v1", "people-avatars-v1", GADGET_CAPABILITY, GADGET_SETTINGS_CAPABILITY, "pr-panel-v1"];
+const CAPABILITIES = ["sync-push-v1", "credentials-v1", "screen-v1", "prs-v1", "uploads-v1", "relay-v1", "push-v1", "device-v1", "voice-v1", "devices-v1", "device-person-v1", "maintenance-v1", "teams-v1", "stream-appends-v1", "reasoning-appends-v1", "separate-thinking-v1", "text-streaming-off-v1", "text-chunks-v1", "text-watch-v1", "step-details-v1", "run-step-deltas-v1", "run-summary-deltas-v1", "team-people-v1", "chat-sections-v1", "chat-typing-v1", "activity-bots-v1", "activity-all-v1", "member-rename-v1", "profile-v1", "people-avatars-v1", GADGET_CAPABILITY, GADGET_SETTINGS_CAPABILITY, "pr-panel-v1", "feedback-v1"];
 /** A custom view (an html block): the page a bot wrote and its data, at the sizes the desktop app keeps them to. */
 /** Calls that make a chat and answer its id. */
 const MAKES_CHAT = new Set(["createChat", "createGroupChat", "forkChat", "startProjectChat"]);
@@ -320,6 +320,8 @@ export class LinkHost extends EventEmitter {
       "link.push.presence": async (session, a) => this.push.setPresence(session.deviceId, a[0], a[1]),
       "link.push.activity": async (session, a) => this.push.setActivity(session.deviceId, a[0], a[1]),
       "link.push.test": (session) => this.push.test(session.deviceId),
+      // A bug report or feature request becomes an issue on the Botkins repo ("feedback-v1"), signed with this computer's relay key.
+      "link.feedback.send": async (_session, a) => this.sendFeedback(a[0]),
       "link.voice.set": async (_session, a) => this.voice.set(a[0]),
       // A key may be typed on the phone or be a saved credential; either way it is kept here and never sent back.
       "link.voice.key": async (_session, a) => {
@@ -1031,6 +1033,36 @@ export class LinkHost extends EventEmitter {
     this.emit("paired", visible);
     this.emit("status");
     return box(key, { serverId: this.store.data.serverId, serverKey: b64u(this.store.data.keys.publicKey), device: device.id, name: this.store.name, hosts: this.hosts(), ...(entry.memberId && { member: true }) }, "profile-ok:" + this.store.data.serverId);
+  }
+  /**
+   * Sends one bug report or feature request to the relay's feedback route, signed with this computer's
+   * relay key (the relay opens the GitHub issue; this computer never holds a GitHub token). The report
+   * holds only what the person wrote and the app, version and platform they sent with it. Answers
+   * `{ number, url }` for the issue.
+   */
+  async sendFeedback(input) {
+    const kind = input?.kind === "feature" ? "feature" : input?.kind === "bug" ? "bug" : null;
+    const title = typeof input?.title === "string" ? input.title.trim() : "";
+    const body = typeof input?.body === "string" ? input.body.trim() : "";
+    if (!kind) throw new Failure("Choose a bug report or a feature request.");
+    if (title.length < 4 || title.length > 120) throw new Failure("Give it a title of 4 to 120 characters.");
+    if (body.length < 4 || body.length > 8000) throw new Failure("Describe it in 4 to 8,000 characters.");
+    const label = (value) => (typeof value === "string" && /^[A-Za-z0-9 ._()+-]{1,40}$/.test(value.trim()) ? value.trim() : undefined);
+    const report = JSON.stringify({ kind, title, body, app: label(input.app), version: label(input.version), platform: label(input.platform) });
+    const key = this.store.relayKey();
+    const time = Math.floor(Date.now() / 1000);
+    const request = JSON.stringify({ v: 1, key: key.publicKey, time, sig: signWithRelayKey(key, "botkins-feedback-v1:" + time + ":" + report), report });
+    let response;
+    try {
+      response = await this.fetch(String(this.relayUrl()).replace(/\/+$/, "") + "/v1/feedback", { method: "POST", headers: { "content-type": "application/json" }, body: request, signal: AbortSignal.timeout(20_000) });
+    } catch {
+      throw new Failure("The report couldn't be sent. Check this computer's connection and try again.");
+    }
+    const answer = await response.json().catch(() => ({}));
+    if (response.status === 201 && typeof answer.url === "string") return { number: answer.number, url: answer.url };
+    if (response.status === 429) throw new Failure("Too many reports at once. Try again in a minute.");
+    if (response.status === 503) throw new Failure("Reports can't be sent right now.");
+    throw new Failure("The report couldn't be sent (" + response.status + ").");
   }
   activePairing() {
     if (this.pairing && this.pairing.expiresAt <= Date.now()) this.cancelPairing();

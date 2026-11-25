@@ -2129,6 +2129,8 @@ export type Calls = {
   "link.push.activity"(chatId: string, token: string | null): void;
   /** Sends one notification to this phone, to see that it arrives. */
   "link.push.test"(): void;
+  /** A bug report or feature request becomes an issue on the Botkins repo ("feedback-v1"). */
+  "link.feedback.send"(report: { kind: "bug" | "feature"; title: string; body: string; app?: string; version?: string; platform?: string }): { number: number; url: string };
   // ---- Device access ("device-v1")
   /** What bots may use on this phone. The phone holds the switches; the computer offers bots the matching tools. */
   "link.device.sources"(sources: DeviceSources): void;

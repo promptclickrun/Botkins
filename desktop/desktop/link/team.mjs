@@ -274,6 +274,8 @@ const POLICY = {
   "link.push.activity": ["settings", "view"],
   "link.chat.typing": ["agents", "chat"],
   "link.push.test": "owner",
+  // Anyone on the team may report a bug or ask for a feature; the relay limits each computer.
+  "link.feedback.send": ["settings", "view"],
   "link.voice.set": "owner",
   "link.voice.key": "owner",
   // The voices a provider lists, for choosing a bot's own voice ("bot-voice-v1"): a role that manages bots needs it, and it lists only names.
@@ -460,6 +462,7 @@ const SELF_METHODS = new Set([
   "link.unpair",
   // A person's own picture is always theirs to set: the link sets the caller's, never anyone else's.
   "setMyAvatar",
+  "link.feedback.send",
 ]);
 const BOT_METHODS = new Set(["updateBot", "setBotProactive", "proactiveAct", "setBotFlags", "makePrimary", "reorderBots", "deleteBot", "duplicateBot", "setBotAccess", "setBotIntegrations", "botMemory", "setBotMemory", "saveTemplate", "exportTemplateText", "link.setLook"]);
 const CHAT_METHODS = new Set(["changeMainFork", "setChatFlags", "renameChat", "regenerateChatTitle", "deleteChat", "forkChat", "reactToMessage", "warmChat", "setChatProject", "recordVoiceLine", "send", "stop", "stopHelper", "unqueue", "sendNow", "compact", "sideQuestion", "clearApprovals", "mentionables", "link.messages", "link.step", "sidePane", "changeSchedule", "link.voice.live", "link.voice.endLive", "link.team.inviteToChat", "link.team.removeFromChat", "link.chats.setSection", "mcpApps.view", "mcpApps.callTool", "mcpApps.readResource"]);

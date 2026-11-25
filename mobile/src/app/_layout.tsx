@@ -187,6 +187,7 @@ export default function RootLayout() {
               <Stack.Screen name="settings/harness" />
               <Stack.Screen name="settings/usage" />
               <Stack.Screen name="settings/about" />
+              <Stack.Screen name="settings/feedback" />
               <Stack.Screen name="settings/chat" />
               <Stack.Screen name="settings/experimental" />
               <Stack.Screen name="settings/voice" />
