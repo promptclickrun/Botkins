@@ -104,7 +104,7 @@ export function recordCanvas(run, chat, task, { type, data, agentId }) {
       delete agent.stoppable;
       if (data.stopped) {
         agent.status = "Stopped";
-        agent.detail ??= "Stopped";
+        agent.detail ??= String(data.detail || "Stopped").slice(0, 500);
       } else if (type === "subagent.failed") {
         agent.status = "Failed";
         agent.detail = String(data.error || "Failed").slice(0, 500);

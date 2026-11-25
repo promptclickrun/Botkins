@@ -273,6 +273,7 @@ class ClaudeSession extends ProviderSession {
     } finally {
       clearTimeout(timer);
       release();
+      if (!turn.stopped) this.settleBackground(turn);
       try {
         q.close?.();
       } catch {
@@ -358,8 +359,9 @@ class ClaudeSession extends ProviderSession {
           if (job?.settled) continue;
           // A helper or command that went to the background is answered at once with a placeholder
           // ("running in the background"). It is still working: its own notice says how it ended.
-          if (job?.backgrounded && !block.is_error && !job.stopRequested) continue;
-          const stopped = job?.stopRequested || job?.status === "stopped";
+          if (job?.backgrounded && !block.is_error && !job.ended) continue;
+          // Stopped only when Claude Code says so: a stop that was asked for may still be refused.
+          const stopped = job?.status === "stopped";
           if (job) job.settled = true;
           this.emit("tool.execution_complete", { toolCallId: block.tool_use_id, success: !block.is_error && !stopped, ...(stopped && { stopped: true }), ...(text && { result: { content: text } }), ...(block.is_error && !stopped && { error: { message: text || "Failed" } }) }, undefined, agentId);
           if (this.tasks.has(block.tool_use_id)) {
@@ -385,6 +387,7 @@ class ClaudeSession extends ProviderSession {
         const job = turn.jobs.get(event.tool_use_id) ?? {};
         Object.assign(job, { taskId: event.task_id, type: event.task_type, backgrounded: job.backgrounded || event.is_backgrounded === true });
         turn.jobs.set(event.tool_use_id, job);
+        this.announceBackground(event.tool_use_id, job);
         this.emit("task.changed", { toolCallId: event.tool_use_id });
         return;
       }
@@ -392,6 +395,7 @@ class ClaudeSession extends ProviderSession {
         const entry = [...turn.jobs.entries()].find(([, job]) => job.taskId === event.task_id);
         if (!entry || event.patch?.is_backgrounded !== true || entry[1].backgrounded) return;
         entry[1].backgrounded = true;
+        this.announceBackground(entry[0], entry[1]);
         this.emit("task.changed", { toolCallId: entry[0] });
         return;
       }
@@ -409,8 +413,8 @@ class ClaudeSession extends ProviderSession {
         if (job.backgrounded && !job.settled) {
           job.settled = true;
           const summary = typeof event.summary === "string" ? event.summary : "";
-          const stopped = event.status === "stopped" || job.stopRequested;
-          const failed = event.status === "failed" && !stopped;
+          const stopped = event.status === "stopped";
+          const failed = event.status === "failed";
           this.emit("tool.execution_complete", { toolCallId: id, success: !failed && !stopped, ...(stopped && { stopped: true }), ...(summary && { result: { content: summary } }), ...(failed && { error: { message: summary || "Failed" } }) });
           if (this.tasks.has(id)) {
             this.tasks.delete(id);
@@ -419,6 +423,25 @@ class ClaudeSession extends ProviderSession {
         }
         this.emit("task.changed", { toolCallId: id });
         return;
+      }
+    }
+  }
+  /** A command that runs in the background is a background command in the chat, however it got there. Once. */
+  announceBackground(id, job) {
+    if (job.type !== "local_bash" || !job.backgrounded || job.announced) return;
+    job.announced = true;
+    this.emit("tool.backgrounded", { toolCallId: id });
+  }
+  /** Background work Claude Code still held when the reply ended is not read any more: the chat is told so. */
+  settleBackground(turn) {
+    for (const [id, job] of turn.jobs) {
+      if (!job.backgrounded || job.settled || job.ended) continue;
+      job.settled = true;
+      const note = "Still running when the reply ended.";
+      this.emit("tool.execution_complete", { toolCallId: id, success: false, stopped: true, result: { content: note } });
+      if (this.tasks.has(id)) {
+        this.tasks.delete(id);
+        this.emit("subagent.completed", { toolCallId: id, stopped: true, detail: note });
       }
     }
   }

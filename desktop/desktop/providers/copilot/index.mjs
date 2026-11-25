@@ -281,8 +281,12 @@ class CopilotSession extends ProviderSession {
     this.subscriptions = new Set();
     // The command of each shell call, by tool call id: Copilot's task list names a shell by its command.
     this.commands = new Map();
+    // What Copilot's task list held when it was last read (null: not read yet), and who is listening.
+    this.tasks = null;
+    this.listeners = new Set();
   }
   on(handler) {
+    this.listeners.add(handler);
     const off = this.sdk.on((event) => {
       const command = event?.type === "tool.execution_start" && event.data?.arguments?.command;
       if (typeof command === "string" && event.data.toolCallId) {
@@ -291,12 +295,42 @@ class CopilotSession extends ProviderSession {
         if (this.commands.size > 300) this.commands.delete(this.commands.keys().next().value);
       }
       handler(event);
+      // The list is read when a helper or a shell call starts or ends, never for a text delta.
+      if (/^subagent\./.test(event?.type ?? "") || (/^tool\.execution_(start|complete)$/.test(event?.type ?? "") && this.commands.has(event.data?.toolCallId))) void this.readTasks();
     });
     this.subscriptions.add(off);
     return () => {
+      this.listeners.delete(handler);
       this.subscriptions.delete(off);
       off();
     };
+  }
+  hasTaskCalls() {
+    return typeof this.sdk.rpc?.tasks?.list === "function" && typeof this.sdk.rpc?.tasks?.cancel === "function";
+  }
+  /** Reads the task list again (one read at a time) and tells the listeners when it changed. */
+  async readTasks() {
+    if (!this.hasTaskCalls()) return;
+    if (this.reading) {
+      this.readAgain = true;
+      return;
+    }
+    this.reading = true;
+    try {
+      const key = (tasks) => (tasks ?? []).map((task) => task.id).join();
+      const before = this.tasks && key(this.tasks);
+      do {
+        this.readAgain = false;
+        const listed = (await this.sdk.rpc.tasks.list())?.tasks;
+        if (Array.isArray(listed)) this.tasks = listed.filter((task) => task?.status === "running" || task?.status === "idle");
+      } while (this.readAgain && !this.closed);
+      // Told only when the list is not what it was: what can be stopped may differ now.
+      if (!this.closed && before !== key(this.tasks)) for (const handler of [...this.listeners]) handler({ type: "task.changed", data: {} });
+    } catch {
+      // The list is only a hint: without it, everything is offered, as before it was read.
+    } finally {
+      this.reading = false;
+    }
   }
   // Read only the journal segment belonging to this submission. A tool request or
   // commentary message can precede a crash without being the person's final answer.
@@ -474,16 +508,23 @@ class CopilotSession extends ProviderSession {
     this.current?.stop();
     return this.sdk.abort();
   }
-  /** Copilot's own task list can cancel one helper or background shell ("experimental" in its SDK). */
-  canStopHelper(_id) {
-    return typeof this.sdk.rpc?.tasks?.list === "function" && typeof this.sdk.rpc?.tasks?.cancel === "function";
+  /**
+   * Copilot's own task list can cancel one helper or background shell ("experimental" in its SDK).
+   * Once the list was read, only what it held then is offered.
+   */
+  canStopHelper(id) {
+    if (!this.hasTaskCalls()) return false;
+    if (!this.tasks) return true;
+    const shell = this.commands.get(id);
+    if (shell) return this.tasks.some((task) => task.type === "shell" && String(task.command ?? "").trim() === shell.command);
+    return this.tasks.some((task) => task.type === "agent" && task.toolCallId === id);
   }
   /**
    * Cancels one helper (by the call that started it) or one background shell (by its command: the
    * list names no call) and leaves the rest of the turn running.
    */
   async stopHelper(id) {
-    if (!this.canStopHelper(id)) throw new Error("Botkins couldn't stop it: this version of Copilot can't stop one helper.");
+    if (!this.hasTaskCalls()) throw new Error("Botkins couldn't stop it: this version of Copilot can't stop one helper.");
     const shell = this.commands.get(id);
     const gone = shell ? "That command already finished." : "That helper already finished.";
     const because = (error) => new Error("Botkins couldn't stop it: " + String(error?.message ?? error).slice(0, 300));
