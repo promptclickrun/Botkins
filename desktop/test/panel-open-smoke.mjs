@@ -20,6 +20,7 @@ delete env.ELECTRON_RUN_AS_NODE;
 const now = Date.now();
 const frameId = "9f8e7d6c-5b4a-4321-89ab-cdef01234567";
 const frameId2 = "1a2b3c4d-5e6f-4321-89ab-cdef01234568";
+const frameId3 = "2b3c4d5e-6f70-4321-89ab-cdef01234569";
 const data = join(dir, "data");
 mkdirSync(join(data, "frames"), { recursive: true });
 
@@ -75,6 +76,11 @@ writeFileSync(
   `<!doctype html><body style='font:14px system-ui;margin:16px'>All launch milestones are green. <button type="button" id="focus-other">Focus summary</button><script>window.__otherKeys={toggle:0};addEventListener("keydown",(e)=>{if((e.metaKey||e.ctrlKey)&&e.shiftKey&&e.key.toLowerCase()==="f")window.__otherKeys.toggle++;});</script></body>`,
 );
 writeFileSync(join(data, "frames", frameId2 + ".json"), "null");
+writeFileSync(
+  join(data, "frames", frameId3 + ".html"),
+  `<!doctype html><body style='font:14px system-ui;margin:16px'>Second HTML block details. <button type="button" id="focus-second">Focus second block</button><script>window.__secondKeys={escape:0,toggle:0};addEventListener("keydown",(e)=>{if(e.key==="Escape")window.__secondKeys.escape++;if((e.metaKey||e.ctrlKey)&&e.shiftKey&&e.key.toLowerCase()==="f")window.__secondKeys.toggle++;});</script></body>`,
+);
+writeFileSync(join(data, "frames", frameId3 + ".json"), "null");
 
 const bots = [
   { id: "luna", name: "Luna", role: "Plans launches", instructions: "You are Luna.", face: "idle", look: { head: "luna", palette: "original" } },
@@ -92,6 +98,7 @@ writeFileSync(
     frames: [
       { id: frameId, owner: "panel:p_board", botId: "luna", createdAt: now },
       { id: frameId2, owner: "panel:p_notes", botId: "luna", createdAt: now },
+      { id: frameId3, owner: "panel:p_notes", botId: "luna", createdAt: now },
     ],
   }),
 );
@@ -140,7 +147,10 @@ const content = {
         stateRev: 0,
         last: null,
         asks: [],
-        blocks: [{ type: "html", frame: frameId2, height: 220, title: "Status summary" }],
+        blocks: [
+          { type: "html", frame: frameId2, height: 220, title: "Status summary" },
+          { type: "html", frame: frameId3, height: 220, title: "Status details" },
+        ],
       },
     ],
     cards: [],
@@ -385,14 +395,45 @@ try {
   await win.keyboard.press("Escape");
   await expect(dialog).toHaveCount(0);
 
-  // Open another panel normally -> opens at normal size
+  // Open another panel (with two HTML blocks) normally -> opens at normal size,
+  // and Cmd/Ctrl+Shift+F + Escape work when focus is inside the second HTML block.
   await win.getByRole("button", { name: "Open Status summary" }).click();
   await expect(dialog).toBeVisible();
   await expect(dialog).not.toHaveClass(/fullscreen/);
+  const secondIframe = dialog.locator(`iframe[src="botkins-app://frame-${frameId3}/"]`);
+  await expect(secondIframe).toBeVisible();
+  const secondBtn = dialog.frameLocator(`iframe[src="botkins-app://frame-${frameId3}/"]`).locator("#focus-second");
+  await expect(secondBtn).toBeVisible();
+  await secondBtn.click();
+  const secondFrame = await (await secondIframe.elementHandle())?.contentFrame();
+  assert.ok(secondFrame, "second HTML block iframe should be present");
+  await secondFrame.evaluate(() => { window.__secondKeys = { escape: 0, toggle: 0 }; });
+
+  await win.keyboard.press(`${mod}+Shift+F`);
+  await expect(dialog).toHaveClass(/fullscreen/);
+  assert.equal(await storedFullscreen(), "1");
+
+  await win.keyboard.press("Escape");
+  await expect(dialog).toBeVisible();
+  await expect(dialog).not.toHaveClass(/fullscreen/);
+  assert.equal(await secondFrame.evaluate(() => window.__secondKeys.escape), 1, "second block should keep Escape");
+
+  await secondFrame.evaluate(() => { window.__secondKeys.toggle = 0; });
+  await sendInputKey("F", [inputMod, "shift"]);
+  await expect(dialog).toHaveClass(/fullscreen/);
+  assert.equal(
+    await secondFrame.evaluate(() => window.__secondKeys.toggle),
+    0,
+    "before-input-event should prevent Cmd/Ctrl+Shift+F in a panel's second HTML block",
+  );
+  await sendInputKey("F", [inputMod, "shift"]);
+  await expect(dialog).not.toHaveClass(/fullscreen/);
+  assert.equal(await storedFullscreen(), "0");
+
   await dialog.getByRole("button", { name: "Close" }).click();
   await expect(dialog).toHaveCount(0);
 
-  // 10. Shortcut is bound to the open panel's frame id, not other custom frames.
+  // 10. Shortcut is bound to the open panel's frame ids, not other custom frames.
   // Even if main still holds `frameId` as open when focus is in `frameId2`, neither
   // `before-input-event` nor `frame-panel-key` swallows or forwards Cmd/Ctrl+Shift+F.
   const otherIframe = win.locator(`iframe[src="botkins-app://frame-${frameId2}/"]`).first();
@@ -406,7 +447,7 @@ try {
   await win.evaluate((staleFrameId) => {
     window.__strayPanelKeys = [];
     window.__offStrayPanelKeys = window.botkins.onPanelKey?.((data) => window.__strayPanelKeys.push(data));
-    window.botkins.setPanelOpen?.(staleFrameId);
+    window.botkins.setPanelOpen?.([staleFrameId]);
   }, frameId);
   try {
     await app.evaluate(({ BrowserWindow }) => {
@@ -435,7 +476,7 @@ try {
   } finally {
     await win.evaluate(() => {
       window.__offStrayPanelKeys?.();
-      window.botkins.setPanelOpen?.(null);
+      window.botkins.setPanelOpen?.([]);
     });
   }
 

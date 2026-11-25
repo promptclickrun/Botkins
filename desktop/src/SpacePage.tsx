@@ -783,7 +783,7 @@ export function SpacePage({
           title={opened.title}
           bot={askAllowed ? state.bots.find((b) => b.id === opened.botId) : undefined}
           asks={asksOf(opened)}
-          frameId={opened.blocks.find((b) => b.type === "html")?.frame ?? null}
+          frameIds={opened.blocks.flatMap((b) => (b.type === "html" ? [b.frame] : []))}
           initialFullscreen={openedState?.fullscreen}
           close={closePanel}
           ask={async (said) => {

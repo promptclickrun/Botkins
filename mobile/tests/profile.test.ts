@@ -20,6 +20,7 @@ function loadProfileStore(
   options?: {
     finish?: () => Promise<{ token: string; profileId: string; deviceId: string; name: string; email: string } | null>;
     onKeep?: (key: string, value: string, write: () => void) => Promise<void>;
+    onForget?: (key: string, remove: () => void) => Promise<void>;
   },
 ) {
   standIn("react-native", {
@@ -34,7 +35,10 @@ function loadProfileStore(
       else storage.set(key, value);
     },
     readKept: async (key: string) => storage.get(key) ?? null,
-    forget: async (key: string) => { storage.delete(key); },
+    forget: async (key: string) => {
+      if (options?.onForget) await options.onForget(key, () => { storage.delete(key); });
+      else storage.delete(key);
+    },
   });
   standIn("../src/state/link", {
     deviceName: () => "Test Phone",
@@ -182,4 +186,113 @@ test("continuing without a profile rolls back a finish that is already saving it
   assert.equal(storage.has("botkins.profile.session.v1"), false);
   assert.equal(storage.get("botkins.profile.choice.v1"), "dismissed");
   assert.equal(storage.has("botkins.profile.attempt.v1"), false);
+});
+
+test("a dismissed enrollment stays signed out after restart even if rollback delete fails once", async () => {
+  const storage = new Map<string, string>();
+  const pending = { id: "d".repeat(32), verifier: "verifier-secret", url: "https://profile.botkins.app/#" + "d".repeat(32), code: "135790" };
+  const session = { token: "tok-canceled", profileId: "prof-1", deviceId: "dev-canceled", name: "Alex", email: "a@example.com" };
+  let sessionWriteStarted!: () => void;
+  const writingSession = new Promise<void>((resolve) => { sessionWriteStarted = resolve; });
+  let releaseSessionWrite!: () => void;
+  const pauseSessionWrite = new Promise<void>((resolve) => { releaseSessionWrite = resolve; });
+  let sessionDeletes = 0;
+
+  const store = loadProfileStore(storage, async () => pending, {
+    finish: async () => session,
+    onKeep: async (key, _value, write) => {
+      if (key === "botkins.profile.session.v1") {
+        write();
+        sessionWriteStarted();
+        await pauseSessionWrite;
+        return;
+      }
+      write();
+    },
+    onForget: async (key, remove) => {
+      if (key === "botkins.profile.session.v1") {
+        sessionDeletes += 1;
+        if (sessionDeletes === 1) throw new Error("Keychain delete failed");
+      }
+      remove();
+    },
+  });
+
+  await store.loadProfile(0);
+  await store.beginProfile("Test Phone");
+  const finishing = store.finishPending();
+  await writingSession;
+
+  const dismissing = store.dismissPrompt();
+  releaseSessionWrite();
+  const [finished] = await Promise.all([finishing, dismissing]);
+
+  assert.equal(finished, undefined);
+  assert.equal(store.useProfile.getState().session, null);
+  assert.equal(sessionDeletes, 1);
+  assert.equal(storage.has("botkins.profile.session.v1"), true);
+
+  // On restart, the saved dismissal for that canceled enrollment must win, retry cleanup, and stay signed out.
+  const reloaded = loadProfileStore(storage, async () => pending, {
+    onForget: async (key, remove) => {
+      if (key === "botkins.profile.session.v1") sessionDeletes += 1;
+      remove();
+    },
+  });
+  await reloaded.loadProfile(0);
+
+  assert.equal(reloaded.useProfile.getState().session, null);
+  assert.equal(reloaded.useProfile.getState().prompt, null);
+  assert.equal(sessionDeletes, 2);
+  assert.equal(storage.has("botkins.profile.session.v1"), false);
+});
+
+test("an ordinary signed-in person who dismissed the prompt earlier stays signed in on load", async () => {
+  const storage = new Map<string, string>();
+  const pending = { id: "e".repeat(32), verifier: "verifier-secret", url: "https://profile.botkins.app/#" + "e".repeat(32), code: "112233" };
+  const session = { token: "tok-valid", profileId: "prof-1", deviceId: "dev-valid", name: "Alex", email: "a@example.com" };
+  storage.set("botkins.profile.session.v1", JSON.stringify(session));
+  storage.set("botkins.profile.choice.v1", "dismissed");
+
+  const store = loadProfileStore(storage, async () => pending);
+  await store.loadProfile(0);
+
+  assert.deepEqual(store.useProfile.getState().session, session);
+  assert.equal(storage.has("botkins.profile.session.v1"), true);
+});
+
+test("a storage failure while finishing keeps the attempt, clears busy, and shows a retryable error", async () => {
+  const storage = new Map<string, string>();
+  const pending = { id: "f".repeat(32), verifier: "verifier-secret", url: "https://profile.botkins.app/#" + "f".repeat(32), code: "987654" };
+  const session = { token: "tok-retry", profileId: "prof-1", deviceId: "dev-retry", name: "Alex", email: "a@example.com" };
+  let failWrites = 1;
+
+  const store = loadProfileStore(storage, async () => pending, {
+    finish: async () => session,
+    onKeep: async (key, _value, write) => {
+      if (key === "botkins.profile.session.v1" && failWrites > 0) {
+        failWrites -= 1;
+        throw new Error("Keychain write failed");
+      }
+      write();
+    },
+  });
+
+  await store.loadProfile(0);
+  await store.beginProfile("Test Phone");
+  const first = await store.finishPending();
+
+  assert.equal(first, undefined);
+  assert.equal(store.useProfile.getState().busy, false);
+  assert.deepEqual(store.useProfile.getState().attempt, pending);
+  assert.equal(store.useProfile.getState().session, null);
+  assert.equal(store.useProfile.getState().error, "Keychain write failed");
+
+  // Retrying Finish succeeds once storage is writable again.
+  const second = await store.finishPending();
+  assert.deepEqual(second, session);
+  assert.equal(store.useProfile.getState().busy, false);
+  assert.equal(store.useProfile.getState().attempt, null);
+  assert.deepEqual(store.useProfile.getState().session, session);
+  assert.equal(store.useProfile.getState().error, null);
 });
