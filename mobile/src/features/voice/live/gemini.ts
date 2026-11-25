@@ -14,7 +14,17 @@ export function withActivity(setup: Record<string, unknown>, mode: InputMode): R
   if (mode !== "push") return setup;
   const inner = obj(setup.setup);
   const config = obj(inner.realtimeInputConfig);
-  return { ...setup, setup: { ...inner, realtimeInputConfig: { ...config, automaticActivityDetection: { ...obj(config.automaticActivityDetection), disabled: true } } } };
+  return { ...setup, setup: { ...inner, realtimeInputConfig: { ...config, automaticActivityDetection: { disabled: true } } } };
+}
+
+/** Turns a Gemini close reason into text the person can act on. */
+export function formatGeminiCloseError(reason: string | undefined, beforeSetup: boolean): string {
+  const text = reason?.trim() ?? "";
+  if (/precondition/i.test(text)) {
+    return "Gemini rejected a voice turn (precondition failed). Restart the call, or switch voice input mode in Settings.";
+  }
+  if (beforeSetup) return text ? "Gemini refused the call: " + text : "Gemini closed the connection.";
+  return text ? "Gemini ended the call: " + text : "The call ended.";
 }
 
 export class GeminiTransport extends LiveBase {
@@ -30,6 +40,10 @@ export class GeminiTransport extends LiveBase {
   private speaker = false;
   private muted = false;
   private ready: (() => void) | null = null;
+  /** The input mode sent in `setup`; Gemini does not allow changing VAD mode mid-session. */
+  private sessionInput: InputMode | null = null;
+  private setupDone = false;
+  private activityOpen = false;
   /** Gemini is still sending the bot's turn. */
   private generating = false;
   /** The person cut the bot off: the rest of that turn is dropped until Gemini says it stopped. */
@@ -48,11 +62,22 @@ export class GeminiTransport extends LiveBase {
     this.clock = now;
   }
 
-  private send(message: Record<string, unknown>) {
-    if (this.socket?.readyState === OPEN) this.socket.send(JSON.stringify(message));
+  override setInput(mode: InputMode) {
+    // Gemini locks activity detection when setup is sent, so mid-call mode switches need a new session.
+    if (this.sessionInput !== null) return;
+    super.setInput(mode);
+  }
+
+  private send(message: Record<string, unknown>): boolean {
+    if (this.socket?.readyState !== OPEN) return false;
+    this.socket.send(JSON.stringify(message));
+    return true;
   }
 
   start(): Promise<void> {
+    this.sessionInput = this.input;
+    this.setupDone = false;
+    this.activityOpen = false;
     return new Promise((resolve, reject) => {
       let opened = false;
       const socket = this.connect(this.session.url);
@@ -73,7 +98,7 @@ export class GeminiTransport extends LiveBase {
       };
       socket.onopen = () => {
         opened = true;
-        this.send(withActivity(this.session.setup, this.input));
+        this.send(withActivity(this.session.setup, this.sessionInput ?? this.input));
       };
       socket.onmessage = (event) => this.handle(event.data);
       socket.onerror = () => {
@@ -84,10 +109,20 @@ export class GeminiTransport extends LiveBase {
       };
       socket.onclose = (event) => {
         clearTimeout(timer);
-        if (this.ready) {
+        if (this.sending) {
+          clearTimeout(this.sending);
+          this.sending = null;
+        }
+        this.setupDone = false;
+        this.activityOpen = false;
+        const beforeSetup = Boolean(this.ready);
+        if (typeof __DEV__ !== "undefined" && Boolean(__DEV__)) {
+          console.warn("Gemini Live socket closed", { code: event.code, reason: event.reason ?? "" });
+        }
+        if (beforeSetup) {
           this.ready = null;
-          reject(new Error(event.reason ? "Gemini refused the call: " + event.reason : "Gemini closed the connection."));
-        } else if (!this.ended) this.fail(event.reason ? "Gemini ended the call: " + event.reason : "The call ended.");
+          reject(new Error(formatGeminiCloseError(event.reason, true)));
+        } else if (!this.ended) this.fail(formatGeminiCloseError(event.reason, false));
       };
     });
   }
@@ -97,10 +132,12 @@ export class GeminiTransport extends LiveBase {
     this.subscriptions.push(
       this.audio.addListener("frame", (frame) => {
         this.hears({ mic: this.muted ? 0 : frame.level });
-        if (this.muted) return;
+        if (this.muted || !this.setupDone) return;
         const { send, barge } = this.gate.frame(frame.data, frame.level);
         // The person talked clearly over the bot: it stops here, and Gemini hears them and stops too.
         if (barge) this.interrupt();
+        // In manual activity mode, Gemini rejects audio sent outside an open activityStart/activityEnd pair.
+        if (this.sessionInput === "push" && !this.activityOpen) return;
         for (const data of send) this.send({ realtimeInput: { audio: { data, mimeType } } });
       }),
       this.audio.addListener("output", (event) => {
@@ -122,6 +159,7 @@ export class GeminiTransport extends LiveBase {
     const message = parseJson(data);
     if (!message) return;
     if ("setupComplete" in message) {
+      this.setupDone = true;
       this.ready?.();
       return;
     }
@@ -200,9 +238,8 @@ export class GeminiTransport extends LiveBase {
   mute(muted: boolean) {
     this.muted = muted;
     this.audio.setMuted(muted);
-    // Tells Gemini the microphone went quiet, so it doesn't wait for more. Only with its own
-    // activity detection on; in push to talk the turn's end is `activityEnd`.
-    if (muted && this.input === "conversation") this.send({ realtimeInput: { audioStreamEnd: true } });
+    // Tell Gemini the microphone went quiet only when automatic activity detection is active after setup.
+    if (muted && this.setupDone && this.sessionInput === "conversation") this.send({ realtimeInput: { audioStreamEnd: true } });
   }
 
   interrupt() {
@@ -217,15 +254,16 @@ export class GeminiTransport extends LiveBase {
   }
 
   press() {
-    if (this.input !== "push" || this.ended || this.gate.holding) return;
+    if (this.sessionInput !== "push" || !this.setupDone || this.ended || this.gate.holding) return;
     if (this.sending) {
-      // Pressed again before the last turn was sent: it goes on as the same turn.
+      // Pressed again before the release tail ended, so continue the already-open activity.
       clearTimeout(this.sending);
       this.sending = null;
-    } else {
+    } else if (!this.activityOpen) {
       if (this.generating || this.gate.botSounding()) this.interrupt();
       // The start of the person's turn interrupts the bot on Gemini's side too (activityHandling's default).
-      this.send({ realtimeInput: { activityStart: {} } });
+      if (!this.send({ realtimeInput: { activityStart: {} } })) return;
+      this.activityOpen = true;
     }
     this.gate.press();
     this.setStatus("listening");
@@ -234,9 +272,13 @@ export class GeminiTransport extends LiveBase {
   release() {
     if (!this.gate.holding) return;
     this.gate.release();
-    // The last pieces of sound are still on their way; the turn ends after them.
+    if (this.sessionInput !== "push" || !this.activityOpen || this.ended) return;
+    if (this.sending) clearTimeout(this.sending);
+    // Keep the activity open briefly for trailing microphone frames, then close it before dropping further audio.
     this.sending = setTimeout(() => {
       this.sending = null;
+      if (this.ended || !this.setupDone || !this.activityOpen) return;
+      this.activityOpen = false;
       this.send({ realtimeInput: { activityEnd: {} } });
     }, RELEASE_TAIL_MS);
   }
@@ -250,6 +292,8 @@ export class GeminiTransport extends LiveBase {
 
   protected close() {
     this.ready = null;
+    this.setupDone = false;
+    this.activityOpen = false;
     if (this.sending) clearTimeout(this.sending);
     this.sending = null;
     this.talking.stop();

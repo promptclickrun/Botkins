@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type HTMLAttributes, type ReactNode } from "react";
+import { Button } from "glisse";
 import {
   ArrowRight,
   CalendarClock,
@@ -480,10 +481,9 @@ export default function Today({
     <>
       <div className="titleline">
         <h1>Today</h1>
-        <button className="primary" onClick={() => setCreating(true)}>
-          <Plus size={16} />
+        <Button variant="filled" className="lg-compact" icon={<Plus size={16} />} onClick={() => setCreating(true)}>
           Create panel
-        </button>
+        </Button>
       </div>
       {board}
       {hiddenCount > 0 && (

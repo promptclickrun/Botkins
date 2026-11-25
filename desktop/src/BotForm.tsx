@@ -1,5 +1,6 @@
 import { useEffect, useEffectEvent, useRef, useState } from "react";
 import { Bot as BotIcon, ChevronDown, Download, Ellipsis, LayoutTemplate, Plus, Trash2, Upload } from "lucide-react";
+import { Button, Input } from "glisse";
 import { BotStudio } from "./BotStudio";
 import { BotAvatar } from "./Avatar";
 import { availableHeads, freshLook } from "./botkins";
@@ -213,25 +214,25 @@ export default function BotForm({
         <div className="botform-fields">
           <label>
             Name
-            <input
+            <Input
               name="name"
               maxLength={48}
               required
               autoFocus
               placeholder="e.g. Nova"
               value={name}
-              onChange={(e) => setName(e.target.value)}
+              onValueChange={setName}
             />
           </label>
           <label>
             Role
-            <input
+            <Input
               name="role"
               placeholder="e.g. Writing partner"
               maxLength={90}
               required
               value={role}
-              onChange={(e) => setRole(e.target.value)}
+              onValueChange={setRole}
             />
           </label>
         </div>
@@ -240,13 +241,13 @@ export default function BotForm({
         <span>
           About <span className="optional">Optional</span>
         </span>
-        <input
+        <Input
           name="summary"
           aria-label="About"
           maxLength={240}
           placeholder="A line about what this bot is for"
           value={summary}
-          onChange={(e) => setSummary(e.target.value)}
+          onValueChange={setSummary}
         />
       </label>
       <label>
@@ -263,14 +264,13 @@ export default function BotForm({
       </label>
       <footer className="botform-foot">
         {cancel && (
-          <button type="button" className="set-button" onClick={cancel}>
+          <Button variant="glass" className="lg-compact" onClick={cancel}>
             Cancel
-          </button>
+          </Button>
         )}
-        <button className="set-button primary" disabled={busy}>
-          <Plus size={15} />
+        <Button type="submit" variant="filled" className="lg-compact" icon={<Plus size={15} />} disabled={busy}>
           Create bot
-        </button>
+        </Button>
       </footer>
       {studio && (
         <BotStudio

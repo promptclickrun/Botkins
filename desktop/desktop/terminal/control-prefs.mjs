@@ -10,7 +10,7 @@
 //    and got a yes. The command line does that (`--yes`, or the question at a terminal). A caller that is the
 //    person gives the mark itself.
 import { backgroundField } from "../startup.mjs";
-import { appearanceField, clarificationPrompts, defaultSettings, FONT_IDS, sidebarField, SIDEBAR, TEXT_SIZES, THEME_IDS } from "../preferences.mjs";
+import { appearanceField, BACKDROPS, clarificationPrompts, defaultSettings, FONT_IDS, sidebarField, SIDEBAR, TEXT_SIZES, THEME_IDS } from "../preferences.mjs";
 import { HARNESSES } from "../harness/index.mjs";
 import { AUTO_SUMMARIZE_MAX, AUTO_SUMMARIZE_MIN } from "../summaries.mjs";
 import { MAC_LEVELS, MAC_TOOLS } from "../mactools.mjs";
@@ -38,12 +38,13 @@ const choice = (values, about) => ({ type: "choice", values, about });
 export const PREFERENCES = {
   "appearance.theme": choice(["system", "light", "dark"], "Light, dark, or the computer's own"),
   "appearance.colorTheme": choice(THEME_IDS, "The color theme"),
+  "appearance.backdrop": choice(BACKDROPS, "The backdrop behind the glass"),
   "appearance.textSize": choice(TEXT_SIZES, "The size of the text"),
   "appearance.font": choice(FONT_IDS, "The font"),
   "appearance.bubble": { type: "color", about: "The color of your messages: theme, or a color such as #3366cc" },
   "appearance.avatarAnimations": switches("Animate bot avatars while they work"),
-  foldTools: switches("Fold the steps of a finished reply into one line"),
-  showThinking: switches("Show the bot's thinking"),
+  foldTools: switches("For older apps: fold the steps of a finished reply into one line (each window's Steps setting is in Settings › Chat)"),
+  showThinking: switches("Show the bot's thinking; off hides it in each window where nobody picked Thinking in Settings › Chat"),
   onboarded: switches("The welcome is done"),
   linkPreviews: switches("Show a preview of a linked page (this computer fetches the page)"),
   readAloud: switches("Read replies aloud"),

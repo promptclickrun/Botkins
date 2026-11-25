@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { ArrowLeft, AudioLines, Check, KeyRound, Mic, Play, Square, Volume2, type LucideIcon } from "lucide-react";
+import { Slider } from "glisse";
 import type { DeskVoiceSettings, LiveProvider, SttProvider, State, TtsProvider, VoiceKeyProvider, VoiceOptions, VoicePatch } from "./types";
 import { Group, Row, SwitchRow, errorText } from "./SettingsRows";
 import { stopCancel } from "./SkillsSettings";
@@ -480,7 +481,7 @@ export default function VoiceSettings({ state }: { state: State }) {
         <Row label="Speed" help={s.tts.provider === "gemini" ? "Gemini reads at its own speed." : undefined}>
           {(id, describedBy) => (
             <span className="voice-speed">
-              <input id={id} type="range" min={0.5} max={2} step={0.05} value={speed} aria-describedby={describedBy} aria-valuetext={speed.toFixed(2) + " times"} onChange={(e) => setSpeed(Number(e.target.value))} />
+              <Slider id={id} min={0.5} max={2} step={0.05} value={speed} aria-describedby={describedBy} aria-valuetext={speed.toFixed(2) + " times"} onValueChange={setSpeed} />
               <output htmlFor={id}>{speed.toFixed(2).replace(/0$/, "")}×</output>
             </span>
           )}

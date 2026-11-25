@@ -477,6 +477,14 @@ export function teamApi({ workspace, handlers, bot }) {
       return { removed: look.member.id, id: look.member.id, name: look.member.name, devices: look.devices.length, chatsInvited: look.chatsInvited, chatsStarted: look.chatsStarted };
     },
 
+    // ── The owner's own picture ──
+    /** Sets the owner's picture (a data URL the link checks) or clears it with null. Answers whether one is set, never the picture. */
+    async "profile.picture"([image]) {
+      if (image !== null && image !== undefined && typeof image !== "string") throw new ControlError("Give a picture, or nothing to clear it.", "BAD_ARGUMENT");
+      const answer = await handlers.setMyAvatar(image ?? null);
+      return { set: !!answer?.avatar };
+    },
+
     // ── The people in a chat ──
     /** Who started a chat and who was invited into it. */
     async "team.chatPeople"([ref]) {

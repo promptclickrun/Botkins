@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
-import { ArrowLeft, Plus, Search, ShieldAlert, Sparkles } from "lucide-react";
+import { ArrowLeft, Plus, ShieldAlert, Sparkles } from "lucide-react";
+import { SearchField } from "glisse";
 import { BotAvatar } from "./Avatar";
 import { colorsOf, lookOf } from "./botkins";
 import { asksFirst, botChips, botSections, deliverableLine, jobLine, tooLong } from "./marketLogic";
@@ -68,10 +69,7 @@ export default function MarketAgents({ state, createBot, refreshed = 0 }: { stat
   return (
     <>
       <div className="set-toolbar int-toolbar plugin-toolbar">
-        <label className="int-filter">
-          <Search size={14} aria-hidden="true" />
-          <input type="search" aria-label="Search bots" placeholder="Search bots" value={query} onChange={(e) => setQuery(e.target.value)} />
-        </label>
+        <SearchField aria-label="Search bots" placeholder="Search bots" value={query} onValueChange={setQuery} />
       </div>
       {chips.length > 2 && (
         <div className="plugin-market-chips" role="group" aria-label="Categories">

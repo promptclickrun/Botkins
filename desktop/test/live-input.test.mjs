@@ -44,3 +44,71 @@ test("manual live voice turns use the provider protocol for OpenAI, Codex and Ge
   const result = spawnSync(process.execPath, ["--experimental-strip-types", "--input-type=module", "-e", script], { encoding: "utf8" });
   assert.equal(result.status, 0, result.stderr || result.stdout);
 });
+
+test("GeminiLiveSession pairs push-to-talk activity signals, waits for setupComplete, and handles fast double presses", () => {
+  const script = String.raw`
+    import assert from 'node:assert/strict';
+    import { GeminiLiveSession, formatGeminiCloseError } from './src/liveProtocol.ts';
+
+    const sent = [];
+    const socket = {
+      readyState: 0,
+      send(raw) { sent.push(JSON.parse(raw)); },
+    };
+    const baseSetup = {
+      setup: {
+        model: 'models/gemini-3.8-live',
+        realtimeInputConfig: { automaticActivityDetection: { startOfSpeechSensitivity: 'START_SENSITIVITY_HIGH' } },
+      },
+    };
+    const session = new GeminiLiveSession('push', baseSetup, 16000);
+
+    // Nothing goes out before the socket opens or before setupComplete arrives.
+    assert.equal(session.press(socket), false);
+    assert.equal(session.release(socket), false);
+    socket.readyState = 1;
+    assert.equal(session.onOpen(socket), true);
+    assert.deepEqual(sent, [
+      {
+        setup: {
+          model: 'models/gemini-3.8-live',
+          realtimeInputConfig: { automaticActivityDetection: { disabled: true } },
+        },
+      },
+    ]);
+    assert.equal(session.press(socket), false);
+    assert.equal(session.sendAudio(socket, 'EARLY'), false);
+    assert.equal(session.release(socket), false);
+    assert.equal(sent.length, 1);
+
+    // After setupComplete, push-to-talk brackets audio between one activityStart and one activityEnd.
+    session.onSetupComplete();
+    assert.equal(session.sendAudio(socket, 'IDLE'), false);
+    assert.equal(session.press(socket), true);
+    assert.equal(session.sendAudio(socket, 'ONE'), true);
+    // A second press before release ends keeps the existing activity open without sending a duplicate start.
+    assert.equal(session.press(socket), true);
+    assert.equal(session.sendAudio(socket, 'TWO'), true);
+    assert.equal(session.mute(socket, true), false);
+    assert.equal(session.release(socket), true);
+    // Audio arriving after activityEnd and a duplicate release must be ignored.
+    assert.equal(session.sendAudio(socket, 'LATE'), false);
+    assert.equal(session.release(socket), false);
+
+    assert.deepEqual(sent.slice(1), [
+      { realtimeInput: { activityStart: {} } },
+      { realtimeInput: { audio: { data: 'ONE', mimeType: 'audio/pcm;rate=16000' } } },
+      { realtimeInput: { audio: { data: 'TWO', mimeType: 'audio/pcm;rate=16000' } } },
+      { realtimeInput: { activityEnd: {} } },
+    ]);
+    assert.ok(!sent.some((message) => 'audioStreamEnd' in (message.realtimeInput ?? {})));
+
+    // Precondition close reasons become actionable; other close reasons stay clear.
+    const precondition = formatGeminiCloseError('Precondition check failed.', false);
+    assert.match(precondition, /precondition/i);
+    assert.match(precondition, /restart|switch/i);
+    assert.equal(formatGeminiCloseError('Model not found', true), 'Gemini refused the call: Model not found.');
+  `;
+  const result = spawnSync(process.execPath, ["--experimental-strip-types", "--input-type=module", "-e", script], { encoding: "utf8" });
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+});

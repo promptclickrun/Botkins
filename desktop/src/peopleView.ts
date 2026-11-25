@@ -1,5 +1,6 @@
 // Who is looking at a chat's people, and what they may do (the link's capability "team-people-v1").
 // The sheet itself is in ChatPeople.tsx; this part has no window in it, so a test can read it.
+import type { ChatPerson } from "./PersonBadge";
 import type { Chat, State, TeamPerson } from "./types";
 
 export const OWNER = "owner";
@@ -26,6 +27,31 @@ export function chatPeopleView(state: State, chat: Chat) {
 export function authorName(state: State, author: { memberId: string; name: string }) {
   const people = state.team && "people" in state.team ? state.team.people : undefined;
   return people?.find((person) => person.id === author.memberId)?.name ?? author.name;
+}
+
+/** Who is looking: "owner" on the computer's own window, or the person paired on the computer in use. */
+export const viewerOf = (state: State) => (state.team && "me" in state.team ? state.team.me.memberId : OWNER);
+
+/**
+ * The people of a chat as their badges and tags draw them: who started it and who was invited, the
+ * viewer too, each with their own picture. The owner with no picture here shows their profile's
+ * emoji, when this window is on the owner's own computer. A team of one is the owner alone.
+ */
+export function chatPersons(state: State, chat: Chat): ChatPerson[] {
+  const team = state.team;
+  const people: TeamPerson[] = (team && "people" in team ? team.people : undefined) ?? [];
+  const ids = new Set([chat.createdBy ?? OWNER, ...(chat.invited ?? []), viewerOf(state)]);
+  // A message keeps its author when they leave the chat, so everyone on the team is known by id.
+  for (const message of chat.messages) if (message.author) ids.add(message.author.memberId);
+  const emoji = !state.remote?.using ? state.profile?.profile?.avatar : undefined;
+  const out: ChatPerson[] = [];
+  for (const id of ids) {
+    const person = people.find((item) => item.id === id);
+    const name = person?.name || (id === OWNER ? state.profile?.profile?.name : undefined);
+    if (!name) continue;
+    out.push({ id, name, ...(person?.avatar && { avatar: person.avatar }), ...(id === OWNER && !person?.avatar && emoji && { emoji }) });
+  }
+  return out;
 }
 
 /** Whether whoever is looking may leave the chat: they were invited into it, and did not start it. */

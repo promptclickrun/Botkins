@@ -1,13 +1,13 @@
-// How this phone draws the app: light or dark, which theme for each, the font, text size, control size.
+// How this phone draws the app: light or dark, which theme for each, the backdrop, font, text size, control size.
 // Every choice applies at once.
 import { MenuView } from "@react-native-menu/menu";
 import { type Href, router } from "expo-router";
-import { ChevronsUpDown, Monitor, Moon, PanelBottom, SunMoon, Sun, Vibrate } from "lucide-react-native";
+import { Check, ChevronsUpDown, Monitor, Moon, PanelBottom, SunMoon, Sun, Vibrate } from "lucide-react-native";
 import { Platform, StyleSheet, View } from "react-native";
 import { useMember, useSettings } from "@/state/hooks";
 import { AVATAR_ANIMATIONS_WARNING } from "@/state/avatarPrefs";
 import { type Prefs, setPrefs, usePrefs } from "@/state/prefs";
-import { BotAvatar, brand, Button, type Colors, DEFAULT_FONT, type FontId, fontsFor, Group, IconTile, Label, Page, radius, Row, Segmented, Slider, space, T, Tap, TEXT_SIZES, THEMES, type ThemeDef, themeById, useTheme } from "@/ui";
+import { BACKDROPS, type BackdropDef, BackdropLayer, BotAvatar, brand, Button, type Colors, DEFAULT_FONT, type FontId, fontsFor, Glass, Group, IconTile, Label, Page, radius, Row, Segmented, Slider, space, T, Tap, TEXT_SIZES, THEMES, type ThemeDef, themeById, tint, useTheme } from "@/ui";
 
 const MODES: { value: Prefs["mode"]; label: string }[] = [
   { value: "system", label: "System" },
@@ -43,19 +43,13 @@ function Screenlet({ colors }: { colors: Colors }) {
 }
 
 function ModeCard({ value, label, selected }: { value: Prefs["mode"]; label: string; selected: boolean }) {
-  const { colors } = useTheme();
+  const { colors, dark: isDark } = useTheme();
+  const hasBackdrop = usePrefs((prefs) => prefs.backdrop !== "clean");
   const light = usePrefs((prefs) => themeById(prefs.lightTheme).light);
   const dark = usePrefs((prefs) => themeById(prefs.darkTheme).dark);
   const half = MOCK.width / 2;
-  return (
-    <Tap
-      onPress={() => setPrefs({ mode: value })}
-      feel="select"
-      accessibilityRole="radio"
-      accessibilityState={{ checked: selected }}
-      accessibilityLabel={label}
-      style={{ flex: 1, alignItems: "center", gap: space.sm, paddingVertical: space.md, borderRadius: radius.lg, backgroundColor: colors.surface, borderWidth: 2, borderColor: selected ? colors.accent : "transparent" }}
-    >
+  const body = (
+    <>
       <View style={{ flexDirection: "row", borderRadius: 10, overflow: "hidden", borderWidth: StyleSheet.hairlineWidth, borderColor: colors.lineStrong }}>
         {value === "system" ? (
           <>
@@ -75,6 +69,46 @@ function ModeCard({ value, label, selected }: { value: Prefs["mode"]; label: str
       <T variant="subhead" weight="600" color={selected ? "accentText" : "ink"} numberOfLines={1}>
         {label}
       </T>
+    </>
+  );
+  if (hasBackdrop) {
+    return (
+      <Tap
+        onPress={() => setPrefs({ mode: value })}
+        feel="select"
+        accessibilityRole="radio"
+        accessibilityState={{ checked: selected }}
+        accessibilityLabel={label}
+        style={{ flex: 1 }}
+      >
+        <Glass
+          interactive
+          tintColor={tint(colors.surface, isDark ? 0.3 : 0.44)}
+          style={{
+            alignItems: "center",
+            gap: space.sm,
+            paddingVertical: space.md,
+            borderRadius: radius.lg,
+            overflow: "hidden",
+            borderWidth: selected ? 2 : StyleSheet.hairlineWidth,
+            borderColor: selected ? colors.accent : undefined,
+          }}
+        >
+          {body}
+        </Glass>
+      </Tap>
+    );
+  }
+  return (
+    <Tap
+      onPress={() => setPrefs({ mode: value })}
+      feel="select"
+      accessibilityRole="radio"
+      accessibilityState={{ checked: selected }}
+      accessibilityLabel={label}
+      style={{ flex: 1, alignItems: "center", gap: space.sm, paddingVertical: space.md, borderRadius: radius.lg, backgroundColor: colors.surface, borderWidth: 2, borderColor: selected ? colors.accent : "transparent" }}
+    >
+      {body}
     </Tap>
   );
 }
@@ -111,11 +145,12 @@ function Orb({ theme, half, selected }: { theme: ThemeDef; half: "light" | "dark
 
 /** One theme: tap the card for both halves, or one swatch for just that half. */
 function ThemeCard({ theme }: { theme: ThemeDef }) {
-  const { colors } = useTheme();
+  const { colors, dark } = useTheme();
+  const hasBackdrop = usePrefs((prefs) => prefs.backdrop !== "clean");
   const lightOn = usePrefs((prefs) => prefs.lightTheme === theme.id);
   const darkOn = usePrefs((prefs) => prefs.darkTheme === theme.id);
-  return (
-    <View style={{ flex: 1, borderRadius: radius.lg, backgroundColor: colors.surface, paddingTop: space.md, paddingBottom: space.sm, alignItems: "center", gap: 6 }}>
+  const body = (
+    <>
       <Tap
         onPress={() => setPrefs({ lightTheme: theme.id, darkTheme: theme.id, themePicked: true })}
         feel="select"
@@ -136,15 +171,151 @@ function ThemeCard({ theme }: { theme: ThemeDef }) {
           {theme.name}
         </T>
       </View>
+    </>
+  );
+  if (hasBackdrop) {
+    return (
+      <Glass
+        tintColor={tint(colors.surface, dark ? 0.3 : 0.44)}
+        style={{ flex: 1, borderRadius: radius.lg, paddingTop: space.md, paddingBottom: space.sm, alignItems: "center", gap: 6, overflow: "hidden" }}
+      >
+        {body}
+      </Glass>
+    );
+  }
+  return (
+    <View style={{ flex: 1, borderRadius: radius.lg, backgroundColor: colors.surface, paddingTop: space.md, paddingBottom: space.sm, alignItems: "center", gap: 6 }}>
+      {body}
     </View>
+  );
+}
+
+/** One selectable backdrop card: live miniature preview with a floating glass pill over it, label, and selection badge. */
+function BackdropCard({ choice, selected }: { choice: BackdropDef; selected: boolean }) {
+  const { colors, dark } = useTheme();
+  const hasBackdrop = usePrefs((prefs) => prefs.backdrop !== "clean");
+  const cardBody = (
+    <>
+      <View
+        style={{
+          height: 76,
+          borderRadius: radius.md,
+          overflow: "hidden",
+          backgroundColor: colors.canvas,
+          borderWidth: StyleSheet.hairlineWidth,
+          borderColor: colors.lineStrong,
+          alignItems: "center",
+          justifyContent: "center",
+        }}
+      >
+        <BackdropLayer backdrop={choice.id} preview />
+        {/* Tiny floating glass pill preview refracting the backdrop underneath */}
+        <Glass
+          glassEffectStyle="clear"
+          tintColor={dark ? "rgba(255,255,255,0.16)" : "rgba(255,255,255,0.58)"}
+          style={{
+            paddingHorizontal: 12,
+            paddingVertical: 6,
+            borderRadius: radius.pill,
+            flexDirection: "row",
+            alignItems: "center",
+            gap: 6,
+            overflow: "hidden",
+          }}
+        >
+          <View style={{ width: 7, height: 7, borderRadius: 4, backgroundColor: colors.accent }} />
+          <View style={{ width: 34, height: 4, borderRadius: 2, backgroundColor: dark ? "rgba(255,255,255,0.82)" : "rgba(15,23,42,0.72)" }} />
+        </Glass>
+        {selected && (
+          <View
+            pointerEvents="none"
+            style={{
+              position: "absolute",
+              top: 6,
+              right: 6,
+              width: 22,
+              height: 22,
+              borderRadius: 11,
+              backgroundColor: colors.accent,
+              alignItems: "center",
+              justifyContent: "center",
+            }}
+          >
+            <Check size={13} color={colors.onAccent} strokeWidth={3} />
+          </View>
+        )}
+      </View>
+      <View style={{ gap: 1, paddingHorizontal: 2 }}>
+        <T variant="subhead" weight="600" color={selected ? "accentText" : "ink"} numberOfLines={1}>
+          {choice.name}
+        </T>
+        <T variant="caption" color="muted" numberOfLines={1}>
+          {choice.subtitle}
+        </T>
+      </View>
+    </>
+  );
+
+  if (hasBackdrop) {
+    return (
+      <Tap
+        onPress={() => setPrefs({ backdrop: choice.id })}
+        feel="select"
+        sink={0.97}
+        accessibilityRole="radio"
+        accessibilityState={{ checked: selected }}
+        accessibilityLabel={choice.name}
+        accessibilityHint={choice.subtitle}
+        style={{ flex: 1 }}
+      >
+        <Glass
+          interactive
+          tintColor={tint(colors.surface, dark ? 0.3 : 0.44)}
+          style={{
+            padding: space.sm,
+            gap: space.sm,
+            borderRadius: radius.lg,
+            overflow: "hidden",
+            borderWidth: selected ? 2 : StyleSheet.hairlineWidth,
+            borderColor: selected ? colors.accent : undefined,
+          }}
+        >
+          {cardBody}
+        </Glass>
+      </Tap>
+    );
+  }
+
+  return (
+    <Tap
+      onPress={() => setPrefs({ backdrop: choice.id })}
+      feel="select"
+      sink={0.97}
+      accessibilityRole="radio"
+      accessibilityState={{ checked: selected }}
+      accessibilityLabel={choice.name}
+      accessibilityHint={choice.subtitle}
+      style={{
+        flex: 1,
+        padding: space.sm,
+        gap: space.sm,
+        borderRadius: radius.lg,
+        backgroundColor: colors.surface,
+        borderWidth: 2,
+        borderColor: selected ? colors.accent : "transparent",
+      }}
+    >
+      {cardBody}
+    </Tap>
   );
 }
 
 /** A short chat at the chosen text size. */
 function TextPreview() {
-  const { colors } = useTheme();
-  return (
-    <View accessibilityElementsHidden importantForAccessibility="no-hide-descendants" style={{ gap: space.md, padding: space.lg, borderRadius: radius.lg, backgroundColor: colors.surface }}>
+  const { colors, dark } = useTheme();
+  const hasBackdrop = usePrefs((prefs) => prefs.backdrop !== "clean");
+  const content = (
+    <>
       <View style={{ flexDirection: "row", gap: space.sm }}>
         <BotAvatar look={{ head: "sprig", palette: "original" }} size={32} badge={false} />
         <View style={{ flex: 1, gap: 2 }}>
@@ -157,6 +328,20 @@ function TextPreview() {
           Thanks, looks good.
         </T>
       </View>
+    </>
+  );
+  if (hasBackdrop) {
+    return (
+      <View accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
+        <Glass tintColor={tint(colors.surface, dark ? 0.3 : 0.44)} style={{ gap: space.md, padding: space.lg, borderRadius: radius.lg, overflow: "hidden" }}>
+          {content}
+        </Glass>
+      </View>
+    );
+  }
+  return (
+    <View accessibilityElementsHidden importantForAccessibility="no-hide-descendants" style={{ gap: space.md, padding: space.lg, borderRadius: radius.lg, backgroundColor: colors.surface }}>
+      {content}
     </View>
   );
 }
@@ -185,6 +370,7 @@ function FontMenu() {
 
 export default function Appearance() {
   const mode = usePrefs((prefs) => prefs.mode);
+  const backdrop = usePrefs((prefs) => prefs.backdrop);
   const textSize = usePrefs((prefs) => prefs.textSize);
   const controlSize = usePrefs((prefs) => prefs.controlSize);
   const haptics = usePrefs((prefs) => prefs.haptics);
@@ -211,6 +397,20 @@ export default function Appearance() {
             <View key={row[0].id} style={{ flexDirection: "row", gap: space.md }}>
               {row.map((theme) => (
                 <ThemeCard key={theme.id} theme={theme} />
+              ))}
+              {row.length === 1 && <View style={{ flex: 1 }} />}
+            </View>
+          ))}
+        </View>
+      </View>
+
+      <View>
+        <Label>Backdrop</Label>
+        <View style={{ gap: space.md }} accessibilityRole="radiogroup">
+          {pairs(BACKDROPS).map((row) => (
+            <View key={row[0].id} style={{ flexDirection: "row", gap: space.md }}>
+              {row.map((choice) => (
+                <BackdropCard key={choice.id} choice={choice} selected={choice.id === backdrop} />
               ))}
               {row.length === 1 && <View style={{ flex: 1 }} />}
             </View>

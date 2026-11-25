@@ -546,8 +546,11 @@ export class LinkClient {
   private pushSession: Session | null = null;
   /** Whether the computer sends text in chunks ("text-chunks-v1"), once it has said. */
   private supportsChunks: boolean | undefined;
+  private supportsTextWatch = false;
   private have: Record<string, number> = {};
   private watching: string[] = [];
+  private keptPage?: string;
+  private replyChats: string[] = [];
   private reasoningWatching: string[] = [];
   private running = false;
   // A late answer belongs to the lifetime that asked, even after a stop and restart.
@@ -566,7 +569,7 @@ export class LinkClient {
   private readonly probeMs: number;
   private readonly probeMaxMs: number;
   /** Set by a wake: the path in use may have died while the phone was away, so the next sync proves it quickly. */
-  private suspect = false;
+  private wakeCheck: { deadline?: number } | null = null;
   /** Set by `rest`: the app is in the background, so nothing is followed until `wake`. */
   private resting = false;
 
@@ -599,6 +602,7 @@ export class LinkClient {
   stop() {
     this.endPush();
     this.running = false;
+    this.wakeCheck = null;
     this.lifetime = null;
     this.opening = null;
     this.probing = null;
@@ -627,7 +631,7 @@ export class LinkClient {
     if (reason === "network" || reason === "retry") this.distrusted.clear();
     // A manual retry while offline shows as connecting again until the next attempt settles.
     if (reason === "retry" && this.state === "offline") this.setState("connecting");
-    this.suspect = true;
+    this.wakeCheck = {};
     // A socket can look open long after the system closed it under a suspended app.
     this.options.check?.();
     this.wakeUp?.();
@@ -674,9 +678,12 @@ export class LinkClient {
     this.wake();
   }
   /** The chats whose messages and running turn should be kept in step (the open ones). */
-  watch(chatIds: string[]) {
+  watch(chatIds: string[], keptPage?: string, replyChats = chatIds) {
     const next = [...new Set(chatIds)].sort();
-    if (next.join("\n") === this.watching.join("\n")) return;
+    const replies = next.filter((id) => replyChats.includes(id));
+    if (next.join("\n") === this.watching.join("\n") && keptPage === this.keptPage && replies.join("\n") === this.replyChats.join("\n")) return;
+    this.replyChats = replies;
+    this.keptPage = keptPage;
     this.watching = next;
     if (this.options.streamAppends && this.supportsAppends) delete this.have.live;
     // The waiting request is for the old set: ask again.
@@ -1126,12 +1133,16 @@ export class LinkClient {
       this.poll = poll;
       try {
         // After a wake the path has to prove itself: no waiting on the computer's side, and a short deadline.
-        const quick = this.suspect;
-        this.suspect = false;
+        const check = this.wakeCheck;
+        const quick = check !== null;
         const session = await this.openSession();
         if (poll.signal.aborted) continue;
         const mode = this.textFor(session);
-        const text: TextMode = mode === "chunks" && this.supportsChunks === false ? "whole" : mode;
+        const watching = this.watching;
+        const restricted = this.replyChats.length < watching.length;
+        // Older computers can turn off text for all watches together. Keep a detail-only chat quiet there too.
+        const text: TextMode = (restricted && (!this.supportsTextWatch || !this.replyChats.length)) ||
+          (mode === "chunks" && this.supportsChunks === false) ? "whole" : mode;
         // Text back on: the computer sends each held body again from its start.
         if (text !== "whole" && this.sentText === "whole") {
           this.texts.clear();
@@ -1139,7 +1150,6 @@ export class LinkClient {
         }
         this.sentMode = mode;
         this.sentText = text;
-        const watching = this.watching;
         const detailed = this.reasoningWatching;
         const requestText = !!this.options.streamAppends && this.supportsAppends !== false &&
           watching.slice(0, 4).every((id) => id.length > 0 && id.length <= 128);
@@ -1172,6 +1182,7 @@ export class LinkClient {
             const meta = news.parts.meta as { capabilities?: string[] } | undefined;
             if (meta) {
               this.supportsPush = meta.capabilities?.includes("sync-push-v1") === true;
+              this.supportsTextWatch = meta.capabilities?.includes("text-watch-v1") === true;
               this.supportsChunks = meta.capabilities?.includes("text-chunks-v1") === true;
               this.supportsStepDeltas = meta.capabilities?.includes("run-step-deltas-v1") === true;
               this.supportsSummaryDeltas = meta.capabilities?.includes("run-summary-deltas-v1") === true;
@@ -1186,22 +1197,33 @@ export class LinkClient {
           }
           this.options.onSync?.();
         };
-        const args = { epoch: this.epoch, have: this.have, watch: watching, ...appends, ...(requestReasoning && { reasoningWatch, ...(this.options.separateThinking && { separateThinking: true }) }), ...(text !== "live" && { text: text === "chunks" ? "chunks" : false }), ...(this.options.lightSteps && { steps: "light" }), ...(requestStepDeltas && { runSteps: "delta" }), ...(requestSummaryDeltas && { runSummaries: "delta" }), ...(!push && { wait: quick ? 0 : 25_000 }) };
+        const args = { epoch: this.epoch, have: this.have, watch: watching, ...(restricted && text !== "whole" && { textWatch: this.replyChats }), ...(this.keptPage && { keepPage: this.keptPage }), ...appends, ...(requestReasoning && { reasoningWatch, ...(this.options.separateThinking && { separateThinking: true }) }), ...(text !== "live" && { text: text === "chunks" ? "chunks" : false }), ...(this.options.lightSteps && { steps: "light" }), ...(requestStepDeltas && { runSteps: "delta" }), ...(requestSummaryDeltas && { runSummaries: "delta" }), ...(!push && { wait: quick ? 0 : 25_000 }) };
         if (push) this.pushSession = session;
         const pollLedger = trackResource("poll", "LinkClient:sync", push ? "link.follow" : "link.sync", this.pairing.serverId);
         let news: SyncNews;
         try {
+          // Watching another chat replaces this poll. Both attempts must fit in the same wake check.
+          let timeout = 40_000;
+          if (check) {
+            check.deadline ??= Date.now() + (this.options.wakeMs ?? 4000);
+            timeout = check.deadline - Date.now();
+            if (timeout <= 0) throw new Error("The wake check expired");
+          }
           news = await this.request<SyncNews>(push ? "link.follow" : "link.sync", [args],
-            quick ? (this.options.wakeMs ?? 4000) : 40_000, poll.signal, session, push ? accept : undefined);
+            timeout, poll.signal, session, push ? accept : undefined);
         } finally {
           pollLedger.release();
         }
+        if (this.lifetime !== lifetime || poll.signal.aborted) continue;
+        this.wakeCheck = null;
         if (push && this.pushSession === session) this.pushSession = null;
         accept(news);
       } catch (error) {
         if (this.lifetime !== lifetime) break;
         // Cut short on purpose (the watched chats changed), or a session to renew: go again.
-        if (poll.signal.aborted || error instanceof Retry) continue;
+        if (poll.signal.aborted) continue;
+        this.wakeCheck = null;
+        if (error instanceof Retry) continue;
         this.useSession(null);
         if (this.lifetime !== lifetime) break;
         const revoked = error instanceof LinkError && error.code === "revoked";

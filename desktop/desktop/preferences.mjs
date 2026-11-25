@@ -14,6 +14,8 @@ export const DEFAULT_THEME = THEMES.default;
 export const FONT_IDS = THEMES.fonts.map((font) => font.id);
 export const DEFAULT_FONT = THEMES.defaultFont;
 export const TEXT_SIZES = ["small", "default", "large", "larger"];
+export const BACKDROPS = ["clean", "mesh", "botkins", "grid"];
+export const DEFAULT_BACKDROP = "clean";
 // The theme everyone had before Ink became the usual one. It was saved for everyone, picked or
 // not, so by itself it doesn't show that a person chose it.
 const OLD_DEFAULT = "botkins";
@@ -50,6 +52,7 @@ export function appearanceField(saved) {
   appearance.darkColorTheme = THEME_IDS.includes(value.darkColorTheme) ? value.darkColorTheme : null;
   if (!isContrast(appearance.contrast)) appearance.contrast = 0;
   if (!TEXT_SIZES.includes(appearance.textSize)) appearance.textSize = "default";
+  if (!BACKDROPS.includes(appearance.backdrop)) appearance.backdrop = DEFAULT_BACKDROP;
   // The font works the same way, in `fontPicked`: the system's face until the person picks one.
   // Before that was kept, any saved font but the old usual one counts as a pick.
   const font = FONT_IDS.includes(value.font) ? value.font : null;
@@ -122,6 +125,8 @@ export const defaultSettings = {
     // Stronger lines and quiet text, 0 to 100 (src/themes.ts withContrast).
     contrast: 0,
     textSize: "default",
+    // Selectable backdrop behind the glass UI: "clean" keeps the solid theme surface.
+    backdrop: "clean",
     // One of the fonts in desktop/themes.json: the system's face until the person picks one
     // (fontPicked). "botkins" is the design kit's pairing.
     font: "system",
@@ -209,6 +214,7 @@ export function changeSettings(settings, patch) {
           !(appearance.darkColorTheme === null || THEME_IDS.includes(appearance.darkColorTheme)) ||
           !isContrast(appearance.contrast) ||
           !TEXT_SIZES.includes(appearance.textSize) ||
+          !BACKDROPS.includes(appearance.backdrop) ||
           !FONT_IDS.includes(appearance.font) ||
           typeof appearance.avatarAnimations !== "boolean" ||
           !Object.hasOwn(LIGHT_BACKGROUNDS, appearance.lightBackground) ||

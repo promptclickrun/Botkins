@@ -12,9 +12,10 @@ import type { BoardItem, Bot, Panel } from "@/link/types";
 import { cronLabel } from "@/features/work/cron";
 import { useBots, useCan, usePart } from "@/state/hooks";
 import { api, attempt } from "@/state/link";
+import { usePrefs } from "@/state/prefs";
 import { useApp } from "@/state/store";
 import { ago, upcoming } from "@/state/time";
-import { Blocks, BotAvatar, Button, EmptyState, Group, IconButton, Label, lift, Loading, Markdown, Mascot, Page, radius, Row, Segmented, space, T, Tap, TwoUp, useTheme } from "@/ui";
+import { Blocks, BotAvatar, Button, EmptyState, Glass, Group, IconButton, Label, lift, Loading, Markdown, Mascot, Page, radius, Row, Segmented, space, T, Tap, tint, TwoUp, useTheme } from "@/ui";
 
 type Segment = "feed" | "idea" | "goal" | "panels";
 const SEGMENTS: { value: Segment; label: string }[] = [
@@ -74,7 +75,17 @@ const UNDER_TAB_BAR = 90;
 
 function Card({ children, inner }: { children: ReactNode; inner?: RefObject<ComponentRef<typeof View> | null> }) {
   const theme = useTheme();
-  const { colors } = theme;
+  const { colors, dark } = theme;
+  const hasBackdrop = usePrefs((prefs) => prefs.backdrop !== "clean");
+  if (hasBackdrop) {
+    return (
+      <View ref={inner} collapsable={false} style={lift(theme)}>
+        <Glass tintColor={tint(colors.surface, dark ? 0.3 : 0.44)} style={{ padding: space.lg, gap: space.md, borderRadius: radius.lg, overflow: "hidden" }}>
+          {children}
+        </Glass>
+      </View>
+    );
+  }
   return (
     <View ref={inner} collapsable={false} style={[{ padding: space.lg, gap: space.md, borderRadius: radius.lg, backgroundColor: colors.surface, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.line }, lift(theme)]}>
       {children}

@@ -203,8 +203,9 @@ test("opened HTML panels fill the phone panel page while keeping their saved sta
   const panelPage = readFileSync(new URL("../src/features/spaces/PanelPage.tsx", import.meta.url), "utf8");
   const blocks = readFileSync(new URL("../src/ui/Blocks.tsx", import.meta.url), "utf8");
   const htmlFrame = readFileSync(new URL("../src/ui/HtmlFrame.tsx", import.meta.url), "utf8");
-  assert.match(panelPage, /<Blocks[^>]*fill=\{hasHtml\}[^>]*state=\{hasHtml \? panelState/);
-  assert.match(panelPage, /flexGrow:\s*1/);
+  // A panel that is only an app fills the screen (panelLayout), with room under its page for the ask bar.
+  assert.match(panelPage, /<Page scroll=\{false\}[^>]*>[\s\S]*?<Blocks[^>]*fill bottom=\{room\} state=\{panelState/);
+  assert.match(panelPage, /panelLayout\(panel, acts\)/);
   assert.match(blocks, /<HtmlFrame[^>]*state=\{state\}[^>]*fill=\{fill\}[^>]*inset=\{!fill\}/);
   assert.match(htmlFrame, /inset = true/);
 });

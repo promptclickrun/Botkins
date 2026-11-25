@@ -1,6 +1,7 @@
 // Hosted profile setup and directory management.  The command line can start the same browser
 // page as the desktop app and can finish it after the person returns; it never prints a session
 // token or accepts one as an argument.
+import { readFileSync } from "node:fs";
 import { CliError, EXIT, table, usage } from "../output.mjs";
 import { confirm, secret } from "./input.mjs";
 
@@ -137,6 +138,36 @@ const profile = {
             show(context, "This revokes that profile device. It can no longer use the profile until it is trusted again.");
             if (!(await confirm(context, "Revoke the profile device?"))) { context.note("Not revoked."); return EXIT.failed; }
             context.print(await context.client.call("profile.revoke", id), "Revoked the profile device.");
+          },
+        },
+      },
+    },
+    picture: {
+      summary: "Set or clear your own picture, which your team sees beside your messages",
+      details: "The picture is kept on this computer's team, not in the hosted profile. The command line does not resize pictures: give a square JPEG or PNG from 32 to 512 pixels wide (256 is best) of at most 72 KB, the size that fits the 96 KB limit once encoded. The desktop app and the phone crop and resize any picture for you.",
+      commands: {
+        set: {
+          summary: "Use a square JPEG or PNG file as your picture",
+          usage: "botkins profile picture set <file>",
+          async run(context) {
+            const path = one(context, "Give the picture's file: a square JPEG or PNG, 32 to 512 pixels wide, at most 72 KB.");
+            let bytes;
+            try {
+              bytes = readFileSync(path);
+            } catch (error) {
+              throw new CliError("The picture " + safe(path) + " can't be read: " + safe(error.message));
+            }
+            const type = bytes[0] === 0x89 && bytes.toString("latin1", 1, 4) === "PNG" ? "png" : bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff ? "jpeg" : "";
+            if (!type) throw new CliError("Use a JPEG or PNG picture. This command does not convert other kinds.");
+            const answer = await context.client.call("profile.picture", "data:image/" + type + ";base64," + bytes.toString("base64"));
+            context.print(answer, "Your picture is set.");
+          },
+        },
+        clear: {
+          summary: "Take your picture away, so people see your initial",
+          usage: "botkins profile picture clear",
+          async run(context) {
+            context.print(await context.client.call("profile.picture", null), "Your picture is cleared.");
           },
         },
       },

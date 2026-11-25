@@ -15,11 +15,12 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import type { Bot, ChatSummary, Message, Preferences, Project, QueuedMessage, Run } from "@/link/types";
 import { useChatPrefs } from "@/state/chatPrefs";
 import { activityLabel, type AvatarState, useBot, useBots, useCan, useCapability, useChat, useChatActivity, useModels, usePart, useSettings, useWatchedChat } from "@/state/hooks";
-import { api, attempt, loadEarlier, reactToMessage, watchReasoning } from "@/state/link";
+import { api, attempt, loadEarlier, reactToMessage } from "@/state/link";
 import { effectiveModel, effortLabel, findModel, modelName } from "@/state/models";
 import { type ChatView, pendingSends, showToast, useApp } from "@/state/store";
+import { usePrefs } from "@/state/prefs";
 import { useTurnMarks } from "@/state/turnMarks";
-import { AvatarMotion, BotAvatar, Button, Chip, EmptyState, hasGlass, IconButton, LinkBanner, Loading, radius, space, T, Tap, tint, useOnShow, useShape, useTextPrompt, useTheme } from "@/ui";
+import { AvatarMotion, BackdropLayer, backdropBaseColor, BotAvatar, Button, Chip, EmptyState, Glass, hasGlass, IconButton, LinkBanner, Loading, radius, space, T, Tap, tint, useOnShow, useShape, useTextPrompt, useTheme } from "@/ui";
 import { speakText, stopSpeech } from "@/features/voice/tts";
 import { endTalk, TalkBar, useTalk } from "../voice/api";
 import { useLiveCall } from "../voice/liveCall";
@@ -32,6 +33,8 @@ import { GroupFace, workWidth } from "./bits";
 import { arrived, composeSlashPrompt, type DraftMention, MAX_MENTIONS, waitingCopies, withBoardQuote } from "./compose";
 import { archivesWhenLeft } from "./habits";
 import { formatTypingLabel, myPlace, myself } from "./people";
+import { ChatPeopleLook } from "./ChatPeopleLook";
+import { continuingKeys } from "./chatSides";
 import { regenerateTitle, regenerateTitleAction, useCanRegenerateTitle } from "./titleActions";
 import { Composer, type ModelPill, type SendOptions } from "./Composer";
 import { ChangesView } from "./Changes";
@@ -45,11 +48,13 @@ import { LiveTurn, TurnText, WorkPart } from "./LiveTurn";
 import { CAPSULE, StatusCapsule } from "./StatusCapsule";
 import { EndedNote, KeptNote, OpenNote, type MessageActions, MessageRow, UserBubble, WorkLine } from "./Messages";
 import { type FoldHold, FoldRow } from "./FoldRow";
+import { Island } from "./Island";
+import { capsuleShown, islandOn } from "./islandModel";
 import { Aside } from "./Aside";
-import { chatTimeline, createTimelineRunSelector, indexMessageOwnership, liveRowVisible, resolveLiveBody, type Item, reuseItems, TIMELINE_V1, underWay } from "./turn";
+import { chatTimeline, createTimelineRunSelector, indexMessageOwnership, liveRowVisible, type Item, reuseItems, TIMELINE_V1, underWay } from "./turn";
 import { ProjectPill, projectActions, runProjectChoice, type Side, SideAnswer } from "./ChatProject";
 import { quoteOf, sideQuestionOf } from "./side";
-import { useAppActive } from "@/state/useAppActive";
+import { useWatchedReasoning } from "./useWatchedReasoning";
 import { endSelecting, selectionEnds } from "./selecting";
 import { MessageLink, openLink } from "@/ui/LinkHold";
 import { pullRequestUrl } from "../../../link-host/pr-url.mjs";
@@ -229,23 +234,38 @@ function RoutineBanner({ chat }: { chat: ChatSummary }) {
 /** Messages waiting for the turn under way. Its button is the desktop app's: "Steer now" when the turn takes a steer, else "Send next". */
 function Queued({ chatId, items, steerable }: { chatId: string; items: QueuedMessage[]; steerable: boolean }) {
   const { colors } = useTheme();
+  const hasBackdrop = usePrefs((prefs) => prefs.backdrop !== "clean");
   return (
     <ScrollView horizontal showsHorizontalScrollIndicator={false} keyboardShouldPersistTaps="handled" contentContainerStyle={{ paddingHorizontal: space.lg, gap: space.sm }}>
-      {items.map((item) => (
-        <View key={item.id} style={{ height: 40, maxWidth: 300, flexDirection: "row", alignItems: "center", paddingLeft: space.md, borderRadius: radius.pill, backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.line }}>
-          <T variant="subhead" color="ink2" numberOfLines={1} style={{ flexShrink: 1 }} accessibilityLabel={"Queued: " + item.text}>
-            {item.text}
-          </T>
-          <Tap onPress={() => void attempt(api.sendNow(chatId, item.id))} feel="select" hitSlop={{ top: 4, bottom: 4 }} accessibilityLabel={steerable ? "Steer now" : "Send next"} style={{ height: 40, justifyContent: "center", paddingLeft: space.md, paddingRight: space.xs }}>
-            <T variant="footnote" weight="700" color="accentText">
-              {steerable ? "Steer now" : "Send next"}
+      {items.map((item) => {
+        const inner = (
+          <>
+            <T variant="subhead" color="ink2" numberOfLines={1} style={{ flexShrink: 1 }} accessibilityLabel={"Queued: " + item.text}>
+              {item.text}
             </T>
-          </Tap>
-          <Tap onPress={() => void attempt(api.unqueue(chatId, item.id))} feel="select" hitSlop={{ top: 4, bottom: 4, right: 4 }} accessibilityLabel="Remove from queue" style={{ width: 40, height: 40, alignItems: "center", justifyContent: "center" }}>
-            <X size={15} color={colors.muted} strokeWidth={2.4} />
-          </Tap>
-        </View>
-      ))}
+            <Tap onPress={() => void attempt(api.sendNow(chatId, item.id))} feel="select" hitSlop={{ top: 4, bottom: 4 }} accessibilityLabel={steerable ? "Steer now" : "Send next"} style={{ height: 40, justifyContent: "center", paddingLeft: space.md, paddingRight: space.xs }}>
+              <T variant="footnote" weight="700" color="accentText">
+                {steerable ? "Steer now" : "Send next"}
+              </T>
+            </Tap>
+            <Tap onPress={() => void attempt(api.unqueue(chatId, item.id))} feel="select" hitSlop={{ top: 4, bottom: 4, right: 4 }} accessibilityLabel="Remove from queue" style={{ width: 40, height: 40, alignItems: "center", justifyContent: "center" }}>
+              <X size={15} color={colors.muted} strokeWidth={2.4} />
+            </Tap>
+          </>
+        );
+        if (hasBackdrop) {
+          return (
+            <Glass key={item.id} style={{ height: 40, maxWidth: 300, flexDirection: "row", alignItems: "center", paddingLeft: space.md, borderRadius: radius.pill, overflow: "hidden" }}>
+              {inner}
+            </Glass>
+          );
+        }
+        return (
+          <View key={item.id} style={{ height: 40, maxWidth: 300, flexDirection: "row", alignItems: "center", paddingLeft: space.md, borderRadius: radius.pill, backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.line }}>
+            {inner}
+          </View>
+        );
+      })}
     </ScrollView>
   );
 }
@@ -295,17 +315,9 @@ type RowProps = {
   openPanel: (id: string) => void;
 };
 
-function ActiveLiveLeaf({ chatId, bot, group, bots, item }: { chatId: string; bot?: Bot; group: boolean; bots: Map<string, Bot>; item: Extract<Item, { kind: "live" }> }) {
-  // The list owns the structural row. Only this leaf subscribes to body appends, so history and
-  // FlatList data keep their identities while stream/reasoning text grows.
-  const body = useApp((state) => state.texts[chatId]);
-  const latestRun = useApp((state) => state.running[chatId]);
-  const resolved = resolveLiveBody(item, body, latestRun);
-  return <LiveTurn chatId={chatId} bot={bot} group={group} bots={bots} item={{ ...item, ...resolved }} />;
-}
-
-const TimelineRow = memo(function TimelineRow({ item, chatId, group, bot, bots, sendText, draftText, messageActions, openPanel, holdFold, viewport, active, replyRef }: RowProps & {
+const TimelineRow = memo(function TimelineRow({ item, chatId, group, bot, bots, sendText, draftText, messageActions, openPanel, holdFold, viewport, active, replyRef, continues }: RowProps & {
   item: Item;
+  continues?: boolean;
   holdFold: FoldHold;
   viewport: ReturnType<typeof createChatViewport>;
   active: boolean;
@@ -313,7 +325,7 @@ const TimelineRow = memo(function TimelineRow({ item, chatId, group, bot, bots, 
 }) {
   const inView = useStore(viewport.rows, (rows) => active && rows.has(item.key));
   const row = item.kind === "message" ? (
-    <MessageRow replyRef={replyRef} item={item} chatId={chatId} group={group} bots={bots} onSend={sendText} onDraft={draftText} actions={messageActions} />
+    <MessageRow replyRef={replyRef} item={item} chatId={chatId} group={group} bots={bots} onSend={sendText} onDraft={draftText} actions={messageActions} continues={continues} />
   ) : item.kind === "work" ? (
     <WorkPart chatId={chatId} bot={bot} item={item} />
   ) : item.kind === "text" ? (
@@ -328,6 +340,8 @@ const TimelineRow = memo(function TimelineRow({ item, chatId, group, bot, bots, 
     <KeptNote line={item.line} />
   ) : item.kind === "open" ? (
     <OpenNote line={item.line} again={item.again} onSend={sendText} />
+  ) : item.kind === "fold" && item.island ? (
+    <Island chatId={chatId} bot={group ? bots.get(item.run.speakers?.at(-1) ?? "") : bot} group={group} item={item} inView={inView} hold={holdFold} onHeight={item.live ? viewport.islandHeight : undefined} />
   ) : item.kind === "fold" ? (
     <FoldRow chatId={chatId} bot={group ? bots.get(item.run.speakers?.at(-1) ?? "") : bot} group={group} item={item} hold={holdFold} />
   ) : item.kind === "thought" ? (
@@ -335,13 +349,15 @@ const TimelineRow = memo(function TimelineRow({ item, chatId, group, bot, bots, 
       <Aside kind="thinking" text={item.text} bot={bot} />
     </View>
   ) : (
-    <ActiveLiveLeaf chatId={chatId} bot={bot} group={group} bots={bots} item={item} />
+    <LiveTurn chatId={chatId} bot={bot} group={group} bots={bots} item={item} />
   );
   return row;
 });
 
 /** Keep text and legacy turn marks at the list that orders them with messages and steps. */
-function ChatTimelineList({ chatId, view, pending, runPart, streaming, group, bot, bots, at, list, position, setPosition, followLatest, sendText, draftText, messageActions, openPanel, emptyView, room}: RowProps & {
+function ChatTimelineList({ chatId, view, pending, runPart, streaming, group, bot, bots, at, list, position, setPosition, followLatest, sendText, draftText, messageActions, openPanel, emptyView, room, viewport }: RowProps & {
+  /** Which rows are on screen: the screen reads it too, to show the capsule only while the island is away. */
+  viewport: ReturnType<typeof createChatViewport>;
   view: ChatView;
   pending: (Message & { clientMessageId: string })[];
   runPart?: Run | null;
@@ -362,7 +378,6 @@ function ChatTimelineList({ chatId, view, pending, runPart, streaming, group, bo
   // The newest message is out of view: the button that goes back to it shows.
   const away = useRef(false);
   const [awayNow, setAway] = useState(false);
-  const [viewport] = useState(createChatViewport);
   // Where a message being scrolled to sits once it is there: 0.5 is the middle; 1 its top at the top (the list is inverted).
   const viewPosition = useRef(0.5);
   // How far from the list's edge it sits: a reply shown from its beginning clears the bar and banners over the list (room.top).
@@ -404,7 +419,10 @@ function ChatTimelineList({ chatId, view, pending, runPart, streaming, group, bo
   const foldFinishedSteps = useChatPrefs((prefs) => prefs.foldFinishedSteps);
   const streamOpen = useApp((state) => streaming && typeof state.texts[chatId]?.stream === "string");
   const ownership = useMemo(() => indexMessageOwnership(view.messages), [view.messages]);
-  const prefs = useMemo(() => ({ steps: stepsPref, thinking: thinkingPref, updates: updatesPref, foldFinishedSteps }), [stepsPref, thinkingPref, updatesPref, foldFinishedSteps]);
+  const prefs = useMemo(() => {
+    const choices = { steps: stepsPref, thinking: thinkingPref, updates: updatesPref, foldFinishedSteps };
+    return { ...choices, island: islandOn(choices) };
+  }, [stepsPref, thinkingPref, updatesPref, foldFinishedSteps]);
   // A new step, steer, or page seals the current text into history using the latest snapshot.
   // Body-only changes reach the active row directly and leave this list untouched.
   const structural = useMemo(() => {
@@ -420,9 +438,12 @@ function ChatTimelineList({ chatId, view, pending, runPart, streaming, group, bo
       marks, timeline, group, prefs, ownership,
       screens: panesOn ? view.pane?.panels?.filter((panel) => panel.kind === "screen") : undefined,
       // Whole-reply mode can receive reasoning before it receives any reply text.
-      livePlaceholder: streamOpen || (!!underWay(runPart) && prefs.thinking === "show"),
+      livePlaceholder: streamOpen || (!!underWay(runPart) && prefs.thinking === "show" && !prefs.island),
     });
   }, [chatId, view, runPart, markPositions, timeline, group, panesOn, prefs, ownership, streamOpen]);
+  // A person's message right after another of theirs shows no name or badge again (chatSides.ts).
+  const me = myself(usePart("meta"));
+  const continuing = useMemo(() => continuingKeys(structural, me), [structural, me]);
   const liveItem = useMemo(() => structural.find((item) => item.kind === "live"), [structural]);
   const showLive = useApp((state) => !liveItem || liveRowVisible(liveItem, state.texts[chatId], state.running[chatId], prefs));
   const previous = useMemo(() => ({ byKey: new Map<string, Item>() }), [chatId]);
@@ -471,11 +492,9 @@ function ChatTimelineList({ chatId, view, pending, runPart, streaming, group, bo
   // the rules). Each change waits a moment again, so a refresh right after the reply lands first.
   const completionPosition = useChatPrefs((prefs) => prefs.completionPosition);
   const onShow = useOnShow();
-  const inFront = useAppActive(onShow);
   const still = useReducedMotion();
   const turnLive = streaming || !!underWay(runPart);
-  const needsReasoning = inFront && turnLive && thinkingPref === "show";
-  useEffect(() => needsReasoning ? watchReasoning(chatId) : undefined, [chatId, needsReasoning]);
+  const inFront = useWatchedReasoning(chatId, onShow && turnLive && thinkingPref === "show");
   useLayoutEffect(() => {
     if (position === "latest") clearTimeout(retry.current);
     if (turnLive && position === "completion") followLatest();
@@ -529,6 +548,9 @@ function ChatTimelineList({ chatId, view, pending, runPart, streaming, group, bo
   // optimistic messages and steps that arrive before the stream, need that room in the inset.
   const hasStatusRow = !pending.length && data[0]?.kind === "fold" && data[0].live;
   const listBottom = hasStatusRow ? room.dock : room.bottom;
+  // The live island as the newest row: the screen shows the capsule once it is scrolled under the message box.
+  const islandNewest = hasStatusRow && data[0]?.kind === "fold" && !!data[0].island;
+  useEffect(() => viewport.trackIsland(islandNewest), [viewport, islandNewest]);
   const finishDrag = (offset: number) => {
     if (position === "history" && offset <= HIDE_AT) followLatest();
   };
@@ -546,6 +568,7 @@ function ChatTimelineList({ chatId, view, pending, runPart, streaming, group, bo
           // below), and the button offers the way back.
           onScroll={(event) => {
             scrolled.current = event.nativeEvent.contentOffset.y;
+            viewport.scrolled(event.nativeEvent.contentOffset.y);
             const next = showsAt(event.nativeEvent.contentOffset.y, away.current);
             if (next !== away.current) {
               away.current = next;
@@ -566,7 +589,7 @@ function ChatTimelineList({ chatId, view, pending, runPart, streaming, group, bo
           keyExtractor={(item) => item.key}
           renderItem={({ item }) => (
             <TimelineRow item={item} chatId={chatId} group={group} bot={bot} bots={bots} sendText={sendText}
-              draftText={draftText} messageActions={messageActions} openPanel={openPanel} holdFold={holdFold} viewport={viewport}
+              draftText={draftText} messageActions={messageActions} openPanel={openPanel} holdFold={holdFold} viewport={viewport} continues={continuing.has(item.key)}
               replyRef={item.kind === "message" && item.latest && item.message.role === "assistant" ? latestReply : undefined}
               active={onShow && inFront && (item.kind === "screen" || item.kind === "live" || (item.kind === "fold" && !!item.live))} />
           )}
@@ -634,7 +657,8 @@ function ChatScreenScreen({ pane: paneId, onLeave: leavePane, onList }: { pane?:
   const keyboardHeight = useKeyboardState((state) => state.height);
   const requestRoom = Math.max(200, Math.min(screenHeight * 0.6, screenHeight - (keyboardUp ? keyboardHeight : insets.bottom) - insets.top - 168));
   const chat = useChat(chatId);
-  const view = useWatchedChat(chatId);
+  const focused = useIsFocused();
+  const view = useWatchedChat(chatId, focused);
   const pending = useSyncExternalStore(pendingSends.subscribe, () => pendingSends.rows(chatId));
   const bot = useBot(chat?.botId);
   const allBots = useBots();
@@ -652,13 +676,20 @@ function ChatScreenScreen({ pane: paneId, onLeave: leavePane, onList }: { pane?:
   const queued = useApp((state) => state.parts.live?.queued[chatId]);
   const steerable = useApp((state) => !!state.parts.live?.steerable?.[chatId]);
   const working = streaming || !!turnRun;
+  // With the island (Steps or Thinking Open) the capsule shows only while the island is scrolled out of view.
+  const [viewport] = useState(createChatViewport);
+  const island = useChatPrefs(islandOn);
+  // Worked out against the message box while the island is the newest row; else by the list's viewability.
+  const islandAbove = useStore(viewport.island);
+  const islandRow = useStore(viewport.rows, (rows) => !!turnRun && rows.has("f:" + turnRun.id));
+  const islandInView = islandAbove ?? islandRow;
+  const showCapsule = capsuleShown({ working, island: island && !!turnRun, islandInView });
   const group = !!chat?.botIds && chat.botIds.length > 1;
   const canChat = useCan("agents", "chat");
 
   // Unfolding on a chat that came from the Chats list: it goes back beside the list, still chosen.
   // Only while this page is in front: with a sheet over it, going back would close the sheet.
   const splitActive = useChatSplit((split) => split.active);
-  const focused = useIsFocused();
   useEffect(() => {
     if (paneId || !splitActive || !focused || useChatSplit.getState().pushed !== chatId) return;
     useChatSplit.setState({ id: chatId, pushed: null });
@@ -939,20 +970,27 @@ function ChatScreenScreen({ pane: paneId, onLeave: leavePane, onList }: { pane?:
   // A pane in the Chats tab keeps its composer above a tab bar at the bottom (none when the bar is the side rail).
   const bottomInset = insets.bottom + (paneId ? shape.tabRoom : 0);
   const spacer = useAnimatedStyle(() => ({ height: Math.max(Math.abs(keyboard.height.value), bottomInset) }));
-  // T3 Code's open chat: on a phone with Liquid Glass the bar is see-through and the chat scrolls
-  // under it, behind a soft fade, and the message box floats over the chat on glass. The bar's
-  // height, the banners under it and the box are measured so the rows can rest clear of them.
-  const glassBar = !paneId && hasGlass();
+  const backdrop = usePrefs((prefs) => prefs.backdrop);
+  const hasBackdrop = backdrop !== "clean";
+  // T3 Code's open chat: on a phone with Liquid Glass (or an active backdrop on iOS) the bar is see-through
+  // and the chat scrolls under it, behind a soft fade, and the message box floats over the chat on glass.
+  const glassBar = !paneId && (hasGlass() || (hasBackdrop && Platform.OS === "ios"));
   const barHeight = useContext(HeaderHeightContext) ?? 0;
   const [paneBar, setPaneBar] = useState(0);
   const [banners, setBanners] = useState(0);
   const [dock, setDock] = useState(0);
   const topBar = glassBar ? barHeight : paneId ? paneBar : 0;
 
-  if (leaving) return <View style={{ flex: 1, backgroundColor: colors.canvas }} />;
+  if (leaving)
+    return (
+      <View style={{ flex: 1, backgroundColor: hasBackdrop ? "transparent" : colors.canvas }}>
+        {hasBackdrop && <BackdropLayer backdrop={backdrop} />}
+      </View>
+    );
   if (!chat)
     return (
-      <View style={{ flex: 1, backgroundColor: colors.canvas, justifyContent: "center" }}>
+      <View style={{ flex: 1, backgroundColor: hasBackdrop ? "transparent" : colors.canvas, justifyContent: "center" }}>
+        {hasBackdrop && <BackdropLayer backdrop={backdrop} />}
         {missing === "gone" && !paneId ? <EmptyState icon={X} title="This chat is gone" action="Back" onAction={leave} /> : missing === "loading" || paneId ? <Loading /> : null}
       </View>
     );
@@ -994,7 +1032,8 @@ function ChatScreenScreen({ pane: paneId, onLeave: leavePane, onList }: { pane?:
   const room = { top: topBar + banners, dock: dock + idleTodoRoom, bottom: dock + idleTodoRoom + (working ? CAPSULE + space.sm : 0) };
   const column = (
     <MessageLink.Provider value={showPulls ? openMessageLink : openLink}>
-    <View style={{ flex: 1, backgroundColor: colors.canvas }}>
+    <View style={{ flex: 1, backgroundColor: hasBackdrop ? "transparent" : colors.canvas }}>
+      {hasBackdrop && <BackdropLayer backdrop={backdrop} />}
       {reaction?.chatId === chatId && reaction.computer === computer && <ReactionPicker close={() => setReaction(undefined)} submit={emoji => {
         setReaction(undefined);
         void attempt(reactToMessage(chatId, reaction.index, reaction.time ?? null, emoji));
@@ -1007,16 +1046,18 @@ function ChatScreenScreen({ pane: paneId, onLeave: leavePane, onList }: { pane?:
             <Loading />
           </View>
         ) : (
-          <ChatTimelineList
-            chatId={chatId} view={view ?? EMPTY_CHAT} pending={pending} runPart={runPart} streaming={streaming} group={group} bot={bot} bots={bots}
-            at={at} list={list} position={position} setPosition={setPosition} followLatest={followLatest} sendText={sendText} draftText={draftText} messageActions={messageActions} openPanel={pane.show}
-            room={room}
-            emptyView={empty && (
-              <View style={{ flex: 1, paddingTop: room.top, paddingBottom: room.bottom }}>
-                <Hello chat={chat} bot={bot} bots={bots} projects={projects} settings={settings} onPick={pick} />
-              </View>
-            )}
-          />
+          <ChatPeopleLook chat={chat} bots={bots}>
+            <ChatTimelineList
+              chatId={chatId} view={view ?? EMPTY_CHAT} pending={pending} runPart={runPart} streaming={streaming} group={group} bot={bot} bots={bots}
+              at={at} list={list} position={position} setPosition={setPosition} followLatest={followLatest} sendText={sendText} draftText={draftText} messageActions={messageActions} openPanel={pane.show}
+              room={room} viewport={viewport}
+              emptyView={empty && (
+                <View style={{ flex: 1, paddingTop: room.top, paddingBottom: room.bottom }}>
+                  <Hello chat={chat} bot={bot} bots={bots} projects={projects} settings={settings} onPick={pick} />
+                </View>
+              )}
+            />
+          </ChatPeopleLook>
         )}
         {topBar > 0 && <Fade edge="top" cover={topBar} />}
         {paneId && header}
@@ -1029,7 +1070,7 @@ function ChatScreenScreen({ pane: paneId, onLeave: leavePane, onList }: { pane?:
         <Fade edge="bottom" cover={dock} />
         {canChat && (working || hasTodos) && (
           <View pointerEvents="box-none" style={{ position: "absolute", left: space.sm, right: space.sm, bottom: dock + space.sm, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: space.sm }}>
-            {working && <StatusCapsule chatId={chatId} bot={bot} group={group} bots={bots} run={turnRun} />}
+            {showCapsule && <StatusCapsule chatId={chatId} bot={bot} group={group} bots={bots} run={turnRun} />}
             {hasTodos && <Chip label={todoLabel(todos)} selected={todoOpen} onPress={() => setTodoDrawerChat(todoOpen ? undefined : chatId)} />}
           </View>
         )}
@@ -1093,7 +1134,8 @@ function ChatScreenScreen({ pane: paneId, onLeave: leavePane, onList }: { pane?:
   );
   if (!book || !project) return column;
   return (
-    <View style={{ flex: 1, flexDirection: "row", backgroundColor: colors.canvas }}>
+    <View style={{ flex: 1, flexDirection: "row", backgroundColor: hasBackdrop ? "transparent" : colors.canvas }}>
+      {hasBackdrop && <BackdropLayer backdrop={backdrop} />}
       <View style={{ width: Math.max(0, book.x - shape.left) }}>{column}</View>
       <View style={{ width: book.width }} />
       <View style={{ flex: 1, paddingTop: insets.top }}>
@@ -1131,9 +1173,27 @@ function EdgeFree({ children }: { children: ReactNode & {} }) {
  */
 const FADE_EDGE = 28;
 function Fade({ edge, cover }: { edge: "top" | "bottom"; cover: number }) {
-  const { colors } = useTheme();
+  const { colors, dark } = useTheme();
+  const backdrop = usePrefs((prefs) => prefs.backdrop);
+  const hasBackdrop = backdrop !== "clean";
   if (cover <= 0) return null;
   const top = edge === "top";
+  if (hasBackdrop) {
+    // Soft translucent scrim so floating Liquid Glass chrome visibly refracts the backdrop while keeping text legible.
+    const base = backdropBaseColor(backdrop, dark, colors.canvas);
+    const strong = tint(base, dark ? 0.56 : 0.5);
+    const soft = tint(base, dark ? 0.24 : 0.2);
+    const clear = tint(base, 0);
+    return (
+      <View pointerEvents="none" style={{ position: "absolute", left: 0, right: 0, height: cover + FADE_EDGE, ...(top ? { top: 0 } : { bottom: 0 }) }}>
+        <LinearGradient
+          colors={top ? [strong, soft, clear] : [clear, soft, strong]}
+          locations={top ? [0, 0.72, 1] : [0, 0.28, 1]}
+          style={{ flex: 1 }}
+        />
+      </View>
+    );
+  }
   return (
     <View pointerEvents="none" style={{ position: "absolute", left: 0, right: 0, height: cover + FADE_EDGE, ...(top ? { top: 0 } : { bottom: 0 }) }}>
       {!top && <LinearGradient colors={[tint(colors.canvas, 0), colors.canvas]} style={{ height: FADE_EDGE }} />}

@@ -1,6 +1,6 @@
 // The turn a bot is working on now, drawn in parts in the order things happened (turn.ts), whatever
 // Steps says: each part's steps and thinking is a `WorkPart`, and the newest part is the `LiveTurn`
-// at the bottom. Its reply's text arrives in complete updates (through the relay). Failed only narrows the canvas steps. The work is drawn the way T3 Code draws it, with the bot
+// at the bottom. Its reply's text arrives in complete word chunks. Failed only narrows the canvas steps. The work is drawn the way T3 Code draws it, with the bot
 // leading: its face (held still, for battery) and what it is doing beside it ("Coding · …", its
 // latest thought), and the steps under it as quiet rows on the chat, with no card (WorkRows.tsx).
 // While the turn runs, its status is the glass capsule over the message box (StatusCapsule.tsx), and
@@ -19,8 +19,9 @@ import { useApp } from "@/state/store";
 import { BotAvatar, Markdown, space, T } from "@/ui";
 import { Aside } from "./Aside";
 import { workWidth } from "./bits";
+import { islandOn } from "./islandModel";
 import { liveTurnDisplay } from "./liveDisplay";
-import { type Item, segmentThinking } from "./turn";
+import { type Item, resolveLiveBody, segmentThinking } from "./turn";
 import { FACE_INDENT, StepLine } from "./WorkRows";
 
 /** The height of the row under a reply that holds Read aloud (MessageRow). */
@@ -86,17 +87,21 @@ export function LiveTurn({ chatId, bot, group, bots, item }: { chatId: string; b
   const doing = useDoing(chatId);
   const onIt = useOnIt(chatId);
   const speaker = (speakerId ? bots.get(speakerId) : undefined) ?? bot;
-  // Relay chunks are received text, not a typewriter animation. Markdown keeps completed blocks
-  // cached while reparsing the active tail; the finished MessageRow performs the exact final parse.
-  const visible = liveTurnDisplay({ stream: item.text, thinking: item.thinking, intent, thinkingMode, showUpdates });
+  // Only this row needs new words. Markdown reuses completed blocks and formats the growing tail when a chunk arrives.
+  const body = useApp((state) => state.texts[chatId]);
+  const latestRun = useApp((state) => state.running[chatId]);
+  const resolved = resolveLiveBody(item, body, latestRun);
+  const visible = liveTurnDisplay({ stream: resolved.text, thinking: resolved.thinking, intent, thinkingMode, showUpdates });
   const stream = visible.stream;
-  const thinking = thinkingMode === "show" ? visible.thinking ?? "" : "";
+  // Once the computer has started the run, Open's thinking is in the island under this row (Island.tsx).
+  const inIsland = useChatPrefs(islandOn) && !!item.run;
+  const thinking = thinkingMode === "show" && !inIsland ? visible.thinking ?? "" : "";
   // Timeline rows are already filtered for Folded/Open/Failed; keep the renderer structural.
   const steps = item.steps;
   // The face leads the work: what the bot is doing and its latest thought. A reply with no work has none.
   const lead = !!thinking || steps.length > 0;
-  // One live line at a time: a running step shown below, or else what the bot is doing.
-  const leadShimmers = onIt && !steps.some((step) => step.status === "Running");
+  // One live line at a time: a running step shown below, or else what the bot is doing. The island's header has it when there is one.
+  const leadShimmers = onIt && !inIsland && !steps.some((step) => step.status === "Running");
   return (
     <View style={{ gap: space.sm + 2 }}>
       {group && !!stream && (

@@ -309,6 +309,7 @@ for (const name of [
   "removeTeamMember",
   "renameTeam",
   "renameTeamMember",
+  "setMyAvatar",
   "useRemoteHost",
   "forgetRemoteHost",
   "renameRemoteHost",

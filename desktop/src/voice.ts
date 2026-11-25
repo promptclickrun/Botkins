@@ -4,7 +4,7 @@
 import { useSyncExternalStore } from "react";
 import type { DeskLiveSession, DeskVoiceSettings, LiveVoiceEvent } from "./types";
 import { liveInputMode, MicGate, RELEASE_TAIL_MS, type InputMode } from "./liveInput";
-import { geminiManualTurn, openAiManualTurn } from "./liveProtocol";
+import { formatGeminiCloseError, GeminiLiveSession, openAiManualTurn } from "./liveProtocol";
 import { botDeviceVoices } from "./botVoice";
 
 const api = window.botkins;
@@ -371,13 +371,6 @@ function addOpenAiManualTurn(session: Record<string, unknown>) {
   return { ...session, session: { ...inner, audio: { ...audio, input: { ...input, turn_detection: null } } } };
 }
 
-function addGeminiManualTurn(session: Record<string, unknown>) {
-  const inner = session.setup && typeof session.setup === "object" ? session.setup as Record<string, unknown> : session;
-  const config = inner.realtimeInputConfig && typeof inner.realtimeInputConfig === "object" ? inner.realtimeInputConfig as Record<string, unknown> : {};
-  const detection = config.automaticActivityDetection && typeof config.automaticActivityDetection === "object" ? config.automaticActivityDetection as Record<string, unknown> : {};
-  return { ...session, setup: { ...inner, realtimeInputConfig: { ...config, automaticActivityDetection: { ...detection, disabled: true } } } };
-}
-
 /** Plays a provider's 16-bit PCM without gaps, and stops at once when the person talks over it. */
 class PcmPlayer {
   next = 0;
@@ -459,6 +452,7 @@ class LiveCall {
   private turnMs = 0;
   private geminiInput = "";
   private geminiSpeaking = false;
+  private geminiSession: GeminiLiveSession | null = null;
   private lastElevenFinal?: number;
   private elevenReplies = 0;
   private lastElevenReply?: string;
@@ -688,9 +682,10 @@ class LiveCall {
     } else if (session.kind === "gemini-ws") {
       this.inputRate = session.input.sampleRate;
       this.outputRate = session.output.sampleRate;
+      const geminiSession = (this.geminiSession = new GeminiLiveSession(this.inputMode, session.setup, session.input.sampleRate));
       ws = new WebSocket(session.url);
       ws.binaryType = "arraybuffer";
-      ws.onopen = () => ws.send(JSON.stringify(this.inputMode === "push" ? addGeminiManualTurn(session.setup) : session.setup));
+      ws.onopen = () => geminiSession.onOpen(ws);
       ws.onmessage = (e) => this.geminiMessage(e.data, ws);
     } else if (session.kind === "elevenlabs-ws") {
       this.inputRate = session.input.sampleRate;
@@ -710,7 +705,11 @@ class LiveCall {
     ws.onerror = () => this.fail(new Error("The live voice couldn't connect. Check your network and try again."));
     ws.onclose = (e) => {
       if (this.ended) return;
+      const beforeSetup = !this.sending;
+      this.geminiSession?.reset();
+      if (import.meta.env.DEV) console.warn("Live voice socket closed", { provider: this.state.provider, code: e.code, reason: e.reason });
       if (e.code === 1000 || e.code === 1005) this.end();
+      else if (this.state.provider === "gemini") this.fail(new Error(formatGeminiCloseError(e.reason, beforeSetup)));
       else this.fail(new Error("The live voice ended" + (e.reason ? ": " + e.reason.slice(0, 200).replace(/\.?$/, ".") : ".")));
     };
     await this.capture(ws, session.kind);
@@ -734,7 +733,7 @@ class LiveCall {
       if (decision.barge) this.interrupt();
       for (const data of decision.send) {
         if (kind === "openai-ws") ws.send(JSON.stringify({ type: "input_audio_buffer.append", audio: data }));
-        else if (kind === "gemini-ws") ws.send(JSON.stringify({ realtimeInput: { audio: { data, mimeType: "audio/pcm;rate=" + this.inputRate } } }));
+        else if (kind === "gemini-ws") this.geminiSession?.sendAudio(ws, data);
         else ws.send(JSON.stringify({ user_audio_chunk: data }));
       }
     };
@@ -748,6 +747,7 @@ class LiveCall {
       return;
     }
     if (message.setupComplete) {
+      this.geminiSession?.onSetupComplete();
       this.sending = true;
       this.update({ status: "live" });
     }
@@ -895,13 +895,26 @@ class LiveCall {
   }
   pressInput() {
     if (this.inputMode !== "push" || this.ended || this.gate.holding) return;
-    this.turnMs = 0;
-    if (this.inputMode === "push") this.interrupt();
+    if (this.state.provider === "gemini" && !this.geminiSession?.setupComplete) return;
+    // Pressing again inside the release tail continues the current turn instead of starting a duplicate one.
+    const continuing = this.releaseTimer !== null;
+    if (this.releaseTimer !== null) {
+      window.clearTimeout(this.releaseTimer);
+      this.releaseTimer = null;
+    }
+    if (!continuing) this.turnMs = 0;
+    if (this.state.provider === "gemini") {
+      if (!this.geminiSession?.activityOpen) this.interrupt();
+      if (!this.geminiSession?.press(this.ws)) return;
+      this.gate.press();
+      this.applyMic();
+      return;
+    }
+    if (!continuing) this.interrupt();
     this.gate.press();
-    if (this.ws?.readyState === WebSocket.OPEN && this.state.provider === "gemini") this.ws.send(JSON.stringify(geminiManualTurn("start")));
     const socket = speaksOpenAi(this.state.provider) ? this.ws : this.channel;
     const open = speaksOpenAi(this.state.provider) ? socket?.readyState === WebSocket.OPEN : socket?.readyState === "open";
-    if (open && socket && (speaksOpenAi(this.state.provider) || this.state.provider === "codex")) socket.send(JSON.stringify({ type: "input_audio_buffer.clear" }));
+    if (!continuing && open && socket && (speaksOpenAi(this.state.provider) || this.state.provider === "codex")) socket.send(JSON.stringify({ type: "input_audio_buffer.clear" }));
     this.applyMic();
   }
   releaseInput() {
@@ -913,7 +926,7 @@ class LiveCall {
     this.releaseTimer = window.setTimeout(() => {
       this.releaseTimer = null;
       if (this.ended) return;
-      if (this.ws?.readyState === WebSocket.OPEN && this.state.provider === "gemini") this.ws.send(JSON.stringify(geminiManualTurn("end")));
+      if (this.state.provider === "gemini") this.geminiSession?.release(this.ws);
       const socket = speaksOpenAi(this.state.provider) ? this.ws : this.channel;
       const open = speaksOpenAi(this.state.provider) ? socket?.readyState === WebSocket.OPEN : socket?.readyState === "open";
       if (open && socket && (speaksOpenAi(this.state.provider) || this.state.provider === "codex")) {
@@ -935,6 +948,8 @@ class LiveCall {
   /** Closes everything this session opened. */
   stop() {
     this.ended = true;
+    this.geminiSession?.reset();
+    this.geminiSession = null;
     window.clearInterval(this.timer);
     if (this.releaseTimer !== null) window.clearTimeout(this.releaseTimer);
     this.off?.();

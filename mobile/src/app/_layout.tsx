@@ -2,7 +2,7 @@ import "react-native-reanimated";
 import { DarkTheme, DefaultTheme, router, Stack, ThemeProvider, usePathname } from "expo-router";
 import * as SplashScreen from "expo-splash-screen";
 import { useEffect, useRef } from "react";
-import { Appearance } from "react-native";
+import { Appearance, Platform } from "react-native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { KeyboardProvider } from "react-native-keyboard-controller";
 import { boot } from "@/state/link";
@@ -12,7 +12,7 @@ import { usePrefs } from "@/state/prefs";
 import { useApp } from "@/state/store";
 import { loadProfile, useProfile } from "@/state/profile";
 import { JOIN_ATTEMPT_KEY, resumeDecision } from "@/features/pair/joinLogic";
-import { ToastHost, useShape, useTheme } from "@/ui";
+import { backdropBaseColor, ToastHost, useShape, useTheme } from "@/ui";
 
 void SplashScreen.preventAutoHideAsync();
 
@@ -29,6 +29,8 @@ export default function RootLayout() {
   const resumeChecked = useRef(false);
 
   const mode = usePrefs((prefs) => prefs.mode);
+  const backdrop = usePrefs((prefs) => prefs.backdrop);
+  const hasBackdrop = backdrop !== "clean";
 
   useEffect(() => {
     void boot();
@@ -72,10 +74,12 @@ export default function RootLayout() {
   if (!booted) return null;
 
   const base = theme.dark ? DarkTheme : DefaultTheme;
+  const screenBg = backdropBaseColor(backdrop, theme.dark, colors.canvas);
+  const glassHeader = hasBackdrop && Platform.OS === "ios";
   // Every pushed page and sheet keeps out of the side rail (iPhone Duo puts the bars on one edge).
   // The tabs lay themselves out: their tab bar is that rail.
   const sides = { paddingLeft: shape.left, paddingRight: shape.right };
-  const navigation = { ...base, colors: { ...base.colors, background: colors.canvas, card: colors.canvas, text: colors.ink, border: colors.line, primary: colors.accent } };
+  const navigation = { ...base, colors: { ...base.colors, background: screenBg, card: screenBg, text: colors.ink, border: colors.line, primary: colors.accent } };
   // A pushed page: a bare native bar with a back button, the page draws its own title.
   const page = {
     headerShown: true,
@@ -84,17 +88,18 @@ export default function RootLayout() {
     headerShadowVisible: false,
     headerBackButtonDisplayMode: "minimal",
     headerTintColor: colors.ink,
-    headerStyle: { backgroundColor: colors.canvas },
-    contentStyle: { backgroundColor: colors.canvas, ...sides },
+    headerTransparent: glassHeader,
+    headerStyle: { backgroundColor: glassHeader ? "transparent" : screenBg },
+    contentStyle: { backgroundColor: screenBg, ...sides },
     statusBarStyle: theme.dark ? "light" : "dark",
   } as const;
   // A sheet fills the width on a narrow screen, rail and all; with room for two panes it is a card away from it.
-  const sheet = { presentation: "formSheet", headerShown: false, sheetGrabberVisible: true, sheetCornerRadius: 28, contentStyle: { backgroundColor: colors.canvas, ...(shape.wide ? {} : sides) } } as const;
+  const sheet = { presentation: "formSheet", headerShown: false, sheetGrabberVisible: true, sheetCornerRadius: 28, contentStyle: { backgroundColor: screenBg, ...(shape.wide ? {} : sides) } } as const;
   const tall = { ...sheet, sheetAllowedDetents: [1] };
   const half = { ...sheet, sheetAllowedDetents: [0.6, 1] };
 
   return (
-    <GestureHandlerRootView style={{ flex: 1, backgroundColor: colors.canvas }}>
+    <GestureHandlerRootView style={{ flex: 1, backgroundColor: screenBg }}>
       <KeyboardProvider>
         <ThemeProvider value={navigation}>
           <Stack screenOptions={page}>
@@ -103,7 +108,7 @@ export default function RootLayout() {
               <Stack.Screen name="welcome" options={{ headerShown: false, animation: "fade", statusBarStyle: "dark" }} />
             </Stack.Protected>
             <Stack.Protected guard={paired} redirectTo="/welcome">
-              <Stack.Screen name="(tabs)" options={{ headerShown: false, contentStyle: { backgroundColor: colors.canvas } }} />
+              <Stack.Screen name="(tabs)" options={{ headerShown: false, contentStyle: { backgroundColor: screenBg } }} />
               <Stack.Screen name="chat/[id]" />
               {/* Links from widgets, Live Activities and notifications (src/features/open): each hands over to a real screen at once. */}
               <Stack.Screen name="open/bot/[id]" options={{ headerShown: false, animation: "none" }} />
@@ -141,6 +146,7 @@ export default function RootLayout() {
               <Stack.Screen name="space/share" options={tall} />
               <Stack.Screen name="space/new-panel" options={tall} />
               <Stack.Screen name="space/ask" options={half} />
+              <Stack.Screen name="space/notes" options={half} />
               <Stack.Screen name="routine/[id]" options={tall} />
               <Stack.Screen name="task/[id]" options={tall} />
               <Stack.Screen name="tools/index" />

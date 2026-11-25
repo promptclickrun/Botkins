@@ -5,11 +5,11 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { DEFAULT_FONT, DEFAULT_THEME, FONT_IDS, THEME_IDS, appearanceField, canvasColor, changeSettings, defaultSettings } from "../desktop/preferences.mjs";
+import { BACKDROPS, DEFAULT_BACKDROP, DEFAULT_FONT, DEFAULT_THEME, FONT_IDS, THEME_IDS, appearanceField, canvasColor, changeSettings, defaultSettings } from "../desktop/preferences.mjs";
 
 const catalog = JSON.parse(readFileSync(new URL("../desktop/themes.json", import.meta.url), "utf8"));
 const theme = (id) => catalog.themes.find((t) => t.id === id);
-const usual = { theme: "system", colorTheme: "ink", themePicked: false, darkColorTheme: null, contrast: 0, textSize: "default", font: "system", fontPicked: false, bubble: "theme", avatarAnimations: true, lightBackground: "cream", darkBackground: "charcoal" };
+const usual = { theme: "system", colorTheme: "ink", themePicked: false, darkColorTheme: null, backdrop: "clean", contrast: 0, textSize: "default", font: "system", fontPicked: false, bubble: "theme", avatarAnimations: true, lightBackground: "cream", darkBackground: "charcoal" };
 
 test("the themes are Botkins, the six named after the kit's palettes, Paper and Ink; Ink is what a new person sees", () => {
   assert.deepEqual(THEME_IDS, ["botkins", "honey", "fern", "tidepool", "bluebell", "fig", "paper", "ink"]);
@@ -198,6 +198,26 @@ test("the app reads in the system's face until the person picks a font, and a fo
 test("the fonts are the phone app's: the system's faces where it has them (the default first), the kit's pairing, and Lora", () => {
   assert.deepEqual(FONT_IDS, ["system", "botkins", "rounded", "avenir", "georgia", "lora", "mono"]);
   assert.equal(DEFAULT_FONT, "system");
+});
+
+test("appearance backdrop defaults to clean, accepts the four backdrops, and rejects invalid values", () => {
+  assert.deepEqual(BACKDROPS, ["clean", "mesh", "botkins", "grid"]);
+  assert.equal(DEFAULT_BACKDROP, "clean");
+  assert.equal(defaultSettings.appearance.backdrop, "clean");
+  assert.equal(appearanceField(undefined).backdrop, "clean");
+  assert.equal(appearanceField({ backdrop: "aurora" }).backdrop, "clean");
+  assert.equal(appearanceField({ backdrop: 42 }).backdrop, "clean");
+
+  let settings = structuredClone(defaultSettings);
+  for (const backdrop of BACKDROPS) {
+    assert.equal(appearanceField({ backdrop }).backdrop, backdrop);
+    settings = changeSettings(settings, { appearance: { backdrop } });
+    assert.equal(settings.appearance.backdrop, backdrop);
+  }
+
+  for (const bad of ["aurora", "", null, 123]) {
+    assert.throws(() => changeSettings(settings, { appearance: { backdrop: bad } }), /Invalid appearance/);
+  }
   const font = (id) => catalog.fonts.find((f) => f.id === id);
   // The kit's pairing has no single family: the styles' own serif and sans are used.
   assert.deepEqual(font("botkins"), { id: "botkins", name: "Botkins" });

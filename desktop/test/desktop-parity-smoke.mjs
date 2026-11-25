@@ -135,9 +135,10 @@ try {
 
   await settings.locator('.set-sidebar [role="tab"]').filter({ hasText: "Chat" }).click();
   await expect(settings.getByText(/Fold finished tool activity|Steps/).first()).toBeVisible();
-  await expect(settings.getByText(/Show the bot.s thinking|Thinking and updates/).first()).toBeVisible();
+  await expect(settings.getByText(/^Thinking$/).first()).toBeVisible();
+  await expect(settings.getByText(/^Updates$/).first()).toBeVisible();
   assert.deepEqual(await settings.locator('select').nth(0).locator('option').allTextContents(), ["Folded", "Open", "Failed only"], "Steps exposes the three requested choices");
-  assert.deepEqual(await settings.locator('select').nth(2).locator('option').allTextContents(), ["Folded", "Open", "Hidden"], "Thinking and updates keeps Hidden as its third choice");
+  assert.deepEqual(await settings.locator('select').nth(1).locator('option').allTextContents(), ["Folded", "Open", "Hidden"], "Thinking keeps Hidden as its third choice");
   await shot(restarted, "settings-chat");
   await settings.getByRole("button", { name: "Close dialog" }).click();
 
@@ -145,7 +146,8 @@ try {
   await restarted.getByRole("button", { name: "Chats", exact: true }).click();
   await restarted.getByRole("button", { name: /Folded turn fixture/ }).click();
   await expect(restarted.locator("main").getByText("The fixture is ready.", { exact: true })).toBeVisible();
-  const work = restarted.getByRole("button", { name: /Worked for .*1 step/ });
+  // Steps and Thinking are Open by default: the finished turn is a receipt under its answer.
+  const work = restarted.getByRole("button", { name: /Worked .*1 step/ });
   await expect(work).toBeVisible();
   await work.click();
   await expect(restarted.locator("main").getByText("I checked the fixture files.", { exact: true })).toBeVisible();

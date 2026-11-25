@@ -1,9 +1,9 @@
 import { needsYou } from "@/state/sessionActivity";
 import { NativeTabs } from "expo-router/native-tabs";
-import type { ReactElement } from "react";
+import { type ReactElement, useMemo } from "react";
 import { isChatsPageUnread } from "@/features/chat/unread";
 import { useSpacesOn } from "@/features/spaces/data";
-import { useCan } from "@/state/hooks";
+import { useCan, usePart } from "@/state/hooks";
 import { usePrefs } from "@/state/prefs";
 import { useApp } from "@/state/store";
 import type { TabId } from "@/state/tabs";
@@ -13,12 +13,17 @@ export default function TabsLayout() {
   const theme = useTheme();
   const { colors } = theme;
   const badge = badgeColors(theme);
-  const unread = useApp((state) => state.parts.chats?.filter(isChatsPageUnread).length ?? 0);
-  const waiting = useApp((state) => needsYou(state.parts));
+  const chats = usePart("chats");
+  const tasks = usePart("tasks");
+  const requests = useApp((state) => state.parts.live?.requests.length ?? 0);
+  // Both badges stay mounted across the tabs. New words in a reply change neither list.
+  const unread = useMemo(() => chats?.filter(isChatsPageUnread).length ?? 0, [chats]);
+  const waiting = requests + useMemo(() => needsYou({ tasks }), [tasks]);
   // A computer without spaces, or a member who may not see them, has no Spaces tab.
   const spacesOn = useSpacesOn();
   const spaces = useCan("today", "view") && spacesOn;
   const order = usePrefs((prefs) => prefs.tabOrder);
+  const hasBackdrop = usePrefs((prefs) => prefs.backdrop !== "clean");
   // Each tab scrolls its own vertical view when reselected. Settings is a button on Home, not a tab.
   const tabs: Record<TabId, ReactElement> = {
     index: (
@@ -56,8 +61,9 @@ export default function TabsLayout() {
     ),
   };
   // The person's own order (Settings › Appearance › Tabs). The bar is built again when it changes.
+  // Omitting opaque backgroundColor when a backdrop is active lets the iOS Liquid Glass tab bar refract it.
   return (
-    <NativeTabs key={order.join()} tintColor={colors.accent} backgroundColor={colors.canvas} badgeBackgroundColor={badge.background} badgeTextColor={badge.text}>
+    <NativeTabs key={order.join()} tintColor={colors.accent} backgroundColor={hasBackdrop ? undefined : colors.canvas} badgeBackgroundColor={badge.background} badgeTextColor={badge.text}>
       {order.map((id) => tabs[id])}
     </NativeTabs>
   );

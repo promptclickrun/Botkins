@@ -6,19 +6,26 @@ import { useCan, useOnline, usePart, useSettings } from "@/state/hooks";
 import { COMPLETION_POSITIONS } from "@/features/chat/completion";
 import { api, attempt } from "@/state/link";
 import { BOT_TAPS } from "@/features/chat/habits";
+import { islandOn } from "@/features/chat/islandModel";
 import { type ChatPrefs, setChatPrefs, useChatPrefs } from "@/state/chatPrefs";
 import { Group, Label, Page, Row, space, T, useTheme } from "@/ui";
 
+// Open is the island (src/features/chat/islandModel.ts): one live window per running turn. The setting is "Steps", never "Tools".
 const STEPS: { value: ChatPrefs["steps"]; label: string; subtitle: string }[] = [
-  { value: "folded", label: "Folded", subtitle: "Tool calls stay in the working rail" },
-  { value: "show", label: "Open", subtitle: "Show every tool call in the chat as it happens" },
-  { value: "failed", label: "Failed only", subtitle: "Show only failed tool calls in the chat" },
+  { value: "folded", label: "Folded", subtitle: "Steps stay in the working rail" },
+  { value: "show", label: "Open", subtitle: "A live window of the newest steps" },
+  { value: "failed", label: "Failed only", subtitle: "Show only failed steps in the chat" },
 ];
 const THINKING: { value: ChatPrefs["thinking"]; label: string; subtitle: string }[] = [
   { value: "folded", label: "Folded", subtitle: "Chain of thought stays in the working rail" },
-  { value: "show", label: "Open", subtitle: "Show chain of thought in the chat as it streams" },
+  { value: "show", label: "Open", subtitle: "The latest lines of thought, in the same window" },
   { value: "hide", label: "Hidden", subtitle: "Not shown while a bot works" },
 ];
+/** Under the row's title: what the choice made does. */
+const choiceLine = (options: { value: string; label: string; subtitle: string }[], value: string, fallback: string) => {
+  const option = options.find((entry) => entry.value === value);
+  return value === "show" && option ? option.label + ": " + option.subtitle.charAt(0).toLowerCase() + option.subtitle.slice(1) : fallback;
+};
 
 /** Auto-summarize: off, or every 5 to 30 turns (the computer's desktop/summaries.mjs). */
 const SUMMARY_TURNS = [0, ...Array.from({ length: 26 }, (_, i) => i + 5)].map((turns) => ({
@@ -56,10 +63,11 @@ export default function Chat() {
       <View>
         <Label>What a reply shows</Label>
         <Group>
-          <ChoiceMenu title="Steps" subtitle="A bot's work in a turn" value={prefs.steps} options={STEPS} onChange={(steps) => setChatPrefs({ steps })} />
-          <ChoiceMenu title="Thinking" subtitle="Chain of thought while a bot works" value={prefs.thinking} options={THINKING} onChange={(thinking) => setChatPrefs({ thinking })} />
-          <Row title="Updates" subtitle="Interim messages and status while a bot works" toggled={prefs.updates} onToggle={(updates) => setChatPrefs({ updates })} />
-          <Row title="Fold finished steps" subtitle="One line with elapsed time and step count" subtitleLines={2} toggled={prefs.foldFinishedSteps} onToggle={(foldFinishedSteps) => setChatPrefs({ foldFinishedSteps })} />
+          <ChoiceMenu title="Steps" subtitle={choiceLine(STEPS, prefs.steps, "A bot's work in a turn")} value={prefs.steps} options={STEPS} onChange={(steps) => setChatPrefs({ steps })} />
+          <ChoiceMenu title="Thinking" subtitle={choiceLine(THINKING, prefs.thinking, "Chain of thought while a bot works")} value={prefs.thinking} options={THINKING} onChange={(thinking) => setChatPrefs({ thinking })} />
+          <Row title="Updates" subtitle="Interim messages land in the chat" toggled={prefs.updates} onToggle={(updates) => setChatPrefs({ updates })} />
+          {/* With Open, a finished turn always folds into the island's receipt, so the switch would do nothing. */}
+          {!islandOn(prefs) && <Row title="Fold finished steps" subtitle="One line with elapsed time and step count" subtitleLines={2} toggled={prefs.foldFinishedSteps} onToggle={(foldFinishedSteps) => setChatPrefs({ foldFinishedSteps })} />}
           <Row title="Text streaming" subtitle="See the reply a few words at a time as it writes" toggled={prefs.textStreaming} onToggle={(textStreaming) => setChatPrefs({ textStreaming })} />
           <Row title="Rich cards" subtitle="Charts, tables and suggested replies" toggled={prefs.richCards} onToggle={(richCards) => setChatPrefs({ richCards })} />
           <Row title="Timestamps" toggled={prefs.timestamps} onToggle={(timestamps) => setChatPrefs({ timestamps })} />

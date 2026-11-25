@@ -282,6 +282,13 @@ const REPLY = [
   "I can turn this into tasks on the board. Run `launch-check` any time to see where things stand.",
 ].join("");
 
+/** A person's picture as the computer keeps it ("people-avatars-v1"): a JPEG data URL, at most 96 KB of base64. */
+export const AVATAR_MAX_BASE64 = 96 * 1024;
+export function isAvatarImage(image) {
+  const match = typeof image === "string" ? /^data:image\/(?:jpeg|png);base64,([A-Za-z0-9+/]+={0,2})$/.exec(image) : null;
+  return !!match && match[1].length <= AVATAR_MAX_BASE64;
+}
+
 export function seed() {
   const t = now();
   const bots = [
@@ -323,6 +330,19 @@ export function seed() {
         message("assistant", "All three sit between $12 and $20 per seat. Two bill yearly only.", 26 * 60, { runId: "run-market" }),
       ],
     },
+    // A chat several people write in ("people-avatars-v1"): the owner, two members (dev-host.mjs puts
+    // them on the team and invites them; Ana has a picture, Ben has none) and Mira, with @mentions.
+    {
+      id: "chat-team", botId: "bot-mira", title: "Launch tweet", time: t - 30 * MIN,
+      messages: [
+        message("user", "Morning! @Ben can you send the final pricing numbers before noon?", 48, { author: { memberId: "m_ana", name: "Ana" }, runId: "run-team-1" }),
+        message("user", "And @Mira, draft the launch tweet once they're in.", 47, { author: { memberId: "m_ana", name: "Ana" }, runId: "run-team-1" }),
+        message("assistant", "Will do, @ana. I'll wait for @Ben's numbers, then draft it for you to review.", 46, { runId: "run-team-1" }),
+        message("user", "On it, @Ana. They're in `@pricing-sheet` now: $12 a seat, $10 yearly.", 40, { author: { memberId: "m_ben", name: "Ben" }, runId: "run-team-2" }),
+        message("user", "Thanks both. @Mira keep it under 200 characters and tag @Ben for the numbers.", 34, { runId: "run-team-3" }),
+        message("assistant", "Here's a draft:\n\n> Botkins is live. Your bots, on every device, from **$10 a seat**. Thanks to @Ben for the numbers.\n\n@Ana, does this read right to you? Nobody named @Zoe is in this chat, so that stays plain.", 30, { runId: "run-team-3" }),
+      ],
+    },
     // The refreshes of the Pipeline panel, which its Manage menu opens as "Open refresh history".
     { id: "chat-refresh-pipeline", botId: "bot-tally", title: "Pipeline · Refreshes", panelId: "panel-pipeline", time: t - 40 * MIN, messages: [message("assistant", "Refreshed the pipeline: 14 leads, 9 demos, 6 trials, 3 won.", 40)] },
     { id: "chat-blog", botId: "bot-quill", title: "Blog post intro", time: t - 3 * 24 * HOUR, messages: [message("user", "Tighten this intro for me.", 3 * 24 * 60 + 2, { runId: "run-blog" }), message("assistant", "Here's a shorter version that leads with the result.", 3 * 24 * 60, { runId: "run-blog" })] },
@@ -348,6 +368,9 @@ export function seed() {
     }),
     run("run-auth", "chat-auth", "The refresh token rotates twice", 185, { summary: "Worked for 41s · 5 steps", steps: [{ id: "s1", name: "grep", label: "Searched for renew(", status: "Done", started: t - 185 * MIN, finished: t - 185 * MIN + 800 }] }),
     run("run-market", "chat-market", "Compare the three closest competitors", 26 * 60 + 4),
+    run("run-team-1", "chat-team", "Draft the launch tweet", 47, { summary: "Worked for 3s", steps: [] }),
+    run("run-team-2", "chat-team", "Pricing numbers", 40, { summary: "", steps: [] }),
+    run("run-team-3", "chat-team", "Keep it under 200 characters", 34, { summary: "Worked for 6s", steps: [] }),
     run("run-blog", "chat-blog", "Tighten this intro", 3 * 24 * 60 + 2),
     run("run-brief", "chat-routine-brief", "Morning brief", 5 * 60, { trigger: "scheduled", scheduleId: 1 }),
   ];
@@ -989,7 +1012,7 @@ function demoArtifacts(state) {
 const escapeHtml = (value) => String(value).replace(/[&<>"]/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[char]);
 /** Words in a message that make the demo bot use the person's phone, and the tool it calls. */
 // The demo turns of docs/turn-timeline.md (MockBackend.timelineTurn).
-const TIMELINE_TURN = /long turn|ask midway|time ?out|interrupt me/i;
+const TIMELINE_TURN = /long turn|trip to austin|ask midway|time ?out|interrupt me/i;
 
 const PHONE_ASKS = [
   { when: /calendar|schedule|meeting/i, tool: "phone_calendar_events", label: "Reading your calendar", args: () => ({ from: today(), to: today(), limit: 10 }) },
@@ -1445,6 +1468,8 @@ export class MockBackend {
     if (process.env.BOTKINS_DEV_AGENTS !== "off") this.capabilities.push("agent-templates-v1");
     // "plugins-v1" (docs/plugins.md): made-up catalogs and installs. One plugin starts installed.
     this.capabilities.push("pi-packages-v1", "skill-upload-v1", "skills-catalog-v1", "skills-featured-v1", "mcp-catalog-v1");
+    // Each person's own picture ("people-avatars-v1"): `setMyAvatar`, kept on the team's people.
+    this.capabilities.push("people-avatars-v1");
     this.catalogToken = "";
     this.demoSkill = {id:"demo/skills/design-review", source:"demo/skills", skillId:"design-review", name:"design-review", installs:240, available:true};
 
@@ -1869,7 +1894,7 @@ export class MockBackend {
     const turn = { stopped: false, steers: [] };
     this.turns.set(id, turn);
     const live = () => !turn.stopped;
-    const kind = /long turn/i.test(prompt) ? "long" : /ask midway/i.test(prompt) ? "ask" : /interrupt me/i.test(prompt) ? "interrupt" : "timeout";
+    const kind = /long turn/i.test(prompt) ? "long" : /trip to austin/i.test(prompt) ? "trip" : /ask midway/i.test(prompt) ? "ask" : /interrupt me/i.test(prompt) ? "interrupt" : "timeout";
     this.state.steerable ??= {};
     this.state.steerable[id] = kind === "long";
     this.state.streams[id] = "";
@@ -1904,7 +1929,7 @@ export class MockBackend {
         await this.sleep(60);
       }
     };
-    const think = async (words) => {
+    const think = async (words, ms = 35) => {
       const thought = { id: randomUUID(), text: "", started: now() };
       (run.reasoning ??= []).push(thought);
       for (const piece of words.split(/(?<=\s)/)) {
@@ -1912,7 +1937,7 @@ export class MockBackend {
         thought.text += piece;
         this.state.thinking[id] = run.reasoning.map((entry) => entry.text).join("\n\n");
         this.changed();
-        await this.sleep(35);
+        await this.sleep(ms);
       }
       thought.finished = now();
     };
@@ -1990,6 +2015,35 @@ export class MockBackend {
       await step("edit", "Editing relay/README.md", { path: "relay/README.md" }, 1100, "1 line changed");
       await steered();
       reply = "All done. The tests pass, the typecheck is clean, and I fixed the frame size in relay/README.md. One test (relay.test.ts, line 88) leaves a socket open; tell me if you'd like me to close it.";
+    } else if (kind === "trip") {
+      // A slow turn for the island (Steps and Thinking Open): headed thoughts between steps, an update,
+      // about two minutes in all, slow enough to look at. With "book" in the message, the last step waits for an approval.
+      const slow = (ms) => ms * 2.5;
+      await think("**Planning the search**\n\nFirst the outbound legs on the 14th, then the return on the 17th, all under $350 round trip. ", slow(120));
+      await step("web_search", "Searched the web: flights to Austin", { query: "flights to Austin Dec 14" }, slow(3500), "12 results");
+      await step("view", "Read itinerary.pdf", { path: "itinerary.pdf" }, slow(3000), "Keynote at 2 pm on the 14th");
+      await step("bash", "Ran: python fares.py", { command: "python fares.py --out AUS" }, slow(4000), "3 nonstop under $300");
+      await say("Found three nonstop options under $300 on the 14th. Checking the return legs and the hotel shuttle now. ");
+      await think("**Comparing fares**\n\nThe 7:05 Alta Air flight is $248 round trip and lands at 12:40, which still leaves time for the 2 pm keynote. The Lark Air fare is $19 cheaper but has a three-hour layover in Denver, so it is worse for a same-day talk. Next I should check the return on the 17th and whether the hotel runs a shuttle from the airport. ", slow(160));
+      await step("web_search", "Searched the web: return flights AUS → SFO", { query: "AUS to SFO Dec 17" }, slow(4000), "9 results");
+      await step("grep", "Searched files: \"shuttle\"", { query: "shuttle" }, slow(2500), "2 matches");
+      await step("view", "Read hotel-confirmation.eml", { path: "hotel-confirmation.eml" }, slow(3000), "Shuttle every 30 minutes");
+      await think("**Checking the shuttle**\n\nThe hotel runs one every 30 minutes from the airport, so the 12:40 landing works. ", slow(140));
+      await step("bash", "Running python fares.py --return", { command: "python fares.py --return SFO" }, slow(6000), "Alta Air 214, $248");
+      if (/book/i.test(prompt)) {
+        commit();
+        const booking = { id: randomUUID(), name: "book_flight", label: "Book Alta Air 214", status: "Running", started: now(), input: JSON.stringify({ flight: "Alta Air 214" }) };
+        run.steps.push(booking);
+        this.state.intents[id] = "Waiting for you";
+        this.changed();
+        const answer = await this.ask({ chatId: id, botId: chat.botId, kind: "permission", title: "Book Alta Air 214", label: "Book Alta Air 214 for $248 on the saved card", preview: "Alta Air 214 · $248 · saved card", detail: "Books the flight." });
+        const refused = answer.action === "deny" || answer.action === "cancel";
+        Object.assign(booking, { status: refused ? "Failed" : "Done", finished: now() });
+        this.changed();
+        if (refused) reply = "No problem, I didn't book it.";
+      }
+      await step("edit", "Editing plan.md", { path: "plan.md" }, slow(3500), "2 lines added");
+      reply ||= "**Alta Air 214** is the pick: $248 round trip, both legs nonstop.\n\n- **Out, Fri 14th:** 7:05 → 12:40, in time for the 2 pm keynote\n- **Back, Mon 17th:** 18:10 → 20:05\n- Hotel shuttle every 30 min from the airport\n\nI added both legs and the shuttle times to `plan.md`.";
     } else if (kind === "ask") {
       await think("I need to know where this goes before I deploy it. ");
       await say("I'll get the build ready first. ");
@@ -2263,6 +2317,24 @@ export class MockBackend {
   }
 
   handlers = {
+    /**
+     * The caller's own picture ("people-avatars-v1"): a JPEG or PNG data URL of at most 96 KB of
+     * base64, or null to clear it. It takes no person: the caller is the person. It is kept as
+     * `team.avatars[personId]`, which the link sends as `team.people[].avatar` and `meta.you.avatar`.
+     * (The link answers this call itself; this is for a link from before it did.)
+     */
+    setMyAvatar(...args) {
+      const [image] = args;
+      if (args.length !== 1 || (image !== null && !isAvatarImage(image))) throw new Failure("Choose a square JPEG or PNG picture of at most 96 KB.");
+      const who = this.caller?.id ?? "owner";
+      const team = this.teamOf?.();
+      const store = team ?? (this.avatarStore ??= {});
+      const { [who]: _before, ...avatars } = store.avatars ?? {};
+      if (image) avatars[who] = image;
+      store.avatars = avatars;
+      if (team) this.onTeamChanged?.();
+      return image ? { avatar: image } : {};
+    },
     appInfo: () => ({ version: this.updates?.current ?? "0.8.0-demo", electron: "42", chrome: "148", platform: process.platform }),
     setPreferences(patch) {
       const { appearance, ...rest } = patch ?? {};

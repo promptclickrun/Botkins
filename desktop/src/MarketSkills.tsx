@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
-import { ExternalLink, Search } from "lucide-react";
+import { ExternalLink } from "lucide-react";
+import { Button, SearchField } from "glisse";
 import type { CatalogSkill, CatalogPreview, FeaturedSkill, SkillInfo, SkillSource, State } from "./types";
 import { Group, Sheet, errorText } from "./SettingsRows";
 import { useAsk } from "./Pages";
@@ -120,19 +121,16 @@ export default function MarketSkills({ state, refreshed, openSkill }: { state: S
   );
   const link = (row: CatalogSkill) => outLink("https://skills.sh/" + row.id, "Open on skills.sh");
   const openButton = (name: string) => (
-    <button className="set-button" onClick={() => openSkill(name)}>
+    <Button variant="glass" className="lg-compact" onClick={() => openSkill(name)}>
       Installed · Open skill
-    </button>
+    </Button>
   );
   const searching = query.trim().length > 0;
   const source: SkillSource | undefined = detail?.preview.source;
   return (
     <>
       <div className="set-toolbar int-toolbar plugin-toolbar">
-        <label className="int-filter">
-          <Search size={14} aria-hidden="true" />
-          <input type="search" aria-label="Search skills" placeholder="Search skills" maxLength={200} value={query} onChange={(e) => setQuery(e.target.value)} />
-        </label>
+        <SearchField aria-label="Search skills" placeholder="Search skills" maxLength={200} value={query} onValueChange={setQuery} />
       </div>
       {query.trim().length === 1 && <p className="set-status">Enter at least two characters.</p>}
       {query.trim().length >= 2 && !error && !rows && <p className="set-status">Searching…</p>}

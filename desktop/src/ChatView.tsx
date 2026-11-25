@@ -32,6 +32,7 @@ import {
   Volume2,
   Square,
 } from "lucide-react";
+import { Button, Glass, Menu as GlisseMenu } from "glisse";
 import { type CompletionScroll, finalReplyIndex } from "./completionScroll";
 import { isSilentMessage } from "../desktop/link/silent-reply.mjs";
 import { pullRequestUrl } from "../desktop/link/pr-url.mjs";
@@ -55,6 +56,7 @@ import {
   WorkingPill,
   duration,
 } from "./ChatActivity";
+import { ActivityIsland, IslandReceipt } from "./ActivityIsland";
 import { QuoteContext } from "./Composer";
 import { MentionChips } from "./MentionMenu";
 import { TeamRail } from "./TeamRail";
@@ -71,7 +73,9 @@ import ProjectChanges, { ProjectPicker, modeLabels } from "./ProjectChanges";
 import { blockedBots } from "./access";
 import { FolderKanban, ShieldAlert, UserPlus } from "lucide-react";
 import { PeopleDialog } from "./ChatPeople";
-import { authorName, chatPeopleView, formatTypingLabel } from "./peopleView";
+import { authorName, chatPeopleView, chatPersons, formatTypingLabel, viewerOf } from "./peopleView";
+import { authorOf, messageSide, personColor, startsPersonRun } from "./messageSides";
+import { PersonBadge, useMentionDirectory, type ChatPerson } from "./PersonBadge";
 import type { Bot, Chat, ChatMode, Message, State } from "./types";
 import { closed, sessionTodos, TRANSFER_TODOS } from "../desktop/link/session-todos";
 import { CONTINUE_OPEN_STEPS, keptLine, openLine } from "./keep";
@@ -81,6 +85,9 @@ import { regenerateTitleItem, useAsk, useMenu } from "./Pages";
 import "./canvas.css";
 import "./projects.css";
 import "./groups.css";
+
+/** A bot's face in a mention tag (src/PersonBadge.tsx): one function, so the chat's mention directory stays the same object. */
+const mentionBotFace = (bot: Bot) => <BotAvatar bot={bot} size={14} badge={false} />;
 
 export type SideAnswer = { question: string; answer?: string; error?: string };
 
@@ -161,23 +168,25 @@ function ReactionList({ message, state }: { message: Message; state: State }) {
 }
 
 function ChatOptions({ state, chat, fail }: { state: State; chat: Chat; fail: (error: unknown) => void }) {
-  const menu = useMenu();
   const item = regenerateTitleItem(state, chat, fail);
-  if (!item) return null;
+  if (!item || item === "separator") return null;
+  const Icon = item.icon;
   return (
-    <>
-      <button
-        className="chathead-icon menu-button"
-        aria-label="Chat options"
-        title="Chat options"
-        aria-haspopup="menu"
-        aria-expanded={!!menu.node}
-        onClick={(event) => menu.show(event, chat.title, [item])}
-      >
-        <Ellipsis size={17} />
-      </button>
-      {menu.node}
-    </>
+    <GlisseMenu
+      className="chathead-menu"
+      aria-label="Chat options"
+      align="end"
+      icon={<Ellipsis size={17} />}
+      items={[
+        {
+          label: item.label,
+          icon: Icon ? <Icon size={14} aria-hidden="true" /> : undefined,
+          onSelect: item.run,
+          disabled: item.disabled,
+          destructive: item.danger,
+        },
+      ]}
+    />
   );
 }
 
@@ -266,8 +275,30 @@ function ChatViewBody({
   const speaker = group ? state.bots.find((b) => b.id === state.speakers?.[chat.id]) : bot;
   const nameOf = (m: Message) =>
     m.botId ? (state.bots.find((b) => b.id === m.botId)?.name ?? "Removed bot") : bot.name;
-  const messageClass = (message: Message) =>
-    message.role + (message.role === "user" && message.author ? " from-member" : "");
+  // Sides: only the viewer's own messages are on the right. Another person's are on the left, in a
+  // person's tinted bubble, with their name and round picture on the first of a run (src/messageSides.ts).
+  const viewer = viewerOf(state);
+  const { people: chatPeopleList, directory: mentions } = useMentionDirectory(chatPersons(state, chat), group ? members : [bot], mentionBotFace);
+  const personOfMessage = (m: Message): ChatPerson => {
+    const id = authorOf(m);
+    return chatPeopleList.find((person) => person.id === id) ?? { id, name: m.author ? authorName(state, m.author) : "Owner" };
+  };
+  const messageClass = (message: Message, list: readonly Message[], index: number) =>
+    messageSide(message, viewer) !== "person"
+      ? message.role
+      : "user from-person person-color-" + personColor(authorOf(message)) + (startsPersonRun(list, index, viewer) ? " starts-run" : "");
+  /** What stands above a person's message: nothing for the viewer's own (a hidden "You"), and another person's name tag and badge on the first of their run. */
+  const personLabel = (m: Message, list: readonly Message[], index: number) => {
+    if (messageSide(m, viewer) !== "person") return <b className="visually-hidden">You</b>;
+    const person = personOfMessage(m);
+    if (!startsPersonRun(list, index, viewer)) return <b className="visually-hidden">{person.name}</b>;
+    return (
+      <>
+        <PersonBadge person={person} size={24} className="person-side-badge" />
+        <b className="person-speaker">{person.name}</b>
+      </>
+    );
+  };
   const project = chat.projectId ? state.projects?.find((p) => p.id === chat.projectId) : undefined;
   const canManageAgents = teamCan(state, "agents", "manage");
   // "Invite" in the header, when the computer in use keeps chat people and the team has someone to invite.
@@ -280,17 +311,22 @@ function ChatViewBody({
   const busy = busy0(state, chat.id);
   const thinking = state.thinking?.[chat.id];
   const queued = state.queued?.[chat.id] ?? [];
+  // Newer preference records use the same three choices as the phone. Keep the older booleans
+  // working for profiles and remote hosts created before the setting was split up. The window
+  // settles them (chatDisplay.ts), so `thinking` already carries an older `showThinking: false`.
+  const thinkingMode = state.settings.thinking ?? (state.settings.showThinking === false ? "hidden" : state.settings.foldThinking === false ? "open" : "folded");
+  const stepsMode = state.settings.steps ?? (state.settings.foldTools ? "folded" : "open");
+  // Updates are their own switch: they land in the chat whatever Thinking is set to.
   const { showThinking, showUpdates, liveThinking, liveStream, liveIntent } = liveTurnDisplay({
-    settings: state.settings,
+    settings: { showThinking: thinkingMode !== "hidden", showUpdates: state.settings.showUpdates },
     stream: state.streams[chat.id],
     thinking,
     intent: state.intents[chat.id],
   });
-  // Newer preference records use the same three choices as the phone. Keep the older booleans
-  // working for profiles and remote hosts created before the setting was split up.
-  const thinkingMode = state.settings.thinking ?? (!showThinking ? "hidden" : state.settings.foldThinking === false ? "open" : "folded");
-  const stepsMode = state.settings.steps ?? (state.settings.foldTools ? "folded" : "open");
   const foldFinishedSteps = state.settings.foldFinishedSteps ?? state.settings.foldTools !== false;
+  // Steps or Thinking set to Open: a one-bot turn's work shows in the activity island
+  // (ActivityIsland.tsx) instead of row by row. A group chat keeps its rows, one bot after another.
+  const islandMode = !group && (stepsMode === "open" || (showThinking && thinkingMode === "open"));
   const chatRuns = state.runs.filter((r) => r.chatId === chat.id);
   const runs = new Map(chatRuns.map((r) => [r.id, r]));
   const latest = chat.main ? chatRuns.find(run => run.forkId === chat.activeFork) : chatRuns[0];
@@ -300,7 +336,7 @@ function ChatViewBody({
   const todos = sessionTodos(latest?.todos, chat.todos ?? chatRuns.find((run) => run.todos)?.todos) ?? [];
   const todoRail = todos.length > 0 && <TaskChip todos={todos} open={drawer === "tasks"} toggle={() => setDrawer(drawer === "tasks" ? "" : "tasks")} />;
   // The to-do chip rides beside the latest turn's fold whenever that fold is sure to be drawn.
-  const todoBesideFold = latest && (latest.status === "Working" || foldFinishedSteps) &&
+  const todoBesideFold = latest && !islandMode && (latest.status === "Working" || foldFinishedSteps) &&
     chat.messages.some((message) => message.role === "user" && message.runId === latest.id && !message.steeredRunId && !message.answer);
   const agents = latest?.agents ?? [];
   const lastUserRun = [...chat.messages].reverse().find((m) => m.role === "user" && m.runId)?.runId;
@@ -654,7 +690,7 @@ function ChatViewBody({
   const timelineMessage = (m: Message, index: number) => (
     <article
       id={`message-${chat.id}-${loadedFrom + index}`}
-      className={messageClass(m)}
+      className={messageClass(m, chat.messages, index)}
       key={`timeline-message-${index}`}
       onContextMenu={e => messageMenu(e, m, loadedFrom + index)}
     >
@@ -664,11 +700,11 @@ function ChatViewBody({
           <span className="speaker-name">{m.botId ? nameOf(m) : bot.name}</span>
         </b>
       ) : m.role === "user" ? (
-        <b className={m.author ? "member-speaker" : "visually-hidden"}>{m.author ? authorName(state, m.author) : "You"}</b>
+        personLabel(m, chat.messages, index)
       ) : <b className="command-label">Command output</b>}
       {m.answer && <small className="answer-label">{m.answer.title}</small>}
       {m.quote && <blockquote className="msg-quote">{m.quote}</blockquote>}
-      {m.role === "command" && m.plain ? <pre className="command-output">{m.text}</pre> : <RichText text={m.voiceCaption ?? m.text} files={files} />}
+      {m.role === "command" && m.plain ? <pre className="command-output">{m.text}</pre> : <RichText text={m.voiceCaption ?? m.text} files={files} mentions={mentions} />}
       <Attachments list={m.attachments} />
       {!!m.mentions?.length && (
         <MentionChips
@@ -695,7 +731,7 @@ function ChatViewBody({
     // The bot is on its work now: the turn runs and nothing waits for the person. Its live line
     // shimmers (T3 Code's look): the running step, or the lead while no step runs in view.
     const onIt = run.status === "Working" && !turnWaits;
-    const showStep = (step: NonNullable<typeof run.steps>[number]) => stepsMode === "open" || (stepsMode === "failed" && step.status === "Failed");
+    const showStep = (step: NonNullable<typeof run.steps>[number]) => (stepsMode === "open" && !islandMode) || (stepsMode === "failed" && step.status === "Failed");
     type Event = { kind: RunTimelineEvent["kind"]; at: number; order: number; key: string; body: ReactNode; fold: ReactNode; details: ReactNode };
     const events: Event[] = [];
     // Older hosts send the currently streaming thought before they publish timed reasoning.
@@ -710,7 +746,7 @@ function ChatViewBody({
           : <InterimUpdate text={event.value.text} />;
         events.push({
           kind: event.kind, at: event.at, order: event.order, key: event.key,
-          body: isReasoning ? (showThinking && thinkingMode === "open" ? update : null) : (showUpdates ? update : null),
+          body: isReasoning ? (showThinking && thinkingMode === "open" && !islandMode ? update : null) : (showUpdates ? update : null),
           fold: isReasoning ? (showThinking && thinkingMode !== "hidden" ? update : null) : (showUpdates ? update : null),
           details: update,
         });
@@ -782,11 +818,12 @@ function ChatViewBody({
     return (
       <Fragment key={`timeline-${run.id}`}>
         {initial && timelineMessage(initial.message, initial.index)}
-        {live && <LiveLead avatar={stillFace(28, true)} label={doingNow} thought={showUpdates ? liveIntent.trim() || undefined : undefined} shimmer={onIt && doingNow !== "Needs you" && !allSteps.some((step) => !step.agentId && step.status === "Running" && showStep(step))} />}
+        {live && !islandMode && <LiveLead avatar={stillFace(28, true)} label={doingNow} thought={showUpdates ? liveIntent.trim() || undefined : undefined} shimmer={onIt && doingNow !== "Needs you" && !allSteps.some((step) => !step.agentId && step.status === "Running" && showStep(step))} />}
         {(live || !folded) && stepsMode === "open" && olderWork}
-        {group ? groupTranscript : (live || !folded) ? events.map((event) => <Fragment key={event.key}>{event.body}</Fragment>) : personBody}
-        {/* A finished one-bot turn folds above its answer: the work, then the reply. */}
-        {!group && !live && (folded || hasActivity) && fold}
+        {group ? groupTranscript : (live || !folded || islandMode) ? events.map((event) => <Fragment key={event.key}>{event.body}</Fragment>) : personBody}
+        {/* A finished one-bot turn folds above its answer: the work, then the reply. With the island
+            the work folds into a receipt under the answer instead. */}
+        {!group && !live && !islandMode && (folded || hasActivity) && fold}
         {/* Botkins gave the bot more turns in this run by itself: said just before the reply it kept going for. */}
         {!group && keptLine(run) && <div className="timeline-kept">{keptLine(run)}</div>}
         {!group && reply.map(({ message, index }) => timelineMessage(message, index))}
@@ -801,7 +838,20 @@ function ChatViewBody({
             <LiveReply updates={updates} files={files} follow={follow} />
           </article>
         )}
-        {(live || group) && (live || folded || hasActivity) && fold}
+        {islandMode && !live && <IslandReceipt run={orderedRun} thoughts={showThinking} onToggle={disclosed} />}
+        {islandMode && live ? (
+          <ActivityIsland
+            run={orderedRun}
+            who={who}
+            avatar={stillFace(20)}
+            waiting={turnWaits}
+            waitingFor={requests.find((request) => !request.detached)?.title}
+            steps={stepsMode === "open"}
+            thinking={showThinking && thinkingMode === "open"}
+            thoughts={showThinking}
+            onToggle={disclosed}
+          />
+        ) : (live || group) && (live || folded || hasActivity) && fold}
         <TeamRail run={run} bots={state.bots} />
         <RunCards run={run} prefill={prefill} pickModel={canManageAgents ? pickModel : undefined} />
         {!live && (failed.includes(run.status) || !!groupFailure) && (
@@ -1060,9 +1110,9 @@ function ChatViewBody({
           )}
           {historic && historic.messages.map((message, i) => historic.from + i < loadedFrom && !isSilentMessage(message) &&
             (!message.interim || (thinkingMode === "open" && (!foldFinishedSteps || !message.runId || !runs.has(message.runId) || runs.get(message.runId)?.status === "Working"))) && (
-            <article key={historic.from + i} id={`message-${chat.id}-${historic.from + i}`} className={messageClass(message)} onContextMenu={e => messageMenu(e, message, historic.from + i)}>
-              {message.author && <b className="member-speaker">{authorName(state, message.author)}</b>}
-              <RichText text={message.text} files={files} />
+            <article key={historic.from + i} id={`message-${chat.id}-${historic.from + i}`} className={messageClass(message, historic.messages, i)} onContextMenu={e => messageMenu(e, message, historic.from + i)}>
+              {message.role === "user" && personLabel(message, historic.messages, i)}
+              <RichText text={message.text} files={files} mentions={mentions} />
               <Attachments list={message.attachments} />
               <Reactions state={state} message={message} botId={chat.botId} />
             </article>
@@ -1081,7 +1131,7 @@ function ChatViewBody({
                 {(m.text || m.role !== "assistant") && (
                   <article
                     id={`message-${chat.id}-${loadedFrom + i}`}
-                    className={messageClass(m)}
+                    className={messageClass(m, chat.messages, i)}
                     onContextMenu={e => messageMenu(e, m, loadedFrom + i)}
                   >
                     {m.interim ? (
@@ -1098,7 +1148,7 @@ function ChatViewBody({
                         </b>
                       )
                     ) : m.role === "user" ? (
-                      <b className={m.author ? "member-speaker" : "visually-hidden"}>{m.author ? authorName(state, m.author) : "You"}</b>
+                      personLabel(m, chat.messages, i)
                     ) : (
                       <b className="command-label">Command output</b>
                     )}
@@ -1107,7 +1157,7 @@ function ChatViewBody({
                       {m.role === "command" && m.plain ? (
                         <pre className="command-output">{m.text}</pre>
                       ) : (
-                        <RichText text={m.voiceCaption ?? m.text} files={files} />
+                        <RichText text={m.voiceCaption ?? m.text} files={files} mentions={mentions} />
                       )}
                       <Attachments list={m.attachments} />
                     {!!m.mentions?.length && (
@@ -1215,9 +1265,9 @@ function ChatViewBody({
             </button>
           ))}
           {pending.map(m => (
-            <article className={messageClass(m)} key={m.clientMessageId} aria-label="Sending message">
+            <article className="user" key={m.clientMessageId} aria-label="Sending message">
               {m.quote && <blockquote className="msg-quote">{m.quote}</blockquote>}
-              <RichText text={m.text} files={files} />
+              <RichText text={m.text} files={files} mentions={mentions} />
               <Attachments list={m.attachments} />
               {!!m.mentions?.length && <MentionChips sent list={m.mentions} />}
             </article>
@@ -1256,7 +1306,9 @@ function ChatViewBody({
           </div>
         </div>
         {/* Always there, so it can fade in and out; hidden, it is out of the tab order and out of reach. */}
-        <button
+        <Button
+          variant="glass"
+          icon={<ArrowDown size={18} strokeWidth={2.25} aria-hidden="true" />}
           className={"to-latest" + (away ? " shown" : "")}
           aria-label="Scroll to latest message"
           title="Scroll to latest message"
@@ -1267,13 +1319,11 @@ function ChatViewBody({
             // From the keyboard, focus moves on to the composer, since the button hides.
             if (e.detail === 0) document.querySelector<HTMLElement>(".composewrap textarea")?.focus();
           }}
-        >
-          <ArrowDown size={18} strokeWidth={2.25} aria-hidden="true" />
-        </button>
+        />
         {notice && (
-          <div className="canvas-notice" role="status">
+          <Glass className="canvas-notice" role="status">
             {notice}
-          </div>
+          </Glass>
         )}
       </div>
       {reactionDialog.node}

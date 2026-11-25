@@ -1,30 +1,43 @@
 // Chat display is a preference of the viewer, including when it connects to another host.
 export type ChatDisplay = {
   completionPosition: "latest" | "beginning";
-  /** Which work calls remain in the conversation; the activity rail always keeps all of them. */
+  /** How a turn's steps show in the chat. Open is the live island (ActivityIsland.tsx); the activity rail always keeps all of them. */
   steps: "folded" | "open" | "failed";
-  /** Which reasoning and interim updates remain in the conversation. */
+  /** How a turn's reasoning shows in the chat. Open puts its newest lines in the island. Updates are their own switch (`showUpdates`). */
   thinking: "open" | "folded" | "hidden";
   /** Collapse a finished turn to one expandable elapsed-time/count line. */
   foldFinishedSteps: boolean;
   /** What selecting a bot does on this device. Main chat is the default. */
   botTap: "main" | "latest" | "new";
 };
-type Saved = Omit<Partial<ChatDisplay>, "steps" | "thinking"> & { steps?: unknown; thinking?: unknown; stepsPicked?: boolean; foldTools?: boolean; showThinking?: boolean };
+type Saved = Omit<Partial<ChatDisplay>, "steps" | "thinking"> & { steps?: unknown; thinking?: unknown; stepsPicked?: boolean; thinkingPicked?: boolean; foldTools?: boolean; showThinking?: boolean };
 const key = "botkins.chatDisplay";
+/**
+ * Open (the live island) is the default for Steps and for Thinking, unless the person chose.
+ *
+ * - Steps: a value saved with `stepsPicked` is the person's choice. Without it, only a value that
+ *   was never a default counts: old Hidden becomes Folded and Failed only stays. Unpicked Every
+ *   and Folded were the old defaults and become Open.
+ * - Thinking: a value saved with `thinkingPicked` is the person's choice. Without it, the
+ *   workspace's `showThinking: false` still means Hidden, a saved Open or Hidden is kept, and
+ *   Folded, the old default, becomes Open.
+ * - The workspace's older `foldTools` and `foldThinking` are not a choice here: their defaults
+ *   (both on) were never picked by anyone.
+ */
 export function settleChatDisplay(saved: Saved, showThinking = true): ChatDisplay {
   const oldSteps = saved?.steps;
   const oldThinking = saved?.thinking;
-  // `every` and `hidden` were the four-choice desktop setting. An old, unpicked Every value was
-  // the old default and becomes Folded; an explicitly picked Every becomes the new Open choice.
-  // Hidden is Folded because both leave the canvas quiet while the activity rail remains complete.
-  const steps = oldSteps === "every" ? (saved.stepsPicked === true ? "open" : "folded") : oldSteps === "hidden" ? "folded" :
-    ["folded", "open", "failed"].includes(oldSteps as string) ? oldSteps as ChatDisplay["steps"] : "folded";
+  const steps: ChatDisplay["steps"] = saved?.stepsPicked === true
+    ? oldSteps === "hidden" ? "folded" : oldSteps === "folded" || oldSteps === "failed" ? oldSteps : "open"
+    : oldSteps === "hidden" ? "folded" : oldSteps === "failed" ? "failed" : "open";
+  const thinking: ChatDisplay["thinking"] = saved?.thinkingPicked === true
+    ? oldThinking === "folded" || oldThinking === "hidden" ? oldThinking : "open"
+    : showThinking === false ? "hidden" : oldThinking === "hidden" ? "hidden" : "open";
   const oldOpen = (oldSteps === "every" && saved.stepsPicked === true) || oldSteps === "open";
   return {
     completionPosition: saved?.completionPosition === "beginning" ? "beginning" : "latest",
     steps,
-    thinking: ["open", "folded", "hidden"].includes(oldThinking as string) ? oldThinking as ChatDisplay["thinking"] : showThinking ? "folded" : "hidden",
+    thinking,
     // An old Every/Open choice was the explicit "keep finished work open" choice. Do not let a
     // missing new toggle turn that choice into a fold; all other old choices keep the new default.
     foldFinishedSteps: typeof saved?.foldFinishedSteps === "boolean" ? saved.foldFinishedSteps : !oldOpen,

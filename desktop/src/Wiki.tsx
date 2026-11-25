@@ -2,6 +2,7 @@ import { storageKey } from "./storage";
 // The Wiki section: shared Markdown pages about goals, projects and people (desktop/wiki.mjs).
 // A side menu of sections and pages, a page in read or edit mode, and what links to it.
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { SearchField } from "glisse";
 import {
   Activity,
   BookOpen,
@@ -961,22 +962,19 @@ function WikiNav({
       <div className="wiki-nav-head">
         <h2>Wiki</h2>
       </div>
-      <label className="wiki-search">
-        <Search size={14} aria-hidden="true" />
-        <input
-          type="search"
-          aria-label="Search the wiki"
-          placeholder="Search the wiki"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Escape" && query) {
-              e.preventDefault();
-              setQuery("");
-            }
-          }}
-        />
-      </label>
+      <SearchField
+        className="wiki-search-field"
+        aria-label="Search the wiki"
+        placeholder="Search the wiki"
+        value={query}
+        onValueChange={setQuery}
+        onKeyDown={(e) => {
+          if (e.key === "Escape" && query) {
+            e.preventDefault();
+            setQuery("");
+          }
+        }}
+      />
       <div className="wiki-nav-scroll">
         {item("Home", <House size={15} />, view.kind === "home" && !query, () => go({ kind: "home" }))}
         <div className="wiki-nav-label">

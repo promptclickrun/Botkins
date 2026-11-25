@@ -1,7 +1,7 @@
 // How chats look and behave on this phone: steps, thinking, updates, rich cards, Markdown, code,
 // typing and reading aloud. These choices stay on this phone when it connects to another computer.
 import { type CompletionPosition, completionPositionOf } from "@/features/chat/completion";
-import { settleSteps, type StepsChoice } from "@/features/chat/fold";
+import { settleSteps, settleThinking, type StepsChoice, type ThinkingChoice } from "@/features/chat/fold";
 import { type BotTap, botTapOf } from "@/features/chat/habits";
 import { keep, readKept } from "@/state/keep";
 import { Platform } from "react-native";
@@ -13,10 +13,12 @@ const KEY = "botkins.chatPrefs.v1";
 export type ChatPrefs = {
   /** Which tool calls appear in the conversation. The activity rail always has the full list. */
   steps: StepsChoice;
-  /** The person chose `steps`. Until then it is Folded (settleSteps in src/features/chat/fold.ts). */
+  /** The person chose `steps`. Until then it is Open (settleSteps in src/features/chat/fold.ts). */
   stepsPicked?: boolean;
   /** A bot's chain of thought (reasoning). */
-  thinking: "show" | "folded" | "hide";
+  thinking: ThinkingChoice;
+  /** The person chose `thinking`. Until then the old default, Folded, reads as Open (settleThinking in fold.ts). */
+  thinkingPicked?: boolean;
   /** Interim messages and status updates while a bot works. */
   updates: boolean;
   /** Collapse finished activity into a single expandable line. */
@@ -41,16 +43,21 @@ export type ChatPrefs = {
   readAloud: boolean;
   /** The person chose `readAloud` on this phone. Until then it follows the computer's Settings › Voice. */
   readAloudPicked?: boolean;
-  /** A reply as the bot writes it. Through the relay this requests updates of a few words every half second or so; the phone shows each received update whole. */
+  /** A reply as the bot writes it. The link asks for complete words a few times a second; the phone shows each received update whole. */
   textStreaming: boolean;
 };
 
-/** How a reply's text is followed on this route: as it is written, in chunks through the relay, or whole. */
-export const textMode = (on: boolean, route: "direct" | "relay" | null): "live" | "chunks" | "whole" => (!on ? "whole" : route === "relay" ? "chunks" : "live");
+/** Both routes ask for words together so painting a long reply leaves time to scroll. */
+export function textMode(on: boolean, route: "direct" | "relay" | null, capabilities?: readonly string[]): "chunks" | "live" | "whole" {
+  if (!on || !capabilities?.includes("stream-appends-v1")) return "whole";
+  if (capabilities.includes("text-chunks-v1")) return "chunks";
+  return route === "direct" ? "live" : "whole";
+}
 
 export const chatPrefDefaults: ChatPrefs = {
-  steps: "folded",
-  thinking: "folded",
+  // Open, the live island, for both (settleSteps and settleThinking say how a saved choice is read).
+  steps: "show",
+  thinking: "show",
   updates: true,
   foldFinishedSteps: true,
   richCards: true,
@@ -81,9 +88,10 @@ export function loadChatPrefs(): Promise<void> {
         useChatPrefs.setState({
           ...chatPrefDefaults, ...read,
           steps,
-          thinking: read.thinking === "show" || read.thinking === "hide" ? read.thinking : "folded",
+          thinking: settleThinking(read),
           updates: typeof read.updates === "boolean" ? read.updates : chatPrefDefaults.updates,
-          foldFinishedSteps: typeof read.foldFinishedSteps === "boolean" ? read.foldFinishedSteps : steps !== "show",
+          // Open once kept every finished step in the chat; it is the island now, which always folds.
+          foldFinishedSteps: typeof read.foldFinishedSteps === "boolean" ? read.foldFinishedSteps : true,
           completionPosition: completionPositionOf(read.completionPosition),
           botTap: botTapOf(read.botTap),
           textStreaming: typeof read.textStreaming === "boolean" ? read.textStreaming : chatPrefDefaults.textStreaming,
@@ -97,7 +105,7 @@ export function loadChatPrefs(): Promise<void> {
 }
 
 export function setChatPrefs(given: Partial<ChatPrefs>) {
-  const patch = { ...given, ...("readAloud" in given && { readAloudPicked: true }), ...("steps" in given && { stepsPicked: true }) };
+  const patch = { ...given, ...("readAloud" in given && { readAloudPicked: true }), ...("steps" in given && { stepsPicked: true }), ...("thinking" in given && { thinkingPicked: true }) };
   useChatPrefs.setState(patch);
   // Saved after the stored choices were read, so a change made early never writes the defaults over them.
   void loadChatPrefs().then(() => {

@@ -75,13 +75,17 @@ export function runRowsFor(part, summaries, previous, acknowledged) {
   }
   const { full, snapshot, patches } = part.rowDelivery;
   if (!snapshot || !previous || previous.version !== acknowledged) return { json: full, snapshot };
-  let json = patches.get(previous);
-  if (json === undefined) {
+  let delivery = patches.get(previous);
+  if (!delivery) {
     const delta = summaries ? runSummaryDelta(previous.baseline, snapshot.baseline, acknowledged)
       : runStepDelta(previous.baseline, snapshot.baseline, acknowledged);
     const patch = delta && JSON.stringify(delta);
-    json = patch && Buffer.byteLength(patch) < Buffer.byteLength(full) ? patch : full;
-    patches.set(previous, json);
+    const json = patch && Buffer.byteLength(patch) < Buffer.byteLength(full) ? patch : full;
+    // Starting, ending, moving or losing access to a run is news in its own right.
+    const progress = summaries && !delta.remove && !delta.order && delta.set?.length > 0 &&
+      delta.set.every(row => row.status === "Working" && previous.baseline.get(row.id)?.status === "Working");
+    delivery = { json, snapshot, progress };
+    patches.set(previous, delivery);
   }
-  return { json, snapshot };
+  return delivery;
 }

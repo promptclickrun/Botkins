@@ -1,14 +1,18 @@
 // The frames screens are built in: a page (pushed, or the root of a tab) and a sheet.
 import { router, useScrollToTop } from "expo-router";
+import { HeaderHeightContext } from "expo-router/react-navigation";
 import { CloudOff, RefreshCw, X } from "lucide-react-native";
-import { type ComponentRef, type ReactNode, useRef } from "react";
+import { type ComponentRef, type ReactNode, useContext, useRef } from "react";
 import { ActivityIndicator, Platform, RefreshControl, ScrollView, type StyleProp, View, type ViewStyle } from "react-native";
 import { KeyboardAwareScrollView } from "react-native-keyboard-controller";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useShape } from "./useShape";
 import { useRestarting } from "@/state/appUpdate";
 import { wake } from "@/state/link";
+import { usePrefs } from "@/state/prefs";
 import { useApp } from "@/state/store";
+import { BackdropLayer } from "./Backdrop";
+import { Glass } from "./Glass";
 import { Tap } from "./Tap";
 import { T } from "./Text";
 import { radius, slopFor, space, useTheme } from "./theme";
@@ -90,7 +94,10 @@ export type PageProps = {
 
 export function Page({ title, caption, actions, children, tab, scroll = true, onRefresh, refreshing = false, keyboard, contentStyle, quietLink, footer, onScroll }: PageProps) {
   const { colors } = useTheme();
+  const backdrop = usePrefs((prefs) => prefs.backdrop);
+  const hasBackdrop = backdrop !== "clean";
   const insets = useSafeAreaInsets();
+  const headerHeight = useContext(HeaderHeightContext) ?? 0;
   const scrollRef = useRef<ComponentRef<typeof ScrollView>>(null);
   useScrollToTop(scrollRef);
   // A tab's root lays itself out beside the side rail (a pushed page gets that room from its stack).
@@ -112,10 +119,12 @@ export function Page({ title, caption, actions, children, tab, scroll = true, on
       {!!actions && <View style={{ flexDirection: "row", alignItems: "center", gap: space.sm, paddingBottom: 3 }}>{actions}</View>}
     </View>
   );
+  // Non-scrolling pushed pages do not get ScrollView's contentInsetAdjustmentBehavior, so pad below the transparent iOS bar.
+  const nonScrollTop = !tab && !scroll && hasBackdrop && Platform.OS === "ios" ? headerHeight + space.sm : space.sm;
   const padding = {
     paddingLeft: space.xl + (tab ? shape.left : 0),
     paddingRight: space.xl + (tab ? shape.right : 0),
-    paddingTop: tab ? insets.top + space.md : space.sm,
+    paddingTop: tab ? insets.top + space.md : nonScrollTop,
     paddingBottom: (tab ? shape.tabRoom : 0) + insets.bottom + space.xxl,
     gap: space.xl,
   };
@@ -128,17 +137,19 @@ export function Page({ title, caption, actions, children, tab, scroll = true, on
   );
   if (!scroll)
     return (
-      <View style={{ flex: 1, backgroundColor: colors.canvas }}>
+      <View style={{ flex: 1, backgroundColor: hasBackdrop ? "transparent" : colors.canvas }}>
+        {hasBackdrop && <BackdropLayer backdrop={backdrop} />}
         <View style={[{ flex: 1 }, padding, contentStyle]}>{body}</View>
         {footer}
       </View>
     );
   const Scroller = keyboard ? KeyboardAwareScrollView : ScrollView;
   return (
-    <View style={{ flex: 1, backgroundColor: colors.canvas }}>
+    <View style={{ flex: 1, backgroundColor: hasBackdrop ? "transparent" : colors.canvas }}>
+      {hasBackdrop && <BackdropLayer backdrop={backdrop} />}
       <Scroller
         ref={tab ? (view) => { scrollRef.current = view; } : undefined}
-        style={{ flex: 1 }}
+        style={{ flex: 1, backgroundColor: "transparent" }}
         contentContainerStyle={[padding, contentStyle]}
         contentInsetAdjustmentBehavior={tab ? "never" : "automatic"}
         keyboardShouldPersistTaps="handled"
@@ -173,15 +184,26 @@ export type SheetProps = {
 /** A screen shown as a sheet: a title, a way out, and one action. */
 export function Sheet({ title, children, action, onAction, actionDisabled, actionLoading, onClose, scroll = true, contentStyle, footer }: SheetProps) {
   const { colors, control } = useTheme();
+  const backdrop = usePrefs((prefs) => prefs.backdrop);
+  const hasBackdrop = backdrop !== "clean";
   const button = control.sheetButton;
   const insets = useSafeAreaInsets();
   const close = onClose ?? (() => router.back());
   // The native sheet lays out its direct children itself, so these views must not be flattened away.
+  const closeIcon = <X size={18} color={colors.ink2} strokeWidth={2.4} />;
   const header = (
     <View collapsable={false} style={{ minHeight: 60, flexDirection: "row", alignItems: "center", paddingHorizontal: space.lg, gap: space.sm }}>
-      <Tap onPress={close} accessibilityLabel="Close" sink={0.9} hitSlop={slopFor(button)} style={{ width: button, height: button, borderRadius: button / 2, backgroundColor: colors.sunken, alignItems: "center", justifyContent: "center" }}>
-        <X size={18} color={colors.ink2} strokeWidth={2.4} />
-      </Tap>
+      {hasBackdrop ? (
+        <Tap onPress={close} accessibilityLabel="Close" sink={0.9} hitSlop={slopFor(button)}>
+          <Glass interactive style={{ width: button, height: button, borderRadius: button / 2, alignItems: "center", justifyContent: "center", overflow: "hidden" }}>
+            {closeIcon}
+          </Glass>
+        </Tap>
+      ) : (
+        <Tap onPress={close} accessibilityLabel="Close" sink={0.9} hitSlop={slopFor(button)} style={{ width: button, height: button, borderRadius: button / 2, backgroundColor: colors.sunken, alignItems: "center", justifyContent: "center" }}>
+          {closeIcon}
+        </Tap>
+      )}
       <T variant="headline" center numberOfLines={1} style={{ flex: 1 }} accessibilityRole="header">
         {title}
       </T>
@@ -201,10 +223,11 @@ export function Sheet({ title, children, action, onAction, actionDisabled, actio
   );
   const padding = { paddingHorizontal: space.xl, paddingTop: space.sm, paddingBottom: insets.bottom + space.xxl, gap: space.xl };
   return (
-    <View collapsable={false} style={{ flex: 1, backgroundColor: colors.canvas }}>
+    <View collapsable={false} style={{ flex: 1, backgroundColor: hasBackdrop ? "transparent" : colors.canvas }}>
+      {hasBackdrop && <BackdropLayer backdrop={backdrop} />}
       {header}
       {scroll ? (
-        <KeyboardAwareScrollView style={{ flex: 1 }} contentContainerStyle={[padding, contentStyle]} keyboardShouldPersistTaps="handled" keyboardDismissMode="interactive" showsVerticalScrollIndicator={false} bottomOffset={24}>
+        <KeyboardAwareScrollView style={{ flex: 1, backgroundColor: "transparent" }} contentContainerStyle={[padding, contentStyle]} keyboardShouldPersistTaps="handled" keyboardDismissMode="interactive" showsVerticalScrollIndicator={false} bottomOffset={24}>
           {children}
         </KeyboardAwareScrollView>
       ) : (

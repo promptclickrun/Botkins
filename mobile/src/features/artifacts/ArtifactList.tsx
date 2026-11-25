@@ -8,7 +8,8 @@ import { ActivityIndicator, FlatList, RefreshControl, StyleSheet, View } from "r
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import type { Artifact } from "@/link/types";
 import { useBot, useCapability, useOnline } from "@/state/hooks";
-import { Chip, EmptyState, Group, LinkBanner, Loading, space, T, useTheme } from "@/ui";
+import { usePrefs } from "@/state/prefs";
+import { BackdropLayer, Chip, EmptyState, Group, LinkBanner, Loading, space, T, useTheme } from "@/ui";
 import { ArtifactRow } from "./ArtifactBits";
 import { useArtifactList } from "./data";
 import { type Filter, FILTERS } from "./logic";
@@ -21,6 +22,8 @@ export default function ArtifactList() {
   const botId = params.botId ?? "";
   const folder = params.folder || undefined;
   const { colors } = useTheme();
+  const backdrop = usePrefs((prefs) => prefs.backdrop);
+  const hasBackdrop = backdrop !== "clean";
   const insets = useSafeAreaInsets();
   const can = useCapability("artifacts-v1");
   const online = useOnline();
@@ -64,8 +67,10 @@ export default function ArtifactList() {
   );
 
   return (
-    <View style={{ flex: 1, backgroundColor: colors.canvas }}>
+    <View style={{ flex: 1, backgroundColor: hasBackdrop ? "transparent" : colors.canvas }}>
+      {hasBackdrop && <BackdropLayer backdrop={backdrop} />}
       <FlatList<Artifact>
+        style={{ backgroundColor: "transparent" }}
         data={can ? list.items : []}
         keyExtractor={(item) => item.id}
         renderItem={({ item }) => (

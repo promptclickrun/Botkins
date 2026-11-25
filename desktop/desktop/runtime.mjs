@@ -435,6 +435,12 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
     // The view of an MCP App in a chat: what it shows, and the calls it makes to its own server (desktop/mcp-apps.mjs).
     ...mcpAppHandlers(workspace),
     ...teamHandlers(() => link),
+    // The window's own person's picture ("people-avatars-v1"): the owner's, on this computer. A paired device
+    // makes the same call, and the link answers it itself for whoever that device belongs to (link/server.mjs).
+    setMyAvatar: (image) => {
+      if (!link) throw new Error("Phone access is still opening. Try again.");
+      return link.setAvatar("owner", image ?? null);
+    },
     ...chatSectionHandlers(() => link),
     pickPluginFolder: async () => {
       const paths = await host.dialogs.open({ title: "Choose a plugin folder", properties: ["openDirectory"] });

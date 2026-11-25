@@ -18,6 +18,7 @@ import { loadPrefs, usePrefs } from "./prefs";
 import { newPresenceKey, removePresenceKey } from "./presence";
 import { currentOf, hasRoom, indexOf, type Kept, NO_COMPUTERS, pairingKey, readKeptComputers, savedIds, startupComputers, tidy, TOO_MANY, using, withDetails, withPairing, without } from "./computers";
 import { applyParts, forgetComputer, mergeChat, onComputerChange, showToast, useApp } from "./store";
+import { createFollowing } from "./following";
 import { createPartsBatcher } from "./partsBatch";
 import { canBrowse, NearbyPace } from "./reconnect";
 import { findNearby } from "./nearby";
@@ -59,6 +60,8 @@ const syncWaiters = new Set<() => void>();
 function follow(pairing: Pairing) {
   client?.stop();
   partsBatcher.clear();
+  // A chat kept from the computer followed until now is not one of this computer's.
+  watched.release();
   client = new LinkClient(pairing, {
     fetch: fetcher,
     streamAppends: true,
@@ -66,7 +69,8 @@ function follow(pairing: Pairing) {
     lightSteps: true,
     runStepDeltas: true,
     runSummaryDeltas: true,
-    textStreaming: (route) => textMode(useChatPrefs.getState().textStreaming, route),
+    textStreaming: (route) => textMode(useChatPrefs.getState().textStreaming && AppState.currentState === "active" && replies.shown().length > 0,
+      route, useApp.getState().parts.meta?.capabilities),
     onParts: partsBatcher.push,
     onState: (link) => {
       useApp.setState({ link });
@@ -95,8 +99,8 @@ function follow(pairing: Pairing) {
       void savePairing(next).catch(() => {});
     },
   });
-  client.watch([...watched.keys()]);
-  client.watchReasoning([...reasoningWatchers.keys()]);
+  publishWatch();
+  client.watchReasoning(reasoningWatchers.shown());
   client.start({ resting: AppState.currentState !== "active" });
 }
 
@@ -226,6 +230,8 @@ async function startApp() {
     if (state === "active") {
       nearbyPace.reset();
       void retrySavedStorage();
+      // Give the returning screen time to reclaim its cached page.
+      watched.returned();
       client?.wake();
     } else if (state === "background") {
       partsBatcher.flush();
@@ -536,36 +542,35 @@ export async function attempt<T>(work: Promise<T>, done?: string): Promise<T | u
   }
 }
 
-// Chats on screen are watched; each screen counts once.
-const watched = new Map<string, number>();
-const reasoningWatchers = new Map<string, number>();
+// Sheets can need chat details without displaying a reply. Only a focused message view asks for words.
+const inBackground = () => AppState.currentState === "background";
+function publishWatch() {
+  client?.watch(watched.shown(), watched.keptPage(), replies.shown());
+}
+const watched = createFollowing({ send: publishWatch, away: inBackground });
+const replies = createFollowing({ send: publishWatch, away: inBackground, lingerMs: 0 });
+const reasoningWatchers = createFollowing({ send: (ids) => client?.watchReasoning(ids), away: inBackground, lingerMs: 0 });
 const watchers = new Set<() => void>();
-/** The chat on screen now (the last one opened), if any. */
-export const chatOnScreen = () => [...watched.keys()].at(-1);
+/** The chat on screen now (the last one opened), if any. A chat that is only kept a little longer is not on screen. */
+export const chatOnScreen = () => watched.shown().at(-1);
 /** Calls `listener` when the chat on screen changes. Returns a function that stops it. */
 export function onChatOnScreen(listener: () => void) {
   watchers.add(listener);
   return () => void watchers.delete(listener);
 }
-function watchId(counts: Map<string, number>, id: string, publish: () => void) {
-  counts.set(id, (counts.get(id) ?? 0) + 1);
-  publish();
+export function watchChat(id: string, showsReply = false) {
+  const stop = watched.watch(id);
+  const stopReply = showsReply ? replies.watch(id) : undefined;
+  for (const tell of watchers) tell();
   return () => {
-    const left = (counts.get(id) ?? 1) - 1;
-    if (left > 0) counts.set(id, left);
-    else counts.delete(id);
-    publish();
-  };
-}
-export function watchChat(id: string) {
-  return watchId(watched, id, () => {
-    client?.watch([...watched.keys()]);
+    stopReply?.();
+    stop();
     for (const tell of watchers) tell();
-  });
+  };
 }
 /** A visible chat or Activity sheet can follow reasoning even when replies arrive whole. */
 export function watchReasoning(id: string) {
-  return watchId(reasoningWatchers, id, () => client?.watchReasoning([...reasoningWatchers.keys()]));
+  return reasoningWatchers.watch(id);
 }
 
 /** Loads the page of messages before the ones a chat holds. */
@@ -611,6 +616,8 @@ export function freshSync(ms: number): Promise<boolean> {
     const hit = () => done(true);
     const timer = setTimeout(() => done(false), ms);
     syncWaiters.add(hit);
+    // Nobody is looking: the chat that was kept a little longer is let go, so this sync brings no chat's page.
+    if (AppState.currentState !== "active") watched.release();
     client.wake();
   });
 }

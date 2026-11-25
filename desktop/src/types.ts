@@ -421,7 +421,12 @@ export type TeamInvite = {
 };
 export type TeamRequest = { id: string; name: string; person?: string; platform: string; kind: string; at: number; inviteId: string };
 /** Someone who can be in a chat: the computer's owner (id "owner") or a team member. */
-export type TeamPerson = { id: string; name: string };
+export type TeamPerson = {
+  id: string;
+  name: string;
+  /** Their own picture ("people-avatars-v1"): a data URL of a square JPEG or PNG, set by them alone. */
+  avatar?: string;
+};
 export type OwnerTeam = { name: string; roles: TeamRole[]; groups: TeamGroup[]; members: TeamMember[]; invites: TeamInvite[]; requests: TeamRequest[]; /** With "team-people-v1": the owner first, then each member. */ people?: TeamPerson[]; /** With "spaces-v1": members may share spaces by link. */ linkSharing?: boolean };
 export type MemberTeam = {
   me: {
@@ -1273,6 +1278,8 @@ declare global {
       removeTeamMember(id: string): Promise<OwnerTeam>;
       renameTeam(name: string): Promise<OwnerTeam>;
       renameTeamMember(id: string, name: string): Promise<OwnerTeam>;
+      /** Sets or clears the picture of whoever is using this window: the owner here, or the person paired on the computer in use ("people-avatars-v1"). */
+      setMyAvatar(image: string | null): Promise<{ avatar?: string }>;
       /** Shows a paired computer's workspace in this window, or this computer's own (null). */
       useRemoteHost(id: string | null): Promise<unknown>;
       forgetRemoteHost(id: string): Promise<void>;
@@ -1934,6 +1941,7 @@ export type PhoneLink = {
 };
 export type AppUpdate = { auto?: boolean; status: "idle" | "checking" | "current" | "available" | "downloading" | "restarting" | "error"; current: string; latest?: string; message?: string; canInstall: boolean };
 export type AppInfo = { version: string; electron: string; chrome: string; platform: string };
+export type BackdropId = "clean" | "mesh" | "botkins" | "grid";
 export type Appearance = {
   /** System, light or dark. */
   theme: "system" | "light" | "dark";
@@ -1950,6 +1958,8 @@ export type Appearance = {
   /** The person picked the font themselves. */
   fontPicked?: boolean;
   textSize: "small" | "default" | "large" | "larger";
+  /** Backdrop layer rendered behind the glass UI; "clean" keeps the solid theme surface. */
+  backdrop?: BackdropId;
   /** "theme", or a hex color for the person's own messages. */
   bubble: string;
   /** Missing on an older computer means the usual desktop default: on. */

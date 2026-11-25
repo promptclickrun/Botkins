@@ -289,11 +289,19 @@ const BASE_STYLE =
   "html,body{margin:0;background:transparent;overflow-wrap:break-word}" +
   "img,svg,canvas,video{max-width:100%}";
 
+// Padding on the root element: a page rarely styles it, so the room stays when the bot's own body has padding of its own.
+const bottomRoom = (bottom?: number) => {
+  const room = typeof bottom === "number" && Number.isFinite(bottom) ? Math.max(0, Math.min(400, Math.round(bottom))) : 0;
+  return room ? ":root{--inset-bottom:" + room + "px}html{padding-bottom:" + room + "px}" : "";
+};
+
 /**
  * The document the web view loads: the policy, the app's colors and the bridge first, then what
- * the bot wrote. `fill` is the full-screen view, where the page scrolls by itself.
+ * the bot wrote. `fill` is the full-screen view, where the page scrolls by itself. `bottom` is room
+ * left under the page's end in that view, so its last line can scroll above what floats over the
+ * frame (a panel's ask bar); the page can read it as `--inset-bottom`.
  */
-export function framePage(html: string, data: unknown, theme: FrameTheme, options: { fill?: boolean } = {}): string {
+export function framePage(html: string, data: unknown, theme: FrameTheme, options: { fill?: boolean; bottom?: number } = {}): string {
   const vars = Object.entries(theme.colors)
     .filter(([name, value]) => /^--[a-z-]+$/.test(name) && /^[#(),.%\sa-zA-Z0-9-]*$/.test(value))
     .map(([name, value]) => name + ":" + value)
@@ -302,7 +310,7 @@ export function framePage(html: string, data: unknown, theme: FrameTheme, option
     '<meta charset="utf-8">' +
     '<meta http-equiv="Content-Security-Policy" content="' + FRAME_CSP + '">' +
     '<meta name="viewport" content="width=device-width, initial-scale=1' + (options.fill ? "" : ", maximum-scale=1, user-scalable=no") + '">' +
-    "<style>:root{color-scheme:" + theme.mode + ";" + vars + ";" + BASE_STYLE + (options.fill ? "" : "html{overflow:hidden}") + "</style>" +
+    "<style>:root{color-scheme:" + theme.mode + ";" + vars + ";" + BASE_STYLE + (options.fill ? bottomRoom(options.bottom) : "html{overflow:hidden}") + "</style>" +
     "<script>" + NESTED_FRAME_GUARD + "\n" + BRIDGE.replace("__DATA__", () => inlineJson(data)).replace("__MODE__", () => JSON.stringify(theme.mode)) + "</script>";
   // The policy has to come before anything of the bot's, so the head is always the app's own.
   return "<!doctype html><html><head>" + head + "</head><body>" + html + "</body></html>";

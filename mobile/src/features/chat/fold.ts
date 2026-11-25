@@ -1,17 +1,32 @@
 // Display choices and the words for a turn’s activity rail.
 import type { Step } from "@/link/types";
 
-/** Settings › Chat › Steps. folded: activity rail only. show: every step in order. failed: failed steps only. */
+/** Settings › Chat › Steps. folded: activity rail only. show (Open): the live island (islandModel.ts). failed: failed steps only. */
 export type StepsChoice = "folded" | "show" | "failed";
 const CHOICES: readonly StepsChoice[] = ["folded", "show", "failed"];
 
-/**
- * The Steps choice a saved record means. Everyone moves to Folded once: a choice saved before
- * `stepsPicked` existed was the old default, not a pick. The old "summary" (one line) is Folded.
+/** Settings › Chat › Thinking. show (Open): the island's lines of thought. folded: the activity rail. hide: nowhere. */
+export type ThinkingChoice = "show" | "folded" | "hide";
+
+/*
+ * Which choice a saved record means (the island release, 2026-11-24). Open, the island, is the
+ * default for Steps and for Thinking unless the person chose otherwise:
+ * - Steps: a choice counts once `stepsPicked` is set (setChatPrefs sets it). Without it, whatever is
+ *   saved was a default, so it becomes Open. A picked value that is no longer a choice (the old
+ *   "summary" or "hide") reads as Folded, which is what it looked like.
+ * - Thinking: `thinkingPicked` is new. A saved value without it is read by what it is: "folded" was
+ *   the old default, so it becomes Open; "show" and "hide" were never defaults, so the person picked
+ *   them and they stay. Anything else is Open.
  */
 export function settleSteps(saved: { steps?: unknown; stepsPicked?: unknown }): StepsChoice {
-  if (saved.stepsPicked !== true) return "folded";
+  if (saved.stepsPicked !== true) return "show";
   return CHOICES.includes(saved.steps as StepsChoice) ? (saved.steps as StepsChoice) : "folded";
+}
+
+export function settleThinking(saved: { thinking?: unknown; thinkingPicked?: unknown }): ThinkingChoice {
+  const value = saved.thinking;
+  if (saved.thinkingPicked === true) return value === "folded" || value === "hide" || value === "show" ? value : "show";
+  return value === "hide" ? "hide" : "show";
 }
 
 /** One thing in a fold, in the order it happened. */

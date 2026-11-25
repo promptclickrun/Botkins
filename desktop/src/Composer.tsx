@@ -1,5 +1,6 @@
 import { createContext, useContext, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { ArrowUp, Square, BrainCircuit, Plus, X, File, Folder, Quote, Sparkles, SquareSlash, Wrench } from "lucide-react";
+import { Button, Glass } from "glisse";
 import {
   MAX_MENTIONS,
   MentionChips,
@@ -465,10 +466,10 @@ export default function Composer({
           )}
         </div>
       )}
+      <Glass className="composer-glass" hidden={voice.docked}>
       <form
         className="composer"
         // The voice dock (in `voice.strip`) stands in for the message box while live voice is on here.
-        hidden={voice.docked}
         onSubmit={(e) => {
           e.preventDefault();
           if (!sending) void submit();
@@ -612,30 +613,33 @@ export default function Composer({
           </button>
         )}
         {busy && !side && (
-          <button
-            type="button"
-            className={hasContent ? "send stop-quiet" : "send"}
+          <Button
+            variant="glass"
+            icon={<Square size={15} />}
+            className={hasContent ? "send-glass stop-quiet" : "send-glass"}
             aria-label="Stop reply"
             onClick={stop}
-          >
-            <Square size={16} />
-          </button>
+          />
         )}
         {busy && !side && ready && (
-          <button type="button" className="secondary" aria-label="Queue message" title="Send after this reply" disabled={sending} onClick={() => void submit(true)}>Queue</button>
+          <Button variant="glass" className="lg-compact" aria-label="Queue message" title="Send after this reply" disabled={sending} onClick={() => void submit(true)}>
+            Queue
+          </Button>
         )}
         {!busy && !side && !ready && voice.live}
         {(side || (busy ? hasContent : ready)) && (
-          <button
-            className="send"
+          <Button
+            type="submit"
+            variant="filled"
+            icon={<ArrowUp size={18} />}
+            className="send-glass"
             aria-label={busy && !side ? "Guide reply" : "Send message"}
             title={busy && !side ? "Guide the current reply when supported, or send after it finishes" : undefined}
             disabled={sending || (!command && (!draft.trim() || draft.trim() === "/"))}
-          >
-            <ArrowUp size={20} />
-          </button>
+          />
         )}
       </form>
+      </Glass>
       {mentioning && !visible && (
         <MentionMenu
           id={listId}

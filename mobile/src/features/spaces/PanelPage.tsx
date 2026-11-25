@@ -1,11 +1,12 @@
 // A panel, opened: its app gets the whole width and works by touch. The bar pins it to Home and
 // has its menu; below it sit the notes people wrote, and the field that asks its bot to change it. Over that
 // field float the things its bot said are worth asking next, as chips: a tap opens the field with
-// the chip's words in it, and sends nothing.
+// the chip's words in it, and sends nothing. A panel that is only an app fills the screen down to
+// the bottom edge, under the floating field: its page scrolls by itself, and its notes open from the bar.
 import { MenuView } from "@react-native-menu/menu";
 import { type Href, router, Stack, useLocalSearchParams } from "expo-router";
-import { Ellipsis, Pin, PinOff, Trash2 } from "lucide-react-native";
-import { useEffect, useState } from "react";
+import { Ellipsis, Pin, PinOff, StickyNote } from "lucide-react-native";
+import { useEffect } from "react";
 import { Alert, ScrollView, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { myself } from "@/features/chat/people";
@@ -14,9 +15,10 @@ import type { PanelView, SpaceSummary } from "@/link/types";
 import { useBots, useCan, usePart } from "@/state/hooks";
 import { api, attempt } from "@/state/link";
 import { ago, upcoming } from "@/state/time";
-import { Blocks, BotAvatar, Button, EmptyState, Field, Glass, Group, IconButton, Label, Loading, Page, radius, slopFor, space as gap, T, Tap, useTheme } from "@/ui";
+import { Blocks, BotAvatar, EmptyState, Glass, IconButton, Loading, Page, radius, slopFor, space as gap, T, Tap, useTheme } from "@/ui";
 import { markItemSeen, panelState, setPanelPinned, usePanelPinned, useSpace, useSpaceContent } from "./data";
-import { asksOf, lastLine } from "./logic";
+import { askRoom, asksOf, isApp, lastLine, noteBadge, panelLayout } from "./logic";
+import { Notes } from "./Notes";
 
 const SIZES: { value: PanelView["size"]; label: string }[] = [
   { value: "small", label: "Small" },
@@ -74,51 +76,26 @@ function PanelMenu({ panel, space, first, last }: { panel: PanelView; space: Spa
   );
 }
 
-/** Short notes people wrote on the panel, and a field to write one. A person removes their own; the maker and the owner remove any. */
-function Notes({ panel, space, me }: { panel: PanelView; space: SpaceSummary; me: string }) {
+const openAsk = (spaceId: string, panelId: string, ask?: number) => router.push(("/space/ask?spaceId=" + encodeURIComponent(spaceId) + "&panelId=" + encodeURIComponent(panelId) + (ask === undefined ? "" : "&ask=" + ask)) as unknown as Href);
+const openNotes = (spaceId: string, panelId: string) => router.push(("/space/notes?spaceId=" + encodeURIComponent(spaceId) + "&panelId=" + encodeURIComponent(panelId)) as unknown as Href);
+
+/** The bar's notes button, for an app on the whole screen: a note with how many there are. */
+function NotesButton({ count, onPress }: { count: number; onPress: () => void }) {
   const { colors } = useTheme();
-  const [text, setText] = useState("");
-  const [saving, setSaving] = useState(false);
-  const acts = space.can === "own" || space.can === "edit";
-  const notes = panel.notes ?? [];
-  if (!acts && !notes.length) return null;
-  const add = async () => {
-    const note = text.trim();
-    if (!note || saving) return;
-    setSaving(true);
-    const done = await attempt(api["spaces.note"](panel.id, note));
-    setSaving(false);
-    if (done) setText("");
-  };
+  const badge = noteBadge(count);
   return (
-    <View>
-      <Label>Notes</Label>
-      {notes.length > 0 && (
-        <Group>
-          {notes.map((note) => (
-            <View key={note.id} style={{ paddingHorizontal: gap.lg, paddingVertical: gap.md, flexDirection: "row", alignItems: "flex-start", gap: gap.md }}>
-              <View style={{ flex: 1, minWidth: 0, gap: 2 }}>
-                <T variant="footnote" color="muted">
-                  {note.name + " · " + ago(note.at)}
-                </T>
-                <T variant="callout">{note.text}</T>
-              </View>
-              {(note.by === me || space.can === "own") && <IconButton icon={Trash2} label={"Remove note by " + note.name} color={colors.muted} onPress={() => void attempt(api["spaces.removeNote"](panel.id, note.id))} />}
-            </View>
-          ))}
-        </Group>
-      )}
-      {acts && (
-        <View style={{ gap: gap.sm, marginTop: notes.length ? gap.md : 0 }}>
-          <Field placeholder="Write a note" value={text} onChangeText={setText} area maxLength={2000} />
-          {!!text.trim() && <Button title="Add note" variant="secondary" size="sm" onPress={() => void add()} loading={saving} style={{ alignSelf: "flex-start" }} />}
+    <Tap onPress={onPress} sink={0.9} accessibilityLabel={count ? "Notes, " + count : "Notes"} accessibilityHint="Opens the panel's notes" style={{ width: 44, height: 44, alignItems: "center", justifyContent: "center" }}>
+      <StickyNote size={20} color={colors.ink} strokeWidth={2.2} />
+      {!!badge && (
+        <View pointerEvents="none" style={{ position: "absolute", top: 5, right: 3, minWidth: 18, height: 18, paddingHorizontal: 4, borderRadius: 9, backgroundColor: colors.accent, alignItems: "center", justifyContent: "center" }}>
+          <T variant="caption" weight="700" color="onAccent" numberOfLines={1} maxFontSizeMultiplier={1}>
+            {badge}
+          </T>
         </View>
       )}
-    </View>
+    </Tap>
   );
 }
-
-const openAsk = (spaceId: string, panelId: string, ask?: number) => router.push(("/space/ask?spaceId=" + encodeURIComponent(spaceId) + "&panelId=" + encodeURIComponent(panelId) + (ask === undefined ? "" : "&ask=" + ask)) as unknown as Href);
 
 /** The bot's asks as a row of glass chips, in its words. The row scrolls sideways when they do not fit. */
 function AskChips({ asks, onPick }: { asks: string[]; onPick: (index: number) => void }) {
@@ -141,11 +118,12 @@ function AskChips({ asks, onPick }: { asks: string[]; onPick: (index: number) =>
   );
 }
 
-/** The bar: the panel's pin to Home, then its menu. */
-function BarButtons({ panel, space, first, last }: { panel: PanelView; space: SpaceSummary; first: boolean; last: boolean }) {
+/** The bar: the panel's notes when they open as a sheet, its pin to Home, then its menu. */
+function BarButtons({ panel, space, first, last, notes }: { panel: PanelView; space: SpaceSummary; first: boolean; last: boolean; notes: boolean }) {
   const pinned = usePanelPinned(space.id, panel.id);
   return (
     <View style={{ flexDirection: "row", alignItems: "center", gap: gap.xs }}>
+      {notes && <NotesButton count={panel.notes?.length ?? 0} onPress={() => openNotes(space.id, panel.id)} />}
       <IconButton icon={pinned ? PinOff : Pin} label={pinned ? "Take off Home" : "Pin to Home"} onPress={() => setPanelPinned({ spaceId: space.id, panelId: panel.id }, !pinned)} />
       <PanelMenu panel={panel} space={space} first={first} last={last} />
     </View>
@@ -155,6 +133,7 @@ function BarButtons({ panel, space, first, last }: { panel: PanelView; space: Sp
 export default function PanelPage() {
   const { spaceId, id } = useLocalSearchParams<{ spaceId: string; id: string }>();
   const insets = useSafeAreaInsets();
+  const { control } = useTheme();
   const space = useSpace(spaceId);
   const { content, loading } = useSpaceContent(spaceId);
   const bots = useBots();
@@ -175,38 +154,59 @@ export default function PanelPage() {
   const routine = panel.routine;
   const caption = [bot?.name, "Updated " + ago(panel.updatedAt), routine ? (routine.enabled && routine.nextAt ? "Next " + upcoming(routine.nextAt) : "Routine paused") : undefined].filter(Boolean).join(" · ");
   const last = lastLine(panel.last, ago);
-  const mayAsk = canChat && (space.can === "own" || space.can === "edit");
-  const hasHtml = panel.blocks.some((block) => block.type === "html");
+  const acts = space.can === "own" || space.can === "edit";
+  const mayAsk = canChat && acts;
+  const layout = panelLayout(panel, acts);
   // Chips only where the field they fill is shown, and only the bot's own.
   const asks = mayAsk ? asksOf(panel) : [];
-  return (
-    <View style={{ flex: 1 }}>
-      <Page contentStyle={[{ paddingBottom: asks.length ? 170 : 120 }, hasHtml && { flexGrow: 1 }]} keyboard>
-        <Stack.Screen options={{ headerRight: () => <BarButtons panel={panel} space={space} first={index === 0} last={index === panels.length - 1} /> }} />
-        <View style={{ flexDirection: "row", alignItems: "center", gap: gap.md }}>
-          <BotAvatar bot={bot} size={40} badge={false} />
-          <View style={{ flex: 1, minWidth: 0, gap: 1 }}>
-            <T variant="title2" numberOfLines={3} accessibilityRole="header">
-              {panel.title}
-            </T>
-            <T variant="footnote" color="muted" numberOfLines={2}>
-              {caption}
-            </T>
-          </View>
-        </View>
-        <Blocks blocks={panel.blocks} title={panel.title} fill={hasHtml} state={hasHtml ? panelState(panel, space, canUse) : undefined} />
-        {!!last && (
-          <T variant="footnote" color="faint">
+  // What floats over the bottom of an app on the whole screen: its page keeps this much room under its end.
+  const room = askRoom({ bottom: insets.bottom, bar: mayAsk ? 50 : 0, chips: asks.length ? control.chip + 2 * slopFor(control.chip) : 0, gap: gap.sm });
+  const bar = <Stack.Screen options={{ headerRight: () => <BarButtons panel={panel} space={space} first={index === 0} last={index === panels.length - 1} notes={layout.notesButton} /> }} />;
+  const head = (
+    <View style={{ flexDirection: "row", alignItems: "center", gap: gap.md }}>
+      <BotAvatar bot={bot} size={40} badge={false} />
+      <View style={{ flex: 1, minWidth: 0, gap: 1 }}>
+        <T variant="title2" numberOfLines={3} accessibilityRole="header">
+          {panel.title}
+        </T>
+        <T variant="footnote" color="muted" numberOfLines={2}>
+          {caption}
+        </T>
+        {layout.fill && !!last && (
+          <T variant="footnote" color="faint" numberOfLines={1}>
             {last}
           </T>
         )}
-        {!!routine && (
-          <T variant="footnote" color="muted">
-            {"Refreshes " + cronLabel(routine.cron).toLowerCase() + " · " + routine.timezone}
-          </T>
-        )}
-        <Notes panel={panel} space={space} me={me} />
-      </Page>
+      </View>
+    </View>
+  );
+  return (
+    <View style={{ flex: 1 }}>
+      {layout.fill ? (
+        // The app takes the rest of the screen, down under the floating field; nothing sits below it.
+        <Page scroll={false} contentStyle={{ paddingBottom: 0, gap: gap.lg }}>
+          {bar}
+          {head}
+          <Blocks blocks={panel.blocks} title={panel.title} fill bottom={room} state={panelState(panel, space, canUse)} />
+        </Page>
+      ) : (
+        <Page contentStyle={{ paddingBottom: asks.length ? 170 : 120 }} keyboard>
+          {bar}
+          {head}
+          <Blocks blocks={panel.blocks} title={panel.title} state={isApp(panel) ? panelState(panel, space, canUse) : undefined} />
+          {!!last && (
+            <T variant="footnote" color="faint">
+              {last}
+            </T>
+          )}
+          {!!routine && (
+            <T variant="footnote" color="muted">
+              {"Refreshes " + cronLabel(routine.cron).toLowerCase() + " · " + routine.timezone}
+            </T>
+          )}
+          <Notes panel={panel} space={space} me={me} />
+        </Page>
+      )}
       {mayAsk && (
         <View pointerEvents="box-none" style={{ position: "absolute", left: gap.lg, right: gap.lg, bottom: insets.bottom + gap.sm, gap: gap.xs }}>
           {asks.length > 0 && <AskChips asks={asks} onPick={(index) => openAsk(space.id, panel.id, index)} />}

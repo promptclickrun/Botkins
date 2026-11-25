@@ -8,6 +8,7 @@ import type { ProfileHost } from "@/link/profile";
 import { deviceName } from "@/state/link";
 import { showToast, useApp } from "@/state/store";
 import { useProfile, approveDevice, beginProfile, deleteProfileAccount, dismissPrompt, finishPending, profileDeviceLabel, refreshProfile, removeProfileHost, restartProfileAttempt, revokeDevice, selectProfileHost, signOutProfile, syncLocalPairings, updateProfile } from "@/state/profile";
+import { YourPicture } from "./YourPicture";
 import { pendingDeviceLabel, profileCode, profileCodeLabel, profileHostIsLocal, profileHostSubtitle, PROFILE_BROWSER_COPY, PROFILE_MIGRATION_COPY, PROFILE_OPTIONAL_COPY } from "./profileLogic";
 import { Badge, Button, EmptyState, Group, IconTile, Label, Loading, Page, Row, space, T, useTextPrompt, useTheme } from "@/ui";
 
@@ -90,6 +91,8 @@ export default function Profile() {
         )}
         {!!error && <T variant="footnote" color="danger">{error}</T>}
         {!!attempt && <Button title="Continue without a profile" variant="ghost" wide onPress={noThanks} />}
+        {/* A picture is kept by the computer, so it needs no Botkins profile. */}
+        <YourPicture />
       </Page>
     );
   }
@@ -105,6 +108,7 @@ export default function Profile() {
         <Row leading={<IconTile icon={UserRound} color={colors.accent} />} title={(avatar ? avatar + " " : "") + (home?.profile.name || session.name)} subtitle={home?.profile.email || session.email} trailing={<Pencil size={17} color={colors.faint} />} chevron disabled={busy} onPress={() => promptInput.ask({ title: "Profile name", value: home?.profile.name || session.name, confirm: "Save", max: 60, onSubmit: (name) => void updateProfile(name) })} />
         <Row leading={<IconTile icon={Smartphone} color={colors.ink2} />} title="This device" value={profileDeviceLabel()} />
       </Group>
+      <YourPicture />
 
       {!!error && <T variant="footnote" color="danger">{error}</T>}
       {!home ? <Loading label="Loading profile" /> : <>

@@ -316,6 +316,30 @@ export function panelRows<P extends Pick<PanelView, "size">>(panels: P[]): P[][]
 /** Whether a panel runs an app (a custom view), which keeps what people do in it. */
 export const isApp = (panel: Pick<PanelView, "blocks">) => panel.blocks.some((block) => block.type === "html");
 
+/**
+ * How an opened panel is laid out. A panel that is only an app fills the screen: its page scrolls by
+ * itself, and its notes and refresh line move to a sheet the bar opens, so nothing sits under the app.
+ * Any other panel scrolls as one page with its notes at the end, and an app in it takes its own height.
+ */
+export function panelLayout(panel: Pick<PanelView, "blocks" | "notes">, canWrite: boolean): { fill: boolean; notesInSheet: boolean; notesButton: boolean } {
+  const fill = panel.blocks.length > 0 && panel.blocks.every((block) => block.type === "html");
+  // The same rule as the notes themselves: shown when the person may write one or there are some to read.
+  const hasNotes = canWrite || (panel.notes?.length ?? 0) > 0;
+  return { fill, notesInSheet: fill, notesButton: fill && hasNotes };
+}
+
+/** The count on the notes button: nothing for none, "9+" past nine. */
+export const noteBadge = (count: number) => (count <= 0 ? undefined : count > 9 ? "9+" : String(count));
+
+/**
+ * The room the floating ask bar and its chips take at the bottom of a full-screen app, so the app's
+ * page can scroll its last line above them. `bar` and `chips` are the heights drawn, 0 when not shown.
+ */
+export function askRoom({ bottom, bar, chips, gap }: { bottom: number; bar: number; chips: number; gap: number }): number {
+  if (!bar) return bottom + gap;
+  return bottom + gap + bar + (chips ? chips + gap / 2 : 0) + gap;
+}
+
 /** The most panels a phone keeps pinned to Home. */
 export const MAX_PANEL_PINS = 24;
 

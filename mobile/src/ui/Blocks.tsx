@@ -11,7 +11,7 @@ import { brand, radius, space, useTheme } from "./theme";
 const TONES: Record<string, Tone> = { neutral: "neutral", positive: "success", warning: "warning", negative: "danger", accent: "accent" };
 const SERIES = [brand.clay, brand.tide, brand.honey, brand.fern, brand.rose];
 
-function Block({ block, title, onAnswer, state, fill }: { block: PanelBlock; title?: string; onAnswer?: (text: string) => void; state?: FrameState; fill?: boolean }) {
+function Block({ block, title, onAnswer, state, fill, bottom }: { block: PanelBlock; title?: string; onAnswer?: (text: string) => void; state?: FrameState; fill?: boolean; bottom?: number }) {
   const { colors } = useTheme();
   switch (block.type) {
     case "markdown":
@@ -154,7 +154,7 @@ function Block({ block, title, onAnswer, state, fill }: { block: PanelBlock; tit
     }
     case "html":
       // A page the bot wrote, drawn in a web view that can't reach the network or the app.
-      return <HtmlFrame frame={block.frame} height={block.height} title={title} onAnswer={onAnswer} state={state} fill={fill} inset={!fill} />;
+      return <HtmlFrame frame={block.frame} height={block.height} title={title} onAnswer={onAnswer} state={state} fill={fill} inset={!fill} bottom={bottom} />;
     default:
       return null;
   }
@@ -170,6 +170,7 @@ export function Blocks({
   onAnswer,
   state,
   fill,
+  bottom,
 }: {
   blocks: PanelBlock[];
   title?: string;
@@ -178,11 +179,13 @@ export function Blocks({
   state?: FrameState;
   /** Let an HTML app block fill the available height on an opened panel page. */
   fill?: boolean;
+  /** With `fill`, room under an app's page for what floats over it. */
+  bottom?: number;
 }) {
   return (
     <View style={[{ gap: space.lg }, fill && { flex: 1 }]}>
       {blocks.map((block, index) => (
-        <Block key={block.type === "html" ? block.frame : index} block={block} title={title} onAnswer={onAnswer} state={state} fill={fill} />
+        <Block key={block.type === "html" ? block.frame : index} block={block} title={title} onAnswer={onAnswer} state={state} fill={fill} bottom={bottom} />
       ))}
     </View>
   );

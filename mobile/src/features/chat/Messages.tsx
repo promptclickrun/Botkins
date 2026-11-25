@@ -22,7 +22,11 @@ import { boardKindLabel, splitBoardQuote } from "./compose";
 import { AlertActions } from "@/features/bots/AlertActions";
 import { ConnectCard } from "./ConnectCard";
 import { McpAppCard } from "./McpAppCard";
-import { myself, speakerLabel } from "./people";
+import { useChatPeople } from "./ChatPeopleLook";
+import { authorOf, personTag, sideOf } from "./chatSides";
+import { myself } from "./people";
+import { PersonBadge } from "./PersonBadge";
+import { accentOf, type PersonLook } from "./personLook";
 import { DOUBLE_TAP_MS, select, selectionTouch, useSelecting } from "./selecting";
 import { answerText, type Ending, type Item } from "./turn";
 import { FACE_INDENT, mostIcon } from "./WorkRows";
@@ -154,8 +158,16 @@ function Stamp({ time, align }: { time?: number; align: "flex-start" | "flex-end
   );
 }
 
-export function UserBubble({ message, index, timestamps, id, actions, paths, media, speaker }: { message: Message; index: number; timestamps: boolean; id: string; actions?: MessageActions; paths?: PathLinks; media: Artifact[]; /** Who wrote it, in a chat several people write in. */ speaker?: string }) {
-  const { colors } = useTheme();
+/**
+ * A person's message. This phone's own person's is on the right; anyone else's is on the left
+ * (chatSides.ts), with their name in their accent color over it and their round badge at its top
+ * left, on the first of their messages in a row.
+ */
+export function UserBubble({ message, index, timestamps, id, actions, paths, media, side = "right", speaker, person, first = true }: { message: Message; index: number; timestamps: boolean; id: string; actions?: MessageActions; paths?: PathLinks; media: Artifact[]; /** "left" for someone else's message. */ side?: "left" | "right"; /** Who wrote it, when it is someone else's. */ speaker?: string; /** Their badge's look. */ person?: PersonLook; /** The first of their messages in a row: it shows their name and badge. */ first?: boolean }) {
+  const { colors, dark } = useTheme();
+  const left = side === "left";
+  const end = left ? "flex-start" : "flex-end";
+  const corner = left ? { borderTopLeftRadius: first ? 6 : 20 } : { borderBottomRightRadius: 6 };
   const selecting = useSelecting((state) => state.id === id);
   // A Today item the person chose to discuss is a card here: it comes as a record the computer kept
   // with the message, or (from a computer that can't keep one) quoted at the top of the text.
@@ -166,10 +178,10 @@ export function UserBubble({ message, index, timestamps, id, actions, paths, med
   const chips = (message.mentions ?? []).filter((mention) => mention.kind !== "board");
   // An answer to a bot's request shows the request it answered above it, as a quote does.
   const above = message.quote || message.answer?.title;
-  const bubble = (
-    <View style={{ alignItems: "flex-end", gap: 4, paddingLeft: "16%" }}>
-      {!!speaker && (
-        <T variant="caption" weight="600" color="muted" numberOfLines={1}>
+  const column = (
+    <View style={left ? { flex: 1, minWidth: 0, alignItems: end, gap: 4 } : { alignItems: end, gap: 4, paddingLeft: "16%" }}>
+      {left && first && !!speaker && (
+        <T variant="footnote" weight="500" numberOfLines={1} style={{ color: accentOf(person?.id ?? authorOf(message), dark) }}>
           {speaker}
         </T>
       )}
@@ -182,7 +194,7 @@ export function UserBubble({ message, index, timestamps, id, actions, paths, med
         </View>
       )}
       {!!message.attachments?.length && (
-        <View style={{ alignItems: "flex-end", gap: 4 }}>
+        <View style={{ alignItems: end, gap: 4 }}>
           {message.attachments.map((file) => (
             <View key={file.path} style={{ flexDirection: "row", alignItems: "center", gap: 6, maxWidth: "100%", height: 32, paddingHorizontal: space.md, borderRadius: radius.pill, backgroundColor: colors.sunken }}>
               <FileText size={14} color={colors.muted} strokeWidth={2.2} />
@@ -209,7 +221,7 @@ export function UserBubble({ message, index, timestamps, id, actions, paths, med
         </View>
       )}
       {chips.length > 0 && (
-        <View style={{ flexDirection: "row", flexWrap: "wrap", justifyContent: "flex-end", gap: 4 }}>
+        <View style={{ flexDirection: "row", flexWrap: "wrap", justifyContent: end, gap: 4 }}>
           {chips.map((mention) => {
             const Icon = mention.kind === "project" ? FolderKanban : mention.kind === "wiki" ? BookOpen : mention.kind === "file" ? FileText : null;
             return (
@@ -225,7 +237,7 @@ export function UserBubble({ message, index, timestamps, id, actions, paths, med
       )}
       {!!rest &&
         (selecting ? (
-          <View {...selectionTouch} style={{ backgroundColor: colors.bubble, borderRadius: 20, borderBottomRightRadius: 6, paddingHorizontal: 15, paddingVertical: 10 }}>
+          <View {...selectionTouch} style={{ backgroundColor: colors.bubble, borderRadius: 20, ...corner, paddingHorizontal: 15, paddingVertical: 10 }}>
             <SelectableText text={rest} markdown={false} color={colors.onBubble} onDone={() => useSelecting.getState().id === id && select(null)} />
           </View>
         ) : (
@@ -242,16 +254,25 @@ export function UserBubble({ message, index, timestamps, id, actions, paths, med
             }}
           >
             <DoubleTap id={id}>
-              <View style={{ backgroundColor: colors.bubble, borderRadius: 20, borderBottomRightRadius: 6, paddingHorizontal: 15, paddingVertical: 10 }}>
+              <View style={{ backgroundColor: colors.bubble, borderRadius: 20, ...corner, paddingHorizontal: 15, paddingVertical: 10 }}>
                 <Markdown text={rest} inline color={colors.onBubble} paths={paths} />
               </View>
             </DoubleTap>
           </TextHoldMenu>
         ))}
-      {media.length > 0 && <ArtifactChips items={media} align="flex-end" />}
+      {media.length > 0 && <ArtifactChips items={media} align={end} />}
       <Reactions message={message} />
-      {timestamps && <Stamp time={message.time} align="flex-end" />}
+      {timestamps && <Stamp time={message.time} align={end} />}
     </View>
+  );
+  // Someone else's: their badge at the top left (room kept for it under the first), then the column.
+  const bubble = left ? (
+    <View style={{ flexDirection: "row", alignItems: "flex-start", gap: space.sm, paddingRight: "12%" }}>
+      <View style={{ width: 26 }}>{first && !!person && <PersonBadge person={person} size={26} />}</View>
+      {column}
+    </View>
+  ) : (
+    column
   );
   if (rest || !actions?.onReact) return bubble;
   return <TextHoldMenu actions={extraActions(actions)} onPressAction={({ nativeEvent }) => runExtra(nativeEvent.event, message, index, actions)}>
@@ -342,7 +363,7 @@ function Reply({ message, index, id, botId, markdown, actions, paths, parts }: {
   );
 }
 
-export const MessageRow = memo(function MessageRow({ item, chatId, group, bots, onSend, onDraft, actions, replyRef }: { replyRef?: RefObject<ComponentRef<typeof View> | null>; item: Extract<Item, { kind: "message" }>; chatId: string; group: boolean; bots: Map<string, Bot>; onSend: (text: string) => void; /** Text a custom view hands over, for the message box. */ onDraft?: (text: string) => void; actions?: MessageActions }) {
+export const MessageRow = memo(function MessageRow({ item, chatId, group, bots, onSend, onDraft, actions, replyRef, continues = false }: { replyRef?: RefObject<ComponentRef<typeof View> | null>; item: Extract<Item, { kind: "message" }>; chatId: string; group: boolean; bots: Map<string, Bot>; /** It follows a message by the same person: no name or badge again. */ continues?: boolean; onSend: (text: string) => void; /** Text a custom view hands over, for the message box. */ onDraft?: (text: string) => void; actions?: MessageActions }) {
   const rich = useChatPrefs((prefs) => prefs.richCards);
   const markdown = useChatPrefs((prefs) => prefs.markdown);
   const timestamps = useChatPrefs((prefs) => prefs.timestamps);
@@ -351,14 +372,19 @@ export const MessageRow = memo(function MessageRow({ item, chatId, group, bots, 
   const chat = useChat(chatId);
   const chatBot = chat?.botId;
   const speaker = message.botId ?? chatBot;
-  // In a chat several people write in, a person's message says who wrote it.
-  const people = usePart("team")?.people;
+  // Someone else's message is on the left, with their name and badge (chatSides.ts).
+  const people = useChatPeople();
   const me = myself(usePart("meta"));
   // Paths the computer knows become links, and a reply's MEDIA: attachments are drawn where they were
   // written (under the text in the person's own message). A reply still
   // being written is left alone until it ends, so half a path is never asked about.
   const links = useMessageLinks(chatId, message.text ?? "", message.role !== "command" && !(latest && run?.status === "Working"));
-  if (message.role === "user") return <UserBubble message={message} index={item.index} timestamps={timestamps} id={chatId + ":" + item.key} actions={actions} paths={links.paths} media={links.media} speaker={speakerLabel(message, run, chat, people, me)} />;
+  if (message.role === "user") {
+    const side = sideOf(message, me);
+    const author = authorOf(message);
+    const person = side === "left" ? (people.get(author) ?? { id: author, name: personTag(message, undefined, me, people) }) : undefined;
+    return <UserBubble message={message} index={item.index} timestamps={timestamps} id={chatId + ":" + item.key} actions={actions} paths={links.paths} media={links.media} side={side} speaker={personTag(message, run, me, people)} person={person} first={!continues} />;
+  }
   if (message.role === "command") return (
     <TextHoldMenu actions={extraActions(actions)} onPressAction={({ nativeEvent }) => runExtra(nativeEvent.event, message, item.index, actions)}>
       <View><CommandBlock message={message} /><Reactions message={message} /></View>

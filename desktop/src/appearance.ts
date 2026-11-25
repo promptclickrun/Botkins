@@ -3,17 +3,17 @@
 // theme's id), the font and the text size.
 // The last appearance is remembered in this window's storage, so the next launch draws in the
 // right colors before the workspace has answered.
-import { DEFAULT_FONT, DEFAULT_THEME, fontFamilyOf, fontShown, inkOn, type Mode, textScale, themeFor, themeVars, withContrast } from "./themes";
-import type { Appearance } from "./types";
+import { backdropOf, DEFAULT_BACKDROP, DEFAULT_FONT, DEFAULT_THEME, fontFamilyOf, fontShown, inkOn, type Mode, textScale, themeFor, themeVars, withContrast } from "./themes";
+import type { Appearance, BackdropId } from "./types";
 
 const KEY = "botkins.appearance";
 /** Fired on `window` when light or dark changes, for anything drawn outside CSS. */
 export const APPEARANCE_EVENT = "botkins-appearance";
 const system = matchMedia("(prefers-color-scheme: dark)");
 
-type Chosen = Pick<Appearance, "theme" | "colorTheme" | "darkColorTheme" | "contrast" | "textSize" | "font" | "bubble">;
-const usual: Chosen = { theme: "system", colorTheme: DEFAULT_THEME, darkColorTheme: null, contrast: 0, textSize: "default", font: DEFAULT_FONT, bubble: "theme" };
-let current: Chosen = usual;
+type Chosen = Pick<Appearance, "theme" | "colorTheme" | "darkColorTheme" | "contrast" | "textSize" | "font" | "bubble"> & { backdrop?: BackdropId };
+const usual: Chosen & { backdrop: BackdropId } = { theme: "system", colorTheme: DEFAULT_THEME, darkColorTheme: null, contrast: 0, textSize: "default", font: DEFAULT_FONT, bubble: "theme", backdrop: DEFAULT_BACKDROP };
+let current: Chosen & { backdrop: BackdropId } = usual;
 
 export const modeOf = (choice: Appearance["theme"]): Mode => (choice === "system" ? (system.matches ? "dark" : "light") : choice);
 
@@ -35,6 +35,7 @@ function draw() {
     root.style.setProperty("--bubble-ink", inkOn(current.bubble));
   }
   root.dataset.theme = theme.id;
+  root.dataset.backdrop = backdropOf(current.backdrop);
   if (root.dataset.mode !== mode) {
     root.dataset.mode = mode;
     window.dispatchEvent(new Event(APPEARANCE_EVENT));
@@ -43,8 +44,8 @@ function draw() {
 
 /** Applies an appearance and remembers it for the next launch. */
 export function applyAppearance(appearance: Chosen) {
-  const { theme, colorTheme, darkColorTheme = null, contrast = 0, textSize, font, bubble } = appearance;
-  current = { theme, colorTheme, darkColorTheme, contrast, textSize, font, bubble };
+  const { theme, colorTheme, darkColorTheme = null, contrast = 0, textSize, font, bubble, backdrop } = appearance;
+  current = { theme, colorTheme, darkColorTheme, contrast, textSize, font, bubble, backdrop: backdropOf(backdrop) };
   draw();
   try {
     localStorage.setItem(KEY, JSON.stringify(current));
@@ -63,7 +64,7 @@ export function previewContrast(contrast: number) {
 export function startAppearance() {
   try {
     const saved = JSON.parse(localStorage.getItem(KEY) ?? "null");
-    if (saved && typeof saved === "object") current = { ...usual, ...saved };
+    if (saved && typeof saved === "object") current = { ...usual, ...saved, backdrop: backdropOf(saved.backdrop) };
   } catch {
     // Unreadable: the usual look.
   }

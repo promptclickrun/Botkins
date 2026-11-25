@@ -1,0 +1,774 @@
+/* ============================================================================
+   Glisse Liquid Glass token bridge + Botkins desktop harmonization + Backdrops
+   ============================================================================
+   glisse/dist/styles.css defines tokens with :where(:root, [data-theme="light"]),
+   :where([data-theme="dark"]), and @media (prefers-color-scheme: dark) :where(...).
+   Botkins sets root[data-mode="light"|"dark"] and root[data-theme="<themeId>"].
+   Mapping ALL 28 --lg-* tokens on :root[data-mode="light"] and :root[data-mode="dark"]
+   guarantees higher specificity (0,2,0 > 0,0,0) and prevents OS dark-mode bleed
+   when Botkins is explicitly in light mode.
+*/
+
+:root[data-mode="light"] {
+  --lg-foreground: var(--ink);
+  --lg-muted: var(--muted);
+  --lg-glass: color-mix(in srgb, var(--raised) 74%, transparent);
+  --lg-glass-active: color-mix(in srgb, var(--sunken) 88%, var(--ink) 4%);
+  --lg-edge: color-mix(in srgb, var(--line-strong) 70%, transparent);
+  --lg-drop: color-mix(in srgb, var(--shadow-color) 10%, transparent);
+  --lg-selection: color-mix(in srgb, var(--ink) 10%, transparent);
+  --lg-lens: color-mix(in srgb, var(--ink) 3%, transparent);
+  --lg-lens-drop: color-mix(in srgb, var(--shadow-color) 14%, transparent);
+  --lg-segment-track: color-mix(in srgb, var(--ink) 8%, transparent);
+  --lg-segment-thumb: var(--raised);
+  --lg-segment-label: var(--ink);
+  --lg-segment-lens: color-mix(in srgb, var(--ink) 4%, transparent);
+  --lg-surface: color-mix(in srgb, var(--surface) 90%, transparent);
+  --lg-surface-edge: var(--line);
+  --lg-shadow: color-mix(in srgb, var(--shadow-color) 18%, transparent);
+  --lg-highlight: var(--hover);
+  --lg-separator: var(--line);
+  --lg-destructive: var(--danger);
+  --lg-track: color-mix(in srgb, var(--ink) 22%, transparent);
+  --lg-rail: color-mix(in srgb, var(--ink) 12%, transparent);
+  --lg-on: var(--success);
+  --lg-fill: var(--accent);
+  --lg-ring: var(--accent);
+  --lg-lens-shine: -1.5;
+  --lg-rim-shine: 0.3;
+  --lg-ease: cubic-bezier(0.25, 0.1, 0.25, 1);
+}
+
+:root[data-mode="dark"] {
+  --lg-foreground: var(--ink);
+  --lg-muted: var(--muted);
+  --lg-glass: color-mix(in srgb, var(--surface) 72%, transparent);
+  --lg-glass-active: color-mix(in srgb, var(--raised) 84%, transparent);
+  --lg-edge: color-mix(in srgb, var(--line-strong) 80%, transparent);
+  --lg-drop: color-mix(in srgb, var(--shadow-color) 22%, transparent);
+  --lg-selection: color-mix(in srgb, var(--ink) 15%, transparent);
+  --lg-lens: color-mix(in srgb, var(--ink) 6%, transparent);
+  --lg-lens-drop: transparent;
+  --lg-segment-track: color-mix(in srgb, var(--ink) 9%, transparent);
+  --lg-segment-thumb: color-mix(in srgb, var(--raised) 92%, var(--ink) 14%);
+  --lg-segment-label: var(--ink);
+  --lg-segment-lens: transparent;
+  --lg-surface: color-mix(in srgb, var(--surface) 88%, transparent);
+  --lg-surface-edge: var(--line-strong);
+  --lg-shadow: color-mix(in srgb, var(--shadow-color) 48%, transparent);
+  --lg-highlight: var(--hover);
+  --lg-separator: var(--line);
+  --lg-destructive: var(--danger);
+  --lg-track: color-mix(in srgb, var(--ink) 26%, transparent);
+  --lg-rail: color-mix(in srgb, var(--ink) 14%, transparent);
+  --lg-on: var(--success);
+  --lg-fill: var(--accent);
+  --lg-ring: var(--accent);
+  --lg-lens-shine: 1;
+  --lg-rim-shine: 0.13;
+  --lg-ease: cubic-bezier(0.25, 0.1, 0.25, 1);
+}
+
+/* ============================================================================
+   Shield glisse primitives from Botkins' broad global button / input rules
+   ============================================================================ */
+
+/* Ink dark theme has --accent: #ffffff and --on-accent: #000000; honor --on-accent! */
+.lg-button[data-variant="filled"]:not([data-tint]):not([data-destructive]) {
+  color: var(--on-accent);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .lg-button[data-variant="filled"]:hover {
+    background-color: color-mix(in srgb, var(--lg-button-fill) 88%, var(--canvas));
+  }
+}
+
+/* Prevent global `button:hover { background-color: var(--hover); }` from leaking */
+button.lg-switch,
+button.lg-switch:hover,
+button.lg-tab,
+button.lg-tab:hover,
+button.lg-input-clear,
+button.lg-input-clear:hover {
+  background-color: transparent;
+}
+
+button.lg-button {
+  height: 34px;
+  padding: 0 14px;
+  border-radius: 17px;
+  font-size: calc(13.5px * var(--text-scale));
+  font-weight: 500;
+  gap: 6px;
+}
+
+button.lg-button[data-icon] {
+  padding-left: 11px;
+}
+
+button.lg-button[data-icon="only"] {
+  width: 34px;
+  height: 34px;
+  padding: 0;
+}
+
+button.lg-button > svg {
+  width: 16px;
+  height: 16px;
+}
+
+button.lg-button.lg-compact {
+  height: 30px;
+  padding: 0 11px;
+  border-radius: 15px;
+  font-size: calc(12.5px * var(--text-scale));
+}
+
+button.lg-button.lg-compact[data-icon="only"] {
+  width: 30px;
+  height: 30px;
+  padding: 0;
+}
+
+/* Glisse Input & SearchField harmonization — shield inner <input> from Botkins global input/settings rules */
+.lg-input {
+  max-width: none;
+  height: 34px;
+  padding: 0 12px;
+  border-radius: 17px;
+  gap: 8px;
+}
+
+.lg-input input,
+.set-control .lg-input input,
+.botform .lg-input input {
+  height: 100%;
+  padding: 0;
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  outline: none;
+  font-size: calc(13.5px * var(--text-scale));
+}
+
+.lg-input input:focus-visible {
+  outline: none;
+}
+
+.lg-input:has(input:focus-visible) {
+  outline: 2px solid var(--lg-ring);
+  outline-offset: 2px;
+}
+
+/* Glisse Slider harmonization — shield inner range input from .set-control input rules */
+.lg-slider {
+  height: 36px;
+  min-width: 150px;
+}
+
+.lg-slider .lg-slider-track {
+  inset: 19px 16px auto;
+}
+
+.lg-slider .lg-slider-thumb {
+  top: -2px;
+}
+
+.lg-slider input,
+.set-control .lg-slider input {
+  height: 36px;
+  padding: 0;
+  margin: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  outline: none;
+}
+
+.lg-slider input:focus-visible {
+  outline: none;
+}
+
+/* Glisse Switch alignment in settings rows */
+.lg-switch {
+  display: inline-block;
+  vertical-align: middle;
+}
+
+/* Glisse SegmentedControl & TabBar desktop sizing */
+.lg-segmented {
+  --lg-tab-height: 30px;
+  font-size: calc(13px * var(--text-scale));
+}
+
+.lg-segmented :is(.lg-tab, .lg-tab-copy) {
+  font-size: calc(13px * var(--text-scale));
+  white-space: nowrap;
+  padding: 0 6px;
+}
+
+.lg-tab-bar {
+  --lg-tab-height: 32px;
+  --lg-tab-inset: 3px;
+}
+
+.lg-tab-bar :is(.lg-tab, .lg-tab-copy) {
+  font-size: calc(13.5px * var(--text-scale));
+  font-weight: 500;
+  white-space: nowrap;
+  gap: 6px;
+}
+
+.lg-tab-bar .count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 9px;
+  font-size: calc(11px * var(--text-scale));
+  font-weight: 700;
+  background: var(--accent);
+  color: var(--on-accent);
+  margin-left: 4px;
+}
+
+/* Glisse Menu harmonization */
+.lg-menu {
+  z-index: 4;
+}
+
+.lg-menu .lg-menu-trigger,
+.lg-menu button.lg-button[data-icon="only"] {
+  width: 32px;
+  height: 32px;
+}
+
+.lg-menu-card {
+  z-index: 40;
+}
+
+.lg-menu-item {
+  font-size: calc(13.5px * var(--text-scale));
+}
+
+/* Glisse Glass floating dock & pill surfaces */
+.composer-glass.lg-glass {
+  border-radius: var(--radius-lg);
+  --lg-blur: 14px;
+  box-shadow:
+    inset 0 0 0 0.5px var(--lg-edge),
+    0 6px 24px color-mix(in srgb, var(--shadow-color) 14%, transparent);
+}
+
+.composer-glass.lg-glass[hidden] {
+  display: none;
+}
+
+.composer-glass .composer {
+  background: transparent;
+  border-color: transparent;
+}
+
+.composer-glass .composer:focus-within {
+  border-color: transparent;
+}
+
+.composer-glass:focus-within {
+  box-shadow:
+    inset 0 0 0 1px var(--line-strong),
+    0 8px 28px color-mix(in srgb, var(--shadow-color) 18%, transparent);
+}
+
+button.lg-button.lg-compact {
+  height: 32px;
+  padding: 0 12px;
+  font-size: calc(13px * var(--text-scale));
+  font-weight: 500;
+}
+
+button.lg-button.send-glass {
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  border-radius: 50%;
+  flex: none;
+}
+
+button.lg-button.send-glass.stop-quiet {
+  opacity: 0.82;
+}
+
+.lg-input.lg-search-compact {
+  height: 32px;
+  width: min(230px, 100%);
+  font-size: calc(13.5px * var(--text-scale));
+}
+
+.thinking-levels.is-disabled {
+  opacity: 0.45;
+  pointer-events: none;
+}
+
+.plugin-top-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.plugin-refresh-glass.lg-button {
+  width: 34px;
+  height: 34px;
+  flex: none;
+}
+
+.plugin-mode-tabs-glass {
+  margin: 10px 0 6px;
+}
+
+.chathead-menu button.lg-button {
+  width: 32px;
+  height: 32px;
+}
+
+/* Floating scroll-to-latest button as liquid glass */
+button.lg-button.to-latest {
+  position: absolute;
+  left: 50%;
+  bottom: calc(var(--compose-room, 0px) + 12px);
+  width: 38px;
+  height: 38px;
+  padding: 0;
+  border-radius: 50%;
+  --lg-blur: 12px;
+  z-index: 4;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transform: translateX(-50%) scale(0.8);
+  transition:
+    opacity 0.18s ease,
+    transform 0.18s ease,
+    visibility 0s linear 0.18s;
+}
+
+button.lg-button.to-latest.shown {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+  transform: translateX(-50%) scale(1);
+  transition:
+    opacity 0.2s ease,
+    transform 0.24s cubic-bezier(0.34, 1.4, 0.64, 1),
+    visibility 0s;
+}
+
+button.lg-button.to-latest.shown:active {
+  transform: translateX(-50%) scale(0.94);
+}
+
+/* Floating glass status notice */
+.canvas-notice.lg-glass {
+  border-radius: 999px;
+  background-color: color-mix(in srgb, var(--surface) 84%, transparent);
+  color: var(--ink);
+  --lg-blur: 12px;
+}
+
+/* Search inputs in pages & toolbars */
+.search .lg-input {
+  width: 210px;
+  height: 32px;
+}
+
+.plugin-toolbar .lg-input,
+.int-toolbar .lg-input {
+  flex: 1 1 220px;
+  height: 34px;
+}
+
+.mp-search-field.lg-input {
+  width: 100%;
+  height: 34px;
+  margin-bottom: 8px;
+}
+
+.wiki-search-field.lg-input {
+  width: 100%;
+  height: 34px;
+}
+
+.work-tabs-glass {
+  margin-top: 2px;
+}
+
+.work-tools {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* ============================================================================
+   Selectable Appearance Backdrops (clean | mesh | botkins | grid)
+   ============================================================================ */
+
+.shell {
+  position: relative;
+  z-index: 1;
+}
+
+.backdrop-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  overflow: hidden;
+  transition: opacity 220ms ease;
+}
+
+/* Mesh backdrop: vibrant blurred radial blobs + subtle -35deg diagonal sheen */
+.backdrop-mesh {
+  background: var(--canvas);
+}
+
+.backdrop-mesh .bd-blob {
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(50px);
+  opacity: 0.55;
+  will-change: transform;
+}
+
+:root[data-mode="dark"] .backdrop-mesh .bd-blob {
+  opacity: 0.68;
+}
+
+.backdrop-mesh .bd-mesh-red {
+  width: clamp(320px, 38vw, 540px);
+  height: clamp(320px, 38vw, 540px);
+  top: -8%;
+  left: -6%;
+  background: radial-gradient(circle, #ff3b30 0%, rgba(255, 59, 48, 0.55) 55%, transparent 78%);
+}
+
+.backdrop-mesh .bd-mesh-blue {
+  width: clamp(360px, 42vw, 600px);
+  height: clamp(360px, 42vw, 600px);
+  top: 22%;
+  right: -8%;
+  background: radial-gradient(circle, #007aff 0%, rgba(0, 122, 255, 0.55) 55%, transparent 78%);
+}
+
+.backdrop-mesh .bd-mesh-green {
+  width: clamp(320px, 36vw, 520px);
+  height: clamp(320px, 36vw, 520px);
+  bottom: -10%;
+  left: 14%;
+  background: radial-gradient(circle, #34c759 0%, rgba(52, 199, 89, 0.52) 55%, transparent 78%);
+}
+
+.backdrop-mesh .bd-sheen {
+  position: absolute;
+  inset: 0;
+  /* A faint sheen with soft edges: narrow bands, so it never reads as a pattern over the color. */
+  background-image: repeating-linear-gradient(
+    -35deg,
+    rgba(255, 255, 255, 0.05) 0 10px,
+    transparent 14px 36px
+  );
+}
+
+:root[data-mode="light"] .backdrop-mesh .bd-sheen {
+  background-image: repeating-linear-gradient(
+    -35deg,
+    rgba(255, 255, 255, 0.12) 0 10px,
+    transparent 14px 36px
+  );
+}
+
+/* Botkins backdrop: ambient indigo, pink, and teal radial orbs */
+.backdrop-botkins {
+  background: var(--canvas);
+}
+
+.backdrop-botkins .bd-blob {
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(55px);
+  opacity: 0.52;
+}
+
+:root[data-mode="dark"] .backdrop-botkins .bd-blob {
+  opacity: 0.72;
+}
+
+.backdrop-botkins .bd-botkins-indigo {
+  width: clamp(360px, 44vw, 620px);
+  height: clamp(360px, 44vw, 620px);
+  top: -10%;
+  left: -6%;
+  background: radial-gradient(circle, #3b82f6, #6366f1 65%, transparent);
+}
+
+.backdrop-botkins .bd-botkins-pink {
+  width: clamp(340px, 40vw, 560px);
+  height: clamp(340px, 40vw, 560px);
+  top: 24%;
+  right: -8%;
+  background: radial-gradient(circle, #ec4899, #8b5cf6 65%, transparent);
+}
+
+.backdrop-botkins .bd-botkins-teal {
+  width: clamp(340px, 38vw, 540px);
+  height: clamp(340px, 38vw, 540px);
+  bottom: -12%;
+  left: 18%;
+  background: radial-gradient(circle, #14b8a6, #0ea5e9 65%, transparent);
+}
+
+/* Grid backdrop: subtle 28px hairline grid over crisp dark/light ground */
+.backdrop-grid {
+  background-color: #f4f6fa;
+}
+
+:root[data-mode="dark"] .backdrop-grid {
+  background-color: #10131a;
+}
+
+.backdrop-grid .bd-grid-pattern {
+  position: absolute;
+  inset: 0;
+  background-size: 28px 28px;
+  background-image:
+    linear-gradient(to right, rgba(120, 130, 155, 0.28) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(120, 130, 155, 0.28) 1px, transparent 1px);
+}
+
+/* ============================================================================
+   Translucent shell surfaces when a non-"clean" backdrop is active
+   ============================================================================ */
+
+:root[data-backdrop]:not([data-backdrop="clean"]) {
+  background: transparent;
+}
+
+:root[data-backdrop]:not([data-backdrop="clean"]) body {
+  background: transparent;
+}
+
+:root[data-backdrop]:not([data-backdrop="clean"]) .shell > aside {
+  background: color-mix(in srgb, var(--rail) 68%, transparent);
+  -webkit-backdrop-filter: blur(22px) saturate(1.4);
+  backdrop-filter: blur(22px) saturate(1.4);
+  border-right: 1px solid color-mix(in srgb, var(--line) 70%, transparent);
+}
+
+:root[data-backdrop]:not([data-backdrop="clean"]) .shell > main {
+  background: color-mix(in srgb, var(--canvas) 26%, transparent);
+}
+
+:root[data-backdrop]:not([data-backdrop="clean"]) .chathead {
+  background: color-mix(in srgb, var(--canvas) 44%, transparent);
+  -webkit-backdrop-filter: blur(18px) saturate(1.35);
+  backdrop-filter: blur(18px) saturate(1.35);
+}
+
+:root[data-backdrop]:not([data-backdrop="clean"]) :is(
+  .set-card,
+  .botcard,
+  .hero,
+  .card,
+  .live-panel,
+  .board-card,
+  .space-panel,
+  .work-card
+) {
+  background: color-mix(in srgb, var(--surface) 74%, transparent);
+  -webkit-backdrop-filter: blur(18px) saturate(1.35);
+  backdrop-filter: blur(18px) saturate(1.35);
+}
+
+:root[data-backdrop]:not([data-backdrop="clean"]) dialog.settings-window {
+  background: color-mix(in srgb, var(--canvas) 82%, transparent);
+  -webkit-backdrop-filter: blur(24px) saturate(1.4);
+  backdrop-filter: blur(24px) saturate(1.4);
+}
+
+:root[data-backdrop]:not([data-backdrop="clean"]) .set-sidebar {
+  background: color-mix(in srgb, var(--rail) 74%, transparent);
+}
+
+/* ============================================================================
+   Settings › Appearance › Backdrop preview cards
+   ============================================================================ */
+
+.backdrop-cards {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  padding: 14px;
+}
+
+@media (max-width: 620px) {
+  .backdrop-cards {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+.backdrop-card {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 7px;
+  padding: 0;
+  border-radius: var(--radius);
+  font-size: calc(13px * var(--text-scale));
+  color: var(--ink);
+  text-align: left;
+  background: transparent;
+}
+
+.backdrop-card:hover {
+  background: transparent;
+}
+
+.backdrop-wire {
+  position: relative;
+  display: block;
+  width: 100%;
+  aspect-ratio: 16 / 10;
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  border: 1.5px solid var(--line);
+  background: var(--canvas);
+  transition: border-color 140ms ease, box-shadow 140ms ease;
+}
+
+.backdrop-card.on .backdrop-wire {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 26%, transparent);
+}
+
+.backdrop-name {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-weight: 500;
+  color: var(--ink);
+}
+
+.backdrop-card.on .backdrop-name {
+  font-weight: 600;
+}
+
+.backdrop-desc {
+  display: block;
+  font-size: calc(11.5px * var(--text-scale));
+  color: var(--muted);
+  line-height: 1.3;
+}
+
+/* Miniature preview graphics inside each Backdrop card */
+.backdrop-wire .bp-blob {
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(12px);
+}
+
+.backdrop-preview-mesh .bp-mesh-red {
+  width: 56%;
+  height: 75%;
+  top: -15%;
+  left: -10%;
+  background: #ff3b30;
+  opacity: 0.78;
+}
+
+.backdrop-preview-mesh .bp-mesh-blue {
+  width: 62%;
+  height: 82%;
+  top: 10%;
+  right: -12%;
+  background: #007aff;
+  opacity: 0.78;
+}
+
+.backdrop-preview-mesh .bp-mesh-green {
+  width: 54%;
+  height: 70%;
+  bottom: -20%;
+  left: 16%;
+  background: #34c759;
+  opacity: 0.72;
+}
+
+.backdrop-preview-mesh .bp-sheen {
+  position: absolute;
+  inset: 0;
+  background-image: repeating-linear-gradient(
+    -35deg,
+    rgba(255, 255, 255, 0.08) 0 3px,
+    transparent 5px 12px
+  );
+}
+
+.backdrop-preview-botkins .bp-botkins-indigo {
+  width: 62%;
+  height: 80%;
+  top: -18%;
+  left: -12%;
+  background: radial-gradient(circle, #3b82f6, #6366f1 68%, transparent);
+  opacity: 0.82;
+}
+
+.backdrop-preview-botkins .bp-botkins-pink {
+  width: 58%;
+  height: 76%;
+  top: 12%;
+  right: -12%;
+  background: radial-gradient(circle, #ec4899, #8b5cf6 68%, transparent);
+  opacity: 0.8;
+}
+
+.backdrop-preview-botkins .bp-botkins-teal {
+  width: 56%;
+  height: 72%;
+  bottom: -20%;
+  left: 18%;
+  background: radial-gradient(circle, #14b8a6, #0ea5e9 68%, transparent);
+  opacity: 0.78;
+}
+
+.backdrop-preview-grid {
+  background-color: #f4f6fa;
+}
+
+:root[data-mode="dark"] .backdrop-preview-grid {
+  background-color: #10131a;
+}
+
+.backdrop-preview-grid .bp-grid {
+  position: absolute;
+  inset: 0;
+  background-size: 12px 12px;
+  background-image:
+    linear-gradient(to right, rgba(120, 130, 155, 0.36) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(120, 130, 155, 0.36) 1px, transparent 1px);
+}
+
+.backdrop-wire .bp-glass-pill {
+  position: absolute;
+  left: 18%;
+  right: 18%;
+  bottom: 14%;
+  height: 22%;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--raised) 62%, transparent);
+  border: 0.5px solid color-mix(in srgb, var(--line-strong) 75%, transparent);
+  -webkit-backdrop-filter: blur(6px);
+  backdrop-filter: blur(6px);
+}

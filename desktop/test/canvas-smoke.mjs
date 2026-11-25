@@ -67,6 +67,12 @@ try {
   await page.setViewportSize({ width: 1190, height: 830 }).catch(() => {});
   await page.getByRole("heading", { name: "Home", exact: true }).waitFor();
   await page.evaluate(() => window.botkins.setPreferences({ approval: "all" }));
+  // This smoke checks the working line and the folded turn: Steps and Thinking are Folded here,
+  // since Open (the island, chat-timeline-smoke.mjs) is the default.
+  await page.evaluate(() => {
+    localStorage.setItem("botkins.chatDisplay", JSON.stringify({ steps: "folded", stepsPicked: true, thinking: "folded", thinkingPicked: true }));
+    window.dispatchEvent(new Event("botkins.chatDisplay"));
+  });
 
   // Empty chat: a role-fitting question with starter prompts that fill the composer.
   const id = await openChat();

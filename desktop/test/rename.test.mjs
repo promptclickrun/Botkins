@@ -156,7 +156,7 @@ test("an earlier folder that could not be linked is used where it is, with every
   assert.equal(join(ws.dir, "files", "pip"), join(appData, LEGACY_NAME, "data", "files", "pip"));
 
   // An appearance saved before themes keeps its look: the light preset decides.
-  assert.deepEqual(ws.state.settings.appearance, { theme: "dark", colorTheme: "fern", themePicked: true, darkColorTheme: null, contrast: 0, textSize: "default", font: "system", fontPicked: false, bubble: "#336699", avatarAnimations: true, lightBackground: "sage", darkBackground: "forest" });
+  assert.deepEqual(ws.state.settings.appearance, { theme: "dark", colorTheme: "fern", themePicked: true, darkColorTheme: null, backdrop: "clean", contrast: 0, textSize: "default", font: "system", fontPicked: false, bubble: "#336699", avatarAnimations: true, lightBackground: "sage", darkBackground: "forest" });
 });
 
 test("the folder is chosen by which one holds a workspace", (t) => {
