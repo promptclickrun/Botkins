@@ -350,7 +350,7 @@ test("a member's agent hears only of what that member may see, and tells that me
 test("a past conversation and a goal surface preparation without an inbox event, with no model call on the next quiet tick", async (t) => {
   const { ws, seen } = setup(t);
   const chat = ws.chat(ws.createChat("pip"));
-  chat.messages.push({ role: "user", text: "I have twenty minutes between trains in York.", time: Date.now() });
+  chat.messages.push({ role: "user", text: "I have twenty minutes between trains in York.", time: Date.now() - HOUR });
   ws.memory.save("pip", "Interested in railway photography.");
   ws.board.post("pip", { kind: "goal", title: "Build my station photo portfolio" });
   ws.setPreferences({ proactive: { enabled: true } });
@@ -454,7 +454,7 @@ test("prior-session grounding and delivery stay inside the recipient and bot bou
   const make = (creator, writer, text, fields = {}) => {
     const chat = ws.chat(ws.createChat("pip"));
     Object.assign(chat, { createdBy: creator, ...fields });
-    chat.messages.push({ role: "user", text, ...(writer && { author: { memberId: writer } }), time: Date.now() });
+    chat.messages.push({ role: "user", text, ...(writer && { author: { memberId: writer } }), time: Date.now() - HOUR });
     return chat;
   };
   ws.memory.save("pip", "PRIVATE owner profile");
@@ -658,4 +658,20 @@ test("delivery into a busy Main chat survives restart and reaches the queued fol
     await working;
     await originalDone;
   }
+});
+
+test("a conversation still going on is left to its own turn, and a decision made there is the person's", async (t) => {
+  const { ws, seen } = setup(t);
+  const chat = ws.chat(ws.createChat("pip"));
+  chat.messages.push({ role: "user", text: "Just merge them now, CI already passed.", time: Date.now() - 60_000 });
+  ws.memory.save("pip", "Ships the app from main.");
+  ws.setPreferences({ proactive: { enabled: true } });
+  on(ws, "pip", { sweepHours: 0 });
+  await ws.panels.routines.run(ws.proactive.routine("pip").chat.id);
+  assert.equal(seen.prompts.length, 1);
+  assert.doesNotMatch(seen.prompts[0], /Just merge them now/, "a live chat is not evidence");
+  assert.match(seen.prompts[0], /What the person said in a conversation is their decision/);
+  chat.messages.at(-1).time = Date.now() - HOUR;
+  await ws.panels.routines.run(ws.proactive.routine("pip").chat.id);
+  assert.match(seen.prompts.at(-1), /Just merge them now/, "once it goes quiet, the conversation counts again");
 });
