@@ -52,6 +52,8 @@ function shape(items: Item[]): string[] {
         return "kept:" + item.line;
       case "open":
         return "open:" + item.line + (item.again ? " (continue)" : "");
+      case "crew":
+        return "crew:" + item.line;
     }
   });
 }
@@ -419,7 +421,10 @@ for (const timeline of [true, false]) {
       const steer = kinds.indexOf("user:Skip the docs");
       assert.ok(steer > 1 && kinds.slice(1, steer).some((k) => k.startsWith("work:")), "work before the steer: " + kinds.join(" | "));
       assert.ok(kinds.slice(steer + 1).some((k) => k.startsWith("work:")), "work after it");
-      assert.ok(kinds.at(-2)?.startsWith("assistant:") && kinds.at(-1) === "activity");
+      // The reply, its activity line, then its crew card (the two helpers).
+      assert.ok(kinds.at(-3)?.startsWith("assistant:") && kinds.at(-2) === "activity", kinds.join(" | "));
+      // An older computer doesn't say which steps were a helper's, so it has no count of them.
+      assert.equal(kinds.at(-1), "crew:2 helpers" + (timeline ? " · " + own.length + " steps" : ""));
     } finally {
       await d.close();
     }

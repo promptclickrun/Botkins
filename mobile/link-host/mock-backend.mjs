@@ -290,6 +290,45 @@ export function isAvatarImage(image) {
   return !!match && match[1].length <= AVATAR_MAX_BASE64;
 }
 
+/** The demo's turn with a crew (chat-crew): see the chat's note in `seed`. */
+function crewRun(t) {
+  const start = t - 4 * MIN;
+  const s = (seconds) => start + seconds * 1000;
+  const step = (id, seconds, took, name, label, more = {}) => ({ id, name, label, status: "Done", started: s(seconds), finished: s(seconds + took), ...more });
+  const searcher = "task-searcher";
+  const reader = "task-reader";
+  return {
+    id: "run-crew", chatId: "chat-crew", title: "Why do coupons double-discount at checkout?", time: start, status: "Completed", detail: "",
+    finished: s(134), summary: "Worked for 2m 14s · 14 steps",
+    usage: { input: 18_400, output: 2_100, model: "claude-fable-5-2" },
+    reasoning: [
+      { id: "think-1", text: "**Finding where coupons apply**\nThe checkout route calls applyCoupon before tax. Read it first, and let helpers look at the rest in parallel.", started: s(2), finished: s(6) },
+      { id: "think-2", text: "**Why the test fails**\nThe discount runs twice when the cart has a subscription item. The test run should show where.", started: s(41), finished: s(44) },
+      { id: "think-3", text: "**Fixing and checking**\nApply the coupon once, in coupons.ts, then rerun the tests.", started: s(92), finished: s(95) },
+    ],
+    steps: [
+      step("crew-read-1", 6, 1, "view", "Read checkout.ts", { input: JSON.stringify({ path: "src/checkout.ts" }) }),
+      step(searcher, 8, 60, "task", "Find where discountTotal changes", { input: JSON.stringify({ description: "Find where discountTotal changes", prompt: "Find every place discountTotal is computed or changed. Report the file and line, and whether it runs per item or per cart." }), output: "Two places so far: cart.ts:88 (per cart) and subscription.ts:142 (per item).", status: "Running", finished: undefined, stoppable: true }),
+      step(reader, 9, 21, "task", "Read Stripe's coupon docs", { input: JSON.stringify({ description: "Read Stripe's coupon docs", prompt: "Read Stripe's docs on coupons and say whether a coupon applies once per invoice or per line item." }), output: "Stripe applies a coupon once per invoice, not per line item." }),
+      { id: "crew-dev", name: "bash", label: "npm run dev", status: "Running", started: s(12), background: true, stoppable: true, input: JSON.stringify({ command: "npm run dev", description: "Start the dev server" }), progress: "> shop@2.4.0 dev\n> vite --port 3000\n\n  VITE v6.2.1  ready in 412 ms\n\n  ➜  Local:   http://localhost:3000/\n10:42:07 hmr update /src/coupons.ts\n10:42:31 hmr update /src/checkout.ts\n10:43:02 GET /api/cart 500\n10:43:05 GET /api/cart 200" },
+      step("crew-s1", 10, 3, "grep", "Searched for discountTotal", { agentId: searcher, input: JSON.stringify({ pattern: "discountTotal" }), output: "6 hits" }),
+      step("crew-s2", 14, 3, "view", "Read cart.ts", { agentId: searcher, input: JSON.stringify({ path: "src/cart.ts" }) }),
+      step("crew-s3", 18, 2, "view", "Read coupons.ts", { agentId: searcher, input: JSON.stringify({ path: "src/coupons.ts" }) }),
+      { id: "crew-s4", name: "view", label: "Read subscription.ts", status: "Running", started: s(22), agentId: searcher, input: JSON.stringify({ path: "src/subscription.ts" }) },
+      step("crew-r1", 11, 6, "web_fetch", "Read stripe.com coupons", { agentId: reader, input: JSON.stringify({ url: "https://stripe.com/docs/billing/subscriptions/coupons" }) }),
+      step("crew-r2", 18, 5, "web_search", "Searched the web for coupon proration", { agentId: reader, input: JSON.stringify({ query: "stripe coupon proration" }) }),
+      step("crew-test-1", 45, 6, "bash", "npm test -- checkout", { status: "Failed", input: JSON.stringify({ command: "npm test -- checkout" }), output: "✓ applies a percent coupon\n✓ applies a fixed coupon\n✗ applies a coupon once for subscriptions\n  expected 18.00, received 16.20\n\nTests: 1 failed, 47 passed, 48 total" }),
+      step("crew-read-2", 60, 2, "view", "Read subscription.ts", { input: JSON.stringify({ path: "src/subscription.ts" }) }),
+      step("crew-edit-1", 96, 3, "edit", "Edited coupons.ts", { input: JSON.stringify({ path: "src/coupons.ts", old_string: "total = applyCoupon(total, cart)", new_string: "if (!cart.couponApplied) total = applyCoupon(total, cart)" }) }),
+      step("crew-test-2", 110, 7, "bash", "npm test -- checkout", { input: JSON.stringify({ command: "npm test -- checkout" }), output: "Tests: 48 passed, 48 total" }),
+    ],
+    agents: [
+      { id: searcher, name: "Code searcher", description: "Find where discountTotal changes", status: "Running", started: s(8), prompt: "Find every place discountTotal is computed or changed. Report the file and line, and whether it runs per item or per cart.", intent: "Reading subscription.ts", stoppable: true },
+      { id: reader, name: "Docs reader", description: "Read Stripe's coupon docs", status: "Done", started: s(9), finished: s(30), prompt: "Read Stripe's docs on coupons and say whether a coupon applies once per invoice or per line item.", result: "Stripe applies a coupon once per invoice, not per line item." },
+    ],
+  };
+}
+
 export function seed() {
   const t = now();
   const bots = [
@@ -344,6 +383,17 @@ export function seed() {
         message("assistant", "Here's a draft:\n\n> Botkins is live. Your bots, on every device, from **$10 a seat**. Thanks to @Ben for the numbers.\n\n@Ana, does this read right to you? Nobody named @Zoe is in this chat, so that stays plain.", 30, { runId: "run-team-3" }),
       ],
     },
+    // A turn with a crew ("stop-helper-v1"): two helpers (one still at work, one back with its
+    // answer) and a dev server left running in the background, with thinking and updates between.
+    {
+      id: "chat-crew", botId: "bot-patch", title: "Coupons at checkout", time: t - 2 * MIN,
+      messages: [
+        message("user", "Why do coupons double-discount at checkout?", 4, { runId: "run-crew" }),
+        { role: "assistant", text: "I'll split this up: one helper searches the code, one reads Stripe's docs. I'll start the dev server too.", time: t - 4 * MIN + 9_000, runId: "run-crew", interim: true },
+        { role: "assistant", text: "Found it: the coupon runs twice for subscription carts. Fixing that now.", time: t - 4 * MIN + 70_000, runId: "run-crew", interim: true },
+        message("assistant", "Fixed: coupons now apply once, even for subscription carts. All 48 checkout tests pass.\n\nThe dev server is still running at http://localhost:3000 if you want to try it.", 2, { runId: "run-crew" }),
+      ],
+    },
     // The refreshes of the Pipeline panel, which its Manage menu opens as "Open refresh history".
     { id: "chat-refresh-pipeline", botId: "bot-tally", title: "Pipeline · Refreshes", panelId: "panel-pipeline", time: t - 40 * MIN, messages: [message("assistant", "Refreshed the pipeline: 14 leads, 9 demos, 6 trials, 3 won.", 40)] },
     { id: "chat-blog", botId: "bot-quill", title: "Blog post intro", time: t - 3 * 24 * HOUR, messages: [message("user", "Tighten this intro for me.", 3 * 24 * 60 + 2, { runId: "run-blog" }), message("assistant", "Here's a shorter version that leads with the result.", 3 * 24 * 60, { runId: "run-blog" })] },
@@ -374,6 +424,7 @@ export function seed() {
     run("run-team-3", "chat-team", "Keep it under 200 characters", 34, { summary: "Worked for 6s", steps: [] }),
     run("run-blog", "chat-blog", "Tighten this intro", 3 * 24 * 60 + 2),
     run("run-brief", "chat-routine-brief", "Morning brief", 5 * 60, { trigger: "scheduled", scheduleId: 1 }),
+    crewRun(t),
   ];
   return {
     bots,
@@ -1436,7 +1487,7 @@ export class MockBackend {
     // "files-v1": a file out and in as text, without a dialog. "folders-v1": the folder browser.
     // "artifacts-v1": what the bots made or were given, from an index the app keeps (here: made up).
     this.capabilities = ["main-chat-v1", "message-reactions-v1", "client-message-id-v1", "voice-turns-v1", "voice-history-v1", "quiet-replies-v1", "routine-delivery-v1", ...(process.env.BOTKINS_DEV_NO_OUTPUT === "off" ? [] : ["routine-no-output-v1"]), "routine-scripts-v1", "routine-models-v1", "routine-silent-v1", "routine-notify-targets-v1", "proactive-agent-v2", "proactive-learning-v1", "proactive-team-v1", "models-v2", "fast-mode-v1", "side-pane-v1", "files-v1", "folders-v1", "project-artifacts-v1", "artifacts-v1", "secure-input-v1", "chat-title-regeneration-v1", ...(process.env.BOTKINS_DEV_USAGE === "off" ? [] : ["provider-usage-v1"])];
-    this.capabilities.push("project-folders-v1", "project-mode-v1", "project-clone-v1", "mark-chats-read-v1");
+    this.capabilities.push("project-folders-v1", "project-mode-v1", "project-clone-v1", "mark-chats-read-v1", "stop-helper-v1");
     if (this.timeline) this.capabilities.push("turn-timeline-v1");
     // "bot-voice-v1": a bot may have a voice of its own. BOTKINS_DEV_BOT_VOICE=off is an older computer.
     this.botVoice = process.env.BOTKINS_DEV_BOT_VOICE !== "off";
@@ -1950,7 +2001,7 @@ export class MockBackend {
       if (!agentId) this.state.intents[id] = label;
       this.changed();
       await this.sleep(ms);
-      if (!live()) return entry;
+      if (!live() || entry.status === "Stopped") return entry;
       Object.assign(entry, { status: "Done", finished: now(), ...(output && { output }) });
       this.changed();
       return entry;
@@ -1961,15 +2012,18 @@ export class MockBackend {
       const helperId = "task-" + randomUUID().slice(0, 8);
       const task = { id: helperId, name: "task", label: description, status: "Running", started: now(), input: JSON.stringify({ description, prompt: asked }, null, 2) };
       run.steps.push(task);
-      const agent = { id: helperId, name, description, status: "Running", started: now(), ...(timeline && { prompt: asked, intent }) };
+      const agent = { id: helperId, name, description, status: "Running", started: now(), ...(timeline && { prompt: asked, intent, stoppable: true }) };
       (run.agents ??= []).push(agent);
       this.changed();
       return (async () => {
         for (const [tool, label, input, ms, output] of work) {
-          if (!live()) break;
+          if (!live() || agent.status === "Stopped") break;
           await step(tool, label, input, ms, output, helperId);
         }
+        // Stopped on its own (stopHelper): it already says so.
+        if (agent.status === "Stopped") return this.changed();
         const finished = now();
+        delete agent.stoppable;
         if (!live()) Object.assign(agent, { status: "Failed", detail: "Stopped with the reply", finished });
         else {
           Object.assign(agent, { status: "Done", finished, ...(timeline && { result }) });
@@ -2729,6 +2783,33 @@ export class MockBackend {
         this.state.panels.push({ ...(spaceId && { spaceId }), ...(chat.createdBy && { createdBy: chat.createdBy }), id: "panel-" + randomUUID().slice(0, 8), key: randomUUID().slice(0, 8), botId: chat.botId, chatId: id, title: clip(what.split("\n")[0], 40), hidden: false, size: "small", revision: 1, updatedAt: now(), routine: null, blocks: [{ type: "markdown", text: "A made-up panel for: " + what }], asks: ["Add last week's numbers", "Make it a chart"] });
       }
       this.turn(chat, run, prompt).catch((error) => console.error(error));
+    },
+    // One helper or background command of the chat's turn ("stop-helper-v1"): a helper's id is the
+    // id of the step that started it. It ends Stopped and can't be stopped again.
+    stopHelper(chatId, id) {
+      if (typeof id !== "string" || !id) throw new Error("Say which helper or command to stop.");
+      const run = this.state.runs.find((one) => one.chatId === chatId && (one.agents?.some((agent) => agent.id === id) || one.steps?.some((step) => step.id === id)));
+      if (!run) throw new Error("That helper isn't in this chat.");
+      const ended = now();
+      const agent = run.agents?.find((one) => one.id === id);
+      if (agent && agent.status === "Running") {
+        Object.assign(agent, { status: "Stopped", finished: ended });
+        delete agent.stoppable;
+        delete agent.intent;
+      }
+      // The step that started the helper, or the background command itself.
+      for (const step of run.steps ?? []) {
+        if (step.id !== id || step.status !== "Running") continue;
+        Object.assign(step, { status: "Stopped", finished: ended });
+        delete step.stoppable;
+      }
+      // The helper's own steps still under way end with it.
+      if (agent)
+        for (const step of run.steps ?? []) {
+          if (step.agentId !== id || step.status !== "Running") continue;
+          Object.assign(step, { status: "Stopped", finished: ended });
+        }
+      this.changed();
     },
     stop(id) {
       const turn = this.turns.get(id);

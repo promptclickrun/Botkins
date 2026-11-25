@@ -1,14 +1,17 @@
-// One helper's activity (route /chat/helper, a sheet): what it was asked, its state and time, the
-// steps it runs as they happen, and what it came back with. It follows the turn live. An older
-// computer doesn't say which steps were a helper's; the sheet says where to get that.
+// One helper (route /chat/helper, a sheet), read as a small chat: what the bot asked it, its steps
+// as they happen (oldest first), what it is doing now, and its answer as its reply. "Stop helper"
+// shows while it runs, when the computer can stop it on its own ("stop-helper-v1"). It follows the
+// turn live. An older computer doesn't say which steps were a helper's; the sheet says where to get that.
 import { useLocalSearchParams } from "expo-router";
 import { CircleDashed } from "lucide-react-native";
-import { useElapsedClock } from "./useElapsedClock";
-import { View } from "react-native";
-import { useCapability, useWatchedChat } from "@/state/hooks";
-import { useApp } from "@/state/store";
-import { duration } from "@/state/time";
-import { Badge, EmptyState, Group, Label, Markdown, Sheet, space, T, type Tone, useTheme } from "@/ui";
+import { StyleSheet, View } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { useBot, useCapability, useChat, useWatchedChat } from "@/state/hooks";
+import { Badge, BotAvatar, Button, EmptyState, Group, Label, Markdown, Sheet, space, T, type Tone, useOnShow, useTheme } from "@/ui";
+import { Shimmer } from "@/ui/Shimmer";
+import { StepMark } from "./bits";
+import { clockOffset } from "./crew";
+import { confirmStop, Elapsed, STOP_HELPER, useRun } from "./CrewCard";
 import { helperDetail } from "./helpers";
 import { StepRow } from "./RunActivity";
 import { TIMELINE_V1 } from "./turn";
@@ -19,49 +22,66 @@ export default function HelperActivity() {
   const { colors } = useTheme();
   const { chatId, runId, helperId } = useLocalSearchParams<{ chatId: string; runId: string; helperId: string }>();
   useWatchedChat(chatId);
-  const saved = useApp((state) => state.chats[chatId]?.runs[runId]);
-  const running = useApp((state) => state.running[chatId]);
-  const run = running?.id === runId ? running : saved;
+  const run = useRun(chatId, runId);
   const timeline = useCapability(TIMELINE_V1);
-  const ticking = run?.agents?.find((agent) => agent.id === helperId)?.status === "Running";
-  const now = useElapsedClock(ticking);
-  const detail = run ? helperDetail(run, helperId, timeline, now) : null;
+  const canStop = useCapability(STOP_HELPER);
+  const onShow = useOnShow();
+  const chatBot = useChat(chatId)?.botId;
+  const bot = useBot(run?.speakers?.at(-1) ?? chatBot);
+  const insets = useSafeAreaInsets();
+  const detail = run ? helperDetail(run, helperId, timeline) : null;
 
-  if (!detail)
+  if (!run || !detail)
     return (
       <Sheet title="Helper">
         <EmptyState icon={CircleDashed} title="Nothing to show" />
       </Sheet>
     );
 
-  const { helper, asked, answer, steps } = detail;
-  const doing = helper.status === "Running" ? helper.intent : undefined;
+  const { helper, asked, answer } = detail;
+  const steps = detail.steps && [...detail.steps].reverse();
+  const live = helper.status === "Running";
+  const botName = bot?.name ?? "The bot";
+  const stoppable = canStop && live && !!helper.stoppable;
+  const bubble = { backgroundColor: colors.surface, borderRadius: 18, paddingHorizontal: space.md, paddingVertical: space.sm + 2 } as const;
+  const line = (color: "muted" | "ink") => (
+    <T variant="footnote" color={color} numberOfLines={2}>
+      {helper.intent}
+    </T>
+  );
+
   return (
-    <Sheet title={helper.name}>
-      <View style={{ gap: space.sm }}>
+    <Sheet
+      title={helper.name}
+      footer={
+        stoppable ? (
+          <View style={{ paddingHorizontal: space.xl, paddingTop: space.sm, paddingBottom: insets.bottom + space.sm, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.line }}>
+            <Button title="Stop helper" variant="danger" wide onPress={() => confirmStop(chatId, helper.id, helper.name, "helper")} />
+          </View>
+        ) : undefined
+      }
+    >
+      <View style={{ gap: space.xs }}>
         <View style={{ flexDirection: "row", alignItems: "center", gap: space.sm, flexWrap: "wrap" }}>
           <Badge label={helper.status} tone={TONE[helper.status] ?? "neutral"} />
-          <T variant="footnote" color="muted" numberOfLines={1} style={{ flexShrink: 1 }}>
-            {duration(detail.took) + (doing ? " · " + doing : "")}
-          </T>
+          <Elapsed started={helper.started} finished={helper.finished} on={onShow && live} />
         </View>
-        {!!helper.description && helper.description !== asked && (
-          <T variant="subhead" color="ink2">
-            {helper.description}
-          </T>
-        )}
+        <T variant="footnote" color="muted" numberOfLines={2}>
+          {"Helper of " + botName + " · started at " + clockOffset(helper.started - run.time)}
+        </T>
       </View>
 
       {!!asked && (
-        <View>
-          <Label>Asked</Label>
-          <Group>
-            <View style={{ padding: space.lg }}>
+        <View style={{ gap: space.xs }}>
+          <Label>{botName + " asked"}</Label>
+          <View style={{ flexDirection: "row", alignItems: "flex-end", gap: space.sm }}>
+            <BotAvatar bot={bot} size={28} animated={false} />
+            <View style={[bubble, { flexShrink: 1 }]}>
               <T variant="callout" selectable>
                 {asked}
               </T>
             </View>
-          </Group>
+          </View>
         </View>
       )}
 
@@ -79,20 +99,32 @@ export default function HelperActivity() {
           </Group>
         ) : (
           <T variant="footnote" color="muted" style={{ paddingHorizontal: space.xs }}>
-            {helper.status === "Running" ? "No steps yet." : "No steps."}
+            {live ? "No steps yet." : "No steps."}
           </T>
+        )}
+        {live && !!helper.intent && (
+          <View style={{ flexDirection: "row", alignItems: "center", gap: space.sm, paddingHorizontal: space.xs, paddingTop: space.md }} accessible accessibilityLabel={"Now: " + helper.intent}>
+            <StepMark status="Running" size={14} />
+            <Shimmer on={onShow} lit={line("ink")} style={{ flex: 1 }}>
+              {line("muted")}
+            </Shimmer>
+          </View>
         )}
       </View>
 
-      {!!answer && (
-        <View>
-          <Label>{helper.status === "Failed" ? "What went wrong" : "Came back with"}</Label>
-          <Group>
-            <View style={{ padding: space.lg }}>
-              <Markdown text={answer} color={helper.status === "Failed" ? colors.danger : undefined} />
+      {helper.status === "Failed" ? (
+        <T variant="callout" color="danger" selectable>
+          {helper.detail || answer || "It stopped with an error."}
+        </T>
+      ) : (
+        !!answer && (
+          <View style={{ gap: space.xs }}>
+            <Label>{helper.name + " answered"}</Label>
+            <View style={bubble}>
+              <Markdown text={answer} />
             </View>
-          </Group>
-        </View>
+          </View>
+        )
       )}
     </Sheet>
   );
