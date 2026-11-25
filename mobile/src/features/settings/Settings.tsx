@@ -49,7 +49,7 @@ export default function Settings() {
       <Group>
         <Row leading={<IconTile icon={Monitor} color={brand.tide} size={36} />} title={name} subtitle={linkLabel(link, route)} chevron onPress={() => router.push("/settings/desktop")} />
         <Row leading={<IconTile icon={MonitorSmartphone} color={brand.tide} />} title="Computers and teams" value={computers > 1 ? String(computers) : undefined} chevron onPress={() => router.push("/settings/computers")} />
-        <Row leading={<IconTile icon={UserRound} color={brand.tide} />} title="Botkins profile" subtitle={profile ? profile.email || profile.name : "Optional · use your identity on other devices"} chevron onPress={() => router.push("/profile")} />
+        <Row leading={<IconTile icon={UserRound} color={brand.tide} />} title="Botkins profile" subtitle={profile ? profile.email || profile.name : meta?.capabilities.includes("people-avatars-v1") ? "Your picture · your identity on other devices" : "Optional · use your identity on other devices"} chevron onPress={() => router.push("/profile")} />
         {owner && <Row leading={<IconTile icon={ScreenShare} color={brand.tide} />} title="Screen" subtitle="See and control your computer" chevron onPress={() => router.push("/remote")} />}
         {owner && meta?.capabilities.includes("teams-v1") && (
           <Row

@@ -15,6 +15,7 @@ import { haptic } from "./haptics";
 import { codePalette, type CodeRun, highlightCode } from "./highlight";
 import { pullRequestUrl } from "../../link-host/pr-url.mjs";
 import { LinkHold, type LinkHoldApi, linkPress, MessageLink, openLink as defaultOpenLink } from "./LinkHold";
+import { type InlineTags, InlineTagsContext, withTags } from "./inlineTags";
 import { parseStreamingMarkdown, type MarkdownStreamCache } from "./markdownCache";
 import { codePreview, type CodePreview, FOLD_LINES } from "./codePreview";
 import { CELL_PAD, tableWidths } from "./tables";
@@ -108,7 +109,7 @@ function fenceClosed(raw: string): boolean {
 export type PathLinks = { has: (path: string) => boolean; find: (text: string) => { start: number; end: number; path: string }[]; open: (path: string) => void };
 
 /** `scale` is the type scale at the person's text size and in their font. */
-type Ctx = { colors: Colors; scale: TypeScale; base: TextStyle; highlight: boolean; wrap: boolean; notes: Map<string, number>; onLink: (url: string) => void; hold: LinkHoldApi | null; paths?: PathLinks };
+type Ctx = { colors: Colors; scale: TypeScale; base: TextStyle; highlight: boolean; wrap: boolean; notes: Map<string, number>; onLink: (url: string) => void; hold: LinkHoldApi | null; paths?: PathLinks; /** A chat's "@Name" tags. */ tags: InlineTags | null };
 
 /** Text with the paths in it that open something drawn as links. Without any, the text as it is. */
 function withPaths(text: string, paths: PathLinks | undefined, color: string, k: string): ReactNode {
@@ -203,7 +204,7 @@ function inline(tokens: Token[] | undefined, ctx: Ctx, key = "i"): ReactNode[] {
         return "\n";
       case "text": {
         const text = token as Tokens.Text;
-        return text.tokens ? inline(text.tokens, ctx, k) : withPaths(unescape(text.text), ctx.paths, ctx.colors.accentText, k);
+        return text.tokens ? inline(text.tokens, ctx, k) : withTags(unescape(text.text), ctx.tags, ctx.base.color as string | undefined, k, (piece, at) => withPaths(piece, ctx.paths, ctx.colors.accentText, at));
       }
       case "escape":
         return (token as Tokens.Escape).text;
@@ -531,17 +532,19 @@ const INLINE = /\[((?:\\.|[^\]\\\n])+)\]\((https?:\/\/[^\s)]+)\)|`([^`\n]+)`|(ht
 
 function InlineOnly({ text, base, paths, plain }: { text: string; base: TextStyle; paths?: PathLinks; plain?: boolean }) {
   const scale = useTheme().type;
+  const tags = useContext(InlineTagsContext);
   const openLink = useContext(MessageLink);
   const hold = useContext(LinkHold);
   // A person's bubble has its own text color; a path in it is underlined in that color.
   const linkColor = String(base.color ?? "");
   const parts = useMemo(() => {
     const out: ReactNode[] = [];
+    const words = (piece: string, at: string) => withTags(piece, tags, linkColor || undefined, at, (rest, key) => withPaths(rest, paths, linkColor, key));
     let last = 0;
     INLINE.lastIndex = 0;
     for (let match = INLINE.exec(text); match; match = INLINE.exec(text)) {
       if (plain && !pullRequestUrl(match[2] ?? match[4])) continue;
-      if (match.index > last) out.push(withPaths(text.slice(last, match.index), paths, linkColor, "t" + last));
+      if (match.index > last) out.push(words(text.slice(last, match.index), "t" + last));
       const k = "u" + match.index;
       const code = match[3];
       if (code !== undefined)
@@ -564,9 +567,9 @@ function InlineOnly({ text, base, paths, plain }: { text: string; base: TextStyl
       }
       last = match.index + match[0].length;
     }
-    if (last < text.length) out.push(withPaths(text.slice(last), paths, linkColor, "t" + last));
+    if (last < text.length) out.push(words(text.slice(last), "t" + last));
     return out;
-  }, [text, base, paths, linkColor, hold, scale, openLink, plain]);
+  }, [text, base, paths, linkColor, hold, scale, openLink, plain, tags]);
   return (
     <Text selectable maxFontSizeMultiplier={1.35} style={base}>
       {parts}
@@ -601,6 +604,7 @@ export const Markdown = memo(function Markdown({ text, color, size = "body", pla
   const { colors, type: scale } = useTheme();
   const openLink = useContext(MessageLink);
   const hold = useContext(LinkHold);
+  const tags = useContext(InlineTagsContext);
   const prefHighlight = useChatPrefs((prefs) => prefs.highlight);
   const prefWrap = useChatPrefs((prefs) => prefs.wrapCode);
   const doHighlight = highlight ?? prefHighlight;
@@ -624,14 +628,14 @@ export const Markdown = memo(function Markdown({ text, color, size = "body", pla
   const noteKey = parsed ? [...parsed.numbers.keys()].join("\u0000") : "";
   const ctx = useMemo<Ctx>(() => {
     const notes = new Map<string, number>(noteKey ? noteKey.split("\u0000").map((id, index) => [id, index + 1]) : []);
-    return { colors, scale, base, highlight: doHighlight, wrap, notes, onLink: openLink, hold, paths };
-  }, [colors, scale, base, doHighlight, wrap, noteKey, hold, paths, openLink]);
+    return { colors, scale, base, highlight: doHighlight, wrap, notes, onLink: openLink, hold, paths, tags };
+  }, [colors, scale, base, doHighlight, wrap, noteKey, hold, paths, openLink, tags]);
 
   if (inlineOnly || (plain && openLink !== defaultOpenLink)) return <InlineOnly text={text} base={base} paths={paths} plain={!inlineOnly && plain} />;
   if (!parsed)
     return (
       <Text selectable maxFontSizeMultiplier={1.35} style={base}>
-        {withPaths(text, paths, colors.accentText, "plain")}
+        {withTags(text, tags, base.color as string | undefined, "plain", (piece, at) => withPaths(piece, paths, colors.accentText, at))}
       </Text>
     );
   return (

@@ -287,8 +287,11 @@ export type Invite = {
   link?: string;
 };
 export type JoinRequest = { id: string; name: string; person?: string; platform: string; kind: "phone" | "desktop"; at: number; inviteId: string };
-/** Someone a chat can be shared with ("team-people-v1"): the owner (id "owner", named after the computer) or a member. */
-export type Person = { id: string; name: string };
+/**
+ * Someone a chat can be shared with ("team-people-v1"): the owner (id "owner", named after the computer) or a member.
+ * `avatar` is the picture they chose ("people-avatars-v1"): a square 256 × 256 JPEG as a data URL, at most 96 KB of base64.
+ */
+export type Person = { id: string; name: string; avatar?: string };
 export type TeamPart =
   | { name: string; roles: Role[]; groups: Group[]; members: Member[]; invites: Invite[]; requests: JoinRequest[]; people?: Person[]; /** "Members may share by link" ("spaces-v1"). */ linkSharing?: boolean }
   | {
@@ -1165,6 +1168,8 @@ export type UsageReport = {
  * "skill-upload-v1" accepts Markdown and zip files. "skills-catalog-v1" searches, previews and installs skills.
  * "market-refresh-v1" (the app's: `plugins.refresh` reads every marketplace again now, so new
  * plugins and agent templates show without waiting for the hour; docs/plugins.md).
+ * "people-avatars-v1" (each person may have a picture, `Person.avatar`, and sets their own with
+ * `setMyAvatar`).
  */
 export type Meta = {
   app: string;
@@ -1178,7 +1183,7 @@ export type Meta = {
    * Who this device is. For an owner device, `admin` says whether Admin mode is on: with it off the
    * device is sent what the owner is part of, not every member's chats, spaces and bots.
    */
-  you?: { kind: "owner"; admin?: boolean } | { kind: "member"; memberId: string; name: string };
+  you?: { kind: "owner"; admin?: boolean; avatar?: string } | { kind: "member"; memberId: string; name: string; avatar?: string };
 };
 
 /** Everything the phone keeps in step with the desktop, by part name. */
@@ -1731,6 +1736,8 @@ export type Calls = {
   recordVoiceLine(chatId: string, id: string, text: string, final: boolean, options?: { role: "assistant"; sessionId: string; afterVoiceId?: string }): void;
   send(chatId: string, text: string, options?: { clientMessageId?: string; voiceId?: string; notify?: false; quote?: string; mentions?: MentionInput[]; attachments?: { name: string; path: string }[]; delivery?: "steer" | "queue" }): void;
   mentionables(chatId: string | undefined, botId?: string): Mentionables;
+  /** Sets or clears ("people-avatars-v1") the caller's own picture: a 256 × 256 JPEG data URL, or null. Answers what is kept. */
+  setMyAvatar(image: string | null): { avatar?: string };
   catalog(botId: string, chatId?: string, refresh?: boolean): Catalog;
   stop(chatId: string): void;
   unqueue(chatId: string, itemId: string): void;

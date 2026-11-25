@@ -33,6 +33,7 @@ import { join } from "node:path";
 import { createInterface } from "node:readline";
 import { introduce, serialLines } from "./gadget-setup.mjs";
 import { LinkHost, qrText } from "./index.mjs";
+import { REMOTE_METHODS } from "./methods.mjs";
 import { MockBackend } from "./mock-backend.mjs";
 import { jpegSize } from "./screen.mjs";
 
@@ -105,6 +106,21 @@ const host = new LinkHost({
 backend.phone = { call: (name, args, options) => host.callDeviceTool(name, args, options) };
 // The team, for the rules that go by a person's role (who a bot may look out for: proactive-rules.mjs).
 backend.teamOf = () => host.store.data.team;
+// People's own pictures ("people-avatars-v1"): the demo's `setMyAvatar` keeps them on the team, and the
+// phones are told. A link that doesn't answer the call itself lets it through to this stand-in app.
+REMOTE_METHODS.add("setMyAvatar");
+backend.onTeamChanged = () => host.teamChanged();
+// Two made-up members for the demo's "Launch tweet" chat, which has their messages: Ana with a
+// picture, Ben with none (his badge is his initial). Both are invited to that chat.
+{
+  const team = host.store.data.team;
+  for (const [id, name] of [["m_ana", "Ana"], ["m_ben", "Ben"]]) {
+    if (!team.members.some((member) => member.id === id)) team.members.push({ id, name, groupId: "g_everyone", joinedAt: Date.now() - 7 * 24 * 60 * 60_000, deviceIds: [] });
+  }
+  team.avatars = { "m_ana": "data:image/jpeg;base64," + readFileSync(new URL("./demo-avatar-ana.jpg", import.meta.url)).toString("base64"), ...team.avatars };
+  team.chats = { ...team.chats, "chat-team": [...new Set([...(team.chats?.["chat-team"] ?? []), "m_ana", "m_ben"])] };
+  host.teamChanged();
+}
 // Its made-up updates (BOTKINS_DEV_UPDATE): a newer version tells the phones, and an install
 // "restarts" the link for a few seconds, as a real update restarts the app.
 backend.updates.onAvailable = (version) => host.push.updateAvailable(version);

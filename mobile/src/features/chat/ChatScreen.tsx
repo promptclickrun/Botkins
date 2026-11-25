@@ -33,6 +33,8 @@ import { GroupFace, workWidth } from "./bits";
 import { arrived, composeSlashPrompt, type DraftMention, MAX_MENTIONS, waitingCopies, withBoardQuote } from "./compose";
 import { archivesWhenLeft } from "./habits";
 import { formatTypingLabel, myPlace, myself } from "./people";
+import { ChatPeopleLook } from "./ChatPeopleLook";
+import { continuingKeys } from "./chatSides";
 import { regenerateTitle, regenerateTitleAction, useCanRegenerateTitle } from "./titleActions";
 import { Composer, type ModelPill, type SendOptions } from "./Composer";
 import { ChangesView } from "./Changes";
@@ -322,8 +324,9 @@ function ActiveLiveLeaf({ chatId, bot, group, bots, item }: { chatId: string; bo
   return <LiveTurn chatId={chatId} bot={bot} group={group} bots={bots} item={{ ...item, ...resolved }} />;
 }
 
-const TimelineRow = memo(function TimelineRow({ item, chatId, group, bot, bots, sendText, draftText, messageActions, openPanel, holdFold, viewport, active, replyRef }: RowProps & {
+const TimelineRow = memo(function TimelineRow({ item, chatId, group, bot, bots, sendText, draftText, messageActions, openPanel, holdFold, viewport, active, replyRef, continues }: RowProps & {
   item: Item;
+  continues?: boolean;
   holdFold: FoldHold;
   viewport: ReturnType<typeof createChatViewport>;
   active: boolean;
@@ -331,7 +334,7 @@ const TimelineRow = memo(function TimelineRow({ item, chatId, group, bot, bots, 
 }) {
   const inView = useStore(viewport.rows, (rows) => active && rows.has(item.key));
   const row = item.kind === "message" ? (
-    <MessageRow replyRef={replyRef} item={item} chatId={chatId} group={group} bots={bots} onSend={sendText} onDraft={draftText} actions={messageActions} />
+    <MessageRow replyRef={replyRef} item={item} chatId={chatId} group={group} bots={bots} onSend={sendText} onDraft={draftText} actions={messageActions} continues={continues} />
   ) : item.kind === "work" ? (
     <WorkPart chatId={chatId} bot={bot} item={item} />
   ) : item.kind === "text" ? (
@@ -447,6 +450,9 @@ function ChatTimelineList({ chatId, view, pending, runPart, streaming, group, bo
       livePlaceholder: streamOpen || (!!underWay(runPart) && prefs.thinking === "show" && !prefs.island),
     });
   }, [chatId, view, runPart, markPositions, timeline, group, panesOn, prefs, ownership, streamOpen]);
+  // A person's message right after another of theirs shows no name or badge again (chatSides.ts).
+  const me = myself(usePart("meta"));
+  const continuing = useMemo(() => continuingKeys(structural, me), [structural, me]);
   const liveItem = useMemo(() => structural.find((item) => item.kind === "live"), [structural]);
   const showLive = useApp((state) => !liveItem || liveRowVisible(liveItem, state.texts[chatId], state.running[chatId], prefs));
   const previous = useMemo(() => ({ byKey: new Map<string, Item>() }), [chatId]);
@@ -594,7 +600,7 @@ function ChatTimelineList({ chatId, view, pending, runPart, streaming, group, bo
           keyExtractor={(item) => item.key}
           renderItem={({ item }) => (
             <TimelineRow item={item} chatId={chatId} group={group} bot={bot} bots={bots} sendText={sendText}
-              draftText={draftText} messageActions={messageActions} openPanel={openPanel} holdFold={holdFold} viewport={viewport}
+              draftText={draftText} messageActions={messageActions} openPanel={openPanel} holdFold={holdFold} viewport={viewport} continues={continuing.has(item.key)}
               replyRef={item.kind === "message" && item.latest && item.message.role === "assistant" ? latestReply : undefined}
               active={onShow && inFront && (item.kind === "screen" || item.kind === "live" || (item.kind === "fold" && !!item.live))} />
           )}
@@ -1051,16 +1057,18 @@ function ChatScreenScreen({ pane: paneId, onLeave: leavePane, onList }: { pane?:
             <Loading />
           </View>
         ) : (
-          <ChatTimelineList
-            chatId={chatId} view={view ?? EMPTY_CHAT} pending={pending} runPart={runPart} streaming={streaming} group={group} bot={bot} bots={bots}
-            at={at} list={list} position={position} setPosition={setPosition} followLatest={followLatest} sendText={sendText} draftText={draftText} messageActions={messageActions} openPanel={pane.show}
-            room={room} viewport={viewport}
-            emptyView={empty && (
-              <View style={{ flex: 1, paddingTop: room.top, paddingBottom: room.bottom }}>
-                <Hello chat={chat} bot={bot} bots={bots} projects={projects} settings={settings} onPick={pick} />
-              </View>
-            )}
-          />
+          <ChatPeopleLook chat={chat} bots={bots}>
+            <ChatTimelineList
+              chatId={chatId} view={view ?? EMPTY_CHAT} pending={pending} runPart={runPart} streaming={streaming} group={group} bot={bot} bots={bots}
+              at={at} list={list} position={position} setPosition={setPosition} followLatest={followLatest} sendText={sendText} draftText={draftText} messageActions={messageActions} openPanel={pane.show}
+              room={room} viewport={viewport}
+              emptyView={empty && (
+                <View style={{ flex: 1, paddingTop: room.top, paddingBottom: room.bottom }}>
+                  <Hello chat={chat} bot={bot} bots={bots} projects={projects} settings={settings} onPick={pick} />
+                </View>
+              )}
+            />
+          </ChatPeopleLook>
         )}
         {topBar > 0 && <Fade edge="top" cover={topBar} />}
         {paneId && header}
