@@ -2,14 +2,16 @@
 // for each panel a bot opened there: a page it wrote (in the sandboxed frame of an html block), a
 // table, a website in the app's own viewer, or the Screen panel. The tabs live in the chat's state,
 // so a phone sees the same ones; what the person does with them goes back through sidePane().
-import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode, type Ref } from "react";
-import { AppWindow, ArrowLeft, ArrowRight, ExternalLink, File, FileAudio, FileImage, FileText, FileVideo, Folder, Globe, Info, MonitorUp, Pin, RotateCw, Table2, TriangleAlert, X } from "lucide-react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode, type Ref } from "react";
+import { AppWindow, ArrowLeft, ArrowRight, ExternalLink, File, FileAudio, FileImage, FileText, FileVideo, Folder, Globe, Info, ListTree, MonitorUp, Pin, RotateCw, Table2, TriangleAlert, Users, X } from "lucide-react";
 import { BotAvatar, type AvatarState } from "./Avatar";
 import { PullRequestPanel } from "./PullRequestPanel";
 import ChatSide from "./ChatSide";
 import HtmlFrame from "./HtmlFrame";
 import { ScreenPanel } from "./ScreenSettings";
 import { AddToProjectDialog, canAddToProject } from "./ProjectExtras";
+import { ActivityPanel, CrewPanel, canStopHelpers, type InspectTarget } from "./ActivityInspector";
+import { crewOf, storySteps, type StoryUpdate } from "./activityStory";
 import type { Artifact, Bot, Chat, PanePanel, State } from "./types";
 import "./blocks.css";
 import "./sidepane.css";
@@ -91,6 +93,11 @@ const KIND_ICONS = { rich_ui: AppWindow, table: Table2, web: Globe, screen: Moni
 const KIND_NAMES = { rich_ui: "View", table: "Table", web: "Website", screen: "Screen" } as const;
 const DETAILS = "details";
 const ARTIFACTS = "artifacts";
+// The turn's work (ActivityInspector.tsx): local tabs, like Artifacts, for the chat's latest turn or the one clicked in the chat.
+const ACTIVITY = "activity";
+const CREW = "crew";
+/** What the chat asked the pane to show: a tab, a turn and what to select in it. A new `seq` asks again. */
+export type Inspect = InspectTarget & { tab: typeof ACTIVITY | typeof CREW };
 const tabId = (chatId: string, id: string) => "pane-tab-" + chatId + "-" + id;
 const bodyId = (chatId: string, id: string) => "pane-body-" + chatId + "-" + id;
 
@@ -107,6 +114,8 @@ export default function SidePane({
   openChat,
   preview,
   pull,
+  inspect,
+  latestRunId,
 }: {
   state: State;
   chat: Chat;
@@ -124,6 +133,10 @@ export default function SidePane({
   openChat?: (id: string, messageIndex?: number) => void;
   preview?: { item: Artifact; local: boolean };
   pull?: { url: string };
+  /** A click in the chat on a turn's work: the Activity or Crew tab, on that turn. */
+  inspect?: Inspect;
+  /** The chat's latest turn: what Activity and Crew show until something in the chat is clicked. */
+  latestRunId?: string;
 }) {
   const panels = chat.pane?.panels ?? [];
   const active = chat.pane?.active ?? null;
@@ -132,6 +145,24 @@ export default function SidePane({
   const askSeq = chat.pane?.ask?.seq ?? 0;
   useEffect(() => setPicked(undefined), [active, askSeq]);
   useEffect(() => { if (pull) setPicked("pull"); }, [pull]);
+  // Which turn each of Activity and Crew shows, and what was clicked to open it.
+  const [targets, setTargets] = useState<{ activity?: InspectTarget; crew?: InspectTarget }>(() => (inspect ? { [inspect.tab]: inspect } : {}));
+  useEffect(() => {
+    if (!inspect) return;
+    setTargets((old) => ({ ...old, [inspect.tab]: inspect }));
+    setPicked(inspect.tab);
+  }, [inspect?.seq]);
+  const runOf = (id?: string) => (id ? state.runs.find((r) => r.id === id && r.chatId === chat.id) : undefined);
+  const latestRun = runOf(latestRunId);
+  const activityRun = runOf(targets.activity?.runId) ?? latestRun;
+  const crewRun = runOf(targets.crew?.runId) ?? latestRun;
+  const crew = useMemo(() => (crewRun ? crewOf(crewRun) : null), [crewRun?.steps, crewRun?.agents]);
+  // The turn's updates: what the bot wrote before it moved on, keyed as the chat keys them.
+  const updates = useMemo<StoryUpdate[]>(
+    () => (activityRun ? chat.messages.flatMap((m, i) => (m.interim && m.runId === activityRun.id && m.text.trim() ? [{ key: "interim-" + i, at: m.time ?? activityRun.time, text: m.text }] : [])) : []),
+    [chat.messages, activityRun?.id],
+  );
+  const hasActivity = !!activityRun && (storySteps(activityRun.steps).length > 0 || !!activityRun.reasoning?.some((t) => t.text.trim()) || updates.length > 0);
   const wanted = picked !== undefined ? picked : active;
   // A chat-path preview is an explicit navigation request from ChatView. Keep this
   // local to the pane so it does not mutate the bot's persisted pane selection.
@@ -140,13 +171,22 @@ export default function SidePane({
   }, [preview?.item.id, preview?.local]);
   // A tab that is gone shows Details instead, or in a group chat the newest panel.
   const shownPanel = panels.find((p) => p.id === wanted) ?? (group ? panels.filter(p => p.kind !== "screen").at(-1) : undefined);
-  const front = wanted === "pull" && pull ? "pull" : wanted === ARTIFACTS ? ARTIFACTS : shownPanel?.id ?? (group ? ARTIFACTS : DETAILS);
-  const tabs: { id: string; panel?: PanePanel }[] = [...(group ? [] : [{ id: DETAILS }]), { id: ARTIFACTS }, ...(pull ? [{ id: "pull" }] : []), ...panels.map((panel) => ({ id: panel.id, panel }))];
+  const front =
+    wanted === "pull" && pull ? "pull" : wanted === ARTIFACTS ? ARTIFACTS : wanted === ACTIVITY && hasActivity ? ACTIVITY : wanted === CREW && crew ? CREW : shownPanel?.id ?? (group ? ARTIFACTS : DETAILS);
+  const inspecting = front === ACTIVITY || front === CREW;
+  const tabs: { id: string; panel?: PanePanel }[] = [
+    ...(group ? [] : [{ id: DETAILS }]),
+    ...(hasActivity ? [{ id: ACTIVITY }] : []),
+    ...(crew ? [{ id: CREW }] : []),
+    { id: ARTIFACTS },
+    ...(pull ? [{ id: "pull" }] : []),
+    ...panels.map((panel) => ({ id: panel.id, panel })),
+  ];
   const showTabs = true;
   const botOf = (id: string) => state.bots.find((b) => b.id === id);
 
   const select = (id: string) => {
-    if (id === ARTIFACTS || id === "pull") { setPicked(id); return; }
+    if (id === ARTIFACTS || id === "pull" || id === ACTIVITY || id === CREW) { setPicked(id); return; }
     const panelId = id === DETAILS ? null : id;
     setPicked(panelId);
     paneAction(chat.id, "select", panelId);
@@ -180,7 +220,7 @@ export default function SidePane({
   const opener = shownPanel ? botOf(shownPanel.botId) : undefined;
   return (
     <aside
-      className={"side-pane" + (shownPanel ? " wide" : "") + (drawer ? " drawer" : "")}
+      className={"side-pane" + (shownPanel || inspecting ? " wide" : "") + (inspecting ? " inspector" : "") + (drawer ? " drawer" : "")}
       aria-label="Side pane"
       onKeyDown={(e) => {
         if (drawer && e.key === "Escape" && !e.defaultPrevented) {
@@ -206,8 +246,8 @@ export default function SidePane({
               {tabs.map(({ id, panel }) => {
                 const selected = id === front;
                 const who = panel ? botOf(panel.botId) : undefined;
-                const Icon = panel ? KIND_ICONS[panel.kind] : id === ARTIFACTS ? File : Info;
-                const title = panel ? panel.title : id === "pull" ? "Pull request" : id === ARTIFACTS ? "Artifacts" : "Details";
+                const Icon = panel ? KIND_ICONS[panel.kind] : id === ARTIFACTS ? File : id === ACTIVITY ? ListTree : id === CREW ? Users : Info;
+                const title = panel ? panel.title : id === "pull" ? "Pull request" : id === ARTIFACTS ? "Artifacts" : id === ACTIVITY ? "Activity" : id === CREW ? "Crew" : "Details";
                 const name = title + (panel ? ", " + KIND_NAMES[panel.kind].toLowerCase() + " from " + (who?.name ?? "a removed bot") : "") + (panel?.pinned ? ", pinned" : "") + (panel?.unseen && !selected ? ", new" : "");
                 return (
                   <div key={id} className={"pane-tab" + (selected ? " selected" : "") + (panel?.pinned ? " pinned" : "")}>
@@ -224,6 +264,7 @@ export default function SidePane({
                     >
                       <Icon size={14} aria-hidden="true" className="pane-kind" />
                       <span className="pane-tab-title">{title}</span>
+                      {id === CREW && crew && <span className="pane-count" aria-hidden="true">{crew.members.length}</span>}
                       {who && <BotAvatar bot={who} size={16} badge={false} />}
                       {panel?.pinned && <Pin size={11} aria-hidden="true" className="pane-pinned" />}
                       {panel?.unseen && !selected && <i className="pane-dot" aria-hidden="true" />}
@@ -274,6 +315,33 @@ export default function SidePane({
           </Body>
         )}
         {front === "pull" && pull && <Body chatId={chat.id} id="pull" tabs><PullRequestPanel key={pull.url} url={pull.url} /></Body>}
+        {front === ACTIVITY && activityRun && (
+          <Body chatId={chat.id} id={ACTIVITY} tabs={showTabs} className="inspect">
+            <ActivityPanel
+              key={activityRun.id}
+              run={activityRun}
+              updates={updates}
+              target={targets.activity?.runId === activityRun.id ? targets.activity : undefined}
+              onCrew={crew && crewRun?.id === activityRun.id ? (id) => {
+                if (id) setTargets((old) => ({ ...old, crew: { runId: activityRun.id, select: id, seq: (old.crew?.seq ?? 0) + 1 } }));
+                setPicked(CREW);
+              } : undefined}
+            />
+          </Body>
+        )}
+        {front === CREW && crewRun && (
+          <Body chatId={chat.id} id={CREW} tabs={showTabs} className="inspect">
+            <CrewPanel
+              key={crewRun.id}
+              run={crewRun}
+              chatId={chat.id}
+              botName={bot.name}
+              botFace={<BotAvatar bot={bot} size={16} badge={false} />}
+              target={targets.crew?.runId === crewRun.id ? targets.crew : undefined}
+              canStop={canStopHelpers(state.remote?.using)}
+            />
+          </Body>
+        )}
         {front === ARTIFACTS && <Body chatId={chat.id} id={ARTIFACTS} tabs={showTabs}><ArtifactsPanel bot={bot} chat={chat} state={state} openChat={openChat} preview={preview} /></Body>}
         {/* A website stays loaded while its tab is behind another, so switching back doesn't reload it. */}
         {panels.map((panel) =>
@@ -537,10 +605,10 @@ function ArtifactPreview({ item, thumbnail, local }: { item: Artifact; thumbnail
   return <pre className="artifact-preview artifact-text">{text ?? "Loading preview…"}</pre>;
 }
 
-function Body({ chatId, id, tabs, away, kind, children }: { chatId: string; id: string; tabs: boolean; away?: boolean; kind?: PanePanel["kind"]; children: ReactNode }) {
+function Body({ chatId, id, tabs, away, kind, className, children }: { chatId: string; id: string; tabs: boolean; away?: boolean; kind?: PanePanel["kind"]; className?: string; children: ReactNode }) {
   return (
     <div
-      className={"pane-body" + (kind ? " " + kind : " details") + (away ? " away" : "")}
+      className={"pane-body" + (className ? " " + className : kind ? " " + kind : " details") + (away ? " away" : "")}
       id={bodyId(chatId, id)}
       {...(tabs && { role: "tabpanel", "aria-labelledby": tabId(chatId, id) })}
       inert={away || undefined}
