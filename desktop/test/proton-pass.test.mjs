@@ -46,21 +46,33 @@ if (command === "login" && env.PROTON_PASS_PERSONAL_ACCESS_TOKEN) {
   }
 } else if (command === "--version") console.log("pass-cli 2.7.1");
 else if (command === "info") console.log("- Email: example@proton.me");
+else if (command === "vault" && sub === "create") fs.writeFileSync(session + "/new-vault", "");
 else if (command === "vault" && sub === "list") {
-  print([{share_id: "shared", name: "Shared"}, ...(!session || !fs.existsSync(session + "/authed") ?
-    [{share_id: "private", name: "Private"}] : [])]);
+  let vaults = [{share_id: "shared", vault_id: "v1", name: "Shared"}, {share_id: "private", vault_id: "v2", name: "Private"}];
+  if (session && fs.existsSync(session + "/new-vault")) vaults.push({share_id: "dedicated", vault_id: "v3", name: "Botkins"});
+  if (session && fs.existsSync(session + "/authed")) {
+    vaults = [{share_id: "agent-share", vault_id: "v1", name: "Shared"}];
+    if (mode === "dedicated") vaults.unshift({share_id: "agent-dedicated", vault_id: "v3", name: "Botkins"});
+    if (mode === "wrong") vaults[0].vault_id = "v2";
+    if (mode === "extra") vaults.push({share_id: "agent-private", vault_id: "v2", name: "Private"});
+    if (mode === "missing") vaults = [];
+  }
+  print({vaults});
 } else if (command === "agent" && sub === "create") {
   print({token: "PROTON_PASS_PERSONAL_ACCESS_TOKEN=" + ${JSON.stringify(TOKEN)}, instruction: "Not for display"});
-} else if (command === "item" && sub === "view") {
+} else if (command === "item") {
+  if (session && !process.argv.includes("--share-id=agent-share") && !process.argv[4]?.startsWith("pass://agent-share/")) fail("wrong share for this session");
   if (session && !fs.existsSync(session + "/authed")) fail("requires an authenticated client");
   if (session && mode === "retry" && !fs.existsSync(${JSON.stringify(join(dir, "retry"))})) {
     fs.writeFileSync(${JSON.stringify(join(dir, "retry"))}, "");
     fail("requires an authenticated client");
   }
-  if (process.argv.some(arg => arg.startsWith("--field="))) {
+  if (sub === "list") print({items: [{item_id: "item", title: "Example"}]});
+  else if (process.argv[4]?.endsWith("/totp?totp=code")) console.log("123456");
+  else if (process.argv.some(arg => arg.startsWith("--field="))) {
     console.log("linked-value");
   } else if (process.argv[4]?.startsWith("pass://")) print("linked-value");
-  else print({title:"Example", login:{password:"linked-value"}});
+  else print({title:"Example", login:{password:"linked-value", totp:"fixture"}});
 } else if (command === "logout" && !process.argv.includes("--force")) fail("try --force");
 `, { mode: 0o700 });
   const credentials = new Credentials({ dir, searchPath: [dir], ...options });
@@ -111,6 +123,10 @@ test("existing references migrate by share ID; unshared IDs and flags never reac
   assert.equal(await credentials.read(shared), "linked-value");
   assert.match((await credentials.check(other)).message, /not shared with Botkins/i);
   await assert.rejects(credentials.items("protonpass", "-flag"), /isn't valid/);
+  assert.deepEqual(await credentials.vaults("protonpass"), [{id: "shared", name: "Shared"}]);
+  assert.equal((await credentials.items("protonpass", "shared"))[0].id, "item");
+  const totp = await credentials.link({manager: "protonpass", vaultId: "shared", itemId: "item", fieldId: "totp", name: "Code"});
+  assert.equal(await credentials.read(totp), "123456");
   const log = await calls();
   const grant = log.find((call) => call.argv[1] === "access");
   assert.deepEqual(grant.argv.slice(4), ["--share-id", "shared", "--role", "viewer"]);
@@ -123,19 +139,45 @@ test("existing references migrate by share ID; unshared IDs and flags never reac
   assert.equal(await reopened.read(shared), "linked-value");
 });
 
+test("a newly created vault and an existing vault map to their own agent shares in any order", async (t) => {
+  const { setup } = await fixture(t, "dedicated");
+  const { session } = setup.start({});
+  await until(setup, session, (view) => view.events.some((event) => event.type === "choose-vaults"));
+  setup.input({ session, vaultIds: ["shared"], createDedicated: true });
+  const done = await until(setup, session, (view) => view.done);
+  assert.equal(done.result.state, "ready", done.error);
+  assert.deepEqual(setup.record().vaults, [
+    { id: "shared", name: "Shared", agentShareId: "agent-share" },
+    { id: "dedicated", name: "Botkins", agentShareId: "agent-dedicated" },
+  ]);
+});
+
+for (const mode of ["wrong", "extra", "missing"]) {
+  test(`setup rejects and revokes the agent when its vault access is ${mode}`, async (t) => {
+    const { setup, calls } = await fixture(t, mode);
+    const { session } = setup.start({});
+    await until(setup, session, (view) => view.events.some((event) => event.type === "choose-vaults"));
+    setup.input({ session, vaultIds: ["shared"] });
+    const done = await until(setup, session, (view) => view.done);
+    assert.match(done.error, /exactly the selected vaults/);
+    assert.equal(setup.record(), undefined);
+    assert.ok((await calls()).some((call) => call.argv[0] === "agent" && call.argv[1] === "delete"));
+  });
+}
+
 test("an agent session is refreshed after two hours and expiry never falls back to the owner's session", async (t) => {
   let now = Date.UTC(2026, 10, 24);
-  const { setup, calls } = await fixture(t, "", { now: () => now });
+  const { credentials, setup, calls } = await fixture(t, "", { now: () => now });
   assert.equal((await setup.status()).state, "signed-out");
   await connect(setup);
   now += 2 * 3600_000;
-  await setup.run(["item", "view", "pass://shared/item/password"], "shared");
+  await credentials.item("protonpass", "shared", "item");
   assert.equal((await calls()).filter((c) => c.argv[0] === "login" && c.kind === "agent").length, 2);
   now += 351 * 86400_000;
   assert.equal((await setup.status()).state, "expiring");
   now += 16 * 86400_000;
   assert.equal((await setup.status()).state, "expired");
-  await assert.rejects(setup.run(["item", "view", "pass://shared/item/password"], "shared"), /expired/i);
+  await assert.rejects(credentials.item("protonpass", "shared", "item"), /expired/i);
 });
 
 test("an extra password only goes through the FIFO; three wrong answers are rejected", { skip: process.platform === "win32" }, async (t) => {
@@ -198,5 +240,5 @@ test("disconnect waits for a new Proton login, deletes the agent, and never rest
   const done = await until(setup, session, (view) => view.done);
   assert.equal(done.result.state, "signed-out");
   assert.ok((await calls()).some((c) => c.argv[0] === "agent" && c.argv[1] === "delete"));
-  await assert.rejects(setup.run(["vault", "list"]), /sign in/i);
+  await assert.rejects(setup.run(() => ["vault", "list"]), /sign in/i);
 });

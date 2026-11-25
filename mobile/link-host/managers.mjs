@@ -226,7 +226,7 @@ export function protonPass(ctx, setup) {
   const name = "Proton Pass";
   const base = { id, name };
   const legacy = (args) => ctx.run(name, "pass-cli", args, ctx.protonLegacyEnv());
-  const pass = (args, vault) => setup ? setup.run(args, vault) : legacy(args);
+  const pass = (makeArgs, vault) => setup ? setup.run(makeArgs, vault) : legacy(makeArgs(vault));
   const array = (value, key) => (Array.isArray(value) ? value : Array.isArray(value?.[key]) ? value[key] : []);
   const loginOf = (item) => item?.content?.content?.Login ?? item?.content?.login ?? item?.login ?? item?.content ?? item ?? {};
   const fieldsOf = (item) => {
@@ -249,12 +249,12 @@ export function protonPass(ctx, setup) {
       if (!ctx.find("pass-cli")) return missing(ctx, base, "pass-cli", { url: "https://proton.me/pass" });
       let version;
       try {
-        version = /\d+\.\d+\.\d+/.exec(String(await pass(["--version"])))?.[0];
+        version = /\d+\.\d+\.\d+/.exec(String(await legacy(["--version"])))?.[0];
       } catch (error) {
         return { ...base, state: "error", message: error.message };
       }
       try {
-        const who = parseJson(name, await pass(["info", "--output", "json"]));
+        const who = parseJson(name, await legacy(["info", "--output", "json"]));
         const account = text(pick(who, "email", "user_email", "username") ?? pick(who?.user, "email", "username"));
         return { ...base, state: "ready", ...(version && { version }), ...(account && { account }) };
       } catch (error) {
@@ -263,13 +263,13 @@ export function protonPass(ctx, setup) {
       }
     },
     async vaults() {
-      return protonVaults(parseJson(name, await pass(["vault", "list", "--output", "json"])));
+      return protonVaults(parseJson(name, await pass(() => ["vault", "list", "--output", "json"])));
     },
     async items(vaultId, query) {
       const share = cleanId(vaultId, "vault");
       const q = cleanQuery(query);
       // No --show-secrets: the list holds titles, not values.
-      const items = array(parseJson(name, await pass(["item", "list", "--share-id=" + share, "--output", "json"], share)), "items");
+      const items = array(parseJson(name, await pass((shareId) => ["item", "list", "--share-id=" + shareId, "--output", "json"], share)), "items");
       return items
         .map((i) => ({ id: pick(i, "id", "item_id", "itemId"), title: text(pick(i, "title", "name") ?? i?.content?.title ?? i?.content?.name), subtitle: text(loginOf(i).username ?? loginOf(i).email) }))
         .filter((i) => text(i.id) && matches(q, i.title, i.subtitle))
@@ -279,7 +279,7 @@ export function protonPass(ctx, setup) {
     async item(vaultId, itemId) {
       const share = cleanId(vaultId, "vault");
       const item = cleanId(itemId, "item");
-      const found = parseJson(name, await pass(["item", "view", "--share-id=" + share, "--item-id=" + item, "--output", "json"], share));
+      const found = parseJson(name, await pass((shareId) => ["item", "view", "--share-id=" + shareId, "--item-id=" + item, "--output", "json"], share));
       const body = found?.item ?? found;
       return { id: item, title: text(pick(body, "title", "name") ?? body?.content?.title ?? body?.content?.name) || "Untitled", fields: fieldsOf(body) };
     },
@@ -289,11 +289,11 @@ export function protonPass(ctx, setup) {
       const field = String(fieldId ?? "").replace(/^extra:/, "");
       if (!field || /^[\s-]/.test(field) || field.length > 120 || /[\x00-\x1f]/.test(field)) throw new Failure("That field isn't valid.");
       if (setup?.record()?.agent && fieldId === "totp") {
-        const code = String(await pass(["item", "view", "pass://" + share + "/" + item + "/totp?totp=code"], share)).trim();
+        const code = String(await pass((shareId) => ["item", "view", "pass://" + shareId + "/" + item + "/totp?totp=code"], share)).trim();
         if (!/^\d{6,10}$/.test(code)) throw new Failure("Proton Pass didn't return a one-time code.");
         return code;
       }
-      return String(await pass(["item", "view", "--share-id=" + share, "--item-id=" + item, "--field=" + field], share)).replace(/\r?\n$/, "");
+      return String(await pass((shareId) => ["item", "view", "--share-id=" + shareId, "--item-id=" + item, "--field=" + field], share)).replace(/\r?\n$/, "");
     },
   };
 }
