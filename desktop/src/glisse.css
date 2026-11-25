@@ -475,18 +475,19 @@ button.lg-button.to-latest.shown:active {
 .backdrop-mesh .bd-sheen {
   position: absolute;
   inset: 0;
+  /* A faint sheen with soft edges: narrow bands, so it never reads as a pattern over the color. */
   background-image: repeating-linear-gradient(
     -35deg,
-    rgba(255, 255, 255, 0.08) 0 18px,
-    transparent 18px 36px
+    rgba(255, 255, 255, 0.05) 0 10px,
+    transparent 14px 36px
   );
 }
 
 :root[data-mode="light"] .backdrop-mesh .bd-sheen {
   background-image: repeating-linear-gradient(
     -35deg,
-    rgba(255, 255, 255, 0.24) 0 18px,
-    transparent 18px 36px
+    rgba(255, 255, 255, 0.12) 0 10px,
+    transparent 14px 36px
   );
 }
 
@@ -710,8 +711,8 @@ button.lg-button.to-latest.shown:active {
   inset: 0;
   background-image: repeating-linear-gradient(
     -35deg,
-    rgba(255, 255, 255, 0.14) 0 6px,
-    transparent 6px 12px
+    rgba(255, 255, 255, 0.08) 0 3px,
+    transparent 5px 12px
   );
 }
 

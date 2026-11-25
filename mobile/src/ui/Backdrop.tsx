@@ -21,8 +21,10 @@ function buildStripePath(cx: number, cy: number, radius: number, period: number,
   return parts.join("");
 }
 
-const FULL_STRIPE_PATH = buildStripePath(215, 466, 620, 36, 18);
-const PREVIEW_STRIPE_PATH = buildStripePath(90, 48, 150, 14, 7);
+// Narrow bands (a third of each period) read as a soft sheen; half-period bands at full strength
+// crossed the blobs as a diamond texture on iOS.
+const FULL_STRIPE_PATH = buildStripePath(215, 466, 620, 36, 12);
+const PREVIEW_STRIPE_PATH = buildStripePath(90, 48, 150, 14, 5);
 
 export type BackdropLayerProps = {
   /** Explicit backdrop id (used by Appearance preview cards). Defaults to the saved preference. */
@@ -80,7 +82,8 @@ export const BackdropLayer = memo(function BackdropLayer({ backdrop: given, prev
     const redOp = dark ? 0.72 : 0.62;
     const blueOp = dark ? 0.75 : 0.65;
     const greenOp = dark ? 0.70 : 0.60;
-    const stripeFill = dark ? "rgba(255,255,255,0.08)" : "rgba(255,255,255,0.22)";
+    // Kept faint: the sheen should only catch the light, never draw a pattern over the color.
+    const stripeFill = dark ? "rgba(255,255,255,0.04)" : "rgba(255,255,255,0.10)";
     const stripeViewBox = preview ? "0 0 180 96" : "0 0 430 932";
     const stripeTransform = preview ? "rotate(-35, 90, 48)" : "rotate(-35, 215, 466)";
     const stripePath = preview ? PREVIEW_STRIPE_PATH : FULL_STRIPE_PATH;
