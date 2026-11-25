@@ -5,6 +5,9 @@ import { memberCanSpaces } from "./team-turn.mjs";
 import { readProfile } from "./bot-profile-files.mjs";
 import { digest } from "./proactive-learning.mjs";
 
+/** How long after a conversation's last message the check leaves it alone. */
+export const LIVE_CHAT = 30 * 60_000;
+
 export function fact(kind, origin, value, at) {
   const text = String(value ?? "").replace(/\s+/g, " ").trim().slice(0, 550);
   const id = kind + "-" + digest(origin + "\n" + text);
@@ -41,8 +44,11 @@ export function personalEvidence(ws, botId, person) {
   }).sort((a, b) => b.time - a.time);
   const runs = new Map(ws.state.runs.map((r) => [r.id, r]));
   let used = 0;
+  const now = Date.now();
   for (const chat of chats) {
     if (ws.chatPeople(chat.id).invited.length) continue;
+    // A conversation the person is still in belongs to that chat's turn: the check waits until it goes quiet.
+    if (now - (chat.messages.at(-1)?.time ?? 0) < LIVE_CHAT) continue;
     const tail = chat.messages.slice(-24);
     const recent = tail.filter((m) => {
       if (m.role !== "user" || m.answer || !m.text?.trim() || (m.author?.memberId ?? "owner") !== person) return false;
