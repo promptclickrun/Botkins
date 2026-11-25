@@ -459,7 +459,7 @@ type HostAttachment = {
   notified: boolean;
   closing?: boolean;
 };
-type PhoneAttachment = { kind: "phone"; ids: Uint8Array; at: number; notified: boolean };
+type PhoneAttachment = { kind: "phone"; ids: Uint8Array; at: number; notified: boolean; closing?: boolean };
 type Attachment = HostAttachment | PhoneAttachment;
 type RecoveryState = { version: "v3"; group: string; until: number; phones?: string[] };
 type SeatState = { version: "v3"; group: string };
@@ -589,15 +589,22 @@ export class Room extends DurableObject<Env> {
     if (message.byteLength > (side?.kind === "phone" ? MAX_PHONE_MESSAGE : MAX_MESSAGE)) return this.ctx.blockConcurrencyWhile(() => this.end(ws, 1009, "too big"));
 
     if (side?.kind === "phone") {
+      if (side.closing) return;
       const now = Date.now();
       const hosts = this.open("host");
       if (hosts.some(host => (this.hostActivity(host)?.deadline ?? Infinity) <= now)) {
         return this.ctx.blockConcurrencyWhile(async () => {
           await this.reapStaleHosts(now);
           await this.forwardRequest(ws, side, bytes);
+          await this.scheduleAlarm();
         });
       }
-      if (!hosts.length) return this.ctx.blockConcurrencyWhile(() => this.holdOrRefuse(ws, side.ids, bytes));
+      if (!hosts.length) {
+        return this.ctx.blockConcurrencyWhile(async () => {
+          await this.holdOrRefuse(ws, side.ids, bytes);
+          await this.scheduleAlarm();
+        });
+      }
       return this.forwardRequest(ws, side, bytes);
     } else if (side?.kind === "host") {
       if (side.closing) return;
@@ -609,10 +616,15 @@ export class Room extends DurableObject<Env> {
       const conn = hex(bytes.subarray(0, 8));
       const phone = this.open("c:" + conn)[0];
       if (side.version === "v3" && bytes.length >= 13 && bytes[8] === 0x02) {
+        const hadPending = this.pending.length > 0;
         const phoneSide = phone?.deserializeAttachment() as PhoneAttachment | undefined;
         const accepted = this.pending.accept(conn, readU32(bytes, 9), phoneSide?.ids);
         send(ws, prefixed(unhex(accepted.ids), prefixed(Uint8Array.of(NOTICE_ANSWER_ACCEPTED), bytes.subarray(9, 13))));
         if (accepted.duplicate) return;
+        // A view of the same bytes: the 8 are stripped without a copy.
+        if (phone) send(phone, bytes.subarray(8));
+        if (hadPending && !this.pending.length) return this.scheduleAlarm();
+        return;
       }
       // A view of the same bytes: the 8 are stripped without a copy.
       if (phone) send(phone, bytes.subarray(8));
@@ -627,9 +639,12 @@ export class Room extends DurableObject<Env> {
       return;
     }
     if (bytes.length < 5 || bytes[0] !== REQUEST) return;
+    const hadPending = this.pending.length > 0;
     const pending = this.pending.add(side.ids, bytes);
-    if (pending) this.drainPending(host);
-    else send(ws, prefixed(Uint8Array.of(NOTICE_OFFLINE), bytes.subarray(1, 5)));
+    if (pending) {
+      this.drainPending(host);
+      if (!hadPending) return this.scheduleAlarm();
+    } else send(ws, prefixed(Uint8Array.of(NOTICE_OFFLINE), bytes.subarray(1, 5)));
   }
 
   private async holdOrRefuse(ws: WebSocket, ids: Uint8Array, bytes: Uint8Array): Promise<void> {
@@ -658,12 +673,15 @@ export class Room extends DurableObject<Env> {
     await this.ended(ws);
     if (side?.kind === "host" && !side.closing && !side.notified) await this.hostEnded(side);
     await this.scheduleAlarm();
-    // Complete the handshake. Codes that cannot be sent (1005, 1006, ...) go without a code.
-    try {
-      if (code >= 1000 && code < 5000 && ![1004, 1005, 1006, 1015].includes(code)) ws.close(code);
-      else ws.close();
-    } catch {
-      // Already closed.
+    // Complete the handshake only if we did not already initiate a close. Repeating ws.close()
+    // on a server-closed hibernated socket keeps the object from hibernating until TCP timeout.
+    if (!side?.closing) {
+      try {
+        if (code >= 1000 && code < 5000 && ![1004, 1005, 1006, 1015].includes(code)) ws.close(code);
+        else ws.close();
+      } catch {
+        // Already closed.
+      }
     }
   }
 
@@ -678,16 +696,27 @@ export class Room extends DurableObject<Env> {
     await this.ended(ws);
     if (side?.kind === "host" && !side.closing && !side.notified) await this.hostEnded(side);
     await this.scheduleAlarm();
-    try {
-      ws.close();
-    } catch {
-      // Already closed.
+    if (!side?.closing) {
+      try {
+        ws.close();
+      } catch {
+        // Already closed.
+      }
     }
   }
 
-  /** The room's sockets with a tag that are still open. A closing socket can linger in `getWebSockets`. */
+  /**
+   * The room's sockets with a tag that are still open and not already closing from our side.
+   * A server-closed socket whose peer never completes the close handshake can linger in
+   * `getWebSockets` across hibernation with `readyState === OPEN`; checking `side.closing`
+   * keeps it out of seat selection, reaping and alarms, and prevents duplicate `ws.close()` calls.
+   */
   private open(tag: string): WebSocket[] {
-    return this.ctx.getWebSockets(tag).filter((ws) => ws.readyState === OPEN);
+    return this.ctx.getWebSockets(tag).filter((ws) => {
+      if (ws.readyState !== OPEN) return false;
+      const side = ws.deserializeAttachment() as Attachment | null;
+      return !side?.closing;
+    });
   }
 
   private kindOf(ws: WebSocket): string {
@@ -762,15 +791,18 @@ export class Room extends DurableObject<Env> {
     }
     // Two OPEN seats are a full re-seat, even when both recently answered a ping. A ping proves
     // only that the old transport was alive before this admission; the new proven socket must be
-    // the active route. Evict the least recently heard seat, demote the survivor, and replay the
-    // bounded opaque request index on the incoming active socket.
-    const leastRecent = [...ordered].sort((a, b) => {
+    // the active route. Evict down to one survivor (least recently heard first), demote that
+    // survivor to standby, and replay the bounded opaque request index on the incoming active seat.
+    const sorted = [...ordered].sort((a, b) => {
       const last = (entry: (typeof ordered)[number]) => entry.activity?.last ?? entry.side.openedAt ?? 0;
       const delta = last(a) - last(b);
       return delta || (a.side.openedAt ?? 0) - (b.side.openedAt ?? 0);
-    })[0]!;
-    await this.end(leastRecent.ws, V3_RESEAT_CLOSE, "replaced");
-    const survivor = ordered.find((entry) => entry.ws !== leastRecent.ws);
+    });
+    const evictCount = Math.max(1, sorted.length - (MAX_V3_HOSTS - 1));
+    for (const victim of sorted.slice(0, evictCount)) {
+      await this.end(victim.ws, V3_RESEAT_CLOSE, "replaced");
+    }
+    const survivor = sorted[evictCount];
     if (survivor) survivor.ws.serializeAttachment({ ...survivor.side, role: "standby" } satisfies Attachment);
     return { role: "active", replay: true };
   }
@@ -947,13 +979,14 @@ export class Room extends DurableObject<Env> {
 
   private async scheduleAlarm(): Promise<void> {
     const recovery = await this.recovery();
-    let due = recovery?.until ?? Infinity;
-    const phones = this.open("phone").length;
+    let due = Math.min(recovery?.until ?? Infinity, this.pending.nextExpiry());
+    const hasPending = this.pending.length > 0;
     const now = Date.now();
     for (const host of this.open("host")) {
       const activity = this.hostActivity(host);
       if (!activity) continue;
-      if (phones) due = Math.min(due, activity.deadline);
+      // Only watch host liveness while a request is actually in flight (not for idle open phones).
+      if (hasPending) due = Math.min(due, activity.deadline);
       const { openedAt, heartbeat } = activity.side;
       if (!heartbeat && openedAt) {
         // Four samples at fixed offsets from admission. Later events cannot extend the probe.
@@ -990,10 +1023,11 @@ export class Room extends DurableObject<Env> {
 
   /** Closes a socket from this side. The reason is always one of our own fixed words. */
   private async end(ws: WebSocket, code: number, reason: string): Promise<void> {
-    log("drop", { kind: this.kindOf(ws), code, reason });
     const side = ws.deserializeAttachment() as Attachment | null;
+    if (side?.closing) return;
+    log("drop", { kind: this.kindOf(ws), code, reason });
     const replacing = reason === "replaced";
-    if (side?.kind === "host") ws.serializeAttachment({ ...side, closing: true } satisfies Attachment);
+    if (side) ws.serializeAttachment({ ...side, closing: true } satisfies Attachment);
     try {
       ws.close(code, reason);
     } catch {
