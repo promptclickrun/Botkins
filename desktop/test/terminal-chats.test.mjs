@@ -365,6 +365,35 @@ test("waiting messages, retry, mentions and a side question", { skip }, async (t
   assert.deepEqual(await changes(), ["chats.unqueue " + chat, "chats.sendNow " + chat, "chats.retry " + chat]);
 });
 
+test("one helper of a turn is listed and stopped alone, and the log has the chat's id", { skip }, async (t) => {
+  const { botkins, client, chatWith, changes, workspace, handlers } = await service(t);
+  await client.call("bots.add", { name: "Nova" });
+  const chat = await chatWith("Nova", "Plan", ["ask", "answer"]);
+  assert.match((await botkins(["chats", "stop-helper", "Plan"])).out, /No helper or background command works in this chat\./);
+  const run = { id: "run-1", chatId: chat, status: "Working", agents: [{ id: "h1", name: "explore\u202e", status: "Running", stoppable: true }, { id: "h0", name: "old", status: "Done" }], steps: [{ id: "s1", background: true, label: "npm run dev", status: "Running" }, { id: "t1", label: "view", status: "Running" }] };
+  workspace.active.set(chat, { stream: "", finishing: false, run });
+  const listed = (await botkins(["chats", "stop-helper", "Plan", "--json"])).json();
+  assert.deepEqual(listed.map((item) => [item.id, item.kind, item.stoppable]), [["h1", "helper", true], ["s1", "command", false]], "what works now, and what can be stopped alone");
+  assert.match((await botkins(["chats", "stop-helper", "Plan"])).out, /^ID +KIND +STOPPABLE +NAME\nh1 +helper +yes +explore\\u\{202e\}\n/, "a name is made safe");
+  const stopped = [];
+  workspace.stopHelper = async (id, helper) => void stopped.push([id, helper]);
+  const done = await botkins(["chats", "stop-helper", "Plan", "h1", "--json"]);
+  assert.deepEqual([done.exit, stopped, done.json().stopped], [0, [[chat, "h1"]], true]);
+  assert.match((await botkins(["chats", "stop-helper", "Plan", "h1"])).out, /^Stopped h1 in "Plan" /);
+  // The workspace's own sentence is the command's.
+  workspace.stopHelper = async () => {
+    throw new Error("That helper already finished.");
+  };
+  const refused = await botkins(["chats", "stop-helper", "Plan", "h1"]);
+  assert.equal(refused.exit, 1);
+  assert.match(refused.err, /That helper already finished\./);
+  assert.equal((await botkins(["chats", "stop-helper"])).exit, 2);
+  assert.equal((await botkins(["chats", "stop-helper", "Plan", "h1", "extra"])).exit, 2);
+  assert.deepEqual((await changes()).filter((line) => line.startsWith("chats.stopHelper")), ["chats.stopHelper " + chat, "chats.stopHelper " + chat], "the log names the chat, and not the helper");
+  workspace.active.delete(chat);
+  assert.equal(typeof handlers.stopHelper, "function");
+});
+
 test("sections: add, rename, order, set a chat, delete; read through the window's own calls", { skip }, async (t) => {
   const { botkins, client, chatWith, changes, everything } = await service(t);
   await client.call("bots.add", { name: "Nova" });
@@ -465,7 +494,7 @@ test("help --json lists the chats commands with usage and options, and a command
   assert.equal(await main(["help", "chats", "--json"], { stdout, stderr: stdout, stdin: Readable.from([]), env: {} }), 0);
   const area = JSON.parse(out.join("")).areas.find((entry) => entry.name === "chats");
   const names = area.commands.map((command) => command.command);
-  for (const name of ["list", "show", "rename", "delete", "fork", "compact", "flags", "project", "group", "retry", "queue", "unqueue", "send-now", "mentions", "aside", "sections list", "sections add", "sections rename", "sections delete", "sections order", "sections set"]) assert.ok(names.includes("chats " + name), name);
+  for (const name of ["list", "show", "rename", "delete", "fork", "compact", "flags", "project", "group", "retry", "queue", "unqueue", "stop-helper", "send-now", "mentions", "aside", "sections list", "sections add", "sections rename", "sections delete", "sections order", "sections set"]) assert.ok(names.includes("chats " + name), name);
   const by = (name) => area.commands.find((command) => command.command === "chats " + name);
   assert.equal(by("delete").asks, "--yes");
   assert.equal(by("sections delete").asks, "--yes");

@@ -3,11 +3,14 @@
 import type { Message, Run, Step, Subagent } from "@/link/types";
 import { inputField } from "./turn";
 
-/** "In the background · 2 running", or "… · 3 finished" (the desktop app's words). */
-export function railLabel(agents: Subagent[]): string {
-  const running = agents.filter((agent) => agent.status === "Running").length;
+/** "In the background · 2 running", or "… · 3 finished" (the desktop app's words). Running background commands count as running. */
+export function railLabel(agents: Subagent[], commands = 0): string {
+  const running = agents.filter((agent) => agent.status === "Running").length + commands;
   return "In the background · " + (running ? running + " running" : agents.length + " finished");
 }
+
+/** The turn's background commands still running: chips on the rail, beside its helpers. */
+export const runningCommands = (steps: Step[] | undefined): Step[] => (steps ?? []).filter((step) => step.background && step.status === "Running");
 
 /**
  * The chat's newest turn, whose helpers the rail shows: the chat's run part when there is one (the

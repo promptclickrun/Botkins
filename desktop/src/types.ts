@@ -354,6 +354,8 @@ export type Subagent = {
   started: number;
   finished?: number;
   detail?: string;
+  /** The computer can stop this helper or background command on its own: `stopHelper` ("stop-helper-v1"). Set only while it runs. */
+  stoppable?: boolean;
 };
 export type Usage = {
   input: number;
@@ -1133,6 +1135,8 @@ declare global {
         options?: { clientMessageId?: string; attachments?: Attachment[]; quote?: string; mentions?: MentionInput[]; delivery?: "steer" | "queue" },
       ): Promise<void>;
       stop(id: string): Promise<void>;
+      /** Stops one helper or background command of the chat's turn, by its id (a helper's id is the id of the step that started it). "stop-helper-v1". */
+      stopHelper(chatId: string, id: string): Promise<void>;
       /** The account behind one model provider. Without an id, the default provider (GitHub Copilot). */
       auth(providerId?: string): Promise<AuthStatus>;
       /** Starts that provider's sign-in in the person's browser and resolves when it is done. */
@@ -2109,6 +2113,8 @@ export type Step = {
   finished?: number;
   /** In a group chat, the member that ran this step. */
   botId?: string;
+  /** The computer can stop this helper or background command on its own: `stopHelper` ("stop-helper-v1"). Set only while it runs. */
+  stoppable?: boolean;
 };
 export type Card = {
   id: string;

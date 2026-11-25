@@ -80,6 +80,8 @@ export const WORKSPACE = {
   providerUsage: cmd("providers usage"),
   // ── Chats ──
   ...each("createChat send stop respond", cmd("chat")),
+  // One helper or background command of a turn, stopped alone: `chats stop-helper` lists them and stops one.
+  stopHelper: cmd("chats stop-helper"),
   // (A side question is a person's act in a chat, which the phone has as /btw: it gets a command with the chat commands.)
   mainChat: cmd("chat"),
   changeMainFork: cmd("chats switch-fork"),
@@ -503,6 +505,7 @@ export const CHANGES = {
   "chats.retry": (args, value) => value?.id,
   "chats.unqueue": (args, value) => value?.id,
   "chats.sendNow": (args, value) => value?.id,
+  "chats.stopHelper": (args, value) => value?.id,
   "chats.sections.add": (args, value) => value?.name,
   "chats.sections.rename": (args, value) => value?.id,
   "chats.sections.delete": (args, value) => value?.id,
@@ -670,7 +673,7 @@ export const READS = ["skillsCatalog.search", "skillsCatalog.preview", "skillsCa
 // The reads of the rest of the workspace, one line for each area (each area's builder writes only its own line).
 export const MORE_READS = {
   bots: ["bots.flags", "bots.proactive", "bots.memory", "bots.sections", "bots.sections.get", "bots.importable", "bots.import.preview", "templates.list", "templates.get", "templates.import.preview", "templates.browse", "templates.market"],
-  chats: ["chats.list", "chats.get", "chats.queue", "chats.mentions", "chats.aside", "chats.sections", "chats.projectLook"], // (`chats.aside` asks the chat's model a question that the chat does not keep.)
+  chats: ["chats.list", "chats.get", "chats.queue", "chats.helpers", "chats.mentions", "chats.aside", "chats.sections", "chats.projectLook"], // (`chats.aside` asks the chat's model a question that the chat does not keep.)
   routines: ["routines.get", "routines.review", "routines.when", "routines.schedules"],
   projects: ["projects.list", "projects.get", "projects.artifacts", "projects.changes", "projects.diff", "todos.list", "todos.get", "tasks.list", "tasks.get", "artifacts.list", "artifacts.read", "artifacts.resolve"],
   wiki: ["wiki.tree", "wiki.find", "wiki.page", "wiki.search", "wiki.history", "wiki.version", "wiki.exportPlan"],

@@ -83,7 +83,7 @@ export const REMOTE_METHODS = new Set([
   // Chats
   "mainChat", "changeMainFork", "setProactiveChatMode", "createChat", "createGroupChat", "setChatFlags", "markChatsRead", "renameChat", "regenerateChatTitle", "deleteChat", "forkChat", "reactToMessage", "warmChat",
   "setChatProject", "startProjectChat", "recordVoiceLine",
-  "send", "stop", "unqueue", "sendNow", "retry", "compact", "sideQuestion", "respond", "clearApprovals",
+  "send", "stop", "stopHelper", "unqueue", "sendNow", "retry", "compact", "sideQuestion", "respond", "clearApprovals",
   "mentionables", "catalog", "linkPreview",
   // Models and providers
   "models", "setModel", "providers", "harnesses", "setProviderEnabled", "providerConfigure", "auth", "signIn", "cancelSignIn", "signOut",
@@ -485,6 +485,7 @@ export function remoteArgs(method, args, { deviceId, uploads } = {}) {
     if (args.length > 1) throw new Error("Choose one picture.");
     return [cleanAvatar(args[0])];
   }
+  if (method === "stopHelper" && (args.length !== 2 || !clean(args[0]) || !clean(args[1]))) throw new Error("Choose the helper or command to stop.");
   if (method === "mainChat" && (args.length !== 1 || !clean(args[0]))) throw new Error("Choose a bot.");
   if (method === "setProactiveChatMode" && (args.length !== 1 || !["main", "new"].includes(args[0]))) throw new Error("Choose Main chat or New chat every time.");
   if (method === "changeMainFork") {

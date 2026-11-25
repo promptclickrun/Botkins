@@ -214,7 +214,7 @@ class ClaudeSession extends ProviderSession {
     this.bridge ??= await provider.bridge.open(spec.handlers ? [...spec.tools, ...this.skills.tools] : []);
     const { record, exists } = await this.target();
     const abort = new AbortController();
-    const turn = (this.turn = { text: [], streamed: 0, seen: 0, any: false, live: null, last: null, abort, userId: randomUUID(), failure: "", stderr: "", context: 0 });
+    const turn = (this.turn = { text: [], streamed: 0, seen: 0, any: false, live: null, last: null, abort, userId: randomUUID(), failure: "", stderr: "", context: 0, jobs: new Map(), level: null });
     let release;
     const held = new Promise((resolve) => (release = resolve));
     const prompt =
@@ -273,6 +273,7 @@ class ClaudeSession extends ProviderSession {
     } finally {
       clearTimeout(timer);
       release();
+      if (!turn.stopped) this.settleBackground(turn);
       try {
         q.close?.();
       } catch {
@@ -354,14 +355,114 @@ class ClaudeSession extends ProviderSession {
         for (const block of Array.isArray(content) ? content : []) {
           if (block.type !== "tool_result") continue;
           const text = resultText(block.content);
-          this.emit("tool.execution_complete", { toolCallId: block.tool_use_id, success: !block.is_error, ...(text && { result: { content: text } }), ...(block.is_error && { error: { message: text || "Failed" } }) }, undefined, agentId);
+          const job = turn.jobs.get(block.tool_use_id);
+          if (job?.settled) continue;
+          // A helper or command that went to the background is answered at once with a placeholder
+          // ("running in the background"). It is still working: its own notice says how it ended.
+          if (job?.backgrounded && !block.is_error && !job.ended) continue;
+          // Stopped only when Claude Code says so: a stop that was asked for may still be refused.
+          const stopped = job?.status === "stopped";
+          if (job) job.settled = true;
+          this.emit("tool.execution_complete", { toolCallId: block.tool_use_id, success: !block.is_error && !stopped, ...(stopped && { stopped: true }), ...(text && { result: { content: text } }), ...(block.is_error && !stopped && { error: { message: text || "Failed" } }) }, undefined, agentId);
           if (this.tasks.has(block.tool_use_id)) {
             this.tasks.delete(block.tool_use_id);
-            this.emit(block.is_error ? "subagent.failed" : "subagent.completed", { toolCallId: block.tool_use_id, ...(block.is_error ? { error: text } : { result:text }) });
+            this.emit(block.is_error && !stopped ? "subagent.failed" : "subagent.completed", { toolCallId: block.tool_use_id, ...(stopped && { stopped: true }), ...(block.is_error && !stopped ? { error: text } : { result: text }) });
           }
         }
         return;
       }
+      case "system":
+        this.systemEvent(event, turn);
+        return;
+    }
+  }
+  /**
+   * Claude Code's notes on its own background work: which task a tool call started (so one can be
+   * stopped alone), whether it went to the background, and how it ended.
+   */
+  systemEvent(event, turn) {
+    switch (event.subtype) {
+      case "task_started": {
+        if (!event.tool_use_id || !event.task_id || event.skip_transcript) return;
+        const job = turn.jobs.get(event.tool_use_id) ?? {};
+        Object.assign(job, { taskId: event.task_id, type: event.task_type, backgrounded: job.backgrounded || event.is_backgrounded === true });
+        turn.jobs.set(event.tool_use_id, job);
+        this.announceBackground(event.tool_use_id, job);
+        this.emit("task.changed", { toolCallId: event.tool_use_id });
+        return;
+      }
+      case "task_updated": {
+        const entry = [...turn.jobs.entries()].find(([, job]) => job.taskId === event.task_id);
+        if (!entry || event.patch?.is_backgrounded !== true || entry[1].backgrounded) return;
+        entry[1].backgrounded = true;
+        this.announceBackground(entry[0], entry[1]);
+        this.emit("task.changed", { toolCallId: entry[0] });
+        return;
+      }
+      case "background_tasks_changed": {
+        turn.level = new Set((event.tasks ?? []).map((task) => task.task_id));
+        for (const [id, job] of turn.jobs) if (job.backgrounded && !job.ended) this.emit("task.changed", { toolCallId: id });
+        return;
+      }
+      case "task_notification": {
+        const id = event.tool_use_id ?? [...turn.jobs.entries()].find(([, job]) => job.taskId === event.task_id)?.[0];
+        const job = id && turn.jobs.get(id);
+        if (!job || job.ended) return;
+        Object.assign(job, { ended: true, status: event.status });
+        // A call that was answered with the foreground's own result is finished by that result.
+        if (job.backgrounded && !job.settled) {
+          job.settled = true;
+          const summary = typeof event.summary === "string" ? event.summary : "";
+          const stopped = event.status === "stopped";
+          const failed = event.status === "failed";
+          this.emit("tool.execution_complete", { toolCallId: id, success: !failed && !stopped, ...(stopped && { stopped: true }), ...(summary && { result: { content: summary } }), ...(failed && { error: { message: summary || "Failed" } }) });
+          if (this.tasks.has(id)) {
+            this.tasks.delete(id);
+            this.emit(failed ? "subagent.failed" : "subagent.completed", { toolCallId: id, ...(stopped && { stopped: true }), ...(failed ? { error: summary } : { result: summary }) });
+          }
+        }
+        this.emit("task.changed", { toolCallId: id });
+        return;
+      }
+    }
+  }
+  /** A command that runs in the background is a background command in the chat, however it got there. Once. */
+  announceBackground(id, job) {
+    if (job.type !== "local_bash" || !job.backgrounded || job.announced) return;
+    job.announced = true;
+    this.emit("tool.backgrounded", { toolCallId: id });
+  }
+  /** Background work Claude Code still held when the reply ended is not read any more: the chat is told so. */
+  settleBackground(turn) {
+    for (const [id, job] of turn.jobs) {
+      if (!job.backgrounded || job.settled || job.ended) continue;
+      job.settled = true;
+      const note = "Still running when the reply ended.";
+      this.emit("tool.execution_complete", { toolCallId: id, success: false, stopped: true, result: { content: note } });
+      if (this.tasks.has(id)) {
+        this.tasks.delete(id);
+        this.emit("subagent.completed", { toolCallId: id, stopped: true, detail: note });
+      }
+    }
+  }
+  /** Whether Claude Code can stop this helper or background command on its own: it told Botkins its task. */
+  canStopHelper(id) {
+    const turn = this.turn;
+    const job = turn?.jobs.get(id);
+    if (!job?.taskId || job.ended || job.settled || job.stopRequested || !turn.query?.stopTask) return false;
+    // The set of live background tasks is the truth for a task that went to the background.
+    return !(job.backgrounded && turn.level && !turn.level.has(job.taskId));
+  }
+  async stopHelper(id) {
+    const turn = this.turn;
+    const job = turn?.jobs.get(id);
+    if (!turn?.query?.stopTask || !job?.taskId || job.ended || job.settled) throw new Error("That helper already finished.");
+    job.stopRequested = true;
+    try {
+      await turn.query.stopTask(job.taskId);
+    } catch (error) {
+      job.stopRequested = false;
+      throw new Error("Botkins couldn't stop it: " + String(error?.message ?? error).slice(0, 300));
     }
   }
   toolStarted(block, agentId) {

@@ -62,6 +62,14 @@
 //     tool.execution_partial_result  data.toolCallId, partialOutput
 //     tool.execution_complete        data.toolCallId, success, result, error
 //     subagent.started / completed / failed   see desktop/canvas.mjs
+//     task.changed                   data.toolCallId: the backend learned something about stopping that
+//                                    helper or background command (canStopHelper may answer differently now)
+//
+// Stopping one helper or background command (optional)
+//   A session that can do it says so per item, `canStopHelper(id)`, and does it, `stopHelper(id)`.
+//   `id` is a helper's id (the id of the step that started it) or a background step's id. A call
+//   that cannot be done rejects with a plain sentence. The workspace marks the item `stoppable`
+//   while it runs and the session says yes (Workspace.stopHelper).
 
 /** A tool Botkins gives a bot. `skipPermission` marks Botkins' own tools, which never ask. */
 export function defineTool(name, { description, parameters, handler, skipPermission = true, defer = "never" }) {
@@ -237,6 +245,14 @@ export class ProviderSession {
   }
   /** Stops the reply in progress. */
   async abort() {}
+  /** True when `stopHelper(id)` can stop this helper or background command right now. Most backends can't stop one alone. */
+  canStopHelper(_id) {
+    return false;
+  }
+  /** Stops one helper or background command of the reply in progress, by its id, and leaves the rest running. Rejects with a plain sentence. */
+  async stopHelper(_id) {
+    unsupported("stopping one helper");
+  }
   /** Ends this use of the session. The provider may keep it warm for the next turn. */
   async close() {}
   /** { model, reasoningEffort } the session is really using, or null. */
