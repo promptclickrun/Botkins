@@ -36,7 +36,9 @@ import {
   type NotifyMode,
   type TargetPersonOption,
 } from "./notifyTargets";
+import { WorkflowsView } from "./Workflows";
 import "./routines.css";
+import "./workflows.css";
 
 const api = window.botkins;
 const DAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
@@ -347,6 +349,7 @@ export default function RoutinesPage({
   const [view, setView] = useState<View>(
     initial?.create ? { mode: "edit", botId: initial.botId } : initial?.id ? { mode: "detail", id: initial.id } : { mode: "list" },
   );
+  const [section, setSection] = useState<"routines" | "workflows">("routines");
   const [botFilter, setBotFilter] = useState(initial?.create ? "" : initial?.botId ?? "");
   const [phoneLink, setPhoneLink] = useState<PhoneLink | null>(null);
   const remoteId = state.remote?.using?.id ?? null;
@@ -415,10 +418,30 @@ export default function RoutinesPage({
   );
   const owners = state.bots.filter((b) => items.some((i) => i.chat.botId === b.id) || b.id === botFilter);
   const act = (p: Promise<unknown>) => void p.catch(actions.fail);
+  const workflowCount = (state.workflows ?? []).length;
   return (
     <div className="routines">
-      <WorkBar work={work} tab="Routines" add={{ label: "New routine", run: () => setView({ mode: "edit", botId: botFilter || undefined }) }} />
-      <p className="muted routines-lede">Work your bots do on a schedule, each in its own chat.</p>
+      <WorkBar
+        work={work}
+        tab="Routines"
+        add={section === "routines" ? { label: "New routine", run: () => setView({ mode: "edit", botId: botFilter || undefined }) } : undefined}
+      />
+      <div className="routines-mode-bar">
+        <GlassSegmented
+          aria-label="Routines view"
+          value={section}
+          items={[
+            { value: "routines", label: "Routines" },
+            { value: "workflows", label: workflowCount > 0 ? `Workflows (${workflowCount})` : "Workflows" },
+          ]}
+          onValueChange={(next) => setSection(next as "routines" | "workflows")}
+        />
+      </div>
+      {section === "workflows" ? (
+        <WorkflowsView state={state} fail={actions.fail} webhookPort={phoneLink?.listening ? phoneLink.port : null} />
+      ) : (
+        <>
+          <p className="muted routines-lede">Work your bots do on a schedule, each in its own chat.</p>
       {owners.length > 1 || botFilter ? (
         <div className="filters chips" role="group" aria-label="Filter by bot">
           <button aria-pressed={!botFilter} onClick={() => setBotFilter("")}>
@@ -565,6 +588,8 @@ export default function RoutinesPage({
             );
           })}
         </section>
+      )}
+        </>
       )}
     </div>
   );

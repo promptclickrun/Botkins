@@ -116,6 +116,22 @@ export const WORKSPACE = {
   duplicateRoutine: cmd("routines duplicate"),
   previewCadence: cmd("routines when"),
   changeSchedule: cmd("routines schedule"),
+  // ── Workflows ──
+  workflowsList: cmd("workflows list"),
+  workflowCreate: cmd("workflows add"),
+  workflowUpdate: cmd("workflows edit"),
+  workflowDelete: cmd("workflows remove"),
+  workflowPause: cmd("workflows pause"),
+  workflowResume: cmd("workflows resume"),
+  workflowRun: cmd("workflows run"),
+  workflowRetryRun: cmd("workflows retry"),
+  workflowRespondApproval: cmd("workflows approve"),
+  workflowCancelRun: cmd("workflows cancel"),
+  workflowExportText: cmd("workflows export"),
+  workflowImportText: cmd("workflows import"),
+  workflowExport: no("window"), // native save file dialog; `workflows export <id>` prints JSON
+  workflowImport: no("window"), // native open file dialog; `workflows import <file>` reads a path
+  workflowRotateWebhookSecret: no("person"), // returns a newly generated webhook secret; stays in the window or owner phone
   // ── Plugins ──
   "skills.upload": cmd("skills upload"),
   // A script command (desktop/script-commands.mjs): `skills add-script` shows the whole script and needs a yes; `skills show` prints it.
@@ -529,6 +545,16 @@ export const CHANGES = {
   "routines.duplicate": (args, value) => (value?.fastMinutes ? withRate(value.name, value.fastMinutes) : (value?.name ?? args?.[0])),
   // A chat's own schedule (a prompt it set with /every or /after): the chat's title, and what was done (pause, resume or delete).
   "routines.schedule": (args, value) => (["pause", "resume", "delete"].includes(value?.action) ? levelOf(value.chat ?? args?.[0], value.action) : (value?.chat ?? args?.[0])),
+  "workflows.add": (args, value) => value?.name ?? args?.[0]?.name,
+  "workflows.edit": (args, value) => value?.name ?? args?.[0],
+  "workflows.remove": (args, value) => value?.name ?? args?.[0],
+  "workflows.pause": (args, value) => value?.name ?? args?.[0],
+  "workflows.resume": (args, value) => value?.name ?? args?.[0],
+  "workflows.run": (args, value) => value?.workflowId ?? args?.[0],
+  "workflows.retry": (args, value) => value?.id ?? args?.[0],
+  "workflows.approve": (args, value) => value?.id ?? args?.[0],
+  "workflows.cancel": (args, value) => value?.id ?? args?.[0],
+  "workflows.import": (args, value) => value?.workflow?.name ?? "imported",
   // ── Projects, to-dos, tasks and artifacts (control-projects.mjs) ──
   // The project's name (the answer has it, whether the caller gave its name or its id). Never a folder, a message, a to-do's words or a diff.
   "projects.add": (args, value) => value?.name ?? args?.[0]?.name,
@@ -683,7 +709,7 @@ export const READS = ["skills.review", "chat.scriptCommand", "skillsCatalog.sear
 export const MORE_READS = {
   bots: ["bots.flags", "bots.proactive", "bots.memory", "bots.sections", "bots.sections.get", "bots.importable", "bots.import.preview", "templates.list", "templates.get", "templates.import.preview", "templates.browse", "templates.market"],
   chats: ["chats.list", "chats.get", "chats.search", "chats.queue", "chats.helpers", "chats.mentions", "chats.aside", "chats.sections", "chats.projectLook"], // (`chats.aside` asks the chat's model a question that the chat does not keep.)
-  routines: ["routines.get", "routines.review", "routines.when", "routines.schedules"],
+  routines: ["routines.get", "routines.review", "routines.when", "routines.schedules", "workflows.list", "workflows.export"],
   projects: ["projects.list", "projects.get", "projects.artifacts", "projects.changes", "projects.diff", "todos.list", "todos.get", "tasks.list", "tasks.get", "artifacts.list", "artifacts.read", "artifacts.resolve"],
   wiki: ["wiki.tree", "wiki.find", "wiki.page", "wiki.search", "wiki.history", "wiki.version", "wiki.exportPlan"],
   prefs: ["preferences.get", "preferences.harnesses", "usage.report", "usage.export", "cache.info", "macTools.status"],

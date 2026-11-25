@@ -1257,6 +1257,52 @@ export type ProactiveBot = Partial<ProactiveBotSettings> & {
 };
 export type ProactivePart = { chatMode?: "main" | "new"; enabled: boolean; bots: Record<string, ProactiveBot | undefined> };
 export type ProactiveLog = { at: number; reason: "signals" | "sweep" | "check" | "context" | "review"; score?: number; signals: number; outcome: "alerted" | "silent" | "failed"; runId: string; said?: string };
+export type WorkflowNode = {
+  id: string;
+  kind: "trigger" | "agent" | "model" | "condition" | "approval" | "output";
+  triggerKind?: "task" | "schedule" | "manual" | "routine" | "chat" | "webhook" | "github";
+  label: string;
+  position: { x: number; y: number };
+  config: Record<string, any>;
+};
+export type WorkflowEdge = { id: string; from: string; to: string; branch?: string };
+export type Workflow = {
+  id: string;
+  name: string;
+  description?: string;
+  enabled: boolean;
+  nodes: WorkflowNode[];
+  edges: WorkflowEdge[];
+  createdAt: number;
+  updatedAt: number;
+  lastRunAt?: number | null;
+};
+export type WorkflowStepRun = {
+  nodeId: string;
+  kind: WorkflowNode["kind"];
+  label: string;
+  status: "pending" | "running" | "waiting_approval" | "completed" | "failed" | "skipped" | "cancelled";
+  startedAt?: number | null;
+  finishedAt?: number | null;
+  summary?: string;
+  error?: string;
+  branch?: string | null;
+};
+export type WorkflowRun = {
+  id: string;
+  workflowId: string;
+  workflowName: string;
+  status: "running" | "waiting_approval" | "completed" | "failed" | "cancelled";
+  triggerNodeId?: string | null;
+  triggerKind?: string | null;
+  manual?: boolean;
+  startedAt: number;
+  finishedAt?: number | null;
+  error?: string | null;
+  steps: Record<string, WorkflowStepRun>;
+  pendingApproval?: { nodeId: string; label: string; message: string; noteField?: string | null } | null;
+};
+
 export type Parts = {
   meta: Meta;
   settings: Preferences;
@@ -1274,6 +1320,9 @@ export type Parts = {
   /** The spaces this person can open ("spaces-v1"). An app that has it ignores `panels` and `board`. */
   spaces?: SpaceSummary[];
   tasks: BotTask[];
+  /** Event-based workflows and recent runs ("workflows-v1"). */
+  workflows?: Workflow[];
+  workflowRuns?: WorkflowRun[];
   /** The Proactive agent: the computer's switch and each bot's agent ("proactive-agent-v2"). A member is sent only their own. */
   proactive?: ProactivePart;
   projects: Project[];
@@ -1831,6 +1880,14 @@ export type Calls = {
   moveTask(id: string, status: TaskStatus | "archived"): void;
   startTask(id: string): void;
   deleteTask(id: string): void;
+  workflowsList(): { workflows: Workflow[]; runs: WorkflowRun[] };
+  workflowPause(id: string): Workflow;
+  workflowResume(id: string): Workflow;
+  workflowRun(id: string, options?: { triggerNodeId?: string; inputs?: Record<string, unknown> }): WorkflowRun;
+  workflowRetryRun(runId: string, nodeId?: string): WorkflowRun;
+  workflowRespondApproval(runId: string, nodeId: string | null, decision: "approved" | "rejected", note?: string): WorkflowRun;
+  workflowCancelRun(runId: string): WorkflowRun;
+  workflowDelete(id: string): boolean;
   refreshPanel(id: string): void;
   changePanel(id: string, action: "delete" | "hide" | "show" | "small" | "wide" | "tall" | "earlier" | "later"): void;
   boardAct(id: string, action: "read" | "unread" | "clear" | "done" | "reopen" | "yes" | "goal" | "notToday" | "up" | "down" | "delete", value?: string): string | undefined;

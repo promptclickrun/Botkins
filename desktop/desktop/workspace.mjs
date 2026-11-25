@@ -38,6 +38,7 @@ import { PhoneTools } from "./phonetools.mjs";
 import { BrowserExtensionTools } from "./browsertools.mjs";
 import { Vault } from "./vault.mjs";
 import { Frames } from "./frames.mjs";
+import { Workflows } from "./workflows.mjs";
 
 import {
   defaultSettings,
@@ -389,6 +390,7 @@ export class Workspace {
       }
     }
     this.tasks = new Tasks(this);
+    this.workflows = new Workflows(this, options?.workflows);
     this.proactive = new Proactive(this);
     // One plain nudge for what is left waiting on a person, with no model (desktop/reminders.mjs).
     this.reminders = new Reminders(this);
@@ -475,6 +477,8 @@ export class Workspace {
       spaces: this.spaces.part(),
       // A project's list of artifacts holds only the ones that still exist.
       projects: this.projects.listed(),
+      workflows: this.workflows.list(),
+      workflowRuns: this.workflows.listRuns(null, 100),
       // The Proactive agent: the computer's switch, and each proactive bot's settings and log, without the keys of what it raised.
       proactive: this.proactive.views(),
       // The reminders sent in the last few minutes, for the link to pass to that person's phones (desktop/link/push.mjs). No app is sent this.
@@ -924,6 +928,15 @@ export class Workspace {
     }, voiceId);
     if (!context.panelId && context.scheduleId == null && !proactiveCheck && !context.reaction) {
       this.recordHumanMentions(chat, prompt, { senderId: author?.memberId ?? "owner", senderName: author?.name });
+    }
+    if (!context.panelId && context.scheduleId == null && !context.taskId && !context.workflowRunId && !chat.workflowId && !proactiveCheck && !context.reaction) {
+      this.events.emit("chat.message", {
+        chat,
+        bot,
+        text: prompt,
+        sender: author?.name ?? author?.memberId ?? "owner",
+        time: chat.time,
+      });
     }
     run.recovery = { extra, ...(proactiveCheck && { proactiveCheck }), ...(message.voiceId && { voicePrompt: prompt }) };
     // With auto-summarize on, the first message is named while the bot replies (desktop/summaries.mjs).
@@ -1455,6 +1468,7 @@ export class Workspace {
       ...updateTools(this.updates, chat, run, task, () => this.active.get(chat.id)),
       ...this.panels.tools(bot, chat, run, task),
       ...this.panels.routines.tools(bot, chat, run, task),
+      ...this.workflows.tools(bot, chat, run, task),
       ...records,
       // iMessage and Mail, for what the person switched on (a turn nobody watches only reads).
       ...this.mac.tools(bot, chat, run, task),

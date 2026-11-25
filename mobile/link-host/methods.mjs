@@ -94,6 +94,9 @@ export const REMOTE_METHODS = new Set([
   // Routines and tasks
   "createRoutine", "updateRoutine", "setRoutineEnabled", "deleteRoutine", "runRoutine", "duplicateRoutine",
   "previewCadence", "changeSchedule",
+  "workflowsList", "workflowCreate", "workflowUpdate", "workflowDelete", "workflowPause", "workflowResume",
+  "workflowRun", "workflowRetryRun", "workflowRespondApproval", "workflowCancelRun",
+  "workflowRotateWebhookSecret", "workflowExportText", "workflowImportText",
   "saveTask", "moveTask", "startTask", "deleteTask",
   // Today
   "refreshPanel", "changePanel", "routine", "boardAct",

@@ -1,10 +1,10 @@
 import { router } from "expo-router";
-import { Activity as ActivityIcon, ChevronDown, ChevronUp, CircleDashed, Plus, Trash2, X } from "lucide-react-native";
+import { Activity as ActivityIcon, ChevronDown, ChevronUp, CircleDashed, Plus, Trash2, Workflow as WorkflowIcon, X } from "lucide-react-native";
 import { useMemo, useState } from "react";
 import { Alert, Switch, View } from "react-native";
 import Animated, { FadeIn } from "react-native-reanimated";
-import type { Bot, BotTask, ChatSchedule, ChatSummary, Panel } from "@/link/types";
-import { type RoutineEntry, useBots, useCan, useChats, useMember, usePart, useRoutines } from "@/state/hooks";
+import type { Bot, BotTask, ChatSchedule, ChatSummary, Panel, Workflow, WorkflowRun } from "@/link/types";
+import { type RoutineEntry, useBots, useCan, useChats, useMember, usePart, useRoutines, useWorkflowRuns, useWorkflows } from "@/state/hooks";
 import { api, attempt } from "@/state/link";
 import { useApp } from "@/state/store";
 import { upcoming } from "@/state/time";
@@ -27,6 +27,7 @@ let lastSegment: Segment = "routines";
 const openChat = (id: string) => router.push({ pathname: "/chat/[id]", params: { id } });
 const openTask = (id: string) => router.push({ pathname: "/task/[id]", params: { id } });
 const openRoutine = (id: string) => router.push({ pathname: "/routine/[id]", params: { id } });
+const openWorkflow = (id: string) => router.push({ pathname: "/workflow/[id]", params: { id } });
 
 // Needs you
 
@@ -121,23 +122,84 @@ function RoutineRow({ routine }: { routine: RoutineEntry }) {
   );
 }
 
+function WorkflowRow({ workflow, latestRun }: { workflow: Workflow; latestRun?: WorkflowRun }) {
+  const { colors } = useTheme();
+  const canUse = useCan("today", "use");
+  const canManage = useCan("today", "manage");
+  const triggers = workflow.nodes.filter((n) => n.kind === "trigger").map((n) => n.triggerKind || "trigger");
+  const sub = [
+    workflow.enabled ? `${workflow.nodes.length} steps` : "Paused",
+    triggers.length ? triggers.join(", ") : undefined,
+    latestRun ? `Last run: ${latestRun.status.replace("_", " ")}` : undefined,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+  return (
+    <HoldMenu
+      actions={[
+        ...(canUse ? [{ id: "run", title: "Run now", image: "play" }] : []),
+        { id: "open", title: "View runs", image: "list.bullet" },
+      ]}
+      onPressAction={({ nativeEvent }) => {
+        if (nativeEvent.event === "run") void attempt(api.workflowRun(workflow.id), "Running " + workflow.name);
+        else if (nativeEvent.event === "open") openWorkflow(workflow.id);
+      }}
+    >
+      <SplitRow
+        leading={<IconTile icon={WorkflowIcon} color={workflow.enabled ? colors.accent : colors.muted} size={44} />}
+        title={workflow.name}
+        subtitle={sub}
+        muted={!workflow.enabled}
+        hint="Tap for runs · long press to run"
+        onPress={() => openWorkflow(workflow.id)}
+        accessory={
+          canManage ? (
+            <Switch
+              value={workflow.enabled}
+              onValueChange={(next) => {
+                haptic.select();
+                void attempt(next ? api.workflowResume(workflow.id) : api.workflowPause(workflow.id));
+              }}
+              {...switchColors(colors, workflow.enabled)}
+              style={{ alignSelf: "center" }}
+              accessibilityLabel={workflow.name + (workflow.enabled ? ", active" : ", paused")}
+            />
+          ) : undefined
+        }
+      />
+    </HoldMenu>
+  );
+}
+
 function Routines({ routines, chats, bots }: { routines: RoutineEntry[]; chats: ChatSummary[]; bots: Map<string, Bot> }) {
   const panels = usePart("panels");
+  const workflows = useWorkflows();
+  const workflowRuns = useWorkflowRuns();
   const canCreate = useCan("today", "create");
   const withRoutine = useMemo(() => (panels ?? []).filter((panel) => panel.routine), [panels]);
   // Schedules a bot made in a chat with /every or /after: every schedule that isn't a routine.
   const schedules = useMemo(() => chats.flatMap((chat) => (chat.schedules ?? []).filter((entry) => !entry.routine).map((entry) => ({ chat, entry }))), [chats]);
   return (
     <View style={{ gap: space.xl }}>
-      {routines.length === 0 ? (
+      {workflows.length > 0 && (
+        <View>
+          <Label>{"Workflows · " + workflows.length}</Label>
+          <Group>
+            {workflows.map((wf) => (
+              <WorkflowRow key={wf.id} workflow={wf} latestRun={workflowRuns.find((r) => r.workflowId === wf.id)} />
+            ))}
+          </Group>
+        </View>
+      )}
+      {routines.length === 0 && workflows.length === 0 ? (
         <EmptyState art={<Mascot size={104} state="planning" />} title="No routines yet" action={canCreate ? "New routine" : undefined} onAction={canCreate ? () => openRoutine("new") : undefined} />
-      ) : (
+      ) : routines.length > 0 ? (
         <Group>
           {routines.map((routine) => (
             <RoutineRow key={routine.id} routine={routine} />
           ))}
         </Group>
-      )}
+      ) : null}
       {withRoutine.length > 0 && (
         <View>
           <Label>{"Today panels · " + withRoutine.length}</Label>
@@ -309,6 +371,7 @@ export default function Work() {
   const allBots = useBots();
   const chats = useChats();
   const routines = useRoutines();
+  const workflowRuns = useWorkflowRuns();
   const allTasks = usePart("tasks");
   const requests = useApp((state) => state.parts.live?.requests);
   const canToday = useCan("today", "view");
@@ -325,13 +388,23 @@ export default function Work() {
       const bot = bots.get(request.botId);
       out.push({ key: "r" + request.id, bot, title: request.title, caption: (bot?.name ?? "A bot") + " is asking", onPress: () => openChat(request.chatId) });
     }
+    for (const run of workflowRuns) {
+      if (run.status === "waiting_approval" && run.pendingApproval) {
+        out.push({
+          key: "wf" + run.id,
+          title: run.workflowName,
+          caption: "Approval needed · " + run.pendingApproval.label,
+          onPress: () => openWorkflow(run.workflowId),
+        });
+      }
+    }
     for (const task of tasks)
       if (task.status === "review" || task.status === "blocked") {
         const bot = task.botId ? bots.get(task.botId) : undefined;
         out.push({ key: "t" + task.id, bot, title: task.title, caption: task.status === "review" ? "Ready for review" : "Blocked", onPress: () => openTask(task.id) });
       }
     return out;
-  }, [requests, tasks, bots]);
+  }, [requests, workflowRuns, tasks, bots]);
 
   const shownSegment = options.some((option) => option.value === segment) ? segment : options[0]?.value;
   const add =
