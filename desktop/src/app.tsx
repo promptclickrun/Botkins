@@ -70,7 +70,7 @@ type Page = "Home" | "Today" | "Chats" | "Wiki" | WorkTab | "Activity" | "Usage"
 const WORK_PAGES: Page[] = [...WORK_TABS, "Activity", "Usage"];
 type Modal = "" | "bot" | "chat" | "account" | "settings" | "model";
 const personalChat = (chat: Chat) =>
-  !chat.archived && (!chat.main || !!(chat.count ?? chat.messages.length)) && !chat.botIds && !chat.panelId && !chat.schedules?.some((entry) => entry.routine);
+  !chat.hostDispatch && !chat.archived && (!chat.main || !!(chat.count ?? chat.messages.length)) && !chat.botIds && !chat.panelId && !chat.schedules?.some((entry) => entry.routine);
 const visitKey = (host: string, bot: string) => "botkins.lastChat." + JSON.stringify([host, bot]);
 function App() {
   const [updates] = useState(() => new WindowState());

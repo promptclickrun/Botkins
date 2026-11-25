@@ -69,3 +69,9 @@ test("an empty Main chat stays visible and never becomes the new chat", () => {
   assert.equal(chatForTap([main], "mira", "new"), null);
   assert.equal(archivesWhenLeft(main, { messages: 0, working: false, waiting: 0, draft: "" }), false);
 });
+
+test("an approval transcript is never selected as a bot's writable chat or archived as a blank draft", () => {
+  const approval = chat("request", { hostDispatch: true, count: 0, time: 100 });
+  for (const tap of ["main", "latest", "new"] as const) assert.equal(chatForTap([approval], "mira", tap), null);
+  assert.equal(archivesWhenLeft(approval, { messages: 0, working: false, waiting: 0, draft: "" }), false);
+});

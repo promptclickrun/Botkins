@@ -6,7 +6,7 @@ type Busy = Pick<State, "streams" | "queued">;
 
 /** A chat nobody wrote in and nothing is set on: no message, not working, nothing queued, not pinned, no schedule, not a panel's. */
 const blank = (chat: Chat, state: Busy) =>
-  !chat.main &&
+  !chat.hostDispatch && !chat.main &&
   !chat.pinned &&
   !chat.panelId &&
   !chat.schedules?.length &&

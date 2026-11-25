@@ -19,7 +19,7 @@ export const botTapOf = (value: unknown): BotTap => (value === "new" || value ==
  * (`archived` says so, and it is taken out of the archive), so empty chats don't pile up there.
  */
 export function chatForTap(chats: ChatSummary[], botId: string, tap: BotTap, person = "owner"): { id: string; archived?: true } | null {
-  const mine = chats.filter((chat) => chat.botId === botId && !chat.botIds && !chat.panelId && !chat.schedules?.some((schedule) => schedule.routine)).sort((a, b) => b.time - a.time);
+  const mine = chats.filter((chat) => chat.botId === botId && !chat.hostDispatch && !chat.botIds && !chat.panelId && !chat.schedules?.some((schedule) => schedule.routine)).sort((a, b) => b.time - a.time);
   if (tap === "main") {
     const main = mine.find(chat => chat.main && (chat.createdBy ?? "owner") === person);
     return main ? { id: main.id } : null;
@@ -40,7 +40,7 @@ export function chatForTap(chats: ChatSummary[], botId: string, tap: BotTap, per
  * sent, one whose bot is working or that has a message waiting.
  */
 export function archivesWhenLeft(chat: ChatSummary | undefined, now: { messages: number; working: boolean; waiting: number; draft: string }): boolean {
-  if (!chat || chat.main || chat.archived || chat.pinned || chat.panelId || chat.schedules?.length) return false;
+  if (!chat || chat.hostDispatch || chat.main || chat.archived || chat.pinned || chat.panelId || chat.schedules?.length) return false;
   if (chat.count > 0 || now.messages > 0) return false;
   return !now.working && now.waiting === 0 && !now.draft.trim();
 }
