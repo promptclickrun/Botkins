@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Monitor, Smartphone, Speaker, Trash2, TriangleAlert } from "lucide-react";
+import { Globe, Monitor, Smartphone, Speaker, Trash2, TriangleAlert } from "lucide-react";
 import type { PhoneLink, State } from "./types";
 import { plural, when } from "./wikiModel";
 import { useAsk } from "./Pages";
@@ -304,7 +304,7 @@ export default function PhoneSettings({ state }: { state: State }) {
               status.devices.map((d) => (
                 <div className="set-row int-item compact" key={d.id}>
                   <span className="int-glyph" aria-hidden="true">
-                    {d.kind === "desktop" ? <Monitor size={14} /> : d.kind === "gadget" ? <Speaker size={14} /> : <Smartphone size={14} />}
+                    {d.kind === "desktop" ? <Monitor size={14} /> : d.kind === "gadget" ? <Speaker size={14} /> : d.kind === "browser" ? <Globe size={14} /> : <Smartphone size={14} />}
                   </span>
                   <div className="set-label">
                     {renaming?.id === d.id ? (
@@ -327,11 +327,11 @@ export default function PhoneSettings({ state }: { state: State }) {
                       <span className="set-name">{d.person || d.name}</span>
                     )}
                     <small className="int-line">
-                      {d.person ? d.name : d.kind === "desktop" ? "Computer" : d.kind === "gadget" ? "Gadget" : "Phone"} · {d.connected ? "Connected" : "Last seen " + when(d.lastSeenAt)}
+                      {d.person ? d.name : d.kind === "desktop" ? "Computer" : d.kind === "gadget" ? "Gadget" : d.kind === "browser" ? "Browser extension" : "Phone"} · {d.connected ? "Connected" : "Last seen " + when(d.lastSeenAt)}
                     </small>
                     {/* What the person chose on that phone, shown here so it can be seen from the computer. */}
-                    {d.kind !== "desktop" && d.kind !== "gadget" && <small className="int-line">{notified(status, d.id)}</small>}
-                    {d.kind !== "desktop" && d.kind !== "gadget" && <small className="int-line">{shared(status, d.id)}</small>}
+                    {d.kind !== "desktop" && d.kind !== "gadget" && d.kind !== "browser" && <small className="int-line">{notified(status, d.id)}</small>}
+                    {d.kind !== "desktop" && d.kind !== "gadget" && d.kind !== "browser" && <small className="int-line">{shared(status, d.id)}</small>}
                   </div>
                   <div className="set-control">
                     {d.kind === "gadget" && status.gadgetSettings && (
@@ -339,7 +339,7 @@ export default function PhoneSettings({ state }: { state: State }) {
                         Settings…
                       </button>
                     )}
-                    {status.canSetPerson && renaming?.id !== d.id && d.kind !== "gadget" && (
+                    {status.canSetPerson && renaming?.id !== d.id && d.kind !== "gadget" && d.kind !== "browser" && (
                       <button type="button" className="set-button" disabled={busy} aria-label={d.person ? "Change name for " + d.person : "Add name for " + d.name} onClick={() => setRenaming({ id: d.id, name: d.person || "" })}>
                         {d.person ? "Change name" : "Add name"}
                       </button>

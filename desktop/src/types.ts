@@ -1942,7 +1942,7 @@ export type PhoneLink = {
   /** The name phones show for this computer. */
   name: string;
   addresses: { address: string; kind: "lan" | "tailnet" | "loopback" | "link"; interface: string }[];
-  devices: { id: string; name: string; person?: string; platform: string; kind?: "phone" | "desktop" | "gadget"; gadget?: GadgetInfo; createdAt: number; lastSeenAt: number; connected: boolean; canNotify?: boolean }[];
+  devices: { id: string; name: string; person?: string; platform: string; kind?: "phone" | "desktop" | "gadget" | "browser"; gadget?: GadgetInfo; browser?: { enabled: boolean; mode: "all" | "group"; browser?: string; profile?: string; version?: string }; createdAt: number; lastSeenAt: number; connected: boolean; canNotify?: boolean }[];
   /** The link has "gadget-settings-v1": a gadget's page with its settings, Wi-Fi and restart, and `gadget` on each gadget above. */
   gadgetSettings?: boolean;
   /** An open pairing code. `qr` is the code's link as one SVG path in a square of `size` units. */

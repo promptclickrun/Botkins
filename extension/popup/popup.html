@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Botkins Browser Control</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <header class="top">
+      <div class="brand">
+        <img src="../icons/icon-32.png" alt="Botkins" width="24" height="24" />
+        <div>
+          <h1>Botkins</h1>
+          <p id="subtitle" class="muted">Checking status…</p>
+        </div>
+      </div>
+      <label class="switch" title="Enable or pause browser control">
+        <input id="master-toggle" type="checkbox" />
+        <span class="slider"></span>
+      </label>
+    </header>
+
+    <main id="content">
+      <section id="error-box" class="banner error hidden"></section>
+
+      <!-- Profile / Sign-in Section -->
+      <section id="auth-section" class="card">
+        <div id="signed-out-view" class="hidden">
+          <div class="row-between">
+            <strong>Sign in with Botkins Profile</strong>
+          </div>
+          <p class="muted small">Sign in once to see and connect your Botkins hosts (Mac, PC, or VPS) with no QR codes.</p>
+          <button id="btn-signin" class="btn primary full">Sign in to Botkins Profile</button>
+        </div>
+
+        <div id="pending-enroll-view" class="hidden">
+          <div class="row-between">
+            <strong>Finish sign-in in the open tab</strong>
+            <button id="btn-cancel-enroll" class="btn ghost small">Cancel</button>
+          </div>
+          <p class="muted small">Enter this 6-digit code on <code>profile.botkins.app</code>:</p>
+          <div id="enroll-code" class="code-box">------</div>
+          <div class="row gap">
+            <button id="btn-check-enroll" class="btn primary grow">I’ve signed in</button>
+            <button id="btn-reopen-enroll" class="btn">Open tab</button>
+          </div>
+        </div>
+
+        <div id="signed-in-view" class="hidden">
+          <div class="row-between">
+            <div class="profile-meta">
+              <span id="profile-avatar" class="avatar"></span>
+              <div>
+                <strong id="profile-name"></strong>
+                <div id="profile-email" class="muted small"></div>
+              </div>
+            </div>
+            <div class="row gap-xs">
+              <button id="btn-refresh" class="btn small" title="Refresh hosts">Refresh</button>
+              <button id="btn-signout" class="btn ghost small">Sign out</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Hosts List -->
+      <section class="card">
+        <div class="row-between">
+          <strong>Botkins Hosts</strong>
+          <span class="muted small">Toggle which hosts can use this browser</span>
+        </div>
+        <div id="hosts-list" class="hosts-list"></div>
+        <details class="direct-pair">
+          <summary>Pair directly with a link</summary>
+          <form id="direct-pair-form" class="row gap-xs">
+            <input id="direct-pair-input" type="text" placeholder="botkins://pair?..." autocomplete="off" />
+            <button type="submit" class="btn small">Pair</button>
+          </form>
+        </details>
+      </section>
+
+      <!-- Access Mode & Current Tab -->
+      <section class="card">
+        <div class="row-between">
+          <strong>Tab access</strong>
+          <div class="segmented" role="group" aria-label="Tab access mode">
+            <button id="mode-all" type="button" class="seg">All tabs</button>
+            <button id="mode-group" type="button" class="seg">Botkins group</button>
+          </div>
+        </div>
+        <p id="mode-hint" class="muted small"></p>
+        <div id="current-tab-row" class="tab-row hidden">
+          <div class="tab-info">
+            <span id="tab-title" class="tab-title"></span>
+          </div>
+          <button id="btn-tab-action" class="btn small"></button>
+        </div>
+      </section>
+    </main>
+
+    <footer class="foot">
+      <button id="btn-options" class="link-btn">Settings</button>
+      <span id="browser-tag" class="muted small"></span>
+    </footer>
+
+    <script type="module" src="popup.js"></script>
+  </body>
+</html>

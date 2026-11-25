@@ -165,3 +165,33 @@ test("the public service limits enrollment starts and repeated sends to one reci
   await f.api("enroll/start", { label: "Beyond budget", challenge: random() }, null, 429);
   assert.equal(f.sql.prepare("SELECT count(*) AS n FROM enrollments").get().n, before);
 });
+
+test("chromium extensions can enroll and read hosts, while web origins and admin routes remain blocked", async (t) => {
+  const f = setup(t),
+    { session } = await signup(f);
+  const extOrigin = "chrome-extension://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+  const callWithOrigin = async (path, body, token, origin) => {
+    const res = await f.fetchWorker("https://profile.botkins.app/v1/" + path, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Origin: origin,
+        ...(token && { Authorization: "Bearer " + token }),
+      },
+      body: JSON.stringify(body),
+    });
+    return { status: res.status, data: await res.json() };
+  };
+  // Allowed for extension: enroll/start, home, proofs/issue, devices/revoke
+  const started = await callWithOrigin("enroll/start", { label: "Chrome", challenge: random() }, null, extOrigin);
+  assert.equal(started.status, 200);
+  const home = await callWithOrigin("home", {}, session.token, extOrigin);
+  assert.equal(home.status, 200);
+  // Blocked for extension: profile/delete, browser/*, arbitrary web origins
+  const del = await callWithOrigin("profile/delete", { confirmationEmail: session.email }, session.token, extOrigin);
+  assert.equal(del.status, 403);
+  const web = await callWithOrigin("home", {}, session.token, "https://evil.example");
+  assert.equal(web.status, 403);
+  const badExt = await callWithOrigin("home", {}, session.token, "chrome-extension://not-valid-id");
+  assert.equal(badExt.status, 403);
+});

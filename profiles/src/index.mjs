@@ -14,6 +14,9 @@ const nativePaths = new Set([
   "proofs/issue",
 ]);
 
+const EXTENSION_ORIGIN = /^chrome-extension:\/\/[a-p]{32}$/;
+const extensionPaths = new Set(["enroll/start", "enroll/finish", "home", "proofs/issue", "devices/revoke"]);
+
 export default {
   async fetch(request, env) {
     try {
@@ -23,9 +26,14 @@ export default {
       ensure(request.method === "POST", 405, "Use POST for profile operations.");
       ensure(path.startsWith("/v1/"), 404);
       const action = path.slice(4),
-        browser = action.startsWith("browser/");
-      if (browser || request.headers.has("Origin"))
-        ensure(request.headers.get("Origin") === ORIGIN, 403, "Use the Botkins sign-in page.");
+        browser = action.startsWith("browser/"),
+        origin = request.headers.get("Origin");
+      if (browser) {
+        ensure(origin === ORIGIN, 403, "Use the Botkins sign-in page.");
+      } else if (origin) {
+        const fromExtension = EXTENSION_ORIGIN.test(origin) && extensionPaths.has(action);
+        ensure(origin === ORIGIN || fromExtension, 403, "Use the Botkins sign-in page.");
+      }
       const ip = request.headers.get("CF-Connecting-IP") ?? "local";
       if (env.IP_LIMIT)
         ensure((await env.IP_LIMIT.limit({ key: ip })).success, 429, "Too many requests. Try again shortly.");

@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Botkins Browser Control — Settings</title>
+    <style>
+      :root {
+        --bg: #ffffff; --surface: #f5f6f8; --ink: #111827; --muted: #6b7280; --line: #e5e7eb; --accent: #ea580c;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root { --bg: #111317; --surface: #1b1e25; --ink: #f3f4f6; --muted: #9ca3af; --line: #2a2f3a; --accent: #f97316; }
+      }
+      body { margin: 0; padding: 28px; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: var(--bg); color: var(--ink); font-size: 14px; }
+      main { max-width: 560px; margin: 0 auto; display: flex; flex-direction: column; gap: 16px; }
+      h1 { margin: 0; font-size: 20px; }
+      .card { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 16px; display: flex; flex-direction: column; gap: 12px; }
+      label { display: flex; flex-direction: column; gap: 4px; font-weight: 500; }
+      input, select { padding: 8px 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--bg); color: var(--ink); font-size: 14px; }
+      .muted { color: var(--muted); font-size: 12.5px; font-weight: 400; }
+      .row { display: flex; align-items: center; gap: 10px; }
+      button { padding: 8px 14px; border-radius: 8px; border: 0; background: var(--accent); color: #fff; font-weight: 600; cursor: pointer; }
+      #saved { font-size: 13px; color: #16a34a; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Botkins Browser Control</h1>
+      <form id="settings-form" class="card">
+        <label>
+          Profile label
+          <input id="profile-label" type="text" maxlength="40" placeholder="e.g. Work Chrome, Personal Edge, Mac Studio" />
+          <span class="muted">Shown to your bots in <code>browser_list</code> so you or your bots can pick between multiple connected browsers.</span>
+        </label>
+        <label>
+          Default tab access
+          <select id="mode">
+            <option value="all">All eligible tabs (OpenClaw / Claude default)</option>
+            <option value="group">Selected tabs only (Botkins tab group)</option>
+          </select>
+        </label>
+        <label>
+          Tab group name
+          <input id="group-name" type="text" maxlength="32" placeholder="Botkins" />
+        </label>
+        <div class="row">
+          <button type="submit">Save settings</button>
+          <span id="saved"></span>
+        </div>
+      </form>
+    </main>
+    <script type="module" src="options.js"></script>
+  </body>
+</html>

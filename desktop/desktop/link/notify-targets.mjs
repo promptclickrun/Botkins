@@ -36,9 +36,9 @@ export function isEligiblePerson(personId, team, botId) {
   return memberSeesBot(personId, team, botId);
 }
 
-/** Gadgets (`kind === "gadget"`) are not push notification targets. */
+/** Gadgets and browser extensions are not push notification targets. */
 export function isNotifiableDevice(device) {
-  return !!device && typeof device.id === "string" && device.id.length > 0 && device.kind !== "gadget";
+  return !!device && typeof device.id === "string" && device.id.length > 0 && device.kind !== "gadget" && device.kind !== "browser";
 }
 
 export function ownerOfDevice(device) {
@@ -250,8 +250,8 @@ export function validateNotifyTargets(
       }
       const rawDevice = allDevicesById.get(token);
       if (rawDevice) {
-        if (rawDevice.kind === "gadget") {
-          throw new Error(`"${rawDevice.name || token}" is a gadget and cannot receive routine push notifications.`);
+        if (rawDevice.kind === "gadget" || rawDevice.kind === "browser") {
+          throw new Error(`"${rawDevice.name || token}" is a ${rawDevice.kind} and cannot receive routine push notifications.`);
         }
         const devOwner = ownerOfDevice(rawDevice);
         if (!isOwner && devOwner !== actor) {

@@ -130,7 +130,7 @@ export function snapshotOf(parts, own = {}) {
     ...(parts.team && { team: parts.team }),
     ...(parts.phones && typeof parts.phones === "object" && {
       remotePhones: Object.entries(parts.phones)
-        .filter(([, phone]) => phone?.kind !== "gadget")
+        .filter(([, phone]) => phone?.kind !== "gadget" && phone?.kind !== "browser")
         .map(([id, phone]) => ({
           id,
           name: phone.name,
