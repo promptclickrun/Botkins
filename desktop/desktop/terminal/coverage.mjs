@@ -305,6 +305,7 @@ export const WORKSPACE = {
   ...each("appUpdateStatus checkAppUpdate installAppUpdate", cmd("update")),
   setAppUpdateAuto: cmd("config set"),
   ...each("snapshot appInfo phoneLink", cmd("status")),
+  sendFeedback: cmd("feedback"),
   ...each("startPhonePairing cancelPhonePairing", cmd("pair")),
   setPhoneLink: cmd("config set"),
   renamePhoneLinkComputer: cmd("config set"),
@@ -337,6 +338,7 @@ export const WORKSPACE = {
 
 /** The phone link's own calls: every `link.*` name of `LinkHost` (desktop/link/server.mjs). */
 export const LINK = {
+  "link.feedback.send": cmd("feedback"),
   "link.devices.list": cmd("devices list"),
   "link.devices.rename": cmd("devices rename"),
   "link.devices.setPerson": cmd("devices set-person"),
@@ -401,6 +403,8 @@ export const LINK = {
  */
 export const CHANGES = {
   stop: null,
+  // A report sent as a public issue: its number. Never its title or text.
+  "feedback.send": (args, value) => (Number.isSafeInteger(value?.number) ? "issue " + value.number : null),
   "pair.start": null,
   "pair.cancel": null,
   "devices.rename": 0,
