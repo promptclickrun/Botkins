@@ -902,6 +902,9 @@ export function dispatch(ws, chat, entry, trigger) {
     trigger,
     scheduleId: entry.id,
     title: entry.routine ? entry.name : "Scheduled · " + entry.prompt.slice(0, 80),
+    // A routine's own prompt may be a script command (a bot's was shown to the person first), and so may a chat's schedule that a person made
+    // (`allowScript` on the entry, kept by /every when the message that made it was a person's). A routine's follow-up turn never is.
+    ...((entry.routine || entry.allowScript === true) && { allowScript: true }),
   });
   // The first message would otherwise rename the routine chat after its prompt.
   if (entry.routine && chat.title !== title) {

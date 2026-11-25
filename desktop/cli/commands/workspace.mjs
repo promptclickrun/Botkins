@@ -103,8 +103,12 @@ async function turn(context, chatId, message, { live, typed = false }) {
   // typed at the prompt is theirs; one that came on the command line (-m) is shown first, and the person says yes (or --yes does).
   const script = await client.call("chat.scriptCommand", chatId, message);
   if (script && !typed) {
+    const name = shownText(script.name);
     context.stderr.write(
-      "This runs the script command /" + shownText(script.name) + " on this computer, with your account's access, and no model.\nThe words it gets (in $BOTKINS_ARGS and on standard input): " + (script.args ? JSON.stringify(shownText(script.args)) : "none") + "\nSee its script with `botkins skills show " + shellWord(script.name, "<the command>") + "`.\n",
+      (script.via
+        ? "This sets up /" + shownText(script.via) + " to run the script command /" + name + " again and again, on this computer, with your account's access, and no model.\n"
+        : "This runs the script command /" + name + " on this computer, with your account's access, and no model.\n") +
+        "The words it gets (in $BOTKINS_ARGS and on standard input): " + (script.args ? JSON.stringify(shownText(script.args)) : "none") + "\nSee its script with `botkins skills show " + shellWord(script.name, "<the command>") + "`.\n",
     );
     if (!(await confirm(context, "Run /" + shownText(script.name) + "?"))) {
       context.note("Nothing was sent.");

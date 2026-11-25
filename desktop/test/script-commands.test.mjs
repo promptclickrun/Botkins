@@ -1,7 +1,7 @@
 // Script commands (desktop/script-commands.mjs): a slash command that runs a script with no model.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Workspace } from "./starter.mjs";
@@ -21,8 +21,17 @@ const read = (path) => readFileSync(fileURLToPath(new URL(path, import.meta.url)
 function setup(t, { commands = [] } = {}) {
   const dir = tempDir(t, "botkins-script-commands-");
   const seen = { created: [], configs: [], sent: [] };
+  // What Copilot's /every keeps until Botkins takes the timer over.
+  const timers = [];
   const rpc = {
-    commands: { list: async () => (commands === "fail" ? Promise.reject(new Error("the provider is down")) : { commands }) },
+    commands: {
+      list: async () => (commands === "fail" ? Promise.reject(new Error("the provider is down")) : { commands }),
+      invoke: async ({ name, input }) => {
+        if (name === "every") timers.push({ id: "t" + (timers.length + 1), prompt: input.replace(/^\S+\s+/, ""), recurring: true, intervalMs: 60_000, nextRunAt: new Date(Date.now() + 60_000).toISOString() });
+        return { kind: "text", text: "Scheduled." };
+      },
+    },
+    schedule: { list: async () => ({ entries: [...timers] }), stop: async ({ id }) => ({ entry: timers.splice(timers.findIndex((entry) => entry.id === id), 1)[0] ?? null }) },
     skills: { ensureLoaded: async () => {}, list: async () => ({ skills: [] }) },
     plugins: { list: async () => ({ plugins: [] }) },
     mcp: { list: async () => ({ servers: [] }) },
@@ -204,7 +213,7 @@ test("typing a script command runs its script with no model and no session, and 
   const { ws, seen } = setup(t);
   save(ws, "hello", 'exec 2>&1; echo "hi from $BOTKINS_COMMAND"; echo "warn" >&2; echo "chat=$BOTKINS_CHAT_ID"; pwd; test -z "$BOTKINS_ROUTINE" && echo not-a-routine');
   const chat = ws.createChat("pip");
-  await ws.send(chat, "/hello");
+  await ws.send(chat, "/hello", { allowScript: true });
   // The menu is read to be sure that the chat's provider has no command of that name (a menu session, not the chat's, and no model).
   assert.deepEqual(seen.created.filter((id) => !id.startsWith("menu-")), [], "the chat's own session was not opened");
   assert.deepEqual(seen.sent, [], "no model turn");
@@ -232,7 +241,7 @@ test("a script command runs in the chat's project folder when it has one", { ski
   save(ws, "where", "pwd");
   const chat = ws.createChat("pip");
   ws.projects.folderFor = () => folder;
-  await ws.send(chat, "/where");
+  await ws.send(chat, "/where", { allowScript: true });
   assert.equal(commandMessages(ws, chat)[0].text, realpathSync(folder));
 });
 
@@ -241,8 +250,8 @@ test("a failing script says its exit code, and one with no output says so", { sk
   save(ws, "bad", "echo partial; exit 3");
   save(ws, "silent", "true");
   const chat = ws.createChat("pip");
-  await ws.send(chat, "/bad");
-  await ws.send(chat, "/silent");
+  await ws.send(chat, "/bad", { allowScript: true });
+  await ws.send(chat, "/silent", { allowScript: true });
   assert.deepEqual(commandMessages(ws, chat).map((m) => m.text), ["partial\n\nExit code 3.", "(no output)"]);
   assert.equal(ws.state.runs.find((r) => r.command === "bad").script.exitCode, 3);
 });
@@ -253,12 +262,12 @@ test("the words after the command reach the script as data and are never part of
   const chat = ws.createChat("pip");
   const folder = join(ws.dir, "files", "pip");
   const hostile = "a; touch pwned && $(touch pwned2) `touch pwned3` 'q' \"d\"";
-  await ws.send(chat, "/echoer " + hostile);
+  await ws.send(chat, "/echoer " + hostile, { allowScript: true });
   const [reply] = commandMessages(ws, chat);
   assert.equal(reply.text, "env=[" + hostile + "]\nstdin=[" + hostile + "]");
   for (const file of ["pwned", "pwned2", "pwned3"]) assert.equal(existsSync(join(folder, file)), false, file + " was not created");
   // No words is an empty value, and the script still gets an end of input.
-  await ws.send(chat, "/echoer");
+  await ws.send(chat, "/echoer", { allowScript: true });
   assert.equal(commandMessages(ws, chat)[1].text, "env=[]\nstdin=[]");
 });
 
@@ -267,7 +276,7 @@ test("Stop ends a running script and everything it started, and it has no time l
   const pids = join(dir, "pids");
   save(ws, "slow", `sh -c 'echo $$ >> "${pids}"; sleep 60' & echo $! >> "${pids}"; echo started; sleep 60`);
   const chat = ws.createChat("pip");
-  const turn = ws.send(chat, "/slow");
+  const turn = ws.send(chat, "/slow", { allowScript: true });
   while (!existsSync(pids) || readFileSync(pids, "utf8").trim().split("\n").length < 2) await tick(20);
   assert.ok(ws.active.has(chat), "the chat is busy while it runs");
   assert.equal(ws.active.get(chat).intent, "Running /slow");
@@ -280,7 +289,7 @@ test("Stop ends a running script and everything it started, and it has no time l
   await tick(50);
   for (const pid of started) assert.throws(() => process.kill(pid, 0), { code: "ESRCH" }, "process " + pid + " is gone");
   // The menu stays answerable while a script runs (it is asked of the bot's menu session, not of the busy chat).
-  const again = ws.send(chat, "/slow");
+  const again = ws.send(chat, "/slow", { allowScript: true });
   while (!ws.active.has(chat)) await tick(5);
   assert.ok((await ws.catalog("pip", chat)).choices.some((c) => c.name === "slow"));
   await ws.stop(chat);
@@ -301,24 +310,24 @@ test("a team member whose role may use skills runs a script command, and one who
   const chat = ws.createChat("pip");
   const ran = join(ws.dir, "files", "pip", "ran.txt");
   // A role that has skills "use" (the default Guest role has it): it runs, as the computer's user.
-  await ws.send(chat, "/touchy first", { author: { memberId: "m_use", name: "Uma" } });
+  await ws.send(chat, "/touchy first", { allowScript: true, author: { memberId: "m_use", name: "Uma" } });
   assert.deepEqual(commandMessages(ws, chat).map((m) => m.text), ["done"]);
   assert.equal(readFileSync(ran, "utf8"), "ran-for-first\n");
   assert.deepEqual(seen.sent, [], "no model");
   // A role that has only skills "read" does not.
   rmSync(ran);
-  await ws.send(chat, "/touchy second", { author: { memberId: "m_read", name: "Rey" } });
+  await ws.send(chat, "/touchy second", { allowScript: true, author: { memberId: "m_read", name: "Rey" } });
   assert.equal(commandMessages(ws, chat)[1].text, "Your team role can't use skills, so it can't run a script command.");
   assert.equal(existsSync(ran), false);
   // The member whose chat it is counts too: the owner typing in a chat of a member who can't use skills runs nothing, and in one of a member who can, runs it.
   const theirs = ws.createChat("pip", "Theirs", undefined, "m_read");
-  await ws.send(theirs, "/touchy third");
+  await ws.send(theirs, "/touchy third", { allowScript: true });
   assert.match(commandMessages(ws, theirs)[0].text, /Your team role can't use skills/);
   const usable = ws.createChat("pip", "Usable", undefined, "m_use");
-  await ws.send(usable, "/touchy fourth");
+  await ws.send(usable, "/touchy fourth", { allowScript: true });
   assert.deepEqual(commandMessages(ws, usable).map((m) => m.text), ["done"]);
   // A member who is not on the team at all has no right to.
-  await ws.send(chat, "/touchy fifth", { author: { memberId: "m_gone", name: "Gone" } });
+  await ws.send(chat, "/touchy fifth", { allowScript: true, author: { memberId: "m_gone", name: "Gone" } });
   assert.match(commandMessages(ws, chat)[2].text, /Your team role can't use skills/);
 });
 
@@ -343,13 +352,13 @@ test("a member's menu lists script commands when their role may use skills", asy
   assert.deepEqual(asked[0], ["pip", undefined, false, "m_use"]);
 });
 
-test("a command that is off, changed or reserved is not run as one, and a turn nobody watches does not run one", { skip: !unix }, async (t) => {
+test("a command that is off, changed or reserved is not run as one", { skip: !unix }, async (t) => {
   const { ws, seen } = setup(t);
   save(ws, "off", "touch ran-off");
   ws.integrations.setSkillEnabled("off", false);
   const chat = ws.createChat("pip");
   // A command that is switched off is not run: the person gets the provider's answer for an unknown command.
-  await ws.send(chat, "/off now");
+  await ws.send(chat, "/off now", { allowScript: true });
   assert.equal(commandMessages(ws, chat).length, 0);
   assert.equal(existsSync(join(ws.dir, "files", "pip", "ran-off")), false);
   assert.equal(ws.state.runs[0].script, undefined);
@@ -357,13 +366,14 @@ test("a command that is off, changed or reserved is not run as one, and a turn n
   // A changed script says why it can't run, and runs nothing.
   save(ws, "changed", "echo ran");
   writeFileSync(join(ws.integrations.skillsDir, "changed", SCRIPT_FILE), "echo other");
-  await ws.send(chat, "/changed");
+  await ws.send(chat, "/changed", { allowScript: true });
   assert.match(commandMessages(ws, chat)[0].text, /^\/changed can't run\. The script was changed outside Botkins/);
-  // A routine's prompt, a reaction and the like are not a person typing.
+  // A routine's run reports as the routine's reply, never as a plain command message of a chat (its own tests are below).
   save(ws, "plain", "echo ran");
   const routine = ws.panels.routines.create({ botId: "pip", name: "Slashy", prompt: "/plain", cadence: { kind: "daily", time: "09:00" } }, Date.UTC(2026, 10, 17, 12));
   await ws.panels.routines.run(routine);
-  assert.equal(commandMessages(ws, routine).length, 0, "a routine does not run a script command");
+  assert.equal(commandMessages(ws, routine).length, 0);
+  assert.equal(ws.chat(routine).messages.findLast((message) => message.role === "assistant").text, "ran");
 });
 
 test("a bot proposes a script command with a card that shows the whole script, and nothing is saved until a yes", async (t) => {
@@ -559,7 +569,7 @@ test("a name that a provider's command has is refused when saving, and a cold or
   ws.clearCatalogs();
   assert.equal(ws.catalogs.size, 0, "a cold menu");
   const typed = ws.createChat("pip");
-  await ws.send(typed, "/clash now");
+  await ws.send(typed, "/clash now", { allowScript: true });
   assert.equal(existsSync(join(ws.dir, "files", "pip", "ran-clash")), false, "the provider's command won");
   assert.equal(ws.state.runs[0].script, undefined);
   assert.deepEqual(commandMessages(ws, typed).filter((m) => /ran|can't run/.test(m.text)), []);
@@ -568,20 +578,20 @@ test("a name that a provider's command has is refused when saving, and a cold or
   await ws.catalog("pip");
   commands.push({ name: "late", description: "Added by an update.", kind: "builtin" });
   for (const entry of ws.catalogs.values()) entry.expires = 0;
-  await ws.send(typed, "/late");
+  await ws.send(typed, "/late", { allowScript: true });
   assert.equal(existsSync(join(ws.dir, "files", "pip", "ran-late")), false);
   // A menu that can't be read decides nothing: the script is not run, and the message says why.
   const failing = setup(t, { commands: "fail" });
   save(failing.ws, "calm", "touch ran-calm");
   const there = failing.ws.createChat("pip");
-  await failing.ws.send(there, "/calm");
+  await failing.ws.send(there, "/calm", { allowScript: true });
   assert.equal(existsSync(join(failing.ws.dir, "files", "pip", "ran-calm")), false);
   assert.match(commandMessages(failing.ws, there)[0].text, /^\/calm did not run: Botkins could not read this chat's commands to be sure.*the provider is down.*Try again\.$/);
   // With the menu readable, and no command of that name, it runs.
   const clear = setup(t, { commands: [] });
   save(clear.ws, "calm", "touch ran-calm");
   const here = clear.ws.createChat("pip");
-  await clear.ws.send(here, "/calm");
+  await clear.ws.send(here, "/calm", { allowScript: true });
   assert.equal(existsSync(join(clear.ws.dir, "files", "pip", "ran-calm")), true);
 });
 
@@ -600,7 +610,7 @@ test("a script does not get Botkins' own secrets or the usual credential variabl
   });
   save(ws, "envy", "env");
   const chat = ws.createChat("pip");
-  await ws.send(chat, "/envy some words");
+  await ws.send(chat, "/envy some words", { allowScript: true });
   const text = commandMessages(ws, chat)[0].text;
   assert.doesNotMatch(text, /ghp_secret|\/keys|hunter2|GITHUB_TOKEN|BOTKINS_KEY_FILE|MY_DB_PASSWORD/);
   assert.match(text, /^PATH=/m);
@@ -783,4 +793,117 @@ test("a bot that makes or changes a task that runs a script command asks the per
   assert.equal(unattended.views.length, 0);
   await assert.rejects(() => unattended.tools.get("task_update").handler({ id: made.id, details: "/deploy sneaky" }), /only be changed with the person there/);
   assert.equal(ws.tasks.get(made.id).body, "/deploy now");
+});
+
+const ran = (ws, file = "ran.log") => existsSync(join(ws.dir, "files", "pip", file));
+const EVERY = { name: "every", description: "Schedule a prompt.", kind: "builtin" };
+
+test("a message runs a script command only when the run was started as a person's: every other way in is plain text", { skip: !unix }, async (t) => {
+  const { ws } = setup(t);
+  save(ws, "deploy", "echo ran >> ran.log; echo deployed $BOTKINS_ARGS");
+  const chat = ws.createChat("pip");
+  // The person's own send does; nothing else that sends a message does, whatever it sends.
+  await ws.send(chat, "/deploy by hand", { allowScript: true });
+  assert.equal(ran(ws), true);
+  rmSync(join(ws.dir, "files", "pip", "ran.log"));
+  assert.equal(ws.state.runs[0].allowScript, true);
+  await ws.send(chat, "/deploy by a program");
+  assert.equal(ran(ws), false, "a send with no mark is text");
+  assert.equal(ws.state.runs[0].allowScript, undefined);
+  assert.equal(ws.state.runs[0].script, undefined);
+  await ws.send(chat, "/deploy by a program", { allowScript: "yes" });
+  assert.equal(ran(ws), false, "only true says it");
+  // A queued message keeps what it was sent as, and a program's queued message is still text.
+  const busy = ws.createChat("pip");
+  ws.active.set(busy, { run: {}, stopped: false });
+  ws.submit(busy, "/deploy a", { allowScript: true });
+  ws.submit(busy, "/deploy b");
+  assert.deepEqual(ws.queues.get(busy).map((item) => item.allowScript), [true, undefined]);
+  ws.queues.delete(busy);
+  ws.active.delete(busy);
+  ws.submit(busy, "/deploy c", { delivery: "queue", allowScript: true });
+  await ws.active.get(busy).done;
+  assert.equal(ran(ws), true);
+  rmSync(join(ws.dir, "files", "pip", "ran.log"));
+  // Retry: a person who sends a turn again keeps it; a program that does gets text.
+  const first = ws.state.runs.find((run) => run.allowScript && run.command === "deploy");
+  await ws.retry(first.id);
+  assert.equal(ran(ws), false, "a retry by a program is text");
+  await ws.retry(first.id, { allowScript: true });
+  assert.equal(ran(ws), true);
+  rmSync(join(ws.dir, "files", "pip", "ran.log"));
+  // A routine's follow-up turn gets "/deploy" as the words of the routine, never as a command.
+  const routine = ws.panels.routines.create({ botId: "pip", name: "Follow", script: "echo before", followUp: true, prompt: "/deploy after", cadence: DAILY }, T0);
+  await ws.panels.routines.run(routine);
+  assert.equal(ran(ws), false);
+  assert.match(ws.state.runs[0].detail, /Unknown command \/deploy/, "the provider's way, which has no such command");
+  // A proactive alert's offer, a space's or a panel's ask, and the voice desk, send what a model wrote or a person typed elsewhere: text.
+  const alert = { runId: "r1", offer: { label: "Deploy", prompt: "/deploy offered" } };
+  Object.assign(ws.proactive, { held: () => ({ alerts: [alert] }), config: () => ({ people: { owner: true } }), eligible: () => true });
+  const taken = ws.proactive.act("pip", "r1", "take", "owner");
+  await ws.active.get(taken.chatId)?.done;
+  assert.equal(ran(ws), false, "an offer that a model wrote is text");
+  assert.equal(ws.state.runs[0].allowScript, undefined);
+  assert.equal(commandMessages(ws, taken.chatId).length, 0);
+  const space = ws.spaces.create({ name: "Launch" }, "owner");
+  const asked = ws.spaces.ask({ spaceId: space, botId: "pip", text: "/deploy from a space" });
+  await ws.active.get(asked.chatId)?.done;
+  assert.equal(ran(ws), false);
+  assert.equal(commandMessages(ws, asked.chatId).length, 0);
+});
+
+test("a chat's schedule runs a script command only when a person made it", { skip: !unix }, async (t) => {
+  const { ws } = setup(t, { commands: [EVERY] });
+  save(ws, "deploy", "echo ran >> ran.log");
+  const chat = ws.createChat("pip");
+  // Copilot's /every, typed by a person, keeps the person's mark with the schedule; sent by a program it does not.
+  await ws.send(chat, "/every 1m /deploy now", { allowScript: true });
+  await ws.send(chat, "/every 1m /deploy sneaky");
+  const [made, sneaky] = ws.chat(chat).schedules;
+  assert.equal(made.allowScript, true);
+  assert.equal(sneaky.allowScript, undefined);
+  const { dispatch } = await import("../desktop/routines.mjs");
+  await dispatch(ws, ws.chat(chat), sneaky, "scheduled");
+  assert.equal(ran(ws), false, "a program's schedule sends text");
+  await dispatch(ws, ws.chat(chat), made, "scheduled");
+  assert.equal(ran(ws), true);
+  assert.equal(ws.state.runs[0].scheduleId, made.id);
+  // Both are in the chat as work that was scheduled, and the script's output is the run's reply.
+  assert.match(ws.chat(chat).messages.findLast((message) => message.role === "assistant" && message.runId === ws.state.runs[0].id).text, /^$|./);
+});
+
+test("only the places that mean a person may mark a message as one: the code names them", () => {
+  const dir = fileURLToPath(new URL("../desktop/", import.meta.url));
+  const found = [];
+  const walk = (folder) => {
+    for (const entry of readdirSync(folder, { withFileTypes: true })) {
+      const path = join(folder, entry.name);
+      if (entry.isDirectory()) { if (!["generated", "node_modules", "remote"].includes(entry.name)) walk(path); }
+      else if (/\.(mjs|cjs)$/.test(entry.name) && /allowScript/.test(readFileSync(path, "utf8"))) found.push(path.slice(dir.length));
+    }
+  };
+  walk(dir);
+  // The window and the paired devices (device-call.mjs, main.mjs), the handlers that take it (runtime.mjs), the command line's agreed send
+  // (terminal/control.mjs), a routine's own prompt and a task's (routines.mjs, tasks.mjs), a chat's schedule that /every kept (providers/copilot/commands.mjs).
+  assert.deepEqual(found.sort(), ["device-call.mjs", "main.mjs", "providers/copilot/commands.mjs", "routines.mjs", "runtime.mjs", "script-commands.mjs", "tasks.mjs", "terminal/control.mjs", "workspace.mjs"].filter((file) => found.includes(file)).sort());
+  for (const file of ["proactive.mjs", "spaces.mjs", "voicedesk.mjs", "panels.mjs", "reaction-turns.mjs", "teamwork.mjs", "host-dispatch.mjs", "terminal/control-spaces.mjs", "terminal/control-chats.mjs"]) assert.equal(found.includes(file), false, file + " does not mark a message as a person's");
+});
+
+test("the window and a paired device are a person: what they send, or send again, carries the mark", async (t) => {
+  const { asPerson, deviceCall } = await import("../desktop/device-call.mjs");
+  assert.deepEqual(asPerson("send", ["c", "/x"]), ["c", "/x", { allowScript: true }]);
+  assert.deepEqual(asPerson("send", ["c", "/x", { delivery: "steer", allowScript: false }]), ["c", "/x", { delivery: "steer", allowScript: true }]);
+  assert.deepEqual(asPerson("retry", ["r"]), ["r", { allowScript: true }]);
+  assert.deepEqual(asPerson("stop", ["c"]), ["c"]);
+  const { ws } = setup(t);
+  const seen = [];
+  const call = deviceCall({ workspace: ws, handlers: { send: (...args) => seen.push(args), retry: (...args) => seen.push(args) }, folders: {} });
+  await call("send", ["c1", "/deploy a"], { principal: { kind: "owner" } });
+  await call("send", ["c1", "/deploy b"], { principal: { kind: "member", memberId: "m_use", name: "Uma" } });
+  await call("retry", ["r1"], { principal: { kind: "owner" } });
+  assert.deepEqual(seen, [
+    ["c1", "/deploy a", { allowScript: true }],
+    ["c1", "/deploy b", { allowScript: true, author: { memberId: "m_use", name: "Uma" } }],
+    ["r1", { allowScript: true }],
+  ]);
 });

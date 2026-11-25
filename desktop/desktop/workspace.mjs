@@ -820,7 +820,7 @@ export class Workspace {
   }
   send(chatId, text, options = {}) {
     if (this.closing) throw new Error("Botkins is closing");
-    const { attachments: files, quote: rawQuote, mentions: rawMentions, voiceId, clientMessageId, author, also: rawAlso, proactiveCheck, merged: rawMerged, ...context } = options;
+    const { attachments: files, quote: rawQuote, mentions: rawMentions, voiceId, clientMessageId, author, also: rawAlso, proactiveCheck, merged: rawMerged, allowScript, ...context } = options;
     // People whose limits apply to this turn beside the chat's maker and the message's writer:
     // someone else wrote text that runs in it (a routine's prompt on a panel that another person
     // refreshes). Members only: the owner narrows nothing.
@@ -875,6 +875,9 @@ export class Workspace {
       chatId,
       ...(chat.main && { forkId: chat.activeFork }),
       ...context,
+      // Only a person's message, a routine's or a task's own prompt, and a schedule that a person made may be a script command.
+      // Anything else that starts a turn (a proactive offer, a space or a panel asking, a retry by a program, the voice desk, a routine's follow-up) treats "/name" as the ordinary text it is.
+      ...(allowScript === true && { allowScript: true }),
       title: context.title || prompt.slice(0, 100),
       time: chat.time,
       status: "Working",
@@ -993,8 +996,8 @@ export class Workspace {
       ...(run.reaction && { message }),
     };
     // A person's message that is a script command: known now, so that the chat is busy with it from the start (the menu is then asked of the bot's menu session).
-    // A routine's run and a task may run one too (not a reaction, a panel refresh or a proactive check: they have no prompt of the person's).
-    if (!run.reaction && !run.panelId && !run.proactive && !run.recovery?.proactiveCheck && !(recovering && run.recovery?.input) && !isGroup(chat)) {
+    // Deny by default: only a run that was started with `allowScript` may be a script command (see `send`).
+    if (run.allowScript === true && !run.reaction && !run.panelId && !run.proactive && !run.recovery?.proactiveCheck && !(recovering && run.recovery?.input) && !isGroup(chat)) {
       const typed = this.scriptCommandCandidate(prompt);
       if (typed) Object.assign(task, { script: true, typedScript: typed });
     }
@@ -1024,6 +1027,7 @@ export class Workspace {
       steer: delivery === "steer",
       ...clientMessageTag(options.clientMessageId),
       ...(options.notify === false && { notify: false }),
+      ...(options.allowScript === true && { allowScript: true }),
       ...(typeof options.voiceId === "string" && options.voiceId.length <= 256 && { voiceId: options.voiceId }),
       text: textField(text, 32000, "message"),
       attachments: validateAttachments(options.attachments),
@@ -1120,6 +1124,7 @@ export class Workspace {
         mentions: next.mentions,
         author: next.author,
         ...(next.notify === false && { notify: false }),
+        ...(next.allowScript === true && !rest.length && { allowScript: true }),
         voiceId: next.voiceId,
         clientMessageId: next.clientMessageId,
         ...(rest.length && { merged: rest }),
@@ -1169,7 +1174,7 @@ export class Workspace {
     }
   }
   /** Sends a failed or stopped turn's message again. */
-  retry(runId) {
+  retry(runId, { allowScript = false } = {}) {
     const run = this.state.runs.find((r) => r.id === runId);
     if (!run) throw new Error("Unknown work item");
     const chat = this.chat(run.chatId);
@@ -1213,6 +1218,8 @@ export class Workspace {
       // A retried routine or task run is still unattended work: it keeps its read-only memory and wiki.
       ...(run.scheduleId != null && { scheduleId: run.scheduleId }),
       ...(run.taskId && { taskId: run.taskId }),
+      // A script command that a person ran is run again only when a person asks again (the window or a phone), never by a program.
+      ...(allowScript === true && run.allowScript === true && { allowScript: true }),
     });
   }
   /** Runs Copilot's native /compact in this chat. */
@@ -2323,6 +2330,22 @@ export class Workspace {
     const typed = matchScriptCommand(prompt);
     if (!typed || RESERVED_COMMANDS.has(typed.name)) return null;
     return this.integrations.scriptCommands().some((c) => c.name === typed.name && c.enabled) ? typed : null;
+  }
+  /**
+   * The script command that a message asks for or sets up: the one it is (`/name words`), or the one a schedule would run
+   * (`/every 1m /name words`, `/after 5m /name`), as { name, args, via? }. A program that sends such a message needs the person's yes.
+   */
+  scriptCommandIn(prompt) {
+    const direct = this.scriptCommandCandidate(prompt);
+    if (direct) return direct;
+    const scheduled = /^\/(every|after)\s+([\s\S]*)$/i.exec(String(prompt ?? "").trim());
+    if (!scheduled) return null;
+    const known = new Set(this.integrations.scriptCommands().map((c) => c.name));
+    for (const match of scheduled[2].matchAll(/(?:^|\s)\/([a-z0-9][a-z0-9-]{0,63})(?=\s|$)/gi)) {
+      const name = match[1].toLowerCase();
+      if (known.has(name) && !RESERVED_COMMANDS.has(name)) return { name, args: scheduled[2].slice(match.index + match[0].length).trim(), via: scheduled[1].toLowerCase() };
+    }
+    return null;
   }
   /**
    * Whether the chat's provider has a command or skill of this name. The menu is read now when it is not at hand (a menu

@@ -119,7 +119,8 @@ export class Tasks {
     const chatId = reuse ? task.chatId : this.ws.createChat(task.botId, "Task · " + task.title.slice(0, 80));
     let turn;
     try {
-      turn = this.ws.send(chatId, this.invocation(task)?.text ?? this.prompt(task), { taskId: task.id, title: "Task · " + task.title.slice(0, 90) });
+      const invoked = this.invocation(task);
+      turn = this.ws.send(chatId, invoked?.text ?? this.prompt(task), { taskId: task.id, title: "Task · " + task.title.slice(0, 90), ...(invoked && { allowScript: true }) });
     } catch (error) {
       Object.assign(task, { chatId, status: "blocked", problem: error.message, updatedAt: Date.now() });
       this.ws.save();

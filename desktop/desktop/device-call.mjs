@@ -25,9 +25,22 @@ const FOR_A_PERSON = {
   setBotProactive: 2, proactiveAct: 3, reactToMessage: 4,
 };
 
+/**
+ * The arguments of a call as a person's: a message the person sends, or a turn they send again, may be a script command
+ * (desktop/script-commands.mjs). A call that comes from the window (main.mjs) or from a paired device (below) is a person's;
+ * a call from the control socket is not, unless the person agreed (desktop/terminal/control.mjs). `send` takes it as an option
+ * in its third argument, `retry` in its second.
+ */
+export function asPerson(name, args) {
+  if (name === "send") return [args[0], args[1], { ...(args[2] && typeof args[2] === "object" ? args[2] : {}), allowScript: true }, ...args.slice(3)];
+  if (name === "retry") return [args[0], { allowScript: true }];
+  return args;
+}
+
 export function deviceCall({ workspace, handlers, folders }) {
   return async (name, args, context = {}) => {
-    const checked = await deviceArgs(folders, name, args);
+    // A paired device is a person (the owner, or a member whose role the computer checked before this call).
+    const checked = asPerson(name, await deviceArgs(folders, name, args));
     const principal = context.principal;
     const member = principal?.kind === "member" ? { memberId: principal.memberId, name: principal.name } : null;
     // A request is gone once it is answered, so its chat is read before the answer goes in.

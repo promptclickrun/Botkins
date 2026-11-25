@@ -533,6 +533,12 @@ test("a message that is a script command is sent from a terminal only when the p
   assert.equal(await read(), 0);
   assert.deepEqual(await client.call("chat.scriptCommand", chatId, "/deploy --target prod"), { name: "deploy", args: "--target prod" });
   assert.equal(await client.call("chat.scriptCommand", chatId, "hello /deploy"), null);
+  // A schedule that would run it again and again is the same: Copilot's /every and /after are not a way round.
+  assert.deepEqual(await client.call("chat.scriptCommand", chatId, "/every 1m /deploy --target prod"), { name: "deploy", args: "--target prod", via: "every" });
+  assert.deepEqual(await client.call("chat.scriptCommand", chatId, "/after 5m run /deploy later"), { name: "deploy", args: "later", via: "after" });
+  assert.equal(await client.call("chat.scriptCommand", chatId, "/every 1m check the logs"), null, "a schedule of no script command is plain");
+  await assert.rejects(() => client.call("chat.send", chatId, "/every 1m /deploy --target prod"), /would run it again and again/);
+  assert.equal(await read(), 0, "nothing was sent");
   // An ordinary message, and a slash command that is not a script command, need no mark.
   assert.equal(await client.call("chat.scriptCommand", chatId, "/not-a-script-command"), null);
   await t.test("the command line shows the command and its words, and asks", async () => {

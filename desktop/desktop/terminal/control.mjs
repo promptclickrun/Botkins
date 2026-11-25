@@ -503,23 +503,25 @@ export function controlApi(service) {
       const only = ref ? bot(ref).id : null;
       return state().chats.filter((chat) => !chat.temporary && (!only || chat.botId === only)).map((chat) => ({ id: chat.id, title: chat.title, botId: chat.botId, bot: state().bots.find((entry) => entry.id === chat.botId)?.name ?? null, messages: chat.messages.length, working: workspace.active.has(chat.id) }));
     },
-    /** The script command that a message would run, { name, args }, or null. The command line shows it to the person before it sends one. */
+    /** The script command that a message would run or set up, { name, args, via? }, or null. The command line shows it to the person before it sends one. */
     "chat.scriptCommand": ([chatId, message]) => {
       workspace.chat(String(chatId));
-      return typeof message === "string" ? workspace.scriptCommandCandidate(message) : null;
+      return typeof message === "string" ? workspace.scriptCommandIn(message) : null;
     },
     /**
      * A message that is a script command runs a script on this computer with the words after the name, which a bot's shell
-     * could choose. So it is sent only with `{ agreed: true }` as the last argument: the caller showed the person the
-     * command and its words and got a yes (the command line asks at a terminal, or takes --yes).
+     * could choose; one that sets up a schedule of it (`/every 1m /name`) arms it. So it is sent as a script command only with
+     * `{ agreed: true }` as the last argument: the caller showed the person the command and its words and got a yes (the command
+     * line asks at a terminal, or takes --yes). Without it the call is refused. Any other message is plain text and needs no mark.
      */
     "chat.send": ([chatId, message, mark]) => {
       const chat = workspace.chat(String(chatId));
       const before = chat.messages.length;
-      const script = typeof message === "string" ? workspace.scriptCommandCandidate(message) : null;
-      if (script && !(mark !== null && typeof mark === "object" && !Array.isArray(mark) && mark.agreed === true))
-        throw new ControlError("/" + script.name + " is a script command: it runs a script on this computer with the words after its name. Show the person the command and its words, and give `{ \"agreed\": true }` as the last argument (on the command line, `botkins chat` asks at a terminal, or takes --yes).", "NEEDS_YES");
-      handlers.send(chat.id, text(message, 200_000, "a message"), { delivery: "queue" });
+      const script = typeof message === "string" ? workspace.scriptCommandIn(message) : null;
+      const agreed = mark !== null && typeof mark === "object" && !Array.isArray(mark) && mark.agreed === true;
+      if (script && !agreed)
+        throw new ControlError("/" + script.name + " is a script command" + (script.via ? ", and /" + script.via + " would run it again and again" : "") + ": it runs a script on this computer with the words after its name. Show the person the command and its words, and give `{ \"agreed\": true }` as the last argument (on the command line, `botkins chat` asks at a terminal, or takes --yes).", "NEEDS_YES");
+      handlers.send(chat.id, text(message, 200_000, "a message"), { delivery: "queue", ...(script && { allowScript: true }) });
       return { chatId: chat.id, after: before };
     },
     /** A chat as it stands. With `wait`, answers when it differs from what the caller has (`seen`: stream length, message count, working), or after a while. */

@@ -913,6 +913,8 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
         voiceId: options?.voiceId,
         clientMessageId: options?.clientMessageId,
         ...(options?.notify === false && { notify: false }),
+        // Only a caller that is a person (the window, a paired phone) or that the person agreed for (the command line) says so: see asPerson (desktop/device-call.mjs).
+        ...(options?.allowScript === true && { allowScript: true }),
       });
       turn?.catch((err) => console.error("Workspace turn:", err.message));
     },
@@ -931,8 +933,8 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
     sendNow: (id, itemId) => workspace.sendNow(id, itemId),
     reactToMessage: (id, index, time, emoji, person = "owner") => workspace.reactToMessage(id, index, time, emoji, person === "owner" ? person : "member:" + person),
     forkChat: (id, index) => workspace.forkChat(id, index),
-    retry: (runId) => {
-      workspace.retry(runId)?.catch((err) => console.error("Retry:", err.message));
+    retry: (runId, options) => {
+      workspace.retry(runId, { allowScript: options?.allowScript === true })?.catch((err) => console.error("Retry:", err.message));
     },
     compact: (id) => {
       workspace.compact(id)?.catch((err) => console.error("Compact:", err.message));
