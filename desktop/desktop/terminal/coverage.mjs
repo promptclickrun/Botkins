@@ -682,7 +682,7 @@ export const READS = ["skills.review", "chat.scriptCommand", "skillsCatalog.sear
 // The reads of the rest of the workspace, one line for each area (each area's builder writes only its own line).
 export const MORE_READS = {
   bots: ["bots.flags", "bots.proactive", "bots.memory", "bots.sections", "bots.sections.get", "bots.importable", "bots.import.preview", "templates.list", "templates.get", "templates.import.preview", "templates.browse", "templates.market"],
-  chats: ["chats.list", "chats.get", "chats.queue", "chats.helpers", "chats.mentions", "chats.aside", "chats.sections", "chats.projectLook"], // (`chats.aside` asks the chat's model a question that the chat does not keep.)
+  chats: ["chats.list", "chats.get", "chats.search", "chats.queue", "chats.helpers", "chats.mentions", "chats.aside", "chats.sections", "chats.projectLook"], // (`chats.aside` asks the chat's model a question that the chat does not keep.)
   routines: ["routines.get", "routines.review", "routines.when", "routines.schedules"],
   projects: ["projects.list", "projects.get", "projects.artifacts", "projects.changes", "projects.diff", "todos.list", "todos.get", "tasks.list", "tasks.get", "artifacts.list", "artifacts.read", "artifacts.resolve"],
   wiki: ["wiki.tree", "wiki.find", "wiki.page", "wiki.search", "wiki.history", "wiki.version", "wiki.exportPlan"],

@@ -27,6 +27,11 @@ export function hasChatSections(state: Pick<State, "chatSections" | "remote">) {
   return Array.isArray(state.chatSections) || !!state.remote?.using?.capabilities?.includes("chat-sections-v1");
 }
 
+/** Whether a person's or a bot's message in the chat holds the search, so the Chats page finds a chat by what was said in it. */
+function saysIt(chat: Chat, q: string) {
+  return (chat.messages ?? []).some((message) => (message.role === "user" || message.role === "assistant") && typeof message.text === "string" && message.text.toLowerCase().includes(q));
+}
+
 /** Today, Yesterday or Earlier, from the start of today. */
 function dayOf(time: number, today: number): DayLabel {
   return time >= today ? "Today" : time >= today - 86400000 ? "Yesterday" : "Earlier";
@@ -68,7 +73,7 @@ export function chatGroups(input: {
     .filter(
       (chat) =>
         (filter === "Archived" ? chat.archived : filter === "Unread" ? isChatsPageUnread(chat) : !chat.archived) &&
-        (!q || (chat.title + " " + (botName(chat) ?? "")).toLowerCase().includes(q)),
+        (!q || (chat.title + " " + (botName(chat) ?? "")).toLowerCase().includes(q) || saysIt(chat, q)),
     );
   if (filter === "Archived") return byDay(matches, today);
   const groups: ChatGroup[] = [];
