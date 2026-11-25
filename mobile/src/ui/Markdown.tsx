@@ -16,6 +16,7 @@ import { codePalette, type CodeRun, highlightCode } from "./highlight";
 import { pullRequestUrl } from "../../link-host/pr-url.mjs";
 import { LinkHold, type LinkHoldApi, linkPress, MessageLink, openLink as defaultOpenLink } from "./LinkHold";
 import { parseStreamingMarkdown, type MarkdownStreamCache } from "./markdownCache";
+import { codePreview, type CodePreview, FOLD_LINES } from "./codePreview";
 import { CELL_PAD, tableWidths } from "./tables";
 import { Tap } from "./Tap";
 import { type Colors, radius, space, type TypeScale, useTheme } from "./theme";
@@ -88,8 +89,12 @@ function numberNotes(body: string, notes: Footnote[]): Map<string, number> {
 function fenceClosed(raw: string): boolean {
   const open = /^ {0,3}(`{3,}|~{3,})/.exec(raw)?.[1];
   if (!open) return true;
-  const close = new RegExp("\\n {0,3}" + (open[0] === "`" ? "`" : "~") + "{" + open.length + ",}[ \\t]*\\n?$");
-  return close.test(raw.replace(/\n+$/, "\n"));
+  let end = raw.length;
+  while (end && raw[end - 1] === "\n") end--;
+  const start = raw.lastIndexOf("\n", end - 1) + 1;
+  if (start === 0) return false;
+  const close = new RegExp("^ {0,3}" + open[0] + "{" + open.length + ",}[ \\t]*$");
+  return close.test(raw.slice(start, end));
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -211,8 +216,6 @@ function inline(tokens: Token[] | undefined, ctx: Ctx, key = "i"): ReactNode[] {
   });
 }
 
-const FOLD_LINES = 30;
-
 /** Splits colored runs at a line count, for a folded block. */
 function firstLines(runs: CodeRun[], lines: number): CodeRun[] {
   const out: CodeRun[] = [];
@@ -255,12 +258,16 @@ const CodeBlock = memo(function CodeBlock({ code, lang, closed, highlight, wrap,
   const scale = useTheme().type;
   const [copied, setCopied] = useState(false);
   const [open, setOpen] = useState(false);
-  const text = code.replace(/\n$/, "");
-  const lineCount = text.split("\n").length;
+  const priorPreview = useRef<CodePreview | undefined>(undefined);
+  const { text, lineCount, previewEnd } = useMemo(() => {
+    const summary = codePreview(code, priorPreview.current);
+    priorPreview.current = summary;
+    return summary;
+  }, [code]);
   const folded = !open && lineCount > FOLD_LINES + 5;
   const runs = useMemo(() => (highlight && closed ? highlightCode(text, lang) : null), [text, lang, highlight, closed]);
   const paint = useMemo(() => codePalette(colors), [colors]);
-  const shown = folded ? (runs ? firstLines(runs, FOLD_LINES) : text.split("\n").slice(0, FOLD_LINES).join("\n")) : (runs ?? text);
+  const shown = folded ? (runs ? firstLines(runs, FOLD_LINES) : text.slice(0, previewEnd)) : (runs ?? text);
   // Lines that are a path the chat links open it; the rest of the block is drawn as always.
   const links = useMemo(() => (paths && closed ? text.split("\n").map((line) => linkedLine(line, paths)) : null), [paths, closed, text]);
   const lines = useMemo(() => (links?.some(Boolean) ? runsByLine(runs, text) : null), [links, runs, text]);

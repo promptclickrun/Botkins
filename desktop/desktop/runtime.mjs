@@ -185,11 +185,11 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
   let askingLink = false;
   let lastExport = null;
   const linkPreviews = new LinkPreviews();
-  const push = () => pushed();
-  function notify() {
+  const push = (change) => pushed(change);
+  function notify(change) {
     // Every time: the link coalesces by itself.
     for (const listener of changeListeners) listener();
-    push();
+    push(change);
   }
   /**
    * Saves a wiki export where the person chooses. Returns the saved file's path, or null when they cancel.

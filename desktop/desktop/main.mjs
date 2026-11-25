@@ -142,6 +142,7 @@ function frameIdOf(address) {
  * live parts of it (desktop/window-push.mjs).
  */
 const windowPush = createWindowPush({
+  visible: () => !!win && !win.isDestroyed() && win.isVisible() && !win.isMinimized(),
   snapshot: () => appSnapshot(),
   send: (state) => {
     if (!win || win.isDestroyed()) return false;
@@ -152,7 +153,7 @@ const windowPush = createWindowPush({
     win.webContents.send("changed-hot", message);
   },
 });
-const push = () => windowPush.push();
+const push = (change) => windowPush.push(change);
 function openTeamJoin(value) {
   const url = String(value ?? "").trim();
   if (!parseJoinUrl(url)) return false;
@@ -286,7 +287,9 @@ function openWindow() {
     panelOpenFrames = new Set();
     lastBeforeInputKey = null;
     win = null;
+    windowPush.visibilityChanged();
   });
+  for (const change of ["show", "hide", "restore", "minimize"]) win.on(change, windowPush.visibilityChanged);
   win.on("show", syncTray);
   win.on("hide", syncTray);
   for (const change of ["focus", "blur", "show", "hide"]) win.on(change, tellWatching);
@@ -343,7 +346,7 @@ else
     remote.resume();
     // Admin mode is each owner device's own. This window's choice is this computer's, off at first.
     adminMode = adminModeStore(join(dataDir, "window.json"));
-    runtime = await createRuntime({ host, dataDir, trial, pushed: () => (push(), control?.changed()) });
+    runtime = await createRuntime({ host, dataDir, trial, pushed: (change) => (push(change), control?.changed()) });
     ({ workspace, link } = runtime);
     profile = new ProfileManager({
       file: join(dataDir, "profile.json"),

@@ -474,8 +474,7 @@ function ChatTimelineList({ chatId, view, pending, runPart, streaming, group, bo
   const inFront = useAppActive(onShow);
   const still = useReducedMotion();
   const turnLive = streaming || !!underWay(runPart);
-  const streamsReplies = useChatPrefs((prefs) => prefs.textStreaming);
-  const needsReasoning = onShow && inFront && turnLive && thinkingPref === "show" && !streamsReplies;
+  const needsReasoning = inFront && turnLive && thinkingPref === "show";
   useEffect(() => needsReasoning ? watchReasoning(chatId) : undefined, [chatId, needsReasoning]);
   useLayoutEffect(() => {
     if (position === "latest") clearTimeout(retry.current);
