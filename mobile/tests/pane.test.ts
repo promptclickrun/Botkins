@@ -45,3 +45,17 @@ test("the tab in front, and which addresses a web panel may open", () => {
   assert.equal(paneUrl("http://localhost:3000/"), "http://localhost:3000/");
   for (const bad of ["javascript:alert(1)", "file:///etc/passwd", "botkins://pair", "https://user:pw@example.com/", "not a url", "", undefined]) assert.equal(paneUrl(bad), null, String(bad));
 });
+
+test("a pane the person closed stays closed until the bot shows something new", () => {
+  // Closed after the ask (at 5): coming back while the turn still runs opens nothing.
+  const closed = { ...pane(7), closed: { runId: "r1", at: 6 } };
+  assert.deepEqual(paneMove(closed, undefined, always), { handled: 7, move: null });
+  // Nor does the same ask seen again.
+  assert.deepEqual(paneMove(closed, 7, always), { handled: 7, move: null });
+  // A newer ask from the bot (after the close) opens it.
+  const newer = { ...pane(8, { at: 9 }), closed: { runId: "r1", at: 6 } };
+  assert.deepEqual(paneMove(newer, 7, always), { handled: 8, move: { open: "p2" } });
+  // A close from before the ask doesn't hold it shut.
+  const before = { ...pane(7, { at: 10 }), closed: { runId: "r0", at: 6 } };
+  assert.deepEqual(paneMove(before, undefined, (runId) => runId === "r1"), { handled: 7, move: { open: "p2" } });
+});
