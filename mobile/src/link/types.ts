@@ -1934,6 +1934,7 @@ export type Calls = {
   "piPackages.list"(): InstalledPiPackage[];
   "piPackages.install"(name: string, version: string): InstalledPiPackage;
   "piPackages.setEnabled"(name: string, version: string, enabled: boolean): InstalledPiPackage;
+  "piPackages.remove"(name: string, version: string): void;
   "agents.browse"(query?: { query?: string; category?: string; marketplace?: string }): { agents: MarketAgent[]; categories: MarketAgentCategory[] };
   /** Refused with a sentence when the template is gone. */
   "agents.template"(id: string): MarketAgentTemplate;

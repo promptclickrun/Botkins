@@ -241,6 +241,7 @@ const POLICY = {
   "piPackages.list": ["plugins", "view"],
   "piPackages.install": ["plugins", "install"],
   "piPackages.setEnabled": ["plugins", "manage"],
+  "piPackages.remove": ["plugins", "uninstall"],
   "agents.browse": ["agents", "create"],
   "agents.template": ["agents", "create"],
   "composio.catalog": "owner",

@@ -9,9 +9,10 @@ import { TEAM_METHODS } from "../link-host/team.mjs";
 import { type FetchLike, LinkClient, pair } from "../src/link/client";
 import type { InstalledPiPackage, PiPackageListing, PiPackageVersion } from "../src/link/types";
 
-test("a paired phone browses, reviews, installs and switches a Pi package", async (t) => {
+test("a paired phone browses, reviews, installs, switches and removes a Pi package", async (t) => {
   const backend = new MockBackend();
   assert.ok(backend.capabilities.includes("pi-packages-v1"));
+  assert.ok(backend.capabilities.includes("pi-packages-remove-v1"));
   const dir = mkdtempSync(join(tmpdir(), "botkins-pi-link-"));
   const host = new LinkHost({ relay: false, dir, backend, port: 0, extraHosts: ["127.0.0.1"] });
   t.after(async () => {
@@ -36,6 +37,11 @@ test("a paired phone browses, reviews, installs and switches a Pi package", asyn
   assert.deepEqual(await client.call("piPackages.setEnabled", name, version, true), installed);
   await assert.rejects(client.call("piPackages.setEnabled", name, version, "false"), /on or off/);
   await assert.rejects(client.call("piPackages.install", "../package", version), /catalog/);
+  await assert.rejects(client.call("piPackages.remove", "../package", version), /catalog/);
+  await assert.rejects(client.call("piPackages.remove", name, "1.0.1"), /no longer installed/);
+  await client.call("piPackages.remove", name, version);
+  assert.deepEqual(await client.call("piPackages.list"), []);
   assert.deepEqual(TEAM_METHODS["piPackages.install"], ["plugins", "install"]);
   assert.deepEqual(TEAM_METHODS["piPackages.setEnabled"], ["plugins", "manage"]);
+  assert.deepEqual(TEAM_METHODS["piPackages.remove"], ["plugins", "uninstall"]);
 });

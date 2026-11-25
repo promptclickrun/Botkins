@@ -34,8 +34,8 @@ export const PLUGIN_METHODS = [
   "plugins.refresh",
 ];
 
-/** Pi packages installed on the computer running the harness ("pi-packages-v1"). */
-export const PI_PACKAGE_METHODS = ["piPackages.browse", "piPackages.preview", "piPackages.list", "piPackages.install", "piPackages.setEnabled"];
+/** Pi packages installed on the computer running the harness ("pi-packages-v1"; "piPackages.remove" is "pi-packages-remove-v1"). */
+export const PI_PACKAGE_METHODS = ["piPackages.browse", "piPackages.preview", "piPackages.list", "piPackages.install", "piPackages.setEnabled", "piPackages.remove"];
 /**
  * The direct apps catalog ("mcp-catalog-v1", the desktop app's desktop/mcp-catalog.mjs): the list, and
  * adding an entry as a tool server with its keys. A stdio entry needs `confirm`, its exact command line.
@@ -318,11 +318,12 @@ function marketArgs(method, args) {
     case "piPackages.list": return [];
     case "piPackages.preview":
     case "piPackages.install":
-    case "piPackages.setEnabled": {
+    case "piPackages.setEnabled":
+    case "piPackages.remove": {
       if (typeof first !== "string" || first.length > 214 || !/^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/.test(first)) refuse("Choose an npm package from the Pi catalog.");
       if (method === "piPackages.preview") return [first];
       if (typeof args[1] !== "string" || args[1].length > 256 || !/^[0-9][0-9A-Za-z.+-]*$/.test(args[1])) refuse("Review the exact Pi package version first.");
-      if (method === "piPackages.install") return [first, args[1]];
+      if (method === "piPackages.install" || method === "piPackages.remove") return [first, args[1]];
       if (typeof args[2] !== "boolean") refuse("Choose on or off.");
       return [first, args[1], args[2]];
     }

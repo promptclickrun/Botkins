@@ -83,6 +83,7 @@ for (const name of [
   "piPackages.list",
   "piPackages.install",
   "piPackages.setEnabled",
+  "piPackages.remove",
   "agents.browse",
   "agents.template",
   "composio.catalog",
