@@ -35,6 +35,7 @@ import { Summaries } from "./summaries.mjs";
 import { Wiki } from "./wiki.mjs";
 import { MacTools, macToolsField } from "./mactools.mjs";
 import { PhoneTools } from "./phonetools.mjs";
+import { BrowserExtensionTools } from "./browsertools.mjs";
 import { Vault } from "./vault.mjs";
 import { Frames } from "./frames.mjs";
 
@@ -317,6 +318,8 @@ export class Workspace {
     this.mac = new MacTools(this, options?.macTools);
     // Tools a bot runs on a paired phone, through the phone link (desktop/phonetools.mjs).
     this.phone = new PhoneTools(this, options?.phoneTools);
+    // Tools a bot runs on a paired Chromium browser extension (desktop/browsertools.mjs).
+    this.browser = new BrowserExtensionTools(this, options?.browserTools);
     this.agents = new Agents(this);
     this.board = new Board(this);
     // Pages of panels and cards, each a person's (desktop/spaces.mjs). Every panel and card is in one.
@@ -1441,6 +1444,8 @@ export class Workspace {
       ...this.mac.tools(bot, chat, run, task),
       // The phone's calendar, contacts, health, location, photos, music and mail, for what the person switched on there.
       ...this.phone.tools(bot, chat, run, task),
+      // Paired Chromium browser extensions (Chrome / Edge), for driving the person's signed-in browser profile.
+      ...(access.member ? [] : this.browser.tools(bot, chat, run, task)),
       // A panel refresh only updates its panel; other turns can post to Today's board, show apps and ask teammates.
       ...(run?.panelId
         ? []

@@ -11,7 +11,7 @@ const kinds = [
   [/^(edit|str_replace|str_replace_editor|apply_patch|patch|multi_edit|multiedit|notebookedit|notebook_edit|insert)$/, "edit"],
   [/^(grep|glob|search|search_files|find|rg|ls|list_dir|list_directory)$/, "search-files"],
   [/^(web_search|websearch|search_web|bing_search|google_search)$/, "web"],
-  [/^(web_fetch|webfetch|fetch|fetch_url|browse|browser_navigate)$/, "web-page"],
+  [/^(web_fetch|webfetch|fetch|fetch_url|browse|browser_[a-z_]+)$/, "web-page"],
   [/^(ask_user|ask)$/, "ask"],
   [/^(task|subagent|run_subagent|delegate)$/, "helper"],
   [/^(sql|update_todo|todo|todo_write|todowrite|manage_todo_list|update_plan)$/, "plan"],

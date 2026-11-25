@@ -49,7 +49,7 @@ export function buildNotifyTargetView(state: State, botId: string, phoneLink?: P
 
   if (isMember && team && "me" in team) {
     const myDevices: TargetDeviceOption[] = (team.me.devices ?? [])
-      .filter((device) => device.kind !== "gadget")
+      .filter((device) => device.kind !== "gadget" && device.kind !== "browser")
       .map((device) => ({
         id: device.id,
         name: device.name,
@@ -88,7 +88,7 @@ export function buildNotifyTargetView(state: State, botId: string, phoneLink?: P
   const ownerDevices: TargetDeviceOption[] = [
     { id: HOST_DEVICE_ID, name: hostName, kind: "host", canNotify: hostCanNotify },
     ...rawDevices
-      .filter((device) => device.kind !== "gadget" && !memberDeviceIds.has(device.id))
+      .filter((device) => device.kind !== "gadget" && device.kind !== "browser" && !memberDeviceIds.has(device.id))
       .map((device) => ({
         id: device.id,
         name: device.name,
@@ -118,7 +118,7 @@ export function buildNotifyTargetView(state: State, botId: string, phoneLink?: P
       const seesBot = role.bots === "all" || (Array.isArray(role.bots) && role.bots.includes(botId));
       if (!seesBot) continue;
       const devices: TargetDeviceOption[] = (member.devices ?? [])
-        .filter((device) => device.kind !== "gadget")
+        .filter((device) => device.kind !== "gadget" && device.kind !== "browser")
         .map((device) => ({
           id: device.id,
           name: device.name,

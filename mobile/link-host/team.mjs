@@ -287,6 +287,8 @@ const POLICY = {
   "link.device.sources": "owner",
   "link.device.answer": "owner",
   "link.device.file": "owner",
+  "link.browser.state": "owner",
+  "link.browser.answer": "owner",
   // Gadgets (gadget.mjs) are the owner's: an owner device names one, and a gadget makes its own calls.
   "link.gadgets.add": "owner",
   "link.gadget.hello": "owner",
@@ -982,8 +984,21 @@ function chatIdOf(method, args, lookups) {
   return null;
 }
 
+const BROWSER_ALLOWED_METHODS = new Set([
+  "link.sync",
+  "link.follow",
+  "link.unfollow",
+  "link.unpair",
+  "link.upload",
+  "link.browser.state",
+  "link.browser.answer",
+]);
+
 /** One member's refusal sentence, or "" when the call may proceed. */
 export function authorize(principal, team, method, args = [], lookups = {}) {
+  if (lookups.browser) {
+    return BROWSER_ALLOWED_METHODS.has(method) ? "" : "A browser extension can only sync its browser tasks and send browser results.";
+  }
   if (lookups.gadget) {
     // The readers stringify the chat id. Check exactly the chat they would open.
     const chatId = ["link.messages", "link.step", "link.push.activity"].includes(method) ? String(args[0]) : chatIdOf(method, args, lookups);

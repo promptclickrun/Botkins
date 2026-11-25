@@ -386,7 +386,7 @@ export const LINK = {
   ...each("link.credentials.protonPassInstallPlan link.credentials.protonPassInstall", cmd("password-managers install")),
   ...each("link.credentials.protonPassSignInStart link.credentials.protonPassSignInRead link.credentials.protonPassSignInInput link.credentials.protonPassSignInCancel", cmd("password-managers sign-in")),
   "link.credentials.protonPassDisconnect": cmd("password-managers disconnect"),
-  ...each("link.device.answer link.device.file link.device.sources link.upload link.pullRequests", no("phone's own")),
+  ...each("link.device.answer link.device.file link.device.sources link.browser.answer link.browser.state link.upload link.pullRequests", no("phone's own")),
   ...each("link.push.activity link.push.prefs link.push.presence link.push.register link.push.test link.push.unregister", no("phone's own")),
   ...each("link.screen.frame link.screen.grant.begin link.screen.grant.confirm link.screen.info link.screen.input link.screen.revoke link.screen.stop link.screen.video.open link.screen.video.read link.screen.video.close", no("phone's own")),
   ...each("link.pullRequest link.pullRequestDiff", no("window's own")),

@@ -351,6 +351,8 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
     ...(host.headless && { macTools: { platform: "headless" } }),
     // Tools a bot runs on a paired phone (desktop/phonetools.mjs). The link is made further down.
     phoneTools: () => (link ? { tools: () => link.deviceTools(), call: (name, args, options) => link.callDeviceTool(name, args, options) } : null),
+    // Tools a bot runs on a paired Chromium browser extension (desktop/browsertools.mjs).
+    browserTools: () => (link ? { tools: () => link.browserTools(), call: (name, args, options) => link.callBrowserTool(name, args, options) } : null),
   });
   // Conversations from builds that shared ~/.copilot keep their history.
   copilot.adoptSessions(workspace.sessionIds());

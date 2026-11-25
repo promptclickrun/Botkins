@@ -17,6 +17,7 @@ import { Credentials, scrub } from "./credentials.mjs";
 import { PROTON_SETUP } from "./proton-setup.mjs";
 import { agree, b64u, box, cleanCode, hkdf, INFO, newCode, newKeyPair, open, random, seal, pushNonce, seqNonce, unb64u, unbox } from "./crypto.mjs";
 import { DeviceTools } from "./device.mjs";
+import { BROWSER_CAPABILITY, BrowserTools } from "./browser.mjs";
 import { botkinRenderer } from "./botkin-svg.mjs";
 import { GADGET_CAPABILITY, GADGET_DEFAULTS, GADGET_SETTINGS_CAPABILITY, Gadgets } from "./gadget.mjs";
 import { cleanPresenceKey, GRANT_CAPABILITY, GRANT_RELAY_CAPABILITY, ScreenGrants } from "./grant.mjs";
@@ -69,6 +70,7 @@ const PUMP_MS = 60;
 const RELAY_POLL_MS = 250;
 const FOLLOW_PUMP_MS = 100;
 const FOLLOW_QUIET_MS = 25_000;
+const BROWSER_FOLLOW_QUIET_MS = 32_000;
 const FOLLOW_LIFE_MS = 4 * 60_000;
 const SUMMARY_PUMP_MS = 1000;
 const TEXT_PUMP_MS = 200; // Tuning value for text-only updates to a following phone.
@@ -83,7 +85,7 @@ const PROFILE_REQUEST_TIMEOUT = 10_000;
 // "maintenance-v1": this copy lets a phone clear the cache and send the computer's own test notification.
 /** The link tells people of notes and changes in their spaces (space-alerts.mjs). Named only while the app has spaces. */
 const SPACE_ALERTS_CAPABILITY = "space-alerts-v1";
-const CAPABILITIES = ["sync-push-v1", "credentials-v1", "screen-v1", "prs-v1", "uploads-v1", "relay-v1", "push-v1", "device-v1", "voice-v1", "devices-v1", "device-person-v1", "maintenance-v1", "teams-v1", "stream-appends-v1", "reasoning-appends-v1", "separate-thinking-v1", "text-streaming-off-v1", "text-chunks-v1", "text-watch-v1", "step-details-v1", "run-step-deltas-v1", "run-summary-deltas-v1", "team-people-v1", "chat-sections-v1", "chat-typing-v1", "activity-bots-v1", "activity-all-v1", "member-rename-v1", "profile-v1", "people-avatars-v1", GADGET_CAPABILITY, GADGET_SETTINGS_CAPABILITY, "pr-panel-v1", "feedback-v1"];
+const CAPABILITIES = ["sync-push-v1", "credentials-v1", "screen-v1", "prs-v1", "uploads-v1", "relay-v1", "push-v1", "device-v1", BROWSER_CAPABILITY, "voice-v1", "devices-v1", "device-person-v1", "maintenance-v1", "teams-v1", "stream-appends-v1", "reasoning-appends-v1", "separate-thinking-v1", "text-streaming-off-v1", "text-chunks-v1", "text-watch-v1", "step-details-v1", "run-step-deltas-v1", "run-summary-deltas-v1", "team-people-v1", "chat-sections-v1", "chat-typing-v1", "activity-bots-v1", "activity-all-v1", "member-rename-v1", "profile-v1", "people-avatars-v1", GADGET_CAPABILITY, GADGET_SETTINGS_CAPABILITY, "pr-panel-v1", "feedback-v1"];
 /** A custom view (an html block): the page a bot wrote and its data, at the sizes the desktop app keeps them to. */
 /** Calls that make a chat and answer its id. */
 const MAKES_CHAT = new Set(["createChat", "createGroupChat", "forkChat", "startProjectChat"]);
@@ -312,6 +314,13 @@ export class LinkHost extends EventEmitter {
       botName: (id) => (this.backend.snapshot().bots ?? []).find((bot) => bot.id === id)?.name,
       log: (line) => this.log(line),
     });
+    this.browser = new BrowserTools({
+      store: this.store,
+      uploads: this.uploads,
+      isLive: (deviceId) => this.liveDevices().has(deviceId),
+      changed: () => this.changed(),
+      onTools: () => this.emit("tools"),
+    });
     // The "link.*" calls the link answers itself, by name. Each is called with (session, args, gone).
     this.calls = {
       "link.push.register": async (session, a) => this.push.register(session.deviceId, a[0], a[1]),
@@ -359,6 +368,8 @@ export class LinkHost extends EventEmitter {
       "link.device.sources": async (session, a) => this.device.setSources(session.deviceId, a[0]),
       "link.device.answer": async (session, a) => this.device.answer(session.deviceId, a[0], a[1]),
       "link.device.file": async (session, a) => this.device.file(session.deviceId, a[0]),
+      "link.browser.state": async (session, a) => this.browser.setState(session.deviceId, a[0]),
+      "link.browser.answer": async (session, a) => this.browser.answer(session.deviceId, a[0], a[1]),
       // The devices paired with this computer (docs/link-contract.md): any paired device may read
       // the list, rename one and remove one, as the person can in the app on this computer.
       "link.devices.list": async (session) => this.devices(session.deviceId),
@@ -596,6 +607,14 @@ export class LinkHost extends EventEmitter {
   callDeviceTool(name, args, options) {
     return this.device.call(name, args, options);
   }
+  /** Browser tools currently exposed by paired Chromium extensions (`browser-v1`). */
+  browserTools() {
+    return this.browser.tools();
+  }
+  /** Runs one browser tool call against a paired Chromium extension. */
+  callBrowserTool(name, args, options) {
+    return this.browser.call(name, args, options);
+  }
 
   // ── Switching on and off ────────────────────────────────────────────────────────────────────
 
@@ -687,6 +706,7 @@ export class LinkHost extends EventEmitter {
     for (const timer of this.inviteTimers.values()) clearTimeout(timer);
     this.inviteTimers.clear();
     this.device.dispose();
+    this.browser.dispose();
     this.voice.close?.();
     this.screen.dispose();
     this.uploads.dispose();
@@ -816,7 +836,7 @@ export class LinkHost extends EventEmitter {
       serverId: this.store.data.serverId,
       addresses: this.server ? reachable() : [],
       // Profile proofs and status keys are host-private; device lists are public Link state.
-      devices: this.store.data.devices.map(({ publicKey: _key, profile: _profile, ...device }) => ({ ...device, connected: live.has(device.id), canNotify: device.kind !== "gadget" && this.push.view(device.id)?.routines === true })),
+      devices: this.store.data.devices.map(({ publicKey: _key, profile: _profile, ...device }) => ({ ...device, connected: live.has(device.id), canNotify: device.kind !== "gadget" && device.kind !== "browser" && this.push.view(device.id)?.routines === true })),
       pairing: pairing ? { code: pairing.code, expiresAt: pairing.expiresAt, url: this.pairingUrl(pairing.code) } : null,
       relay: { enabled: !!this.relaySettings(), connected: !!this.relayLink?.connected, url: this.relayUrl(), ...(this.relayLink?.taken && { problem: "taken" }) },
       // The phones that get notifications, and what each allows bots to use.
@@ -1019,7 +1039,7 @@ export class LinkHost extends EventEmitter {
     const old = this.store.data.devices.filter((device) => device.profile?.profileId === proof.profileId && device.profile?.deviceId === proof.deviceId && (device.memberId ?? null) === entry.memberId);
     for (const device of old) this.removeDevice(device.id, { keepProfileBinding: true });
     const supplied = request.device;
-    const kind = supplied.kind === "desktop" ? "desktop" : "phone";
+    const kind = supplied.kind === "desktop" ? "desktop" : supplied.kind === "browser" && !entry.memberId ? "browser" : "phone";
     const device = this.store.addDevice({
       name: supplied.name,
       platform: supplied.platform,
@@ -1130,7 +1150,7 @@ export class LinkHost extends EventEmitter {
       createdAt: device.createdAt,
       lastSeenAt: device.lastSeenAt,
       connected: live.has(device.id),
-      canNotify: device.kind !== "gadget" && this.push.view(device.id)?.routines === true,
+      canNotify: device.kind !== "gadget" && device.kind !== "browser" && this.push.view(device.id)?.routines === true,
       ...(device.id === asking && { current: true }),
     }));
   }
@@ -1223,7 +1243,7 @@ export class LinkHost extends EventEmitter {
         kind: device.kind,
         platform: device.platform,
         ...(device.memberId && { memberId: device.memberId }),
-        canNotify: device.kind !== "gadget" && this.push.view(device.id)?.routines === true,
+        canNotify: device.kind !== "gadget" && device.kind !== "browser" && this.push.view(device.id)?.routines === true,
       })),
       host: {
         name: this.store.name || "This computer",
@@ -1908,6 +1928,7 @@ export class LinkHost extends EventEmitter {
     this.uploads.forget(id);
     this.push.forget(id);
     this.device.forget(id);
+    this.browser.forget(id);
     this.gadgets.forget(id);
     this.grants.forget(id);
     this.typing.forgetSource(id);
@@ -1950,8 +1971,10 @@ export class LinkHost extends EventEmitter {
   async handle(req, res) {
     try {
       // Only this computer, the local network and a tailnet may call, and never a web page.
+      // A Chromium extension's background service worker sends `Origin: chrome-extension://<id>` on POSTs.
       if (!isNear(req.socket.remoteAddress)) throw new Refused(403, "far");
-      if (req.headers.origin) throw new Refused(403, "origin");
+      const origin = req.headers.origin;
+      if (origin && !/^chrome-extension:\/\/[a-p]{32}$/.test(origin)) throw new Refused(403, "origin");
       const path = new URL(req.url ?? "/", "http://link").pathname;
       if (!path.startsWith(PREFIX)) throw new Refused(404, "not_found");
       const route = path.slice(PREFIX.length);
@@ -2244,10 +2267,12 @@ export class LinkHost extends EventEmitter {
     const state = this.backend.snapshot();
     const isFollow = method === "link.follow";
     const cancel = method === "link.unfollow";
+    const deviceKindOf = this.store.device(session.deviceId)?.kind;
     const refusal = authorize(principal, this.store.data.team, isFollow || cancel ? "link.sync" : method, args, {
       bot: (id) => (state.bots ?? []).find((bot) => bot.id === id),
       chat: (id) => (state.chats ?? []).find((chat) => chat.id === id),
-      gadget: this.store.device(session.deviceId)?.kind === "gadget",
+      gadget: deviceKindOf === "gadget",
+      browser: deviceKindOf === "browser",
       request: (id) => (state.requests ?? []).find((request) => request.id === id),
       // A script command that Botkins keeps: a member may not remove, turn off or replace it (team.mjs).
       scriptCommand: (name) => Object.hasOwn(state.skills?.scripts ?? {}, name),
@@ -2667,8 +2692,10 @@ export class LinkHost extends EventEmitter {
    */
   viewParts(session, watching, quiet) {
     // A gadget follows two small parts of its own, made from the owner's (gadget.mjs).
+    // A browser extension follows only `meta` and its own `asks` (browser.mjs) to stay zero-chatter on the relay.
     const device = session.deviceId === undefined ? null : this.store.device(session.deviceId);
     if (device?.kind === "gadget" && !device.memberId) return this.gadgets.view(device, this.parts);
+    if (device?.kind === "browser" && !device.memberId) return this.browser.view(device, this.parts, () => ++this.version);
     const principal = this.principal(session.deviceId);
     const admin = principal?.kind === "owner" && principal.admin === true;
     // An owner device with Admin mode on is sent everything; the host's own calls too.
@@ -2865,13 +2892,15 @@ export class LinkHost extends EventEmitter {
         if (session.follow === waiter) delete session.follow;
         resolve(quiet);
       };
+      const isBrowser = this.store.device(session.deviceId)?.kind === "browser";
       const pump = () => {
         try {
           if (!push.ready()) return FOLLOW_PUMP_MS;
           const now = Date.now();
           if (last !== null && now < last + FOLLOW_PUMP_MS) return last + FOLLOW_PUMP_MS - now;
           const news = read(last !== null);
-          const heartbeat = (last ?? started) + FOLLOW_QUIET_MS;
+          const quietMs = isBrowser ? BROWSER_FOLLOW_QUIET_MS : FOLLOW_QUIET_MS;
+          const heartbeat = (last ?? started) + quietMs;
           if (!(news instanceof Json) && now < heartbeat) {
             return Math.min(heartbeat - now, typeof news === "number" ? news : Infinity);
           }
@@ -2902,10 +2931,11 @@ export class LinkHost extends EventEmitter {
   }
   sync(session, request, gone, via = "http", push) {
     const { epoch, have, watch, wait, appends, text } = request;
-    // A gadget follows its two parts and its reply's text: no steps, and no reasoning.
-    const forGadget = session.deviceId !== undefined && this.store.device(session.deviceId)?.kind === "gadget";
-    const steps = forGadget ? undefined : request.steps;
-    const reasoningWatch = forGadget ? undefined : request.reasoningWatch;
+    // A gadget or browser extension follows minimal parts: no steps, and no reasoning.
+    const kind = session.deviceId === undefined ? null : this.store.device(session.deviceId)?.kind;
+    const forMinimal = kind === "gadget" || kind === "browser";
+    const steps = forMinimal ? undefined : request.steps;
+    const reasoningWatch = forMinimal ? undefined : request.reasoningWatch;
     const watching = (Array.isArray(watch) ? watch : []).filter((id) => typeof id === "string").slice(0, MAX_WATCH);
     // A hidden chat can keep one page warm without receiving text, reasoning or step updates.
     const keepPage = typeof request.keepPage === "string" &&
@@ -2928,14 +2958,14 @@ export class LinkHost extends EventEmitter {
     }
     // One form for a session: a client names it on every sync, and the versions it holds are for that form.
     session.light = steps === "light";
-    if (!forGadget && session.light && request.runSteps === "delta") {
+    if (!forMinimal && session.light && request.runSteps === "delta") {
       session.runStepBases ??= new Map();
       for (const name of session.runStepBases.keys()) {
         const chat = name.slice(4);
         if (!watching.includes(chat) && !session.reasoningWatch.includes(chat)) session.runStepBases.delete(name);
       }
     } else delete session.runStepBases;
-    if (!forGadget && request.runSummaries === "delta") session.runSummaryBases ??= new Map();
+    if (!forMinimal && request.runSummaries === "delta") session.runSummaryBases ??= new Map();
     else delete session.runSummaryBases;
     // Capture the negotiation for this request. A concurrent full-snapshot reader cannot opt in an older wait.
     const runBases = { steps: session.runStepBases, summaries: session.runSummaryBases, paceSummaries: !!push || Number(wait) > 0 };

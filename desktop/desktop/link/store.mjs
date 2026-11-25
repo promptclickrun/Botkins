@@ -46,13 +46,12 @@ function loadProfiles(value) {
   }));
   return { owner: profileBinding(value.owner), members };
 }
-/** A paired device is a phone or a computer (another Botkins app that uses this one). */
-/** "gadget": a small device that talks with a bot (gadget.mjs). It is named, never guessed from a platform. */
-export const DEVICE_KINDS = ["phone", "desktop", "gadget"];
+/** A paired device is a phone, computer, gadget, or Chromium browser extension. */
+export const DEVICE_KINDS = ["phone", "desktop", "gadget", "browser"];
 const DESKTOP_PLATFORMS = ["darwin", "macos", "mac", "win32", "windows", "linux", "desktop"];
 /** The kind a device says it is, else the kind its platform makes it. A phone when nothing says otherwise, as before. */
 export const deviceKind = (kind, platform) => (DEVICE_KINDS.includes(kind) ? kind : DESKTOP_PLATFORMS.includes(String(platform ?? "").toLowerCase()) ? "desktop" : "phone");
-const KIND_NAMES = { desktop: "Computer", gadget: "Gadget" };
+const KIND_NAMES = { desktop: "Computer", gadget: "Gadget", browser: "Browser" };
 const deviceName = (name, kind) => String(name || (KIND_NAMES[kind] ?? "Phone")).replace(/[\u0000-\u001f\u007f]/g, " ").trim().slice(0, 60) || (KIND_NAMES[kind] ?? "Phone");
 /** The name of the person a device belongs to ("Jordan"), cleaned; "" when there is none. A device's `name` stays its model. */
 export const personName = (value) => (typeof value === "string" ? value.replace(/[\u0000-\u001f\u007f]/g, " ").trim().slice(0, 60).trim() : "");
@@ -267,8 +266,8 @@ export class LinkStore {
     const member = typeof memberId === "string" && memberId ? memberId : null;
     const count = this.data.devices.filter((device) => (member ? device.memberId : !device.memberId)).length;
     if (count >= (member ? MAX_MEMBER_DEVICES : MAX_OWNER_DEVICES)) throw new Error(member ? "Too many member devices. Remove one first." : "Too many paired owner devices. Remove one first.");
-    // A gadget is the owner's (gadget.mjs). A team member's device that calls itself one is a phone, with a member's cut of everything.
-    const is = member && kind === "gadget" ? "phone" : deviceKind(kind, platform);
+    // A gadget or browser extension is the owner's. A team member's device that calls itself one is a phone, with a member's cut of everything.
+    const is = member && (kind === "gadget" || kind === "browser") ? "phone" : deviceKind(kind, platform);
     const who = personName(person);
     const device = {
       id: newId(9),
@@ -327,6 +326,16 @@ export class LinkStore {
     }
     if (JSON.stringify(gadget) === JSON.stringify(device.gadget ?? {})) return true;
     device.gadget = gadget;
+    this.save();
+    return true;
+  }
+  /** Browser extension state (enabled, access mode, browser name/profile/version). */
+  setBrowser(id, browser) {
+    const device = this.device(id);
+    if (device?.kind !== "browser") return false;
+    if (isDeepStrictEqual(device.browser ?? null, browser ?? null)) return true;
+    if (browser) device.browser = browser;
+    else delete device.browser;
     this.save();
     return true;
   }
