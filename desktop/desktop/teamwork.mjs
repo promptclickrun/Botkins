@@ -58,11 +58,15 @@ export class Teamwork {
       "\nUse ask_teammate when a teammate fits a substantial part of the request. Split independent work across roles. Handle quick requests yourself or when the person asks for you. Say whom you're asking and why, share only the context they need, and combine their results into your reply." + remote
     );
   }
-  /** What a teammate is told while it works on an ask. */
-  helperNote(asker) {
+  /**
+   * What a teammate is told while it works on an ask. It is the same whoever asks, so the
+   * teammate's session keeps one system prompt (desktop/session-prompts.mjs); each message names
+   * the teammate it is from ("Message from …", in ask).
+   */
+  helperNote() {
     return (
-      "\n\nYour teammate " + asker.name + " (" + asker.role + ") is asking for your help on the person's behalf. " +
-      "Do the work and reply to " + asker.name + " with the result; they will pass it on. " +
+      "\n\nA teammate is asking for your help on the person's behalf; each message says which one. " +
+      "Do the work and reply to that teammate with the result; they will pass it on. " +
       "You can't ask the person anything from here, and you can't bring in other teammates. If something is missing, or another teammate fits better, say so in your reply."
     );
   }
@@ -281,7 +285,7 @@ export class Teamwork {
       projectId: chat.projectId,
       folder: chat.folder,
       helper: true,
-      extraInstructions: this.helperNote(asker),
+      extraInstructions: this.helperNote(),
       get restartSession() { return record.restartSession; },
       set restartSession(value) { record.restartSession = value; },
       get sessionFolder() { return record.sessionFolder; },
@@ -314,6 +318,7 @@ export class Teamwork {
       off = session.on((event) => {
         this.ws.artifactEvents.tool(chat, asker.id, run, event, entry);
         if (event.type === "user.message" && !event.agentId && rootEventId == null) rootEventId = event.id;
+        this.ws.compacted(session, event);
         if (event.type === "assistant.intent" && !event.agentId) {
           entry.intent = String(event.data?.intent ?? "").slice(0, 200);
           this.ws.notify();

@@ -76,9 +76,11 @@ test("asking a teammate runs it in its own session and returns its reply to the 
   assert.equal(sent, "Message from Pip (Everyday helper):\nFind sources on tide tables\n\nWhat they need back: three links");
   assert.doesNotMatch(sent, /Research tide tables/, "the chat itself is not passed on");
   assert.match(system(log, helper), /^You are Scout, Research partner\./);
-  assert.match(system(log, helper), /Your teammate Pip \(Everyday helper\) is asking for your help/);
+  // The same whoever asks, so the teammate's session keeps one prompt; the message names the asker.
+  assert.match(system(log, helper), /A teammate is asking for your help on the person's behalf; each message says which one\./);
+  assert.doesNotMatch(system(log, helper), /Pip/);
   assert.doesNotMatch(system(log, helper), /Your team\n|today_\* tools/, "a helper has no team of its own and no dashboard tools");
-  assert.deepEqual(log.sessions.get(helper).toolNames(), ["memory_read", "profile_read", "wiki_search", "wiki_read"], "a helper reads its memory and the wiki, and changes nothing");
+  assert.deepEqual(log.sessions.get(helper).toolNames(), ["memory_read", "profile_read", "wiki_read", "wiki_search"], "a helper reads its memory and the wiki, and changes nothing (a session's tools come in order of name)");
   // What the turn recorded for the chat to show.
   const [ask] = ws.state.runs[0].teamwork;
   assert.deepEqual(

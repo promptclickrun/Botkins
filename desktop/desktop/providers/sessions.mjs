@@ -6,7 +6,7 @@
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
-import { forkSystemMessage, forkTranscript } from "../canvas.mjs";
+import { earlierConversation, forkTranscript } from "../canvas.mjs";
 
 export class SessionStore {
   /** @param file  Where the records are kept. Omit to keep them in memory only (tests, no data folder). */
@@ -86,13 +86,14 @@ export async function serversWithTokens(spec) {
 }
 
 /**
- * The conversation so far as system prompt text, for a backend that has lost its own copy of a
- * conversation (or never had it). The message being answered now is left out.
+ * The conversation so far, for a backend that has lost its own copy of a conversation (or never
+ * had it), to go before the first message it is sent (canvas.mjs earlierConversation). The
+ * message being answered now is left out.
  */
 export function transcriptContext(spec, botName = "Assistant") {
   const messages = [...(spec.history?.() ?? [])];
   if (messages.at(-1)?.role === "user") messages.pop();
-  return forkSystemMessage(forkTranscript(messages, botName));
+  return earlierConversation(forkTranscript(messages, botName));
 }
 
 /**

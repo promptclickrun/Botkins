@@ -78,7 +78,7 @@ test("reasoning, usage, context, subagents and todos are recorded for the main a
     emit({ type: "assistant.reasoning_delta", agentId: "sub", data: { reasoningId: "x", deltaContent: "helper" } });
     live = ws.snapshot().thinking[id];
     emit({ type: "assistant.reasoning", data: { reasoningId: "r1", content: "Let me think." } });
-    emit({ type: "assistant.usage", data: { model: "m1", inputTokens: 100, outputTokens: 20, cacheReadTokens: 50, cost: 1, duration: 900 } });
+    emit({ type: "assistant.usage", data: { model: "m1", inputTokens: 100, outputTokens: 20, cacheReadTokens: 50, cacheWriteTokens: 30, cost: 1, duration: 900 } });
     emit({ type: "assistant.usage", agentId: "sub", data: { model: "m2", inputTokens: 10, outputTokens: 5 } });
     emit({ type: "session.usage_info", data: { currentTokens: 3800, tokenLimit: 10000, messagesLength: 4 } });
     emit({ type: "subagent.started", data: { toolCallId: "a1", agentName: "explore", agentDisplayName: "Explorer", agentDescription: "Looks around" } });
@@ -111,7 +111,9 @@ test("reasoning, usage, context, subagents and todos are recorded for the main a
   assert.equal(run.reasoning.length, 1);
   assert.equal(run.reasoning[0].text, "Let me think.");
   assert.ok(run.reasoning[0].finished >= run.reasoning[0].started);
-  assert.deepEqual(run.usage, { input: 110, output: 25, cacheRead: 50, cost: 1, durationMs: 900, model: "m1" });
+  // The Copilot runtime's input holds the cache (100 = 20 uncached + 50 read + 30 written); the run
+  // counts the uncached input. Both cache counts are kept, 0 when a backend used none.
+  assert.deepEqual(run.usage, { input: 30, output: 25, cacheRead: 50, cacheWrite: 30, cost: 1, durationMs: 900, model: "m1" });
   // The window's makeup is kept for the context details popup; updatedAt is the time it was recorded.
   const { updatedAt, ...context } = chat.context;
   assert.ok(updatedAt > 0);
@@ -295,7 +297,8 @@ test("a failed turn can be retried with its attachments", async (t) => {
 
 test("fork copies the transcript and gives the new session the earlier conversation", async (t) => {
   const configs = [];
-  const session = fakeSession(async (_emit, { prompt }) => ({ data: { content: "echo " + prompt } }));
+  const prompts = [];
+  const session = fakeSession(async (_emit, { prompt }) => (prompts.push(prompt), { data: { content: "echo " + prompt.split("\n\n").at(-1) } }));
   const dir = mkdtempSync(join(tmpdir(), "botkins-fork-"));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const client = async () => ({
@@ -316,7 +319,12 @@ test("fork copies the transcript and gives the new session the earlier conversat
   assert.match(fork.forkContext, /User: The code is 4417/);
   assert.doesNotMatch(fork.forkContext, /Second/);
   await ws.send(forkId, "What was the code?");
-  assert.match(configs.at(-1).systemMessage.content, /earlier-conversation[\s\S]*4417/);
+  // The earlier conversation comes with the fork's first message, and never in its system prompt.
+  assert.doesNotMatch(configs.at(-1).systemMessage.content, /earlier-conversation|4417/);
+  assert.match(prompts.at(-1), /^\[Botkins: this conversation continues from earlier\.[\s\S]*<earlier-conversation>[\s\S]*4417[\s\S]*<\/earlier-conversation>\n\n[\s\S]*What was the code\?$/);
+  assert.equal(ws.chat(forkId).forkContext, undefined, "it is told once");
+  await ws.send(forkId, "Thanks");
+  assert.doesNotMatch(prompts.at(-1), /earlier-conversation/);
   assert.equal(configs.at(-1).inference.reasoningSummary, "detailed");
   assert.match(forkTranscript([{ role: "user", text: "x".repeat(50) }], "Pip", 20), /^…/);
 });

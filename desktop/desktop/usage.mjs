@@ -1,4 +1,7 @@
-// Usage totals from recorded runs: `run.usage = {input, output, cacheRead?, cost?, model?, durationMs?}`.
+// Usage totals from recorded runs: `run.usage = {input, output, cacheRead?, cacheWrite?, cost?, model?, durationMs?}`.
+// `input` is the input that was neither read from nor written to the prompt cache. A run with
+// `cacheWrite` was counted that way by every provider; older runs counted it differently (some
+// with the cached part inside `input`), so only the newer ones go into the cache hit rate.
 const DAY = 86400000;
 
 /** YYYY-MM-DD for an instant in a time zone. */
@@ -6,16 +9,31 @@ export function dayKey(t, timeZone) {
   return new Intl.DateTimeFormat("en-CA", { timeZone, year: "numeric", month: "2-digit", day: "2-digit" }).format(t);
 }
 
-const blank = () => ({ turns: 0, input: 0, output: 0, cacheRead: 0, cost: 0, priced: 0 });
+const blank = () => ({ turns: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, priced: 0, cacheHitRate: null });
+/** Read from cache, as a share of all the input of the runs counted the current way: null with none. */
+export function cacheHitRate({ input = 0, cacheRead = 0, cacheWrite = 0 } = {}) {
+  const all = input + cacheRead + cacheWrite;
+  return all > 0 ? cacheRead / all : null;
+}
+// The counts behind each total's cacheHitRate, kept apart while a report is made.
+const MEASURED = Symbol("measured");
 function add(total, run) {
   const u = run.usage ?? {};
   total.turns++;
   total.input += Number(u.input) || 0;
   total.output += Number(u.output) || 0;
   total.cacheRead += Number(u.cacheRead) || 0;
+  total.cacheWrite += Number(u.cacheWrite) || 0;
   if (Number.isFinite(u.cost)) {
     total.cost += u.cost;
     total.priced++;
+  }
+  if (Number.isFinite(u.cacheWrite)) {
+    const measured = (total[MEASURED] ??= { input: 0, cacheRead: 0, cacheWrite: 0 });
+    measured.input += Number(u.input) || 0;
+    measured.cacheRead += Number(u.cacheRead) || 0;
+    measured.cacheWrite += u.cacheWrite;
+    total.cacheHitRate = cacheHitRate(measured);
   }
 }
 export const modelOf = (run) => run.usage?.model || run.model?.model || "Unknown";
@@ -75,7 +93,7 @@ function cell(v) {
 /** One CSV row per turn in the range. Text cells are quoted and guarded against spreadsheet formulas. */
 export function usageCsv(state, { days = 30, now = Date.now(), timeZone } = {}) {
   const chats = new Map(state.chats.map((c) => [c.id, c]));
-  const rows = [["time", "date", "bot", "chat", "title", "status", "trigger", "model", "input_tokens", "output_tokens", "cache_read_tokens", "cost", "duration_ms", "provider"]];
+  const rows = [["time", "date", "bot", "chat", "title", "status", "trigger", "model", "input_tokens", "output_tokens", "cache_read_tokens", "cost", "duration_ms", "provider", "cache_write_tokens"]];
   for (const run of usageRuns(state, days, now, timeZone).toSorted((a, b) => a.time - b.time)) {
     const chat = chats.get(run.chatId);
     const u = run.usage ?? {};
@@ -94,6 +112,7 @@ export function usageCsv(state, { days = 30, now = Date.now(), timeZone } = {}) 
       u.cost ?? "",
       u.durationMs ?? "",
       providerOf(run),
+      u.cacheWrite ?? "",
     ]);
   }
   return rows.map((r) => r.map(cell).join(",")).join("\n") + "\n";

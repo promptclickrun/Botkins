@@ -5,7 +5,7 @@ import { test } from "node:test";
 import { REMOTE_METHODS } from "../link-host/methods.mjs";
 import { MockBackend } from "../link-host/mock-backend.mjs";
 import { liveTurnDisplay } from "../src/features/chat/liveDisplay";
-import { clockToDate, dateToClock, desktopFonts, desktopFontShown, everyBotAllowed, grantSummary, isHexColor, isUsualOrder, megabytes, movePlace, PLACES, placeOrder, platformName, shareLine, tokens, usageDays } from "../src/features/settings/computer";
+import { clockToDate, dateToClock, desktopFonts, desktopFontShown, everyBotAllowed, grantSummary, isHexColor, isUsualOrder, megabytes, movePlace, PLACES, placeOrder, platformName, shareLine, tokens, usageDays, cachePercent } from "../src/features/settings/computer";
 import { filterSkills, folderName, skillOrigin, skillsIn } from "../src/features/skills/shared";
 import { importText, keyHeaderOf, listText } from "../src/features/tools/shared";
 import type { SkillInfo, UsageReport } from "../src/link/types";
@@ -71,6 +71,12 @@ test("about, storage and usage figures", () => {
   assert.equal(tokens(1_420_000), "1.4M");
   assert.equal(tokens(96_000), "96K");
   assert.equal(shareLine({ turns: 1, input: 1200, output: 80, cacheRead: 0, cost: 0, priced: 0 }), "1 turn · 1.2K in · 80 out");
+  // A computer that counts the cache adds its hit rate; an older one leaves it out.
+  assert.equal(shareLine({ turns: 2, input: 1200, output: 80, cacheRead: 9000, cacheWrite: 300, cost: 0, priced: 0, cacheHitRate: 0.857 }), "2 turns · 1.2K in · 80 out · 86% cached");
+  assert.equal(shareLine({ turns: 2, input: 1200, output: 80, cacheRead: 0, cost: 0, priced: 0, cacheHitRate: null }), "2 turns · 1.2K in · 80 out");
+  assert.equal(cachePercent(0.004), "<1%");
+  assert.equal(cachePercent(0), "0%");
+  assert.equal(cachePercent(undefined), "");
 
   const today = Date.UTC(2026, 10, 19);
   const totals = { cacheRead: 0, cost: 0, priced: 0 };
@@ -220,4 +226,12 @@ test("thinking and interim updates are controlled independently on phone and com
   assert.equal(backend.state.settings.showThinking, false);
   assert.equal(backend.state.settings.showUpdates, true);
   await assert.rejects(backend.call("setPreferences", [{ showUpdates: "no" }]));
+});
+
+test("the demo computer keeps Keep prompt cache longer on by default and takes only a boolean", async () => {
+  const backend = new MockBackend();
+  assert.equal(backend.state.settings.longPromptCache, true);
+  await backend.call("setPreferences", [{ longPromptCache: false }]);
+  assert.equal(backend.state.settings.longPromptCache, false);
+  await assert.rejects(backend.call("setPreferences", [{ longPromptCache: "no" }]));
 });

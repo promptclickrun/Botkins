@@ -108,8 +108,12 @@ export function tokens(count: number): string {
   return String(Math.round(count));
 }
 
-/** One line for a model's or a bot's share: "12 turns · 1.2M in · 80K out". */
-export const shareLine = (totals: UsageTotals) => totals.turns + (totals.turns === 1 ? " turn" : " turns") + " · " + tokens(totals.input) + " in · " + tokens(totals.output) + " out";
+/** A cache hit rate as a whole percent ("<1%" under one), or "" when the computer didn't count one. */
+export const cachePercent = (rate: number | null | undefined) => (typeof rate !== "number" ? "" : rate > 0 && rate < 0.01 ? "<1%" : Math.round(rate * 100) + "%");
+
+/** One line for a model's or a bot's share: "12 turns · 1.2M in · 80K out · 64% cached". */
+export const shareLine = (totals: UsageTotals) =>
+  totals.turns + (totals.turns === 1 ? " turn" : " turns") + " · " + tokens(totals.input) + " in · " + tokens(totals.output) + " out" + (cachePercent(totals.cacheHitRate) ? " · " + cachePercent(totals.cacheHitRate) + " cached" : "");
 
 const DAY = 86_400_000;
 const keyOf = (time: number) => new Date(time).toISOString().slice(0, 10);

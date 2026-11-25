@@ -10,7 +10,7 @@ import { api, attempt } from "@/state/link";
 import { useApp } from "@/state/store";
 import { Button, EmptyState, Group, Label, Loading, Page, Row, T, useOnShow } from "@/ui";
 import { harnessChoices, programAction } from "./harnessChoices";
-import { ChoiceRow } from "./shared";
+import { ChoiceRow, useHeld } from "./shared";
 
 export { HARNESSES, harnessName } from "./harnessChoices";
 
@@ -20,6 +20,7 @@ export default function HarnessSettings() {
   const shown = useOnShow();
   const revision = useApp((state) => state.parts.revs?.providers);
   const capable = useCapability(SIGNIN_CAPABILITY);
+  const [cache, holdCache] = useHeld(settings && { longPromptCache: settings.longPromptCache });
   const [programs, setPrograms] = useState<HarnessStatus[]>([]);
   // Asked again when the screen shows, after an install, and when the computer's providers change.
   useEffect(() => {
@@ -65,6 +66,18 @@ export default function HarnessSettings() {
         </Group>
         <T variant="footnote" color="muted" style={{ marginTop: 8, paddingHorizontal: 4 }}>
           A chat keeps its conversation when you switch. Its next reply starts on the other harness.
+        </T>
+      </View>
+      <View>
+        <Group>
+          <Row
+            title="Keep prompt cache longer"
+            toggled={cache?.longPromptCache ?? true}
+            onToggle={(longPromptCache) => void holdCache({ longPromptCache }, () => api.setPreferences({ longPromptCache }))}
+          />
+        </Group>
+        <T variant="footnote" color="muted" style={{ marginTop: 8, paddingHorizontal: 4 }}>
+          With Pi or OMP, keeps a chat's prompt cache for about an hour instead of five minutes where the provider supports it (GitHub Copilot's models do), so a chat you come back to after a break still starts from cache. A plan isn't billed by the token, so this costs nothing extra.
         </T>
       </View>
       {programs.map((program) => {

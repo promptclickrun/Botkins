@@ -287,12 +287,14 @@ test("usage: the report as text and JSON, and the export to standard output or a
   if (!workspace.state.bots.length) workspace.state.bots.push(bot);
   workspace.state.chats.push({ id: "c1", botId: bot.id, title: "Chat one", messages: [] });
   const run = (id, usage, extra = {}) => ({ id, chatId: "c1", time: Date.now() - 3600_000, status: "Done", title: "A turn", usage, ...extra });
-  workspace.state.runs.push(run("r1", { input: 1200, output: 300, cost: 0.5, model: "gpt-x" }), run("r2", { input: 800, output: 100, model: "gpt-x" }), run("r3", { input: 50, output: 5, model: "other" }, { chatId: "gone", title: "=SUM(A1)" }));
+  // r2 was counted with the cache (cacheWrite present), so the hit rate comes from it alone.
+  workspace.state.runs.push(run("r1", { input: 1200, output: 300, cost: 0.5, model: "gpt-x" }), run("r2", { input: 800, output: 100, cacheRead: 3000, cacheWrite: 200, model: "gpt-x" }), run("r3", { input: 50, output: 5, model: "other" }, { chatId: "gone", title: "=SUM(A1)" }));
   const report = await botkins(["usage", "show", "--days", "7"]);
   assert.equal(report.exit, 0, report.err);
-  assert.match(report.out, /^The last 7 days: 3 turns\.\nTokens in 2,050, out 405, read from the cache 0\. Cost \$0\.50 \(priced for 1 of the 3 turns\)\./);
-  assert.match(report.out, /By model:\nMODEL +PROVIDER +TURNS +IN +OUT +COST\ngpt-x +- +2 +2,000 +400 +\$0\.50\n/);
-  assert.match(report.out, new RegExp("By bot:\\nBOT +TURNS +IN +OUT +COST\\n" + bot.name + " +2 +2,000"));
+  assert.match(report.out, /^The last 7 days: 3 turns\.\nTokens in 2,050, out 405, read from the cache 3,000, written to the cache 200\. Cache hit rate 75%\. Cost \$0\.50 \(priced for 1 of the 3 turns\)\./);
+  assert.match(report.out, /By model:\nMODEL +PROVIDER +TURNS +IN +OUT +CACHED +COST\ngpt-x +- +2 +2,000 +400 +75% +\$0\.50\n/);
+  assert.match(report.out, /other +- +1 +50 +5 +- +-/, "a model with no turn counted the current way has no rate");
+  assert.match(report.out, new RegExp("By bot:\\nBOT +TURNS +IN +OUT +CACHED +COST\\n" + bot.name + " +2 +2,000"));
   assert.match(report.out, /Deleted bot +1 +50/);
   const json = (await botkins(["usage", "show", "--json"])).json();
   assert.equal(json.days, 30);
@@ -306,7 +308,7 @@ test("usage: the report as text and JSON, and the export to standard output or a
   // The export: the CSV on standard output, as JSON, or in a file that only the owner reads.
   const csv = await botkins(["usage", "export", "--days", "7"]);
   assert.equal(csv.exit, 0, csv.err);
-  assert.match(csv.out, /^time,date,bot,chat,title,status,trigger,model,input_tokens,output_tokens,cache_read_tokens,cost,duration_ms,provider\n/);
+  assert.match(csv.out, /^time,date,bot,chat,title,status,trigger,model,input_tokens,output_tokens,cache_read_tokens,cost,duration_ms,provider,cache_write_tokens\n/);
   assert.equal(csv.out.trim().split("\n").length, 4);
   assert.match(csv.out, /'=SUM\(A1\)/, "a title that is a formula is guarded");
   const wrapped = (await botkins(["usage", "export", "--days", "7", "--json"])).json();

@@ -150,6 +150,12 @@ export default function ContextDetails({
             <dt>Cached input</dt>
             <dd>{n(last.usage!.cacheRead)}</dd>
           </div>
+          {last.usage!.cacheWrite !== undefined && (
+            <div>
+              <dt>Written to cache</dt>
+              <dd>{n(last.usage!.cacheWrite)}</dd>
+            </div>
+          )}
           <div>
             <dt>Output</dt>
             <dd>{n(last.usage!.output)}</dd>

@@ -376,8 +376,9 @@ test("folder order, fallback, project defaults and a moved session's transcript"
     assert.deepEqual(deleted.slice(count), [id]);
     assert.equal(specs.at(-1).established, false);
     assert.equal(specs.at(-1).folder, folder);
-    assert.match(specs.at(-1).instructions, /Keep my notes/);
-    assert.match(specs.at(-1).instructions, /Notes saved/);
+    // The transcript goes with the session's first message, never in its system prompt.
+    assert.doesNotMatch(specs.at(-1).instructions, /Keep my notes|Notes saved/);
+    assert.match(chat.forkContext, /Keep my notes[\s\S]*Notes saved/);
     assert.ok(!chat.restartSession);
   };
   projects.setChatProject(id, p);

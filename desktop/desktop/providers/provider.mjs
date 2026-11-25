@@ -52,7 +52,9 @@
 //     assistant.reasoning_delta      data.reasoningId, data.deltaContent
 //     assistant.reasoning            data.reasoningId, data.content
 //     assistant.intent               data.intent
-//     assistant.usage                data.inputTokens, outputTokens, cacheReadTokens, cost, duration, model
+//     assistant.usage                data.inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens,
+//                                    cost, duration, model. inputTokens is the input that was neither
+//                                    read from nor written to the prompt cache (usageData below).
 //     session.usage_info             data.currentTokens, tokenLimit and the optional breakdown
 //     session.todos_changed          (then ProviderSession.todos())
 //     user.message                   id is the fork boundary of the turn
@@ -70,6 +72,26 @@
 //   `id` is a helper's id (the id of the step that started it) or a background step's id. A call
 //   that cannot be done rejects with a plain sentence. The workspace marks the item `stoppable`
 //   while it runs and the session says yes (Workspace.stopHelper).
+
+/**
+ * The data of an `assistant.usage` event, in Botkins' terms whatever the backend's are.
+ * Backends count input two ways: Anthropic's `input_tokens` leaves out what was read from and
+ * written to the prompt cache, and OpenAI's `input_tokens` or `prompt_tokens` (Codex, Gemini, the
+ * Copilot runtime) holds all of it. With `includesCache`, the cached part is taken out, so
+ * `inputTokens` is always the uncached input and a cache hit rate can be read from any of them.
+ */
+export function usageData({ input, output, cacheRead, cacheWrite, includesCache = false, ...rest }) {
+  const count = (value) => (Number.isFinite(value) && value > 0 ? value : 0);
+  const read = count(cacheRead);
+  const write = count(cacheWrite);
+  return {
+    inputTokens: includesCache ? Math.max(0, count(input) - read - write) : count(input),
+    outputTokens: count(output),
+    cacheReadTokens: read,
+    cacheWriteTokens: write,
+    ...rest,
+  };
+}
 
 /** A tool Botkins gives a bot. `skipPermission` marks Botkins' own tools, which never ask. */
 export function defineTool(name, { description, parameters, handler, skipPermission = true, defer = "never" }) {

@@ -135,10 +135,12 @@ export function resultText(result) {
   return parts.join("\n");
 }
 
+const slug = (text) => String(text).replace(/[^A-Za-z0-9_-]+/g, "_").replace(/^_+|_+$/g, "") || "x";
+/** How the Botkins names of a server's tools begin (a long one may be cut short within it). */
+export const proxyPrefix = (server) => slug(server) + "__";
 /** A Botkins tool's name for a server's tool: letters, digits, _ and -, 64 at most, the same each time. */
 export function proxyName(server, tool) {
-  const slug = (text) => String(text).replace(/[^A-Za-z0-9_-]+/g, "_").replace(/^_+|_+$/g, "") || "x";
-  const name = slug(server) + "__" + slug(tool);
+  const name = proxyPrefix(server) + slug(tool);
   if (name.length <= 64) return name;
   return name.slice(0, 55) + "_" + createHash("sha256").update(server + "\0" + tool).digest("hex").slice(0, 8);
 }

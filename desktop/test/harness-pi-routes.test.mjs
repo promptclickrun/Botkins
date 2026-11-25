@@ -99,7 +99,9 @@ test("Pi runs an OpenCode model's turn through /opencode: one OpenCode step per 
   const imports = [];
   const open = new Map();
   let calls = 0;
-  const emit = (sessionID, type, data = {}) => open.get(sessionID)?.received({ type, data: { sessionID, assistantMessageID: "m-" + sessionID, ...data } });
+  // Each prompt is answered in a message of its own, as OpenCode does.
+  const replies = new Map();
+  const emit = (sessionID, type, data = {}) => open.get(sessionID)?.received({ type, data: { sessionID, assistantMessageID: replies.get(sessionID) ?? "m-" + sessionID, ...data } });
   let server;
   const api = {
     get: async () => ({ data: [] }),
@@ -115,7 +117,9 @@ test("Pi runs an OpenCode model's turn through /opencode: one OpenCode step per 
       const prompt = /^\/api\/session\/([^/]+)\/prompt$/.exec(path);
       if (prompt) {
         const id = prompt[1];
-        const imported = imports.find((each) => each.info.id === id);
+        replies.set(id, "m-" + id + "-" + imports.length);
+        // A conversation's requests share one session id (the relay removes each session after its request).
+        const imported = imports.findLast((each) => each.info.id === id);
         const done = imported.messages.find((message) => message.type === "assistant")?.content.find((part) => part.type === "tool")?.state;
         setImmediate(() => {
           emit(id, "session.step.started");
@@ -168,5 +172,6 @@ test("Pi runs an OpenCode model's turn through /opencode: one OpenCode step per 
   assert.equal(ran.length, 1, "Pi ran Botkins' tool, not OpenCode");
   assert.equal(calls, 1);
   assert.equal(imports.length, 2, "one OpenCode session per model request");
+  assert.equal(imports[1].info.id, imports[0].info.id, "a conversation's requests share one session id, which OpenCode makes its prompt cache key");
   assert.equal(imports[1].messages.at(-1).content.find((part) => part.type === "tool").state.status, "completed", "the second request carries the tool's result");
 });

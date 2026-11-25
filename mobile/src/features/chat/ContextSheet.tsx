@@ -150,6 +150,7 @@ export default function ContextSheet() {
           <Group>
             <Row title="Input" value={tokens(usage.latest.input)} />
             {usage.latest.cacheRead !== undefined && <Row title="Cached input" value={tokens(usage.latest.cacheRead)} />}
+            {usage.latest.cacheWrite !== undefined && <Row title="Written to cache" value={tokens(usage.latest.cacheWrite)} />}
             <Row title="Output" value={tokens(usage.latest.output)} />
           </Group>
         </View>

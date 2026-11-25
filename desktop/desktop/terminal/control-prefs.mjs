@@ -49,6 +49,7 @@ export const PREFERENCES = {
   linkPreviews: switches("Show a preview of a linked page (this computer fetches the page)"),
   readAloud: switches("Read replies aloud"),
   teamwork: switches("Bots may ask each other for help from a chat"),
+  longPromptCache: switches("Keep a chat's prompt cache for about an hour where the provider supports it"),
   autoSummarize: { type: "turns", about: "Turns between a chat's summaries into a new title, on the Default routines model: off, or 5 to 30" },
   approval: choice(["ask", "read", "assisted", "all"], "How tool requests are approved: ask for each, read-only tools without asking, the provider decides, or all without asking"),
   clarify: { type: "list", values: Object.keys(clarificationPrompts), about: "When a bot asks a clarifying question: any of " + Object.keys(clarificationPrompts).join(", ") + ", or none" },

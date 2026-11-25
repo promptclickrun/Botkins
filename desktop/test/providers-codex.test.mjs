@@ -268,7 +268,8 @@ test("a turn starts a thread, streams the reply and its work, and reports what i
   assert.deepEqual(await session.todos(), { rows: [{ id: "1", title: "Look", status: "completed" }, { id: "2", title: "Answer", status: "inProgress" }], dependencies: [] });
   assert.deepEqual(of("session.usage_info"), [{ currentTokens: 900, tokenLimit: 200000 }]);
   // The thread's first report is its total; what came before this turn's last call is the baseline.
-  assert.deepEqual(of("assistant.usage"), [{ inputTokens: 700, outputTokens: 200, cacheReadTokens: 500, model: "gpt-x", duration: 1200 }]);
+  // Codex counts the cached input inside inputTokens: of 700, 500 came from the cache.
+  assert.deepEqual(of("assistant.usage"), [{ inputTokens: 200, outputTokens: 200, cacheReadTokens: 500, cacheWriteTokens: 0, model: "gpt-x", duration: 1200 }]);
   assert.deepEqual(events.find((e) => e.type === "user.message").id, "turn-1", "the turn's id is its fork boundary");
   assert.deepEqual(await session.currentModel(), { model: "gpt-x", reasoningEffort: "high" });
   await session.close();
@@ -300,8 +301,10 @@ test("a conversation resumes its thread, and one Codex has lost continues from B
   const recovered = await provider.openSession(spec({ established: true, hasReplies: true, history: () => history }));
   await recovered.send({ prompt: "Still there?" });
   const restart = sent("thread/start")[1];
-  assert.match(restart.developerInstructions, /<earlier-conversation>[\s\S]*User: Hi[\s\S]*Assistant: Hello/);
-  assert.doesNotMatch(restart.developerInstructions, /Still there/);
+  // The transcript comes once, with the first message: the developer instructions are sent again
+  // with every resume and stay the same.
+  assert.doesNotMatch(restart.developerInstructions, /earlier-conversation|User: Hi/);
+  assert.match(sent("turn/start").at(-1).input[0].text, /^\[Botkins: this conversation continues from earlier\.[^\n]*\n<earlier-conversation>\nUser: Hi\n\nAssistant: Hello\n<\/earlier-conversation>\n\nStill there\?$/);
   assert.equal(provider.sessions.get("chat-1").ref, "thread-2", "the new thread takes the conversation's place");
   await recovered.close();
   // Any other failure to resume is reported, not papered over with a new thread.

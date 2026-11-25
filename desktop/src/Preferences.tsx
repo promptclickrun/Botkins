@@ -53,6 +53,12 @@ export function HarnessSettings({ settings, change, fail, setup = true, windows 
           <Choices label="Harness" value={harness} options={options} onChange={(id) => void change({ harness: id }).catch(fail)} />
         </div>
       </div>
+      <SwitchRow
+        label="Keep prompt cache longer"
+        help="With Pi or OMP, keeps a chat's prompt cache for about an hour instead of five minutes where the provider supports it (GitHub Copilot's models do), so a chat you come back to after a break still starts from cache. A plan isn't billed by the token, so this costs nothing extra."
+        checked={settings.longPromptCache ?? true}
+        onChange={(on) => void change({ longPromptCache: on }).catch(fail)}
+      />
       {programs.filter((program) => program.installed).map((program) => (
         <ValueRow key={program.id} label={program.name} value={program.version ? "Version " + program.version : "Installed"} />
       ))}

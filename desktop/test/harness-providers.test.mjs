@@ -517,7 +517,7 @@ function fakeOpenCode(script, { efforts = { "google/gemini-3.5-flash-lite": ["lo
       if (prompt) {
         const sessionID = prompt[1];
         log.prompts.push(body);
-        const imported = log.imports.find((each) => each.info.id === sessionID);
+        const imported = log.imports.findLast((each) => each.info.id === sessionID);
         setImmediate(async () => {
           for (const event of script({ sessionID, prompt: body, imported, server: log.mcp.at(-1)?.name, emit: (type, data) => emit(sessionID, type, data) }) ?? []) {
             await tick(1);

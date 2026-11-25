@@ -555,7 +555,8 @@ export type ReasoningView = { run: string; items: Reasoning[] };
  * `result` what it came back with (each cut short by the computer).
  */
 export type Subagent = { id: string; name: string; description?: string; status: "Running" | "Done" | "Failed" | "Stopped"; started: number; finished?: number; detail?: string; prompt?: string; intent?: string; result?: string };
-export type Usage = { input: number; output: number; cacheRead?: number; cost?: number; model?: string; durationMs?: number };
+/** `input` is the input that was neither read from nor written to the prompt cache. */
+export type Usage = { input: number; output: number; cacheRead?: number; cacheWrite?: number; cost?: number; model?: string; durationMs?: number };
 export type TeamAsk = {
   id: string;
   botId: string;
@@ -980,6 +981,8 @@ export type Preferences = {
    * run ChatGPT and Claude plans (harnesses() says whether each is installed). Missing on an older computer.
    */
   harness?: "copilot" | "provider" | "pi" | "omp";
+  /** Keep prompt cache longer: on (the default), a chat's prompt cache is kept for about an hour instead of five minutes where the provider supports it. Missing on an older computer. */
+  longPromptCache?: boolean;
   /** Tools that run in Botkins on a Mac, switched there only: iMessage and Mail. Missing on an older computer or one that isn't a Mac. */
   macTools?: { imessage?: DeviceLevel; mail?: DeviceLevel };
 };
@@ -1060,7 +1063,8 @@ export type Artifact = {
 export type ArtifactPage = { items: Artifact[]; nextCursor: string | null };
 /** A piece of a file, as base64. `nextOffset` is where the next piece starts; null at the end. A folder has no data. */
 export type ArtifactChunk = { artifact: Artifact; data: string; encoding: "base64"; offset: number; nextOffset: number | null };
-export type UsageTotals = { turns: number; input: number; output: number; cacheRead: number; cost: number; priced: number };
+/** `cacheHitRate`: read from cache ÷ (uncached input + read + written), null when no run counts it. Both cache fields are absent from an older computer. */
+export type UsageTotals = { turns: number; input: number; output: number; cacheRead: number; cacheWrite?: number; cost: number; priced: number; cacheHitRate?: number | null };
 export type UsageReport = {
   days: number;
   totals: UsageTotals;

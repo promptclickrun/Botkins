@@ -191,7 +191,8 @@ test("a turn tells the agent the bot's instructions once, streams its work, and 
   ]);
   assert.deepEqual(await session.todos(), { rows: [{ id: "1", title: "Look", status: "completed" }, { id: "2", title: "Answer", status: "in_progress" }], dependencies: [] });
   assert.deepEqual(of("session.usage_info"), [{ currentTokens: 1800, tokenLimit: 200000 }]);
-  assert.deepEqual(of("assistant.usage"), [{ inputTokens: 100, outputTokens: 20, cacheReadTokens: 50, model: "gpt" }]);
+  // ACP counts each kind of token apart: input is the uncached input.
+  assert.deepEqual(of("assistant.usage"), [{ inputTokens: 100, outputTokens: 20, cacheReadTokens: 50, cacheWriteTokens: 0, model: "gpt" }]);
 
   // The second message of the session carries no instructions; changed instructions are sent again.
   await session.send({ prompt: "And then?" });

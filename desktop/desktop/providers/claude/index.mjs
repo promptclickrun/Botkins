@@ -15,7 +15,7 @@ import { spawn } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
-import { ModelProvider, ProviderSession } from "../provider.mjs";
+import { ModelProvider, ProviderSession, usageData } from "../provider.mjs";
 import { cliEnv, findBinary, run, versionOf } from "../cli.mjs";
 import { buildInventory, resolvePrompt } from "../commands.mjs";
 import { SessionStore, mcpText, missingConversation, serversWithTokens, transcriptContext, uuidFor } from "../sessions.mjs";
@@ -217,7 +217,11 @@ class ClaudeSession extends ProviderSession {
     const turn = (this.turn = { text: [], streamed: 0, seen: 0, any: false, live: null, last: null, abort, userId: randomUUID(), failure: "", stderr: "", context: 0, jobs: new Map(), level: null });
     let release;
     const held = new Promise((resolve) => (release = resolve));
+    // A conversation Claude Code doesn't hold continues from Botkins' own transcript, told once
+    // with this message: in the system prompt it would be sent on every later turn too.
+    const lost = !exists && spec.established && spec.hasReplies ? transcriptContext(spec) : "";
     const prompt =
+      (lost ? lost + "\n\n" : "") +
       message.prompt + ((message.attachments ?? []).length ? "\n\nAttached:\n" + message.attachments.map((a) => "- " + a.path + (a.kind === "directory" ? " (folder)" : "")).join("\n") : "");
     // Approvals need the channel to Claude Code kept open, so the message goes in as a stream that
     // stays open until the reply is complete.
@@ -225,14 +229,12 @@ class ClaudeSession extends ProviderSession {
       yield { type: "user", uuid: turn.userId, session_id: "", parent_tool_use_id: null, message: { role: "user", content: prompt } };
       await held;
     })();
-    // A conversation Claude Code doesn't hold continues from Botkins' own transcript.
-    const lost = !exists && spec.established && spec.hasReplies ? transcriptContext(spec) : "";
     const options = await this.options({
       abortController: abort,
       systemPrompt: {
         type: "preset",
         preset: "claude_code",
-        append: spec.instructions + this.skills.instructions + (spec.coding ? projectInstructions(spec.folder) : "") + (spec.context ?? "") + lost,
+        append: spec.instructions + this.skills.instructions + (spec.coding ? projectInstructions(spec.folder) : "") + (spec.context ?? ""),
       },
       ...(exists ? { resume: record.ref } : { sessionId: record.ref }),
       ...(spec.handlers && {
@@ -304,6 +306,8 @@ class ClaudeSession extends ProviderSession {
   }
   /** One message from the SDK's stream. */
   received(event) {
+    // Claude Code compacted the conversation: the workspace begins the next turn from the current prompt (desktop/session-prompts.mjs).
+    if (event.type === "system" && event.subtype === "compact_boundary" && !event.parent_tool_use_id) this.emit("session.compaction_complete", {});
     const turn = this.turn;
     if (!turn) return;
     const agentId = event.parent_tool_use_id || undefined;
@@ -494,15 +498,17 @@ class ClaudeSession extends ProviderSession {
     const models = Object.entries(result.modelUsage ?? {});
     this.provider.noteLimits(result.modelUsage);
     const main = models.find(([name]) => name.includes(this.model.model)) ?? models[0];
-    this.emit("assistant.usage", {
-      inputTokens: (usage.input_tokens ?? 0) + (usage.cache_creation_input_tokens ?? 0),
-      outputTokens: usage.output_tokens ?? 0,
-      cacheReadTokens: usage.cache_read_input_tokens ?? 0,
+    // Anthropic's input_tokens leaves out the cache: what was written to it is its own count.
+    this.emit("assistant.usage", usageData({
+      input: usage.input_tokens,
+      output: usage.output_tokens,
+      cacheRead: usage.cache_read_input_tokens,
+      cacheWrite: usage.cache_creation_input_tokens,
       // A plan isn't billed by the token; a cost is only shown for a metered account.
       ...(this.provider.metered && typeof result.total_cost_usd === "number" && { cost: result.total_cost_usd }),
       duration: result.duration_ms,
       model: main?.[0] ?? this.model.model,
-    });
+    }));
     if (main?.[1]?.contextWindow && turn.context) this.emit("session.usage_info", { currentTokens: turn.context, tokenLimit: main[1].contextWindow });
   }
   /** Answers one of Claude Code's permission prompts through this turn's handlers. */

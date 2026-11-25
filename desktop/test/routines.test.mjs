@@ -579,6 +579,7 @@ test("usage totals by day, model and bot over 7, 30 and 90 days", () => {
   assert.equal(ny.byDay.find((d) => d.turns).date, "2026-11-16");
   const csv = usageCsv(state, { days: 7, now, timeZone: "UTC" }).trim().split("\n");
   assert.equal(csv.length, 4);
-  assert.match(csv[0], /^time,date,bot,chat,title,status,trigger,model,input_tokens.*,duration_ms,provider$/);
+  // Columns added later go at the end, so a sheet made from an older export still lines up.
+  assert.match(csv[0], /^time,date,bot,chat,title,status,trigger,model,input_tokens.*,duration_ms,provider,cache_write_tokens$/);
   assert.ok(csv.some((l) => l.includes(`"'=SUM(1)"`)), "formula-like cells are neutralized");
 });

@@ -370,3 +370,15 @@ test("a voice acknowledgement and tool share the input item even before its word
   desk.heard("call", "Anything on my list?", true, { item: "input" });
   assert.deepEqual(ws.chat(chat).messages.map(m => m.text), ["Anything on my list?", "Checking.", "ok"]);
 });
+
+test("longPromptCache is on by default, takes only on or off, and is kept across a restart", (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "botkins-prompt-cache-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const ws = new Workspace(dir, async () => ({}), () => {});
+  assert.equal(ws.state.settings.longPromptCache, true);
+  for (const bad of ["yes", "on", 1, null]) assert.throws(() => ws.setPreferences({ longPromptCache: bad }), /on or off/);
+  assert.equal(ws.state.settings.longPromptCache, true, "a refused value changes nothing");
+  ws.setPreferences({ longPromptCache: false });
+  assert.equal(ws.state.settings.longPromptCache, false);
+  assert.equal(new Workspace(dir, async () => ({}), () => {}).state.settings.longPromptCache, false);
+});
