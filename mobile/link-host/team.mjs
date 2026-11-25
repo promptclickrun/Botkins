@@ -339,6 +339,12 @@ const POLICY = {
   // The people in a chat ("team-people-v1"): its creator or the owner invites; an invited person may leave.
   "link.team.inviteToChat": ["agents", "chat"],
   "link.team.removeFromChat": ["agents", "chat"],
+  nodeHostStatus: "owner",
+  nodeHostSetup: "owner",
+  nodeHostUpdate: "owner",
+  nodeHostPause: "owner",
+  nodeHostDisconnect: "owner",
+  nodeHostRevokeGrant: "owner",
 };
 
 export const TEAM_METHODS = Object.freeze(Object.fromEntries(Object.entries(POLICY).map(([name, value]) => [name, value === "owner" ? "owner" : Object.freeze(value)])));
@@ -853,7 +859,7 @@ export function ownerParts(parts, team, extra = {}) {
       queued: byChat(live.queued),
       ...(live.steerable && { steerable: byChat(live.steerable) }),
       ...(filteredTyping && Object.keys(filteredTyping).length > 0 && { typing: filteredTyping }),
-      requests: (live.requests ?? []).filter((request) => ids.has(request.chatId)),
+      requests: (live.requests ?? []).filter((request) => ids.has(request.chatId) || request.nodeJob === true),
       active: (live.active ?? []).filter((id) => ids.has(id)),
     };
   }

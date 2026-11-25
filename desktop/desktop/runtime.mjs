@@ -1041,6 +1041,49 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
     resetPhoneRelay: () => phone.resetPhoneRelay(),
     requestScreenPermission: (kind) => phone.requestScreenPermission(kind),
     allowLocalNetwork: () => phone.allowLocalNetwork(),
+    // Node host role and controls (desktop/node-host.mjs). Only this window and the local
+    // control socket call these: none is in REMOTE_METHODS, so a phone or team member cannot
+    // change node settings or grants directly.
+    nodeStatus: () => ({
+      ...workspace.nodeHost.view(),
+      listening: link?.status?.().listening === true,
+    }),
+    nodeSetup: async (input = {}) => {
+      const chosen = typeof input === "string" ? input : input?.name;
+      const fallback = link?.store?.data?.name || computerName() || "Node Host";
+      const name = typeof chosen === "string" && chosen.trim() ? chosen.trim() : fallback;
+      const status = workspace.nodeHost.setup({ name });
+      if (link && !link.store.data.locked) {
+        if (link.store.data.name !== status.name) link.setName(status.name);
+        if (!link.status().enabled) await link.setEnabled(true).catch((error) => console.error("Phone link:", error.message));
+        announce();
+      }
+      return { ...status, listening: link?.status?.().listening === true };
+    },
+    nodeRename: (name) => {
+      const status = workspace.nodeHost.rename(name);
+      if (link && !link.store.data.locked && link.store.data.name !== status.name) {
+        link.setName(status.name);
+        announce();
+      }
+      return { ...status, listening: link?.status?.().listening === true };
+    },
+    nodePause: (paused) => ({
+      ...workspace.nodeHost.setPaused(paused === true),
+      listening: link?.status?.().listening === true,
+    }),
+    nodeShareProject: (projectId, shared = true) => ({
+      ...workspace.nodeHost.shareProject(String(projectId), shared !== false),
+      listening: link?.status?.().listening === true,
+    }),
+    nodeRevokeGrant: (grantId) => ({
+      ...workspace.nodeHost.revokeGrant(grantId ? String(grantId) : undefined),
+      listening: link?.status?.().listening === true,
+    }),
+    nodeDisconnect: async () => ({
+      ...workspace.nodeHost.disconnect(),
+      listening: link?.status?.().listening === true,
+    }),
     // iMessage and Mail for bots (Settings › MCP servers › On this Mac, desktop/mactools.mjs). Only this
     // window may call these: none is in REMOTE_METHODS, so a phone can't switch them on or check them.
     // The permission check runs only when the page asks, never at start-up.
@@ -1366,6 +1409,7 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
       workspace.closing = true;
       workspace.reactionTurns?.close();
       workspace.hostDispatch.close();
+      workspace.nodeHost.close();
       updates?.stopAuto?.();
       // A routine's script stops with Botkins; its run is ended when Botkins opens again.
       routines.stopScripts();

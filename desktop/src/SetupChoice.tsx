@@ -1,9 +1,9 @@
 // The first launch's first question: run bots on this computer, use another computer's Botkins,
-// or join a team. "Set up on this computer" goes on to the welcome (src/Welcome.tsx) and the first
-// bot (src/FirstBot.tsx); the other two are steps here that end with the window using that computer.
+// join a team, or set up as a node host. "Set up on this computer" goes on to the welcome
+// (src/Welcome.tsx) and the first bot (src/FirstBot.tsx); the other choices finish setup here.
 import { useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
-import { ArrowLeft, ChevronRight, CircleAlert, Monitor, MonitorSmartphone, Users } from "lucide-react";
+import { ArrowLeft, ChevronRight, CircleAlert, Monitor, MonitorSmartphone, Server, Users } from "lucide-react";
 import { WelcomeFrame } from "./Welcome";
 import { PairForm, TeamJoin } from "./RemoteHosts";
 import { errorText } from "./SettingsRows";
@@ -14,14 +14,15 @@ import { ProfileSetupInline } from "./ProfileSettings";
 
 const api = window.botkins;
 
-export type SetupPath = "here" | "computer" | "team";
+export type SetupPath = "here" | "computer" | "team" | "node";
 
 const CHOICES: { id: SetupPath; title: string; line: string; icon: ReactNode }[] = [
   { id: "here", title: "Set up on this computer", line: "Your bots run here. Sign in to a model provider, then make your first bot.", icon: <Monitor size={22} /> },
   { id: "computer", title: "Connect to another computer", line: "Use the Botkins on another computer or a server. Paste its pairing link or code.", icon: <MonitorSmartphone size={22} /> },
   { id: "team", title: "Join a team", line: "Use a team's bots with the invite code its owner sent you.", icon: <Users size={22} /> },
+  { id: "node", title: "Set Up as Node Host", line: "Share local bots and read-only project folders with your other Botkins hosts without creating a bot here.", icon: <Server size={22} /> },
 ];
-const FOOT = "You can change this later in Settings › Computers and teams.";
+const FOOT = "You can change this later in Settings › Computers and teams or Settings › Node host.";
 
 /** The step's Back button, at the top of its card. */
 function SetupBack({ back }: { back: () => void }) {
@@ -140,6 +141,60 @@ export function SetupTeam({ back, initialJoin }: { back: () => void; initialJoin
         <div className="setup-step">
           <TeamJoin initialJoin={initialJoin} approved={(id) => void done(id).catch(() => {})} />
         </div>
+        <Problem text={problem} />
+        <p className="welcome-foot">{FOOT}</p>
+      </div>
+    </WelcomeFrame>
+  );
+}
+
+/** Set up as a node host: pick a name for this computer and finish setup without creating a bot. */
+export function SetupNode({ back, state, finish }: { back: () => void; state: State; finish: () => Promise<void> }) {
+  const [name, setName] = useState(state.nodeHost?.name || "");
+  const [busy, setBusy] = useState(false);
+  const [problem, setProblem] = useState("");
+  const title = useRef<HTMLHeadingElement>(null);
+  useEffect(() => title.current?.focus(), []);
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    setBusy(true);
+    setProblem("");
+    try {
+      await api.nodeSetup({ name: name.trim() || undefined });
+      await finish();
+    } catch (err) {
+      setProblem(errorText(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <WelcomeFrame label="setup-node-title">
+      <div className="welcome-card setup-card">
+        <SetupBack back={back} />
+        <h1 id="setup-node-title" ref={title} tabIndex={-1}>
+          Set Up as Node Host
+        </h1>
+        <ProfileSetupInline state={state} />
+        <p className="welcome-lede">
+          Run this computer as a node host in your profile. Your other computers can list files in folders you share here, with your approval on first use.
+        </p>
+        <form className="setup-step" onSubmit={submit}>
+          <label className="set-label" htmlFor="setup-node-name" style={{ display: "grid", gap: 6, marginBottom: 12 }}>
+            <span>Node name</span>
+            <input
+              id="setup-node-name"
+              type="text"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="e.g. Build Mac or Home Server"
+              disabled={busy}
+            />
+          </label>
+          <button type="submit" className="primary" disabled={busy}>
+            {busy ? "Setting up…" : "Set Up as Node Host"}
+          </button>
+        </form>
         <Problem text={problem} />
         <p className="welcome-foot">{FOOT}</p>
       </div>

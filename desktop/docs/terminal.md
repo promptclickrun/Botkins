@@ -8,6 +8,7 @@ It runs on Linux (x64 and ARM64, with systemd) and on macOS. A small virtual mac
 - [Sign a model provider in](#sign-a-model-provider-in)
 - [Make a bot and talk to it](#make-a-bot-and-talk-to-it)
 - [Use an optional profile](#use-an-optional-profile)
+- [Run as a Node Host](#run-as-a-node-host)
 - [Pair a phone](#pair-a-phone)
 - [Configure the host](#configure-the-host)
 - [Operate the service](#operate-the-service)
@@ -671,6 +672,31 @@ Approve a new device with `botkins profile devices approve <device>` and enter i
 Use `botkins profile disconnect --yes` to remove this host from the profile and revoke its profile connections. Use `botkins profile reconnect` to link it again. To permanently delete the profile, run `botkins profile delete --yes` and enter its verified email. If a computer was offline during setup, `botkins profile refresh` retries the link when the computer is reachable.
 
 The terminal host must have secure key storage for a profile session or profile-enrolled computer. If it cannot open its host key, profile setup remains session-only and no token or browser verifier is written to disk.
+
+## Run as a Node Host
+
+A computer can run as a Node Host so bots on your other computers (bound to the same owner profile) can talk to its shared bots or list files in project folders you choose to share. A node host needs no model sign-in or bots when it only shares project folders.
+
+```sh
+botkins node setup --name "Studio Mac"
+botkins node status
+botkins node share Website
+botkins node unshare Website
+botkins node rename "Render Box"
+botkins node pause
+botkins node resume
+botkins node revoke <grant-id> --yes
+botkins node revoke --all --yes
+botkins node disconnect --yes
+```
+
+- **`botkins node setup --name <name>`** turns on Node Host mode and saves the node's name. If the host is linked to your profile, it publishes as a node even with no bots or chats.
+- **`botkins node status`** shows **Online** or **Paused**, the last completed request, shared project folders, and saved job grants. The same summary appears in `botkins status` and the dashboard Overview.
+- **`botkins node share <project>`** and **`unshare <project>`** control which workspace project folders this node advertises for read-only file listing (`project.list_files`). A project is named by its id or name.
+- **`botkins node pause`** and **`resume`** stop or resume accepting new cross-host node jobs without disconnecting the node or removing grants.
+- **`botkins node revoke <grant-id>`** (or **`--all`**) revokes saved file-listing grants so the next request from that source host and bot asks for approval again. Conversation grants for cross-host Teamwork are separate (`botkins tools forget-approvals`).
+- **`botkins node disconnect`** turns off Node Host mode, cancels pending job requests, and stops advertising node capabilities. `revoke` and `disconnect` ask at a terminal and require `--yes` without a terminal.
+- All commands support `--json`. State changes leave a line in the log (`node.setup`, `node.rename`, `node.pause`, `node.share`, `node.revoke`, `node.disconnect`).
 
 ## Pair a phone
 

@@ -81,6 +81,13 @@ const tabLines = {
         ["Phone link", !status.link.enabled ? "off" : status.link.listening ? "“" + status.link.name + "” on port " + status.link.port + "  " + c.dim(status.link.addresses.join(", ")) : c.red("on, not listening")],
         ["Relay", relay],
         ["Devices", status.link.devices + " paired, " + status.link.connected + " connected" + (status.link.pairing ? "  (a pairing code is open)" : "")],
+        ...(status.nodeHost?.enabled
+          ? [
+              ["Node host", "“" + status.nodeHost.name + "” · " + (status.nodeHost.paused ? c.yellow("Paused") : c.green("Online"))],
+              ["Shared folders", status.nodeHost.sharedProjects?.length ? status.nodeHost.sharedProjects.map((project) => project.name).join(", ") : c.dim("none")],
+              ["Last node job", status.nodeHost.lastCompleted ? status.nodeHost.lastCompleted.sourceBotName + " on " + status.nodeHost.lastCompleted.sourceHostName + " · " + status.nodeHost.lastCompleted.operation + " (" + status.nodeHost.lastCompleted.resourceName + ")  " + c.dim(ago(status.nodeHost.lastCompleted.at, state.now)) : c.dim("none yet")],
+            ]
+          : []),
         ["Workspace", status.workspace.bots + " bots, " + status.workspace.chats + " chats, " + status.workspace.routines + " routines" + (status.workspace.working ? ", " + c.cyan(status.workspace.working + " working") : "") + (status.workspace.waiting ? ", " + c.yellow(status.workspace.waiting + " waiting for an answer") : "")],
         ["Secrets", status.vault.locked ? c.red("vault locked") : "wrapped by the " + status.secrets.where],
         ["Memory", status.memory.rssMb + " MB"],

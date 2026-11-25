@@ -33,6 +33,85 @@ export async function peerRoster(peers, hostId) {
   return { host: { serverId: host.serverId, name: host.name }, bots, pin: host.pin };
 }
 
+/**
+ * Discovers versioned capabilities on one or all same-owner hosts.
+ * A sleeping or unreachable host is reported as unavailable rather than failing discovery.
+ */
+export async function peerCapabilities(peers, hostId) {
+  const hosts = await peers.hosts(true);
+  if (hostId !== undefined) {
+    const host = hosts.find((item) => item.serverId === hostId);
+    if (!host) throw new Error("Choose a computer from list_node_hosts.");
+    try {
+      const capabilities = await peers.call(host.serverId, "capabilities", {}, host.pin);
+      return {
+        host: { serverId: host.serverId, name: capabilities?.name || host.name },
+        online: capabilities?.online !== false,
+        unavailable: false,
+        capabilities,
+        pin: host.pin,
+      };
+    } catch (error) {
+      if (error?.code === "TEAMWORK_OFFLINE") {
+        return {
+          host: { serverId: host.serverId, name: host.name },
+          online: false,
+          unavailable: true,
+          capabilities: null,
+          pin: host.pin,
+        };
+      }
+      throw error;
+    }
+  }
+  const nodes = await Promise.all(
+    hosts.map(async (host) => {
+      try {
+        const capabilities = await peers.call(host.serverId, "capabilities", {}, host.pin);
+        return {
+          serverId: host.serverId,
+          name: capabilities?.name || host.name,
+          role: capabilities?.role || "standard",
+          online: capabilities?.online !== false,
+          paused: !!capabilities?.paused,
+          unavailable: false,
+          version: capabilities?.version ?? 1,
+          bots: Array.isArray(capabilities?.bots) ? capabilities.bots : [],
+          operations: Array.isArray(capabilities?.operations) ? capabilities.operations : [],
+          projects: Array.isArray(capabilities?.projects) ? capabilities.projects : [],
+        };
+      } catch (error) {
+        if (error?.code === "TEAMWORK_OFFLINE") {
+          return {
+            serverId: host.serverId,
+            name: host.name,
+            role: "unknown",
+            online: false,
+            paused: false,
+            unavailable: true,
+            bots: [],
+            operations: [],
+            projects: [],
+          };
+        }
+        return {
+          serverId: host.serverId,
+          name: host.name,
+          role: "standard",
+          online: false,
+          paused: false,
+          unavailable: true,
+          error: String(error?.message || "Unavailable"),
+          bots: [],
+          operations: [],
+          projects: [],
+        };
+      }
+    }),
+  );
+  return { hosts: nodes };
+}
+
 // Journal the destination identity and request ID before submitting. If a recovered source
 // turn no longer owns its wait, cancel on the next connection, even if the chat was deleted.
 export class OutgoingDispatches {
@@ -47,10 +126,10 @@ export class OutgoingDispatches {
     }
   }
 
-  start(entry, pin) {
+  start(entry, pin, { cancelOp = "cancel" } = {}) {
     const { id, remote: { hostId } } = entry;
     this.live.add(id);
-    this.pending.set(id, { id, hostId, pin });
+    this.pending.set(id, { id, hostId, pin, ...(cancelOp !== "cancel" && { cancelOp }) });
     this.ws.save();
   }
 
@@ -64,10 +143,11 @@ export class OutgoingDispatches {
     if (this.cancelling.has(id)) return this.cancelling.get(id);
     const record = this.pending.get(id);
     if (!record || !this.ws.teamworkPeers?.available()) return;
+    const cancelOp = record.cancelOp === "job.cancel" ? "job.cancel" : "cancel";
     const attempt = (async () => {
       try {
-        const { status } = await this.ws.teamworkPeers.call(record.hostId, "cancel", { id }, record.pin);
-        if (["cancelled", "answered", "failed", "denied"].includes(status)) this.finish(id);
+        const { status } = await this.ws.teamworkPeers.call(record.hostId, cancelOp, { id }, record.pin);
+        if (["cancelled", "answered", "completed", "failed", "denied"].includes(status)) this.finish(id);
       } catch {
         // Retain the durable ID. An offline, signed-out or re-paired machine may come back.
       }
@@ -137,6 +217,74 @@ export async function remoteReply(ws, bot, chat, run, task, entry, message, pin)
         throw new Error(result.error || "The remote teammate could not finish.");
       }
       throw new Error("The other computer returned an invalid Teamwork response.");
+    }
+  } finally {
+    task.helpers.delete(helper);
+    if (finished) outgoing.finish(entry.id);
+    else await outgoing.cancel(entry.id);
+  }
+}
+
+/**
+ * Runs a bounded operation on another same-owner node host.
+ * Retries reuse the same request ID so a reconnect never executes the job twice.
+ */
+export async function remoteJob(ws, bot, chat, run, task, entry, payload, pin) {
+  const { hostId } = entry.remote;
+  const peers = ws.teamworkPeers;
+  const submit = {
+    id: entry.id,
+    sourceBotId: bot.id,
+    sourceBotName: bot.name,
+    operation: payload.operation,
+    resourceId: payload.resourceId,
+    path: payload.path ?? "",
+    createdAt: entry.started,
+  };
+  const receipt = { id: entry.id };
+  const controller = new AbortController();
+  const outgoing = ws.teamwork.outgoing;
+  outgoing.start(entry, pin, { cancelOp: "job.cancel" });
+  const helper = { abort: async () => { controller.abort(); await outgoing.cancel(entry.id); } };
+  (task.helpers ??= new Set()).add(helper);
+  let operation = "job.submit";
+  let finished = false;
+  let delay = 0;
+  try {
+    while (true) {
+      requireRemoteTurn(ws, bot, chat, run, task);
+      if (delay) await wait(delay, undefined, { signal: controller.signal });
+      requireRemoteTurn(ws, bot, chat, run, task);
+      let result;
+      try {
+        result = await peers.call(hostId, operation, operation === "job.submit" ? submit : receipt, pin);
+      } catch (error) {
+        if (error.code !== "TEAMWORK_OFFLINE") throw error;
+        delay = Math.min(15000, Math.max(1500, delay * 2));
+        continue;
+      }
+      requireRemoteTurn(ws, bot, chat, run, task);
+      if (result?.status === "pending" || result?.status === "working") {
+        const status = result.status === "pending" ? "waiting" : "working";
+        if (entry.status !== status) {
+          entry.status = status;
+          ws.notify();
+        }
+        operation = "job.status";
+        delay = 3000;
+        continue;
+      }
+      if (result?.status === "completed" && result.result && typeof result.result === "object") {
+        finished = true;
+        return result.result;
+      }
+      if (["denied", "cancelled", "failed"].includes(result?.status)) {
+        finished = true;
+        if (result.status === "denied") throw new Error("The owner declined this request.");
+        if (result.status === "cancelled") throw new Error("The request was cancelled on the node host.");
+        throw new Error(result.error || "The node host could not finish this request.");
+      }
+      throw new Error("The node host returned an invalid response.");
     }
   } finally {
     task.helpers.delete(helper);

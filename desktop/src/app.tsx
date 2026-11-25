@@ -46,7 +46,8 @@ import { AllSpaces, SidebarSpaces, SpacePage } from "./SpacePage";
 import { hasSpaces } from "./spaces";
 import Welcome from "./Welcome";
 import FirstBot from "./FirstBot";
-import SetupChoice, { SetupConnect, SetupTeam, type SetupPath } from "./SetupChoice";
+import SetupChoice, { SetupConnect, SetupNode, SetupTeam, type SetupPath } from "./SetupChoice";
+import RequestPanel from "./RequestPanel";
 import { ProfileMigrationPrompt, useMigrationPrompt } from "./ProfileSettings";
 import type { Attachment, BoardItem, Bot, Chat, MarketAgentTemplate, MentionInput, Message, State } from "./types";
 import { tokenOf, type DraftMention } from "./MentionMenu";
@@ -193,7 +194,7 @@ function App() {
   const [setupPath, setSetupPathNow] = useState<SetupPath | "">(() => {
     try {
       const saved = sessionStorage.getItem(SETUP_KEY);
-      return saved === "here" || saved === "computer" || saved === "team" ? saved : "";
+      return saved === "here" || saved === "computer" || saved === "team" || saved === "node" ? saved : "";
     } catch {
       return "";
     }
@@ -722,16 +723,18 @@ function App() {
     );
   }
   // The welcome shows on first launch and whenever no model provider that is on is connected. A workspace
-  // with chats predates it. While the list loads, or every provider is still starting, nothing is known
-  // yet, so an onboarded person isn't shown the welcome in the meantime.
-  const onboarded = !!state && (!!state.settings.onboarded || state.chats.some(c => !c.main || c.messages.length > 0));
+  // with chats predates it. A computer set up as a node host has finished setup without bots or a model
+  // provider, so it opens straight into the window. While the list loads, or every provider is still
+  // starting, nothing is known yet, so an onboarded person isn't shown the welcome in the meantime.
+  const isNodeHost = !!state?.nodeHost?.enabled && !state?.remote?.using;
+  const onboarded = !!state && (!!state.settings.onboarded || isNodeHost || state.chats.some(c => !c.main || c.messages.length > 0));
   const enabledProviders = providers?.filter((p) => p.enabled) ?? [];
   const connectedProviders = enabledProviders.filter(isConnected);
   const settled = !!providers && !(enabledProviders.length > 0 && enabledProviders.every((p) => p.starting));
   // A first launch opens on the choice of where the bots run (src/SetupChoice.tsx), unless the window
   // already uses another computer or a team: their bots are already there.
   const firstRun = !!state && !onboarded && !state.remote?.using && !memberTeam(state);
-  const welcome = !!state && (firstRun || (onboarded && settled && !connectedProviders.length && !later));
+  const welcome = !!state && (firstRun || (onboarded && !isNodeHost && settled && !connectedProviders.length && !later));
   // The computer in use has sent nothing yet (it can't be reached, a different computer answered, or
   // it no longer knows this one): the window says so in place of its pages, and offers the way back.
   const using = state?.remote?.using;
@@ -762,6 +765,17 @@ function App() {
   if (firstRun && setupPath === "") return <SetupChoice choose={setSetupPath} state={state} />;
   if (firstRun && setupPath === "computer") return <SetupConnect back={() => setSetupPath("")} />;
   if (firstRun && setupPath === "team") return <SetupTeam back={() => setSetupPath("")} initialJoin={teamJoinUrl || undefined} />;
+  if (firstRun && setupPath === "node")
+    return (
+      <SetupNode
+        back={() => setSetupPath("")}
+        state={state}
+        finish={async () => {
+          receiveSnapshot(await api.snapshot());
+          setSetupPath("");
+        }}
+      />
+    );
   if (welcome)
     return (
       <Welcome
@@ -772,8 +786,8 @@ function App() {
       />
     );
   // A workspace of this computer's with no bots opens on the first-run step: the person's existing
-  // agents, or Create a bot. Never while another computer is in use: a bot made there would go to it.
-  if (!state.bots.length && !state.remote?.using && !memberTeam(state))
+  // agents, or Create a bot. Never while another computer is in use, and never on an empty node host.
+  if (!state.bots.length && !isNodeHost && !state.remote?.using && !memberTeam(state))
     return (
       <FirstBot
         remote={state.remote}
@@ -786,7 +800,9 @@ function App() {
       />
     );
   const stream = state.streams[chatId];
-  const elsewhere = state.requests.find((r) => r.chatId !== chatId);
+  const chatIds = new Set(state.chats.map((c) => c.id));
+  const hostRequests = state.requests.filter((r) => r.nodeJob || !chatIds.has(r.chatId));
+  const elsewhere = state.requests.find((r) => r.chatId !== chatId && !r.nodeJob && chatIds.has(r.chatId));
   const actions: PageActions = {
     open,
     botChat,
@@ -964,6 +980,16 @@ function App() {
       </aside>
       <main>
         {!hostDown && <HostBanner state={state} pairAgain={() => settings("Computers")} />}
+        {hostRequests.length > 0 && (
+          <div style={{ padding: "12px 18px 0" }}>
+            <RequestPanel
+              key={hostRequests[0].id}
+              req={hostRequests[0]}
+              count={hostRequests.length}
+              bot={hostRequests[0].sourceBotName || state.nodeHost?.name || "Node host"}
+            />
+          </div>
+        )}
         {elsewhere && (
           <button
             className="request-banner"
@@ -1096,9 +1122,27 @@ function App() {
             )}
             {page === "Home" && state.bots.length === 0 && (
               <div className="empty">
-                {memberHost
-                  ? "No agents are visible to this role. Ask the team owner if you need access."
-                  : (state.remote?.using?.name ?? "This computer") + " has no bots yet. Create one with the + beside Bots."}
+                {memberHost ? (
+                  "No agents are visible to this role. Ask the team owner if you need access."
+                ) : isNodeHost && state.nodeHost ? (
+                  <div style={{ display: "grid", gap: 10, justifyItems: "center", maxWidth: 460 }}>
+                    <strong>
+                      {state.nodeHost.name} · {state.nodeHost.paused ? "Paused" : "Online"}
+                    </strong>
+                    <span>
+                      Node host with {state.nodeHost.sharedProjects.length} shared{" "}
+                      {state.nodeHost.sharedProjects.length === 1 ? "folder" : "folders"}
+                      {state.nodeHost.lastCompleted
+                        ? ` · Last request: ${state.nodeHost.lastCompleted.sourceBotName} (${state.nodeHost.lastCompleted.status})`
+                        : ""}
+                    </span>
+                    <button type="button" className="primary" onClick={() => settings("Node host")}>
+                      Manage Node host
+                    </button>
+                  </div>
+                ) : (
+                  (state.remote?.using?.name ?? "This computer") + " has no bots yet. Create one with the + beside Bots."
+                )}
               </div>
             )}
             {page === "Projects" && (

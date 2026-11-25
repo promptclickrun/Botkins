@@ -53,6 +53,7 @@ import { friendlyModel } from "./modelnames.mjs";
 import { meterLimit } from "./modeldetails.mjs";
 import { ToolBridge } from "./providers/toolbridge.mjs";
 import { HostDispatch } from "./host-dispatch.mjs";
+import { NodeHost } from "./node-host.mjs";
 import { Interactions } from "./interactions.mjs";
 import { MAX_CONTINUATIONS, mergedPrompt, nextMove, openSteps, takeBatch } from "./keep-moving.mjs";
 import { recordActivity } from "./activity.mjs";
@@ -223,6 +224,8 @@ export class Workspace {
       : readWorkspace(this.file);
     this.hostDispatch = new HostDispatch(this, this.state.hostDispatch);
     delete this.state.hostDispatch;
+    this.nodeHost = new NodeHost(this, this.state.nodeHost);
+    delete this.state.nodeHost;
     // Queued messages share the atomic workspace write with the run that consumes them.
     this.queues = new Map(Object.entries(this.state.pendingMessages ?? {}));
     delete this.state.pendingMessages;
@@ -430,7 +433,7 @@ export class Workspace {
         ? { ...this.state, ...(this.queues.size && { pendingMessages: Object.fromEntries(this.queues) }), ...(detachedQuestions.length && { detachedQuestions }) }
         : this.state;
     const outgoing = this.teamwork?.outgoing.pending;
-    writeFileSync(this.file + ".tmp", JSON.stringify({ ...persisted, ...this.hostDispatch?.persisted(), ...(outgoing?.size && { outgoingDispatches: [...outgoing.values()] }) }), {
+    writeFileSync(this.file + ".tmp", JSON.stringify({ ...persisted, ...this.hostDispatch?.persisted(), ...this.nodeHost?.persisted(), ...(outgoing?.size && { outgoingDispatches: [...outgoing.values()] }) }), {
       mode: 0o600,
     });
     renameSync(this.file + ".tmp", this.file);
@@ -442,6 +445,8 @@ export class Workspace {
       chats: this.state.chats.map(visibleChat),
       // The harness that runs turns: the default gives way while its program isn't here and nobody chose.
       settings: { ...this.state.settings, harness: this.harness.effective() },
+      // Node host role, advertised folders, pause state, last completed job and active grants.
+      nodeHost: this.nodeHost.view(),
       // Each space with what it holds, for the link to make each person's own list from
       // (docs/spaces.md, "What each device is sent"). No app is sent this part as it is.
       spaces: this.spaces.part(),

@@ -436,6 +436,45 @@ export type MemberTeam = {
 };
 export type TeamJoinTarget = { code: string; serverId: string; serverKey: string; name: string; hosts: string[]; room?: string; relayBase?: string };
 export type TeamJoinState = { id: string; team: string; status: "pending" | "approved" | "denied" | "closed" | "offline"; createdAt?: number; requestId?: string };
+export type NodeHostProject = {
+  id: string;
+  name: string;
+  path: string;
+  shared?: boolean;
+};
+export type NodeHostGrant = {
+  id: string;
+  sourceHostName: string;
+  sourceBotId: string;
+  sourceBotName: string;
+  operation: string;
+  resourceId: string;
+  resourceName: string;
+  until: number | null;
+  createdAt: number;
+};
+export type NodeHostLastCompleted = {
+  requestId: string;
+  operation: string;
+  resourceId: string;
+  resourceName: string;
+  sourceHostName: string;
+  sourceBotName: string;
+  status: string;
+  at: number;
+  summary: string;
+};
+export type NodeHostState = {
+  enabled: boolean;
+  name: string;
+  status: "off" | "online" | "paused";
+  paused: boolean;
+  capabilitiesVersion: number;
+  sharedProjects: NodeHostProject[];
+  availableProjects: NodeHostProject[];
+  grants: NodeHostGrant[];
+  lastCompleted: NodeHostLastCompleted | null;
+};
 export type State = {
   /** Which computer's workspace this is: null for this one, else the paired computer in use. */
   remote?: {
@@ -444,6 +483,8 @@ export type State = {
   };
   /** The hosted profile's public identity and computer directory; no token or verifier is sent. */
   profile?: ProfileState;
+  /** Local node host role, shared folders, active job grants, and last completed request. */
+  nodeHost?: NodeHostState;
   bots: Bot[];
   /** Full team management data for this computer's owner, or this member's filtered identity. */
   team?: OwnerTeam | MemberTeam;
@@ -1239,6 +1280,14 @@ declare global {
       /** Renames a paired phone or computer as this computer lists it. */
       renamePhone(id: string, name: string): Promise<void>;
       setPhonePerson(id: string, person: string): Promise<void>;
+      // Node host role and shared project folders (Settings › Node host).
+      nodeStatus(): Promise<NodeHostState>;
+      nodeSetup(input?: { name?: string }): Promise<NodeHostState>;
+      nodeRename(name: string): Promise<NodeHostState>;
+      nodePause(paused: boolean): Promise<NodeHostState>;
+      nodeShareProject(projectId: string, shared: boolean): Promise<NodeHostState>;
+      nodeRevokeGrant(grantId?: string | null): Promise<NodeHostState>;
+      nodeDisconnect(): Promise<NodeHostState>;
       /** Each connected provider's plan and limits. `refresh` reads every provider again first. */
       providerUsage(options?: { refresh?: boolean }): Promise<ProviderUsage[]>;
       /** A read that nobody waited for has come in: ask again. */
@@ -2081,6 +2130,7 @@ export type RequestAnswer = {
 };
 export type AgentRequest = {
   dispatch?: true;
+  nodeJob?: true;
   id: string;
   chatId: string;
   botId: string;
@@ -2091,6 +2141,13 @@ export type AgentRequest = {
   preview?: string;
   detail?: string;
   remember?: string;
+  sourceBotName?: string;
+  targetBotName?: string;
+  sourceHostName?: string;
+  targetHostName?: string;
+  operation?: string;
+  resourceId?: string;
+  resourceName?: string;
   choices?: string[];
   freeform?: boolean;
   schema?: { properties: Record<string, FormField>; required?: string[] };

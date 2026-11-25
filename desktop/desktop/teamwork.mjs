@@ -14,7 +14,8 @@
 import { randomUUID } from "node:crypto";
 import { defineTool } from "./providers/provider.mjs";
 import { isGroup } from "./groups.mjs";
-import { OutgoingDispatches, peerRoster, remoteReply, remoteTeamworkAllowed, requireRemoteTurn } from "./remote-teamwork.mjs";
+import { OutgoingDispatches, peerCapabilities, peerRoster, remoteJob, remoteReply, remoteTeamworkAllowed, requireRemoteTurn } from "./remote-teamwork.mjs";
+import { LIST_FILES_OPERATION } from "./node-host.mjs";
 import { canUseProject } from "./access.mjs";
 import { recordActivity } from "./activity.mjs";
 import { recordCanvas } from "./canvas.mjs";
@@ -50,7 +51,7 @@ export class Teamwork {
   brief(bot, chat) {
     const team = this.roster(bot, chat);
     const remote = remoteTeamworkAllowed(this.ws, bot, chat, this.ws.active.get(chat.id)?.run, this.ws.active.get(chat.id))
-      ? "\nUse list_host_teammates to find teammates on the owner’s other computers. Use their host and bot IDs with ask_teammate. Their computer handles approval." : "";
+      ? "\nUse list_host_teammates to find teammates on the owner’s other computers, and use list_node_hosts and list_node_files to inspect folders shared by the owner’s node hosts. Their computer handles approval." : "";
     if (!team.length) return remote;
     return (
       "\n\n## Your team\nYou're " + bot.name + ". Your teammates:\n" + team.map(line).join("\n") +
@@ -81,6 +82,36 @@ export class Teamwork {
           requireRemoteTurn(this.ws, bot, chat, run, task);
           return JSON.stringify(host === undefined ? roster : { host: roster.host, bots: roster.bots });
         },
+      }),
+      defineTool("list_node_hosts", {
+        description: "List the owner's other Botkins hosts and their advertised node capabilities (availability, bots and shared project folders). Pass a host ID to inspect one host.",
+        parameters: { type: "object", properties: { host: { type: "string", description: "Optional Botkins host ID." } }, additionalProperties: false },
+        handler: async ({ host } = {}) => {
+          requireRemoteTurn(this.ws, bot, chat, run, task);
+          const discovered = await peerCapabilities(this.ws.teamworkPeers, host);
+          requireRemoteTurn(this.ws, bot, chat, run, task);
+          if (host === undefined) return JSON.stringify(discovered);
+          return JSON.stringify({
+            host: discovered.host,
+            online: discovered.online,
+            unavailable: discovered.unavailable,
+            capabilities: discovered.capabilities,
+          });
+        },
+      }),
+      defineTool("list_node_files", {
+        description: "List files in a project folder shared by one of the owner's node hosts. Use host and project IDs from list_node_hosts.",
+        parameters: {
+          type: "object",
+          properties: {
+            host: { type: "string", description: "The node host ID from list_node_hosts." },
+            project: { type: "string", description: "A shared project ID advertised by that node host." },
+            path: { type: "string", description: "Optional relative subfolder inside the shared project." },
+          },
+          required: ["host", "project"],
+          additionalProperties: false,
+        },
+        handler: (args) => this.listNodeFiles(chat, bot, run, task, args ?? {}),
       })] : []),
       defineTool("ask_teammate", {
         description:
@@ -165,6 +196,67 @@ export class Teamwork {
       entry.finished = Date.now();
       delete entry.intent;
       for (const step of entry.steps ?? []) if (step.status === "Running") step.status = "Interrupted";
+      this.ws.notify();
+    }
+  }
+  async listNodeFiles(chat, bot, run, task, { host, project, path: relPath = "" }) {
+    if (!run || task.stopped || this.ws.closing || this.ws.active.get(chat.id) !== task)
+      throw new Error("This turn is no longer active");
+    requireRemoteTurn(this.ws, bot, chat, run, task);
+    const hostId = typeof host === "string" ? host.trim() : "";
+    const projectId = typeof project === "string" ? project.trim() : "";
+    if (!hostId) throw new Error("Choose a node host ID from list_node_hosts.");
+    if (!projectId) throw new Error("Choose a shared project ID from list_node_hosts.");
+    if (relPath !== undefined && typeof relPath !== "string") throw new Error("Subfolder path must be text.");
+    const discovered = await peerCapabilities(this.ws.teamworkPeers, hostId);
+    requireRemoteTurn(this.ws, bot, chat, run, task);
+    if (discovered.unavailable || !discovered.online) {
+      throw new Error(discovered.host.name + " is currently unavailable.");
+    }
+    const caps = discovered.capabilities;
+    const ops = Array.isArray(caps?.operations) ? caps.operations : [];
+    if (!ops.some((op) => op === LIST_FILES_OPERATION || op?.id === LIST_FILES_OPERATION)) {
+      throw new Error(discovered.host.name + " does not offer file listing.");
+    }
+    const targetProject = (Array.isArray(caps?.projects) ? caps.projects : []).find((item) => item.id === projectId);
+    if (!targetProject) {
+      throw new Error("Choose a shared project ID on " + discovered.host.name + " from list_node_hosts.");
+    }
+    const asks = (run.teamwork ??= []);
+    if (asks.length >= MAX_ASKS) throw new Error("You can make up to " + MAX_ASKS + " teamwork or node requests in one reply. Answer with what you have.");
+    const folderLabel = targetProject.name + (relPath ? "/" + relPath : "");
+    const entry = {
+      id: randomUUID(),
+      botId: "node:" + targetProject.id,
+      fromBotId: bot.id,
+      remote: { hostId, hostName: discovered.host.name, botName: targetProject.name },
+      message: "List files in " + folderLabel,
+      status: "waiting",
+      started: Date.now(),
+    };
+    asks.push(entry);
+    this.ws.notify();
+    try {
+      const result = await remoteJob(
+        this.ws,
+        bot,
+        chat,
+        run,
+        task,
+        entry,
+        { operation: LIST_FILES_OPERATION, resourceId: targetProject.id, path: relPath || "" },
+        discovered.pin,
+      );
+      entry.reply = `${result.entries?.length ?? 0} ${result.entries?.length === 1 ? "entry" : "entries"} in ${folderLabel}`.slice(0, REPLY_MAX);
+      entry.status = "answered";
+      return JSON.stringify({ host: discovered.host, ...result });
+    } catch (error) {
+      entry.status = task.stopped || task.ended ? "stopped" : "failed";
+      entry.error = String(error.message).slice(0, 600);
+      throw new Error(discovered.host.name + " couldn't list files: " + entry.error);
+    } finally {
+      entry.finished = Date.now();
+      delete entry.intent;
       this.ws.notify();
     }
   }
