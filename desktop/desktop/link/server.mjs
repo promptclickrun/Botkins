@@ -1818,7 +1818,7 @@ export class LinkHost extends EventEmitter {
       let changed = false;
       for (const id of ids) {
         const chat = byId.get(id);
-        if (!chat || !inChat(team, chat, principal.memberId) || (chat.createdBy !== principal.memberId && !visible(role, chat.botId))) continue;
+        if (!chat || !inChat(team, chat, principal.memberId) || !visible(role, chat.botId)) continue;
         const time = Number.isFinite(chat.time) ? chat.time : 0;
         const prev = view.chats[chat.id];
         if (!prev?.unread && prev?.seen === time) continue;

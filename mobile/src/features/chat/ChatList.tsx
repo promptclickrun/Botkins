@@ -6,17 +6,15 @@ import Animated, { FadeIn, useAnimatedRef, useAnimatedScrollHandler, useSharedVa
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import type { BoardScroll } from "@/features/home/BotBoard";
 import type { ChatSummary } from "@/link/types";
-import { isConversation, useBots, useCan, useCapability, useChats, usePart } from "@/state/hooks";
+import { useBots, useCan, useCapability, useChats, usePart } from "@/state/hooks";
 import { useApp } from "@/state/store";
 import { Chip, EmptyState, foldGap, IconButton, LinkBanner, listWidth, Mascot, radius, space, T, Tap, useShape, useTextPrompt, useTheme } from "@/ui";
 import { ChatBoard } from "./ChatBoard";
 import { ChatPane } from "./ChatScreen";
-import { markAllChatsRead } from "./open";
+import { markChatsPageRead } from "./open";
 import { useChatSplit } from "./split";
 import { newSection } from "./sectionMenus";
-import { allUnreadChats } from "./unread";
-
-const isArchivedConversation = (chat: ChatSummary) => !!chat.archived && !chat.panelId && !chat.schedules?.some((schedule) => schedule.routine);
+import { chatsPageUnreadChats, isChatsPageArchived, isChatsPageChat } from "./unread";
 
 function SearchField({ value, onChange }: { value: string; onChange: (text: string) => void }) {
   const { colors, dark, type, control } = useTheme();
@@ -142,9 +140,9 @@ function ChatListScreen() {
   const sections = filing ? (held ?? []) : undefined;
 
   const bots = useMemo(() => new Map(allBots.map((bot) => [bot.id, bot])), [allBots]);
-  const conversations = useMemo(() => chats.filter(isConversation), [chats]);
-  const archived = useMemo(() => chats.filter(isArchivedConversation), [chats]);
-  const unreadCount = useMemo(() => allUnreadChats(chats).length, [chats]);
+  const conversations = useMemo(() => chats.filter(isChatsPageChat), [chats]);
+  const archived = useMemo(() => chats.filter(isChatsPageArchived), [chats]);
+  const unreadCount = useMemo(() => chatsPageUnreadChats(chats).length, [chats]);
   const needle = query.trim().toLowerCase();
   const { shown, old } = useMemo(() => {
     const matches = (chat: ChatSummary) => {
@@ -214,7 +212,7 @@ function ChatListScreen() {
             <SearchField value={query} onChange={setQuery} />
             {(archived.length > 0 || (sections && canChat) || (unreadCount > 0 && canView)) && (
               <View style={{ flexDirection: "row", flexWrap: "wrap", gap: space.sm }}>
-                {unreadCount > 0 && canView && <Chip label="Mark all as read" icon={MailOpen} onPress={() => void markAllChatsRead()} />}
+                {unreadCount > 0 && canView && <Chip label="Mark all as read" icon={MailOpen} onPress={() => void markChatsPageRead()} />}
                 {sections && canChat && <Chip label="New section" icon={FolderPlus} onPress={() => newSection(prompt.ask)} />}
                 {archived.length > 0 && <Chip label={showArchived ? "Hide archived" : "Show archived"} icon={Archive} selected={showArchived} onPress={() => setShowArchived(!showArchived)} />}
                 {prompt.node}

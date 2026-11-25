@@ -6,7 +6,7 @@ import { useEffect, useMemo, useState } from "react";
 import { create } from "zustand";
 import type { PanelView, SpaceContent, SpaceSummary } from "@/link/types";
 import { useCapability, useOnline, usePart } from "@/state/hooks";
-import { api, attempt } from "@/state/link";
+import { api, attempt, boundApi } from "@/state/link";
 import { DRAG } from "@/features/home/drag";
 import { runMarkSpacesRead } from "@/features/chat/unread";
 import { onComputerChange, showToast, useApp } from "@/state/store";
@@ -87,24 +87,29 @@ export function markSeen(id: string) {
   api["link.spaces.seen"](id).catch(() => {});
 }
 
-/** Explicit mark-as-read for one or more spaces: records seen marks that succeeded and surfaces one toast if any fail. */
+/** Explicit mark-as-read for one or more spaces: captures pre-send timestamps and computer so in-flight updates stay unread. */
 export async function markSpacesRead(ids: string[]) {
-  const result = await runMarkSpacesRead(ids, (id) => api["link.spaces.seen"](id));
-  if (result.succeeded.length > 0) {
-    useSeenMarks.setState((marks) => {
-      const next = { ...marks.spaces };
-      let changed = false;
-      for (const id of result.succeeded) {
-        const upTo = newest(useContents.getState()[id]?.content);
-        if (upTo && upTo > (next[id] ?? 0)) {
-          next[id] = upTo;
-          changed = true;
+  const { api: bound, isCurrent: clientCurrent } = boundApi();
+  const computer = useApp.getState().pairing?.serverId;
+  const isCurrent = () => clientCurrent() && useApp.getState().pairing?.serverId === computer;
+  const result = await runMarkSpacesRead(ids, (id) => bound["link.spaces.seen"](id), {
+    snapshotUpTo: (id) => newest(useContents.getState()[id]?.content),
+    isCurrent,
+    applyMarks: (captured) => {
+      useSeenMarks.setState((marks) => {
+        const next = { ...marks.spaces };
+        let changed = false;
+        for (const [id, upTo] of Object.entries(captured)) {
+          if (upTo > (next[id] ?? 0)) {
+            next[id] = upTo;
+            changed = true;
+          }
         }
-      }
-      return changed ? { spaces: next } : marks;
-    });
-  }
-  if (result.failed > 0) {
+        return changed ? { spaces: next } : marks;
+      });
+    },
+  });
+  if (result.failed > 0 && isCurrent()) {
     showToast(result.error instanceof Error && result.error.message ? result.error.message : "Couldn't mark as read.", "error");
   }
 }
