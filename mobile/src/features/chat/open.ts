@@ -7,15 +7,16 @@ import { boardMessage } from "./compose";
 import { chatForTap } from "./habits";
 
 /**
- * Selecting a bot: opens its latest one-to-one chat, or starts a new one each time, as the person
+ * Selecting a bot opens Main chat by default. It can open the latest chat or a new one, as the person
  * chose in Settings › Chat ("When you select a bot"; chatForTap in habits.ts has the rule).
  */
-export async function openBotChat(botId: string) {
-  const chats = useApp.getState().parts.chats ?? [];
-  const held = chatForTap(chats, botId, useChatPrefs.getState().botTap);
+export async function openBotChat(botId: string, tap = useChatPrefs.getState().botTap) {
+  const { chats = [], meta } = useApp.getState().parts;
+  const main = meta?.capabilities.includes("main-chat-v1");
+  const held = chatForTap(chats, botId, tap === "main" && !main ? "latest" : tap, meta?.you?.kind === "member" ? meta.you.memberId : "owner");
   // An empty chat that was archived when it was left is used again.
   if (held?.archived) api.setChatFlags(held.id, { archived: false }).catch(() => {});
-  const id = held?.id ?? (await attempt(api.createChat(botId)));
+  const id = held?.id ?? (await attempt(tap === "main" && main ? api.mainChat(botId) : api.createChat(botId)));
   if (id) router.push({ pathname: "/chat/[id]", params: { id } });
 }
 

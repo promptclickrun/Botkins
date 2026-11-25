@@ -8,11 +8,11 @@ import type { ChatSummary } from "../src/link/types";
 const chat = (id: string, more: Partial<ChatSummary> = {}): ChatSummary => ({ id, botId: "mira", title: id, time: 1, count: 2, ...more });
 
 test("selecting a bot opens its latest chat, or a new one each time", () => {
-  assert.deepEqual(BOT_TAPS.map((choice) => choice.label), ["Open the latest chat", "Start a new chat"]);
+  assert.deepEqual(BOT_TAPS.map((choice) => choice.label), ["Open Main chat", "Open the latest chat", "Start a new chat"]);
   assert.equal(botTapOf("new"), "new");
   assert.equal(botTapOf("latest"), "latest");
-  assert.equal(botTapOf(undefined), "latest");
-  assert.equal(botTapOf("often"), "latest");
+  assert.equal(botTapOf(undefined), "main");
+  assert.equal(botTapOf("often"), "main");
   const chats = [
     chat("old", { time: 10 }),
     chat("newest", { time: 30 }),
@@ -59,4 +59,13 @@ test("a chat left with no message is archived, unless something keeps it", () =>
   // Already archived, or gone (another computer is in use): nothing to do.
   assert.equal(archivesWhenLeft(chat("c", { count: 0, archived: true }), quiet), false);
   assert.equal(archivesWhenLeft(undefined, quiet), false);
+});
+
+test("an empty Main chat stays visible and never becomes the new chat", () => {
+  const main = chat("main", { main: true, count: 0 });
+  assert.equal(botTapOf(undefined), "main");
+  assert.deepEqual(chatForTap([main, chat("newer", { time: 20 })], "mira", "main"), { id: "main" });
+  assert.equal(chatForTap([main], "mira", "main", "member"), null);
+  assert.equal(chatForTap([main], "mira", "new"), null);
+  assert.equal(archivesWhenLeft(main, { messages: 0, working: false, waiting: 0, draft: "" }), false);
 });

@@ -554,7 +554,7 @@ export async function loadEarlier(chatId: string) {
     const page = (await api["link.messages"](chatId, view.from, 60)) as ChatDetail | null;
     useApp.setState((state) => {
       const held = state.chats[chatId];
-      if (!held || !page || page.from + page.messages.length !== held.from) return {};
+      if (!held || !page || page.activeFork !== held.activeFork || page.from + page.messages.length !== held.from) return {};
       const runs = { ...held.runs };
       for (const run of page.runs) runs[run.id] = run;
       return { chats: { ...state.chats, [chatId]: { ...held, from: page.from, messages: [...page.messages, ...held.messages], runs, loadingEarlier: false } } };

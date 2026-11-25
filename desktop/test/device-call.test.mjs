@@ -137,7 +137,7 @@ test("a call about a space is handed the person who made it, whatever the device
 
 test("a bot a member makes or copies is marked as theirs, and one without the mark is the owner's", async (t) => {
   const { ws } = open(t);
-  const handlers = { addBot: (data) => ws.agents.create(data), duplicateBot: (id) => ws.agents.duplicateBot(id) };
+  const handlers = { addBot: (...args) => ws.agents.create(...args), duplicateBot: (...args) => ws.agents.duplicateBot(...args) };
   const call = deviceCall({ workspace: ws, handlers, folders: {} });
   const made = await call("addBot", [{ name: "Avery's helper", role: "Helper", instructions: "Help." }], { principal: avery });
   assert.equal(ws.bot(made).createdBy, "m_avery");

@@ -114,7 +114,8 @@ test("deleting a bot removes its chats, runs, panels and Copilot sessions", asyn
   ws.active.delete(b);
   await ws.agents.deleteBot(scout);
   assert.ok(!ws.state.bots.some((x) => x.id === scout));
-  assert.deepEqual(ws.state.chats.map((c) => c.id), [keep]);
+  assert.deepEqual(ws.state.chats.filter(c => !c.main).map(c => c.id), [keep]);
+  assert.ok(!ws.state.chats.some(c => c.botId === scout));
   assert.deepEqual(ws.state.runs.map((r) => r.id), ["r2"]);
   assert.deepEqual(ws.state.panels.map((p) => p.id), ["p2"]);
   assert.deepEqual(deleted, [a], "only established sessions are deleted");
@@ -138,7 +139,7 @@ test("chat flags, rename and delete", async (t) => {
   ws.chat(id).established = true;
   ws.state.panels.push({ id: "p", botId: ws.state.bots[0].id, refreshChatId: id });
   await ws.agents.deleteChat(id);
-  assert.equal(ws.state.chats.length, 0);
+  assert.ok(ws.state.chats.every(c => c.main));
   assert.equal(ws.state.panels[0].refreshChatId, undefined);
   assert.deepEqual(deleted, [id]);
 });

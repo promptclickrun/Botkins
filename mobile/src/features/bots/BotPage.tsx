@@ -69,6 +69,7 @@ function BotDetail({ bot }: { bot: Bot }) {
   const phoneVoice = usePhoneVoice((prefs) => prefs.bots?.[bot.id]);
   const canCreateToday = useCan("today", "create");
   const member = useMember();
+  const mainChats = useCapability("main-chat-v1");
   const proactiveSupported = useCapability(PROACTIVE_CAPABILITY);
   const proactivePart = usePart("proactive");
   const me = myself(usePart("meta"));
@@ -128,7 +129,7 @@ function BotDetail({ bot }: { bot: Bot }) {
         </View>
         {canChat && (
           <View style={{ flexDirection: "row", gap: space.md, alignSelf: "stretch" }}>
-            <Button title="Chat" icon={MessageCircle} onPress={() => void openBotChat(bot.id)} style={{ flex: 1 }} accessibilityLabel={"Chat with " + bot.name} />
+            <Button title={mainChats ? "Main chat" : "Chat"} icon={MessageCircle} onPress={() => void openBotChat(bot.id, mainChats ? "main" : undefined)} style={{ flex: 1 }} accessibilityLabel={"Chat with " + bot.name} />
             <Button title="New chat" icon={SquarePen} variant="secondary" onPress={() => void newBotChat(bot.id)} style={{ flex: 1 }} />
           </View>
         )}

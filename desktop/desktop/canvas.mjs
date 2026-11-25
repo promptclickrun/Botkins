@@ -227,6 +227,13 @@ export function forkTranscript(messages, botName, cap = 30000) {
   return transcript;
 }
 
+/** Context carried into a fresh main-chat session. A fork made before compaction still uses that earlier history. */
+export function mainTranscript(chat, botName, end = chat.messages.length) {
+  const summary = chat.compacted && chat.compacted.through <= end ? chat.compacted : null;
+  const tail = forkTranscript(chat.messages.slice(summary?.through ?? 0, end), botName);
+  return [summary?.text, tail].filter(Boolean).join("\n\n");
+}
+
 export function forkSystemMessage(transcript) {
   return transcript
     ? "\n\nThis chat was forked from an earlier conversation. Treat the transcript below as the conversation so far and continue from it.\n<earlier-conversation>\n" +

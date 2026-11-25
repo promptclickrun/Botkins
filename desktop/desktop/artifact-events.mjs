@@ -80,7 +80,7 @@ export class ArtifactEvents {
       // widened: a picture that an earlier version did not take as the bot's own (it was in the
       // session's own folder) is found now. Recording is safe to repeat.
       const again = this.ws.state.mediaPass !== MEDIA_PASS;
-      for (const chat of this.ws.state.chats) this.counts.set(chat, again ? 0 : chat.messages.length);
+      for (const chat of this.ws.state.chats) this.counts.set(chat.messages, again ? 0 : chat.messages.length);
       if (again) this.ws.artifacts.batch(() => void this.ws.state.chats.forEach((chat) => this.messages(chat)));
       this.ws.state.mediaPass = MEDIA_PASS;
       return;
@@ -93,7 +93,7 @@ export class ArtifactEvents {
   }
 
   messages(chat) {
-    const start = this.counts.get(chat) ?? 0;
+    const start = this.counts.get(chat.messages) ?? 0;
     for (let index = start; index < chat.messages.length; index++) {
       const message = chat.messages[index];
       const botIds = message.botId ? [message.botId] : message.role === "user" ? chat.botIds ?? [chat.botId] : [chat.botId];
@@ -114,7 +114,7 @@ export class ArtifactEvents {
         }
       }
     }
-    this.counts.set(chat, chat.messages.length);
+    this.counts.set(chat.messages, chat.messages.length);
   }
 
   // Recover observable outputs of successful structured writes in pre-index workspaces.

@@ -517,8 +517,9 @@ export const workspace = {
   },
   models: {
     summary: "List the models the signed-in providers offer",
-    usage: "botkins models [--default <provider/model>] [--routines <provider/model|none>] [--effort <level>] [--speed <off|fast|ultrafast|inherit> [--bot <bot> | --chat <id>]]",
+    usage: "botkins models [--default <provider/model>] [--routines <provider/model|none>] [--effort <level>] [--speed <off|fast|ultrafast|inherit> [--bot <bot> | --chat <id>]] [--chat <id> --model <provider/model|inherit>]",
     options: {
+      model: { type: "string", value: "provider/model|inherit", about: "Set the model of the chat named by --chat" },
       speed: { type: "string", value: "mode", about: "Set fast mode. Fast and Ultrafast use your plan allowance much faster" },
       bot: { type: "string", value: "bot", about: "Set speed for this bot" },
       chat: { type: "string", value: "id", about: "Set speed for this chat" },
@@ -529,6 +530,10 @@ export const workspace = {
     details: "A routine uses its own model, else the Default routines model, else its bot's model, else the default model.",
     async run(context) {
       const o = context.options;
+      if (o.model !== undefined) {
+        if (!o.chat || o.bot || o.speed || o.default || o.routines || (o.model === "inherit" && o.effort)) throw usage("Choose --chat and --model, with an optional --effort for a model.");
+        return void context.print(await context.client.call("models.chat", o.chat, o.model, o.effort), m => "Chat model: " + (m.provider ? m.provider + "/" : "") + m.model + ".");
+      }
       if (o.speed !== undefined) {
         if (o.default || o.routines || o.effort || (o.bot && o.chat)) throw usage("Set speed separately, for one scope at a time.");
         if (!["inherit", "off", "fast", "ultrafast"].includes(o.speed) || (o.speed === "inherit" && !o.bot && !o.chat))
@@ -551,16 +556,18 @@ export const workspace = {
   },
   chat: {
     summary: "Talk to a bot",
-    usage: "botkins chat <bot> [-m <message>] [--chat <id>]",
+    usage: "botkins chat <bot> [-m <message>] [--chat <id> | --new]",
     options: {
       message: { type: "string", short: "m", value: "text", about: "Send one message, print the reply and return (\"-\" reads it from standard input)" },
-      chat: { type: "string", value: "id", about: "Continue this chat instead of starting a new one" },
+      chat: { type: "string", value: "id", about: "Continue this chat instead of Main chat" },
+      new: { type: "boolean", about: "Start an ordinary new chat instead of Main chat" },
     },
     details: "Without -m, a prompt opens: type a message and Enter. Ctrl-C stops a reply; Ctrl-D, or /quit, leaves. The chat is an ordinary one: a paired phone shows it too. When the bot asks for an approval, the request is shown on standard error and you are asked at a terminal. With no terminal the request is refused: no flag approves it.",
     async run(context) {
       if (context.args.length !== 1) throw usage("Name the bot (its name or id).");
       const { client, color } = context;
-      const opened = context.options.chat ? { chatId: context.options.chat, bot: { name: context.args[0] } } : await client.call("chat.open", context.args[0]);
+      if (context.options.chat && context.options.new) throw usage("Choose --chat or --new.");
+      const opened = context.options.chat ? { chatId: context.options.chat, bot: { name: context.args[0] } } : await client.call(context.options.new ? "chat.open" : "chat.main", context.args[0]);
       if (context.options.message !== undefined) {
         const message = context.options.message === "-" ? await new Promise((resolve) => { let text = ""; context.stdin.on("data", (chunk) => (text += chunk)).on("end", () => resolve(text)); }) : context.options.message;
         const result = await turn(context, opened.chatId, message, { live: !context.json });

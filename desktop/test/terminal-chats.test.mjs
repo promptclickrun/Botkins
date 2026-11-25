@@ -62,7 +62,7 @@ async function service(t) {
   return { dir, paths, client, botkins, put, changes, everything, workspace: running.runtime.workspace, handlers: running.runtime.handlers, chatWith };
 }
 /** The ids and titles of the chats, for a short comparison. */
-const titles = async (botkins) => (await botkins(["chats", "list", "--json"])).json().map((chat) => chat.title).sort();
+const titles = async (botkins) => (await botkins(["chats", "list", "--json"])).json().filter(c => !c.main).map((chat) => chat.title).sort();
 
 test("a chat is found by its id or its title, and rename, flags, show and list work with text and --json", { skip }, async (t) => {
   const { botkins, client, chatWith, changes, everything, workspace } = await service(t);
@@ -76,8 +76,8 @@ test("a chat is found by its id or its title, and rename, flags, show and list w
   assert.match(list.out, /^TITLE +WITH +STATE +SECTION +ID\n/);
   assert.match(list.out, new RegExp("Quarterly plan +Nova +- +- +" + plan));
   const json = (await botkins(["chats", "list", "--json"])).json();
-  assert.deepEqual(json.map((chat) => [chat.title, chat.bot, chat.messages, chat.pinned, chat.mode]).sort(), [["Notes", "Orbit", 0, false, "default"], ["Quarterly plan", "Nova", 2, false, "default"], ["Quarterly review", "Orbit", 0, false, "default"]]);
-  assert.deepEqual((await botkins(["chats", "list", "--bot", "Nova", "--json"])).json().map((chat) => chat.id), [plan]);
+  assert.deepEqual(json.filter(c => !c.main).map((chat) => [chat.title, chat.bot, chat.messages, chat.pinned, chat.mode]).sort(), [["Notes", "Orbit", 0, false, "default"], ["Quarterly plan", "Nova", 2, false, "default"], ["Quarterly review", "Orbit", 0, false, "default"]]);
+  assert.deepEqual((await botkins(["chats", "list", "--bot", "Nova", "--json"])).json().filter(c => !c.main).map((chat) => chat.id), [plan]);
   assert.match((await botkins(["chats", "list", "--bot", "Nobody"])).err, /There is no bot called Nobody/);
 
   // By id, by the whole title (not by its case), and by the start of a title that one chat has.
@@ -383,7 +383,7 @@ test("sections: add, rename, order, set a chat, delete; read through the window'
   assert.equal((await botkins(["chats", "sections", "set", "Plan", "Work"])).out, 'Put "Plan" (' + plan + ') in the section "Work".\n');
   assert.equal((await botkins(["chats", "sections", "set", notes, work.json().id])).exit, 0);
   const list = await botkins(["chats", "sections", "list"]);
-  assert.match(list.out, /^SECTION +CHATS +ID\nWork +2 +cs_[\w-]+\nHome +0 +cs_[\w-]+\n0 chats are in no section\.\n$/);
+  assert.match(list.out, /^SECTION +CHATS +ID\nWork +2 +cs_[\w-]+\nHome +0 +cs_[\w-]+\n1 chat is in no section\.\n$/);
   assert.deepEqual((await botkins(["chats", "show", plan, "--json"])).json().section, "Work");
   assert.match((await botkins(["chats", "list"])).out, /Plan +Nova +- +Work +/);
   assert.equal((await botkins(["chats", "sections", "set", "Plan", "--none"])).out, '"Plan" (' + plan + ") is in no section.\n");
@@ -406,7 +406,7 @@ test("sections: add, rename, order, set a chat, delete; read through the window'
   assert.match(asked.err, /This needs a yes\. Run it again with --yes\./);
   const gone = await botkins(["chats", "sections", "delete", "Work", "--yes"]);
   assert.equal(gone.out, 'Deleted the section "Work".\n');
-  assert.deepEqual((await botkins(["chats", "sections", "list", "--json"])).json(), { sections: [{ id: (await client.call("chats.sections")).sections[0].id, name: "Family and friends", chats: 0 }], without: 2 });
+  assert.deepEqual((await botkins(["chats", "sections", "list", "--json"])).json(), { sections: [{ id: (await client.call("chats.sections")).sections[0].id, name: "Family and friends", chats: 0 }], without: 3 });
   assert.deepEqual(await titles(botkins), ["Notes", "Plan"], "the chats stay");
 
   // The log: a new section by its name, the rest by id. The titles are not in it.
@@ -428,7 +428,7 @@ test("help --json lists the chats commands with usage and options, and a command
   assert.equal(by("delete").asks, "--yes");
   assert.equal(by("sections delete").asks, "--yes");
   assert.equal(by("project").asks, "--yes");
-  assert.deepEqual(by("fork").options.map((option) => option.name), ["--at"]);
+  assert.deepEqual(by("fork").options.map((option) => option.name).sort(), ["--at", "--in-main"].sort());
   assert.deepEqual(by("aside").arguments.map((argument) => argument.name), ["chat", "question"]);
   for (const command of area.commands) assert.match(command.usage, /^botkins chats /);
 });
@@ -464,4 +464,25 @@ test("an answer to a request that waits in a chat leaves a line: the chat, the k
   const lines = all.filter((text) => text.includes("Changed from the command line"));
   assert.deepEqual(lines.map((text) => text.split("Changed from the command line: ")[1]), ["chat.respond " + chatId + " permission yes", "chat.respond " + chatId + " permission no", "chat.respond " + chatId + " question yes", "chat.respond " + chatId + " question no"]);
   assert.equal(lines.join("\n").includes("PRIVATE"), false);
+});
+
+test("the terminal opens Main chat, resets and resumes its forks, and sets the proactive destination", { skip }, async t => {
+  const { botkins, client } = await service(t);
+  await client.call("bots.add", { name: "Nova" });
+  const { chatId: id } = await client.call("chat.main", "Nova");
+  assert.equal((await client.call("chat.main", "Nova")).chatId, id);
+  assert.notEqual((await client.call("chat.open", "Nova")).chatId, id);
+  const reset = await botkins(["chats", "reset", id, "--json"]);
+  assert.equal(reset.exit, 0, reset.err);
+  const fresh = reset.json();
+  assert.equal(fresh.id, id);
+  assert.notEqual(fresh.activeFork, "original");
+  assert.match((await botkins(["chats", "show", id])).out, new RegExp(fresh.activeFork));
+  const back = await botkins(["chats", "switch-fork", id, "original", "--json"]);
+  assert.equal(back.exit, 0, back.err);
+  assert.equal(back.json().activeFork, "original");
+  const set = await botkins(["preferences", "set", "proactive.chatMode", "new", "--json"]);
+  assert.equal(set.exit, 0, set.err);
+  assert.equal(set.json().value, "new");
+  assert.deepEqual(await client.call("preferences.get", "proactive.chatMode"), { "proactive.chatMode": "new" });
 });

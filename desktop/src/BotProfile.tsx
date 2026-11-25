@@ -191,7 +191,8 @@ export default function BotProfile({
             </p>
           )}
           <div className="actionrow profile-actions">
-            <button className="primary" onClick={() => actions.newChatWith(bot.id)}>
+            {state.proactive?.chatMode && <button className="primary" onClick={() => actions.mainChat(bot.id)}>Main chat</button>}
+            <button className={state.proactive?.chatMode ? "secondary" : "primary"} onClick={() => actions.newChatWith(bot.id)}>
               <MessageSquarePlus size={15} />
               New chat
             </button>

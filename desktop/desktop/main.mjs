@@ -336,8 +336,8 @@ else
     // Keep the automatic LAN enable one-shot and remember an explicit phone-link disable.
     installTeamworkPeers(runtime, profile, remote.transport());
     const originalAddBot = runtime.handlers.addBot;
-    runtime.handlers.addBot = (data) => {
-      const result = originalAddBot(data);
+    runtime.handlers.addBot = (data, person) => {
+      const result = originalAddBot(data, person);
       if (profile.token()) void profile.ensureLocalHost({ existing: true }).catch((error) => console.error("Profile local host:", error.message));
       return result;
     };

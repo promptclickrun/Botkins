@@ -80,7 +80,7 @@ export const REMOTE_METHODS = new Set([
   "addSection", "renameSection", "deleteSection",
   "saveTemplate", "renameTemplate", "deleteTemplate", "exportTemplateText", "importTemplateText",
   // Chats
-  "createChat", "createGroupChat", "setChatFlags", "renameChat", "regenerateChatTitle", "deleteChat", "forkChat", "reactToMessage", "warmChat",
+  "mainChat", "changeMainFork", "setProactiveChatMode", "createChat", "createGroupChat", "setChatFlags", "renameChat", "regenerateChatTitle", "deleteChat", "forkChat", "reactToMessage", "warmChat",
   "setChatProject", "startProjectChat", "recordVoiceLine",
   "send", "stop", "unqueue", "sendNow", "retry", "compact", "sideQuestion", "respond", "clearApprovals",
   "mentionables", "catalog", "linkPreview",
@@ -469,6 +469,15 @@ export function remoteArgs(method, args, { deviceId, uploads } = {}) {
     if (args.length !== 2 || !clean(args[0]) || Object.keys(args[1]).some((key) => key !== "action"))
       throw new Error("Choose one approval action for this request.");
     return [args[0], { action: args[1].action }];
+  }
+  if (method === "mainChat" && (args.length !== 1 || !clean(args[0]))) throw new Error("Choose a bot.");
+  if (method === "setProactiveChatMode" && (args.length !== 1 || !["main", "new"].includes(args[0]))) throw new Error("Choose Main chat or New chat every time.");
+  if (method === "changeMainFork") {
+    const [id, action, value, expected] = args;
+    const valid = action === "reset" ? value == null
+      : action === "fork" ? Number.isSafeInteger(value) && value >= 0
+      : action === "switch" && clean(value);
+    if (!clean(id) || !valid || args.length > 4 || (expected != null && !clean(expected))) throw new Error("Choose a Main chat and a fork or reset.");
   }
   if (method === "regenerateChatTitle") {
     if (args.length !== 1 || !clean(args[0])) throw new Error("Choose a chat to regenerate its title.");

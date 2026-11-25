@@ -61,6 +61,7 @@ export const dateLabel = (time: number) =>
 
 /** A list's time: the hour today, "Yesterday", the weekday this week, else the date. */
 export function shortTime(time: number) {
+  if (!time) return "";
   const start = new Date();
   start.setHours(0, 0, 0, 0);
   const today = start.getTime();
@@ -89,6 +90,7 @@ const previewOf = (text: string) =>
 export type PageActions = {
   open: (chatId: string) => void;
   botChat: (bot: Bot) => void;
+  mainChat: (botId: string) => void;
   addBot: () => void;
   newChat: () => void;
   showChats: () => void;
@@ -362,6 +364,7 @@ export function botMenuItems(state: State, b: Bot, actions: PageActions, ask: As
   const primary = state.bots[0]?.id === b.id;
   const sections = state.sections ?? [];
   const items: MenuItem[] = [
+    ...(state.proactive?.chatMode ? [{ label: "Main chat", icon: MessageSquarePlus, run: () => actions.mainChat(b.id) }] : []),
     { label: "New chat", icon: MessageSquarePlus, run: () => actions.newChatWith(b.id) },
     { label: "Bot page", icon: UserRound, run: () => actions.botPage(b.id) },
     "separator",
@@ -781,14 +784,17 @@ export function SidebarBots({ state, actions, compact }: { state: State; actions
   const menu = useMenu();
   const dialogs = useAsk();
   const { primary, pinned, sections, rest } = arrangeBots(state);
-  // One walk over the chats: each bot's latest chat (the one its row opens) and whether any is unread.
+  // Show the conversation the default bot selection opens; unread can come from any thread.
+  const showMain = state.proactive?.chatMode && (state.settings.botTap ?? "main") === "main";
+  const creator = memberTeam(state)?.me.memberId;
   const latest = new Map<string, Chat>();
   const unread = new Set<string>();
   for (const c of state.chats) {
     if (c.panelId || c.archived) continue;
+    if (c.unread) unread.add(c.botId);
+    if (showMain && (!c.main || c.createdBy !== creator)) continue;
     const seen = latest.get(c.botId);
     if (!seen || c.time > seen.time) latest.set(c.botId, c);
-    if (c.unread) unread.add(c.botId);
   }
   const item = (b: Bot) => {
     const items = () => botMenuItems(state, b, actions, dialogs.ask);
@@ -949,7 +955,7 @@ export function regenerateTitleItem(state: State, chat: Chat, fail: (error: unkn
     (host && !host.capabilities.includes("chat-title-regeneration-v1")) ||
     !teamCan(state, "agents", "chat") ||
     (member && chat.createdBy !== member.me.memberId) ||
-    !(chat.count ?? chat.messages.length) ||
+    chat.main || !(chat.count ?? chat.messages.length) ||
     chat.panelId ||
     chat.schedules?.some((entry) => entry.routine)
   ) return undefined;
@@ -962,7 +968,7 @@ export function regenerateTitleItem(state: State, chat: Chat, fail: (error: unkn
 
 function chatMenuItems(state: State, chat: Chat, actions: PageActions, ask: AskFn): MenuItem[] {
   const titleItem = regenerateTitleItem(state, chat, actions.fail);
-  return [
+  const common: MenuItem[] = [
     {
       label: chat.pinned ? "Unpin" : "Pin",
       icon: chat.pinned ? PinOff : Pin,
@@ -975,6 +981,10 @@ function chatMenuItems(state: State, chat: Chat, actions: PageActions, ask: AskF
       icon: chat.unread ? MailOpen : Mail,
       run: () => run(actions, api().setChatFlags(chat.id, { unread: !chat.unread })),
     },
+  ];
+  if (chat.main) return common;
+  return [
+    ...common,
     {
       label: "Rename…",
       icon: Pencil,

@@ -201,7 +201,7 @@ export function controlApi(service) {
       messages,
       count: chat.messages.length,
       ...(request && { request: { id: request.id, kind: request.kind, title: request.title, ...(request.dispatch && { dispatch: true, detail: request.detail, label: request.label }) } }),
-      run: state().runs.find((run) => run.chatId === chat.id) ?? null,
+      run: state().runs.find((run) => run.chatId === chat.id && (!chat.main || run.forkId === chat.activeFork)) ?? null,
     };
   };
   /** Applies a whole config: saves it, makes the running service agree, and says what waits for a restart. */
@@ -476,6 +476,12 @@ export function controlApi(service) {
       return state().settings.model ?? null;
     },
     /** The Default routines model: `ref` sets it (with a thinking level, `effort`), null clears it, nothing reads it. */
+    "models.chat": async ([id, ref, effort]) => {
+      const chat = workspace.chat(String(id));
+      const model = ref === "inherit" ? null : { ...(await selection(ref)), ...(effort && { reasoningEffort: String(effort) }) };
+      await workspace.setModel("chat", chat.id, model);
+      return workspace.effectiveModel(chat);
+    },
     "models.routines": async ([ref, effort]) => {
       if (ref === null || ref === "") await workspace.setModel("routines", null, null);
       else if (ref !== undefined) await workspace.setModel("routines", null, { ...(await selection(ref)), ...(effort && { reasoningEffort: String(effort) }) });
@@ -483,6 +489,10 @@ export function controlApi(service) {
     },
 
     // ── Chat ─────────────────────────────────────────────────────────────────────────────────
+    "chat.main": ([ref]) => {
+      const found = bot(ref);
+      return { chatId: handlers.mainChat(found.id), bot: { id: found.id, name: found.name } };
+    },
     "chat.open": ([ref]) => {
       const found = bot(ref);
       return { chatId: handlers.createChat(found.id), bot: { id: found.id, name: found.name } };

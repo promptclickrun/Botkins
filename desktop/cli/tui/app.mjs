@@ -173,7 +173,7 @@ export function createApp({ client, write, size, colors = true, now = () => Date
       const bot = chosen();
       const message = bot && (await ask("Message for " + bot.name + ":"));
       if (!message?.trim()) return;
-      const { chatId } = await client.call("chat.open", bot.id);
+      const { chatId } = await client.call("chat.main", bot.id);
       await client.call("chat.send", chatId, message.trim());
       Object.assign(state, { tab: "Chats", selected: 0 });
       read({ id: chatId, title: message.trim().slice(0, 60), bot: bot.name, messages: 0 });

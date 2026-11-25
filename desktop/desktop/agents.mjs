@@ -1,6 +1,7 @@
 // Bot and chat management: primary bot, pins, hiding, sections, duplication and deletion.
 // How a bot looks is in desktop/looks.mjs.
 import { randomUUID } from "node:crypto";
+import { conversations, makeMainChat } from "./link/main-chat.mjs";
 import { textField } from "./panels.mjs";
 import { nextLook } from "./looks.mjs";
 import { GROUP_MIN, isGroup, memberSessionId } from "./groups.mjs";
@@ -91,7 +92,7 @@ export class Agents {
     return { provider: agent.provider, agent: agent.agent, ...(agent.file && { file: agent.file }) };
   }
   /** Makes a bot of each chosen agent, in the order given. Agents that are bots already are skipped. */
-  async importAgents(keys) {
+  async importAgents(keys, person = "owner") {
     if (!Array.isArray(keys) || !keys.length || keys.length > 100 || keys.some((k) => typeof k !== "string"))
       throw new Error("Choose at least one agent.");
     const offered = await this.importable();
@@ -116,10 +117,12 @@ export class Agents {
         ...(agent.model && { model: agent.model }),
         look: nextLook(id, [...this.state.bots, ...made].map((b) => b.look)),
         origin: this.origin(agent),
+        ...(person !== "owner" && { createdBy: person }),
       };
       made.push(bot);
     }
     this.state.bots.push(...made);
+    this.state.chats.push(...made.map(bot => makeMainChat(bot.id, person)));
     const ids = made.map((bot) => bot.id);
     if (ids.length) {
       this.ws.clearCatalogs();
@@ -128,11 +131,11 @@ export class Agents {
     return ids;
   }
   /** Creates a bot from the Create a bot form. `data.agent` names the existing agent the form started from. */
-  async create(data) {
-    if (data?.agent == null) return this.ws.addBot(data);
+  async create(data, person = "owner") {
+    if (data?.agent == null) return this.ws.addBot(data, person);
     const agent = (await this.importable()).find((a) => a.key === data.agent);
     if (!agent) throw new Error("That agent is no longer available. Choose it again.");
-    const id = this.ws.addBot(data);
+    const id = this.ws.addBot(data, person);
     const bot = this.ws.bot(id);
     bot.origin = this.origin(agent);
     if (agent.model) bot.model = agent.model;
@@ -171,7 +174,7 @@ export class Agents {
     if (this.state.bots[0]) this.state.bots[0].hidden = false;
     this.ws.save();
   }
-  duplicateBot(id) {
+  duplicateBot(id, person = "owner") {
     const source = this.ws.bot(id);
     const copy = structuredClone(source);
     Object.assign(copy, {
@@ -182,6 +185,8 @@ export class Agents {
     });
     // A copy belongs to whoever copied it: the mark of who made the first one is not carried over.
     delete copy.createdBy;
+    if (person !== "owner") copy.createdBy = person;
+    this.state.chats.push(makeMainChat(copy.id, person));
     this.state.bots.splice(this.state.bots.indexOf(source) + 1, 0, copy);
     this.ws.save();
     return copy.id;
@@ -204,7 +209,7 @@ export class Agents {
       if (group.botId === id) group.botId = group.botIds[0];
     }
     // Sessions this bot kept as a helping teammate in other bots' chats (desktop/teamwork.mjs).
-    for (const chat of this.state.chats) {
+    for (const chat of this.state.chats.flatMap(conversations)) {
       if (!chat.helpers?.[id]) continue;
       if (chat.helpers[id].established && !chats.includes(chat)) memberSessions.push(helperSessionId(chat, id));
       delete chat.helpers[id];
@@ -258,16 +263,20 @@ export class Agents {
       if (typeof value !== "boolean") throw new Error("Invalid chat flag");
       next[key] = value;
     }
+    if (chat.main && next.archived) throw new Error("Main chat stays in your chats.");
     Object.assign(chat, next);
     this.ws.save();
   }
   /** A title the person gave. It stays: auto-summarize no longer renames the chat (desktop/summaries.mjs). */
   renameChat(id, title) {
-    Object.assign(this.ws.chat(id), { title: textField(title, 120, "chat title"), titleSet: true });
+    const chat = this.ws.chat(id);
+    if (chat.main) throw new Error("Main chat keeps its name.");
+    Object.assign(chat, { title: textField(title, 120, "chat title"), titleSet: true });
     this.ws.save();
   }
   async deleteChat(id) {
     const chat = this.ws.chat(id);
+    if (chat.main) throw new Error("Main chat stays with its bot. Use Reset context to start fresh.");
     this.assertIdle([chat], "chat");
     this.state.chats = this.state.chats.filter((c) => c !== chat);
     // A question left waiting in the chat goes with it.
@@ -286,13 +295,13 @@ export class Agents {
     const browser = this.ws.secureInputs?.formBrowser;
     if (browser) await Promise.all(chats.map(chat => browser.close(chat.id)));
     // A group chat has one session per member (desktop/groups.mjs); any chat may hold teammates' sessions.
-    const sessions = chats.flatMap((c) => [
+    const sessions = chats.flatMap(conversations).flatMap((c) => [
       ...(isGroup(c)
         ? Object.entries(c.members ?? {})
             .filter(([, m]) => m.established)
             .map(([botId, m]) => [memberSessionId(c, botId), m.sessionProvider])
         : c.established
-          ? [[c.id, c.sessionProvider]]
+          ? [[c.sessionId ?? c.id, c.sessionProvider]]
           : []),
       ...Object.entries(c.helpers ?? {})
         .filter(([, h]) => h.established)

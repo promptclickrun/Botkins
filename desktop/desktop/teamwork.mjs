@@ -25,7 +25,7 @@ const MESSAGE_MAX = 16000;
 const REPLY_MAX = 32000;
 
 /** The session a teammate keeps for one chat, so follow-up asks there build on earlier ones. */
-export const helperSessionId = (chat, botId) => chat.id + "-team-" + botId;
+export const helperSessionId = (chat, botId) => (chat.sessionId ?? chat.id) + "-team-" + botId;
 
 const line = (bot) => "- " + bot.name + ": " + bot.role + "." + (bot.summary ? " " + bot.summary.trim().slice(0, 200) : "");
 

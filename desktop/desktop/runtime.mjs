@@ -118,7 +118,7 @@ export const KEYED_PROVIDERS = "keyed-providers-v1";
 /** A bot may have a voice of its own (`bot.voice`): reading aloud and live voice, over Settings › Voice. */
 export const BOT_VOICE = "bot-voice-v1";
 const CHAT_TITLE_REGENERATION = "chat-title-regeneration-v1";
-export const CAPABILITIES = ["message-reactions-v1", "client-message-id-v1", "voice-turns-v1", "voice-history-v1", "quiet-replies-v1", "models-v2", "fast-mode-v1", LOOKS_CAPABILITY, ...headCapabilities, BOT_VOICE, ROUTINE_DELIVERY, "routine-no-output-v1", ROUTINE_OWNER, ROUTINE_SCRIPTS, ROUTINE_MODELS, ROUTINE_SILENT, ROUTINE_NOTIFY_TARGETS, PROACTIVE, PROACTIVE_LEARNING, PROACTIVE_TEAM, BOARD_MENTIONS, PROVIDER_USAGE, SIDE_PANE, REMOTE_HOSTS, FILES, FOLDERS, ARTIFACTS, PROJECT_ARTIFACTS, "project-folders-v1", "project-mode-v1", "project-clone-v1", "secure-input-v1", "turn-timeline-v1", PLUGINS, PLUGIN_STARTS, PROVIDER_SIGNIN, SPACES, AGENT_TEMPLATES, COMPOSIO_APPS, MARKET_REFRESH, MCP_APPS, "pi-packages-v1", "skill-upload-v1", "skills-catalog-v1", "skills-featured-v1", MCP_CATALOG_CAPABILITY, CHAT_TITLE_REGENERATION, KEYED_PROVIDERS];
+export const CAPABILITIES = ["main-chat-v1", "message-reactions-v1", "client-message-id-v1", "voice-turns-v1", "voice-history-v1", "quiet-replies-v1", "models-v2", "fast-mode-v1", LOOKS_CAPABILITY, ...headCapabilities, BOT_VOICE, ROUTINE_DELIVERY, "routine-no-output-v1", ROUTINE_OWNER, ROUTINE_SCRIPTS, ROUTINE_MODELS, ROUTINE_SILENT, ROUTINE_NOTIFY_TARGETS, PROACTIVE, PROACTIVE_LEARNING, PROACTIVE_TEAM, BOARD_MENTIONS, PROVIDER_USAGE, SIDE_PANE, REMOTE_HOSTS, FILES, FOLDERS, ARTIFACTS, PROJECT_ARTIFACTS, "project-folders-v1", "project-mode-v1", "project-clone-v1", "secure-input-v1", "turn-timeline-v1", PLUGINS, PLUGIN_STARTS, PROVIDER_SIGNIN, SPACES, AGENT_TEMPLATES, COMPOSIO_APPS, MARKET_REFRESH, MCP_APPS, "pi-packages-v1", "skill-upload-v1", "skills-catalog-v1", "skills-featured-v1", MCP_CATALOG_CAPABILITY, CHAT_TITLE_REGENERATION, KEYED_PROVIDERS];
 /**
  * What a paired device is told this app supports. A feature whose calls the link does not carry
  * (desktop/link/methods.mjs) is left out, so a device never asks for what it cannot reach.
@@ -578,6 +578,7 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
     },
     updateBot: (id, data) => workspace.updateBot(id, data),
     // A bot's Proactive agent, for the person who calls: the window and the command line are the owner's (desktop/device-call.mjs names a member).
+    setProactiveChatMode: (mode, person) => workspace.proactive.setChatMode(mode, person),
     setBotProactive: (id, patch, person = "owner") => workspace.proactive.setBot(id, patch, person),
     // What a person does with an alert they were sent: "take" starts a normal turn with the bot's offer in their chat
     // and answers that chat's id, "later" holds what it was about back for a day. Only the person it was for has it.
@@ -656,7 +657,7 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
     setBotFlags: (id, patch) => workspace.agents.setBotFlags(id, patch),
     makePrimary: (id) => workspace.agents.makePrimary(id),
     reorderBots: (ids) => workspace.agents.reorderBots(ids),
-    duplicateBot: (id) => workspace.agents.duplicateBot(id),
+    duplicateBot: (id, person) => workspace.agents.duplicateBot(id, person),
     // Bot templates (desktop/templates.mjs)
     saveTemplate: (botId, name) => workspace.templates.saveFromBot(botId, name),
     renameTemplate: (id, name) => workspace.templates.rename(id, name),
@@ -875,10 +876,12 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
       if (target === workspace.wiki.root) await host.shell.openPath(target);
       else host.shell.showItemInFolder(target);
     },
-    addBot: (data) => workspace.agents.create(data),
+    addBot: (data, person) => workspace.agents.create(data, person),
     // The person's existing agents (for Copilot, ~/.copilot/agents) and making bots of them.
     importableAgents: () => workspace.agents.importable(),
-    importAgents: (keys) => workspace.agents.importAgents(keys),
+    importAgents: (keys, person) => workspace.agents.importAgents(keys, person),
+    mainChat: (botId, person) => workspace.mainChat(botId, person),
+    changeMainFork: (...args) => workspace.changeMainFork(...args),
     createChat: (id) => workspace.createChat(id),
     createGroupChat: (botIds, title) => workspace.createGroupChat(botIds, title),
     recordVoiceLine: (chatId, id, text, final, author, options) => workspace.recordVoiceLine(chatId, id, text, final, author, options),

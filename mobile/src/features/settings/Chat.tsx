@@ -2,7 +2,7 @@
 import { MenuView } from "@react-native-menu/menu";
 import { ChevronsUpDown } from "lucide-react-native";
 import { View } from "react-native";
-import { useCan, useOnline, useSettings } from "@/state/hooks";
+import { useCan, useOnline, usePart, useSettings } from "@/state/hooks";
 import { COMPLETION_POSITIONS } from "@/features/chat/completion";
 import { api, attempt } from "@/state/link";
 import { BOT_TAPS } from "@/features/chat/habits";
@@ -48,6 +48,7 @@ export function ChoiceMenu<V extends string>({ title, subtitle, value, options, 
 export default function Chat() {
   const prefs = useChatPrefs();
   const settings = useSettings();
+  const chatMode = usePart("proactive")?.chatMode;
   const online = useOnline();
   const canManage = useCan("settings", "manage");
   return (
@@ -67,7 +68,10 @@ export default function Chat() {
       <View>
         <Label>Opening</Label>
         <Group>
-          <ChoiceMenu title="When you select a bot" value={prefs.botTap} options={BOT_TAPS} onChange={(botTap) => setChatPrefs({ botTap })} stacked />
+          <ChoiceMenu title="When you select a bot" value={!chatMode && prefs.botTap === "main" ? "latest" : prefs.botTap} options={chatMode ? BOT_TAPS : BOT_TAPS.filter(t => t.value !== "main")} onChange={(botTap) => setChatPrefs({ botTap })} stacked />
+          {chatMode && <ChoiceMenu title="Proactive signals" subtitle="Where your bots send alerts delivered to chat." value={chatMode}
+            options={[{ value: "main", label: "Main chat" }, { value: "new", label: "New chat every time" }]}
+            onChange={mode => void attempt(api.setProactiveChatMode(mode))} />}
         </Group>
       </View>
 

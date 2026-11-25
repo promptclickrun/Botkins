@@ -110,6 +110,27 @@ export class Proactive {
   get state() {
     return this.ws.state.proactive;
   }
+  chatMode(person = OWNER) {
+    return this.state.newChatPeople?.includes(person) ? "new" : "main";
+  }
+  setChatMode(mode, person = OWNER) {
+    if (mode !== "main" && mode !== "new") throw new Error("Choose Main chat or New chat every time.");
+    const people = new Set(this.state.newChatPeople);
+    if (mode === "new") people.add(person);
+    else people.delete(person);
+    this.state.newChatPeople = [...people];
+    this.ws.save();
+  }
+  /** Resolve only at delivery: setup and silent wakes never create a chat. */
+  chatTarget(botId, person) {
+    if (this.chatMode(person) === "main") {
+      const main = this.ws.chat(this.ws.mainChat(botId, person));
+      // A link from before private Main chats could still hold an invitation.
+      if (!this.ws.chatPeople(main.id).invited.length) return main;
+    }
+    const title = "Signal from " + this.ws.bot(botId).name;
+    return this.ws.chat(this.ws.createChat(botId, title, undefined, person === OWNER ? undefined : person));
+  }
   /** The computer's switch. */
   get master() {
     return this.ws.state.settings.proactive?.enabled === true;
@@ -348,7 +369,7 @@ export class Proactive {
   /** The part the link sends: the computer's switch, and each bot that has settings. */
   views() {
     const bots = Object.fromEntries(Object.keys(this.ws.state.settings.proactive.bots).map((id) => [id, this.view(id)]));
-    return { enabled: this.master, bots };
+    return { enabled: this.master, bots, chatMode: this.chatMode(), ...(this.state.newChatPeople?.length && { newChatPeople: this.state.newChatPeople }) };
   }
   /**
    * What a person may hear of from Botkins. The owner: their own chats' runs and questions, their tasks, and every
@@ -570,8 +591,11 @@ export class Proactive {
   }
   /** Writes what the person chose on the alert where it was delivered, so every window and phone shows it. */
   mark(botId, alert, chosen) {
-    const message = alert.chatId && this.ws.state.chats.find((c) => c.id === alert.chatId)?.messages.find((m) => m.proactiveRunId === alert.runId);
-    if (message) message.alert = { ...message.alert, runId: alert.runId, chosen };
+    const chat = alert.chatId && this.ws.state.chats.find(c => c.id === alert.chatId);
+    if (chat) for (const fork of [chat, ...Object.values(chat.savedForks ?? {})]) {
+      const message = fork.messages.find(m => m.proactiveRunId === alert.runId);
+      if (message) message.alert = { ...message.alert, runId: alert.runId, chosen };
+    }
     const item = alert.itemId && this.ws.board?.items.find((i) => i.id === alert.itemId);
     if (item) {
       item.alert = { ...item.alert, runId: alert.runId, chosen };
@@ -613,8 +637,7 @@ export class Proactive {
     if (!proactiveChats(this.ws.teamOf(), by)) throw new Error("Your team role can't chat with this bot.");
     const createdBy = by === OWNER ? undefined : by;
     const title = alert.offer.label;
-    const chat = this.ws.chat(this.ws.createChat(botId));
-    if (createdBy) chat.createdBy = createdBy;
+    const chat = this.ws.chat(this.ws.createChat(botId, title, undefined, createdBy));
     chat.titleSet = true;
     const author = createdBy && { memberId: by, name: personName(this.ws.teamOf(), by) || "A member" };
     // Marked once the turn has started: a start that fails leaves the alert to try again.

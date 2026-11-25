@@ -166,7 +166,7 @@ test("a refused card stores no page, and a panel whose chat is gone has no chat 
   const frame = ws.state.panels[0].blocks[0].frame;
   assert.equal(ws.frames.chatFor(frame), null);
   assert.equal(ws.frames.chatFor(frame), null);
-  assert.equal(ws.state.chats.filter((c) => c.botId === "scout").length, 0);
+  assert.deepEqual(ws.state.chats.filter(c => c.botId === "scout").map(c => c.main), [true]);
   assert.equal(ws.state.panels[0].chatId, "gone-chat");
 });
 

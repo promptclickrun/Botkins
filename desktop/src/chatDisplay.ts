@@ -7,8 +7,8 @@ export type ChatDisplay = {
   thinking: "open" | "folded" | "hidden";
   /** Collapse a finished turn to one expandable elapsed-time/count line. */
   foldFinishedSteps: boolean;
-  /** What selecting a bot does: open its latest chat, or start a new one. */
-  botTap: "latest" | "new";
+  /** What selecting a bot does on this device. Main chat is the default. */
+  botTap: "main" | "latest" | "new";
 };
 type Saved = Omit<Partial<ChatDisplay>, "steps" | "thinking"> & { steps?: unknown; thinking?: unknown; stepsPicked?: boolean; foldTools?: boolean; showThinking?: boolean };
 const key = "botkins.chatDisplay";
@@ -28,7 +28,7 @@ export function settleChatDisplay(saved: Saved, showThinking = true): ChatDispla
     // An old Every/Open choice was the explicit "keep finished work open" choice. Do not let a
     // missing new toggle turn that choice into a fold; all other old choices keep the new default.
     foldFinishedSteps: typeof saved?.foldFinishedSteps === "boolean" ? saved.foldFinishedSteps : !oldOpen,
-    botTap: saved?.botTap === "new" ? "new" : "latest",
+    botTap: saved?.botTap === "new" || saved?.botTap === "latest" ? saved.botTap : "main",
   };
 }
 export function readChatDisplay(): Saved {

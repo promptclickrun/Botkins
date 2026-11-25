@@ -415,9 +415,8 @@ export class Routines {
     const fields = this.fields(data, now);
     const deliver = deliveryField(data.deliver, this.ws, data.botId, personOf(createdBy));
     const notifyChange = this.notifyChange(data.botId, data, personOf(createdBy), opts);
-    const chatId = this.ws.createChat(data.botId, "Routine · " + fields.name);
+    const chatId = this.ws.createChat(data.botId, "Routine · " + fields.name, undefined, createdBy);
     const chat = this.ws.chat(chatId);
-    if (createdBy) chat.createdBy = createdBy;
     const id = (chat.lastScheduleId ?? 0) + 1;
     chat.lastScheduleId = id;
     chat.schedules = [
@@ -622,7 +621,7 @@ export class Routines {
    * The chat a routine's reply goes to: the one chosen, else the bot's latest chat that the
    * routine's creator is in. Makes one, theirs, when there is none.
    */
-  chatTarget(botId, deliver, title, createdBy, privateOnly = false) {
+  chatTarget(botId, deliver, title, createdBy) {
     const person = personOf(createdBy);
     if (deliver.chatId) {
       const chat = this.ws.state.chats.find((c) => c.id === deliver.chatId);
@@ -630,11 +629,9 @@ export class Routines {
       if (problem) throw new Error(problem);
       return chat;
     }
-    const latest = this.ws.state.chats.filter((c) => !chatProblem(c, botId, this.ws, person) && (!privateOnly || (personOf(c.createdBy) === person && !this.ws.chatPeople(c.id).invited.length))).sort((a, b) => b.time - a.time)[0];
+    const latest = this.ws.state.chats.filter((c) => (!c.main || c.messages.length) && !chatProblem(c, botId, this.ws, person)).sort((a, b) => b.time - a.time)[0];
     if (latest) return latest;
-    const made = this.ws.chat(this.ws.createChat(botId, title));
-    if (createdBy) made.createdBy = createdBy;
-    return made;
+    return this.ws.chat(this.ws.createChat(botId, title, undefined, createdBy));
   }
   /** Sends a finished routine run's reply where its routine says. A failure is noted on the run. */
   deliver(chat, run, proactiveCheck) {
@@ -656,7 +653,9 @@ export class Routines {
           (person !== "owner" && !this.ws.turnPeople(chat).sees())) to = "chat";
       }
       if (to === "chat") {
-        const target = this.chatTarget(chat.botId, entry.deliver, entry.name, maker, !!run.proactive);
+        const target = run.proactive
+          ? this.ws.proactive.chatTarget(chat.botId, personOf(maker))
+          : this.chatTarget(chat.botId, entry.deliver, entry.name, maker);
         const time = Date.now();
         // A proactive alert carries what the apps may do with it (desktop/proactive.mjs, `act`).
         target.messages.push({ role: "assistant", text, time, ...(run.proactive && { proactiveRunId: run.id, alert: this.ws.proactive.alertOf(run, proactiveCheck) }) });

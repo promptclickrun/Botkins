@@ -1,6 +1,5 @@
 // Selecting a bot, and leaving a new chat nobody wrote in, in an isolated data folder. No turns.
-// Settings › Chat › "When you select a bot" is kept on this device: "Open the latest chat" (the
-// usual) or "Start a new chat". A new chat with no message is archived when the person leaves it;
+// Main chat is the default. Settings › Chat also offers the latest chat or a new one. A new chat with no message is archived when the person leaves it;
 // one with typed text is kept. "Start a new chat" reuses such an empty chat, archived or not. Set BOTKINS_SELECT_SHOTS to a folder for a screenshot of the setting.
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -34,7 +33,7 @@ try {
   page.on("pageerror", (e) => errors.push(e.message));
   await page.getByRole("heading", { name: "Home", exact: true }).waitFor();
   const snap = () => page.evaluate(() => window.botkins.snapshot());
-  const chats = async (botId) => (await snap()).chats.filter((c) => c.botId === botId);
+  const chats = async (botId) => (await snap()).chats.filter((c) => c.botId === botId && !c.main);
   const select = (name) => page.locator("aside .botnav-item", { hasText: name }).getByRole("button").first().click();
   const place = (name) => page.getByRole("navigation", { name: "Workspace" }).getByRole("button", { name, exact: true }).click();
   const title = page.locator(".chathead h2");
@@ -44,7 +43,10 @@ try {
     const settings = page.getByRole("dialog", { name: "Settings" });
     await settings.getByRole("tab", { name: "Chat", exact: true }).click();
     const picker = settings.getByLabel("When you select a bot", { exact: true });
-    await expect(picker.getByRole("option")).toHaveText(["Open the latest chat", "Start a new chat"]);
+    await expect(picker.getByRole("option")).toHaveText(["Open Main chat", "Open the latest chat", "Start a new chat"]);
+    const signals = settings.getByLabel("Proactive signals", { exact: true });
+    await signals.selectOption(value === "latest" ? "main" : "new");
+    await expect.poll(async () => (await snap()).proactive.chatMode).toBe(value === "latest" ? "main" : "new");
     await picker.selectOption(value);
     await expect(picker).toHaveValue(value);
     if (shots && value === "new") {
@@ -55,7 +57,17 @@ try {
     await expect(settings).toBeHidden();
   };
 
-  // The usual: selecting a bot opens its latest chat.
+  // The default opens the bot's stable Main chat even with a newer ordinary conversation.
+  await select("Pip");
+  await expect(page.locator(".chathead-title small")).toHaveText("Main chat");
+  const id = (await snap()).chats.find(c => c.botId === "pip" && c.main).id;
+  await page.getByLabel("Main chat context").selectOption("reset");
+  await expect.poll(async () => (await snap()).chats.find(c => c.id === id).activeFork).not.toBe("original");
+  await page.getByLabel("Main chat context").selectOption("original");
+  await select("Scout");
+  assert.ok(!(await snap()).chats.find(c => c.id === id).archived);
+  await choose("latest");
+  // Explicit latest still opens the earlier ordinary conversation.
   await select("Pip");
   await expect(title).toHaveText("Pip");
   await expect(page.locator("article.assistant")).toContainText("Peas and broad beans.");

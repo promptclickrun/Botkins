@@ -81,6 +81,9 @@ export const WORKSPACE = {
   // ── Chats ──
   ...each("createChat send stop respond", cmd("chat")),
   // (A side question is a person's act in a chat, which the phone has as /btw: it gets a command with the chat commands.)
+  mainChat: cmd("chat"),
+  changeMainFork: cmd("chats switch-fork"),
+  setProactiveChatMode: cmd("preferences set"),
   renameChat: cmd("chats rename"),
   regenerateChatTitle: cmd("chats regenerate-title"),
   deleteChat: cmd("chats delete"),
@@ -404,6 +407,8 @@ export const CHANGES = {
   "models.default": null,
   "models.speed": ([scope, id]) => id ?? scope,
   "models.routines": null,
+  "models.chat": 0,
+  "chat.main": (args, value) => value?.chatId,
   "routines.run": 0,
   "routines.pause": 0,
   "routines.resume": 0,
@@ -473,6 +478,8 @@ export const CHANGES = {
   "chats.regenerateTitle": (args, value) => value?.id,
   "chats.delete": (args, value) => value?.id,
   "chats.react": (_args, value) => value?.id,
+  "chats.reset": (args, value) => value?.id,
+  "chats.switchFork": (args, value) => value?.id,
   "chats.fork": (args, value) => value?.from,
   "chats.compact": (args, value) => value?.id,
   "chats.flags": (args, value) => value?.id,

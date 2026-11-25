@@ -256,6 +256,7 @@ function ChatViewBody({
     .map((id) => state.bots.find((b) => b.id === id))
     .filter((b): b is Bot => !!b);
   const group = (chat.botIds?.length ?? 0) >= 2;
+  const ownMain = chat.main && chat.createdBy === (state.team && "me" in state.team ? state.team.me.memberId : undefined);
   // The model this chat runs on: its own choice, else (a routine's chat) the routines default, else its bot's, else the global default.
   const { models } = useModelCatalog();
   const defaultProvider = useDefaultProvider();
@@ -285,7 +286,7 @@ function ChatViewBody({
   const foldFinishedSteps = state.settings.foldFinishedSteps ?? state.settings.foldTools !== false;
   const chatRuns = state.runs.filter((r) => r.chatId === chat.id);
   const runs = new Map(chatRuns.map((r) => [r.id, r]));
-  const latest = chatRuns[0];
+  const latest = chat.main ? chatRuns.find(run => run.forkId === chat.activeFork) : chatRuns[0];
   // A question whose turn went on without an answer waits behind the ones a turn is waiting on, and is not "waiting" for the turn.
   const requests = state.requests.filter((r) => r.chatId === chat.id).sort((a, b) => Number(!!a.detached) - Number(!!b.detached));
   const turnWaits = requests.some((r) => !r.detached);
@@ -487,17 +488,17 @@ function ChatViewBody({
     };
   }, [completions, chat.id, pendingRun, replyIndex, busy, onScreen, state.settings.completionPosition]);
 
-  const [earlier, setEarlier] = useState<{ target: typeof messageTarget; from: number; messages: Message[] }>();
+  const [earlier, setEarlier] = useState<{ target: typeof messageTarget; fork?: string; from: number; messages: Message[] }>();
   const loadedFrom = chat.loaded?.from ?? 0;
   useEffect(() => {
     if (!messageTarget || messageTarget.index >= loadedFrom) return;
     let current = true;
     void window.botkins.artifactMessagePage(chat.id, messageTarget.index).then((page) => {
-      if (page && current) setEarlier({ target: messageTarget, ...page });
+      if (page && current) setEarlier({ target: messageTarget, fork: chat.activeFork, ...page });
     }).catch((e) => { if (current) setNotice(String(e)); });
     return () => { current = false; };
-  }, [messageTarget, chat.id, loadedFrom]);
-  const historic = earlier && earlier.target === messageTarget ? earlier : undefined;
+  }, [messageTarget, chat.id, chat.activeFork, loadedFrom]);
+  const historic = earlier && earlier.target === messageTarget && earlier.fork === chat.activeFork ? earlier : undefined;
   useEffect(() => {
     if (!messageTarget) return;
     const frame = requestAnimationFrame(() => {
@@ -545,6 +546,8 @@ function ChatViewBody({
     requestAnimationFrame(() =>
       document.querySelector<HTMLTextAreaElement>(".composewrap textarea[role=combobox]")?.focus(),
     );
+  const forkThread = (index: number) => window.botkins.forkChat(chat.id, index).then(id => openChat?.(id));
+  const forkLabel = ownMain ? "Fork in Main chat" : "Fork from here";
   const act = {
     copy: (m: Message) =>
       void window.botkins
@@ -555,11 +558,10 @@ function ChatViewBody({
       setQuote(m.text.trim().slice(0, 1200));
       focusComposer();
     },
-    fork: (i: number) =>
-      void window.botkins
-        .forkChat(chat.id, i)
-        .then((id) => openChat?.(id))
-        .catch((e) => setNotice(e.message)),
+    fork: (i: number) => void (ownMain
+      ? window.botkins.changeMainFork(chat.id, "fork", i, chat.activeFork)
+      : forkThread(i)
+    ).catch(e => setNotice(e.message)),
   };
   useEffect(() => {
     setShowChanges(false);
@@ -620,8 +622,8 @@ function ChatViewBody({
         )}
         {!group && (
           <button
-            aria-label="Fork from here"
-            title="Fork from here"
+            aria-label={forkLabel}
+            title={forkLabel}
             disabled={busy}
             onClick={() => act.fork(loadedFrom + i)}
           >
@@ -846,7 +848,7 @@ function ChatViewBody({
         <div className="chathead-title">
           <h2>{group ? chat.title : bot.name}</h2>
           <small className={doing ? "doing" : undefined}>
-            {doing ||
+            {doing || (chat.main && "Main chat") ||
               (group
                 ? chat.title === members.map((m) => m.name).join(", ")
                   ? "Group chat · " + members.length + " bots"
@@ -855,6 +857,19 @@ function ChatViewBody({
           </small>
         </div>
         <div className="chathead-tools">
+          {ownMain && <select aria-label="Main chat context" title="Main chat context" disabled={busy}
+            value={chat.activeFork} onChange={e => {
+              const id = e.target.value;
+              if (id === "compact") {
+                void window.botkins.compact(chat.id).catch(err => setNotice(err.message));
+                return;
+              }
+              void (id === "reset" ? window.botkins.changeMainFork(chat.id, "reset", undefined, chat.activeFork) : window.botkins.changeMainFork(chat.id, "switch", id, chat.activeFork)).catch(err => setNotice(err.message));
+            }}>
+            {chat.forks?.map(f => <option key={f.id} value={f.id}>{f.name}</option>)}
+            <option value="compact">Compact</option>
+            <option value="reset">Reset context</option>
+          </select>}
           {project && (
             <div className="project-tag">
               <span className="project-label" title={chat.folder ?? project.folder ?? project.name}>
@@ -926,7 +941,7 @@ function ChatViewBody({
               <ModelBadge choice={model} models={models} />
             </button>
           )}
-          {peopleView && (
+          {!chat.main && peopleView && (
             <button className="chathead-icon chat-invite" aria-label="Invite" title="Invite" aria-haspopup="dialog" onClick={() => setShowPeople(true)}>
               <UserPlus size={17} />
             </button>
@@ -1275,9 +1290,12 @@ function ChatViewBody({
           )}
           {!group && (
             <button role="menuitem" disabled={busy} onClick={() => act.fork(menu.index)}>
-              <GitFork size={14} /> Fork from here
+              <GitFork size={14} /> {forkLabel}
             </button>
           )}
+          {ownMain && <button role="menuitem" disabled={busy} onClick={() => void forkThread(menu.index).catch(e => setNotice(e.message))}>
+            <GitFork size={14} /> Fork as new chat
+          </button>}
         </div>
       )}
       <div className="composewrap" ref={composeArea}>

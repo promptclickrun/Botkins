@@ -182,6 +182,9 @@ export type Message = {
 };
 export type Chat = {
   hostDispatch?: true;
+  main?: boolean;
+  activeFork?: string;
+  forks?: { id: string; name: string }[];
   fastMode?: FastMode;
   /** Latest message count advertised by a paired computer, even before its chat page arrives. */
   count?: number;
@@ -250,6 +253,7 @@ export type PanePanel = {
   url?: string;
 };
 export type Run = {
+  forkId?: string;
   ending?: "failed" | "timed-out" | "interrupted" | "stopped";
   /** The turn's plan when it ended: how many steps are open, of how many. */
   plan?: { open: number; total: number };
@@ -1060,6 +1064,9 @@ declare global {
       refreshPanel(id: string): Promise<void>;
       cacheInfo(): Promise<{ bytes: number; catalogs: number }>;
       clearCache(): Promise<void>;
+      mainChat(botId: string): Promise<string>;
+      changeMainFork(id: string, action: "reset" | "fork" | "switch", value?: number | string, expected?: string): Promise<string>;
+      setProactiveChatMode(mode: "main" | "new"): Promise<void>;
       createChat(id: string): Promise<string>;
       /** A chat with 2 to 6 bots. Returns its id. */
       createGroupChat(botIds: string[], title?: string): Promise<string>;
@@ -1911,7 +1918,7 @@ export type Preferences = {
   routineModel?: ModelChoice;
   appearance: Appearance;
   completionPosition?: import("./chatDisplay").ChatDisplay["completionPosition"];
-  /** What selecting a bot does on this device: open its latest chat (the usual), or start a new one. */
+  /** What selecting a bot does on this device: open Main chat (the usual), its latest chat, or a new one. */
   botTap?: import("./chatDisplay").ChatDisplay["botTap"];
   steps?: "folded" | "open" | "failed";
   thinking?: "open" | "folded" | "hidden";
@@ -2012,7 +2019,7 @@ export type ProactiveBot = Partial<ProactiveBotSettings> & {
     evaluation?: { trained: number; tested: number; baseline: number; previous: number; challenger: number; promoted: boolean };
   };
 };
-export type ProactivePart = { enabled: boolean; bots: Record<string, ProactiveBot | undefined> };
+export type ProactivePart = { chatMode?: "main" | "new"; enabled: boolean; bots: Record<string, ProactiveBot | undefined> };
 /** What the Proactive agent did at each wake (desktop/proactive.mjs), newest first. */
 export type ProactiveLog = { at: number; reason: "signals" | "sweep" | "check" | "context" | "review"; score?: number; signals: number; outcome: "alerted" | "silent" | "failed"; runId: string; said?: string };
 export type Step = {

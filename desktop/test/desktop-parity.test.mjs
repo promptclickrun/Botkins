@@ -86,9 +86,10 @@ test("helper steps carry only an explicitly associated helper id", async () => {
 });
 
 test("selecting a bot opens its latest chat unless this device chose a new chat", () => {
-  assert.equal(settleChatDisplay({}).botTap, "latest");
+  assert.equal(settleChatDisplay({}).botTap, "main");
   assert.equal(settleChatDisplay({ botTap: "new" }).botTap, "new");
-  for (const value of ["latest", "", "New", null, 1, undefined]) assert.equal(settleChatDisplay({ botTap: value }).botTap, "latest", String(value));
+  assert.equal(settleChatDisplay({ botTap: "latest" }).botTap, "latest");
+  for (const value of ["", "New", null, 1, undefined]) assert.equal(settleChatDisplay({ botTap: value }).botTap, "main", String(value));
 });
 
 test("a chat nobody wrote in is archived when it is left; every other chat is kept", () => {

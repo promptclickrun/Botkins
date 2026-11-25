@@ -39,6 +39,7 @@ const chatText = (chat) =>
     "With: " + (chat.group ? chat.bots.map((name) => safe(name ?? "a bot that is gone")).join(", ") + " (a group chat)" : safe(chat.bot ?? "a bot that is gone")),
     "Messages: " + chat.messages + (state(chat) ? "   (" + state(chat) + ")" : ""),
     chat.project ? "Project: " + safe(chat.project) + " (" + chat.mode + ")" : chat.mode !== "default" ? "Mode: " + chat.mode : null,
+    ...(chat.forks ?? []).map(f => (f.id === chat.activeFork ? "Active fork: " : "Fork: ") + f.name + " (" + f.id + ")"),
     chat.section ? "Section: " + safe(chat.section) : null,
     chat.time ? "Last used: " + ago(chat.time) : null,
     chat.latestTurn ? "Latest turn: " + chat.latestTurn.id + (chat.latestTurn.status ? " (" + safe(chat.latestTurn.status) + ")" : "") : null,
@@ -196,13 +197,28 @@ export const chatsCommands = {
       },
       fork: {
         summary: "Make a new chat that holds this one up to a message",
-        usage: "botkins chats fork <chat> [--at <number>]",
-        options: { at: { type: "string", value: "number", about: "The message to fork from, counted from 0 as `botkins chat` read counts them. Without it, the last message" } },
+        usage: "botkins chats fork <chat> [--at <number>] [--in-main]",
+        options: { "in-main": { type: "boolean", about: "Make this the active fork in the same Main chat" }, at: { type: "string", value: "number", about: "The message to fork from, counted from 0 as `botkins chat` read counts them. Without it, the last message" } },
         details: "The new chat is of the same bot and starts with the conversation up to that message. A group chat cannot be forked, and a chat that is working must finish first.",
         async run(context) {
           const at = context.options.at;
           if (at !== undefined && !/^\d+$/.test(at)) throw usage("--at is a message's number, from 0.");
-          context.print(await context.client.call("chats.fork", one(context, CHAT), ...(at !== undefined ? [Number(at)] : [])), (chat) => "Made the chat " + named(chat) + " from message " + chat.at + " of " + safe(chat.from) + ".");
+          context.print(await context.client.call("chats.fork", one(context, CHAT), at === undefined ? null : Number(at), context.options["in-main"] === true), (chat) => chat.main ? "Switched Main chat to fork " + chat.activeFork + "." : "Made the chat " + named(chat) + " from message " + chat.at + " of " + safe(chat.from) + ".");
+        },
+      },
+      reset: {
+        summary: "Start Main chat with fresh context and keep the previous fork",
+        usage: "botkins chats reset <chat>",
+        async run(context) {
+          context.print(await context.client.call("chats.reset", one(context, CHAT)), c => "Reset Main chat context (" + c.id + ").");
+        },
+      },
+      "switch-fork": {
+        summary: "Resume a saved fork in the same Main chat (chats show lists its forks)",
+        usage: "botkins chats switch-fork <chat> <fork-id>",
+        async run(context) {
+          if (context.args.length !== 2) throw usage("Give a Main chat and a fork id.");
+          context.print(await context.client.call("chats.switchFork", ...context.args), c => "Switched Main chat to fork " + c.activeFork + ".");
         },
       },
       compact: {

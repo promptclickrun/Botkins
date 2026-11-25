@@ -35,6 +35,7 @@ function chatSummary(chat) {
     ...(Array.isArray(chat.pane?.panels) && chat.pane.panels.length > 0 && { panes: chat.pane.panels.length }),
     ...(chat.fastMode && { fastMode: chat.fastMode }),
     ...(chat.model && { model: chat.model }),
+    ...(chat.main && { main: true, activeFork: chat.activeFork, forks: chat.forks }),
     ...(chat.forkedFrom && { forkedFrom: chat.forkedFrom }),
     ...(chat.context && { context: chat.context }),
     ...(chat.schedules?.length && { schedules: chat.schedules }),
@@ -47,6 +48,7 @@ function runSummary(run) {
   return {
     id: run.id,
     chatId: run.chatId,
+    ...(run.forkId && { forkId: run.forkId }),
     title: run.title,
     time: run.time,
     status: run.status,
@@ -348,6 +350,7 @@ export function chatPart(state, chatId, runs = runsByChat(state, [chatId]).get(c
   const todos = chat.todos ?? (chat.botIds?.length > 1 ? runs.find((run) => run.todos)?.todos : undefined);
   return {
     id: chatId,
+    ...(chat.main && { activeFork: chat.activeFork }),
     from,
     total: all.length,
     messages,
@@ -364,6 +367,7 @@ export function runPart(state, chatId, runs = runsByChat(state, [chatId]).get(ch
   if (!chat) return null;
   // Text a bot wrote on the way ("turn-timeline-v1": `interim`) is not a reply.
   const answered = new Set((chat.messages ?? []).filter((m) => m.role !== "user" && !m.interim).map((m) => m.runId).filter(Boolean));
+  if (chat.main) runs = runs.filter(r => r.forkId === chat.activeFork);
   const run = runs.find((r) => r.status === "Working") ?? (runs[0] && !answered.has(runs[0].id) ? runs[0] : null);
   return run ? runDetail(run) : null;
 }

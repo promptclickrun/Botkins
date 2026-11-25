@@ -174,7 +174,7 @@ test("bots are added, changed and removed by name, and a bot answers in a chat a
   assert.deepEqual(providers.map((entry) => [entry.id, entry.enabled, entry.installed, entry.connected]), [["grok", true, true, true]]);
   assert.deepEqual((await client.call("models")).map((model) => model.ref), ["grok/standin-1"]);
   const nova = await client.call("bots.add", { name: "Nova", role: "Editor", instructions: "Be brief.", model: "grok/standin-1" });
-  assert.deepEqual([nova.name, nova.role, nova.model.model, nova.chats], ["Nova", "Editor", "standin-1", 0]);
+  assert.deepEqual([nova.name, nova.role, nova.model.model, nova.chats], ["Nova", "Editor", "standin-1", 1]);
   const plain = await client.call("bots.add", { name: "Pip" });
   assert.deepEqual([plain.role, plain.instructions], ["Assistant", "Help with what you are asked, clearly and briefly."]);
   await assert.rejects(client.call("bots.add", {}), { code: "BAD_ARGUMENT" });
@@ -218,8 +218,8 @@ test("bots are added, changed and removed by name, and a bot answers in a chat a
     listed = (await client.call("chat.list", "Nova II")).map((chat) => [chat.title, chat.messages]);
     if (listed[0]?.[0] !== "What is the capital of France?") break;
   }
-  assert.deepEqual(listed, [["Stand-in reply to: Reply with the title. — this answer arrives in pieces, a…", 2]]);
-  assert.equal((await client.call("status")).workspace.chats, 1);
+  assert.deepEqual(listed, [["Stand-in reply to: Reply with the title. — this answer arrives in pieces, a…", 2], ["Main chat", 0]]);
+  assert.equal((await client.call("status")).workspace.chats, 3);
   // A second turn: the run a chat shows is its latest, and the list of runs has the newest first.
   const again = await client.call("chat.send", chatId, "And of Italy?");
   for (let seen; ; ) {
@@ -404,7 +404,7 @@ test("a phone pairs from the terminal's code, chats with a bot and is listed, re
   const [device] = await client.call("devices.list");
   assert.deepEqual([device.id, device.name, device.kind, device.platform], [result.device.id, "Sam's iPhone", "phone", "ios"]);
   assert.equal((await client.call("status")).link.devices, 1);
-  assert.equal((await client.call("status")).workspace.chats, 1);
+  assert.equal((await client.call("status")).workspace.chats, 2);
   assert.equal((await client.call("devices.rename", "sam's iphone", "Kitchen phone")).name, "Kitchen phone");
   await assert.rejects(client.call("devices.rename", "Nobody's", "x"), { code: "NOT_FOUND" });
   // The person behind a device is the link's own to keep: with a link that has it, it is set; without, it is said so.
@@ -413,9 +413,37 @@ test("a phone pairs from the terminal's code, chats with a bot and is listed, re
     (error) => assert.equal(error.code, "UNSUPPORTED"),
   );
   // The paired phone comes back with what it kept, then is removed and can't.
-  const again = JSON.parse((await run(process.execPath, [phone, "--pairing", saved, "--via", "lan"], { env, timeout: 60_000 })).stdout);
+  const [nova] = await client.call("bots.list");
+  const main = (await client.call("chat.main", nova.id)).chatId;
+  assert.notEqual(result.chat.id, main);
+  const calls = [["mainChat", nova.id], ["changeMainFork", main, "reset"], ["changeMainFork", main, "switch", "original"], ["setProactiveChatMode", "new"]];
+  const again = JSON.parse((await run(process.execPath, [phone, "--pairing", saved, "--via", "lan", "--call", JSON.stringify(calls)], { env, timeout: 60_000 })).stdout);
   assert.deepEqual(again.bots, ["Nova"]);
+  assert.deepEqual(again.calls, [main, main, main, null]);
+  assert.deepEqual(await client.call("preferences.get", "proactive.chatMode"), { "proactive.chatMode": "new" });
   assert.deepEqual(await client.call("devices.remove", "Kitchen phone"), { removed: device.id, name: "Kitchen phone" });
   await assert.rejects(run(process.execPath, [phone, "--pairing", saved, "--via", "lan", "--timeout", "4"], { env, timeout: 30_000 }));
   assert.deepEqual(await client.call("devices.list"), []);
+});
+
+test("the installed CLI continues Main chat on an ACP model, compacts it and can request a separate thread", { skip }, async t => {
+  const { client, paths, env } = await service(t);
+  await client.call("bots.add", { name: "Nova", model: "grok/standin-1" });
+  const cli = fileURLToPath(new URL("../cli/botkins.mjs", import.meta.url));
+  const command = async (...words) => JSON.parse((await run(process.execPath, [cli, ...words, "--json"], { env: { ...env, BOTKINS_SOCKET: paths.socket } })).stdout);
+  const { chatId } = await command("chat", "Nova", "-m", "Remember our March departure.");
+  assert.equal((await command("chats", "show", chatId)).main, true);
+  const result = await command("chat", "Nova", "-m", "/compact");
+  assert.equal(result.chatId, chatId);
+  assert.equal(result.status, "Completed");
+  const fork = await command("chats", "fork", chatId, "--in-main", "--at", "1");
+  assert.equal(fork.id, chatId);
+  assert.notEqual(fork.activeFork, "original");
+  assert.equal((await command("chats", "switch-fork", chatId, "original")).activeFork, "original");
+  const model = await command("models", "--chat", chatId, "--model", "grok/standin-1");
+  assert.equal(model.model, "standin-1");
+  assert.equal((await command("chat", "Nova", "-m", "Continue our plan.")).chatId, chatId);
+  const other = await command("chat", "Nova", "--new", "-m", "Another topic.");
+  assert.notEqual(other.chatId, chatId);
+  assert.ok(!(await command("chats", "show", other.chatId)).main);
 });
