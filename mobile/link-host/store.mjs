@@ -4,6 +4,7 @@
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { hostname } from "node:os";
 import { join } from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import { b64u, newKeyPair, random, unb64u } from "./crypto.mjs";
 import { DEFAULT_RELAY_URL, newRelayKey, validRelayKey } from "./relay.mjs";
 import { cleanAvatars, defaultTeam } from "./team.mjs";
@@ -290,13 +291,17 @@ export class LinkStore {
   push(deviceId) {
     return Object.hasOwn(this.data.push ?? {}, deviceId) ? this.data.push[deviceId] : null;
   }
+  /** Saves a phone's notification record. False when nothing changed, so a repeat writes nothing. */
   setPush(deviceId, record) {
-    if (!this.device(deviceId)) return;
+    if (!this.device(deviceId)) return false;
+    // A phone may register the same address again and again; only a real change is written.
+    if (isDeepStrictEqual(this.push(deviceId), record ?? null)) return false;
     const push = { ...this.data.push };
     if (record) push[deviceId] = record;
     else delete push[deviceId];
     this.data.push = push;
     this.save();
+    return true;
   }
   /** What bots may use on a phone, by source: { calendar: "read", … }. */
   sources(deviceId) {
@@ -304,6 +309,7 @@ export class LinkStore {
   }
   setSources(deviceId, sources) {
     if (!this.device(deviceId)) return;
+    if (Object.hasOwn(this.data.sources ?? {}, deviceId) && isDeepStrictEqual(this.data.sources[deviceId], sources)) return;
     this.data.sources = { ...this.data.sources, [deviceId]: sources };
     this.save();
   }
