@@ -1,7 +1,6 @@
 // A person's round badge (their own picture, or their initial in their color), and the tag an
 // "@Name" in a message is drawn as (src/mentionTags.ts finds them).
 import { createContext, memo, useContext, useRef, type ReactNode } from "react";
-import { BotAvatar } from "./Avatar";
 import { initialOf, personColor } from "./messageSides";
 import type { MentionName } from "./mentionTags";
 import type { Bot } from "./types";
@@ -30,18 +29,23 @@ export const PersonBadge = memo(function PersonBadge({ person, size = 24, classN
 
 /** Who a tag names: a person, or a bot in the chat. */
 export type MentionTarget = { kind: "person"; person: ChatPerson } | { kind: "bot"; bot: Bot };
-/** The names a chat's messages may tag, and what each one draws. Made once per chat, so text is not parsed again. */
-export type MentionDirectory = { names: MentionName[]; targets: Map<string, MentionTarget> };
+/**
+ * The names a chat's messages may tag, and what each one draws. Made once per chat, so text is not
+ * parsed again. `botFace` draws a bot's small face: the chat hands it in, so the text renderer (also
+ * compiled for exports, scripts/build-wiki-export.mjs) never loads the avatar kit itself.
+ */
+export type MentionDirectory = { names: MentionName[]; targets: Map<string, MentionTarget>; botFace?: (bot: Bot) => ReactNode };
 
 export const MentionContext = createContext<MentionDirectory | null>(null);
 
 /** The tag of one "@Name": a rounded pill with the person's picture or the bot's face, and the text as it was written. */
 export function MentionTag({ id, children }: { id: string; children?: ReactNode }) {
-  const target = useContext(MentionContext)?.targets.get(id);
+  const directory = useContext(MentionContext);
+  const target = directory?.targets.get(id);
   if (!target) return <>{children}</>;
   return (
     <span className={"mention-tag " + (target.kind === "bot" ? "is-bot" : "is-person person-color-" + personColor(target.person.id))}>
-      {target.kind === "bot" ? <BotAvatar bot={target.bot} size={14} badge={false} /> : <PersonBadge person={target.person} size={14} />}
+      {target.kind === "bot" ? directory?.botFace?.(target.bot) : <PersonBadge person={target.person} size={14} />}
       <span className="mention-tag-text">{children}</span>
     </span>
   );
@@ -56,14 +60,14 @@ const sameBots = (a: readonly Bot[], b: readonly Bot[]) =>
  * The chat's directory, kept the same object while its people and bots are the same. The window's
  * state is a new object on every change, and a new directory would draw every message again.
  */
-export function useMentionDirectory(people: readonly ChatPerson[], bots: readonly Bot[]): { people: readonly ChatPerson[]; directory: MentionDirectory } {
+export function useMentionDirectory(people: readonly ChatPerson[], bots: readonly Bot[], botFace?: (bot: Bot) => ReactNode): { people: readonly ChatPerson[]; directory: MentionDirectory } {
   const held = useRef<{ people: readonly ChatPerson[]; bots: readonly Bot[]; directory: MentionDirectory }>(null);
-  if (!held.current || !samePeople(held.current.people, people) || !sameBots(held.current.bots, bots)) held.current = { people, bots, directory: mentionDirectory(people, bots) };
+  if (!held.current || !samePeople(held.current.people, people) || !sameBots(held.current.bots, bots)) held.current = { people, bots, directory: mentionDirectory(people, bots, botFace) };
   return { people: held.current.people, directory: held.current.directory };
 }
 
 /** The directory for a chat: its people and its bots, by the names a message would use. */
-export function mentionDirectory(people: readonly ChatPerson[], bots: readonly Bot[]): MentionDirectory {
+export function mentionDirectory(people: readonly ChatPerson[], bots: readonly Bot[], botFace?: (bot: Bot) => ReactNode): MentionDirectory {
   const names: MentionName[] = [];
   const targets = new Map<string, MentionTarget>();
   for (const person of people) {
@@ -74,5 +78,5 @@ export function mentionDirectory(people: readonly ChatPerson[], bots: readonly B
     names.push({ key: "bot:" + bot.id, name: bot.name });
     targets.set("bot:" + bot.id, { kind: "bot", bot });
   }
-  return { names, targets };
+  return { names, targets, ...(botFace && { botFace }) };
 }

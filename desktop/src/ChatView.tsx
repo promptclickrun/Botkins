@@ -86,6 +86,9 @@ import "./canvas.css";
 import "./projects.css";
 import "./groups.css";
 
+/** A bot's face in a mention tag (src/PersonBadge.tsx): one function, so the chat's mention directory stays the same object. */
+const mentionBotFace = (bot: Bot) => <BotAvatar bot={bot} size={14} badge={false} />;
+
 export type SideAnswer = { question: string; answer?: string; error?: string };
 
 const failed = ["Needs you", "Interrupted", "Stopped"];
@@ -275,7 +278,7 @@ function ChatViewBody({
   // Sides: only the viewer's own messages are on the right. Another person's are on the left, in a
   // person's tinted bubble, with their name and round picture on the first of a run (src/messageSides.ts).
   const viewer = viewerOf(state);
-  const { people: chatPeopleList, directory: mentions } = useMentionDirectory(chatPersons(state, chat), group ? members : [bot]);
+  const { people: chatPeopleList, directory: mentions } = useMentionDirectory(chatPersons(state, chat), group ? members : [bot], mentionBotFace);
   const personOfMessage = (m: Message): ChatPerson => {
     const id = authorOf(m);
     return chatPeopleList.find((person) => person.id === id) ?? { id, name: m.author ? authorName(state, m.author) : "Owner" };
