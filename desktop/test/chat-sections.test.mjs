@@ -49,6 +49,11 @@ test("while searching only groups with a match show, and the bot's name matches 
   assert.equal(chatGroups({ chats, sections, today, query: "pip", botName: () => "Pip" }).length, 5);
 });
 
+test("a search also finds a chat by what was said in it", () => {
+  const said = [chat("quiet", today + 1000, { messages: [{ role: "assistant", text: "Merged PR #250, the Browser Extension" }] }), chat("other", today + 2000)];
+  assert.deepEqual(shape(chatGroups({ chats: said, today, query: "browser extension" })), [["Today", ["quiet"]]]);
+});
+
 test("Unread shows only groups with an unread chat; Archived lists archived chats by day, without sections", () => {
   assert.deepEqual(shape(chatGroups({ chats, sections, today, filter: "Unread" })), [["Home", ["news"]]]);
   assert.deepEqual(shape(chatGroups({ chats, sections, today, filter: "Archived" })), [["Today", ["asleep"]]]);

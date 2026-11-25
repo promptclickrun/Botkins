@@ -101,6 +101,7 @@ import { proposalsFrom } from "./proactive-learning.mjs";
 import { Templates } from "./templates.mjs";
 import { readWorkspace, WorkspaceWriter } from "./workspace-file.mjs";
 import { Access } from "./access.mjs";
+import { SessionSearch } from "./session-search.mjs";
 import { memberCanSpaces, narrower, personName, speakerContext, speakerPrompt, turnAccess } from "./team-turn.mjs";
 import { Spaces } from "./spaces.mjs";
 
@@ -314,6 +315,8 @@ export class Workspace {
     this.summaries = new Summaries(this);
     // The shared wiki of goals, projects and people (desktop/wiki.mjs)
     this.wiki = new Wiki(this);
+    // Searching past chats, across every harness (desktop/session-search.mjs)
+    this.sessionSearch = new SessionSearch(this);
     // iMessage and Mail for bots, on a Mac (desktop/mactools.mjs). Tests pass stand-ins in options.macTools.
     this.mac = new MacTools(this, options?.macTools);
     // Tools a bot runs on a paired phone, through the phone link (desktop/phonetools.mjs).
@@ -1394,6 +1397,7 @@ export class Workspace {
       fixed: {
         head,
         group: chat.groupInstructions || "",
+        sessions: this.sessionSearch.context(),
         extra: chat.extraInstructions || "",
         profile: this.profileContext(bot.id),
         own:
@@ -1414,7 +1418,7 @@ export class Workspace {
   }
   /** The instructions a session is given, from instructionParts (without the memory, which is the session's `context`). */
   composeInstructions({ fixed, live }) {
-    return fixed.head + live.project + live.space + fixed.group + live.team + live.subagents + live.wiki + fixed.extra + fixed.profile + fixed.own;
+    return fixed.head + live.project + live.space + fixed.group + live.team + live.subagents + live.wiki + (fixed.sessions ?? "") + fixed.extra + fixed.profile + fixed.own;
   }
   /** What a bot is told at the start of a conversation, as it is now. */
   instructionsFor(chat, bot) {
@@ -1428,6 +1432,8 @@ export class Workspace {
       ...this.projects.tools(bot, chat, run, task),
       ...this.memory.tools(bot, chat, run, task),
       ...this.wiki.tools(bot, chat, run, task),
+      // Past chats, from every harness (desktop/session-search.mjs). Read-only.
+      ...this.sessionSearch.tools(bot, chat, run, task),
     ];
     // A helping teammate reads records and keeps its memory; it changes nothing else in the app.
     if (chat.helper) return records;

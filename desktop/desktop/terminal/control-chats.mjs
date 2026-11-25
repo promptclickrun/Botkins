@@ -119,6 +119,23 @@ export function chatsApi({ workspace, handlers, bot }) {
       const of = held();
       return state().chats.filter((entry) => !entry.temporary && (!only || entry.botId === only || entry.botIds?.includes(only))).map((entry) => view(entry, of));
     },
+    /** Messages of every chat that hold the words, best first (desktop/session-search.mjs), as the owner sees them. */
+    "chats.search": ([query, options = {}] = []) => {
+      const o = options && typeof options === "object" && !Array.isArray(options) ? options : {};
+      try {
+        return workspace.sessionSearch.search(text(query, 500, "some words to search for"), {
+          ...(o.bot && { bot: bot(o.bot) }),
+          ...(o.chat && { chatId: chat(o.chat).id }),
+          ...(Number.isInteger(o.limit) && { limit: o.limit }),
+          ...(o.since && { since: o.since }),
+          ...(o.before && { before: o.before }),
+          ...(o.role && { role: o.role }),
+        });
+      } catch (error) {
+        if (error instanceof ControlError) throw error;
+        throw new ControlError(error.message, "BAD_ARGUMENT");
+      }
+    },
     /** One chat, with the turn that `chats.retry` would send again. */
     "chats.get": ([ref]) => {
       const found = chat(ref);
