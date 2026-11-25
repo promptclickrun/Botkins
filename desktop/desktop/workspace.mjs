@@ -320,6 +320,9 @@ export class Workspace {
     this.projects = new Projects(this);
     this.artifacts = new Artifacts(this);
     this.artifactEvents = new ArtifactEvents(this);
+    // Per run: the stops being tried (Workspace.stopHelper) and the function that reads a turn's events.
+    this.stopping = new WeakMap();
+    this.replays = new WeakMap();
     this.artifactEvents.restore(existsSync(this.artifacts.file));
     // Agent access (desktop/access.mjs)
     this.access = new Access(this);
@@ -2588,14 +2591,25 @@ export class Workspace {
       if (this.queues.has(chat.id)) setImmediate(() => this.drain(chat.id));
     }
   }
-  /** `session.on` for a turn's run: after each event, the run's `stoppable` marks are brought up to date. */
+  /**
+   * `session.on` for a turn's run: after each event, the run's `stoppable` marks are brought up to
+   * date. The end of an item whose stop is being tried (Workspace.stopHelper) is held back until
+   * it is known whether the stop worked.
+   */
   listen(session, run, handler) {
-    return session.on((event) => {
+    const process = (event) => {
       try {
         handler(event);
       } finally {
         this.syncStoppable(run, session, event);
       }
+    };
+    this.replays.set(run, process);
+    return session.on((event) => {
+      const ending = /^(subagent\.(completed|failed)|tool\.execution_complete)$/.test(event?.type ?? "");
+      const hold = ending && (this.stopping.get(run) ?? []).find((entry) => entry.ids.has(event.data?.toolCallId));
+      if (hold) hold.held.push(event);
+      else process(event);
     });
   }
   /**
@@ -2604,7 +2618,7 @@ export class Workspace {
    * Only a running helper or background command carries it.
    */
   syncStoppable(run, session, event) {
-    if (typeof session?.canStopHelper !== "function" || !/^(subagent\.|tool\.execution_(start|complete)|task\.)/.test(event?.type ?? "")) return;
+    if (typeof session?.canStopHelper !== "function" || !/^(subagent\.|tool\.(execution_(start|complete)|backgrounded)|task\.)/.test(event?.type ?? "")) return;
     const can = (item) => item.status === "Running" && !!session.canStopHelper(item.id);
     let helpers = false;
     for (const agent of run.agents ?? []) {
@@ -2636,30 +2650,32 @@ export class Workspace {
     if (!helper && !step) throw new Error("That isn't a helper or a background command of this turn.");
     if ((helper ?? step).status !== "Running") throw new Error("That helper already finished.");
     const session = task.session;
-    if (typeof session?.stopHelper !== "function" || !session.canStopHelper?.(id)) throw new Error("This model can't stop one helper on its own. Stop the whole turn instead.");
-    // Marked first: what the harness reports while it stops the helper (a cancel, a failure) doesn't change this.
+    if (typeof session?.stopHelper !== "function" || !session.canStopHelper?.(id)) throw new Error("That can't be stopped on its own right now. Stop the whole turn instead.");
+    // While the stop is tried, the end of these items is held: if the harness reports the cancel as
+    // a failure, that is not how they ended; if the stop is refused because they ended, it is.
     const items = [...(helper ? [helper] : []), ...(run.steps ?? []).filter((item) => item.id === id || (helper && item.agentId === id))].filter((item) => item.status === "Running");
-    const before = items.map((item) => ({ ...item }));
-    const now = Date.now();
-    for (const item of items) {
-      delete item.stoppable;
-      Object.assign(item, { status: "Stopped", finished: now, ...(item === helper && { detail: "Stopped by you" }) });
-    }
-    this.notify();
+    const hold = { ids: new Set(items.map((item) => item.id)), held: [] };
+    const holds = this.stopping.get(run) ?? [];
+    if (holds.some((entry) => entry.ids.has(id))) throw new Error("That is being stopped already.");
+    this.stopping.set(run, [...holds, hold]);
+    const release = () => this.stopping.set(run, (this.stopping.get(run) ?? []).filter((entry) => entry !== hold));
     try {
       await session.stopHelper(id);
     } catch (error) {
-      // It was not stopped: it is as it was.
-      for (const [index, item] of items.entries()) {
-        for (const key of ["status", "finished", "detail", "stoppable"]) {
-          if (before[index][key] === undefined) delete item[key];
-          else item[key] = before[index][key];
-        }
-      }
-      this.notify();
+      release();
+      // It was not stopped: what ended meanwhile ended as the harness said.
+      for (const event of hold.held) this.replays.get(run)?.(event);
       throw error;
     }
+    release();
+    const now = Date.now();
+    for (const item of items) {
+      delete item.stoppable;
+      if (item.status !== "Running") continue;
+      Object.assign(item, { status: "Stopped", finished: now, ...(item === helper && { detail: "Stopped by you" }) });
+    }
     this.save();
+    this.notify();
   }
   async stop(chatId) {
     this.hostDispatch.stop(chatId);

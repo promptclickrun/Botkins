@@ -810,3 +810,81 @@ test("a stop Claude Code refuses is a plain sentence, and the task can be tried 
   finish();
   await sent;
 });
+
+test("an ending that comes while a stop is refused is the real ending, not a stop", async (t) => {
+  let finish;
+  const gate = new Promise((resolve) => (finish = resolve));
+  const { provider } = setup(t, async (turn) => {
+    turn.use("f1", "Agent", { subagent_type: "Explore", description: "Look" });
+    started(turn, "f1", "task-f", "local_agent", false);
+    // The helper finishes while Claude Code is still answering the stop, and the stop is then refused.
+    turn.onStop = async () => {
+      turn.result("f1", "Looked");
+      await new Promise((resolve) => setImmediate(resolve));
+      throw new Error("Too late");
+    };
+    await gate;
+  });
+  const session = await provider.openSession(spec({ handlers: {} }));
+  const events = [];
+  session.on((e) => events.push(e));
+  const sent = session.send({ prompt: "Go" });
+  await until(() => session.canStopHelper("f1"), "the task to be named");
+  await assert.rejects(session.stopHelper("f1"), /Botkins couldn't stop it: Too late/);
+  assert.deepEqual(events.filter((e) => e.type === "tool.execution_complete").map((e) => [e.data.toolCallId, e.data.success, e.data.stopped]), [["f1", true, undefined]]);
+  assert.deepEqual(events.filter((e) => e.type === "subagent.completed").map((e) => [e.data.toolCallId, e.data.stopped, e.data.result]), [["f1", undefined, "Looked"]]);
+  finish();
+  await sent;
+});
+
+test("background work still running when the reply ends is closed with a plain note", async (t) => {
+  const { provider } = setup(t, async (turn) => {
+    turn.use("a1", "Agent", { subagent_type: "Explore", description: "Find the file", run_in_background: true });
+    started(turn, "a1", "task-a", "local_agent", true);
+    turn.result("a1", "running in the background");
+    turn.use("b1", "Bash", { command: "npm run dev", run_in_background: true });
+    started(turn, "b1", "task-b", "local_bash", true);
+    turn.result("b1", "running in the background");
+    turn.use("c1", "Bash", { command: "sleep 1", run_in_background: true });
+    started(turn, "c1", "task-c", "local_bash", true);
+    turn.result("c1", "running in the background");
+    ended(turn, "c1", "task-c", "completed", "Done sleeping");
+    turn.say("Started them.");
+  });
+  const session = await provider.openSession(spec({ handlers: {} }));
+  const events = [];
+  session.on((e) => events.push(e));
+  await session.send({ prompt: "Go" });
+  assert.deepEqual(events.filter((e) => e.type === "tool.execution_complete").map((e) => [e.data.toolCallId, e.data.success, e.data.stopped, e.data.result?.content]), [
+    ["c1", true, undefined, "Done sleeping"],
+    ["a1", false, true, "Still running when the reply ended."],
+    ["b1", false, true, "Still running when the reply ended."],
+  ]);
+  assert.deepEqual(events.filter((e) => e.type === "subagent.completed").map((e) => [e.data.toolCallId, e.data.stopped, e.data.detail]), [["a1", true, "Still running when the reply ended."]]);
+});
+
+test("a command moved to the background mid-run is announced as one", async (t) => {
+  let finish;
+  const gate = new Promise((resolve) => (finish = resolve));
+  const { provider } = setup(t, async (turn) => {
+    turn.use("b1", "Bash", { command: "npm run dev" });
+    started(turn, "b1", "task-b", "local_bash", false);
+    turn.use("a1", "Agent", { subagent_type: "Explore", description: "Look" });
+    started(turn, "a1", "task-a", "local_agent", false);
+    await gate;
+    turn.emit({ type: "system", subtype: "task_updated", task_id: "task-b", patch: { is_backgrounded: true } });
+    turn.emit({ type: "system", subtype: "task_updated", task_id: "task-a", patch: { is_backgrounded: true } });
+    turn.result("b1", "running in the background");
+    ended(turn, "b1", "task-b", "completed", "Done");
+    ended(turn, "a1", "task-a", "completed", "Looked");
+  });
+  const session = await provider.openSession(spec({ handlers: {} }));
+  const events = [];
+  session.on((e) => events.push(e));
+  const sent = session.send({ prompt: "Go" });
+  await until(() => session.canStopHelper("a1"), "the tasks to be named");
+  assert.deepEqual(events.filter((e) => e.type === "tool.backgrounded"), []);
+  finish();
+  await sent;
+  assert.deepEqual(events.filter((e) => e.type === "tool.backgrounded").map((e) => e.data.toolCallId), ["b1"], "a command, and not a helper");
+});

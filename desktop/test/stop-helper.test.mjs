@@ -64,6 +64,11 @@ function open(session, t) {
   return { ws, id: ws.createChat("pip") };
 }
 
+/** Lets what an event started (Copilot's task list is read after one) finish. */
+const settle = async () => {
+  for (let i = 0; i < 5; i++) await new Promise((resolve) => setImmediate(resolve));
+};
+
 const helper = (emit, id) => {
   emit({ type: "tool.execution_start", data: { toolCallId: id, toolName: "task", arguments: { prompt: "Find it" } } });
   emit({ type: "subagent.started", data: { toolCallId: id, agentName: "explore", agentDescription: "Find it" } });
@@ -74,16 +79,17 @@ test("a running helper and a running background command are marked stoppable, an
   const tasks = [];
   let seen;
   const session = fakeSession(async (emit, self) => {
-    helper(emit, "h1");
-    helper(emit, "h2");
-    shell(emit, "s1", "npm run dev");
-    emit({ type: "tool.execution_start", data: { toolCallId: "plain", toolName: "view", arguments: { path: "/a" } } });
-    emit({ type: "tool.execution_start", data: { toolCallId: "inner", toolName: "grep", arguments: { pattern: "x" } }, agentId: "h1" });
     tasks.push(
       { type: "agent", id: "task-1", toolCallId: "h1", status: "running" },
       { type: "agent", id: "task-2", toolCallId: "h2", status: "running" },
       { type: "shell", id: "shell-1", command: "npm run dev", status: "running", startedAt: new Date().toISOString() },
     );
+    helper(emit, "h1");
+    helper(emit, "h2");
+    shell(emit, "s1", "npm run dev");
+    emit({ type: "tool.execution_start", data: { toolCallId: "plain", toolName: "view", arguments: { path: "/a" } } });
+    emit({ type: "tool.execution_start", data: { toolCallId: "inner", toolName: "grep", arguments: { pattern: "x" } }, agentId: "h1" });
+    await settle();
     const run = ws.state.runs[0];
     const marks = () => [run.agents.map((a) => a.stoppable === true), run.steps.map((s) => [s.id, s.stoppable === true])];
     seen = { before: marks(), part: structuredClone(runPart(ws.state, id)) };
@@ -124,6 +130,7 @@ test("a call that is not a running helper or background command of the chat's tu
     emit({ type: "tool.execution_start", data: { toolCallId: "plain", toolName: "view", arguments: { path: "/a" } } });
     emit({ type: "subagent.completed", data: { toolCallId: "h1", result: "ok" } });
     helper(emit, "h3");
+    await settle();
     for (const [name, call] of [["done", () => ws.stopHelper(id, "h1")], ["plain", () => ws.stopHelper(id, "plain")], ["unknown", () => ws.stopHelper(id, "nope")], ["empty", () => ws.stopHelper(id, "")], ["other chat", () => ws.stopHelper("elsewhere", "h3")], ["gone from the list", () => ws.stopHelper(id, "h3")]])
       outcomes[name] = await call().then(() => "stopped", (error) => error.message);
   }, { tasks: () => tasks });
@@ -136,7 +143,7 @@ test("a call that is not a running helper or background command of the chat's tu
     unknown: "That isn't a helper or a background command of this turn.",
     empty: "Choose a helper or a command to stop.",
     "other chat": "This chat isn't working on a turn right now.",
-    "gone from the list": "That helper already finished.",
+    "gone from the list": "That can't be stopped on its own right now. Stop the whole turn instead.",
   });
   assert.deepEqual(session.cancelled, [], "nothing was cancelled by a refused call");
 });
@@ -152,7 +159,7 @@ test("a model that can't stop one helper marks none and says so", async (t) => {
   const { ws, id } = open(session, t);
   await ws.send(id, "go");
   assert.deepEqual(seen.marks.filter((mark) => mark), []);
-  assert.equal(seen.error, "This model can't stop one helper on its own. Stop the whole turn instead.");
+  assert.equal(seen.error, "That can't be stopped on its own right now. Stop the whole turn instead.");
 });
 
 test("a runtime that refuses the cancel gives a plain sentence and the helper goes on", async (t) => {
@@ -160,6 +167,7 @@ test("a runtime that refuses the cancel gives a plain sentence and the helper go
   const tasks = [{ type: "agent", id: "task-1", toolCallId: "h1", status: "running" }];
   const session = fakeSession(async (emit, self) => {
     helper(emit, "h1");
+    await settle();
     self.rpc.tasks.cancel = async () => {
       throw new Error("method not found");
     };
@@ -211,12 +219,12 @@ test("Copilot matches a helper by its call and a shell by its command, and says 
   const events = [];
   session.on((event) => events.push(event));
   const live = fake.log.sessions.get("stop-chat");
+  assert.equal(session.canStopHelper("anything"), true, "until the list is read, the runtime's word is not known");
   const at = (offset) => new Date(Date.now() + offset).toISOString();
   live.emit({ type: "tool.execution_start", data: { toolCallId: "s-old", toolName: "bash", arguments: { command: "npm run dev  " } } });
   await new Promise((resolve) => setTimeout(resolve, 15));
   live.emit({ type: "tool.execution_start", data: { toolCallId: "s-new", toolName: "bash", arguments: { command: "npm run dev" } } });
-  assert.equal(events.length, 2, "the events still reach the workspace");
-  assert.equal(session.canStopHelper("anything"), true);
+  assert.equal(events.filter((event) => event.type === "tool.execution_start").length, 2, "the events still reach the workspace");
 
   tasks = [
     { type: "agent", id: "task-a", toolCallId: "h1", status: "running" },
@@ -246,4 +254,98 @@ test("Copilot matches a helper by its call and a shell by its command, and says 
   delete fake.log.sessions.get("stop-chat").rpc.tasks;
   assert.equal(session.canStopHelper("h1"), false, "a runtime without the task calls can't");
   await assert.rejects(session.stopHelper("h1"), /Botkins couldn't stop it: this version of Copilot can't stop one helper\./);
+});
+
+// ── An ending that arrives while a stop is being tried ──
+test("a helper or command that ends while its stop is tried keeps its real ending when the stop fails", async (t) => {
+  const live = [
+    { type: "agent", id: "task-1", toolCallId: "h1", status: "running" },
+    { type: "shell", id: "shell-1", command: "npm run dev", status: "running", startedAt: new Date().toISOString() },
+  ];
+  let during = null;
+  let seen;
+  const session = fakeSession(async (emit) => {
+    helper(emit, "h1");
+    shell(emit, "s1", "npm run dev");
+    await settle();
+    const attempt = async (id, end) => {
+      // The task list is read in the middle of the stop: the item ends then, and is gone from the list.
+      during = end;
+      return ws.stopHelper(id, id).catch((error) => error.message);
+    };
+    seen = [
+      await attempt("h1", () => {
+        emit({ type: "tool.execution_complete", data: { toolCallId: "h1", success: true, result: { content: "Found it" } } });
+        emit({ type: "subagent.completed", data: { toolCallId: "h1", result: "Found it" } });
+      }),
+      await attempt("s1", () => emit({ type: "tool.execution_complete", data: { toolCallId: "s1", success: false, error: { message: "Exited with code 1" } } })),
+    ];
+  }, { tasks: () => {
+    if (!during) return live;
+    const end = during;
+    during = null;
+    end();
+    return [];
+  } });
+  const { ws, id } = open(session, t);
+  // (The attempts above name the id twice: `stopHelper(id, id)` is the call's own id.)
+  const original = ws.stopHelper.bind(ws);
+  ws.stopHelper = (_id, item) => original(id, item);
+  await ws.send(id, "go");
+  const run = ws.state.runs[0];
+  assert.deepEqual(seen, ["That helper already finished.", "That command already finished."]);
+  assert.deepEqual([run.agents[0].status, run.agents[0].detail, run.agents[0].result], ["Done", undefined, "Found it"], "the helper's own ending, not Running until the turn's end");
+  assert.deepEqual(run.steps.map((step) => [step.id, step.status]), [["h1", "Done"], ["s1", "Failed"]]);
+  assert.deepEqual(session.cancelled, []);
+});
+
+// ── A command that went to the background while it ran ──
+test("a command that is moved to the background is a background command, and can be stopped", async (t) => {
+  const tasks = [{ type: "shell", id: "shell-1", command: "npm run dev", status: "running", startedAt: new Date().toISOString() }];
+  let seen;
+  const session = fakeSession(async (emit) => {
+    // Started in the foreground: nothing says it is a background command yet.
+    emit({ type: "tool.execution_start", data: { toolCallId: "s1", toolName: "bash", arguments: { command: "npm run dev" } } });
+    await settle();
+    const run = ws.state.runs[0];
+    const before = [run.steps[0].background === true, run.steps[0].stoppable === true];
+    emit({ type: "tool.backgrounded", data: { toolCallId: "s1" } });
+    await settle();
+    seen = { before, after: [run.steps[0].background === true, run.steps[0].stoppable === true], error: await ws.stopHelper(id, "s1").then(() => "", (error) => error.message), status: run.steps[0].status };
+  }, { tasks: () => tasks });
+  const { ws, id } = open(session, t);
+  await ws.send(id, "go");
+  assert.deepEqual(seen, { before: [false, false], after: [true, true], error: "", status: "Stopped" });
+  assert.deepEqual(session.cancelled, ["shell-1"]);
+});
+
+test("Copilot offers a stop only for what its task list holds, as of the last time it was read", async (t) => {
+  const folder = tempDir(t);
+  let tasks = [];
+  const fake = fakeClient(undefined, { rpc: () => ({ model: { switchTo: async () => ({}) }, permissions: { setMode: async () => ({ success: true }) }, tasks: { list: async () => ({ tasks }), cancel: async () => ({ cancelled: true }) } }) });
+  const copilot = new CopilotProvider({ connect: fake.client });
+  t.after(() => copilot.stop());
+  const session = await copilot.openSession({ sessionId: "snap-chat", folder, model: { model: "auto" }, approval: "ask", instructions: "", skills: { directories: [], disabled: [] }, mcpServers: {}, plugins: [], tools: [] });
+  const events = [];
+  session.on((event) => events.push(event.type));
+  const live = fake.log.sessions.get("snap-chat");
+  assert.equal(session.canStopHelper("h1"), true, "before the list was read, the runtime's word is not known");
+  tasks = [{ type: "agent", id: "task-1", toolCallId: "h1", status: "running" }, { type: "shell", id: "sh-1", command: "make", status: "running", startedAt: new Date().toISOString() }];
+  live.emit({ type: "subagent.started", data: { toolCallId: "h1" } });
+  live.emit({ type: "subagent.started", data: { toolCallId: "h2" } });
+  live.emit({ type: "tool.execution_start", data: { toolCallId: "s1", toolName: "bash", arguments: { command: "make" } } });
+  live.emit({ type: "tool.execution_start", data: { toolCallId: "s2", toolName: "bash", arguments: { command: "make test" } } });
+  await settle();
+  assert.deepEqual(["h1", "h2", "s1", "s2"].map((id) => session.canStopHelper(id)), [true, false, true, false], "listed items only");
+  assert.ok(events.includes("task.changed"), "the workspace is told when the answer changes");
+  tasks = [];
+  live.emit({ type: "subagent.completed", data: { toolCallId: "h1" } });
+  await settle();
+  assert.equal(session.canStopHelper("h1"), false, "a helper that ended is not offered");
+  // Text deltas read nothing.
+  let reads = 0;
+  fake.log.sessions.get("snap-chat").rpc.tasks.list = async () => (reads++, { tasks });
+  for (let i = 0; i < 20; i++) live.emit({ type: "assistant.message_delta", data: { deltaContent: "x" } });
+  await settle();
+  assert.equal(reads, 0);
 });

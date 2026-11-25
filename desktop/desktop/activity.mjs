@@ -67,7 +67,11 @@ export function recordActivity(run, { type, data, agentId }, notify) {
     if (!owner && agentId) pendingOwners.set(step, agentId);
     run.steps.push(step);
   } else if (!step) return;
-  else if (type === "tool.execution_progress")
+  else if (type === "tool.backgrounded") {
+    // A command that was moved to the background while it ran.
+    if (step.background) return;
+    step.background = true;
+  } else if (type === "tool.execution_progress")
     step.progress = displayValue(data.progressMessage, 1200);
   else if (type === "tool.shell_output")
     step.output = ((step.output || "") + data.text).slice(-12000);
