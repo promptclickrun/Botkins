@@ -279,9 +279,19 @@ class CopilotSession extends ProviderSession {
     this.sdk = entry.sdk;
     this.id = entry.id;
     this.subscriptions = new Set();
+    // The command of each shell call, by tool call id: Copilot's task list names a shell by its command.
+    this.commands = new Map();
   }
   on(handler) {
-    const off = this.sdk.on(handler);
+    const off = this.sdk.on((event) => {
+      const command = event?.type === "tool.execution_start" && event.data?.arguments?.command;
+      if (typeof command === "string" && event.data.toolCallId) {
+        this.commands.set(event.data.toolCallId, { command: command.trim(), at: Date.now() });
+        // A long session keeps only the latest calls.
+        if (this.commands.size > 300) this.commands.delete(this.commands.keys().next().value);
+      }
+      handler(event);
+    });
     this.subscriptions.add(off);
     return () => {
       this.subscriptions.delete(off);
@@ -463,6 +473,41 @@ class CopilotSession extends ProviderSession {
   abort() {
     this.current?.stop();
     return this.sdk.abort();
+  }
+  /** Copilot's own task list can cancel one helper or background shell ("experimental" in its SDK). */
+  canStopHelper(_id) {
+    return typeof this.sdk.rpc?.tasks?.list === "function" && typeof this.sdk.rpc?.tasks?.cancel === "function";
+  }
+  /**
+   * Cancels one helper (by the call that started it) or one background shell (by its command: the
+   * list names no call) and leaves the rest of the turn running.
+   */
+  async stopHelper(id) {
+    if (!this.canStopHelper(id)) throw new Error("Botkins couldn't stop it: this version of Copilot can't stop one helper.");
+    const shell = this.commands.get(id);
+    const gone = shell ? "That command already finished." : "That helper already finished.";
+    const because = (error) => new Error("Botkins couldn't stop it: " + String(error?.message ?? error).slice(0, 300));
+    let listed;
+    try {
+      listed = (await this.sdk.rpc.tasks.list())?.tasks ?? [];
+    } catch (error) {
+      throw because(error);
+    }
+    const open = (task) => task?.status === "running" || task?.status === "idle";
+    let found;
+    if (shell) {
+      // The same command may run twice: the one that began nearest to this call.
+      const began = (task) => Math.abs(Date.parse(task.startedAt) - shell.at);
+      found = listed.filter((task) => task.type === "shell" && open(task) && String(task.command ?? "").trim() === shell.command).sort((a, b) => (began(a) || 0) - (began(b) || 0))[0];
+    } else found = listed.find((task) => task.type === "agent" && open(task) && task.toolCallId === id);
+    if (!found) throw new Error(gone);
+    let result;
+    try {
+      result = await this.sdk.rpc.tasks.cancel({ id: found.id });
+    } catch (error) {
+      throw because(error);
+    }
+    if (result?.cancelled === false) throw new Error(gone);
   }
   async close({ discard = false } = {}) {
     if (this.closed) return;

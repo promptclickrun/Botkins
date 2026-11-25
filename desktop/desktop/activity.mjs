@@ -74,6 +74,8 @@ export function recordActivity(run, { type, data, agentId }, notify) {
   else if (type === "tool.execution_partial_result")
     step.output = displayValue(data.partialOutput, 12000);
   else if (type === "tool.execution_complete") {
+    // The person stopped it (Workspace.stopHelper): the harness's report of that is not another ending.
+    if (step.status === "Stopped") return;
     // `stopped`: the call was written but never ran (a harness ended its message first), so it
     // neither did anything nor failed.
     step.status = data.success ? "Done" : data.stopped ? "Stopped" : "Failed";

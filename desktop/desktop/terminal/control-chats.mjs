@@ -248,6 +248,23 @@ export function chatsApi({ workspace, handlers, bot }) {
       await handlers.unqueue(found.id, message.id);
       return { id: found.id, title: found.title, item: message.id, removed: true };
     },
+    /** The helpers and background commands of the chat's turn that work now: { id, kind, name, stoppable }. Empty when the chat is not working. */
+    "chats.helpers"([ref]) {
+      const found = chat(ref);
+      const run = workspace.active.get(found.id)?.run;
+      const brief = (text) => String(text ?? "").replace(/\s+/g, " ").slice(0, 120);
+      return [
+        ...(run?.agents ?? []).filter((agent) => agent.status === "Running").map((agent) => ({ id: agent.id, kind: "helper", name: brief(agent.name), stoppable: agent.stoppable === true })),
+        ...(run?.steps ?? []).filter((step) => step.background && step.status === "Running").map((step) => ({ id: step.id, kind: "command", name: brief(step.label), stoppable: step.stoppable === true })),
+      ];
+    },
+    /** Stops one helper or background command of the chat's turn (`chats.helpers` names them) and leaves the turn working. */
+    async "chats.stopHelper"([ref, id]) {
+      const found = chat(ref);
+      const item = text(id, 1024, "the id of a helper or command (`botkins chats stop-helper " + found.id + "` lists them)");
+      await handlers.stopHelper(found.id, item);
+      return { id: found.id, title: found.title, item, stopped: true };
+    },
     /** Moves a waiting message to the front and sends it now: into the turn that works, when the model takes it, or as the next turn. */
     async "chats.sendNow"([ref, item]) {
       const found = chat(ref);

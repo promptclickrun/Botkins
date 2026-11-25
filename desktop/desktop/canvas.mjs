@@ -98,8 +98,14 @@ export function recordCanvas(run, chat, task, { type, data, agentId }) {
     case "subagent.failed": {
       const agent = run.agents?.find((a) => a.id === data?.toolCallId);
       if (!agent) return false;
+      // The person stopped this helper: what the harness reports after that does not change it.
+      if (agent.status === "Stopped") return true;
       agent.finished = Date.now();
-      if (type === "subagent.failed") {
+      delete agent.stoppable;
+      if (data.stopped) {
+        agent.status = "Stopped";
+        agent.detail ??= "Stopped";
+      } else if (type === "subagent.failed") {
         agent.status = "Failed";
         agent.detail = String(data.error || "Failed").slice(0, 500);
       } else {
@@ -120,13 +126,17 @@ export function finishCanvas(run) {
   for (const r of run.reasoning ?? []) r.finished ??= now;
   if (run.reasoning) run.reasoning = run.reasoning.filter((r) => r.text.trim());
   if (!run.reasoning?.length) delete run.reasoning;
+  // Nothing can be stopped on its own once the reply is over.
+  for (const step of run.steps ?? []) delete step.stoppable;
   // A helper still running here was cut off by the end of the reply. Nothing says it failed.
-  for (const a of run.agents ?? [])
+  for (const a of run.agents ?? []) {
+    delete a.stoppable;
     if (a.status === "Running") {
       a.status = "Stopped";
       a.detail = "Stopped with the reply";
       a.finished = now;
     }
+  }
   if (run.steps?.length) run.summary = workSummary(run.steps);
 }
 

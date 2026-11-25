@@ -335,8 +335,11 @@ export class Workspace {
     this.templates = new Templates(this);
     for (const run of this.state.runs) {
       if (run.status === "Working") {
-        for (const step of run.steps ?? [])
+        for (const step of run.steps ?? []) {
+          delete step.stoppable;
           if (step.status === "Running") step.status = "Interrupted";
+        }
+        for (const agent of run.agents ?? []) delete agent.stoppable;
         // Teammates that were still working when Botkins closed (desktop/teamwork.mjs).
         for (const ask of run.teamwork ?? []) {
           if (ask.status === "waiting" || ask.status === "working") ask.status = "stopped";
@@ -2224,7 +2227,7 @@ export class Workspace {
       session = await this.openSession(view, bot, run, task);
       task.session = session;
       if (task.stopped) return "";
-      unsubscribe = session.on((event) => {
+      unsubscribe = this.listen(session, run, (event) => {
         const { type, data, agentId } = event;
         if (!event.agentId && !event.data?.parentToolCallId) {
           if (event.type === "tool.execution_start") commitInterim(chat, run, task);
@@ -2346,7 +2349,7 @@ export class Workspace {
         proposals ??= { candidates: [] };
         return;
       }
-      unsubscribe = session.on((event) => {
+      unsubscribe = this.listen(session, run, (event) => {
         if (!event.agentId && !event.data?.parentToolCallId) {
           if (event.type === "tool.execution_start") {
             // Text that may still be a [SILENT] answer to a reaction is not kept as a message.
@@ -2584,6 +2587,79 @@ export class Workspace {
       // Messages sent while this turn ran go next, in order.
       if (this.queues.has(chat.id)) setImmediate(() => this.drain(chat.id));
     }
+  }
+  /** `session.on` for a turn's run: after each event, the run's `stoppable` marks are brought up to date. */
+  listen(session, run, handler) {
+    return session.on((event) => {
+      try {
+        handler(event);
+      } finally {
+        this.syncStoppable(run, session, event);
+      }
+    });
+  }
+  /**
+   * Marks the helpers and background commands of a running turn that the session can stop alone
+   * (`stoppable`, "stop-helper-v1"), and clears the mark on one that ended or can't be stopped.
+   * Only a running helper or background command carries it.
+   */
+  syncStoppable(run, session, event) {
+    if (typeof session?.canStopHelper !== "function" || !/^(subagent\.|tool\.execution_(start|complete)|task\.)/.test(event?.type ?? "")) return;
+    const can = (item) => item.status === "Running" && !!session.canStopHelper(item.id);
+    let helpers = false;
+    for (const agent of run.agents ?? []) {
+      if (!!agent.stoppable === can(agent)) continue;
+      if (agent.stoppable) delete agent.stoppable;
+      else agent.stoppable = true;
+      helpers = true;
+    }
+    for (const step of run.steps ?? []) {
+      if (!step.background && !step.stoppable) continue;
+      if (!!step.stoppable === (!!step.background && can(step))) continue;
+      if (step.stoppable) delete step.stoppable;
+      else step.stoppable = true;
+      this.notify({ kind: "tool-step", runId: run.id, stepId: step.id });
+    }
+    if (helpers) this.notify();
+  }
+  /**
+   * Stops one helper or background command of the chat's turn, by its id, and leaves the turn
+   * running. The session does the stopping; this records that the person did.
+   */
+  async stopHelper(chatId, id) {
+    if (typeof id !== "string" || !id) throw new Error("Choose a helper or a command to stop.");
+    const task = this.active.get(chatId);
+    const run = task?.run;
+    if (!task || task.stopped || !run || run.status !== "Working") throw new Error("This chat isn't working on a turn right now.");
+    const helper = run.agents?.find((agent) => agent.id === id);
+    const step = run.steps?.find((item) => item.id === id && (helper || item.background));
+    if (!helper && !step) throw new Error("That isn't a helper or a background command of this turn.");
+    if ((helper ?? step).status !== "Running") throw new Error("That helper already finished.");
+    const session = task.session;
+    if (typeof session?.stopHelper !== "function" || !session.canStopHelper?.(id)) throw new Error("This model can't stop one helper on its own. Stop the whole turn instead.");
+    // Marked first: what the harness reports while it stops the helper (a cancel, a failure) doesn't change this.
+    const items = [...(helper ? [helper] : []), ...(run.steps ?? []).filter((item) => item.id === id || (helper && item.agentId === id))].filter((item) => item.status === "Running");
+    const before = items.map((item) => ({ ...item }));
+    const now = Date.now();
+    for (const item of items) {
+      delete item.stoppable;
+      Object.assign(item, { status: "Stopped", finished: now, ...(item === helper && { detail: "Stopped by you" }) });
+    }
+    this.notify();
+    try {
+      await session.stopHelper(id);
+    } catch (error) {
+      // It was not stopped: it is as it was.
+      for (const [index, item] of items.entries()) {
+        for (const key of ["status", "finished", "detail", "stoppable"]) {
+          if (before[index][key] === undefined) delete item[key];
+          else item[key] = before[index][key];
+        }
+      }
+      this.notify();
+      throw error;
+    }
+    this.save();
   }
   async stop(chatId) {
     this.hostDispatch.stop(chatId);

@@ -343,6 +343,7 @@ for (const name of [
   "createGroupChat",
   "send",
   "stop",
+  "stopHelper",
   "warmChat",
   "recordVoiceLine",
   "chooseFiles",

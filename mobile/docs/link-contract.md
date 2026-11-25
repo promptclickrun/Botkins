@@ -198,6 +198,8 @@ With `main-chat-v1`, `mainChat(botId)` returns the caller’s private, stable Ma
 
 With `chat-title-regeneration-v1`, `regenerateChatTitle(chatId)` asks the host's summarizer to generate and save a title and returns the title. Only the chat's starter or the owner can request it. It needs a message to summarize and does not change the automatic naming setting or add a turn.
 
+With `stop-helper-v1`, `stopHelper(chatId, id)` stops one helper or one background command of the chat's turn and leaves the turn running. `id` is a helper's id (the id of the step that started it) or a background step's id. The computer offers it only for an item that carries `stoppable: true` on its `Subagent` or `Step`: set while that item runs and the model provider can stop it on its own (Claude Code once it has the task's id, GitHub Copilot through its task list; the others cannot), never after it ended. A stopped helper ends as "Stopped" with the detail "Stopped by you", a stopped command's step as "Stopped". The call rejects with a plain sentence when the item already finished, isn't part of the running turn, or the provider could not stop it. It needs the same permission as `stop`.
+
 
 ## Devices: list, rename, remove (`devices-v1`)
 
