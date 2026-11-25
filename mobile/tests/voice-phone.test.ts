@@ -959,6 +959,123 @@ test("Gemini: its own sound never reaches it; push to talk marks the person's tu
   push.end();
 });
 
+test("Gemini push to talk: pairs activityStart/activityEnd, blocks pre-setup and post-end frames, and locks mode", async () => {
+  const h = harness();
+  const c = clock();
+  const session = {
+    url: "wss://x?access_token=secret-token",
+    setup: {
+      setup: {
+        model: "models/gemini-3.8-live",
+        realtimeInputConfig: { automaticActivityDetection: { startOfSpeechSensitivity: "START_SENSITIVITY_HIGH" } },
+      },
+    },
+    input: { sampleRate: 16000 },
+    output: { sampleRate: 24000 },
+  };
+  const push = new GeminiTransport(session, h.audio, h.connect, h.tools, c.now);
+  let talk: GeminiTransport | null = null;
+  try {
+    push.setInput("push");
+    const errors: string[] = [];
+    push.on("error", (message) => errors.push(message));
+    const started = push.start();
+    const socket = h.sockets[0]!;
+
+    // Pressing while still connecting must send nothing and leave no pending activity.
+    push.press();
+    push.release();
+    socket.open();
+    assert.deepEqual(socket.sent, [
+      {
+        setup: {
+          model: "models/gemini-3.8-live",
+          realtimeInputConfig: { automaticActivityDetection: { disabled: true } },
+        },
+      },
+    ]);
+
+    // Pressing after open but before setupComplete must also send nothing.
+    push.press();
+    push.release();
+    assert.equal(socket.sent.length, 1, "nothing is sent before setupComplete");
+
+    socket.receive({ setupComplete: {} });
+    await started;
+    await tick(RELEASE_TAIL_MS + 30);
+    assert.equal(socket.sent.length, 1, "no orphan activityEnd after a pre-setup press");
+
+    // Full push-to-talk turn: activityStart, audio chunks, then one activityEnd, never audioStreamEnd.
+    push.press();
+    h.audio.frame("ONE", 0.2);
+    c.advance(100);
+    h.audio.frame("TWO", 0.2);
+    push.release();
+    // Fast double press inside the release tail continues the same activity without a duplicate start.
+    c.advance(50);
+    h.audio.frame("TAIL", 0.2);
+    push.press();
+    h.audio.frame("THREE", 0.2);
+    push.release();
+    // Simulate timer jitter: activityEnd fires while the gate clock is still 1 ms short of RELEASE_TAIL_MS.
+    c.advance(RELEASE_TAIL_MS - 1);
+    await tick(RELEASE_TAIL_MS + 30);
+    h.audio.frame("LATE", 0.2);
+
+    // Mid-call setInput cannot change Gemini's already-sent setup; muting must never send audioStreamEnd.
+    push.setInput("conversation");
+    push.mute(true);
+    h.audio.frame("IDLE", 0.5);
+    push.mute(false);
+
+    assert.deepEqual(socket.sent.slice(1), [
+      { realtimeInput: { activityStart: {} } },
+      { realtimeInput: { audio: { data: "ONE", mimeType: "audio/pcm;rate=16000" } } },
+      { realtimeInput: { audio: { data: "TWO", mimeType: "audio/pcm;rate=16000" } } },
+      { realtimeInput: { audio: { data: "TAIL", mimeType: "audio/pcm;rate=16000" } } },
+      { realtimeInput: { audio: { data: "THREE", mimeType: "audio/pcm;rate=16000" } } },
+      { realtimeInput: { activityEnd: {} } },
+    ]);
+    assert.ok(!socket.sent.some((message) => "audioStreamEnd" in ((message.realtimeInput as Record<string, unknown> | undefined) ?? {})));
+
+    // A precondition close reports an actionable error and logs raw close metadata in dev builds.
+    const previousDev = (globalThis as { __DEV__?: boolean }).__DEV__;
+    const previousWarn = console.warn;
+    const warnings: unknown[][] = [];
+    (globalThis as { __DEV__?: boolean }).__DEV__ = true;
+    console.warn = (...args: unknown[]) => warnings.push(args);
+    try {
+      socket.onclose?.({ code: 1007, reason: "Precondition check failed." });
+    } finally {
+      console.warn = previousWarn;
+      if (previousDev === undefined) delete (globalThis as { __DEV__?: boolean }).__DEV__;
+      else (globalThis as { __DEV__?: boolean }).__DEV__ = previousDev;
+    }
+    assert.equal(errors.length, 1);
+    assert.match(errors[0]!, /precondition/i);
+    assert.match(errors[0]!, /restart|switch/i);
+    assert.ok(warnings.some((args) => JSON.stringify(args).includes("1007") && JSON.stringify(args).includes("Precondition check failed.")));
+    assert.ok(!warnings.some((args) => JSON.stringify(args).includes("secret-token")));
+
+    // Switching a hands-free session to push mid-call must never send manual activity signals.
+    talk = new GeminiTransport(session, h.audio, h.connect, h.tools, c.now);
+    const talkStarted = talk.start();
+    const talkSocket = h.sockets[1]!;
+    talkSocket.open();
+    talkSocket.receive({ setupComplete: {} });
+    await talkStarted;
+    talk.setInput("push");
+    const before = talkSocket.sent.length;
+    talk.press();
+    talk.release();
+    await tick(RELEASE_TAIL_MS + 30);
+    assert.equal(talkSocket.sent.length, before, "hands-free session ignores mid-call manual activity signals");
+  } finally {
+    push.end();
+    talk?.end();
+  }
+});
+
 test("ElevenLabs: silence goes while the agent talks or the button is up, so its own turn taking still works", async () => {
   const h = harness();
   const c = clock();
