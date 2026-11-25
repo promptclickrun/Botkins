@@ -468,3 +468,21 @@ test("a legacy open checklist can be cleared without reviving an older turn on r
   await ws.send(chat, "Hello");
   assert.equal(session.sent.at(-1).prompt, "Hello");
 });
+
+test("a session that can't take the checklist back is handed it once, not with every message", async (t) => {
+  const before = [{ id: "a", title: "Wait for the build", status: "in_progress" }];
+  // This session has no checklist tool: its own list stays empty whatever it is sent.
+  const { ws, session, chat } = setup(t, () => "Noted.");
+  ws.chat(chat).todos = before;
+  const turn = async (text, n) => {
+    await ws.send(chat, text);
+    await until(() => session.sent.length === n && !ws.active.has(chat), "turn " + n);
+    return session.sent[n - 1].prompt;
+  };
+  assert.ok((await turn("Where are we?", 1)).includes(JSON.stringify(before)));
+  assert.equal(await turn("Clear your todos", 2), "Clear your todos");
+  assert.equal(await turn("Thanks", 3), "Thanks");
+  // A changed checklist is handed over again.
+  ws.chat(chat).todos = [{ id: "b", title: "Ship Android", status: "pending" }];
+  assert.match(await turn("And now?", 4), /Ship Android/);
+});

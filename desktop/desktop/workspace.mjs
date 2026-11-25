@@ -217,6 +217,8 @@ export class Workspace {
     this.active = new Map();
     this.locks = new Map();
     this.catalogs = new Map();
+    /** By chat: the conversation last handed the chat's checklist, and which rows (todoHandoff), so it is offered once. */
+    this.todoHandoffs = new Map();
     this.catalogGeneration = 0;
     // One session per bot answers "/" menus and side questions before a chat has a conversation.
     this.menus = new Map();
@@ -2374,6 +2376,14 @@ export class Workspace {
     const snapshot = JSON.stringify(todos);
     const existing = await session.todos().catch(() => null);
     if (existing && JSON.stringify(mapTodos(existing)) === snapshot) return "";
+    // Once per live session and checklist: a session that can't take the rows back (its harness has no
+    // checklist tool, or the tool dropped out) would otherwise get the same rows with every message.
+    // A new session (restart, harness switch, reset) or a changed checklist is handed them again.
+    const live = this.todoHandoffs.get(chat.id);
+    // A turn gets a fresh wrapper for the same conversation, so the conversation is named by its id.
+    const conversation = (session.providerId ?? "") + ":" + (session.id ?? "");
+    if (session.id && live?.conversation === conversation && live.snapshot === snapshot) return "";
+    this.todoHandoffs.set(chat.id, { conversation, snapshot });
     return "\n\n[Botkins chat checklist] Restore these saved rows in this session's todo tool. Reconcile by ID, preserve completed steps and dependencies where supported, and use the tool to record additions, completion or an explicit clear. The rows are progress data for the person's request.\n" + snapshot;
   }
   /**
