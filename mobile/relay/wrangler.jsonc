@@ -18,8 +18,9 @@
   // where every socket comes from one address.
   // APNS_TOPIC is the iPhone app's bundle id. The APNs key is not here: APNS_KEY_P8, APNS_KEY_ID and
   // APNS_TEAM_ID are Worker secrets (see README). APNS_HOST is for tests only and stays unset.
-  // FEEDBACK_REPO is where /v1/feedback opens issues. GITHUB_ISSUES_TOKEN (issues: write on that repo only)
-  // and TURNSTILE_SECRET (the website form) are Worker secrets; without the token the route answers 503.
+  // FEEDBACK_REPO is where /v1/feedback opens issues, as the Botkins Intake GitHub App (installed on that repo
+  // only, Issues: write). GITHUB_APP_ID, GITHUB_APP_INSTALLATION_ID, GITHUB_APP_KEY and TURNSTILE_SECRET (the
+  // website form) are Worker secrets; without the app's three the route answers 503.
   "vars": { "RATE_LIMITS": "on", "APNS_TOPIC": "app.botkins.mobile", "FEEDBACK_REPO": "promptclickrun/Botkins" },
   "ratelimits": [
     { "name": "SOCKETS", "namespace_id": "47611", "simple": { "limit": 30, "period": 60 } },

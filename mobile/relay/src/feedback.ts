@@ -1,6 +1,10 @@
 // POST /v1/feedback: a bug report or a feature request becomes an issue on the Botkins repo.
 //
-// Two ways in, each with its own check, and one GitHub token (a Worker secret) that only this route uses:
+// Two ways in, each with its own check. Issues are opened as the "Botkins Intake" GitHub App, installed
+// on the repo alone with Issues: write. Its id, installation id and private key are Worker secrets that
+// only this route uses; the relay signs a short JWT and trades it for an installation token, kept until
+// just before it expires.
+//
 //
 //   from a computer   { v: 1, key, time, sig, report }   sig = Ed25519 over "botkins-feedback-v1:" + time + ":" + report
 //                     The computer signs with the relay key it already has. Phones send through their
@@ -9,11 +13,12 @@
 //
 // `report` is the JSON text of { kind, title, body, app?, platform?, version? }. The issue says where
 // it came from and what the sender chose to write; the relay adds nothing else (no address, no key).
-// Logs hold the outcome only. Without the token or the repo the route answers 503 feedback_off.
+// Logs hold the outcome only. Without the app's settings or the repo the route answers 503 feedback_off.
 //
 // This file loads in Node as well (no Cloudflare imports), so the helpers have unit tests.
 
-import { verifyEd25519 } from "./pure.ts";
+import { base64url, verifyEd25519 } from "./pure.ts";
+import { pemToPkcs8 } from "./push.ts";
 
 export const FEEDBACK_PREFIX = "botkins-feedback-v1:";
 export const MAX_BODY = 32 * 1024;
@@ -101,7 +106,10 @@ export function corsFor(origin: string | null): Record<string, string> {
 }
 
 export type FeedbackEnv = {
-  GITHUB_ISSUES_TOKEN?: string;
+  GITHUB_APP_ID?: string;
+  GITHUB_APP_INSTALLATION_ID?: string;
+  /** PEM text of the app's PKCS#8 private key. */
+  GITHUB_APP_KEY?: string;
   TURNSTILE_SECRET?: string;
   FEEDBACK_REPO?: string;
   REQUESTS: RateLimit;
@@ -112,6 +120,56 @@ export type FeedbackEnv = {
 export function repoOf(env: Pick<FeedbackEnv, "FEEDBACK_REPO">): string | null {
   const repo = env.FEEDBACK_REPO ?? "";
   return /^[A-Za-z0-9-]{1,39}\/[A-Za-z0-9._-]{1,100}$/.test(repo) ? repo : null;
+}
+
+const GITHUB_API = "https://api.github.com";
+const githubHeaders = (auth: string) => ({ accept: "application/vnd.github+json", authorization: auth, "user-agent": "botkins-relay", "x-github-api-version": "2022-11-28" });
+
+/** The app's settings, or null when one is missing or malformed. */
+export function appOf(env: Pick<FeedbackEnv, "GITHUB_APP_ID" | "GITHUB_APP_INSTALLATION_ID" | "GITHUB_APP_KEY">): { id: string; installation: string; key: string } | null {
+  const id = env.GITHUB_APP_ID?.trim() ?? "";
+  const installation = env.GITHUB_APP_INSTALLATION_ID?.trim() ?? "";
+  if (!/^\d{1,12}$/.test(id) || !/^\d{1,12}$/.test(installation) || !env.GITHUB_APP_KEY) return null;
+  return { id, installation, key: env.GITHUB_APP_KEY };
+}
+
+/** A GitHub App JWT (RS256), valid for nine minutes from a minute ago, as GitHub asks. */
+export async function appJwt(appId: string, pem: string, nowMs = Date.now()): Promise<string | null> {
+  const der = pemToPkcs8(pem);
+  if (!der) return null;
+  let key: CryptoKey;
+  try {
+    key = await crypto.subtle.importKey("pkcs8", der, { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" }, false, ["sign"]);
+  } catch {
+    return null;
+  }
+  const now = Math.floor(nowMs / 1000);
+  const enc = new TextEncoder();
+  const part = (value: object) => base64url(enc.encode(JSON.stringify(value)));
+  const head = part({ alg: "RS256", typ: "JWT" }) + "." + part({ iat: now - 60, exp: now + 540, iss: appId });
+  const sig = new Uint8Array(await crypto.subtle.sign("RSASSA-PKCS1-v1_5", key, enc.encode(head)));
+  return head + "." + base64url(sig);
+}
+
+/** One installation token per Worker instance, reused until five minutes before GitHub ends it. */
+let cached: { installation: string; token: string; until: number } | null = null;
+export const forgetInstallationToken = () => void (cached = null);
+
+async function installationToken(app: { id: string; installation: string; key: string }, fetcher: typeof fetch): Promise<string | null> {
+  const now = Date.now();
+  if (cached && cached.installation === app.installation && cached.until > now) return cached.token;
+  const jwt = await appJwt(app.id, app.key, now);
+  if (!jwt) return null;
+  const response = await fetcher(GITHUB_API + "/app/installations/" + app.installation + "/access_tokens", { method: "POST", headers: githubHeaders("Bearer " + jwt), signal: AbortSignal.timeout(GITHUB_TIMEOUT_MS) });
+  if (response.status !== 201) {
+    console.log(JSON.stringify({ event: "feedback_token", status: response.status }));
+    return null;
+  }
+  const answer = (await response.json()) as { token?: string; expires_at?: string };
+  if (typeof answer.token !== "string") return null;
+  const expires = Date.parse(answer.expires_at ?? "") || now + 60 * 60_000;
+  cached = { installation: app.installation, token: answer.token, until: expires - 5 * 60_000 };
+  return answer.token;
 }
 
 async function readCapped(request: Request, max: number): Promise<string | null> {
@@ -142,7 +200,8 @@ export async function handleFeedback(request: Request, env: FeedbackEnv, limited
   if (limited && !(await env.REQUESTS.limit({ key: network })).success) return fail("rate_limited", 429);
   if (request.method !== "POST") return fail("method_not_allowed", 405);
   const repo = repoOf(env);
-  if (!env.GITHUB_ISSUES_TOKEN || !repo) return fail("feedback_off", 503);
+  const app = appOf(env);
+  if (!app || !repo) return fail("feedback_off", 503);
   if (!(request.headers.get("content-type") ?? "").toLowerCase().startsWith("application/json")) return fail("bad_request", 400);
 
   const raw = await readCapped(request, MAX_BODY);
@@ -179,18 +238,16 @@ export async function handleFeedback(request: Request, env: FeedbackEnv, limited
 
   const issue = issueFor(report, source);
   try {
-    const response = await fetcher("https://api.github.com/repos/" + repo + "/issues", {
+    const token = await installationToken(app, fetcher);
+    if (!token) return fail("github_failed", 502);
+    const response = await fetcher(GITHUB_API + "/repos/" + repo + "/issues", {
       method: "POST",
-      headers: {
-        accept: "application/vnd.github+json",
-        authorization: "Bearer " + env.GITHUB_ISSUES_TOKEN,
-        "content-type": "application/json",
-        "user-agent": "botkins-relay",
-        "x-github-api-version": "2022-11-28",
-      },
+      headers: { ...githubHeaders("token " + token), "content-type": "application/json" },
       body: JSON.stringify(issue),
       signal: AbortSignal.timeout(GITHUB_TIMEOUT_MS),
     });
+    // A token GitHub no longer takes (the app was reinstalled, the key rotated) is made again next time.
+    if (response.status === 401) forgetInstallationToken();
     if (!response.ok) {
       console.log(JSON.stringify({ event: "feedback", source, status: response.status }));
       return fail("github_failed", 502);
