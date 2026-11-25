@@ -19,7 +19,7 @@ import { api, attempt, loadEarlier, reactToMessage, watchReasoning } from "@/sta
 import { effectiveModel, effortLabel, findModel, modelName } from "@/state/models";
 import { type ChatView, pendingSends, showToast, useApp } from "@/state/store";
 import { useTurnMarks } from "@/state/turnMarks";
-import { AvatarMotion, BotAvatar, Chip, EmptyState, hasGlass, IconButton, LinkBanner, Loading, radius, space, T, Tap, tint, useOnShow, useShape, useTextPrompt, useTheme } from "@/ui";
+import { AvatarMotion, BotAvatar, Button, Chip, EmptyState, hasGlass, IconButton, LinkBanner, Loading, radius, space, T, Tap, tint, useOnShow, useShape, useTextPrompt, useTheme } from "@/ui";
 import { speakText, stopSpeech } from "@/features/voice/tts";
 import { endTalk, TalkBar, useTalk } from "../voice/api";
 import { useLiveCall } from "../voice/liveCall";
@@ -113,7 +113,7 @@ function ChatTitle({ chat, bot, bots, state, model, room, docked }: { chat: Chat
   const { width } = useWindowDimensions();
   const group = !!chat.botIds && chat.botIds.length > 1;
   const name = group ? chat.title || "Group chat" : (bot?.name ?? chat.title);
-  const status = activityLabel(state) || model;
+  const status = activityLabel(state) || [chat.main && "Main chat", model].filter(Boolean).join(" · ");
   const body = (
     <View style={{ flexDirection: "row", alignItems: "center", gap: space.sm, maxWidth: width - room }}>
       {/* The face of the agent you're with moves (avatarMotion.tsx); the rest of the chat holds still. */}
@@ -144,25 +144,31 @@ function ChatMenu({ chat, bot, bots, started, projects, settings, onDelete, pane
   // deleting and the chat's model, project and people are its starter's (and the owner's).
   const multiple = useCapability("project-folders-v1");
   const savesMode = useCapability("project-mode-v1");
-  const canShare = useCapability("team-people-v1");
+  const canShare = useCapability("team-people-v1") && !chat.hostDispatch;
   const teamSize = usePart("team")?.people?.length ?? 0;
-  const place = myPlace(chat, myself(usePart("meta")));
+  const person = myself(usePart("meta"));
+  const ownMain = chat.main && (chat.createdBy ?? "owner") === person;
+  const place = myPlace(chat, person);
   const mine = place === "manages";
   const canRegenerate = useCanRegenerateTitle(chat, mine);
   const prompt = useTextPrompt();
   const rename = () => prompt.ask({ title: "Rename chat", value: chat.title, onSubmit: (title) => void attempt(api.renameChat(chat.id, title)) });
   const actions = [
     ...(bot && !chat.botIds ? [{ id: "new", title: "New chat with " + bot.name, image: "square.and.pencil" }] : []),
-    ...(canShare && (mine ? teamSize > 1 : place === "invited") ? [{ id: "people", title: mine ? "Invite" : "People in this chat", image: mine ? "person.badge.plus" : "person.2" }] : []),
+    ...(!chat.main && canShare && (mine ? teamSize > 1 : place === "invited") ? [{ id: "people", title: mine ? "Invite" : "People in this chat", image: mine ? "person.badge.plus" : "person.2" }] : []),
     ...(canManage && mine ? [{ id: "model", title: "Model…", image: "cpu" }] : []),
     // Before the first message the chat can still change its project and mode.
     ...(started || !mine ? [] : projectActions({ chat, projects, settings, bots }, multiple)),
     ...(project?.folder ? [{ id: "changes", title: "Changes", image: "plus.forwardslash.minus" }] : []),
     ...(panes > 0 ? [{ id: "pane", title: "Side pane", image: "sidebar.right" }] : []),
     { id: "pin", title: chat.pinned ? "Unpin" : "Pin", image: chat.pinned ? "pin.slash" : "pin" },
-    ...(mine ? [{ id: "rename", title: "Rename", image: "pencil" }] : []),
-    ...(canRegenerate ? [regenerateTitleAction] : []),
-    ...(mine ? [{ id: "compact", title: "Compact", image: "arrow.down.right.and.arrow.up.left" }, { id: "delete", title: "Delete", image: "trash", attributes: { destructive: true } }] : []),
+    ...(mine && !chat.main ? [{ id: "rename", title: "Rename", image: "pencil" }] : []),
+    ...(canRegenerate && !chat.main ? [regenerateTitleAction] : []),
+    ...(mine ? [{ id: "compact", title: "Compact", image: "arrow.down.right.and.arrow.up.left" }] : []),
+    ...(ownMain ? [
+      ...(chat.forks ?? []).map(f => ({ id: "fork:" + f.id, title: f.name, state: f.id === chat.activeFork ? "on" as const : "off" as const })),
+      { id: "reset", title: "Reset context", image: "arrow.counterclockwise" },
+    ] : mine && !chat.main ? [{ id: "delete", title: "Delete", image: "trash", attributes: { destructive: true } }] : []),
   ];
   return (
     <>
@@ -181,6 +187,8 @@ function ChatMenu({ chat, bot, bots, started, projects, settings, onDelete, pane
         else if (action === "pin") void attempt(api.setChatFlags(chat.id, { pinned: !chat.pinned }), chat.pinned ? "Unpinned" : "Pinned");
         else if (action === "rename") rename();
         else if (action === regenerateTitleAction.id) regenerateTitle(chat.id);
+        else if (action === "reset") void attempt(api.changeMainFork(chat.id, "reset", undefined, chat.activeFork));
+        else if (action.startsWith("fork:")) void attempt(api.changeMainFork(chat.id, "switch", action.slice(5), chat.activeFork));
         else if (action === "compact") void attempt(api.compact(chat.id), "Compacting");
         else if (action === "delete")
           Alert.alert("Delete this chat?", "Its messages are deleted too.", [
@@ -466,8 +474,7 @@ function ChatTimelineList({ chatId, view, pending, runPart, streaming, group, bo
   const inFront = useAppActive(onShow);
   const still = useReducedMotion();
   const turnLive = streaming || !!underWay(runPart);
-  const streamsReplies = useChatPrefs((prefs) => prefs.textStreaming);
-  const needsReasoning = onShow && inFront && turnLive && thinkingPref === "show" && !streamsReplies;
+  const needsReasoning = inFront && turnLive && thinkingPref === "show";
   useEffect(() => needsReasoning ? watchReasoning(chatId) : undefined, [chatId, needsReasoning]);
   useLayoutEffect(() => {
     if (position === "latest") clearTimeout(retry.current);
@@ -774,6 +781,12 @@ function ChatScreenScreen({ pane: paneId, onLeave: leavePane, onList }: { pane?:
     // "/btw" and "/ask" are answered beside the chat, also while the bot works.
     const asked = fromComposer && chatId ? sideQuestionOf(composed) : null;
     if (asked) return Promise.resolve(askSide(asked.command, asked.question));
+    if (chat?.main && fromComposer && composed.toLowerCase() === "/clear") {
+      return attempt(api.changeMainFork(chatId, "reset", undefined, chat.activeFork)).then(id => {
+        if (id) setText("");
+        return !!id;
+      });
+    }
     const card = fromComposer ? pinned : undefined;
     const quoted = fromComposer ? quote : "";
     const files = options?.attachments?.length ?? 0;
@@ -870,15 +883,12 @@ function ChatScreenScreen({ pane: paneId, onLeave: leavePane, onList }: { pane?:
         setQuote(quoteOf(value));
         input.current?.focus();
       },
-      onFork: group
-        ? undefined
-        : (index) =>
-            void attempt(api.forkChat(chatId, index)).then((id) => {
-              if (id) openChat(id);
-            }),
+      onFork: group ? undefined : index => void attempt(api.forkChat(chatId, index)).then(id => id && openChat(id)),
+      onMainFork: chat?.main && (chat.createdBy ?? "owner") === myself(meta)
+        ? index => void attempt(api.changeMainFork(chatId, "fork", index, chat.activeFork)) : undefined,
       busy: working,
     }),
-    [group, chatId, working, paneId, computer, reactionsOn],
+    [group, chat?.main, chat?.activeFork, chat?.createdBy, meta?.you, chatId, working, paneId, computer, reactionsOn],
   );
   const pick = (starter: string) => {
     setText(starter);
@@ -1043,7 +1053,9 @@ function ChatScreenScreen({ pane: paneId, onLeave: leavePane, onList }: { pane?:
             </View>
           )}
           {canChat && !!queued?.length && <Queued chatId={chatId} items={queued} steerable={steerable} />}
-          {canChat ? (
+          {canChat && chat.hostDispatch ? (
+            working && <View style={{ paddingHorizontal: space.md }}><Button title="Stop request" variant="secondary" onPress={() => void attempt(api.stop(chatId))} /></View>
+          ) : canChat ? (
             <View style={{ paddingHorizontal: space.md, gap: space.sm }}>
               <TalkBar chatId={chatId} />
               <VoiceDock chatId={chatId} />

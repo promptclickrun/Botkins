@@ -163,7 +163,7 @@ test("the common edits are one key and an answer each, and a refusal is shown an
     "relay.set": (on) => ({ enabled: on, connected: false }),
     "routines.run": () => ({ name: "Morning brief" }),
     "routines.pause": () => ({ name: "Morning brief" }),
-    "chat.open": () => ({ chatId: "c9", bot: { name: "Pip" } }),
+    "chat.main": () => ({ chatId: "c9", bot: { name: "Pip" } }),
     "chat.send": () => ({ chatId: "c9", after: 0 }),
     "chat.read": () => ({ chatId: "c9", working: true, stream: "Thinking", messages: [{ index: 0, role: "user", text: "Hello Pip" }], count: 1, seen: "x" }),
     "chat.stop": null,
@@ -226,7 +226,7 @@ test("the common edits are one key and an answer each, and a refusal is shown an
   await answer("Hello Pip");
   await done();
   await new Promise((resolve) => setTimeout(resolve, 10));
-  assert.deepEqual(asked().filter(([name]) => name.startsWith("chat.")).slice(0, 3).map(([name, ...args]) => [name, args[0]]), [["chat.open", "b2"], ["chat.send", "c9"], ["chat.read", "c9"]]);
+  assert.deepEqual(asked().filter(([name]) => name.startsWith("chat.")).slice(0, 3).map(([name, ...args]) => [name, args[0]]), [["chat.main", "b2"], ["chat.send", "c9"], ["chat.read", "c9"]]);
   assert.equal(app.state.tab, "Chats");
   assert.match(screen(), /you  Hello Pip/);
   assert.match(screen(), /Pip  Thinking/);

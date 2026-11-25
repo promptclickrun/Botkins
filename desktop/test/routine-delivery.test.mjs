@@ -163,11 +163,11 @@ test("a chosen chat gets the reply, and a bot with no chat gets one", async (t) 
 
   // Routine chats, groups and panel chats are not the main chat.
   const none = new Set(ws.state.chats.filter((c) => c.botId === "scout").map((c) => c.id));
-  assert.equal(none.size, 0);
+  assert.deepEqual([...none], [ws.mainChat("scout")]);
   ws.createGroupChat(["scout", "patch"], "Pair");
   const id = r.create({ botId: "scout", name: "Digest", prompt: "Summarize.", cadence: DAILY, timezone: NY, deliver: { to: "chat" } }, T0);
   await r.run(id);
-  const made = ws.state.chats.filter((c) => c.botId === "scout" && c.id !== id && !c.botIds);
+  const made = ws.state.chats.filter((c) => c.botId === "scout" && c.id !== id && !c.botIds && !none.has(c.id));
   assert.equal(made.length, 1, "one chat was made for the bot");
   assert.equal(made[0].title, "Digest");
   assert.equal(made[0].messages.length, 1);

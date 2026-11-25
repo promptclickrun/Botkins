@@ -25,6 +25,28 @@ async function host(options: Record<string, unknown> = {}) {
 }
 const loopback = (link: { port: number }) => "127.0.0.1:" + link.port;
 
+test("a cold background link makes no request until it is explicitly woken", async (t) => {
+  const { link } = await host();
+  t.after(() => link.stop());
+  const paired = await pair(fetcher, { hosts: [loopback(link)], code: link.startPairing().code }, device);
+  let requests = 0;
+  const synced = Promise.withResolvers<void>();
+  const client = new LinkClient(paired, {
+    fetch(url, init) { requests++; return fetcher(url, init); },
+    onParts() {},
+    onState() {},
+    onSync: () => synced.resolve(),
+  });
+  t.after(() => client.stop());
+  client.start({ resting: true });
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(requests, 0);
+  client.wake();
+  await synced.promise;
+  assert.ok(requests > 0);
+  client.rest();
+});
+
 test("Proton Pass setup is negotiated, and the demo can install and share a selected vault", async (t) => {
   assert.equal(supportsProtonSetup(["credentials-v1"]), false);
   const old = await host({ backend: new MockBackend({ proton: false }) });

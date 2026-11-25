@@ -153,7 +153,7 @@ export function gadgetPart({ device, bots = [], chat, live = {}, voice = {}, wor
   const mine = device.gadget ?? {};
   const bot = bots.find((item) => item.id === (chat?.botId ?? mine.botId)) ?? bots.find((item) => !item.hidden) ?? bots[0];
   const chatId = chat?.id;
-  const request = chatId ? (live.requests ?? []).find((item) => item.chatId === chatId) : undefined;
+  const request = chatId ? (live.requests ?? []).find((item) => !item.dispatch && item.chatId === chatId) : undefined;
   const working = !!chatId && ((live.active ?? []).includes(chatId) || Object.hasOwn(live.streams ?? {}, chatId));
   const writing = working && !!(live.streams ?? {})[chatId];
   const reply = lastReply(chat);
@@ -463,7 +463,7 @@ export class Gadgets {
   /** The gadget's chat as the app has it now, with its messages. Undefined when it has none, or it is gone. */
   chatOf(device, state = this.host.backend.snapshot()) {
     const id = device.gadget?.chatId;
-    return id ? (state.chats ?? []).find((chat) => chat.id === id) : undefined;
+    return id ? (state.chats ?? []).find((chat) => chat.id === id && !chat.hostDispatch) : undefined;
   }
   /** The two parts a gadget follows, each with a version that changes only when its content does. */
   view(device, parts) {
@@ -581,7 +581,7 @@ export class Gadgets {
       patch.chatId = null;
     }
     if (typeof input?.chatId === "string") {
-      const chat = (state.chats ?? []).find((item) => item.id === input.chatId);
+      const chat = (state.chats ?? []).find((item) => item.id === input.chatId && !item.hostDispatch);
       if (!chat) throw new Failure("This chat no longer exists.");
       patch.chatId = chat.id;
       patch.botId = chat.botId;

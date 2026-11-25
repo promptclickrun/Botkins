@@ -4,6 +4,7 @@ import {
   Bot as BotIcon,
   Boxes,
   ChartColumn,
+  Cpu,
   FlaskConical,
   HardDrive,
   Info,
@@ -47,6 +48,7 @@ import PluginsSettings from "./PluginsSettings";
 import TeamSettings, { type TeamView } from "./TeamSettings";
 import ExperimentalSettings from "./ExperimentalSettings";
 import ProfileSettings from "./ProfileSettings";
+import NodeHostSettings from "./NodeHostSettings";
 import { memberTeam, teamCan } from "./teamAccess";
 import "./settings.css";
 
@@ -68,6 +70,7 @@ export type SectionId =
   | "team"
   | "access"
   | "computers"
+  | "node"
   | "phone"
   | "voice"
   | "usage"
@@ -92,6 +95,7 @@ const SECTIONS: { id: SectionId; label: string; icon: LucideIcon }[] = [
   { id: "team", label: "Team", icon: Users },
   { id: "access", label: "Access", icon: KeyRound },
   { id: "computers", label: "Computers and teams", icon: MonitorSmartphone },
+  { id: "node", label: "Node host", icon: Cpu },
   { id: "phone", label: "Phone", icon: Smartphone },
   { id: "voice", label: "Voice", icon: Mic },
   { id: "usage", label: "Usage", icon: ChartColumn },
@@ -139,6 +143,8 @@ export function sectionFor(tab: string): { section: SectionId; view?: BotView; t
     computers: { section: "computers" },
     "other computers": { section: "computers" },
     "join a team": { section: "computers" },
+    node: { section: "node" },
+    "node host": { section: "node" },
     speech: { section: "voice" },
     "live voice": { section: "voice" },
   };
@@ -200,10 +206,11 @@ export default function Settings({
   const routineModels = !state.remote?.using || !!state.remote.using.capabilities?.includes("routine-models-v1");
   const sections = SECTIONS.filter((item) => {
     if (item.id === "team" && state.remote?.using) return false;
+    if (item.id === "node" && state.remote?.using) return false;
     // A computer reached over the link may be older than this window: it says so in its capabilities.
     if (item.id === "experimental" && state.remote?.using && !state.remote.using.capabilities?.includes("proactive-agent-v2")) return false;
     if (!memberHost) return true;
-    if (item.id === "experimental" ||
+    if (item.id === "experimental" || item.id === "node" ||
       item.id === "team" || item.id === "credentials" || item.id === "teamwork" || item.id === "access" || item.id === "usage" || item.id === "storage" || item.id === "account" || item.id === "voice") return false;
     if (item.id === "bots") return teamCan(state, "agents");
     if (item.id === "skills") return teamCan(state, "skills");
@@ -365,7 +372,7 @@ export default function Settings({
           )}
           {section === "sidebar" && <SidebarSettings settings={state.settings} spaces={hasSpaces(state)} fail={fail} />}
           {section === "chats" && <>
-            <ChatDisplaySettings settings={settings} />
+            <ChatDisplaySettings settings={settings} chatMode={state.proactive?.chatMode} fail={fail} />
             {(!memberHost || teamCan(state, "settings", "manage")) && <>
               <SummarySettings settings={preferences} change={changePreferences} fail={fail} />
               <BehaviorSettings settings={preferences} change={changePreferences} fail={fail} />
@@ -378,7 +385,12 @@ export default function Settings({
               fail={fail}
             />
           )}
-          {section === "bots" && (
+          {section === "bots" && !bot && (
+            <p className="set-status" role="status">
+              This computer has no bots yet.
+            </p>
+          )}
+          {section === "bots" && bot && (
             <>
               <div className="set-toolbar">
                 <span className="set-bot">
@@ -528,6 +540,7 @@ export default function Settings({
               <PhoneSettings state={state} />
             ))}
           {section === "computers" && <ComputersAndTeams state={state} initialJoin={initialJoin} />}
+          {section === "node" && <NodeHostSettings state={state} fail={fail} />}
           {section === "voice" && <VoiceSettings state={state} />}
           {section === "usage" && <Usage runCount={runCount} />}
           {section === "storage" && (

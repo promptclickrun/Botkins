@@ -49,7 +49,6 @@ const partsBatcher = createPartsBatcher(applyParts, {
 });
 onComputerChange(() => partsBatcher.clear());
 let savedStorageLocked = false;
-let savedStorageRetry: ReturnType<typeof AppState.addEventListener> | null = null;
 // A profile pairing is a separate trust path from the phone's manual pairings. While one is in
 // use it may temporarily be the active link, but it never replaces the local pairing in `kept`.
 let activeProfilePairing: Pairing | null = null;
@@ -63,7 +62,10 @@ function follow(pairing: Pairing) {
   client = new LinkClient(pairing, {
     fetch: fetcher,
     streamAppends: true,
+    separateThinking: true,
     lightSteps: true,
+    runStepDeltas: true,
+    runSummaryDeltas: true,
     textStreaming: (route) => textMode(useChatPrefs.getState().textStreaming, route),
     onParts: partsBatcher.push,
     onState: (link) => {
@@ -95,7 +97,7 @@ function follow(pairing: Pairing) {
   });
   client.watch([...watched.keys()]);
   client.watchReasoning([...reasoningWatchers.keys()]);
-  client.start();
+  client.start({ resting: AppState.currentState !== "active" });
 }
 
 // A computer whose address changed (a new one from the router, another network at home) is found
@@ -148,13 +150,16 @@ async function readSaved(): Promise<{ kept: Kept; fromOldVersion: boolean }> {
   return { kept: read, fromOldVersion: !index && read.list.length > 0 };
 }
 
-async function retrySavedStorage() {
-  if (!savedStorageLocked) return;
+let restoring: Promise<void> | undefined;
+function retrySavedStorage() {
+  if (!savedStorageLocked) return Promise.resolve();
+  return restoring ??= restoreSavedStorage().finally(() => { restoring = undefined; });
+}
+
+async function restoreSavedStorage() {
   try {
     const saved = await readSaved();
     savedStorageLocked = false;
-    savedStorageRetry?.remove();
-    savedStorageRetry = null;
     // Do not overwrite a pairing made while protected storage was locked. It will be persisted by
     // that flow once storage is available; the next launch can read the complete index.
     await loadPrefs();
@@ -168,18 +173,19 @@ async function retrySavedStorage() {
   }
 }
 
-function retrySavedStorageOnActive() {
-  savedStorageRetry ??= AppState.addEventListener("change", (next) => {
-    if (next === "active") void retrySavedStorage();
+/** Reads what the phone saved and starts following the computer in use, when there is one. */
+let booting: Promise<void> | undefined;
+export function boot() {
+  return booting ??= startApp().catch((error) => {
+    booting = undefined;
+    throw error;
   });
 }
 
-/** Reads what the phone saved and starts following the computer in use, when there is one. */
-export async function boot() {
+async function startApp() {
   // The keychain can't be read before the phone was unlocked for the first time since it was turned
-  // on, and the app can be started in the background then. That is not "no pairing": the read is
-  // tried again until it works. Only when the person has the app in front and it still fails is
-  // the pairing given up.
+  // on. Keep any existing pairing and defer locked background reads until the next foreground.
+  let lockedWhileAway = false;
   let saved: { kept: Kept; fromOldVersion: boolean } | undefined;
   for (let failed = 0; ; ) {
     try {
@@ -195,9 +201,9 @@ export async function boot() {
       }
       break;
     } catch {
-      if (AppState.currentState === "active" && ++failed >= 3) {
+      if (AppState.currentState !== "active" || ++failed >= 3) {
         savedStorageLocked = true;
-        retrySavedStorageOnActive();
+        lockedWhileAway = AppState.currentState !== "active";
         break;
       }
       await new Promise((resolve) => setTimeout(resolve, 1000));
@@ -219,6 +225,7 @@ export async function boot() {
   AppState.addEventListener("change", (state) => {
     if (state === "active") {
       nearbyPace.reset();
+      void retrySavedStorage();
       client?.wake();
     } else if (state === "background") {
       partsBatcher.flush();
@@ -226,6 +233,8 @@ export async function boot() {
       fetcher.rest();
     }
   });
+  // The foreground transition may have happened while prefs were loading.
+  if (lockedWhileAway && AppState.currentState === "active") void retrySavedStorage();
   // Leaving Wi-Fi, or coming back to it, changes how the computer is reached: look again at once.
   try {
     // Only a real change counts (the kind of network, or whether it is up), and a burst of them is one.
@@ -570,7 +579,7 @@ export async function loadEarlier(chatId: string) {
     const page = (await api["link.messages"](chatId, view.from, 60)) as ChatDetail | null;
     useApp.setState((state) => {
       const held = state.chats[chatId];
-      if (!held || !page || page.from + page.messages.length !== held.from) return {};
+      if (!held || !page || page.activeFork !== held.activeFork || page.from + page.messages.length !== held.from) return {};
       const runs = { ...held.runs };
       for (const run of page.runs) runs[run.id] = run;
       return { chats: { ...state.chats, [chatId]: { ...held, from: page.from, messages: [...page.messages, ...held.messages], runs, loadingEarlier: false } } };
@@ -606,8 +615,25 @@ export function freshSync(ms: number): Promise<boolean> {
   });
 }
 
+/** A silent push gets one protected-storage attempt and one sync within its execution budget. */
+export async function syncForPush(ms: number) {
+  const deadline = Date.now() + ms;
+  const preparation = useApp.getState().booted ? retrySavedStorage() : boot();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([preparation, new Promise<void>((resolve) => { timer = setTimeout(resolve, ms); })]);
+  } finally {
+    clearTimeout(timer);
+  }
+  const remaining = deadline - Date.now();
+  return remaining > 0 && freshSync(remaining);
+}
+
 /** Back to rest after a wake in the background, unless the person opened the app meanwhile. */
 export function restIfAway() {
-  if (AppState.currentState !== "active") client?.rest();
+  if (AppState.currentState !== "active") {
+    client?.rest();
+    fetcher.rest();
+  }
 }
 export { mergeChat };

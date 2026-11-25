@@ -85,6 +85,7 @@ export function chatsApi({ workspace, handlers, bot }) {
     return {
       id: entry.id,
       title: entry.title,
+      ...(entry.main && { main: true, activeFork: entry.activeFork, forks: entry.forks }),
       botId: entry.botId,
       bot: botOf(entry.botId),
       ...(members && { group: true, bots: members.map(botOf) }),
@@ -146,15 +147,25 @@ export function chatsApi({ workspace, handlers, bot }) {
       return { id: found.id, index, emoji };
     },
     /** A new chat of the same bot with the conversation up to a message (`at`: its place in the chat, 0 is the first; the last without it). */
-    async "chats.fork"([ref, at]) {
+    async "chats.fork"([ref, at, inMain]) {
       const found = chat(ref);
       if (!found.messages.length) throw new ControlError("This chat has no message to fork from.", "BAD_ARGUMENT");
       const index = at === undefined || at === null ? found.messages.length - 1 : at;
       if (!Number.isInteger(index) || index < 0 || index >= found.messages.length) throw new ControlError("Choose a message from 0 to " + (found.messages.length - 1) + ".", "BAD_ARGUMENT");
-      const id = await handlers.forkChat(found.id, index);
+      const id = inMain === true ? await handlers.changeMainFork(found.id, "fork", index) : await handlers.forkChat(found.id, index);
       return { ...view(chat(id)), from: found.id, at: index };
     },
     /** Starts a turn of the chat's model that summarizes the conversation (the runtime's own /compact). It answers when the turn has started. */
+    async "chats.reset"([ref]) {
+      const found = chat(ref);
+      await handlers.changeMainFork(found.id, "reset");
+      return view(found);
+    },
+    async "chats.switchFork"([ref, fork]) {
+      const found = chat(ref);
+      await handlers.changeMainFork(found.id, "switch", fork);
+      return view(found);
+    },
     "chats.compact"([ref]) {
       const found = chat(ref);
       handlers.compact(found.id);

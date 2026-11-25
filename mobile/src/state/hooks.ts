@@ -1,3 +1,5 @@
+import { useOnShow } from "@/ui/useOnShow";
+import { useAppActive } from "./useAppActive";
 // How screens read the computer's state.
 import { useEffect, useMemo } from "react";
 import { botActivity, chatActivity, type AvatarState } from "./sessionActivity";
@@ -41,7 +43,8 @@ export const useChatActivity = (chatId: string): AvatarState => useApp((state) =
 
 /** Keeps a chat's messages and running turn in step while the calling screen is shown. */
 export function useWatchedChat(chatId: string | undefined): ChatView | undefined {
-  useEffect(() => (chatId ? watchChat(chatId) : undefined), [chatId]);
+  const visible = useAppActive(useOnShow(!!chatId));
+  useEffect(() => (chatId && visible ? watchChat(chatId) : undefined), [chatId, visible]);
   return useApp((state) => (chatId ? state.chats[chatId] : undefined));
 }
 

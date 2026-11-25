@@ -8,6 +8,7 @@ It runs on Linux (x64 and ARM64, with systemd) and on macOS. A small virtual mac
 - [Sign a model provider in](#sign-a-model-provider-in)
 - [Make a bot and talk to it](#make-a-bot-and-talk-to-it)
 - [Use an optional profile](#use-an-optional-profile)
+- [Run as a Node Host](#run-as-a-node-host)
 - [Pair a phone](#pair-a-phone)
 - [Configure the host](#configure-the-host)
 - [Operate the service](#operate-the-service)
@@ -238,7 +239,8 @@ botkins bots skills Nova --off weekly-report
 - `botkins skills edit`, `remove`, `enable` and `disable` change a skill. `botkins skills add-folder <path>` adds a skill from its folder, or links a folder of skills. The folder must be in the home folder of the user that runs Botkins, or on a plugged-in disk; `botkins folders` lists what you can choose, and on a server you copy the folder there first. A plugin folder is not taken as a folder of skills, because a plugin can run commands.
 - **A skill's header and the question.** A skill is a folder with a `SKILL.md`, and that file has a header with the skill's `name` and `description`. A header can have more keys. In other tools, `allowed-tools` lets a skill use tools with no question, and `hooks` or `mcp-servers` start programs. In Botkins a skill's header does none of that: Botkins asks before a command runs, as it does with no skill, and the header starts nothing. A check that uses the real runtime holds this for each version of the runtime (`test/skill-allowed-tools-live.mjs`).
 - `botkins bots access <bot> --all`, `--project <project>` or `--none` sets which projects a bot can use. `botkins bots menu <bot>` lists what the bot's chat offers; like each turn of the bot, it starts the bot's tools that are programs and are on.
-- `botkins tools forget-approvals` forgets the approvals that were given to tools "for this chat".
+- `botkins chats list` shows incoming Teamwork chats. On the destination computer, run `botkins chats approve <chat-id>` to read the message and decide whether to allow it once, for today, or always for that source and target. The command is also available in the terminal dashboard.
+- `botkins tools forget-approvals` clears saved tool and cross-host Teamwork approvals. Use `--chat <id>` to clear those associated with one chat.
 
 ## Plugins
 
@@ -333,6 +335,14 @@ botkins templates use inbox-sorter@botkins --name Sorter
 - The log has one line for each change, by the name of the bot, the section or the template (`bots.order` has no name): `bots.duplicate`, `bots.order`, `bots.primary`, `bots.flags.set`, `bots.memory.set`, `bots.sections.add`, `bots.sections.rename`, `bots.sections.remove`, `bots.import`, `templates.save`, `templates.rename`, `templates.remove`, `templates.export`, `templates.import` and `templates.use`.
 
 ### Chats
+
+`botkins chat <bot>` opens your Main chat with that bot. Use `--new` to start a separate chat, or `--chat <id>` to open an existing thread. Each person's Main chat is private and keeps its address, including when its model changes.
+
+- `botkins chats compact <id>` compacts the active conversation. An ACP model summarizes in a separate session because ACP has no native compact command.
+- `botkins chats fork <id> --at 4 --in-main` continues from message 4 in a new fork of the same Main chat. Without `--in-main`, the command creates a separate thread.
+- `botkins chats reset <id>` starts with empty context. `botkins chats show <id>` lists the saved forks. `botkins chats switch-fork <id> <fork-id>` resumes one, including its previous messages.
+- `botkins models --chat <id> --model <provider/model>` selects the chat's model. Use `inherit` to follow the bot again.
+- In Settings › Chat › Proactive signals, **Main chat** is the default. Choose **New chat every time** to receive each chat alert in a new private thread. In the terminal use `botkins preferences set proactive.chatMode new` or `main`. The choice applies to your alerts on this host. Checks still run in their own routines. Taking an offer starts its own work thread.
 
 `botkins chat <bot>` talks to a bot. `botkins chats` keeps the chats that the Chats page of the window shows.
 
@@ -662,6 +672,31 @@ Approve a new device with `botkins profile devices approve <device>` and enter i
 Use `botkins profile disconnect --yes` to remove this host from the profile and revoke its profile connections. Use `botkins profile reconnect` to link it again. To permanently delete the profile, run `botkins profile delete --yes` and enter its verified email. If a computer was offline during setup, `botkins profile refresh` retries the link when the computer is reachable.
 
 The terminal host must have secure key storage for a profile session or profile-enrolled computer. If it cannot open its host key, profile setup remains session-only and no token or browser verifier is written to disk.
+
+## Run as a Node Host
+
+A computer can run as a Node Host so bots on your other computers (bound to the same owner profile) can talk to its shared bots or list files in project folders you choose to share. A node host needs no model sign-in or bots when it only shares project folders.
+
+```sh
+botkins node setup --name "Studio Mac"
+botkins node status
+botkins node share Website
+botkins node unshare Website
+botkins node rename "Render Box"
+botkins node pause
+botkins node resume
+botkins node revoke <grant-id> --yes
+botkins node revoke --all --yes
+botkins node disconnect --yes
+```
+
+- **`botkins node setup --name <name>`** turns on Node Host mode and saves the node's name. If the host is linked to your profile, it publishes as a node even with no bots or chats.
+- **`botkins node status`** shows **Online** or **Paused**, the last completed request, shared project folders, and saved job grants. The same summary appears in `botkins status` and the dashboard Overview.
+- **`botkins node share <project>`** and **`unshare <project>`** control which workspace project folders this node advertises for read-only file listing (`project.list_files`). A project is named by its id or name.
+- **`botkins node pause`** and **`resume`** stop or resume accepting new cross-host node jobs without disconnecting the node or removing grants.
+- **`botkins node revoke <grant-id>`** (or **`--all`**) revokes saved file-listing grants so the next request from that source host and bot asks for approval again. Conversation grants for cross-host Teamwork are separate (`botkins tools forget-approvals`).
+- **`botkins node disconnect`** turns off Node Host mode, cancels pending job requests, and stops advertising node capabilities. `revoke` and `disconnect` ask at a terminal and require `--yes` without a terminal.
+- All commands support `--json`. State changes leave a line in the log (`node.setup`, `node.rename`, `node.pause`, `node.share`, `node.revoke`, `node.disconnect`).
 
 ## Pair a phone
 

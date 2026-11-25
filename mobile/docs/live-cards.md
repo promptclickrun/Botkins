@@ -57,8 +57,7 @@ own. A request makes its sound through the card; a finished turn still gets its 
 - **How the pushes are sent.** Apple holds a priority 5 push back to save power, most of all on a
   locked phone, and allows only so many at priority 10. A push with an alert, and a change that
   matters (a chat needs the person, a chat ended, a new turn, the app left the front), goes at 10.
-  Steps and thinking go at most every 2.5 seconds: at 10 when the last push at 10 was 15 seconds
-  ago or more (`ACTIVITY_LOUD_GAP_MS`), else at 5. The app declares
+  Steps and thinking use priority 5 at most once every 15 seconds. The app declares
   `NSSupportsLiveActivitiesFrequentUpdates`. A push's `timestamp` is the second rounded up, and
   always later than the one before: Apple orders a card's updates by it, the phone's own too.
 - **A row's words** (`l`). The step that runs, else what the bot says it is doing, else the step it

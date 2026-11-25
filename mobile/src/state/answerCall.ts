@@ -1,9 +1,10 @@
 // What an answer given away from the app means, as one call to the computer (src/state/answers.ts
 // sends it). No React Native imports: tests/cards.test.ts runs it.
 import type { QueuedAnswer } from "../../modules/botkins-activity/types";
+import type { RequestAnswer } from "../link/types";
 
 export type AnswerCall =
-  | { method: "respond"; requestId: string; answer: { action: string; value?: string } }
+  | { method: "respond"; requestId: string; answer: RequestAnswer }
   | { method: "stop"; chatId: string }
   | { method: "retry"; runId: string };
 

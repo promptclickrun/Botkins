@@ -90,12 +90,14 @@ export class Interactions {
     const entry = this.entries.get(id);
     if (!entry) throw new Error("This request has already closed.");
     const { view } = entry;
+    if (view.dispatch && (person !== "owner" || (!human && answer.action !== "cancel")))
+      throw new Error("Only the destination owner can answer this dispatch request.");
     if (
       view.kind === "permission" &&
-      !["approve", "deny", "remember", "cancel"].includes(answer.action)
+      !["approve", "deny", "remember", "cancel"].includes(answer.action) && !(view.dispatch && answer.action === "today")
     )
       throw new Error("Unknown approval response");
-    if (answer.action === "remember" && !view.remember)
+    if (answer.action === "remember" && !view.remember && !view.dispatch)
       throw new Error("This approval cannot be remembered.");
     if (
       view.kind === "question" &&
@@ -135,6 +137,7 @@ export class Interactions {
    * holds it, and it comes back when Botkins opens again.
    */
   cancel(chatId, { detached = false, keep = false } = {}) {
+    if (chatId && detached) this.ws.hostDispatch?.stop(chatId);
     this.ws.secureInputs?.cancel(chatId);
     let dropped = false;
     for (const [id, entry] of [...this.entries])

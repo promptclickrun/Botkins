@@ -204,6 +204,15 @@ export const service = {
             ["Phone link", !status.link.enabled ? "off" : status.link.listening ? "“" + status.link.name + "” on port " + status.link.port + (status.link.addresses.length ? "  (" + status.link.addresses.join(", ") + ")" : "") : "on, not listening (see `botkins logs`)"],
             ["Relay", relay],
             ["Devices", status.link.devices + " paired, " + status.link.connected + " connected" + (status.link.pairing ? "  (a pairing code is open)" : "")],
+            ...(status.nodeHost?.enabled
+              ? [
+                  ["Node host", "“" + status.nodeHost.name + "” · " + (status.nodeHost.paused ? "Paused" : "Online")],
+                  ["Shared folders", status.nodeHost.sharedProjects?.length ? status.nodeHost.sharedProjects.map((project) => project.name).join(", ") : "none"],
+                  ...(status.nodeHost.lastCompleted
+                    ? [["Last node job", status.nodeHost.lastCompleted.sourceBotName + " on " + status.nodeHost.lastCompleted.sourceHostName + " · " + status.nodeHost.lastCompleted.operation + " (" + status.nodeHost.lastCompleted.resourceName + ")"]]
+                    : []),
+                ]
+              : []),
             ["Workspace", status.workspace.bots + " bots, " + status.workspace.chats + " chats, " + status.workspace.routines + " routines" + (status.workspace.working ? ", " + status.workspace.working + " working" : "") + (status.workspace.waiting ? ", " + status.workspace.waiting + " waiting for an answer" : "")],
             ["Secrets", status.vault.locked ? color.red("vault locked") : "wrapped by the " + status.secrets.where],
             ["Memory", status.memory.rssMb + " MB"],

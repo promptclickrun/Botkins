@@ -24,7 +24,7 @@ import { sendAnswers, startAnswers } from "./answers";
 import { ALL_CARD, cardOver } from "../../link-host/cards.mjs";
 import { botsWithWork, hasWork, MAX_CARDS, phoneCard } from "./cards";
 import { answerPendingAsks } from "./device";
-import { api, attempt, chatOnScreen, freshSync, onChatOnScreen, restIfAway, switchComputer, tellOthers } from "./link";
+import { api, attempt, chatOnScreen, syncForPush, onChatOnScreen, restIfAway, switchComputer, tellOthers } from "./link";
 import { useApp } from "./store";
 
 const KEY = "botkins.push.v1";
@@ -544,9 +544,8 @@ if (native) {
     native.TaskManager.defineTask(TASK, async () => {
       // Woken in the background, the link is at rest (or the app was just started): follow until one
       // sync has come back, so what follows reads the computer's state now, not what was held before.
-      const end = Date.now() + 20_000;
-      while (Date.now() < end && !(await freshSync(Math.max(1000, end - Date.now())))) await new Promise((resolve) => setTimeout(resolve, 250));
       try {
+        await syncForPush(20_000);
         // The same wake brings a chat's card up to date (a turn ended while the app was closed) and
         // tells the computer the card's address, so it can change the card itself from then on.
         await syncActivities().catch(() => {});

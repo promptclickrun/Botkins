@@ -21,10 +21,10 @@ const HARNESSES: { id: NonNullable<Values["harness"]>; name: string }[] = [
   { id: "omp", name: "OMP" },
 ];
 const HARNESS_HELP: Record<NonNullable<Values["harness"]>, string> = {
-  copilot: "One harness runs every chat. GitHub Copilot, ChatGPT and Claude models each answer on their own plan, with the same tools, skills and connections.",
-  provider: "Each model's own tool runs its chats: Codex for ChatGPT, Claude Code for Claude, and the Copilot SDK for GitHub Copilot.",
-  pi: "Pi runs ChatGPT and Claude chats, and each answers on its own plan. GitHub Copilot models stay on the Copilot SDK.",
-  omp: "OMP runs ChatGPT and Claude chats with Pi-compatible tools and its own improvements, and each answers on its own plan. GitHub Copilot models stay on the Copilot SDK.",
+  copilot: "One harness runs every chat. GitHub Copilot, ChatGPT, Claude and OpenCode models each answer on their own plan, with the same tools, skills and connections.",
+  provider: "Each model's own tool runs its chats: Codex for ChatGPT, Claude Code for Claude, the Copilot SDK for GitHub Copilot, and OpenCode for its models.",
+  pi: "Pi runs every chat: GitHub Copilot, ChatGPT, Claude and OpenCode models each answer on their own plan. Copilot's Auto model stays on the Copilot SDK.",
+  omp: "OMP runs every chat with Pi-compatible tools and its own improvements: GitHub Copilot, ChatGPT, Claude and OpenCode models each answer on their own plan. Copilot's Auto model stays on the Copilot SDK.",
 };
 
 /** Settings › General › Harness: one harness for every plan (the Copilot SDK), or each provider's own. */
@@ -40,7 +40,7 @@ export function HarnessSettings({ settings, change, fail, setup = true, windows 
   const knownPrograms = new Set(programs.map((item) => item.id));
   const options = HARNESSES.filter((option) => option.id === "copilot" || option.id === "provider" || knownPrograms.has(option.id) || harness === option.id);
   return (
-    <Group title="Harness" footer="A chat keeps its conversation when you switch; its next reply starts on the other harness. OpenCode and other agents always run themselves.">
+    <Group title="Harness" footer="A chat keeps its conversation when you switch; its next reply starts on the other harness. Agents you add over ACP always run themselves.">
       <div className="set-row">
         <div className="set-label">
           <span className="set-name">What runs your bots</span>
@@ -405,7 +405,7 @@ const approvalHelp: Record<Values["approval"], string> = {
   all: "Approves every request, commands and file changes too. Managed policies still apply.",
 };
 
-export function ChatDisplaySettings({ settings }: Pick<Props, "settings">) {
+export function ChatDisplaySettings({ settings, chatMode, fail }: Pick<Props, "settings" | "fail"> & { chatMode?: "main" | "new" }) {
   return (
     <Group title="Chat">
       <Row label="Steps" help={({folded:"Tool calls stay in the working rail", open:"Show every tool call in the chat as it happens", failed:"Show only failed tool calls in the chat"})[settings.steps ?? "folded"]}>
@@ -426,11 +426,18 @@ export function ChatDisplaySettings({ settings }: Pick<Props, "settings">) {
         </select>}
       </Row>
       <Row label="When you select a bot">
-        {(id) => <select className="bot-tap" id={id} value={settings.botTap ?? "latest"} onChange={e => saveChatDisplay({ botTap: e.target.value === "new" ? "new" : "latest" })}>
+        {(id) => <select className="bot-tap" id={id} value={settings.botTap === "main" && !chatMode ? "latest" : settings.botTap ?? (chatMode ? "main" : "latest")} onChange={e => saveChatDisplay({ botTap: e.target.value as Values["botTap"] })}>
+          {chatMode && <option value="main">Open Main chat</option>}
           <option value="latest">Open the latest chat</option>
           <option value="new">Start a new chat</option>
         </select>}
       </Row>
+      {chatMode && <Row label="Proactive signals" help="Where your bots send alerts delivered to chat.">
+        {id => <select id={id} value={chatMode} onChange={e => void window.botkins.setProactiveChatMode(e.target.value === "new" ? "new" : "main").catch(fail)}>
+          <option value="main">Main chat</option>
+          <option value="new">New chat every time</option>
+        </select>}
+      </Row>}
     </Group>
   );
 }
@@ -483,7 +490,7 @@ export function BehaviorSettings({ settings, change, fail }: Props) {
         </Row>
         <ValueRow
           label="Remembered approvals"
-          help="Requests you allowed for the rest of a chat."
+          help="Saved tool approvals and cross-host Teamwork permissions."
           value={
             <button
               type="button"
@@ -491,7 +498,7 @@ export function BehaviorSettings({ settings, change, fail }: Props) {
               onClick={() =>
                 window.botkins
                   .clearApprovals()
-                  .then(() => setMessage("Remembered chat approvals cleared."))
+                  .then(() => setMessage("Remembered approvals cleared."))
                   .catch(fail)
               }
             >

@@ -504,6 +504,10 @@ export type RoutineInput = {
 export type ChatContext = { current: number; limit: number; system?: number; tools?: number; conversation?: number; messages?: number; updatedAt?: number };
 /** A chat as lists show it. Its messages arrive in a ChatDetail when the chat is open. */
 export type ChatSummary = {
+  hostDispatch?: true;
+  main?: boolean;
+  activeFork?: string;
+  forks?: { id: string; name: string }[];
   fastMode?: FastMode;
   id: string;
   botId: string;
@@ -572,6 +576,7 @@ export type TeamAsk = {
   id: string;
   botId: string;
   fromBotId: string;
+  remote?: { hostId: string; hostName: string; botName: string };
   message: string;
   status: "waiting" | "working" | "answered" | "failed" | "stopped";
   started: number;
@@ -646,6 +651,8 @@ export type Run = RunSummary & {
   /** Tools with an MCP App view that ran in this turn. */
   mcpApps?: McpAppCard[];
   options?: { label: string; prompt: string; description?: string }[];
+  /** The active run has reasoning available when its detail is opened. */
+  hasReasoning?: boolean;
   reasoning?: Reasoning[];
   todos?: Todo[];
   agents?: Subagent[];
@@ -688,7 +695,7 @@ export type ChatPane = {
   closed?: { runId: string | null; at: number };
 };
 /** One page of a chat's messages. `from` is the index of the first one in the whole chat. */
-export type ChatDetail = { id: string; from: number; total: number; messages: Message[]; runs: Run[]; todos?: Todo[]; pane?: ChatPane };
+export type ChatDetail = { id: string; activeFork?: string; from: number; total: number; messages: Message[]; runs: Run[]; todos?: Todo[]; pane?: ChatPane };
 
 export type FormField = {
   type: string;
@@ -718,7 +725,16 @@ export type SecureField = {
   hint?: string;
   optional?: true;
 };
+/** A cross-host permission is scoped to the source and target bots and hosts shown on the card. */
+export type DispatchAction = "approve" | "today" | "remember" | "deny";
+export type RequestAnswer = {
+  action: DispatchAction | "cancel" | "answer" | "accept";
+  /** A saved credential's reference instead of text: the computer puts the value in. */
+  value?: string | CredentialRef;
+  content?: Record<string, unknown>;
+};
 export type AgentRequest = {
+  dispatch?: true;
   id: string;
   chatId: string;
   botId: string;
@@ -1133,6 +1149,8 @@ export type UsageReport = {
  * "project-artifacts-v1" (artifacts attached to a project: `Project.artifacts` and three calls).
  * "sync-push-v1" (sealed sync updates on an open relay request),
  * "stream-appends-v1" (boolean live indicators and cursor-based reply and thinking text for watched chats).
+ * "run-summary-deltas-v1" (incremental visible run summaries with runSummaries: "delta").
+ * "run-step-deltas-v1" (incremental working-run steps for a client that requests light steps and runSteps: "delta").
  * "step-details-v1" (steps without their long input and output for a client that asks; `link.step` reads one).
  * "turn-timeline-v1" (a turn in the order it happened: text before a step, a steer or a request
  * as interim messages, answers to requests as messages, a time on every reply, each helper's own
@@ -1199,7 +1217,7 @@ export type ProactiveBot = Partial<ProactiveBotSettings> & {
     evaluation?: { trained: number; tested: number; baseline: number; previous: number; challenger: number; promoted: boolean };
   };
 };
-export type ProactivePart = { enabled: boolean; bots: Record<string, ProactiveBot | undefined> };
+export type ProactivePart = { chatMode?: "main" | "new"; enabled: boolean; bots: Record<string, ProactiveBot | undefined> };
 export type ProactiveLog = { at: number; reason: "signals" | "sweep" | "check" | "context" | "review"; score?: number; signals: number; outcome: "alerted" | "silent" | "failed"; runId: string; said?: string };
 export type Parts = {
   meta: Meta;
@@ -1692,6 +1710,9 @@ export type Calls = {
   exportTemplateText(target: { templateId: string } | { botId: string }): SharedFile;
   /** Makes a template from a shared file's text and answers its id. Needs "files-v1". */
   importTemplateText(file: { name?: string; text: string }): string;
+  mainChat(botId: string): string;
+  changeMainFork(id: string, action: "reset" | "fork" | "switch", value?: number | string, expected?: string): string;
+  setProactiveChatMode(mode: "main" | "new"): void;
   createChat(botId: string): string;
   createGroupChat(botIds: string[], title?: string): string;
   setChatFlags(id: string, flags: Partial<Pick<ChatSummary, "pinned" | "archived" | "unread">>): void;
@@ -1716,7 +1737,7 @@ export type Calls = {
   compact(chatId: string): void;
   sideQuestion(chatId: string, question: string): string;
   /** A value (or a form field's value) may be a CredentialRef: the computer fills the secret in. */
-  respond(requestId: string, answer: { action: string; value?: string | CredentialRef; content?: Record<string, unknown> }): void;
+  respond(requestId: string, answer: RequestAnswer): void;
   clearApprovals(chatId?: string): void;
   models(): ModelInfo[];
   /** "routines" is the Default routines model ("routine-models-v1"); null clears it. */

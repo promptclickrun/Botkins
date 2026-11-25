@@ -46,7 +46,8 @@ import { AllSpaces, SidebarSpaces, SpacePage } from "./SpacePage";
 import { hasSpaces } from "./spaces";
 import Welcome from "./Welcome";
 import FirstBot from "./FirstBot";
-import SetupChoice, { SetupConnect, SetupTeam, type SetupPath } from "./SetupChoice";
+import SetupChoice, { SetupConnect, SetupNode, SetupTeam, type SetupPath } from "./SetupChoice";
+import RequestPanel from "./RequestPanel";
 import { ProfileMigrationPrompt, useMigrationPrompt } from "./ProfileSettings";
 import type { Attachment, BoardItem, Bot, Chat, MarketAgentTemplate, MentionInput, Message, State } from "./types";
 import { tokenOf, type DraftMention } from "./MentionMenu";
@@ -70,7 +71,7 @@ type Page = "Home" | "Today" | "Chats" | "Wiki" | WorkTab | "Activity" | "Usage"
 const WORK_PAGES: Page[] = [...WORK_TABS, "Activity", "Usage"];
 type Modal = "" | "bot" | "chat" | "account" | "settings" | "model";
 const personalChat = (chat: Chat) =>
-  !chat.archived && !chat.botIds && !chat.panelId && !chat.schedules?.some((entry) => entry.routine);
+  !chat.hostDispatch && !chat.archived && (!chat.main || !!(chat.count ?? chat.messages.length)) && !chat.botIds && !chat.panelId && !chat.schedules?.some((entry) => entry.routine);
 const visitKey = (host: string, bot: string) => "botkins.lastChat." + JSON.stringify([host, bot]);
 function App() {
   const [updates] = useState(() => new WindowState());
@@ -193,7 +194,7 @@ function App() {
   const [setupPath, setSetupPathNow] = useState<SetupPath | "">(() => {
     try {
       const saved = sessionStorage.getItem(SETUP_KEY);
-      return saved === "here" || saved === "computer" || saved === "team" ? saved : "";
+      return saved === "here" || saved === "computer" || saved === "team" || saved === "node" ? saved : "";
     } catch {
       return "";
     }
@@ -499,8 +500,20 @@ function App() {
     open(key);
     return key;
   }
+  async function mainChat(id: string) {
+    if (!state?.proactive?.chatMode) return newChat(id);
+    const key = await api.mainChat(id);
+    await openNew(key);
+    return key;
+  }
   function botChat(b: Bot) {
     leave(() => {
+      // Settings › Chat › When you select a bot: "Main chat", when this computer keeps one.
+      if (state?.proactive?.chatMode && (state.settings.botTap ?? "main") === "main" && teamCan(state, "agents", "chat")) {
+        markBotRead(b.id);
+        void mainChat(b.id).catch(fail);
+        return;
+      }
       const chats = state?.chats.filter((c) => c.botId === b.id && personalChat(c)) ?? [];
       // Settings › Chat › When you select a bot: "Start a new chat". A new chat nobody wrote in yet
       // is that new chat, so selecting the bot twice makes one, not two; so is one that was archived
@@ -508,7 +521,7 @@ function App() {
       // archived yet: the archiving of a chat just left may still be on its way.
       if (state?.settings.botTap === "new" && teamCan(state, "agents", "chat")) {
         markBotRead(b.id);
-        const blank = newChatToReuse(state.chats, b.id, state);
+        const blank = newChatToReuse(state.chats, b.id, state, memberTeam(state)?.me.memberId);
         if (blank) {
           if (blank.archived) reopenedChats.current.add(blank.id);
           void api.setChatFlags(blank.id, { archived: false }).then(() => open(blank.id)).catch(fail);
@@ -572,11 +585,12 @@ function App() {
         return;
       }
       if (command === "new" || command === "clear") {
-        await newChat(bot?.id || state!.bots[0].id);
+        if (command === "clear" && chat?.main) await api.changeMainFork(chat.id, "reset", undefined, chat.activeFork);
+        else await newChat(bot?.id || state!.bots[0].id);
         clear();
         return;
       }
-      const id = key === "home" ? await newChat(state!.bots[0].id) : key;
+      const id = key === "home" ? await mainChat(state!.bots[0].id) : key;
       if ((command === "model" || command === "models") && !args) {
         setModal("model");
         clear();
@@ -636,7 +650,7 @@ function App() {
   }
   async function pickModel(key: string) {
     if (key === "home") {
-      const id = await newChat(state!.bots[0].id);
+      const id = await mainChat(state!.bots[0].id);
       setDrafts((prev) => ({ ...prev, [id]: prev.home || "", home: "" }));
       setDraftMentions((prev) => ({ ...prev, [id]: prev.home ?? [], home: [] }));
       setDraftCommands((prev) => ({ ...prev, [id]: prev.home ?? null, home: null }));
@@ -655,6 +669,11 @@ function App() {
     );
   }
   function composer(key: string, placeholder: string) {
+    if (key !== "home" && chat?.hostDispatch) {
+      return state?.streams[key] !== undefined
+        ? <button className="secondary" onClick={() => void api.stop(key).catch(fail)}>Stop request</button>
+        : null;
+    }
     const target = key === "home" ? state!.bots[0] : bot!;
     const chatPeople = key !== "home" && chat ? chatMentionPeople(state!, chat) : [];
     const canTyping =
@@ -692,7 +711,7 @@ function App() {
         botName={key !== "home" && (chat?.botIds?.length ?? 0) > 1 ? "The group" : target.name}
         botLook={target.look}
         botVoice={target.voice}
-        startChat={key === "home" ? () => newChat(target.id) : undefined}
+        startChat={key === "home" ? () => mainChat(target.id) : undefined}
         members={
           key !== "home" && (chat?.botIds?.length ?? 0) > 1
             ? chat!.botIds!.map((id) => state!.bots.find((b) => b.id === id)!).filter(Boolean)
@@ -704,16 +723,18 @@ function App() {
     );
   }
   // The welcome shows on first launch and whenever no model provider that is on is connected. A workspace
-  // with chats predates it. While the list loads, or every provider is still starting, nothing is known
-  // yet, so an onboarded person isn't shown the welcome in the meantime.
-  const onboarded = !!state && (!!state.settings.onboarded || state.chats.length > 0);
+  // with chats predates it. A computer set up as a node host has finished setup without bots or a model
+  // provider, so it opens straight into the window. While the list loads, or every provider is still
+  // starting, nothing is known yet, so an onboarded person isn't shown the welcome in the meantime.
+  const isNodeHost = !!state?.nodeHost?.enabled && !state?.remote?.using;
+  const onboarded = !!state && (!!state.settings.onboarded || isNodeHost || state.chats.some(c => !c.main || c.messages.length > 0));
   const enabledProviders = providers?.filter((p) => p.enabled) ?? [];
   const connectedProviders = enabledProviders.filter(isConnected);
   const settled = !!providers && !(enabledProviders.length > 0 && enabledProviders.every((p) => p.starting));
   // A first launch opens on the choice of where the bots run (src/SetupChoice.tsx), unless the window
   // already uses another computer or a team: their bots are already there.
   const firstRun = !!state && !onboarded && !state.remote?.using && !memberTeam(state);
-  const welcome = !!state && (firstRun || (onboarded && settled && !connectedProviders.length && !later));
+  const welcome = !!state && (firstRun || (onboarded && !isNodeHost && settled && !connectedProviders.length && !later));
   // The computer in use has sent nothing yet (it can't be reached, a different computer answered, or
   // it no longer knows this one): the window says so in place of its pages, and offers the way back.
   const using = state?.remote?.using;
@@ -744,6 +765,17 @@ function App() {
   if (firstRun && setupPath === "") return <SetupChoice choose={setSetupPath} state={state} />;
   if (firstRun && setupPath === "computer") return <SetupConnect back={() => setSetupPath("")} />;
   if (firstRun && setupPath === "team") return <SetupTeam back={() => setSetupPath("")} initialJoin={teamJoinUrl || undefined} />;
+  if (firstRun && setupPath === "node")
+    return (
+      <SetupNode
+        back={() => setSetupPath("")}
+        state={state}
+        finish={async () => {
+          receiveSnapshot(await api.snapshot());
+          setSetupPath("");
+        }}
+      />
+    );
   if (welcome)
     return (
       <Welcome
@@ -754,8 +786,8 @@ function App() {
       />
     );
   // A workspace of this computer's with no bots opens on the first-run step: the person's existing
-  // agents, or Create a bot. Never while another computer is in use: a bot made there would go to it.
-  if (!state.bots.length && !state.remote?.using && !memberTeam(state))
+  // agents, or Create a bot. Never while another computer is in use, and never on an empty node host.
+  if (!state.bots.length && !isNodeHost && !state.remote?.using && !memberTeam(state))
     return (
       <FirstBot
         remote={state.remote}
@@ -763,11 +795,14 @@ function App() {
         created={async (id, after) => {
           receiveSnapshot(await api.snapshot());
           if (id && after?.setUp && proactiveTeam) botPage(id, true);
+          else if (id) await mainChat(id);
         }}
       />
     );
   const stream = state.streams[chatId];
-  const elsewhere = state.requests.find((r) => r.chatId !== chatId);
+  const chatIds = new Set(state.chats.map((c) => c.id));
+  const hostRequests = state.requests.filter((r) => r.nodeJob || !chatIds.has(r.chatId));
+  const elsewhere = state.requests.find((r) => r.chatId !== chatId && !r.nodeJob && chatIds.has(r.chatId));
   const actions: PageActions = {
     open,
     botChat,
@@ -776,6 +811,7 @@ function App() {
       if (!state) return;
       markChatsRead(chatsPageUnreadChats(state.chats).map((c) => c.id));
     },
+    mainChat: id => void mainChat(id).catch(fail),
     addBot: () => setModal("bot"),
     newChat: () => setModal("chat"),
     showChats: () => nav("Chats"),
@@ -944,6 +980,16 @@ function App() {
       </aside>
       <main>
         {!hostDown && <HostBanner state={state} pairAgain={() => settings("Computers")} />}
+        {hostRequests.length > 0 && (
+          <div style={{ padding: "12px 18px 0" }}>
+            <RequestPanel
+              key={hostRequests[0].id}
+              req={hostRequests[0]}
+              count={hostRequests.length}
+              bot={hostRequests[0].sourceBotName || state.nodeHost?.name || "Node host"}
+            />
+          </div>
+        )}
         {elsewhere && (
           <button
             className="request-banner"
@@ -1076,9 +1122,27 @@ function App() {
             )}
             {page === "Home" && state.bots.length === 0 && (
               <div className="empty">
-                {memberHost
-                  ? "No agents are visible to this role. Ask the team owner if you need access."
-                  : (state.remote?.using?.name ?? "This computer") + " has no bots yet. Create one with the + beside Bots."}
+                {memberHost ? (
+                  "No agents are visible to this role. Ask the team owner if you need access."
+                ) : isNodeHost && state.nodeHost ? (
+                  <div style={{ display: "grid", gap: 10, justifyItems: "center", maxWidth: 460 }}>
+                    <strong>
+                      {state.nodeHost.name} · {state.nodeHost.paused ? "Paused" : "Online"}
+                    </strong>
+                    <span>
+                      Node host with {state.nodeHost.sharedProjects.length} shared{" "}
+                      {state.nodeHost.sharedProjects.length === 1 ? "folder" : "folders"}
+                      {state.nodeHost.lastCompleted
+                        ? ` · Last request: ${state.nodeHost.lastCompleted.sourceBotName} (${state.nodeHost.lastCompleted.status})`
+                        : ""}
+                    </span>
+                    <button type="button" className="primary" onClick={() => settings("Node host")}>
+                      Manage Node host
+                    </button>
+                  </div>
+                ) : (
+                  (state.remote?.using?.name ?? "This computer") + " has no bots yet. Create one with the + beside Bots."
+                )}
               </div>
             )}
             {page === "Projects" && (
@@ -1196,6 +1260,7 @@ function App() {
               receiveSnapshot(await api.snapshot());
               setModal("");
               if (after?.setUp && proactiveTeam) botPage(id, true);
+              else await mainChat(id);
             }}
           />
         )}

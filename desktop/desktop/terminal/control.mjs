@@ -33,6 +33,7 @@ import { sharingApi } from "./control-sharing.mjs";
 import { teamApi } from "./control-team.mjs";
 import { appsApi } from "./control-apps.mjs";
 import { profileApi } from "./control-profile.mjs";
+import { nodeApi } from "./control-node.mjs";
 import { checkReach } from "./reach.mjs";
 import { normaliseConfig } from "../providers/keyed/config.mjs";
 
@@ -200,8 +201,8 @@ export function controlApi(service) {
       ...(task?.intent && { intent: task.intent }),
       messages,
       count: chat.messages.length,
-      ...(request && { request: { id: request.id, kind: request.kind, title: request.title } }),
-      run: state().runs.find((run) => run.chatId === chat.id) ?? null,
+      ...(request && { request: { id: request.id, kind: request.kind, title: request.title, ...(request.dispatch && { dispatch: true, detail: request.detail, label: request.label }) } }),
+      run: state().runs.find((run) => run.chatId === chat.id && (!chat.main || run.forkId === chat.activeFork)) ?? null,
     };
   };
   /** Applies a whole config: saves it, makes the running service agree, and says what waits for a restart. */
@@ -253,6 +254,7 @@ export function controlApi(service) {
         },
         secrets: keys ? { source: keys.source, where: keys.where } : { source: "file", where: "key files in the data folder (a trial run)" },
         vault: { locked: workspace.vault.locked === true, entries: workspace.vault.list().length },
+        nodeHost: workspace.nodeHost.view(),
         update: runtime.updates?.status() ?? { status: "unavailable" },
       };
     },
@@ -476,6 +478,12 @@ export function controlApi(service) {
       return state().settings.model ?? null;
     },
     /** The Default routines model: `ref` sets it (with a thinking level, `effort`), null clears it, nothing reads it. */
+    "models.chat": async ([id, ref, effort]) => {
+      const chat = workspace.chat(String(id));
+      const model = ref === "inherit" ? null : { ...(await selection(ref)), ...(effort && { reasoningEffort: String(effort) }) };
+      await workspace.setModel("chat", chat.id, model);
+      return workspace.effectiveModel(chat);
+    },
     "models.routines": async ([ref, effort]) => {
       if (ref === null || ref === "") await workspace.setModel("routines", null, null);
       else if (ref !== undefined) await workspace.setModel("routines", null, { ...(await selection(ref)), ...(effort && { reasoningEffort: String(effort) }) });
@@ -483,6 +491,10 @@ export function controlApi(service) {
     },
 
     // ── Chat ─────────────────────────────────────────────────────────────────────────────────
+    "chat.main": ([ref]) => {
+      const found = bot(ref);
+      return { chatId: handlers.mainChat(found.id), bot: { id: found.id, name: found.name } };
+    },
     "chat.open": ([ref]) => {
       const found = bot(ref);
       return { chatId: handlers.createChat(found.id), bot: { id: found.id, name: found.name } };
@@ -522,9 +534,9 @@ export function controlApi(service) {
           return { id: run.id, chatId: run.chatId, title: run.title, status: run.status, ...(run.detail && { detail: String(run.detail).slice(0, 300) }), time: run.time ? new Date(run.time).toISOString() : null, bot: state().bots.find((entry) => entry.id === chat?.botId)?.name ?? null, ...(run.scheduleId != null && { routine: true }) };
         }),
     // The answer says which chat and which kind of request (never its text or the answer's), for the log line (coverage.mjs). The request is gone once it is answered, so it is read first.
-    // A yes to a request (`approve`, and `remember`, which also says yes to the next ones) needs the mark `{ agreed: true }` as the last argument: a bot's shell must not approve its own request by a quiet call. A no, a cancel and an answer to a question need none.
+    // A yes to a request (`approve`, `today` or `remember`) needs the mark `{ agreed: true }` as the last argument: a bot's shell must not approve its own request by a quiet call. A no, a cancel and an answer to a question need none.
     "chat.respond": async ([requestId, answer, mark]) => {
-      if ((answer?.action === "approve" || answer?.action === "remember") && !(mark !== null && typeof mark === "object" && !Array.isArray(mark) && mark.agreed === true))
+      if (["approve", "today", "remember"].includes(answer?.action) && !(mark !== null && typeof mark === "object" && !Array.isArray(mark) && mark.agreed === true))
         throw new ControlError("A yes to a request that waits in a chat needs a yes of the person. Show the request to the person, and give `{ \"agreed\": true }` as the last argument (on the command line, `botkins chat` asks the person at a terminal; no flag gives it).", "NEEDS_YES");
       const asked = workspace.interactions.snapshot().find((entry) => entry.id === String(requestId));
       await handlers.respond(String(requestId), answer);
@@ -600,7 +612,7 @@ export function controlApi(service) {
   // A plugin by its name, bots by their names, and what of a plugin runs here (desktop/terminal/control-plugins.mjs).
   Object.assign(api, pluginsApi({ workspace, handlers, bot, signIns, log: (line) => log?.info?.(line) }));
   // The rest of the workspace, one file for each area (desktop/terminal/control-<area>.mjs). A name that is there already is not replaced.
-  for (const area of [botsApi, chatsApi, routinesApi, projectsApi, wikiApi, prefsApi, credentialsApi, voiceApi, spacesApi, sharingApi, teamApi, appsApi]) {
+  for (const area of [botsApi, chatsApi, routinesApi, projectsApi, wikiApi, prefsApi, credentialsApi, voiceApi, spacesApi, sharingApi, teamApi, appsApi, nodeApi]) {
     for (const [name, call] of Object.entries(area({ workspace, handlers, bot, signIns, selection }))) {
       if (Object.hasOwn(api, name)) throw new Error("Two control calls have the name " + name + ".");
       api[name] = call;

@@ -18,7 +18,7 @@ import { uploadSkill } from "./skill-import.mjs";
 import { parseSkill } from "./skill-format.mjs";
 import { botVoiceField } from "./voice.mjs";
 import { proactiveChats, proactivePatch, proactiveSees, proactiveStart } from "./proactive-rules.mjs";
-import { chatPeople } from "./team.mjs";
+import { findMainChat, makeMainChat, migrateMainChats, changeMainContext, visibleChat } from "./main-chat.mjs";
 import { Failure } from "./tools.mjs";
 import { PROTON_DOWNLOADS, PROTON_GUIDE } from "./proton-install.mjs";
 import { PINS, VERSION } from "./proton-pins.mjs";
@@ -197,8 +197,8 @@ const PROVIDERS = [
 
 // The harnesses that are programs of their own, absent until the phone installs them.
 const HARNESS_TOOLS = [
-  { id: "pi", name: "Pi", description: "The Pi coding agent, as the harness for ChatGPT and Claude plans.", harness: true, enabled: true, default: false, installed: false, connected: false, signIn: null, signOut: false, install: { url: "https://pi.dev", command: "curl -fsSL https://pi.dev/install.sh | sh" }, message: "Install Pi on your computer to use it as the harness." },
-  { id: "omp", name: "OMP", description: "OMP, the enhanced Pi coding agent, as the harness for ChatGPT and Claude plans.", harness: true, enabled: true, default: false, installed: false, connected: false, signIn: null, signOut: false, install: { url: "https://omp.sh", command: "curl -fsSL https://omp.sh/install | sh" }, message: "Install OMP on your computer to use it as the harness." },
+  { id: "pi", name: "Pi", description: "The Pi coding agent, as the harness for GitHub Copilot, ChatGPT, Claude and OpenCode models.", harness: true, enabled: true, default: false, installed: false, connected: false, signIn: null, signOut: false, install: { url: "https://pi.dev", command: "curl -fsSL https://pi.dev/install.sh | sh" }, message: "Install Pi on your computer to use it as the harness." },
+  { id: "omp", name: "OMP", description: "OMP, the enhanced Pi coding agent, as the harness for GitHub Copilot, ChatGPT, Claude and OpenCode models.", harness: true, enabled: true, default: false, installed: false, connected: false, signIn: null, signOut: false, install: { url: "https://omp.sh", command: "curl -fsSL https://omp.sh/install | sh" }, message: "Install OMP on your computer to use it as the harness." },
 ];
 
 const SKILLS = [
@@ -1405,10 +1405,13 @@ export class MockBackend {
     for (const p of state.projects ?? []) p.folders ??= p.folder ? [p.folder] : [];
     this.cloneFolders = new Set();
     this.wiki = new MockWiki(state);
+    migrateMainChats(state.bots, state.chats);
+    state.proactive ??= { enabled: true, bots: {} };
+    state.proactive.chatMode = state.proactive.newChatPeople?.includes("owner") ? "new" : "main";
     // What this stand-in app supports itself, beyond the link's own list.
     // "files-v1": a file out and in as text, without a dialog. "folders-v1": the folder browser.
     // "artifacts-v1": what the bots made or were given, from an index the app keeps (here: made up).
-    this.capabilities = ["message-reactions-v1", "client-message-id-v1", "voice-turns-v1", "voice-history-v1", "quiet-replies-v1", "routine-delivery-v1", ...(process.env.BOTKINS_DEV_NO_OUTPUT === "off" ? [] : ["routine-no-output-v1"]), "routine-scripts-v1", "routine-models-v1", "routine-silent-v1", "routine-notify-targets-v1", "proactive-agent-v2", "proactive-learning-v1", "proactive-team-v1", "models-v2", "fast-mode-v1", "side-pane-v1", "files-v1", "folders-v1", "project-artifacts-v1", "artifacts-v1", "secure-input-v1", "chat-title-regeneration-v1", ...(process.env.BOTKINS_DEV_USAGE === "off" ? [] : ["provider-usage-v1"])];
+    this.capabilities = ["main-chat-v1", "message-reactions-v1", "client-message-id-v1", "voice-turns-v1", "voice-history-v1", "quiet-replies-v1", "routine-delivery-v1", ...(process.env.BOTKINS_DEV_NO_OUTPUT === "off" ? [] : ["routine-no-output-v1"]), "routine-scripts-v1", "routine-models-v1", "routine-silent-v1", "routine-notify-targets-v1", "proactive-agent-v2", "proactive-learning-v1", "proactive-team-v1", "models-v2", "fast-mode-v1", "side-pane-v1", "files-v1", "folders-v1", "project-artifacts-v1", "artifacts-v1", "secure-input-v1", "chat-title-regeneration-v1", ...(process.env.BOTKINS_DEV_USAGE === "off" ? [] : ["provider-usage-v1"])];
     this.capabilities.push("project-folders-v1", "project-mode-v1", "project-clone-v1", "mark-chats-read-v1");
     if (this.timeline) this.capabilities.push("turn-timeline-v1");
     // "bot-voice-v1": a bot may have a voice of its own. BOTKINS_DEV_BOT_VOICE=off is an older computer.
@@ -1511,7 +1514,7 @@ export class MockBackend {
         ],
       }));
     }
-    return this.state;
+    return this.state.chats.some(c => c.savedForks) ? { ...this.state, chats: this.state.chats.map(visibleChat) } : this.state;
   }
   /**
    * What a live voice may know of the bot and the person (server.mjs `liveNotes`): the person's
@@ -1674,14 +1677,21 @@ export class MockBackend {
     for (const fn of this.listeners) fn();
   }
   /** A made-up proactive alert in a person's own chat with a bot, with one offer ("proactive-team-v1"). The offer's prompt stays here. */
+  mainChat(botId, person) {
+    this.bot(botId);
+    const held = findMainChat(this.state.chats, botId, person);
+    if (held) return held.id;
+    const chat = makeMainChat(botId, person);
+    this.state.chats.push(chat);
+    return chat.id;
+  }
   demoAlert(bot, person) {
-    const team = this.teamOf?.();
-    const mine = (chat) => chat.botId === bot.id && !chat.schedules?.length && !chat.botIds && !chat.panelId && (chat.createdBy ?? "owner") === person && !chatPeople(team, chat).invited.length;
-    let chat = this.state.chats.find(mine);
-    if (!chat) {
+    let chat;
+    if (this.state.proactive.newChatPeople?.includes(person)) {
       chat = { id: "chat-" + randomUUID().slice(0, 8), botId: bot.id, title: "New chat", time: now(), messages: [], ...(person !== "owner" && { createdBy: person }) };
       this.state.chats.unshift(chat);
     }
+    else chat = this.chat(this.mainChat(bot.id, person));
     const runId = "run-look-" + randomUUID().slice(0, 8);
     const text = "The launch checklist has three items with no owner.\n\nThe launch is in four days and nobody has picked up the press kit, the status page or the support macros.\n\nI can draft who takes what for you to send.";
     chat.messages.push({ role: "assistant", text, time: now(), proactiveRunId: runId, alert: { runId, offer: "Draft who takes what" } });
@@ -2226,7 +2236,7 @@ export class MockBackend {
     chat.unread = true;
     // Auto-summarize, as the desktop does it: every few completed turns a chat the person didn't name gets a new title.
     const every = this.state.settings.autoSummarize;
-    if (run.status === "Completed" && every && !chat.titleSet && (chat.titleTurns = (chat.titleTurns ?? 0) + 1) >= every) {
+    if (run.status === "Completed" && every && !chat.main && !chat.titleSet && (chat.titleTurns = (chat.titleTurns ?? 0) + 1) >= every) {
       chat.titleTurns = 0;
       chat.title = demoTitle(chat.messages.filter((message) => message.role === "user").at(-1)?.text);
     }
@@ -2294,7 +2304,11 @@ export class MockBackend {
       // Made from a starter: kept as the computer keeps it (desktop/workspace.mjs addBot).
       const starter = starterById(data.starter);
       if (starter) Object.assign(bot, { starter: starter.id }, starter.suggestProactive && { suggestProactive: true });
+      const person = this.caller?.id ?? "owner";
+      if (person === "owner") delete bot.createdBy;
+      else bot.createdBy = person;
       this.state.bots.push(bot);
+      this.mainChat(bot.id, person);
       return bot.id;
     },
     updateBot(id, patch) {
@@ -2331,7 +2345,11 @@ export class MockBackend {
     duplicateBot(id) {
       const { id: _id, pinned: _pinned, ...copy } = this.bot(id);
       const bot = { ...structuredClone(copy), id: "bot-" + randomUUID().slice(0, 8), name: copy.name + " copy" };
+      const person = this.caller?.id ?? "owner";
+      if (person === "owner") delete bot.createdBy;
+      else bot.createdBy = person;
       this.state.bots.push(bot);
+      this.mainChat(bot.id, person);
       return bot.id;
     },
     // Made-up agents in the person's GitHub Copilot setup. A bot made from one is marked `added`.
@@ -2350,7 +2368,10 @@ export class MockBackend {
         if (!agent) throw new Error("That agent is gone.");
         if (agent.problem) throw new Error(agent.problem);
         const bot = { id: "bot-" + randomUUID().slice(0, 8), name: agent.name, role: agent.role, instructions: agent.instructions, face: "idle", ...(agent.summary && { summary: agent.summary }), origin: { provider: agent.provider, agent: agent.agent } };
+        const person = this.caller?.id ?? "owner";
+        if (person !== "owner") bot.createdBy = person;
         this.state.bots.push(bot);
+        this.mainChat(bot.id, person);
         return bot.id;
       });
     },
@@ -2477,6 +2498,26 @@ export class MockBackend {
       return template.id;
     },
     // Chats
+    mainChat(botId) {
+      return this.mainChat(botId, this.caller?.id ?? "owner");
+    },
+    changeMainFork(id, action, value, expected) {
+      const chat = this.chat(id);
+      if ((chat.createdBy ?? "owner") !== (this.caller?.id ?? "owner")) throw new Error("Only the person whose Main chat this is can change its context.");
+      if (expected && expected !== chat.activeFork) throw new Error("The active fork changed. Choose it again.");
+      if (this.turns.has(id) || this.state.queued?.[id]?.length || this.state.requests?.some(r => r.chatId === id)) throw new Error("Finish the reply, waiting messages and questions before changing forks.");
+      changeMainContext(chat, action, value);
+      return id;
+    },
+    setProactiveChatMode(mode) {
+      if (!["main", "new"].includes(mode)) throw new Error("Choose Main chat or New chat every time.");
+      const person = this.caller?.id ?? "owner";
+      const people = new Set(this.state.proactive.newChatPeople);
+      if (mode === "new") people.add(person);
+      else people.delete(person);
+      this.state.proactive.newChatPeople = [...people];
+      if (person === "owner") this.state.proactive.chatMode = mode;
+    },
     createChat(botId) {
       this.bot(botId);
       const chat = { id: "chat-" + randomUUID().slice(0, 8), botId, title: "New chat", time: now(), messages: [] };
@@ -2490,6 +2531,7 @@ export class MockBackend {
       return chat.id;
     },
     setChatFlags(id, flags) {
+      if (flags.archived && this.chat(id).main) throw new Error("Main chat stays in your chats.");
       Object.assign(this.chat(id), flags);
     },
     markChatsRead(ids) {
@@ -2504,17 +2546,18 @@ export class MockBackend {
       }
     },
     renameChat(id, title) {
+      if (this.chat(id).main) throw new Error("Main chat keeps its name.");
       Object.assign(this.chat(id), { title: text(title, 120, "title"), titleSet: true });
     },
     regenerateChatTitle(id) {
       const chat = this.chat(id);
-      if (chat.temporary || chat.panelId || chat.schedules?.some((entry) => entry.routine)) throw new Error("This chat's title can't be regenerated.");
+      if (chat.main || chat.temporary || chat.panelId || chat.schedules?.some((entry) => entry.routine)) throw new Error("This chat's title can't be regenerated.");
       const opening = chat.messages.find((message) => message.role === "user" && message.text?.trim());
       if (!opening) throw new Error("Send a message before regenerating the title.");
       return (chat.title = opening.text.trim().replace(/\s+/g, " ").slice(0, 80));
     },
     deleteChat(id) {
-      this.chat(id);
+      if (this.chat(id).main) throw new Error("Main chat stays with its bot.");
       this.state.chats = this.state.chats.filter((c) => c.id !== id);
     },
     warmChat() {},
@@ -2536,6 +2579,10 @@ export class MockBackend {
       const index = Number(messageIndex);
       if (!Number.isInteger(index) || index < 0 || index >= from.messages.length) throw new Error("That message is gone.");
       const chat = { ...structuredClone({ ...from, messages: from.messages.slice(0, index + 1) }), id: "chat-" + randomUUID().slice(0, 8), title: from.title + " (fork)", time: now(), pinned: false, unread: false, forkedFrom: { chatId, messageIndex: index } };
+      delete chat.main;
+      delete chat.forks;
+      delete chat.activeFork;
+      delete chat.savedForks;
       delete chat.schedules;
       delete chat.context;
       this.state.chats.unshift(chat);

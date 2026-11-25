@@ -38,8 +38,7 @@ async function setup(t) {
   const today = ws.spaces.ensure("owner").today.id;
   ws.state.panels.push({ id: "p_owner", key: "mine", botId: "pip", spaceId: today, title: "Mine", blocks: [], revision: 1, hidden: false });
   // A member's: a bot they made, a chat with it, and a space with a panel of that bot.
-  const helper = await ws.agents.create({ name: "Avery's helper", role: "Helper", instructions: "Help." });
-  ws.bot(helper).createdBy = "m_avery";
+  const helper = await ws.agents.create({ name: "Avery's helper", role: "Helper", instructions: "Help." }, "m_avery");
   const averys = ws.createChat(helper);
   ws.chat(averys).createdBy = "m_avery";
   const launch = ws.spaces.create({ name: "Avery's launch" }, "m_avery");
@@ -76,7 +75,9 @@ test("with Admin mode off the owner's window is shown what the owner is part of,
 
   const off = view(false, { streams, intents: { [owners]: "a", [averys]: "b" } });
   assert.equal(off.adminMode, false);
-  assert.deepEqual(off.chats.map((chat) => chat.id), [owners], "the member's chat is not listed");
+  assert.equal(off.chats.filter(c => c.main).length, 3);
+  assert.ok(off.chats.every(c => !c.createdBy));
+  assert.deepEqual(off.chats.filter(chat => !chat.main).map((chat) => chat.id), [owners], "the member's chat is not listed");
   assert.deepEqual(off.runs.map((run) => run.id), ["run-owner"]);
   assert.equal(off.bots.some((bot) => bot.id === helper), false, "nor the bot the member made");
   assert.ok(off.bots.some((bot) => bot.id === "pip"));
@@ -92,7 +93,7 @@ test("with Admin mode off the owner's window is shown what the owner is part of,
 
   const on = view(true, { streams });
   assert.equal(on.adminMode, true);
-  assert.deepEqual(on.chats.map((chat) => chat.id).sort(), [owners, averys].sort());
+  assert.deepEqual(on.chats.filter(chat => !chat.main).map((chat) => chat.id).sort(), [owners, averys].sort());
   assert.ok(on.bots.some((bot) => bot.id === helper));
   assert.deepEqual(on.panels.map((panel) => panel.id), ["p_owner", "p_avery"]);
   assert.deepEqual(Object.keys(on.streams).sort(), [owners, averys].sort());
@@ -101,18 +102,18 @@ test("with Admin mode off the owner's window is shown what the owner is part of,
 
 test("a chat that is not listed but waits for the owner's answer is shown while it waits, and can be answered", async (t) => {
   const { ws, view, owners, averys, helper } = await setup(t);
-  assert.deepEqual(view(false).chats.map((chat) => chat.id), [owners]);
+  assert.deepEqual(view(false).chats.filter(chat => !chat.main).map((chat) => chat.id), [owners]);
   // A bot in the member's chat asks for something only the owner can allow.
   const waiting = ws.interactions.permission(ws.chat(averys), { stopped: false }, { kind: "shell", title: "Run a command", detail: "ls" });
   const shown = view(false);
-  assert.deepEqual(shown.chats.map((chat) => chat.id).sort(), [owners, averys].sort(), "listed while the request waits");
+  assert.deepEqual(shown.chats.filter(chat => !chat.main).map((chat) => chat.id).sort(), [owners, averys].sort(), "listed while the request waits");
   assert.deepEqual(shown.requests.map((request) => request.chatId), [averys]);
   assert.ok(shown.bots.some((bot) => bot.id === helper), "with its bot, so the chat can be drawn");
   // The owner answers it from the window, as for any chat.
   ws.interactions.respond(shown.requests[0].id, { action: "approve" });
   assert.deepEqual(await waiting, { allow: true, interactive: true });
   const after = view(false);
-  assert.deepEqual([after.chats.map((chat) => chat.id), after.requests], [[owners], []], "and it leaves the list again");
+  assert.deepEqual([after.chats.filter(chat => !chat.main).map((chat) => chat.id), after.requests], [[owners], []], "and it leaves the list again");
 });
 
 test("with a link from before Admin mode the window is shown everything and no switch", async (t) => {
@@ -122,7 +123,7 @@ test("with a link from before Admin mode the window is shown everything and no s
   for (const admin of [false, true]) {
     const shown = ownerWindowView(ws.snapshot(), old, admin);
     assert.equal("adminMode" in shown, false);
-    assert.deepEqual(shown.chats.map((chat) => chat.id).sort(), [owners, averys].sort());
+    assert.deepEqual(shown.chats.filter(chat => !chat.main).map((chat) => chat.id).sort(), [owners, averys].sort());
     assert.equal(typeof shown.spaces[0].can, "string");
   }
   // A link from before spaces: no `spaces`, which is how the window knows to show the Today page.

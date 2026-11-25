@@ -229,13 +229,13 @@ export default function RequestPanel({
           {req.detail && !secure && (
             <details
               className="request-raw"
-              open={req.preview ? undefined : true}
+              open={req.preview && !req.dispatch ? undefined : true}
             >
               <summary>Full request</summary>
               <pre>{shown(req.detail)}</pre>
             </details>
           )}
-          {req.remember && (
+          {req.remember && !req.dispatch && (
             <small>
               Remembering this approval allows {req.remember} for this
               conversation.
@@ -365,14 +365,19 @@ export default function RequestPanel({
           </button>
           {req.kind === "permission" ? (
             <>
-              {req.remember && (
+              {req.dispatch && (
+                <button type="button" disabled={busy} onClick={() => reply({ action: "today" })}>
+                  Allow for today
+                </button>
+              )}
+              {(req.dispatch || req.remember) && (
                 <button
                   type="button"
                   disabled={busy}
-                  title={"Remember for " + req.remember}
+                  title={req.dispatch ? undefined : "Remember for " + req.remember}
                   onClick={() => reply({ action: "remember" })}
                 >
-                  Allow for this chat
+                  {req.dispatch ? "Always allow" : "Allow for this chat"}
                 </button>
               )}
               <button
@@ -381,7 +386,7 @@ export default function RequestPanel({
                 disabled={busy}
                 onClick={() => reply({ action: "approve" })}
               >
-                Allow once
+                {req.dispatch ? "Allow this time" : "Allow once"}
               </button>
             </>
           ) : (

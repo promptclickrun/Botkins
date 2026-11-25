@@ -58,6 +58,7 @@ const KEYS = [
   ["background.runAtStartup", "on | off", "For the desktop app's window (this host starts with `botkins service install`)"],
   ["sidebar.order", "Home, Today, Chats, Work, Wiki", "The order of the places in the side menu"],
   ["sidebar.collapsed", "on | off", "The side menu shows icons only"],
+  ["proactive.chatMode", "main | new", "Proactive signals: Main chat or New chat every time, for you on this computer"],
   ["proactive.enabled", "on | off", "Experimental: the computer's switch for the Proactive agent (each bot's own is `botkins bots proactive`)"],
 ];
 /** The keys, for the help of `preferences set`. */

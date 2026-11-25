@@ -31,6 +31,7 @@ import { createRuntime, isSplitHost } from "./runtime.mjs";
 import { withOwnerChatSections } from "./chat-sections-ipc.mjs";
 import { electronHost } from "./host/electron.mjs";
 import { createWindowPush } from "./window-push.mjs";
+import { installTeamworkPeers } from "./teamwork-peers.mjs";
 import { ProfileManager } from "./profile.mjs";
 
 // Use the Botkins path for an existing installation. A development run never changes it.
@@ -113,7 +114,7 @@ const appSnapshot = () => {
     ...(!using && link ? { team: link.team() } : {}),
     phones: { revision: runtime.phoneRevision() },
     remote: { using, hosts: remote?.list() ?? [] },
-    ...(profile && { profile: profile.status({ existing: !!workspace?.state?.bots?.length || !!workspace?.state?.chats?.length || !!remote?.list?.().length }) }),
+    ...(profile && { profile: profile.status({ existing: !!workspace?.state?.bots?.length || !!workspace?.state?.chats?.length || !!workspace?.nodeHost?.enabled || !!remote?.list?.().length }) }),
   };
 };
 /** Whether a frame may load this address: an html block's page or an MCP App's view, from botkins-app://. */
@@ -141,6 +142,7 @@ function frameIdOf(address) {
  * live parts of it (desktop/window-push.mjs).
  */
 const windowPush = createWindowPush({
+  visible: () => !!win && !win.isDestroyed() && win.isVisible() && !win.isMinimized(),
   snapshot: () => appSnapshot(),
   send: (state) => {
     if (!win || win.isDestroyed()) return false;
@@ -151,7 +153,7 @@ const windowPush = createWindowPush({
     win.webContents.send("changed-hot", message);
   },
 });
-const push = () => windowPush.push();
+const push = (change) => windowPush.push(change);
 function openTeamJoin(value) {
   const url = String(value ?? "").trim();
   if (!parseJoinUrl(url)) return false;
@@ -285,7 +287,9 @@ function openWindow() {
     panelOpenFrames = new Set();
     lastBeforeInputKey = null;
     win = null;
+    windowPush.visibilityChanged();
   });
+  for (const change of ["show", "hide", "restore", "minimize"]) win.on(change, windowPush.visibilityChanged);
   win.on("show", syncTray);
   win.on("hide", syncTray);
   for (const change of ["focus", "blur", "show", "hide"]) win.on(change, tellWatching);
@@ -342,7 +346,7 @@ else
     remote.resume();
     // Admin mode is each owner device's own. This window's choice is this computer's, off at first.
     adminMode = adminModeStore(join(dataDir, "window.json"));
-    runtime = await createRuntime({ host, dataDir, trial, pushed: () => (push(), control?.changed()) });
+    runtime = await createRuntime({ host, dataDir, trial, pushed: (change) => (push(change), control?.changed()) });
     ({ workspace, link } = runtime);
     profile = new ProfileManager({
       file: join(dataDir, "profile.json"),
@@ -350,19 +354,31 @@ else
       lib: remote.lib,
       local: () => link,
       remote: () => remote,
-      workspace: () => !!workspace.state.bots.length || !!workspace.state.chats.length,
+      workspace: () => !!workspace.state.bots.length || !!workspace.state.chats.length || !!workspace.nodeHost?.enabled,
       fetch: host.fetch,
       device: { name: computerName(), platform: process.platform, kind: "desktop" },
       changed: () => push(),
       log: (line) => console.error(line),
     });
-    // The first real local bot is the point at which a signed-in installation becomes a host.
+    // The first real local bot (or setting up as a node host) is the point at which a signed-in installation becomes a host.
     // Keep the automatic LAN enable one-shot and remember an explicit phone-link disable.
+    installTeamworkPeers(runtime, profile, remote.transport());
     const originalAddBot = runtime.handlers.addBot;
-    runtime.handlers.addBot = (data) => {
-      const result = originalAddBot(data);
+    runtime.handlers.addBot = (data, person) => {
+      const result = originalAddBot(data, person);
       if (profile.token()) void profile.ensureLocalHost({ existing: true }).catch((error) => console.error("Profile local host:", error.message));
       return result;
+    };
+    const originalNodeSetup = runtime.handlers.nodeSetup;
+    runtime.handlers.nodeSetup = async (input) => {
+      const result = await originalNodeSetup(input);
+      if (profile.token()) void profile.ensureLocalHost({ existing: true }).catch((error) => console.error("Profile local host:", error.message));
+      return result;
+    };
+    const originalNodeDisconnect = runtime.handlers.nodeDisconnect;
+    runtime.handlers.nodeDisconnect = async () => {
+      if (profile.token()) await profile.disconnectLocal().catch((error) => console.error("Profile disconnect:", error.message));
+      return originalNodeDisconnect();
     };
     const originalSetPhoneLink = runtime.handlers.setPhoneLink;
     runtime.handlers.setPhoneLink = async (enabled) => {
@@ -507,7 +523,7 @@ else
       renameRemoteHost: (id, name) => remote.rename(String(id), name),
       // Hosted profile identity.  Only the public status/directory crosses into the page; the
       // bearer token and browser verifier remain in ProfileManager's protected file.
-      profileStatus: () => profile.status({ existing: !!workspace.state.bots.length || !!workspace.state.chats.length || !!remote.list().length }),
+      profileStatus: () => profile.status({ existing: !!workspace.state.bots.length || !!workspace.state.chats.length || !!workspace.nodeHost?.enabled || !!remote.list().length }),
       profileStart: async (label) => {
         const attempt = await profile.start(label);
         return attempt;

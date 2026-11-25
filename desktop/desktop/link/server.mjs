@@ -23,6 +23,7 @@ import { cleanPresenceKey, GRANT_CAPABILITY, GRANT_RELAY_CAPABILITY, ScreenGrant
 import { REMOTE_METHODS, remoteArgs } from "./methods.mjs";
 import { isNear, reachable } from "./net.mjs";
 import { baseParts, CHAT_PAGE, CHUNK_HOLD_MAX_MS, CHUNK_LIVE_MS, CHUNK_MS, chatPart, chunkDelta, compactWorkingRun, lightPart, quietLive, reasoningDelta, runPart, runsByChat, stepDetail, textDelta } from "./parts.mjs";
+import { runRowsFor } from "./run-step-delta.mjs";
 import { jsonFragments, sameFragments } from "./json-cache.mjs";
 import { reasoningPreview } from "./reasoning-preview.mjs";
 import { PullRequests } from "./prs.mjs";
@@ -46,6 +47,7 @@ const PREFIX = "/botkins/v1/";
 // A sealed call may carry a file part (4 MB, as base64 and sealed); the pairing steps are tiny.
 const MAX_RPC_BODY = 6 * 1024 * 1024;
 const MAX_BODY = 64 * 1024;
+const MAX_TEAMWORK_BODY = 160 * 1024;
 const PAIR_TTL = 5 * 60_000;
 // Wrong pairing codes: a source gets 8 tries for one open code, and the code is withdrawn only after 200
 // wrong tries from everyone together (it has 60 bits, so that stays safe). Per-source tables stay small.
@@ -80,7 +82,7 @@ const PROFILE_REQUEST_TIMEOUT = 10_000;
 // "maintenance-v1": this copy lets a phone clear the cache and send the computer's own test notification.
 /** The link tells people of notes and changes in their spaces (space-alerts.mjs). Named only while the app has spaces. */
 const SPACE_ALERTS_CAPABILITY = "space-alerts-v1";
-const CAPABILITIES = ["sync-push-v1", "credentials-v1", "screen-v1", "prs-v1", "uploads-v1", "relay-v1", "push-v1", "device-v1", "voice-v1", "devices-v1", "device-person-v1", "maintenance-v1", "teams-v1", "stream-appends-v1", "reasoning-appends-v1", "text-streaming-off-v1", "text-chunks-v1", "step-details-v1", "team-people-v1", "chat-sections-v1", "chat-typing-v1", "activity-bots-v1", "activity-all-v1", "member-rename-v1", "profile-v1", GADGET_CAPABILITY, GADGET_SETTINGS_CAPABILITY, "pr-panel-v1"];
+const CAPABILITIES = ["sync-push-v1", "credentials-v1", "screen-v1", "prs-v1", "uploads-v1", "relay-v1", "push-v1", "device-v1", "voice-v1", "devices-v1", "device-person-v1", "maintenance-v1", "teams-v1", "stream-appends-v1", "reasoning-appends-v1", "separate-thinking-v1", "text-streaming-off-v1", "text-chunks-v1", "step-details-v1", "run-step-deltas-v1", "run-summary-deltas-v1", "team-people-v1", "chat-sections-v1", "chat-typing-v1", "activity-bots-v1", "activity-all-v1", "member-rename-v1", "profile-v1", GADGET_CAPABILITY, GADGET_SETTINGS_CAPABILITY, "pr-panel-v1"];
 /** A custom view (an html block): the page a bot wrote and its data, at the sizes the desktop app keeps them to. */
 /** Calls that make a chat and answer its id. */
 const MAKES_CHAT = new Set(["createChat", "createGroupChat", "forkChat", "startProjectChat"]);
@@ -1761,6 +1763,8 @@ export class LinkHost extends EventEmitter {
     const state = this.backend.snapshot();
     const chat = (state.chats ?? []).find((item) => item.id === chatId);
     if (!chat) throw new Failure("That chat is no longer available.");
+    if (chat.hostDispatch) throw new Failure("A cross-host Teamwork chat is private to the owner.");
+    if (chat.main) throw new Failure("Main chat stays private. Invite people to a new chat instead.");
     if (privateProactiveChat(chat)) throw new Failure("This chat holds one person's alerts and can't be shared.");
     if (person !== OWNER && !team.members.some((member) => member.id === person)) throw new Failure("That person is no longer on the team.");
     const people = chatPeople(team, chat);
@@ -1808,6 +1812,7 @@ export class LinkHost extends EventEmitter {
   memberView(principal, method, args, state) {
     const team = this.store.data.team;
     let view = viewOf(team, principal.memberId);
+    if (method === "setChatFlags" && args[1]?.archived && state.chats?.some(c => c.id === args[0] && c.main)) throw new Failure("Main chat stays in your chats.");
     if (method === "setBotFlags") view = withBotFlags(view, String(args[0]), args[1]);
     else if (method === "reorderBots") view = { ...view, order: (Array.isArray(args[0]) ? args[0] : []).filter((id) => typeof id === "string").slice(0, 500) };
     else if (method === "setChatFlags") view = withChatFlags(view, String(args[0]), args[1], (state.chats ?? []).find((chat) => chat.id === args[0])?.time);
@@ -1904,7 +1909,7 @@ export class LinkHost extends EventEmitter {
       // A call needs a known session and a body that fits before any of the body is read.
       const sessionId = String(req.headers["x-botkins-session"] ?? "");
       if (route === "rpc") this.knownSession(sessionId);
-      const limit = route === "rpc" ? MAX_RPC_BODY : MAX_BODY;
+      const limit = route === "rpc" ? MAX_RPC_BODY : route === "profile" ? MAX_TEAMWORK_BODY : MAX_BODY;
       if (Number(req.headers["content-length"]) > limit) throw new Refused(413, "too_large");
       const body = await readBody(req, limit);
       const gone = new Promise((resolve) => res.on("close", resolve));
@@ -1928,12 +1933,21 @@ export class LinkHost extends EventEmitter {
   async serve({ route, push, session: sessionId = "", body = Buffer.alloc(0), from = "", via = "http", gone = new Promise(() => {}) }) {
     const json = (status, value) => ({ status, body: Buffer.from(JSON.stringify(value), "utf8"), json: true });
     try {
-      if (route === "hello") return json(200, this.hello(via));
+      if (route === "hello") return json(200, { ...this.hello(via), ...(this.teamworkPeer && { teamworkBoot: this.teamworkPeer.boot }) });
       if (route !== "rpc" && route !== "pair" && route !== "join" && route !== "session" && route !== "profile") throw new Refused(404, "not_found");
       if (route === "profile") {
-        if (body.length > MAX_BODY) throw new Refused(413, "too_large");
+        if (body.length > MAX_TEAMWORK_BODY) throw new Refused(413, "too_large");
         let message;
         try { message = JSON.parse(body.toString("utf8")); } catch { throw new Refused(400, "bad_json"); }
+        if (message?.teamwork === 1) {
+          try {
+            if (!this.teamworkPeer) throw new Error();
+            return json(200, await this.teamworkPeer.receive(message));
+          } catch (error) {
+            throw new Refused(error?.code === "TEAMWORK_OFFLINE" ? 503 : 403, "teamwork_unavailable");
+          }
+        }
+        if (body.length > MAX_BODY) throw new Refused(413, "too_large");
         return json(200, { box: await this.profile(message) });
       }
       const limit = route === "rpc" ? MAX_RPC_BODY : MAX_BODY;
@@ -2177,6 +2191,7 @@ export class LinkHost extends EventEmitter {
     const refusal = authorize(principal, this.store.data.team, isFollow || cancel ? "link.sync" : method, args, {
       bot: (id) => (state.bots ?? []).find((bot) => bot.id === id),
       chat: (id) => (state.chats ?? []).find((chat) => chat.id === id),
+      gadget: this.store.device(session.deviceId)?.kind === "gadget",
       request: (id) => (state.requests ?? []).find((request) => request.id === id),
       run: (id) => (state.runs ?? []).find((run) => run.id === id),
       // The app says who made each routine once it names "routine-owner-v1".
@@ -2475,7 +2490,7 @@ export class LinkHost extends EventEmitter {
     } else delete next.spaces;
     // Who was invited to each chat, for the owner's lists; a member's are added with their own cut (filterParts).
     const invites = this.store.data.team.chats ?? {};
-    next.chats = (next.chats ?? []).map((chat) => (invites[chat.id]?.length ? { ...chat, invited: [...invites[chat.id]] } : chat));
+    next.chats = (next.chats ?? []).map((chat) => (!chat.main && invites[chat.id]?.length ? { ...chat, invited: [...invites[chat.id]] } : chat));
     // The owner's own sections for their chats; a member's are added with their own cut (filterParts).
     const sections = chatSectionsOf(this.store.data.team, OWNER);
     next.chatSections = sections.list;
@@ -2525,6 +2540,11 @@ export class LinkHost extends EventEmitter {
       const continues = prev && prev.run === run && prev.boundary === boundary &&
         stream.startsWith(prev.stream) && thinking.startsWith(prev.thinking);
       const text = { id: continues ? prev.id : this.epoch + "." + ++this.version, stream, thinking, run, boundary };
+      // The reply has its own cursor when this client doesn't display thoughts. A rotating
+      // thought preview must never reset the reply or wake the phone for reasoning alone.
+      const lastReply = prev?.reply;
+      const sameReply = lastReply && prev.run === run && prev.boundary === boundary && stream.startsWith(lastReply.stream);
+      text.reply = { id: sameReply ? lastReply.id : this.epoch + "." + ++this.version, stream, thinking: "" };
       const items = wantedReasoning.has(id) && this.reasoningParts.get(id)?.snapshot?.items;
       if (items?.length) {
         const speaker = next.live.speakers[id];
@@ -2633,7 +2653,7 @@ export class LinkHost extends EventEmitter {
     return (part[slot] ??= JSON.stringify(compactWorkingRun(JSON.parse(part.json), light)));
   }
   /** Missing parts as JSON, null when caught up, or milliseconds until the next eligible flush. */
-  news(known, watching, cursors, session, throttle, interval = 0, advance) {
+  news(known, watching, cursors, session, throttle, interval = 0, advance, runBases) {
     const partWatching = [...new Set([...watching, ...(session.reasoningWatch ?? [])])];
     // A phone that asked for no text streaming ("text-streaming-off-v1") gets the indicators only, and no text:
     // text growing alone wakes nothing. The reply comes whole in its chat's page.
@@ -2652,6 +2672,7 @@ export class LinkHost extends EventEmitter {
     let first = false; // and it is the first of a reply: the phone holds none of it yet
     const parts = [];
     const versions = {};
+    const deliveredRuns = [];
     const deliveredReasoning = [];
     const deliveredText = [];
     for (const name of values.names ?? this.names(partWatching)) {
@@ -2663,7 +2684,15 @@ export class LinkHost extends EventEmitter {
       if (!legacyTextOnly) textOnly = false;
       // A chat's page and its run with light steps ("step-details-v1"), made once for each version.
       const light = session.light && (name.startsWith("chat:") || name.startsWith("run:"));
-      parts.push(JSON.stringify(name) + ":" + (light ? (part.light ??= JSON.stringify(lightPart(JSON.parse(part.json)))) : part.json));
+      const summaries = name === "runs";
+      const bases = summaries ? runBases?.summaries : name.startsWith("run:") ? runBases?.steps : null;
+      let json;
+      if (bases) {
+        const delivery = runRowsFor(part, summaries, bases.get(name), known[name]);
+        deliveredRuns.push([bases, name, delivery.snapshot]);
+        json = delivery.json;
+      } else json = light ? (part.light ??= JSON.stringify(lightPart(JSON.parse(part.json)))) : part.json;
+      parts.push(JSON.stringify(name) + ":" + json);
     }
     for (const chat of partWatching) {
       const shown = values === this.parts || values.texts?.has(chat) || (values.get("chat:" + chat)?.json ?? "null") !== "null";
@@ -2671,7 +2700,7 @@ export class LinkHost extends EventEmitter {
       if (cursors && watching.includes(chat)) {
         const cursor = Object.hasOwn(cursors, chat) ? cursors[chat] : null;
         const raw = shown && !session.noText ? this.texts.get(chat) : undefined;
-        const text = followsReasoning && raw?.projected ? raw.projected : raw;
+        const text = session.separateThinking && !followsReasoning ? raw?.reply : (followsReasoning && raw?.projected ? raw.projected : raw);
         let delta = textDelta(text, cursor);
         if (chunks && delta) {
           const cut = chunkDelta(text, delta, cursor, loose, true);
@@ -2717,6 +2746,10 @@ export class LinkHost extends EventEmitter {
     // The first words of a reply never wait for the clock: time to first text is what a phone shows most plainly.
     const remaining = (session.lastNews ?? 0) + (chunks && textOnly ? (live ? this.chunkTiming.live : this.chunkTiming.every) : interval || TEXT_PUMP_MS) - now;
     if (throttle && (textOnly || interval) && remaining > 0 && !(first && textOnly)) return remaining;
+    for (const [bases, name, sent] of deliveredRuns) {
+      if (sent) bases.set(name, sent);
+      else bases.delete(name);
+    }
     for (const [chat, sent] of deliveredReasoning) session.reasoningSent.set(chat, sent);
     advance?.(versions, deliveredText);
     if (held) session.heldSince = now;
@@ -2786,6 +2819,7 @@ export class LinkHost extends EventEmitter {
     const previousReasoningWatch = session.reasoningWatch ?? [];
     const acceptsAppends = this.backend.streamAppends !== false && validCursors(appends, watching);
     session.reasoningNegotiated = this.backend.streamAppends !== false && validReasoningWatch(reasoningWatch) && (appends === undefined || acceptsAppends);
+    session.separateThinking = session.reasoningNegotiated && request.separateThinking === true;
     session.reasoningWatch = session.reasoningNegotiated ? [...new Set(reasoningWatch)] : [];
     session.reasoningSent ??= new Map();
     for (const id of previousReasoningWatch) if (!session.reasoningWatch.includes(id)) {
@@ -2794,6 +2828,17 @@ export class LinkHost extends EventEmitter {
     }
     // One form for a session: a client names it on every sync, and the versions it holds are for that form.
     session.light = steps === "light";
+    if (!forGadget && session.light && request.runSteps === "delta") {
+      session.runStepBases ??= new Map();
+      for (const name of session.runStepBases.keys()) {
+        const chat = name.slice(4);
+        if (!watching.includes(chat) && !session.reasoningWatch.includes(chat)) session.runStepBases.delete(name);
+      }
+    } else delete session.runStepBases;
+    if (!forGadget && request.runSummaries === "delta") session.runSummaryBases ??= new Map();
+    else delete session.runSummaryBases;
+    // Capture the negotiation for this request. A concurrent full-snapshot reader cannot opt in an older wait.
+    const runBases = { steps: session.runStepBases, summaries: session.runSummaryBases };
     session.watchUntil = Date.now() + MAX_WAIT;
     let known = epoch === this.epoch && have && typeof have === "object" ? have : {};
     this.refresh(watching, session.reasoningWatch);
@@ -2808,10 +2853,10 @@ export class LinkHost extends EventEmitter {
           };
         }
       };
-      return this.follow(session, push, (throttle) => this.news(known, watching, cursors, session, throttle, FOLLOW_PUMP_MS, advance));
+      return this.follow(session, push, (throttle) => this.news(known, watching, cursors, session, throttle, FOLLOW_PUMP_MS, advance, runBases));
     }
     const interval = via === "relay" ? RELAY_POLL_MS : 0;
-    const news = () => this.news(known, watching, cursors, session, Number(wait) > 0 || interval > 0, interval);
+    const news = () => this.news(known, watching, cursors, session, Number(wait) > 0 || interval > 0, interval, undefined, runBases);
     const now = news();
     const quiet = () => ({ epoch: this.epoch, v: null, parts: {} });
     if (now instanceof Json) return now;

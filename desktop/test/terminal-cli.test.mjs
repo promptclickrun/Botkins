@@ -274,7 +274,7 @@ test("one message is sent and its reply printed, and a script gets the reply as 
     { working: true, stream: "Hello there", messages: [], count: 1, seen: "b", run: null },
     { working: false, stream: "", messages: [{ index: 1, role: "assistant", text: "Hello there, Sam." }], count: 2, seen: "c", run: { status: "Completed" } },
   ];
-  const answers = { "chat.open": { chatId: "c1", bot: { id: "b1", name: "Nova" } }, "chat.send": { chatId: "c1", after: 0 }, "chat.read": () => reads.shift() };
+  const answers = { "chat.main": { chatId: "c1", bot: { id: "b1", name: "Nova" } }, "chat.send": { chatId: "c1", after: 0 }, "chat.read": () => reads.shift() };
   const live = await botkins(["chat", "Nova", "-m", "Hi"], { service: fakeService(answers) });
   assert.deepEqual([live.exit, live.out], [EXIT.ok, "Hello there\nHello there, Sam.\n"]);
   reads.push({ working: false, stream: "", messages: [{ index: 1, role: "assistant", text: "Done." }], count: 2, seen: "c", run: { status: "Completed" } });
@@ -302,6 +302,13 @@ test("one message is sent and its reply printed, and a script gets the reply as 
     const person = fakeService({ ...answers, "chat.respond": null });
     await botkins(["chat", "Nova", "-m", "Clean up"], { service: person, input: typed, tty: true });
     assert.deepEqual(person.calls.find(([name]) => name === "chat.respond"), expected);
+  }
+  const dispatch = { id: "r2", kind: "permission", title: "Pip on Laptop to Scout on Desktop", dispatch: true, detail: "  first line\nsecond line  " };
+  for (const [typed, action] of [["1", "approve"], ["2", "today"], ["3", "remember"], ["4", "deny"], ["y", "deny"]]) {
+    const service = fakeService({ "chat.read": () => ({ request: dispatch }), "chat.respond": null });
+    const result = await botkins(["chats", "approve", "c1"], { service, input: typed + "\n", tty: true });
+    assert.match(result.err, /  first line\nsecond line  /);
+    assert.deepEqual(service.calls.at(-1), ["chat.respond", "r2", { action }, ...(action === "deny" ? [] : [{ agreed: true }])]);
   }
   // A turn that failed ends the command with a failure.
   reads.push({ working: false, stream: "", messages: [], count: 1, seen: "a", run: { status: "Failed", detail: "The model is unavailable." } });

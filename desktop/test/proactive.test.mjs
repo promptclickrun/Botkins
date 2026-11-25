@@ -333,7 +333,7 @@ test("a member's agent hears only of what that member may see, and tells that me
   assert.match(seen.prompts[0], /Avery question/);
   assert.doesNotMatch(seen.prompts[0], /Owner|payroll|Blake|roadmap/, "nothing of the owner's or of another member's");
   assert.doesNotMatch(seen.prompts[0], /inbox, calendar/, "and no look at the computer's own accounts");
-  const said = ws.chat(averysChat).messages.findLast((m) => m.role === "assistant");
+  const said = ws.chat(ws.mainChat("pip", "m_avery")).messages.findLast((m) => m.role === "assistant");
   assert.match(said?.text, /^Your report failed\./, "the alert is in the member's chat");
   for (const id of [ownerChat, blakesChat]) assert.equal(ws.chat(id).messages.some((m) => m.text?.startsWith("Your report failed.")), false);
   assert.equal(ws.notifiesOwner(ws.proactive.routine("pip", "m_avery").chat.id), false, "and not the owner's to be told of");
@@ -366,7 +366,8 @@ test("a past conversation and a goal surface preparation without an inbox event,
     ] });
   };
   await ws.panels.routines.run(ws.proactive.routine("pip").chat.id);
-  const alert = chat.messages.at(-1);
+  const inbox = ws.chat(ws.mainChat("pip"));
+  const alert = inbox.messages.at(-1);
   assert.match(alert.text, /^Use your York stop/);
   assert.match(alert.text, /twenty minutes.*\n\nPick one platform detail/s);
   assert.doesNotMatch(alert.text, /candidates|festival|books/);
@@ -379,7 +380,7 @@ test("a past conversation and a goal surface preparation without an inbox event,
   assert.equal(seen.prompts.length, 1);
   await tick(ws, "pip", "manual");
   // The alternative grounded in different evidence can win once the first was said.
-  assert.match(chat.messages.at(-1).text, /photography books/);
+  assert.match(inbox.messages.at(-1).text, /photography books/);
   await tick(ws, "pip", "manual");
   assert.equal(ws.proactive.view("pip").log[0].outcome, "silent");
   assert.equal(ws.proactive.view("pip").pings, 2);
@@ -609,4 +610,52 @@ test("selecting one suggestion leaves another distinct waiting request available
   assert.equal(ws.proactive.view("pip").pings, 2);
   assert.notEqual(ws.proactive.view("pip").log[0].said, ws.proactive.view("pip").log[1].said);
   assert.equal(await tick(ws, "pip"), null);
+});
+
+test("delivery into a busy Main chat survives restart and reaches the queued follow-up once", async t => {
+  const { ws, seen, dir } = setup(t);
+  on(ws, "pip", { watch: ["runs"], sweepHours: 0 });
+  const id = ws.mainChat("pip");
+  const source = ws.createChat("pip");
+  failedRun(ws, "backup", source, "Backup check");
+  const entered = Promise.withResolvers(), release = Promise.withResolvers();
+  seen.reply = async prompt => {
+    if (prompt === "Keep working") {
+      entered.resolve();
+      await release.promise;
+      return "Finished.";
+    }
+    if (prompt.includes("Generate") || prompt.includes('"candidates"')) return proposal("Backups need attention")(prompt);
+    return "All right.";
+  };
+  const queuedFinished = host => new Promise(resolve => {
+    const listener = ({ run }) => {
+      if (run.chatId === id && run.title === "Follow up") { host.events.off("turn", listener); resolve(); }
+    };
+    host.events.on("turn", listener);
+  });
+  const originalDone = queuedFinished(ws);
+  const working = ws.send(id, "Keep working");
+  await entered.promise;
+  ws.submit(id, "Follow up", { delivery: "queue" });
+  try {
+    await assert.rejects(ws.changeMainFork(id, "reset"), /Finish the reply/);
+    await tick(ws, "pip");
+    assert.equal(ws.chat(id).messages.filter(m => m.alert).length, 1);
+    const restored = setup(t, { before: other => copyFileSync(join(dir, "workspace.json"), join(other, "workspace.json")) });
+    assert.equal(restored.ws.mainChat("pip"), id);
+    assert.equal(restored.ws.queues.get(id)[0].text, "Follow up");
+    restored.seen.reply = "Done.";
+    const drained = queuedFinished(restored.ws);
+    await Promise.all(restored.ws.resumeActive());
+    await drained;
+    assert.equal(restored.ws.chat(id).messages.filter(m => m.alert).length, 1);
+    assert.equal(restored.ws.proactive.view("pip").pings, 1);
+    assert.equal(restored.ws.queues.has(id), false);
+    assert.equal(restored.seen.prompts.filter(p => p.includes("Since your last turn") && p.includes("Backups need attention")).length, 1);
+  } finally {
+    release.resolve();
+    await working;
+    await originalDone;
+  }
 });

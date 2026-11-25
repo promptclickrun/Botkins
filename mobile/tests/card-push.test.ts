@@ -145,7 +145,7 @@ test("a push with an alert is always sent at priority 10", () => {
   assert.equal(first.priority, 10);
   // A second request takes the first one's place: the card's phases are as they were.
   mac.world.requests.splice(0, 1, { id: "ask2", chatId: "chat", botId: "bot", kind: "question", title: "And which hour?" });
-  mac.look(3000);
+  mac.look(10);
   const second = mac.card().find((item) => item.payload.aps.alert)!;
   assert.equal(second.payload.aps.alert.body, "A bot needs you");
   assert.equal(second.priority, 10, "Apple holds a priority 5 push back: an alert in one would come late");
@@ -158,7 +158,7 @@ test("a card's push is never stamped earlier than the moment it was built, and e
   const mac = computer();
   mac.card();
   const stamps: number[] = [];
-  for (const ms of [2850, 2600, 2700, 3100]) {
+  for (const ms of [15_850, 15_600, 15_700, 16_100]) {
     mac.step("Step at " + stamps.length);
     mac.look(ms);
     const [card] = mac.card();
@@ -170,25 +170,20 @@ test("a card's push is never stamped earlier than the moment it was built, and e
   mac.done();
 });
 
-test("steps reach a locked phone at once: a priority 10 push every so often, the rest at 5", () => {
-  // Apple holds priority 5 pushes back to save power, most of all on a locked phone, and allows
-  // only so many at 10. So a turn's steps go at 10 now and then, and the card is never far behind.
+test("ordinary Lock Screen steps coalesce at low priority and completion bypasses the interval", () => {
   const mac = computer();
   mac.card();
-  const pushes: { at: number; priority: number }[] = [];
+  const pushes: Sent[] = [];
   for (let second = 3; second <= 90; second += 3) {
     mac.step("Step at " + second);
     mac.look(3000);
-    for (const item of mac.card()) pushes.push({ at: mac.now(), priority: item.priority });
+    pushes.push(...mac.card());
   }
-  assert.equal(pushes.length, 30, "every step is sent");
-  const loud = pushes.filter((item) => item.priority === 10).map((item) => item.at);
-  assert.ok(loud.length >= 4, "some at priority 10");
-  assert.ok(loud.length <= 8, "not all: Apple allows only so many");
-  for (let index = 1; index < loud.length; index++) {
-    assert.ok(loud[index]! - loud[index - 1]! >= 15_000, "at least 15 seconds apart");
-    assert.ok(loud[index]! - loud[index - 1]! <= 20_000, "and no more than a little over that while steps come");
-  }
+  assert.equal(pushes.length, 6);
+  assert.ok(pushes.every((item) => item.priority === 5));
+  mac.finish();
+  mac.look(10);
+  assert.equal(mac.card()[0]?.priority, 10);
   mac.done();
 });
 

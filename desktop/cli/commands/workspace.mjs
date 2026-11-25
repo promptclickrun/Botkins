@@ -69,6 +69,29 @@ const VOICE_OPTIONS = {
   "same-voice": { type: "boolean", about: "Give the bot no voice of its own: it follows Settings › Voice" },
 };
 
+export async function approvalAction(context, request) {
+  context.stderr.write("The bot asks for your approval to:\n  " + shownText(request.title) + "\n");
+  if (request.dispatch) {
+    if (request.label) context.stderr.write(shownText(request.label) + "\n");
+    context.stderr.write(String(request.detail ?? "").split("\n").map(shownText).join("\n") + "\n");
+  }
+  if (!context.stdin.isTTY || context.json) {
+    context.note("Refused: there is no terminal to ask at. Approve a request at a terminal, in the app's window or on a phone.");
+    return "deny";
+  }
+  if (request.dispatch) {
+    const choice = await ask(context, "1 Allow this time   2 Allow for today   3 Always allow   4 Deny [4] ");
+    switch (choice?.trim()) {
+      case "1": return "approve";
+      case "2": return "today";
+      case "3": return "remember";
+      default: return "deny";
+    }
+  }
+  const choice = await ask(context, context.color.yellow("Approve? ") + "[y/N] ");
+  return /^y(es)?$/i.test(choice?.trim() ?? "") ? "approve" : "deny";
+}
+
 /**
  * Sends one message and shows the reply as it comes. Returns { reply, status }.
  * A bot that asks for an approval or an answer is answered at the terminal, or refused when there is none.
@@ -100,13 +123,7 @@ async function turn(context, chatId, message, { live }) {
       printed = "";
       let answer;
       if (request.kind === "permission") {
-        // What the bot wants to do is shown first, on standard error, also with --json.
-        context.stderr.write("The bot asks for your approval to:\n  " + shownText(request.title) + "\n");
-        if (!context.stdin.isTTY || context.json) {
-          // Nobody to ask: the request is refused. No flag approves it: a yes to a bot's request comes from a person, at a terminal, in the window or on a phone.
-          answer = { action: "deny" };
-          context.note("Refused: there is no terminal to ask at. Approve a request at a terminal, in the app's window or on a phone.");
-        } else answer = { action: /^y(es)?$/i.test((await ask(context, color.yellow("Approve? ") + "[y/N] ")).trim()) ? "approve" : "deny" };
+        answer = { action: await approvalAction(context, request) };
       } else if (!context.stdin.isTTY || context.json) {
         // Nobody to ask: a question is left unanswered.
         answer = { action: "cancel" };
@@ -116,7 +133,7 @@ async function turn(context, chatId, message, { live }) {
         answer = value ? { action: "answer", value } : { action: "cancel" };
       }
       // A yes carries the mark `{ agreed: true }`, which the service needs: it is given only after the person said yes at the terminal.
-      await client.call("chat.respond", ...(answer.action === "approve" ? [request.id, answer, { agreed: true }] : [request.id, answer])).catch((error) => context.note(error.message));
+      await client.call("chat.respond", ...(["approve", "today", "remember"].includes(answer.action) ? [request.id, answer, { agreed: true }] : [request.id, answer])).catch((error) => context.note(error.message));
       continue;
     }
     if (!view.working) {
@@ -500,8 +517,9 @@ export const workspace = {
   },
   models: {
     summary: "List the models the signed-in providers offer",
-    usage: "botkins models [--default <provider/model>] [--routines <provider/model|none>] [--effort <level>] [--speed <off|fast|ultrafast|inherit> [--bot <bot> | --chat <id>]]",
+    usage: "botkins models [--default <provider/model>] [--routines <provider/model|none>] [--effort <level>] [--speed <off|fast|ultrafast|inherit> [--bot <bot> | --chat <id>]] [--chat <id> --model <provider/model|inherit>]",
     options: {
+      model: { type: "string", value: "provider/model|inherit", about: "Set the model of the chat named by --chat" },
       speed: { type: "string", value: "mode", about: "Set fast mode. Fast and Ultrafast use your plan allowance much faster" },
       bot: { type: "string", value: "bot", about: "Set speed for this bot" },
       chat: { type: "string", value: "id", about: "Set speed for this chat" },
@@ -512,6 +530,10 @@ export const workspace = {
     details: "A routine uses its own model, else the Default routines model, else its bot's model, else the default model.",
     async run(context) {
       const o = context.options;
+      if (o.model !== undefined) {
+        if (!o.chat || o.bot || o.speed || o.default || o.routines || (o.model === "inherit" && o.effort)) throw usage("Choose --chat and --model, with an optional --effort for a model.");
+        return void context.print(await context.client.call("models.chat", o.chat, o.model, o.effort), m => "Chat model: " + (m.provider ? m.provider + "/" : "") + m.model + ".");
+      }
       if (o.speed !== undefined) {
         if (o.default || o.routines || o.effort || (o.bot && o.chat)) throw usage("Set speed separately, for one scope at a time.");
         if (!["inherit", "off", "fast", "ultrafast"].includes(o.speed) || (o.speed === "inherit" && !o.bot && !o.chat))
@@ -534,16 +556,18 @@ export const workspace = {
   },
   chat: {
     summary: "Talk to a bot",
-    usage: "botkins chat <bot> [-m <message>] [--chat <id>]",
+    usage: "botkins chat <bot> [-m <message>] [--chat <id> | --new]",
     options: {
       message: { type: "string", short: "m", value: "text", about: "Send one message, print the reply and return (\"-\" reads it from standard input)" },
-      chat: { type: "string", value: "id", about: "Continue this chat instead of starting a new one" },
+      chat: { type: "string", value: "id", about: "Continue this chat instead of Main chat" },
+      new: { type: "boolean", about: "Start an ordinary new chat instead of Main chat" },
     },
     details: "Without -m, a prompt opens: type a message and Enter. Ctrl-C stops a reply; Ctrl-D, or /quit, leaves. The chat is an ordinary one: a paired phone shows it too. When the bot asks for an approval, the request is shown on standard error and you are asked at a terminal. With no terminal the request is refused: no flag approves it.",
     async run(context) {
       if (context.args.length !== 1) throw usage("Name the bot (its name or id).");
       const { client, color } = context;
-      const opened = context.options.chat ? { chatId: context.options.chat, bot: { name: context.args[0] } } : await client.call("chat.open", context.args[0]);
+      if (context.options.chat && context.options.new) throw usage("Choose --chat or --new.");
+      const opened = context.options.chat ? { chatId: context.options.chat, bot: { name: context.args[0] } } : await client.call(context.options.new ? "chat.open" : "chat.main", context.args[0]);
       if (context.options.message !== undefined) {
         const message = context.options.message === "-" ? await new Promise((resolve) => { let text = ""; context.stdin.on("data", (chunk) => (text += chunk)).on("end", () => resolve(text)); }) : context.options.message;
         const result = await turn(context, opened.chatId, message, { live: !context.json });

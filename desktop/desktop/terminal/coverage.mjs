@@ -81,6 +81,9 @@ export const WORKSPACE = {
   // ── Chats ──
   ...each("createChat send stop respond", cmd("chat")),
   // (A side question is a person's act in a chat, which the phone has as /btw: it gets a command with the chat commands.)
+  mainChat: cmd("chat"),
+  changeMainFork: cmd("chats switch-fork"),
+  setProactiveChatMode: cmd("preferences set"),
   renameChat: cmd("chats rename"),
   regenerateChatTitle: cmd("chats regenerate-title"),
   deleteChat: cmd("chats delete"),
@@ -305,6 +308,14 @@ export const WORKSPACE = {
   restartGadget: cmd("gadgets restart"),
   setPhoneRelay: cmd("relay on"),
   resetPhoneRelay: cmd("relay reset"),
+  // ── Node host (control-node.mjs) ──
+  nodeStatus: cmd("node status"),
+  nodeSetup: cmd("node setup"),
+  nodeRename: cmd("node rename"),
+  nodePause: cmd("node pause"),
+  nodeShareProject: cmd("node share"),
+  nodeRevokeGrant: cmd("node revoke"),
+  nodeDisconnect: cmd("node disconnect"),
   // ── What needs a window ──
   ...each("chooseFiles chooseProjectFolder pickPluginFolder pickSkillUpload addSkillFolder", no("window")), // a file or folder dialog (a path is given to the command instead)
   ...each("revealProject revealSkill revealWiki revealWikiExport openChatPath openLink openAppRelease", no("window")), // opens a folder, a file or a link on the computer's screen
@@ -405,6 +416,8 @@ export const CHANGES = {
   "models.default": null,
   "models.speed": ([scope, id]) => id ?? scope,
   "models.routines": null,
+  "models.chat": 0,
+  "chat.main": (args, value) => value?.chatId,
   "routines.run": 0,
   "routines.pause": 0,
   "routines.resume": 0,
@@ -474,6 +487,8 @@ export const CHANGES = {
   "chats.regenerateTitle": (args, value) => value?.id,
   "chats.delete": (args, value) => value?.id,
   "chats.react": (_args, value) => value?.id,
+  "chats.reset": (args, value) => value?.id,
+  "chats.switchFork": (args, value) => value?.id,
   "chats.fork": (args, value) => value?.from,
   "chats.compact": (args, value) => value?.id,
   "chats.flags": (args, value) => value?.id,
@@ -635,6 +650,14 @@ export const CHANGES = {
   "profile.reconnect": null,
   "profile.deleteAccount": null,
   "profile.markMigrationPrompted": null,
+  // ── Node host (control-node.mjs) ──
+  // Logs the node name, project name, grant id, or pause state — never local folder paths.
+  "node.setup": (args, value) => value?.name ?? args?.[0],
+  "node.rename": (args, value) => value?.name ?? args?.[0],
+  "node.pause": (args, value) => (value?.paused === true || args?.[0] === true ? "paused" : "online"),
+  "node.share": (args, value) => levelOf(value?.project?.name ?? args?.[0], (value?.project?.shared ?? args?.[1] !== false) ? "shared" : "unshared"),
+  "node.revoke": (args, value) => value?.revoked ?? args?.[0] ?? "all",
+  "node.disconnect": null,
 };
 /** The service's own calls that only read, wait or talk in a chat: no line. Every call is in this list, in CHANGES or in LOGS_ITSELF. */
 export const READS = ["skillsCatalog.search", "skillsCatalog.preview", "skillsCatalog.featured", "mcpCatalog.list", "piPackages.browse", "piPackages.preview", "piPackages.list", "status", "logs.read", "doctor", "events.wait", "pair.status", "devices.list", "bots.list", "bots.get", "providers.list", "providers.services", "providers.login.read", "providers.login.input", "providers.login.cancel", "models", "chat.open", "chat.list", "chat.send", "chat.read", "chat.stop", "runs.list", "routines.list", "plugins.list", "plugins.marketplaces", "plugins.refresh", "plugins.browse", "plugins.preview", "config.get", "config.describe", "relay.status", "update.status", "update.check", "methods", "plugins.get", "tools.list", "tools.get", "tools.import.preview", "tools.signIn.read", "tools.signIn.input", "tools.signIn.cancel", "skills.list", "skills.get", "bots.tools", "bots.access", "bots.menu", "folders.list", "gadgets.get", "profile.status", "profile.home"];
@@ -656,6 +679,8 @@ export const MORE_READS = {
   team: ["team.get", "team.roles", "team.role", "team.groups", "team.invites", "team.requests", "team.members", "team.chatPeople", "team.look"],
   // (Marketplace › Apps: the person's Composio apps, control-apps.mjs)
   apps: ["apps.list", "apps.connected", "apps.accounts", "apps.card"], // (`apps.card` looks at a chat's Connect card again; when the app is connected, the chat goes on as it would for the window.)
+  // (Node host, control-node.mjs)
+  node: ["node.status"],
 };
 READS.push(...Object.values(MORE_READS).flat());
 

@@ -253,7 +253,8 @@ test("a provider without a Copilot home, or another provider, offers what it has
   const offered = await ws.agents.importable();
   assert.deepEqual(offered.map((a) => [a.key, a.providerName]), [["other:helper", "Other"]]);
   assert.equal(errors.mock.callCount(), 1, "a provider that fails is skipped and logged");
-  const [id] = await ws.agents.importAgents(["other:helper"]);
+  const [id] = await ws.agents.importAgents(["other:helper"], "m_avery");
+  assert.deepEqual(ws.state.chats.filter(c => c.botId === id && c.main).map(c => c.createdBy), ["m_avery"]);
   assert.deepEqual(ws.bot(id).origin, { provider: "other", agent: "helper" });
 });
 

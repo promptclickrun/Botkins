@@ -181,6 +181,10 @@ export type Message = {
   author?: { memberId: string; name: string };
 };
 export type Chat = {
+  hostDispatch?: true;
+  main?: boolean;
+  activeFork?: string;
+  forks?: { id: string; name: string }[];
   fastMode?: FastMode;
   /** Latest message count advertised by a paired computer, even before its chat page arrives. */
   count?: number;
@@ -249,6 +253,7 @@ export type PanePanel = {
   url?: string;
 };
 export type Run = {
+  forkId?: string;
   ending?: "failed" | "timed-out" | "interrupted" | "stopped";
   /** The turn's plan when it ended: how many steps are open, of how many. */
   plan?: { open: number; total: number };
@@ -308,6 +313,7 @@ export type TeamAsk = {
   botId: string;
   /** The bot that asked. */
   fromBotId: string;
+  remote?: { hostId: string; hostName: string; botName: string };
   message: string;
   expecting?: string;
   /** waiting: queued behind another ask to the same teammate. working: the teammate is on it. */
@@ -430,6 +436,45 @@ export type MemberTeam = {
 };
 export type TeamJoinTarget = { code: string; serverId: string; serverKey: string; name: string; hosts: string[]; room?: string; relayBase?: string };
 export type TeamJoinState = { id: string; team: string; status: "pending" | "approved" | "denied" | "closed" | "offline"; createdAt?: number; requestId?: string };
+export type NodeHostProject = {
+  id: string;
+  name: string;
+  path: string;
+  shared?: boolean;
+};
+export type NodeHostGrant = {
+  id: string;
+  sourceHostName: string;
+  sourceBotId: string;
+  sourceBotName: string;
+  operation: string;
+  resourceId: string;
+  resourceName: string;
+  until: number | null;
+  createdAt: number;
+};
+export type NodeHostLastCompleted = {
+  requestId: string;
+  operation: string;
+  resourceId: string;
+  resourceName: string;
+  sourceHostName: string;
+  sourceBotName: string;
+  status: string;
+  at: number;
+  summary: string;
+};
+export type NodeHostState = {
+  enabled: boolean;
+  name: string;
+  status: "off" | "online" | "paused";
+  paused: boolean;
+  capabilitiesVersion: number;
+  sharedProjects: NodeHostProject[];
+  availableProjects: NodeHostProject[];
+  grants: NodeHostGrant[];
+  lastCompleted: NodeHostLastCompleted | null;
+};
 export type State = {
   /** Which computer's workspace this is: null for this one, else the paired computer in use. */
   remote?: {
@@ -438,6 +483,8 @@ export type State = {
   };
   /** The hosted profile's public identity and computer directory; no token or verifier is sent. */
   profile?: ProfileState;
+  /** Local node host role, shared folders, active job grants, and last completed request. */
+  nodeHost?: NodeHostState;
   bots: Bot[];
   /** Full team management data for this computer's owner, or this member's filtered identity. */
   team?: OwnerTeam | MemberTeam;
@@ -682,15 +729,7 @@ declare global {
         },
       ): Promise<void>;
       sideQuestion(id: string, question: string): Promise<string>;
-      respond(
-        id: string,
-        answer: {
-          action: string;
-          /** A saved credential's reference instead of text: the computer puts the value in. */
-          value?: string | CredentialRef;
-          content?: Record<string, unknown>;
-        },
-      ): Promise<void>;
+      respond(id: string, answer: RequestAnswer): Promise<void>;
       clearApprovals(chatId?: string): Promise<void>;
       copyReply(chatId: string): Promise<void>;
       subscribe(fn: (state: State) => void): () => void;
@@ -1075,6 +1114,9 @@ declare global {
       refreshPanel(id: string): Promise<void>;
       cacheInfo(): Promise<{ bytes: number; catalogs: number }>;
       clearCache(): Promise<void>;
+      mainChat(botId: string): Promise<string>;
+      changeMainFork(id: string, action: "reset" | "fork" | "switch", value?: number | string, expected?: string): Promise<string>;
+      setProactiveChatMode(mode: "main" | "new"): Promise<void>;
       createChat(id: string): Promise<string>;
       /** A chat with 2 to 6 bots. Returns its id. */
       createGroupChat(botIds: string[], title?: string): Promise<string>;
@@ -1238,6 +1280,14 @@ declare global {
       /** Renames a paired phone or computer as this computer lists it. */
       renamePhone(id: string, name: string): Promise<void>;
       setPhonePerson(id: string, person: string): Promise<void>;
+      // Node host role and shared project folders (Settings › Node host).
+      nodeStatus(): Promise<NodeHostState>;
+      nodeSetup(input?: { name?: string }): Promise<NodeHostState>;
+      nodeRename(name: string): Promise<NodeHostState>;
+      nodePause(paused: boolean): Promise<NodeHostState>;
+      nodeShareProject(projectId: string, shared: boolean): Promise<NodeHostState>;
+      nodeRevokeGrant(grantId?: string | null): Promise<NodeHostState>;
+      nodeDisconnect(): Promise<NodeHostState>;
       /** Each connected provider's plan and limits. `refresh` reads every provider again first. */
       providerUsage(options?: { refresh?: boolean }): Promise<ProviderUsage[]>;
       /** A read that nobody waited for has come in: ask again. */
@@ -1926,7 +1976,7 @@ export type Preferences = {
   routineModel?: ModelChoice;
   appearance: Appearance;
   completionPosition?: import("./chatDisplay").ChatDisplay["completionPosition"];
-  /** What selecting a bot does on this device: open its latest chat (the usual), or start a new one. */
+  /** What selecting a bot does on this device: open Main chat (the usual), its latest chat, or a new one. */
   botTap?: import("./chatDisplay").ChatDisplay["botTap"];
   steps?: "folded" | "open" | "failed";
   thinking?: "open" | "folded" | "hidden";
@@ -2030,7 +2080,7 @@ export type ProactiveBot = Partial<ProactiveBotSettings> & {
     evaluation?: { trained: number; tested: number; baseline: number; previous: number; challenger: number; promoted: boolean };
   };
 };
-export type ProactivePart = { enabled: boolean; bots: Record<string, ProactiveBot | undefined> };
+export type ProactivePart = { chatMode?: "main" | "new"; enabled: boolean; bots: Record<string, ProactiveBot | undefined> };
 /** What the Proactive agent did at each wake (desktop/proactive.mjs), newest first. */
 export type ProactiveLog = { at: number; reason: "signals" | "sweep" | "check" | "context" | "review"; score?: number; signals: number; outcome: "alerted" | "silent" | "failed"; runId: string; said?: string };
 export type Step = {
@@ -2070,7 +2120,17 @@ export type FormField = {
   maxLength?: number;
   format?: string;
 };
+/** A cross-host permission is scoped to the source and target bots and hosts shown on the card. */
+export type DispatchAction = "approve" | "today" | "remember" | "deny";
+export type RequestAnswer = {
+  action: DispatchAction | "cancel" | "answer" | "accept";
+  /** A saved credential's reference instead of text: the computer puts the value in. */
+  value?: string | CredentialRef;
+  content?: Record<string, unknown>;
+};
 export type AgentRequest = {
+  dispatch?: true;
+  nodeJob?: true;
   id: string;
   chatId: string;
   botId: string;
@@ -2081,6 +2141,13 @@ export type AgentRequest = {
   preview?: string;
   detail?: string;
   remember?: string;
+  sourceBotName?: string;
+  targetBotName?: string;
+  sourceHostName?: string;
+  targetHostName?: string;
+  operation?: string;
+  resourceId?: string;
+  resourceName?: string;
   choices?: string[];
   freeform?: boolean;
   schema?: { properties: Record<string, FormField>; required?: string[] };

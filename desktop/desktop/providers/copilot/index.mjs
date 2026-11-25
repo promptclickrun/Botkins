@@ -32,10 +32,11 @@
 import { createHash, randomUUID } from "node:crypto";
 import { cpSync, existsSync, mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { CopilotClient, RuntimeConnection, defineTool as sdkTool } from "@microsoft/copilot-sdk";
+import { CopilotClient, CopilotRequestHandler, CopilotWebSocketCloseStatus, CopilotWebSocketHandler, RuntimeConnection, defineTool as sdkTool } from "@microsoft/copilot-sdk";
 import { ModelProvider, ProviderSession } from "../provider.mjs";
 import { QUIET_CHECK_MS, watchQuiet } from "../liveness.mjs";
 import { decide } from "./permissions.mjs";
+import { CopilotRelay } from "./relay.mjs";
 import { inventory, resolvePrompt } from "./commands.mjs";
 import { matchModel, readAgents } from "./agents.mjs";
 import { env } from "../../home.mjs";
@@ -532,7 +533,7 @@ export class CopilotProvider extends ModelProvider {
   constructor({ baseDirectory, userHome, workingDirectory, keepWarmMs = 0, maxWarm = 6, keepOne = false, connect, github, platform = process.platform, sdk, quietCheckMs = QUIET_CHECK_MS } = {}) {
     super();
     Object.assign(this, { baseDirectory, userHome, workingDirectory, keepWarmMs, maxWarm, keepOne, connect, github, platform, quietCheckMs });
-    this.sdk = sdk ?? { CopilotClient, RuntimeConnection };
+    this.sdk = sdk ?? { CopilotClient, RuntimeConnection, CopilotRequestHandler, CopilotWebSocketHandler, CopilotWebSocketCloseStatus };
     this.pool = new Map();
     // Disconnects in progress. A session opened while one runs is slow, so opens wait for them.
     this.teardowns = new Set();
@@ -580,7 +581,7 @@ export class CopilotProvider extends ModelProvider {
     // tools, skills and MCP servers (see sessionOptions).
     // BOTKINS_COPILOT_LOG=debug writes the runtime's detailed log under <baseDirectory>/logs.
     const logLevel = env("COPILOT_LOG");
-    const github = this.github?.() ?? (!loadSavedAccount && this.signedOutFile && existsSync(this.signedOutFile) ? { useLoggedInUser: false } : undefined);
+    const github = this.githubOptions({ loadSavedAccount });
     const make = (runtime) =>
       new Client({ mode: "coding-agent", runtime, ...(logLevel && { observability: { logLevel } }), ...(github && { github }) });
     const inProcess = this.inProcess();
@@ -598,6 +599,40 @@ export class CopilotProvider extends ModelProvider {
     }
     return client;
   }
+  /** How the runtime signs in: what `github` says, else signed out after the person signed out here, else the saved sign-in. */
+  githubOptions({ loadSavedAccount = false } = {}) {
+    return this.github?.() ?? (!loadSavedAccount && this.signedOutFile && existsSync(this.signedOutFile) ? { useLoggedInUser: false } : undefined);
+  }
+  /**
+   * GitHub Copilot's models for another harness (Pi, OMP): the runtime that lends its requests'
+   * sign-in to the gateway (relay.mjs). Null for a test runtime (`connect`) or an SDK without a
+   * request handler.
+   */
+  relay() {
+    const { CopilotRequestHandler: Handler, CopilotWebSocketHandler: WebSocketHandler, CopilotWebSocketCloseStatus: CloseStatus } = this.sdk;
+    if (this.connect || !Handler) return null;
+    this.relayed ??= new CopilotRelay({ start: (handler) => this.startRelay(handler), Handler, WebSocketHandler, CloseStatus, log: (line) => console.error(line) });
+    return this.relayed;
+  }
+  /**
+   * The relay's runtime: always a child process, the program GitHub signed (two runtimes in one
+   * process would share one native library), in a folder beside Botkins' own Copilot folder with
+   * a copy of which account is signed in, and signed in the way the main runtime is.
+   */
+  async startRelay(requestHandler) {
+    const { CopilotClient: Client, RuntimeConnection: Runtime } = this.sdk;
+    const baseDirectory = this.baseDirectory && this.baseDirectory + "-relay";
+    if (baseDirectory) {
+      mkdirSync(baseDirectory, { recursive: true, mode: 0o700 });
+      const accounts = join(this.baseDirectory, "config.json");
+      if (existsSync(accounts)) cpSync(accounts, join(baseDirectory, "config.json"));
+    }
+    const github = this.githubOptions();
+    const runtime = Runtime.forSpawnedStdio({ ...(baseDirectory && { baseDirectory }), ...(this.workingDirectory && { workingDirectory: this.workingDirectory }) });
+    const client = new Client({ mode: "coding-agent", runtime, models: { requestHandler }, ...(github && { github }) });
+    await client.start();
+    return client;
+  }
   /** Starts the runtime ahead of the first turn (Workspace.warmUp and warmRoute). */
   async warm() {
     if (!this.stopping) await this.client();
@@ -605,6 +640,10 @@ export class CopilotProvider extends ModelProvider {
   async stop() {
     if (this.shutdown) return this.shutdown;
     this.stopping = true;
+    // The relay signs in the way the runtime does: a change of sign-in starts it again too.
+    const relay = this.relayed;
+    this.relayed = null;
+    void relay?.stop();
     for (const entry of this.pool.values()) clearTimeout(entry.timer);
     this.pool.clear();
     const connection = this.connection;
@@ -824,6 +863,9 @@ export class CopilotProvider extends ModelProvider {
       ...(m.provider?.id && { source: m.provider.id }),
       efforts: [...new Set(m.supportedReasoningEfforts ?? [])],
       defaultEffort: m.defaultReasoningEffort,
+      // A model that thinks only adaptively (GitHub's "adaptive_only" or "required") refuses a
+      // thinking budget: a harness that speaks Anthropic's API to it must ask for adaptive thinking.
+      ...(["adaptive_only", "required"].includes(m.capabilities?.supports?.adaptive_thinking) && { adaptiveThinking: true }),
       // What GitHub's listing says about the model: its limits, what it takes, who made it and its price class.
       ...modelDetails({
         contextWindow: m.capabilities?.limits?.max_context_window_tokens,

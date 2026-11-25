@@ -99,7 +99,8 @@ test("a streaming turn sends the live parts only, and the window ends up with th
   assert.ok(hots.every(({ message }) => message.base === base));
   // Only the step that changed, and no other step or run, is in the message.
   const message = hots.at(-1).message;
-  assert.deepEqual(Object.keys(message.fields), ["streams"]);
+  assert.equal(message.fields, undefined);
+  assert.deepEqual(message.appends.map(({ name, chat, add }) => ({ name, chat, add })), [{ name: "streams", chat: "chat-0", add: "word 19 " }]);
   assert.equal(message.runs.length, 1);
   assert.deepEqual(message.runs[0].steps.map((step) => step.id), ["step-39"]);
   assert.equal(message.runs[0].rest, undefined);
@@ -325,4 +326,124 @@ test("a missing patch needs a fresh base, and a duplicate or stale patch cannot 
   assert.equal(window.text("local", "chat-0"), "fresh");
   assert.ok(hot(13, 14, "after recovery"));
   assert.equal(window.text("local", "chat-0"), "after recovery");
+});
+
+test("reply and thinking suffixes preserve replacement, truncation and UTF-16 cursors", () => {
+  const state = makeState({ chats: 2, messages: 1, steps: 1 });
+  state.streams["chat-0"] = "🤖";
+  state.thinking = { "chat-0": "looking", "chat-1": "busy" };
+  const { page, tick } = setup(state);
+  tick();
+  state.streams["chat-0"] += "!";
+  state.thinking["chat-1"] += "…";
+  tick();
+  assert.deepEqual(page.log.at(-1).message.appends, [
+    { name: "streams", chat: "chat-0", from: 2, add: "!" },
+    { name: "thinking", chat: "chat-1", from: 4, add: "…" },
+  ]);
+  const window = new WindowState();
+  window.whole({ ...structuredClone(state), seq: 2 });
+  assert.equal(window.hot({ base: 2, seq: 3, appends: [{ name: "streams", chat: "chat-0", from: 20, add: "wrong cursor" }] }), false);
+  assert.equal(window.text("local", "chat-0"), "🤖!");
+  state.streams["chat-0"] = "";
+  state.thinking["chat-0"] = "other";
+  delete state.thinking["chat-1"];
+  tick();
+  assert.deepEqual(withoutSeq(page.held.state), state);
+});
+
+test("coalesced dirty notifications carry every edit and a general change overrides narrower hints", () => {
+  const state = makeState({ chats: 2, messages: 1, steps: 3 });
+  const page = windowOf();
+  let pending;
+  const push = createWindowPush({ snapshot: () => state, send: page.send, sendHot: page.sendHot, now: () => 0, later: f => (pending = f) });
+  push.flush();
+  state.runs[0].steps[2].output += "1";
+  push.push({ kind: "tool-step", runId: "run-live", stepId: "step-2" });
+  state.runs[0].steps[0].output += "2";
+  push.push({ kind: "tool-step", runId: "run-live", stepId: "step-0" });
+  state.streams["chat-0"] += "first";
+  push.push({ kind: "stream-append", chatId: "chat-0", previous: "", body: state.streams["chat-0"] });
+  pending();
+  assert.deepEqual(page.log.at(-1).message.runs[0].steps.map(step => step.id), ["step-0", "step-2"]);
+  assert.deepEqual(withoutSeq(page.held.state), state);
+  state.runs[0].steps[1].output = "same length edit";
+  state.runs[0].steps[1].metadata = { status: "old" };
+  push.push();
+  push.push({ kind: "stream-append", chatId: "chat-0", previous: "", body: state.streams["chat-0"] });
+  pending();
+  state.runs[0].steps[1].metadata.status = "new";
+  push.push();
+  pending();
+  assert.deepEqual(withoutSeq(page.held.state), state);
+});
+
+test("closing to the tray cancels pending work and restoring sends exactly one fresh base", () => {
+  const state = makeState({ chats: 2, messages: 1, steps: 1 });
+  let shown = true, pending, snapshots = 0;
+  const page = windowOf();
+  const push = createWindowPush({
+    snapshot: () => { snapshots++; return state; }, visible: () => shown,
+    send: page.send, sendHot: page.sendHot, later: f => (pending = f), cancel: () => { pending = undefined; },
+  });
+  push.visibilityChanged();
+  state.streams["chat-0"] += "one";
+  push.push({ kind: "stream-append", chatId: "chat-0", previous: "", body: state.streams["chat-0"] });
+  shown = false;
+  push.visibilityChanged();
+  assert.equal(pending, undefined);
+  state.streams["chat-0"] += " hidden";
+  for (let i = 0; i < 100; i++) push.push({ kind: "stream-append", chatId: "chat-0", previous: "", body: state.streams["chat-0"] });
+  assert.equal(pending, undefined);
+  assert.equal(snapshots, 1);
+  shown = true;
+  push.visibilityChanged();
+  push.visibilityChanged();
+  assert.equal(snapshots, 2);
+  assert.deepEqual(page.log.map(entry => entry.kind), ["whole", "whole"]);
+  assert.deepEqual(withoutSeq(page.held.state), state);
+  state.streams["chat-0"] += " again";
+  push.push({ kind: "stream-append", chatId: "chat-0", previous: "", body: state.streams["chat-0"] });
+  pending();
+  assert.equal(page.log.at(-1).message.base, page.log[1].message.seq);
+  assert.deepEqual(withoutSeq(page.held.state), state);
+});
+
+test("one hundred growing reply updates send each new character once and keep completed steps clean", () => {
+  const state = makeState({ chats: 1, messages: 1, steps: 100 });
+  state.streams["chat-0"] = "x";
+  let inspected = 0;
+  for (const step of state.runs[0].steps) {
+    const output = "z".repeat(2048);
+    Object.defineProperty(step, "output", { enumerable: true, get: () => { inspected++; return output; } });
+  }
+  let pending;
+  const page = windowOf();
+  const push = createWindowPush({ snapshot: () => state, send: page.send, sendHot: page.sendHot, now: () => 0, later: fn => (pending = fn) });
+  push.flush();
+  inspected = 0;
+  for (let i = 0; i < 100; i++) {
+    // Multiple provider events per window push. Keep only the first boundary and the latest body.
+    for (let n = 0; n < 4; n++) {
+      const previous = state.streams["chat-0"];
+      const body = previous + "a".repeat(16);
+      state.streams["chat-0"] = body;
+      push.push({ kind: "stream-append", chatId: "chat-0", previous, body });
+    }
+    pending();
+  }
+  assert.equal(inspected, 0, "pure reply updates should never traverse a tool step");
+  const messages = page.log.filter(entry => entry.kind === "hot").map(entry => entry.message);
+  assert.equal(messages.length, 100);
+  assert.equal(messages.reduce((sum, message) => sum + message.appends[0].add.length, 0), 6400);
+  assert.deepEqual(page.held.state.streams, state.streams);
+
+  const first = state.streams["chat-0"];
+  state.streams["chat-0"] += "unused";
+  push.push({ kind: "stream-append", chatId: "chat-0", previous: first, body: state.streams["chat-0"] });
+  // A recovered draft is reset in between the two provider chunks.
+  state.streams["chat-0"] = "new draft";
+  push.push({ kind: "stream-append", chatId: "chat-0", previous: "", body: state.streams["chat-0"] });
+  pending();
+  assert.deepEqual(page.held.state.streams, state.streams);
 });

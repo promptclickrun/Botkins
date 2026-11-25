@@ -114,6 +114,44 @@ legacy devices and future devices remain independent. Removing a team member rem
 membership and profile grant. Profile proofs and `statusKey` never appear in `status().devices`,
 paired events or client device lists.
 
+### Same-owner host teamwork
+
+Desktop and terminal installations advertise a random 16-byte base64url `teamworkBoot` in
+`hello` while the host transport is installed. Both installations need a signed-in profile,
+a listening Link host, and a local owner binding for that profile. For each operation they read
+the authenticated profile directory. Pending and working status polls can reuse this read
+for ten seconds. Both sides recheck ownership before releasing a terminal status or reply.
+Each host ID must have a single owner entry with its
+pinned X25519 host key. Members, disconnected hosts, and failed directory reads are refused.
+The destination resolves the displayed computer names from this directory and rechecks both
+host identities when approving the bot pair.
+
+The source posts `{ teamwork: 1, from, publicKey, box }` to `/botkins/v1/profile` over HTTP
+or relay route 6. Only the teamwork handler opens this envelope. The key is HKDF-SHA256 over
+the static host-to-host X25519 secret, salted with the UTF-8 JSON array
+`[profileId, sourceServerId, targetServerId]`, with info `botkins/teamwork-host/v1`.
+The request box uses Link's random-nonce ChaCha20-Poly1305 with AAD `teamwork/request` and
+contains `{ id, boot, at, operation, payload }`. The source generates a fresh 16-byte
+base64url ID per envelope. The destination checks its boot nonce, a timestamp within 60
+seconds, and the allowed operations `list`, `submit`, `status`, and `cancel`. It retains
+accepted IDs until expiry and refuses excess traffic when its 4096-ID or 24-in-flight
+capacity is full. The reply box uses AAD `teamwork/reply/<id>` and contains `{ value }`
+or `{ error }`. Application retries reuse the dispatch ID inside the payload and generate
+a new envelope. This exchange creates no Link device or RPC session. Existing relays carry
+it unchanged. Both endpoints must support the extension.
+
+A destination approval uses `kind: "permission", dispatch: true`. Show its title, label and full detail together. The title identifies the bots and their computers. The detail holds the exact message. Owner clients call `respond(id, {action})` with `approve` (Allow this time), `today` (Allow for today), `remember` (Always allow), or `deny` (Deny). These grants apply to the displayed direction. Notifications and Live Activities open the full decision in the app. A chat whose summary has `hostDispatch: true` stays private to the owner.
+
+After a human approves, B waits for an authenticated follow-up for that request before sending the message to its model. A journals the request ID and host identity before submission. If its waiting turn stops or its process restarts, A withdraws **that ID** on reconnection. Cancellation can overtake submission. A cancellation receipt contains only the resulting state.
+
+### Incremental tool steps (`run-step-deltas-v1`)
+
+A client can add `runSteps: "delta"` alongside `steps: "light"` to its sync or follow request. A host advertising this capability seeds each watched `run:<chatId>` with a complete authorized run. Later it may send the same named part as `{ patch: "steps", run, base, set?, remove?, order?, metadata? }`. `run` is the working run ID. `base` must match the previously applied version of that part. `set` contains changed or new step objects keyed by their existing IDs. Remove the IDs in `remove`, apply the upserts in order (new IDs append), then use the optional `order` as the complete list of remaining IDs. When present, `metadata` replaces every run field except the steps. Advance the part version from the enclosing `v` after applying the update. A mismatched base or run ID requires a fresh snapshot, requested by omitting the acknowledged version. A full run or null always replaces the previous value. The host computes every patch from the same access-filtered light representation it would otherwise send in full. Clients and hosts that omit the option continue to exchange full runs.
+
+### Incremental run summaries (`run-summary-deltas-v1`)
+
+A client may independently send `runSummaries: "delta"` on sync or follow. After the initial full `runs` list, the host can return `{ patch: "summaries", base, set?, remove?, order? }` in that part. Rows are identified by run ID and use the same remove, upsert and ordering rules as tool steps. The list contains only the runs visible to the requesting device. A complete array, including an empty one when access changes, replaces all prior rows. A version mismatch requires the client to omit its acknowledgement and fetch a fresh list.
+
 ### Light steps (`step-details-v1`)
 
 Most of a long turn's bytes are the inputs and outputs of its steps, and a chat shows them only when a step is opened. A client that sends `steps: "light"` in the `link.sync` argument gets `chat:<id>` and `run:<id>` with light steps: a step keeps its `input` and `output` only when each is at most 400 characters, when the step is a question the bot asked (`ask_user`, `ask`), or when it started a helper. Any other step comes without them and says `more: true`. `link.messages` answers in the form the session follows in.
@@ -130,7 +168,9 @@ With appends, `live.streams` and `live.thinking` map chat IDs to booleans. A key
 
 ### Reasoning appends (`reasoning-appends-v1`)
 
-A host with `reasoning-appends-v1` accepts `reasoningWatch` in `link.sync`, an array of up to four chat IDs. Sending the field selects the compact working-run format. Older clients omit it and receive their usual snapshots. New phones request reasoning for the chats they stream. In whole-reply mode the visible chat requests reasoning when Thinking and updates is Open. Opening Activity also requests reasoning when thinking is visible there. Both release their watch when they leave. Full step inputs and outputs remain available through the existing step-detail call. Callers that request full steps receive them directly.
+A host with `reasoning-appends-v1` accepts `reasoningWatch` in `link.sync`, an array of up to four chat IDs. Sending the field selects the compact working-run format. Older clients omit it and receive their usual snapshots. The phone requests reasoning when a visible chat shows open thinking or when the person expands thinking in Activity. A folded disclosure can request the complete current reasoning at any time. A backgrounded or covered chat releases its watch. Interim updates have their own display setting. Full step inputs and outputs remain available through the existing step-detail call. Callers that request full steps receive them directly.
+
+A host advertising `separate-thinking-v1` accepts `separateThinking: true` with a valid `reasoningWatch`. Watched chats outside that list receive reply-only text with an independent cursor. A growing thought cannot reset the reply cursor. A compact working run with retained thoughts carries `hasReasoning: true`, so Activity can offer to open it. Clients that omit the flag retain the existing text stream format.
 
 A working run's reasoning travels in a separate `reasoning:<chatId>` part for each permitted chat. It contains `{run, items, reset?, remove?, order?}`. An item carries its ID, timing, optional bot ID, UTF-16 offset `from`, and suffix `add`. The host compares its current snapshot with the last one sent on that session when the phone acknowledges its version in `have`. New or rewritten items start at zero. Order and removal changes carry their affected IDs. A missing acknowledgment or new session receives a fresh snapshot with `reset: true`. A null part clears the working reasoning. Completed runs keep the authoritative detail supplied by the computer.
 
@@ -148,7 +188,10 @@ A host with `text-chunks-v1` also accepts `text: "chunks"`, for a phone on the r
 
 With `client-message-id-v1`, a client may include a locally generated `clientMessageId` in the options for `send`. The host echoes it on the queued item and on the user message when delivered. A client can show the message immediately and replace its local row when either echo arrives. Each press of Send gets its own ID, even for identical text.
 
+With `main-chat-v1`, `mainChat(botId)` returns the caller’s private, stable Main chat, creating it if needed. A summary marked `main` carries `activeFork` and `forks` (id and name). `changeMainFork(chatId, action, value?, expectedFork?)` resets context, forks at a zero-based message index, or switches to a saved fork id (actions `reset`, `fork`, `switch`). A chat detail includes its active fork so earlier pages from different forks never join. `createChat` and `forkChat` still create separate chats. `setProactiveChatMode("main" | "new")` sets the authenticated person's chat delivery preference across bots. Their `proactive.chatMode` follows in sync.
+
 With `chat-title-regeneration-v1`, `regenerateChatTitle(chatId)` asks the host's summarizer to generate and save a title and returns the title. Only the chat's starter or the owner can request it. It needs a message to summarize and does not change the automatic naming setting or add a turn.
+
 
 ## Devices: list, rename, remove (`devices-v1`)
 

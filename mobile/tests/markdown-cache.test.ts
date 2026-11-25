@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { Marked, type Token } from "marked";
-import { parseStreamingMarkdown } from "../src/ui/markdownCache";
+import { parseStreamingMarkdown, type MarkdownStreamCache } from "../src/ui/markdownCache";
+import { codePreview, FOLD_LINES, type CodePreview } from "../src/ui/codePreview";
 
 const marked = new Marked({ gfm: true, breaks: true });
 
@@ -113,5 +114,63 @@ test("a reference definition inside a quote or a list forces a full lex, so earl
     const first = parseStreamingMarkdown(body + "Fourth", lex);
     const next = parseStreamingMarkdown(body + tail, lex, first.cache);
     assert.deepEqual(next.tokens, lex(body + tail), `cached parse should match a full lex for ${JSON.stringify(tail)}`);
+  }
+});
+
+test("100 appends to a 6,400-character open fence submit bounded lexer input and keep all code", () => {
+  const line = "  const current = sample.next();".padEnd(63, " ") + "\n";
+  let text = "";
+  let cache: MarkdownStreamCache | undefined;
+  let submitted = 0;
+  for (let i = 0; i < 100; i++) {
+    text += i === 0 ? "```js\n" + line.slice(6) : line;
+    const parsed = parseStreamingMarkdown(text, (source) => {
+      submitted += source.length;
+      return marked.lexer(source);
+    }, cache);
+    cache = parsed.cache;
+    assert.deepEqual(parsed.tokens, marked.lexer(text));
+  }
+  assert.equal(text.length, 6400);
+  assert.ok(submitted < 2 * text.length, `fed ${submitted} characters for ${text.length} received`);
+});
+
+test("a fence split at any character matches marked through indentation, closing, revisions and definitions", () => {
+  const lex = (source: string) => marked.lexer(source);
+  for (const fence of ["```", "````", "~~~", "  ```", "   ~~~~"]) {
+    const intro = "See [label].\n\n";
+    const opened = intro + fence + "ts\n  body\n\n";
+    const close = fence + fence.trim()[0] + "  \n";
+    let cache: MarkdownStreamCache | undefined;
+    const check = (text: string) => {
+      const result = parseStreamingMarkdown(text, lex, cache);
+      assert.deepEqual(result.tokens, lex(text), JSON.stringify(text));
+      cache = result.cache;
+    };
+    let text = opened;
+    for (const char of "\t  code\n    ```\n x\n [ref]: /inside\n" + close + "\n[label]: /outside\n\nAfter") {
+      text += char;
+      check(text);
+    }
+    check(opened + "corrected line");
+    check(opened + "corrected line\r\n" + close);
+    check("Replacement paragraph\n\n" + fence + "ts\nreplaced");
+  }
+});
+
+test("the folded preview and its line count match the complete selectable and copyable code after edits", () => {
+  const lines = Array.from({ length: 80 }, (_, i) => `line ${i}  `);
+  const complete = lines.join("\n");
+  let previous: CodePreview | undefined;
+  const sources = [...lines.map((_, i) => lines.slice(0, i + 1).join("\n")), complete + "\n", complete + "\n\n", complete + "\n\nnew", "short replacement", complete.replace("line 2", "revised\nline 2")];
+  for (const code of sources) {
+    const summary = codePreview(code, previous);
+    const full = code.replace(/\n$/, "");
+    const allLines = full.split("\n");
+    const preview = summary.previewEnd < 0 ? summary.text : summary.text.slice(0, summary.previewEnd);
+    assert.equal(summary.text, full);
+    assert.equal(summary.lineCount, allLines.length);
+    assert.equal(preview, allLines.slice(0, FOLD_LINES).join("\n"));
+    previous = summary;
   }
 });

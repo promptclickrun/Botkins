@@ -18,6 +18,7 @@ import { loadConfig, saveConfig } from "./config.mjs";
 import { changeCounter, ownFolder, startControl } from "./control-start.mjs";
 import { createLog } from "./logs.mjs";
 import { prepareReach } from "./reach.mjs";
+import { installTeamworkPeers } from "../teamwork-peers.mjs";
 import { ProfileManager } from "../profile.mjs";
 import { RemoteHosts } from "../remotehosts.mjs";
 import * as profileLib from "../remote/link-client.mjs";
@@ -112,17 +113,29 @@ export async function startService({ paths, version, trial = false, reach = !tri
       lib: profileLib,
       local: () => runtime.link,
       remote: () => remote,
-      workspace: () => !!runtime.workspace.state.bots.length || !!runtime.workspace.state.chats.length,
+      workspace: () => !!runtime.workspace.state.bots.length || !!runtime.workspace.state.chats.length || !!runtime.workspace.nodeHost?.enabled,
       fetch: host.fetch,
       device: { name: config.name || "Terminal host", platform: process.platform, kind: "terminal" },
       changed: bump,
       log: (line) => log.info(line),
     });
+    installTeamworkPeers(runtime, profile, remote.transport());
     const originalAddBot = runtime.handlers.addBot;
-    runtime.handlers.addBot = (data) => {
-      const result = originalAddBot(data);
+    runtime.handlers.addBot = (data, person) => {
+      const result = originalAddBot(data, person);
       if (profile.token()) void profile.ensureLocalHost({ existing: true }).catch((error) => log.error("Profile local host: " + error.message));
       return result;
+    };
+    const originalNodeSetup = runtime.handlers.nodeSetup;
+    runtime.handlers.nodeSetup = async (input) => {
+      const result = await originalNodeSetup(input);
+      if (profile.token()) void profile.ensureLocalHost({ existing: true }).catch((error) => log.error("Profile local host: " + error.message));
+      return result;
+    };
+    const originalNodeDisconnect = runtime.handlers.nodeDisconnect;
+    runtime.handlers.nodeDisconnect = async () => {
+      if (profile.token()) await profile.disconnectLocal().catch((error) => log.error("Profile disconnect: " + error.message));
+      return originalNodeDisconnect();
     };
     void profile.bindAll().catch((error) => log.error("Profile bind: " + error.message));
     service.profile = profile;
@@ -156,14 +169,14 @@ export async function startService({ paths, version, trial = false, reach = !tri
       config = saveConfig(paths.config, next);
       await apply(config);
       if (prior.link.enabled !== config.link.enabled) profile.noteLocalLinkSetting(config.link.enabled === true);
-      if (config.link.enabled === true && profile.token()) void profile.ensureLocalHost({ existing: !!runtime.workspace.state.bots.length || !!runtime.workspace.state.chats.length }).catch((error) => log.error("Profile local host: " + error.message));
+      if (config.link.enabled === true && profile.token()) void profile.ensureLocalHost({ existing: !!runtime.workspace.state.bots.length || !!runtime.workspace.state.chats.length || !!runtime.workspace.nodeHost?.enabled }).catch((error) => log.error("Profile local host: " + error.message));
       if (profile.token()) void profile.bindAll().catch((error) => log.error("Profile bind: " + error.message));
       bump();
     };
     // The link's own start comes first: two starts at once would both try to take the port.
     await runtime.listening;
     await apply(config);
-    if (profile.token()) void profile.ensureLocalHost({ existing: !!runtime.workspace.state.bots.length || !!runtime.workspace.state.chats.length }).catch((error) => log.error("Profile local host: " + error.message));
+    if (profile.token()) void profile.ensureLocalHost({ existing: !!runtime.workspace.state.bots.length || !!runtime.workspace.state.chats.length || !!runtime.workspace.nodeHost?.enabled }).catch((error) => log.error("Profile local host: " + error.message));
     if (profile.token()) void profile.bindAll().catch((error) => log.error("Profile bind: " + error.message));
     service.stop = stop;
     const control = await startControl({ service, socket: paths.socket, log });

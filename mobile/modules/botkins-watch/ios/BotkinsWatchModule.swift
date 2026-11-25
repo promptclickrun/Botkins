@@ -91,6 +91,9 @@ public final class BotkinsWatchModule: Module {
     AsyncFunction("update") { (snapshot: String) async in
       await self.bridge.update(snapshot)
     }
+    AsyncFunction("updateProgress") { (snapshot: String) async in
+      await self.bridge.update(snapshot, durable: false)
+    }
     AsyncFunction("clear") { () async in
       await self.bridge.clear()
     }
@@ -171,17 +174,24 @@ private final class PhoneWatchSession: NSObject, WCSessionDelegate {
     self.tellReachability(session)
   }
 
-  func update(_ snapshot: String) {
+  func update(_ snapshot: String, durable: Bool = true) {
     guard let session = self.session else { return }
     self.lastSnapshot = snapshot
-    do {
-      try session.updateApplicationContext(["snapshot": snapshot])
-    } catch {
-      // The next sync still carries the latest revision.
-    }
+    if durable || !session.isReachable { cacheLatestSnapshot(session) }
     if session.isReachable {
-      session.sendMessage(["kind": "snapshot", "snapshot": snapshot], replyHandler: nil, errorHandler: nil)
+      session.sendMessage(["kind": "snapshot", "snapshot": snapshot], replyHandler: nil) { [weak self] _ in
+        Task { @MainActor in
+          guard let self, self.lastSnapshot == snapshot else { return }
+          self.cacheLatestSnapshot(session)
+        }
+      }
     }
+  }
+
+  private func cacheLatestSnapshot(_ session: WCSession) {
+    guard session.activationState == .activated, session.isWatchAppInstalled,
+          let snapshot = lastSnapshot, (session.applicationContext["snapshot"] as? String) != snapshot else { return }
+    try? session.updateApplicationContext(["snapshot": snapshot])
   }
 
   func clear() {
@@ -426,9 +436,7 @@ private final class PhoneWatchSession: NSObject, WCSessionDelegate {
       "paired": session.isPaired,
       "installed": session.isWatchAppInstalled,
     ])
-    if let snapshot = lastSnapshot {
-      try? session.updateApplicationContext(["snapshot": snapshot])
-    }
+    if !reachable { cacheLatestSnapshot(session) }
     disconnect?.cancel()
     disconnect = nil
     if !reachable, let id = voiceSession {

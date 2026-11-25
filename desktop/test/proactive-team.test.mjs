@@ -205,8 +205,8 @@ test("privacy: an alert built from one person's evidence reaches only that perso
   ws.memory.save("pip", "PRIVATE owner memory");
   ws.proactive.setBot("pip", wizard(["owner", "m_avery", "m_blake"]));
   const ownerChat = chatOf(ws, "pip", "owner");
-  const averysChat = chatOf(ws, "pip", "m_avery");
-  const blakesChat = chatOf(ws, "pip", "m_blake");
+  const averysChat = ws.mainChat("pip", "m_avery");
+  const blakesChat = ws.mainChat("pip", "m_blake");
   failedRun(ws, "a", averysChat, "Avery report");
   failedRun(ws, "b", blakesChat, "Blake expenses");
   failedRun(ws, "o", ownerChat, "Owner payroll");
@@ -256,7 +256,7 @@ test("notify off delivers quietly: the alert is in the person's chat with no not
   ws.panels.routines.setEnabled(ws.proactive.routine("pip", "owner").chat.id, null, true);
   assert.equal(ws.proactive.config("pip").people.owner.on, true);
   assert.notEqual(ws.proactive.routine("pip", "owner").entry.notify, false);
-  const averysChat = chatOf(ws, "pip", "m_avery");
+  const averysChat = ws.mainChat("pip", "m_avery");
   failedRun(ws, "a", averysChat, "Avery report");
   seen.reply = proposal("Your report failed.");
   await tick(ws, "pip", "m_avery");
@@ -273,7 +273,7 @@ test("a proactive check never takes routine notify targets: no override tool, an
   entry.notifyTargets = { people: ["owner"], devices: [] };
   const names = ws.panels.routines.tools(ws.bot("pip"), chat, { id: "r1", chatId: chat.id, scheduleId: entry.id, trigger: "scheduled", proactive: true }, { stopped: false }).map((tool) => tool.name);
   assert.ok(!names.includes("routine_notify"), "a proactive check can't choose who hears of it");
-  const averysChat = chatOf(ws, "pip", "m_avery");
+  const averysChat = ws.mainChat("pip", "m_avery");
   failedRun(ws, "a", averysChat, "Avery report");
   seen.reply = proposal("Your report failed.");
   await tick(ws, "pip", "m_avery");
@@ -493,7 +493,7 @@ test("signals: a routine run that failed, and a turn that stopped with open plan
 test("taking an alert starts a fresh private turn, and Not now brings an alert back a day later", async (t) => {
   const { ws, seen } = setup(t, { team: team() });
   ws.proactive.setBot("pip", wizard(["owner", "m_avery"]));
-  const averysChat = chatOf(ws, "pip", "m_avery");
+  const averysChat = ws.mainChat("pip", "m_avery");
   failedRun(ws, "a", averysChat, "Avery report");
   seen.reply = proposal("Your report failed.", { offer: { label: "Run the report again", prompt: "Run my weekly report again and tell me what failed." } });
   await tick(ws, "pip", "m_avery");
@@ -563,7 +563,7 @@ test("Not now holds evidence across the recipient's bots, even after the origina
   failedRun(ws, "a", chatId, "Shared evidence across bots");
   seen.reply = proposal("Report failed.");
   await tick(ws, "pip", "m_avery");
-  const { until } = ws.proactive.act("pip", ws.chat(chatId).messages.at(-1).proactiveRunId, "later", "m_avery");
+  const { until } = ws.proactive.act("pip", ws.chat(ws.mainChat("pip", "m_avery")).messages.at(-1).proactiveRunId, "later", "m_avery");
   const held = until - 23 * HOUR;
   assert.equal(ws.proactive.wake("scout", "scheduled", held, "m_avery"), null);
   ws.peopleOf = (id) => ({ invited: id === chatId ? ["owner"] : [] });
@@ -769,7 +769,7 @@ test("taking an offer needs a role that may chat, a failed start leaves the aler
   assert.equal(call(avery, "pip", "run-1", "take"), "");
 
   ws.proactive.setBot("pip", wizard(["owner", "m_blake"]));
-  const blakesChat = chatOf(ws, "pip", "m_blake");
+  const blakesChat = ws.mainChat("pip", "m_blake");
   failedRun(ws, "b", blakesChat, "Blake expenses");
   seen.reply = proposal("Your expenses failed.", { offer: { label: "Run them again", prompt: "Run my expenses again." } });
   await tick(ws, "pip", "m_blake");
@@ -781,7 +781,7 @@ test("taking an offer needs a role that may chat, a failed start leaves the aler
   failedRun(ws, "o", ownersChat, "Owner payroll");
   seen.reply = proposal("Payroll failed.", { offer: { label: "Run payroll again", prompt: "Run payroll again." } });
   await tick(ws, "pip", "owner");
-  const mine = ws.chat(ownersChat).messages.findLast((m) => m.alert);
+  const mine = ws.chat(ws.mainChat("pip")).messages.findLast((m) => m.alert);
   const submit = ws.submit.bind(ws);
   ws.submit = () => { throw new Error("Up to 20 messages can wait at once."); };
   assert.throws(() => ws.proactive.act("pip", mine.proactiveRunId, "take", "owner"), /Up to 20/);
@@ -807,4 +807,55 @@ test("removing a person's routine turns their check off even when the scheduler 
   await ws.panels.routines.remove(id);
   assert.equal(ws.proactive.config("pip").people.owner.on, false);
   assert.equal(ws.proactive.routine("pip"), null, "it is not made again");
+});
+
+test("scheduled signals route to the recipient's Main chat or a fresh private thread on every delivery", async t => {
+  const studio = team();
+  const { ws, seen, dir } = setup(t, { team: studio });
+  ws.proactive.setBot("pip", wizard(["owner", "m_avery"], { watch: ["runs"] }));
+  const ownerSource = chatOf(ws, "pip", "owner");
+  const averySource = chatOf(ws, "pip", "m_avery");
+  const deliver = async (host, fake, person, source, name) => {
+    failedRun(host, name, source, name);
+    fake.reply = proposal(name + " needs attention.");
+    await tick(host, "pip", person);
+    const run = host.state.runs.find(r => r.proactive && host.chat(r.chatId).createdBy === (person === "owner" ? undefined : person));
+    assert.ok(run.delivery?.chatId, run.detail);
+    return host.chat(run.delivery.chatId);
+  };
+  const main = await deliver(ws, seen, "owner", ownerSource, "Payroll");
+  assert.equal(main.main, true);
+  assert.notEqual(main.id, ownerSource);
+  ws.proactive.setChatMode("new", "m_avery");
+  const first = await deliver(ws, seen, "m_avery", averySource, "Inventory");
+  assert.ok(!first.main);
+  assert.equal(first.createdBy, "m_avery");
+  const { ws: again, seen: next } = setup(t, { team: studio, dir });
+  const second = await deliver(again, next, "m_avery", averySource, "Backups");
+  assert.notEqual(second.id, first.id);
+  assert.equal(second.messages.length, 1);
+  assert.equal((await deliver(again, next, "owner", ownerSource, "Contracts")).id, main.id);
+  again.proactive.setChatMode("main", "m_avery");
+  const personal = await deliver(again, next, "m_avery", averySource, "Shipping");
+  assert.equal(personal.main, true);
+  assert.equal(personal.createdBy, "m_avery");
+  assert.notEqual(personal.id, main.id);
+  again.peopleOf = id => ({ invited: id === personal.id ? ["owner"] : [] });
+  const fallback = await deliver(again, next, "m_avery", averySource, "Returns");
+  assert.notEqual(fallback.id, personal.id);
+  assert.equal(fallback.createdBy, "m_avery");
+  assert.deepEqual(again.chatPeople(fallback.id).invited, []);
+});
+
+test("a stale invitation or a role that lost bot visibility cannot expose a Main chat in sync", t => {
+  const studio = team();
+  const { ws } = setup(t, { team: studio });
+  const mine = ws.mainChat("pip", "m_avery");
+  studio.chats = { [mine]: ["m_blake", "owner"] };
+  const parts = { chats: [ws.chat(mine)], bots: ws.state.bots };
+  assert.equal(filterParts(parts, avery, studio).chats.length, 1);
+  assert.equal(filterParts(parts, blake, studio).chats.length, 0);
+  assert.equal(ownerParts(parts, studio).chats.length, 0);
+  studio.roles.find(role => role.id === "r_mgr").perms.agents = [];
+  assert.equal(filterParts(parts, avery, studio).chats.length, 0);
 });

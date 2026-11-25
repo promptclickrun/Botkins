@@ -165,7 +165,15 @@ export function migrateProactive(saved, state) {
       if (!plain(held)) continue;
       gates[id] = { people: Object.fromEntries(Object.entries(plain(held.people) ? held.people : {}).filter(([, own]) => plain(own))) };
     }
-    return { settings: { enabled: old.enabled !== false, bots }, state: { shape: PROACTIVE_SHAPE, bots: gates, reminders: plain(gate.reminders) ? gate.reminders : {}, snoozed: migrateSnoozes(gates, gate.snoozed) } };
+    return {
+      settings: { enabled: old.enabled !== false, bots },
+      state: {
+        shape: PROACTIVE_SHAPE, bots: gates,
+        ...(Array.isArray(gate.newChatPeople) && { newChatPeople: [...new Set(gate.newChatPeople.filter(id => typeof id === "string"))] }),
+        reminders: plain(gate.reminders) ? gate.reminders : {},
+        snoozed: migrateSnoozes(gates, gate.snoozed),
+      },
+    };
   }
   // Before: one entry per bot, each with the one `person` it worked for.
   const before = {};

@@ -51,10 +51,7 @@ export const ACTIVITY_TYPE = "BotkinActivityAttributes";
 
 const TOKEN = /^[0-9a-f]{64,200}$/;
 const PRESENT_MS = 45_000; // a phone that said it is in front, and was heard from this recently, is looking at the app
-const ACTIVITY_GAP_MS = 2_500; // the least time between two updates of one Live Activity
-// Apple holds a priority 5 push back to save power, most of all on a locked phone, and allows only
-// so many at priority 10. A card's steps go at 10 this often, so the Lock Screen is never far behind.
-const ACTIVITY_LOUD_GAP_MS = 15_000;
+const ACTIVITY_GAP_MS = 15_000; // ordinary Lock Screen progress only; milestones go immediately
 const ACTIVITY_STALE_S = 15 * 60;
 // A finished turn's card stays on the phone, marked done, this long, unless a new turn in the chat
 // takes it over first. Then it is ended. (The phone has the same time: LINGER_MS in src/state/activity.ts.)
@@ -375,6 +372,7 @@ export class Push {
    * owner was invited. `people` is the link's own answer (server.mjs, inChat).
    */
   maySeeChat(device, chat) {
+    if (chat?.hostDispatch && (device.kind === "gadget" || device.memberId)) return false;
     if (!chat) return !device.memberId;
     const person = device.memberId ?? "owner";
     // Without the link's list of who was invited, a chat is its starter's alone.
@@ -391,6 +389,7 @@ export class Push {
     for (const device of targets) {
       // A request only the owner can answer (an approval, a secure input) goes to the owner's devices
       // whoever's chat it is: nobody else can unblock the bot. Any other goes to the chat's people.
+      if (request.dispatch && device.kind === "gadget") continue;
       const ownerOnly = request.kind === "permission" || request.kind === "secure";
       if (ownerOnly ? !!device.memberId : !this.maySeeChat(device, chat)) continue;
       if (!this.wants(device, "requests") || this.present(device.id, request.chatId)) continue;
@@ -414,6 +413,7 @@ export class Push {
   onReminder(sends, targets, reminder, chats) {
     const chat = chats.get(reminder.chatId);
     for (const device of targets) {
+      if (chat?.hostDispatch && device.kind === "gadget") continue;
       if ((device.memberId ?? "owner") !== reminder.person) continue;
       // A request only the owner can answer is the owner's whoever's chat it is. Anything else is for the chat's people.
       if (reminder.ownerOnly ? !!device.memberId : !this.maySeeChat(device, chat)) continue;
@@ -605,10 +605,17 @@ export class Push {
       const text = JSON.stringify(next);
       if (last?.text === text) continue;
       // A card that said "done" and has a new turn to show changes at once, like one that needs the person.
-      const urgent = next.phase === "needs-you" || last?.over === true;
+      const urgent = next.phase === "needs-you" || last?.phase === "needs-you" || last?.over === true;
       // The phone shows the app's own state while it is in front; Apple also limits how often an activity may change.
-      if (!urgent && (this.present(device.id) || this.now() - (last?.at ?? 0) < ACTIVITY_GAP_MS)) continue;
-      this.sent.set(key, { at: this.now(), text });
+      const now = this.now();
+      if (!urgent) {
+        if (this.present(device.id)) continue;
+        if (last && now - last.at < ACTIVITY_GAP_MS) {
+          this.scheduleCardLook(last.at + ACTIVITY_GAP_MS + 50, now);
+          continue;
+        }
+      }
+      this.sent.set(key, { at: now, text, phase: next.phase });
       sends.push(this.activity(record, token, "update", next, { urgent }));
     }
   }
@@ -748,8 +755,7 @@ export class Push {
   /**
    * Brings the cards up to date on the phones that have one for all Botkins or one per Botkin. A
    * change that matters (a chat needs the person, a chat ended, a new turn on a card) goes at once;
-   * steps and thinking at most every ACTIVITY_GAP_MS (at priority 10 every ACTIVITY_LOUD_GAP_MS,
-   * else at 5), and not while the phone is in front (it draws its own cards then). A card whose
+   * steps and thinking at most every ACTIVITY_GAP_MS at priority 5, and not while the phone is in front (it draws its own cards then). A card whose
    * chats have all ended says so for `overHold`, then is ended, and its final state stays a few
    * minutes; one with no chat left to show is ended at once. On the card for all Botkins, the first
    * update that shows a new request, or that every chat has ended, carries an alert (the island
@@ -849,7 +855,8 @@ export class Push {
           .join();
         // A card that said done and has a new turn to show changes at once.
         // So does one the phone drew while it was in front (setPresence emptied its text).
-        const urgent = !last || marks !== last.marks || last.over === true || last.text === "";
+        const asking = cardKey === ALL_CARD ? card.state.chats.filter((chat) => chat.phase === "needs-you" && chimes?.get(chat.id)?.kind === "request") : [];
+        const urgent = !last || marks !== last.marks || last.over === true || last.text === "" || asking.length > 0;
         if (!urgent) {
           if (this.present(device.id)) continue;
           const wait = ACTIVITY_GAP_MS - (now - (last?.at ?? 0));
@@ -858,21 +865,22 @@ export class Push {
             continue;
           }
         }
-        const asking = cardKey === ALL_CARD ? card.state.chats.filter((chat) => chat.phase === "needs-you" && chimes?.get(chat.id)?.kind === "request") : [];
         for (const chat of asking) chimes.delete(chat.id);
         const alert = asking.length ? { title: "Botkins", body: asking.length > 1 ? asking.length + " bots need you" : "A bot needs you" } : undefined;
-        // A step goes at priority 10 when the last push at 10 was a while ago, else at 5.
-        const loud = urgent || !!alert || now - (last?.loudAt ?? 0) >= ACTIVITY_LOUD_GAP_MS;
         const shown = content();
-        this.sent.set(key, { at: now, loudAt: loud ? now : last?.loudAt, text, state: shown, marks, over: false });
-        sends.push(this.activity(record, token, "update", shown, { urgent: loud, relevance: card.relevance, alert }));
+        this.sent.set(key, { at: now, text, state: shown, marks, over: false });
+        sends.push(this.activity(record, token, "update", shown, { urgent, relevance: card.relevance, alert }));
       }
       // A notification the card didn't make its sound for (a request it has no room for, a turn
       // that ended while others still work) is sent as it is.
       for (const held of chimes?.values() ?? []) sends.push(held.alert);
     }
     // Nothing else may change before then: look again when a chat drops off, or a held-back update is due.
-    if (next != null && (!this.cardTimer || next < this.cardAt)) {
+    if (next != null) this.scheduleCardLook(next, now);
+  }
+
+  scheduleCardLook(next, now) {
+    if (!this.cardTimer || next < this.cardAt) {
       clearTimeout(this.cardTimer);
       this.cardAt = next;
       this.cardTimer = setTimeout(() => {

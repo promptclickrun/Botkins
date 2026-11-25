@@ -92,6 +92,7 @@ export function parseStatus(text) {
 
 const MAX_TODOS = 500;
 function restart(chat) {
+  for (const fork of Object.values(chat.savedForks ?? {})) restart(fork);
   if (chat.established || chat.messages?.length) chat.restartSession = true;
   for (const session of [...Object.values(chat.members ?? {}), ...Object.values(chat.helpers ?? {})])
     if (session.established) session.restartSession = true;

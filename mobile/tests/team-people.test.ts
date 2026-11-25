@@ -24,9 +24,23 @@ const teamOf = (more: Record<string, unknown> = {}) => ({ roles: [role()], group
 const ana = { kind: "member", memberId: "m_a", name: "Ana", groupId: "g" };
 const ben = { kind: "member", memberId: "m_b", name: "Ben", groupId: "g" };
 
+test("a stale team invitation cannot expose a cross-host Teamwork chat or its approval", () => {
+  const team = teamOf({ chats: { c: ["m_a"] } });
+  const chat = { id: "c", botId: "b", hostDispatch: true };
+  const request = { id: "r", chatId: "c", kind: "permission", dispatch: true, detail: "private text" };
+  const parts = { chats: [chat], bots: [{ id: "b" }], live: { requests: [request] }, "chat:c": { messages: [request.detail] } };
+  const view = filterParts(parts, ana, team);
+  assert.deepEqual(view.chats, []);
+  assert.deepEqual(view.live.requests, []);
+  assert.equal(view["chat:c"], null);
+  assert.match(authorize(ana, team, "respond", ["r", { action: "today" }], { request: [request], chat: [chat] }), /owner/);
+  assert.match(authorize(ana, team, "link.messages", ["c", 0], { chat: [{ ...chat, createdBy: ana.memberId }] }), /owner/);
+});
+
 test("a chat's people are its starter and those invited", () => {
   const team = teamOf({ chats: { "c-ana": ["m_b"], "c-owner": ["m_a"] } });
   assert.equal(personOf({ kind: "owner" }), OWNER);
+  assert.equal(inChat(team, { id: "c-owner", hostDispatch: true }, "m_a"), false);
   assert.equal(personOf(ana), "m_a");
   assert.deepEqual(chatPeople(team, { id: "c-ana", createdBy: "m_a" }), { createdBy: "m_a", invited: ["m_b"] });
   assert.deepEqual(chatPeople(team, { id: "c-owner" }), { createdBy: OWNER, invited: ["m_a"] });

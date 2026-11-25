@@ -1,22 +1,32 @@
-// The gateway: where the Copilot runtime sends model requests that a ChatGPT plan or a Claude
-// plan answers. It is a small server on this computer only (127.0.0.1, a port of its own) that
-// answers only to the secret the runtime was given for this run of the app.
+// The gateway: where a harness (the Copilot runtime, Pi, OMP) sends the model requests of a
+// provider it doesn't own. It is a small server on this computer only (127.0.0.1, a port of its
+// own) that answers only to the secret the harness was given for this run of the app, and turns
+// away any request that names a browser origin.
 //
 //   POST /chatgpt/responses    OpenAI Responses format    → the person's ChatGPT plan (chatgpt.mjs)
 //   POST /claude/v1/messages   Anthropic Messages format  → the person's Claude plan, through
 //                                                           Claude Code (claude.mjs)
+//   POST /copilot/v1/messages | /responses | /chat/completions
+//                                                         → GitHub Copilot's models, signed with
+//                                                           headers the Copilot runtime lends
+//                                                           (copilot.mjs, providers/copilot/relay.mjs)
+//   POST /opencode/chat/completions                       → a model the person connected in
+//                                                           OpenCode, one step of an OpenCode
+//                                                           session (opencode.mjs)
 //   POST /key/<provider>/chat/completions | /responses     → OpenRouter, Azure Foundry or an
 //                                                           OpenAI endpoint, with the key the
 //                                                           person gave (providers/keyed)
 //
-// Neither plan's sign-in, and no key, passes through a harness: it is added here, for the one
-// request that needs it.
+// No plan's sign-in, and no key, passes through a harness: it is added here (or stays in the
+// program that holds it), for the one request that needs it.
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import { createServer } from "node:http";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { assemble, ClaudePool, claudeTurn, PlanError } from "./claude.mjs";
 import { chatgptTurn, completeOutput } from "./chatgpt.mjs";
+import { COPILOT_ENDPOINTS, copilotHeaders, copilotUrl } from "./copilot.mjs";
+import { completion } from "./opencode.mjs";
 import { KEYED, KEY_PATHS } from "../providers/keyed/config.mjs";
 
 const MAX_BODY = 64 * 1024 * 1024;
@@ -27,13 +37,15 @@ export class Gateway {
    * @param options.claude   async () => ({ file, env, cwd, bridge, report? }) for the Claude plan, or null.
    * @param options.keyed    (providerId) => { baseUrl, query?, headers, secrets } | null: where a key provider's
    *                         requests go, with its key in the headers (providers/keyed). Null for none.
+   * @param options.copilot  () => the Copilot relay (providers/copilot/relay.mjs) | null.
+   * @param options.opencode () => the OpenCode relay (opencode.mjs) | null.
    * @param options.version  Botkins' version.
    * @param options.waiting  How many runs of Claude Code wait for a request (claude.mjs, ClaudePool). 0 for none.
    * @param options.settleMs How long such a run must have waited before it takes a request (tests pass 0).
    * @param options.fetch, options.launch  For tests.
    */
-  constructor({ chatgpt = null, claude = null, keyed = () => null, speedTier = async () => undefined, version = "", fetch: fetcher = globalThis.fetch, launch, waiting = 2, settleMs, log = () => {} } = {}) {
-    Object.assign(this, { chatgpt, claude, keyed, speedTier, version, fetch: fetcher, launch, log });
+  constructor({ chatgpt = null, claude = null, keyed = () => null, copilot = () => null, opencode = () => null, speedTier = async () => undefined, version = "", fetch: fetcher = globalThis.fetch, launch, waiting = 2, settleMs, log = () => {} } = {}) {
+    Object.assign(this, { chatgpt, claude, keyed, copilot, opencode, speedTier, version, fetch: fetcher, launch, log });
     // Runs of Claude Code that have finished starting, so a reply begins at once and doesn't stop in its middle.
     this.pool = claude && waiting > 0 ? new ClaudePool({ size: waiting, log, ...(settleMs !== undefined && { settleMs }), ...(launch && { launch }) }) : null;
     this.secret = randomBytes(24).toString("base64url");
@@ -104,7 +116,7 @@ export class Gateway {
       response.writeHead(status, { "content-type": "application/json", "content-length": Buffer.byteLength(body) }).end(body);
     };
     const path = new URL(request.url, "http://127.0.0.1").pathname.replace(/\/+$/, "");
-    const anthropic = path.startsWith("/claude");
+    const anthropic = path.startsWith("/claude") || path === "/copilot/v1/messages";
     try {
       // A page in a browser must never reach a plan: one that names an origin is turned away unread.
       if (request.headers.origin) throw new PlanError(403, "permission_error", "Forbidden");
@@ -134,6 +146,12 @@ export class Gateway {
         if (!Object.hasOwn(KEYED, id) || !KEY_PATHS.includes(endpoint)) throw new PlanError(404, "not_found_error", "Not found");
         return await this.keyedRequest(id, endpoint, raw, request, response, gone.signal);
       }
+      const copilotRoute = path.match(/^\/copilot\/(.+)$/);
+      if (copilotRoute) {
+        if (!Object.hasOwn(COPILOT_ENDPOINTS, copilotRoute[1])) throw new PlanError(404, "not_found_error", "Not found");
+        return await this.copilotRequest(copilotRoute[1], body, raw, request, response, gone.signal);
+      }
+      if (path === "/opencode/chat/completions") return await this.opencodeRequest(body, response, gone.signal);
       const route = path.match(/^\/(chatgpt|claude)(?:\/(fast|ultrafast))?(\/.*)$/);
       if (route) {
         const [, plan, speed, endpoint] = route;
@@ -171,12 +189,20 @@ export class Gateway {
       if (signal.aborted) return response.destroy();
       throw new PlanError(502, "api_error", "Couldn't reach " + name + " (" + (error?.cause?.code ?? "no answer") + ").");
     }
+    await this.passOn(answer, response, signal, name, connection.secrets);
+  }
+
+  /**
+   * Streams an upstream answer back as it comes: the status, the content type and the body (an
+   * event stream is not touched). An error's body is read whole, with each of `secrets` hidden.
+   */
+  async passOn(answer, response, signal, name, secrets = []) {
     const type = answer.headers.get("content-type") ?? "application/json";
     const retry = answer.headers.get("retry-after");
     const head = { "content-type": type, ...(retry && { "retry-after": retry }) };
     if (!answer.ok || !answer.body) {
       let reply = answer.body ? await answer.text() : "";
-      for (const secret of connection.secrets ?? []) if (secret) reply = reply.split(secret).join("[key]");
+      for (const secret of secrets ?? []) if (secret) reply = reply.split(secret).join("[key]");
       response.writeHead(answer.status, { ...head, "content-length": Buffer.byteLength(reply) }).end(reply);
       return;
     }
@@ -185,6 +211,78 @@ export class Gateway {
       if (!signal.aborted) this.log("gateway: " + name + "'s stream ended early: " + (error?.cause?.code ?? error?.code ?? "no reason given"));
       response.destroy();
     });
+  }
+
+  /**
+   * Sends one request to GitHub Copilot's model API, signed with headers the Copilot runtime lent
+   * (providers/copilot/relay.mjs), and streams the answer back as it comes. Headers GitHub
+   * refuses are borrowed again once. The sign-in is in the headers only, and hidden in an error.
+   */
+  async copilotRequest(endpoint, body, text, request, response, signal) {
+    const relay = this.copilot();
+    if (!relay) throw new PlanError(503, "api_error", "GitHub Copilot isn't set up on this computer. Sign in to it in Settings › Model providers.");
+    const api = COPILOT_ENDPOINTS[endpoint];
+    const borrow = async (fresh) => {
+      try {
+        return await relay.credentials(body?.model, { fresh });
+      } catch (error) {
+        const status = error?.status === 401 || error?.status === 403 ? error.status : 503;
+        throw new PlanError(status, status === 503 ? "api_error" : "authentication_error", "GitHub Copilot couldn't sign the request: " + (error?.message ?? error));
+      }
+    };
+    const send = async (lent) => {
+      try {
+        return await this.fetch(copilotUrl(lent, endpoint), { method: "POST", headers: copilotHeaders(lent, api, body, request.headers), body: text, signal, redirect: "error" });
+      } catch (error) {
+        if (signal.aborted) return null;
+        throw new PlanError(502, "api_error", "Couldn't reach GitHub Copilot (" + (error?.cause?.code ?? "no answer") + ").");
+      }
+    };
+    let lent = await borrow(false);
+    let answer = await send(lent);
+    if (answer && (answer.status === 401 || answer.status === 403) && Date.now() - lent.at > 1000) {
+      await answer.body?.cancel().catch(() => {});
+      relay.forget();
+      lent = await borrow(true);
+      answer = await send(lent);
+    }
+    if (!answer) return response.destroy();
+    const token = /^Bearer (.+)$/i.exec(lent.headers.authorization ?? "")?.[1];
+    await this.passOn(answer, response, signal, "GitHub Copilot", [token]);
+  }
+
+  /**
+   * Answers a Chat Completions request with one step of an OpenCode model (opencode.mjs): as an
+   * event stream of chunks, or with stream: false as one completion.
+   */
+  async opencodeRequest(body, response, signal) {
+    const relay = this.opencode();
+    if (!relay) throw new PlanError(503, "api_error", "OpenCode isn't set up on this computer. Install it and connect a model service in Settings › Model providers.");
+    const streaming = body?.stream !== false;
+    const whole = completion();
+    let began = false;
+    const emit = (chunk) => {
+      if (!streaming) return whole.take(chunk);
+      if (!began) {
+        began = true;
+        response.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache" });
+      }
+      response.write("data: " + JSON.stringify(chunk) + "\n\n");
+    };
+    try {
+      await relay.turn(body, { emit, signal });
+    } catch (error) {
+      // Before the reply began the failure is the answer; after, it ends the stream as OpenAI's own would.
+      if (!began) throw error;
+      if (!signal.aborted) response.write("data: " + JSON.stringify({ error: { message: error?.message ?? "OpenCode stopped.", type: error instanceof PlanError ? error.type : "api_error", code: error?.status ?? null } }) + "\n\n");
+      return void response.end();
+    }
+    if (!streaming) {
+      const reply = JSON.stringify(whole.message());
+      response.writeHead(200, { "content-type": "application/json", "content-length": Buffer.byteLength(reply) }).end(reply);
+      return;
+    }
+    response.end("data: [DONE]\n\n");
   }
 
   async chatgptRequest(body, response, signal, serviceTier) {

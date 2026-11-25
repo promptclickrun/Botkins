@@ -33,7 +33,7 @@ export type ChatPrefs = {
   timestamps: boolean;
   /** Where a chat lands once a reply has finished: at its end (latest) or its beginning (src/features/chat/completion.ts). */
   completionPosition: CompletionPosition;
-  /** What selecting a bot on Home opens: its latest chat, or a new one each time (src/features/chat/habits.ts). */
+  /** What selecting a bot on Home opens: Main chat, its latest chat, or a new one each time (src/features/chat/habits.ts). */
   botTap: BotTap;
   /** Return sends; off makes Return a new line. */
   enterSends: boolean;
@@ -59,7 +59,7 @@ export const chatPrefDefaults: ChatPrefs = {
   wrapCode: false,
   timestamps: false,
   completionPosition: "latest",
-  botTap: "latest",
+  botTap: "main",
   // A phone has no Shift key, so Return makes a new line unless asked otherwise. A tablet with a keyboard may prefer sending.
   enterSends: Platform.OS === "ios" && Platform.isPad,
   readAloud: false,

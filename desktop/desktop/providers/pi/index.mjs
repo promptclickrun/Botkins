@@ -1,9 +1,10 @@
 // Pi (pi.dev, the `pi` command, MIT) as a harness: Settings › Harness › Pi.
 //
 // Pi is a coding agent: the loop, the tools (read, bash, edit, write, grep, find, ls) and the
-// session files. It isn't a model provider here. A chat on a ChatGPT or Claude plan's model runs
-// in Pi, and the plan answers Pi's model requests through Botkins' gateway (desktop/harness), the
-// same connection the Copilot runtime uses. Pi keeps no sign-in of its own for this.
+// session files. It isn't a model provider here. A chat on a GitHub Copilot, ChatGPT, Claude,
+// OpenCode or key provider's model runs in Pi, and that provider answers Pi's model requests
+// through Botkins' gateway (desktop/harness), the same connection the Copilot runtime uses. Pi
+// keeps no sign-in of its own for this.
 //
 // Each Botkins conversation is one `pi --mode rpc` process, kept running between turns and
 // started again on Pi's own session file when it was let go. Botkins' extension
@@ -45,7 +46,7 @@ const RUNTIMES = {
     id: PI_ID,
     name: "Pi",
     binary: "pi",
-    description: "The Pi coding agent, as the harness for ChatGPT and Claude plans.",
+    description: "The Pi coding agent, as the harness for GitHub Copilot, ChatGPT, Claude and OpenCode models.",
     install: INSTALL,
     extension: EXTENSION,
     sessionEnv: "BOTKINS_PI_SESSION",
@@ -54,7 +55,7 @@ const RUNTIMES = {
     id: OMP_ID,
     name: "OMP",
     binary: "omp",
-    description: "OMP, the enhanced Pi coding agent, as the harness for ChatGPT and Claude plans.",
+    description: "OMP, the enhanced Pi coding agent, as the harness for GitHub Copilot, ChatGPT, Claude and OpenCode models.",
     install: OMP_INSTALL,
     extension: OMP_EXTENSION,
     sessionEnv: "BOTKINS_OMP_SESSION",
@@ -313,7 +314,7 @@ class PiSession extends ProviderSession {
   /** The plan connection and model this session's model is on, in the harness's terms. */
   target(model = this.model) {
     const connection = this.spec.inference?.providers?.find((each) => each.name === model.source) ?? this.spec.inference?.providers?.[0];
-    if (!connection) throw new Error(this.provider.name + " runs ChatGPT and Claude plan models. Choose one of those for this chat.");
+    if (!connection) throw new Error(this.provider.name + " can't run this model: its provider has no connection here. Choose another model for this chat.");
     return { provider: connection.name, modelId: model.model };
   }
   /** What the extension reads (extension.mjs): the connections, the MCP servers and the instructions. */
@@ -647,7 +648,7 @@ class PiSession extends ProviderSession {
 export class PiProvider extends ModelProvider {
   id = PI_ID;
   name = "Pi";
-  description = "The Pi coding agent, as the harness for ChatGPT and Claude plans.";
+  description = "The Pi coding agent, as the harness for GitHub Copilot, ChatGPT, Claude and OpenCode models.";
   /** A harness, not a model provider: Settings › Model providers doesn't list it. */
   harness = true;
   /**

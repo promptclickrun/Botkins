@@ -9,7 +9,8 @@
 //                  and always while nothing streams. Every whole state is complete: a window that has
 //                  only this one is right.
 //   "changed-hot"  only the live parts (HOT_FIELDS, and the steps of the turns that run, only the ones
-//                  that changed), numbered with `seq` and `base`, the whole state it applies to. The
+//                  that changed), numbered with `seq` and `base`, the whole state it applies to.
+//                  Reply and thinking text carry a UTF-16 cursor and suffix, or replace from zero. The
 //                  window drops one whose `base` is not the whole state it holds (src/hotState.ts), so
 //                  an old live part never lands on a newer state; both kinds come over one channel, in
 //                  the order sent.
@@ -23,6 +24,8 @@
 /** The top-level fields of the state that change with every word of a reply. */
 export const HOT_FIELDS = ["streams", "thinking", "intents", "speakers", "steerable", "queued", "requests", "typing"];
 
+const BODY_FIELDS = ["streams", "thinking"];
+const OTHER_FIELDS = HOT_FIELDS.filter(name => !BODY_FIELDS.includes(name));
 const text = JSON.stringify;
 const working = (run) => run.status === "Working";
 const streaming = (state) => Object.keys(state.streams ?? {}).length > 0;
@@ -64,9 +67,26 @@ export function stillKey(state) {
   return text(still);
 }
 
-/** What the window is told of a running turn, as text per part, to tell what changed on the next push. */
+// A step is a flat record, often with several large strings. Keep those immutable values
+// so a later in-place edit can be detected without serializing every previous tool result.
+// For an unfamiliar, nested step use the original value comparison.
+function rememberStep(step) {
+  return Object.values(step).some(value => value !== null && typeof value === "object") ? text(step) : { ...step };
+}
+
+function sameStep(before, step) {
+  if (typeof before === "string") return before === text(step);
+  if (!before) return false;
+  const keys = Object.keys(step);
+  return keys.length === Object.keys(before).length && keys.every(key => Object.hasOwn(before, key) && before[key] === step[key]);
+}
+
 function remembered(run) {
-  return { rest: text(restOf(run)), order: run.steps ? run.steps.map((step) => step.id).join("\0") : null, steps: new Map((run.steps ?? []).map((step) => [step.id, text(step)])) };
+  return {
+    rest: text(restOf(run)),
+    order: run.steps ? run.steps.map((step) => step.id).join("\0") : null,
+    steps: new Map((run.steps ?? []).map(step => [step.id, rememberStep(step)])),
+  };
 }
 
 /**
@@ -77,11 +97,22 @@ function remembered(run) {
  * @param options.every     How long to wait between two full comparisons while a bot streams (ms), at least.
  *                          A comparison that took t ms is followed by at least 20 t ms of not comparing.
  */
-export function createWindowPush({ snapshot, send, sendHot, delay = 35, every = 750, now = Date.now, later = setTimeout }) {
+export function createWindowPush({ snapshot, send, sendHot, delay = 35, every = 750, now = Date.now, later = setTimeout, cancel = clearTimeout, visible = () => true }) {
   let seq = 0;
   // What the window was last sent: null when it holds nothing we can build on.
   let known = null;
   let timer = null;
+  let wasVisible;
+  // An unclassified change reconciles the entire projection. Classified changes retain only
+  // the steps and reply boundaries touched before the next coalesced push.
+  const clean = () => ({ steps: new Map(), streams: new Map() });
+  let dirty = clean();
+  const forget = () => {
+    if (timer !== null) cancel(timer);
+    timer = null;
+    known = null;
+    dirty = clean();
+  };
 
   /** The state as the window's new base: numbered, and remembered. `key` is stillKey(state) when it was just made. */
   function whole(state, key) {
@@ -93,7 +124,8 @@ export function createWindowPush({ snapshot, send, sendHot, delay = 35, every = 
       key: live ? (key ?? stillKey(state)) : null,
       checked: now(),
       cost: 0,
-      fields: Object.fromEntries(HOT_FIELDS.map((name) => [name, text(state[name])])),
+      fields: Object.fromEntries(OTHER_FIELDS.map((name) => [name, text(state[name])])),
+      bodies: Object.fromEntries(BODY_FIELDS.map(name => [name, state[name] && { ...state[name] }])),
       runs: new Map((state.runs ?? []).filter(working).map((run) => [run.id, remembered(run)])),
       seq,
     };
@@ -104,17 +136,42 @@ export function createWindowPush({ snapshot, send, sendHot, delay = 35, every = 
   }
 
   /** The hot message for what changed since the last message, or null when nothing did (or `false` when the whole state is needed). */
-  function hot(state) {
+  function hot(state, changes) {
+    const dirtySteps = changes?.steps;
+    const textOnly = dirtySteps?.size === 0;
     const fields = {};
-    for (const name of HOT_FIELDS) {
+    const appends = [];
+    for (const name of textOnly ? ["streams"] : BODY_FIELDS) {
+      const before = known.bodies[name];
+      const next = state[name];
+      if (!before && !next) continue;
+      // The set of running chats changed, or thinking started/ended. Replace the map.
+      if (!before || !next || Object.keys(before).length !== Object.keys(next).length || Object.keys(next).some(id => !Object.hasOwn(before, id))) {
+        fields[name] = next ?? null;
+        known.bodies[name] = next && { ...next };
+        continue;
+      }
+      for (const [chat, body] of Object.entries(next)) {
+        const previous = before[chat];
+        if (previous === body) continue;
+        const hint = name === "streams" ? changes?.streams.get(chat) : undefined;
+        // A normal provider append already knows where it began. Verify both ends against
+        // the owner's visible snapshot. Replacements and paired hosts have the exact prefix fallback.
+        const appended = (hint && hint.previous === previous && hint.body === body) || body.startsWith(previous);
+        const from = appended ? previous.length : 0;
+        appends.push({ name, chat, from, add: body.slice(from) });
+        before[chat] = body;
+      }
+    }
+    for (const name of textOnly ? [] : OTHER_FIELDS) {
       const value = text(state[name]);
       if (value === known.fields[name]) continue;
       fields[name] = state[name] === undefined ? null : state[name];
       known.fields[name] = value;
     }
     const runs = [];
-    for (const run of state.runs ?? []) {
-      if (!working(run)) continue;
+    for (const run of textOnly ? [] : state.runs ?? []) {
+      if (!working(run) || (dirtySteps && !dirtySteps.has(run.id))) continue;
       const before = known.runs.get(run.id);
       if (!before) return false;
       const patch = { id: run.id };
@@ -130,44 +187,70 @@ export function createWindowPush({ snapshot, send, sendHot, delay = 35, every = 
         before.order = order;
       }
       const changed = [];
+      const touched = dirtySteps?.get(run.id);
       for (const step of run.steps ?? []) {
-        const value = text(step);
-        if (before.steps.get(step.id) === value) continue;
+        if (touched && !touched.has(step.id) && before.steps.has(step.id)) continue;
+        if (sameStep(before.steps.get(step.id), step)) continue;
         changed.push(step);
-        before.steps.set(step.id, value);
+        before.steps.set(step.id, rememberStep(step));
       }
-      if (before.steps.size > (run.steps?.length ?? 0)) before.steps = new Map((run.steps ?? []).map((step) => [step.id, before.steps.get(step.id)]));
+      if (patch.order !== undefined) before.steps = new Map((run.steps ?? []).map((step) => [step.id, before.steps.get(step.id)]));
       if (changed.length) patch.steps = changed;
       if (patch.rest || patch.order !== undefined || patch.steps) runs.push(patch);
     }
-    if (!Object.keys(fields).length && !runs.length) return null;
+    if (!Object.keys(fields).length && !appends.length && !runs.length) return null;
     seq += 1;
-    return { base: known.seq, seq, ...(Object.keys(fields).length && { fields }), ...(runs.length && { runs }) };
+    return { base: known.seq, seq, ...(Object.keys(fields).length && { fields }), ...(appends.length && { appends }), ...(runs.length && { runs }) };
   }
 
-  function flush() {
+  function flush(changes = null) {
     timer = null;
+    dirty = clean();
+    if (!visible()) return forget();
     const state = snapshot();
     // Nothing streams (or the window has nothing to build on yet): the whole state, as it always was.
     if (!known || known.key === null || !streaming(state)) return sendWhole(state);
     if (shapeOf(state) !== known.shape) return sendWhole(state);
     const start = now();
     if (start - known.checked >= Math.max(every, known.cost * 20)) {
+      changes = null;
       const key = stillKey(state);
       const done = now();
       known.cost = done - start;
       known.checked = done;
       if (key !== known.key) return sendWhole(state, key);
     }
-    const message = hot(state);
+    const message = hot(state, changes);
     if (message === false) return sendWhole(state);
     if (message && sendHot(message) === false) known = null;
   }
 
   return {
     /** Something changed: the window hears of it soon. */
-    push() {
-      if (!timer) timer = later(flush, delay);
+    push(change) {
+      if (!visible()) return;
+      if (dirty) {
+        if (change?.kind === "stream-append") {
+          const earlier = dirty.streams.get(change.chatId);
+          // A replacement between two appends breaks their common cursor; compare at flush.
+          let previous = change.previous;
+          if (earlier) previous = earlier.body === previous ? earlier.previous : undefined;
+          dirty.streams.set(change.chatId, { previous, body: change.body });
+        } else if (change?.kind === "tool-step") {
+          const ids = dirty.steps.get(change.runId) ?? new Set();
+          ids.add(change.stepId);
+          dirty.steps.set(change.runId, ids);
+        } else dirty = null;
+      }
+      if (timer === null) timer = later(() => flush(dirty), delay);
+    },
+    // On hide discard the incremental base. On show always send one current full snapshot.
+    visibilityChanged() {
+      const shown = visible();
+      if (shown === wasVisible) return;
+      wasVisible = shown;
+      forget();
+      if (shown) flush();
     },
     /** The whole state for a window that asked (it is now the window's base). */
     whole: () => whole(snapshot()),

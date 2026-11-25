@@ -561,12 +561,12 @@ export const tools = {
         },
       },
       "forget-approvals": {
-        summary: "Forget the approvals given to tools \"for this chat\"",
+        summary: "Forget saved tool approvals and cross-host Teamwork permissions",
         usage: "botkins tools forget-approvals [--chat <id>]",
         options: { chat: { type: "string", value: "id", about: "Only this chat's (every chat's without it)" } },
         async run(context) {
           if (context.args.length) throw usage("This command takes no words, only --chat <id>.");
-          context.print(await context.client.call("tools.forgetApprovals", context.options.chat), () => "Forgotten. A bot asks again before it uses such a tool.");
+          context.print(await context.client.call("tools.forgetApprovals", context.options.chat), () => "Forgotten. Bots will ask again.");
         },
       },
     },

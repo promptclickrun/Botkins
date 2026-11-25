@@ -2,8 +2,10 @@
 // only one bounded chat page and never registers that page as a visible iPhone chat.
 import { WatchCompanion } from "../../modules/botkins-watch";
 import { chatForTap } from "@/features/chat/habits";
+import { chatActivity } from "./sessionActivity";
+import type { ChatSummary } from "@/link/types";
 import { showChat } from "@/features/open/opening";
-import { encodeWatchSnapshot, parseWatchCommand, watchSnapshotOf } from "@/features/watch/model";
+import { encodeWatchSnapshot, parseWatchCommand, WATCH_MESSAGE_LIMIT, watchSnapshotOf, type WatchVoice } from "@/features/watch/model";
 import {
   endWatchVoice,
   interruptWatchVoice,
@@ -15,10 +17,12 @@ import {
   watchVoiceState,
 } from "@/features/watch/voice";
 import { api } from "./link";
-import { mergeChat, type ChatView, useApp } from "./store";
+import { mergeChat, type ChatView, type PhoneParts, useApp } from "./store";
 
 let begun = false;
 let publishing: ReturnType<typeof setTimeout> | null = null;
+const WATCH_PROGRESS_MS = 1_000;
+const WATCH_AWAY_PROGRESS_MS = 15_000;
 let disconnected: ReturnType<typeof setTimeout> | null = null;
 let revision = Date.now();
 let sentSignature = "";
@@ -33,20 +37,35 @@ let pages: Record<string, ChatView | undefined> = {};
 const subs: { remove(): void }[] = [];
 const stops: (() => void)[] = [];
 
-function selectedChat() {
-  const state = useApp.getState();
-  const bot = state.parts.bots?.find((item) => !item.hidden);
-  if (!bot) return null;
+let selection: {
+  bots?: PhoneParts["bots"];
+  chats?: PhoneParts["chats"];
+  voiceChat?: string;
+  chat: ChatSummary | null;
+} | undefined;
+
+function selectedChat(): ChatSummary | null {
+  const { bots, chats } = useApp.getState().parts;
   const voiceChat = watchVoiceState().chatId;
-  if (voiceChat && state.parts.chats?.some((chat) => chat.id === voiceChat && chat.botId === bot.id)) {
-    return state.parts.chats.find((chat) => chat.id === voiceChat) ?? null;
+  if (selection && selection.bots === bots && selection.chats === chats && selection.voiceChat === voiceChat) return selection.chat;
+  const bot = bots?.find((item) => !item.hidden);
+  let chat: ChatSummary | undefined;
+  if (bot && chats) {
+    if (voiceChat) chat = chats.find((item) => item.id === voiceChat && item.botId === bot.id);
+    if (!chat) {
+      const latest = chatForTap(chats, bot.id, "latest");
+      if (latest) chat = chats.find((item) => item.id === latest.id);
+    }
   }
-  const selected = chatForTap(state.parts.chats ?? [], bot.id, "latest");
-  if (!selected) return null;
-  return state.parts.chats?.find((chat) => chat.id === selected.id) ?? null;
+  selection = { bots, chats, voiceChat, chat: chat ?? null };
+  return selection.chat;
 }
 
-function publish() {
+function hasWatchPage(local: ChatView | undefined, count: number) {
+  return !!local && local.total === count && local.from <= Math.max(0, count - WATCH_MESSAGE_LIMIT) && local.from + local.messages.length === count;
+}
+
+function publish(durable = true) {
   if (publishing) clearTimeout(publishing);
   publishing = null;
   if (!WatchCompanion || !installed) return;
@@ -57,12 +76,12 @@ function publish() {
       pairing: state.pairing,
       link: state.link,
       parts: state.parts,
-      chats: { ...state.chats, ...pages },
+      chats: hasWatchPage(state.chats[pageChat], pageCount) ? state.chats : { ...state.chats, ...pages },
       texts: state.texts,
     },
     revision: revision + 1,
     voice,
-    chatId: voice.chatId,
+    chatId: voice.chatId ?? selectedChat()?.id,
   });
   if (!state.pairing) {
     if (!cleared) {
@@ -84,30 +103,41 @@ function publish() {
   const snapshot = { ...pending, revision };
   const json = encodeWatchSnapshot(snapshot);
   sentSignature = signature;
-  void WatchCompanion.update(json).catch(() => {});
+  const delivery = !durable && WatchCompanion.updateProgress ? WatchCompanion.updateProgress(json) : WatchCompanion.update(json);
+  void delivery.catch(() => {});
 }
 
-function publishSoon() {
-  if (!installed || publishing) return;
-  publishing = setTimeout(publish, 120);
+function publishSoon(immediate = false) {
+  if (!installed) return;
+  if (immediate) {
+    publish();
+  } else if (!publishing) {
+    publishing = setTimeout(() => publish(false), reachable ? WATCH_PROGRESS_MS : WATCH_AWAY_PROGRESS_MS);
+  }
 }
 
-async function refreshPage(force = false) {
+async function refreshPage(force = false, immediate = false) {
   if (!installed) return;
   const state = useApp.getState();
   const chat = selectedChat();
   if (!chat || state.link !== "online") return;
   if (fetching) return;
+  if (hasWatchPage(state.chats[chat.id], chat.count)) {
+    pageChat = chat.id;
+    pageCount = chat.count;
+    pages = {};
+    return;
+  }
   if (!force && pageChat === chat.id && pageCount === chat.count && pages[chat.id]) return;
   fetching = true;
   pageChat = chat.id;
   pageCount = chat.count;
   try {
-    const detail = await api["link.messages"](chat.id, chat.count, 8);
+    const detail = await api["link.messages"](chat.id, chat.count, WATCH_MESSAGE_LIMIT);
     if (!detail || useApp.getState().pairing?.serverId !== state.pairing?.serverId) return;
     pages = { [chat.id]: mergeChat(undefined, detail) };
     pageCount = chat.count;
-    publishSoon();
+    publishSoon(immediate);
   } catch {
     // The bounded summary snapshot remains useful while the full page is offline.
   } finally {
@@ -128,8 +158,8 @@ function hostChanged() {
   sentSignature = "";
   if (hadHost) endWatchVoice("The paired computer changed.");
   if (!next) void WatchCompanion?.clear().catch(() => {});
-  else void refreshPage(true);
-  publishSoon();
+  else void refreshPage(true, true);
+  publishSoon(true);
 }
 
 function onCommand(value: unknown, commandRevision?: number, sessionId?: string) {
@@ -160,8 +190,8 @@ function onCommand(value: unknown, commandRevision?: number, sessionId?: string)
       endWatchVoice();
       return;
     case "refresh":
-      void refreshPage(true);
-      publishSoon();
+      void refreshPage(true, true);
+      publishSoon(true);
       return;
     case "openOnPhone": {
       const chatId = command.chatId ?? selectedChat()?.id;
@@ -188,36 +218,53 @@ export async function startWatchCompanion() {
   subs.push(
     WatchCompanion.addListener("command", (event) => onCommand(event.command, event.revision, event.sessionId)),
     WatchCompanion.addListener("reachability", (event) => {
-      installed = event.paired && event.installed;
+      const nextInstalled = event.paired && event.installed;
+      if (installed === nextInstalled && reachable === event.reachable) return;
+      installed = nextInstalled;
       reachable = event.reachable;
+      if (publishing) clearTimeout(publishing);
+      publishing = null;
       if (reachable) {
         if (disconnected) clearTimeout(disconnected);
         disconnected = null;
         sentSignature = "";
         void refreshPage();
-      } else disconnectSoon();
-      publishSoon();
+      } else if (watchVoiceState().sessionId) disconnectSoon();
+      publishSoon(true);
     }),
   );
+  let previousVoice: WatchVoice | undefined;
+  let previousChat = selectedChat();
   stops.push(
-    subscribeWatchVoice(() => {
-      const chat = selectedChat();
-      if (chat && (chat.id !== pageChat || chat.count !== pageCount)) void refreshPage();
-      publishSoon();
+    subscribeWatchVoice((voice) => {
+      if (!installed) return;
+      const previous = previousVoice;
+      previousVoice = voice;
+      if (previous && previous.status === voice.status && previous.sessionId === voice.sessionId &&
+          previous.chatId === voice.chatId && previous.muted === voice.muted &&
+          previous.push === voice.push && previous.problem === voice.problem) return;
+      void refreshPage(false, true);
+      publishSoon(true);
     }),
     useApp.subscribe((state, before) => {
-      if (state.pairing?.serverId !== before.pairing?.serverId) hostChanged();
-      if (
-        state.parts.chats !== before.parts.chats ||
-        state.parts.bots !== before.parts.bots ||
-        state.parts.live !== before.parts.live ||
-        state.texts !== before.texts ||
-        state.chats !== before.chats ||
-        state.link !== before.link
-      ) {
-        void refreshPage();
-        publishSoon();
+      if (state.pairing?.serverId !== before.pairing?.serverId) {
+        hostChanged();
+        return;
       }
+      if (!installed) return;
+      const selected = selectedChat();
+      const id = selected?.id;
+      const beforeSelected = previousChat;
+      previousChat = selected;
+      const selectionChanged = id !== beforeSelected?.id;
+      const oldActivity = id && state.parts.live !== before.parts.live ? chatActivity(before.parts.live, id) : undefined;
+      const activity = oldActivity !== undefined && id ? chatActivity(state.parts.live, id) : undefined;
+      const activityChanged = oldActivity !== activity;
+      const milestone = selectionChanged || state.link !== before.link || (activityChanged &&
+        (activity === "waiting" || oldActivity === "waiting" || activity === "idle" || oldActivity === "idle"));
+      if (selectionChanged || selected?.count !== beforeSelected?.count || state.link !== before.link) void refreshPage(false, milestone);
+      if (milestone || activityChanged || selected !== beforeSelected || state.parts.bots !== before.parts.bots ||
+          (id && (state.chats[id] !== before.chats[id] || state.texts[id]?.stream !== before.texts[id]?.stream))) publishSoon(milestone);
     }),
   );
   await WatchCompanion.start();
@@ -234,5 +281,8 @@ export function stopWatchCompanion() {
   for (const subscription of subs.splice(0)) subscription.remove();
   for (const stop of stops.splice(0)) stop();
   endWatchVoice();
+  installed = false;
+  reachable = false;
+  selection = undefined;
   begun = false;
 }
