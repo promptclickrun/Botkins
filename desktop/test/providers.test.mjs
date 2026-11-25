@@ -967,7 +967,7 @@ test("a second provider serves the chats whose model belongs to it, and a chat c
   // (The echo repeats what it was sent: the transcript, then the message.)
   assert.match(chat.messages.at(-1).text, /^echo: [\s\S]*\n\nSecond$/);
   assert.equal(chat.sessionProvider, "echo");
-  assert.deepEqual(log.deleted, [id], "the old provider's session is removed");
+  assert.deepEqual(log.deleted, [], "the old provider's native session is preserved so switching back resumes it");
   // The transcript comes with the first message, before it, and never in the system prompt, where
   // it would be sent again with every request and no compaction could shrink it.
   assert.match(seen[0].prompt, /^\[Botkins: this conversation continues from earlier\.[^\n]*\n<earlier-conversation>\n[\s\S]*First[\s\S]*copilot: First\n<\/earlier-conversation>\n\nSecond$/);

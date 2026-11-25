@@ -6,6 +6,7 @@
 // One talk at a time, app-wide. It ends when the person ends it, when nothing is said twice in a
 // row, when the bot needs an answer on the screen, or when the chat's screen closes.
 import { create } from "zustand";
+import { holdBackgroundLink } from "@/state/link";
 import { showToast, useApp } from "@/state/store";
 import { chatAccess } from "./chatAccess";
 import { canListen, type Handlers, listen, type Session } from "./dictation";
@@ -28,6 +29,7 @@ const LOUD = 0.5;
 
 let generation = 0;
 let session: Session | null = null;
+let releaseBackgroundHold: (() => void) | null = null;
 
 export const canTalk = canListen;
 
@@ -39,6 +41,7 @@ export function startTalk(chatId: string) {
     return;
   }
   const mine = ++generation;
+  releaseBackgroundHold ??= holdBackgroundLink("voice");
   useTalk.setState({ chatId, phase: "listening", heard: "", level: 0 });
   void loop(chatId, () => generation === mine);
 }
@@ -46,6 +49,8 @@ export function startTalk(chatId: string) {
 /** Ends the talk: stops listening and stops what is being read. */
 export function endTalk() {
   generation++;
+  releaseBackgroundHold?.();
+  releaseBackgroundHold = null;
   session?.cancel();
   session = null;
   if (useTalk.getState().phase !== "off") stopSpeech();

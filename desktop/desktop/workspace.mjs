@@ -68,6 +68,7 @@ import {
   recordCanvas,
   validateAttachments,
 } from "./canvas.mjs";
+import { holderSessions, migrateChatSessions, migrateSessionHolder } from "./providers/sessions.mjs";
 import { Agents, instructionsField, migrateAgents, summaryField } from "./agents.mjs";
 import { linkLooks, lookField, migrateLooks, nextLook } from "./looks.mjs";
 import { starterById } from "./starters.mjs";
@@ -290,6 +291,7 @@ export class Workspace {
     }
     migrateAgents(this.state);
     migrateMainChats(this.state.bots, this.state.chats);
+    migrateChatSessions(this.state.chats, this.providers.default.id);
     // Every bot is a Botkin (desktop/looks.mjs). A bot without a look takes the one a phone saved
     // for it in the link's own file, where looks were kept before bots had them.
     migrateLooks(this.state, linkLooks(dir));
@@ -537,11 +539,13 @@ export class Workspace {
   }
   /** Every provider session id this workspace holds, for provider housekeeping. */
   sessionIds() {
-    return this.state.chats.flatMap(conversations).flatMap((c) => [
-      ...(c.established ? [c.sessionId ?? c.id] : []),
-      ...Object.entries(c.members ?? {}).filter(([, m]) => m.established).map(([botId]) => memberSessionId(c, botId)),
-      ...Object.entries(c.helpers ?? {}).filter(([, h]) => h.established).map(([botId]) => helperSessionId(c, botId)),
+    const def = this.providers.default.id;
+    const ids = this.state.chats.flatMap(conversations).flatMap((c) => [
+      ...holderSessions(c, c.sessionId ?? c.id, def).map(([id]) => id),
+      ...Object.entries(c.members ?? {}).flatMap(([botId, m]) => holderSessions(m, memberSessionId(c, botId), def).map(([id]) => id)),
+      ...Object.entries(c.helpers ?? {}).flatMap(([botId, h]) => holderSessions(h, helperSessionId(c, botId), def).map(([id]) => id)),
     ]);
+    return [...new Set(ids)];
   }
   chat(id) {
     const chat = this.state.chats.find((c) => c.id === id);
@@ -1311,11 +1315,14 @@ export class Workspace {
     if (source.established && nativeBoundary && (atEnd || boundary)) {
       try {
         const provider = this.sessionProvider(source);
-        const forked = await provider.forkSession(source.sessionId ?? source.id, { ...(boundary && !atEnd && { toEventId: boundary }) });
+        const sourceRef = source.sessions?.[provider.id]?.ref ?? source.sessionId ?? source.id;
+        const forked = await provider.forkSession(sourceRef, { ...(boundary && !atEnd && { toEventId: boundary }) });
         if (forked) {
-          chat.id = forked;
+          // Keep Botkins' chat.id separate from every harness-native ref so one harness's
+          // minted id never leaks into another harness or into derived member/helper ids.
           chat.established = true;
           chat.sessionProvider = provider.id;
+          chat.sessions = { [provider.id]: { ref: forked, ...(source.sessionFolder !== undefined && { folder: source.sessionFolder }), through: chat.messages.length } };
           native = true;
         }
       } catch (err) {
@@ -1656,22 +1663,75 @@ export class Workspace {
           planExit: () => ({ approved: false }), autoSwitch: () => "no", form: () => ({ action: "cancel" }) },
       });
     }
-    // A changed provider, project or working folder starts a fresh session with the transcript.
-    const moved = chat.restartSession || (chat.established && chat.sessionFolder !== undefined && chat.sessionFolder !== folder);
-    if (moved || (chat.established && this.sessionProvider(chat) !== provider)) {
-      if (chat.established) {
-        await this.sessionProvider(chat).deleteSession(chat.sessionId ?? chat.id).catch(() => {});
+    // Migrate legacy single-provider fields into per-harness records (`sessions[providerId]`).
+    if (!chat.temporary) migrateSessionHolder(chat, this.providers.default.id);
+    const defaultSessionId = chat.sessionId ?? chat.id;
+    let entry = !chat.temporary ? chat.sessions?.[provider.id] : undefined;
+    // A restart (project move, /compact, etc.) invalidates every harness's native session on this chat.
+    if (chat.restartSession) {
+      if (chat.sessions) {
+        for (const [oldPid, oldEntry] of Object.entries(chat.sessions)) {
+          await this.providers.get(oldPid).deleteSession(oldEntry?.ref || defaultSessionId).catch(() => {});
+        }
+        delete chat.sessions;
+      } else if (chat.established) {
+        await this.sessionProvider(chat).deleteSession(defaultSessionId).catch(() => {});
       }
+      entry = undefined;
       chat.established = false;
+      const beforeEnd = chat.main
+        ? (run ? chat.messages.findIndex(m => m.role === "user" && m.runId === run.id) : -1)
+        : (run ? (chat.messages?.length ?? 0) - 1 : (chat.messages?.length ?? 0));
       if (chat.main) {
-        const at = run ? chat.messages.findIndex(m => m.role === "user" && m.runId === run.id) : -1;
-        chat.forkContext = mainTranscript(chat, bot.name, at < 0 ? undefined : at);
-      } else if (moved || !chat.sessionId) {
-        chat.forkContext = forkTranscript((chat.messages ?? []).slice(0, run ? -1 : undefined), bot.name);
+        chat.forkContext = mainTranscript(chat, bot.name, beforeEnd < 0 ? undefined : beforeEnd);
+      } else {
+        chat.forkContext = forkTranscript((chat.messages ?? []).slice(0, Math.max(0, beforeEnd)), bot.name);
       }
       if (chat.sessionId) chat.restartSession = false;
       else delete chat.restartSession;
+    } else if (entry && entry.folder !== undefined && entry.folder !== folder) {
+      // Only this harness's folder moved: delete and restart only this harness's session.
+      await provider.deleteSession(entry.ref || defaultSessionId).catch(() => {});
+      delete chat.sessions[provider.id];
+      entry = undefined;
     }
+    const providerEstablished = !!entry;
+    const providerSessionId = entry?.ref || defaultSessionId;
+    // Was this chat previously established on a DIFFERENT harness?
+    const switchedProvider = !chat.temporary && !!chat.established && this.sessionProvider(chat) !== provider;
+    // Compute the turns this harness hasn't seen yet (full transcript on first switch, or only
+    // the delta since `entry.through` when switching back to a harness with an existing native session).
+    const priorEnd = chat.main
+      ? (() => {
+          const at = run ? chat.messages.findIndex(m => m.role === "user" && m.runId === run.id) : -1;
+          return at < 0 ? (chat.messages?.length ?? 0) : at;
+        })()
+      : (run && !chat.group && !chat.helper ? Math.max(0, (chat.messages?.length ?? 0) - 1) : (chat.messages?.length ?? 0));
+    let catchUpContext = "";
+    if (!chat.temporary && !chat.forkContext && !chat.group && switchedProvider) {
+      if (!providerEstablished) {
+        if (chat.helper && Array.isArray(chat.helperMessages) && chat.helperMessages.length > 0) {
+          catchUpContext = forkTranscript(chat.helperMessages, bot.name);
+        } else if (priorEnd > 0) {
+          catchUpContext = chat.main
+            ? mainTranscript(chat, bot.name, priorEnd)
+            : forkTranscript((chat.messages ?? []).slice(0, priorEnd), bot.name);
+        }
+      } else {
+        // Switching back to a harness that already has a native session: hand off only the turns
+        // that happened on other harnesses since `entry.through`.
+        const seen = typeof entry.through === "number" ? entry.through : (chat.helper ? (chat.helperMessages?.length ?? 0) : priorEnd);
+        if (chat.helper && Array.isArray(chat.helperMessages) && seen < chat.helperMessages.length) {
+          catchUpContext = forkTranscript(chat.helperMessages.slice(seen), bot.name);
+        } else if (!chat.helper && seen < priorEnd) {
+          const start = chat.compacted && chat.compacted.through > seen ? chat.compacted.through : seen;
+          const summary = chat.compacted && chat.compacted.through > seen && chat.compacted.through <= priorEnd ? chat.compacted.text : "";
+          const delta = forkTranscript((chat.messages ?? []).slice(start, priorEnd), bot.name);
+          catchUpContext = [summary, delta].filter(Boolean).join("\n\n");
+        }
+      }
+    }
+    if (catchUpContext) chat.forkContext = catchUpContext;
     const handlers = run && {
       cancelForSteer: () => this.interactions.cancel(chat.id),
       permission: (request) => this.interactions.permission(chat, task, request),
@@ -1718,7 +1778,7 @@ export class Workspace {
       ? await this.plugins.session(bot, chat, { skillsOnly: !copilotPlugins })
       : { directories: [], mcpServers: {}, hooks: undefined };
     // What the session was told when it began, or what it begins with now (desktop/session-prompts.mjs).
-    const prompt = this.sessionPrompt(chat, bot, provider, hosted?.model ?? choice);
+    const prompt = this.sessionPrompt(chat, bot, provider, hosted?.model ?? choice, providerSessionId, providerEstablished);
     // Servers with views (and the Composio tool) are run by Botkins, when they answer; their tools
     // come with Botkins' own below, and the harness doesn't get them (desktop/mcp-apps.mjs). Each
     // stays on the side it began the session on: one that doesn't answer now isn't handed to the
@@ -1738,11 +1798,11 @@ export class Workspace {
     };
     const tools = this.stableTools(prompt, [...this.sessionTools(bot, chat, run, task), ...this.mcpApps.tools(bot, chat, run, task, routed)], access.mcp);
     const session = await provider.openSession({
-      sessionId: chat.sessionId ?? chat.id,
-      established: !!chat.established,
+      sessionId: providerSessionId,
+      established: providerEstablished,
       // While Botkins still has the conversation to tell the session (tellSession), the provider
       // isn't to tell it again from the history.
-      hasReplies: !chat.forkContext && !!chat.messages?.some((m) => m.role === "assistant"),
+      hasReplies: !chat.forkContext && (chat.helper ? !!(chat.helperMessages?.length) : !!chat.messages?.some((m) => m.role === "assistant")),
       temporary: !!chat.temporary,
       folder,
       coding: !!projectFolder,
@@ -1766,16 +1826,29 @@ export class Workspace {
       plugins: [...(access.plugins ? pluginSpec.directories : [])],
       pluginHooks: access.plugins && copilotPlugins ? pluginSpec.hooks : undefined,
       pluginRevision: this.plugins.generation,
-      history: () => chat.compacted ? chat.messages.slice(chat.compacted.through) : chat.messages ?? [],
+      history: () => chat.helper ? (chat.helperMessages ?? []) : (chat.compacted ? chat.messages.slice(chat.compacted.through) : chat.messages ?? []),
       handlers: handlers || null,
     });
-    if (!chat.temporary && (!chat.established || chat.sessionProvider !== provider.id || chat.sessionFolder !== (projectFolder || undefined))) {
+    // For group members, openSession must not pre-populate `through` with chat.messages.length
+    // because catchUp() reads `through` to determine which group messages this harness hasn't seen yet.
+    if (!chat.temporary) {
+      const nextFolder = projectFolder || undefined;
+      const sessions = (chat.sessions ??= {});
+      const prevEntry = sessions[provider.id];
+      const nextThrough = prevEntry?.through ?? (chat.group || chat.helper ? 0 : priorEnd);
+      const entryChanged = !prevEntry || prevEntry.folder !== nextFolder || (entry?.ref && prevEntry.ref !== entry.ref);
+      sessions[provider.id] = {
+        ...(entry?.ref && { ref: entry.ref }),
+        ...(nextFolder !== undefined && { folder: nextFolder }),
+        through: nextThrough,
+      };
+      const metaChanged = !chat.established || chat.sessionProvider !== provider.id || chat.sessionFolder !== nextFolder;
       chat.established = true;
       chat.sessionProvider = provider.id;
-      if (projectFolder || chat.sessionFolder) chat.sessionFolder = projectFolder || undefined;
-      this.save();
+      if (nextFolder || chat.sessionFolder) chat.sessionFolder = nextFolder;
+      if (entryChanged || metaChanged) this.save();
     }
-    return this.tellSession(session, chat, prompt, task);
+    return this.tellSession(session, chat, prompt, task, provider.id);
   }
   /** A session event that says the session was compacted: its next turn begins from the current prompt (session-prompts.mjs). */
   compacted(session, event) {
@@ -1788,8 +1861,8 @@ export class Workspace {
    * profile or the model changed. Returns { key, record, instructions, live, note }: `note` tells
    * the session what changed in the live parts since it was last told, or is "".
    */
-  sessionPrompt(chat, bot, provider, model) {
-    const key = provider.id + ":" + (chat.sessionId ?? chat.id);
+  sessionPrompt(chat, bot, provider, model, sessionId = chat.sessionId ?? chat.id, established = !!chat.established) {
+    const key = provider.id + ":" + sessionId;
     const parts = this.instructionParts(chat, bot);
     const basis = digest([
       parts.fixed, provider.id, model?.model ?? "", model?.source ?? "",
@@ -1797,7 +1870,7 @@ export class Workspace {
       chat.spaceId ? this.turnPeople(chat).people.toSorted() : null,
     ]);
     let record = this.sessionPrompts.get(key);
-    const begins = chat.temporary ? !record : !chat.established;
+    const begins = chat.temporary ? !record : !established;
     if (!record || begins || record.stale || record.basis !== basis)
       record = this.sessionPrompts.set(key, { chatId: chat.id, botId: bot.id, basis, parts: parts.live, told: parts.live, tools: [], routes: {} }, { temporary: !!chat.temporary });
     else this.sessionPrompts.used(key);
@@ -1826,12 +1899,13 @@ export class Workspace {
    * session), before the message, and what changed in its context, after it. Each is told once:
    * it counts as told when the message was answered, and is told again when it wasn't.
    */
-  tellSession(session, chat, prompt, task) {
+  tellSession(session, chat, prompt, task, providerId) {
     const earlier = chat.forkContext || "";
     const { note } = prompt;
     // A compaction rewrites what the session holds, and may leave out what a note told it: the
     // turn that sees one (executeTurn, memberTurn: compacted) has the next begin from the current prompt.
     session.promptKey = prompt.key;
+    session.providerId = providerId;
     if ((!earlier && !note) || typeof session.send !== "function") return session;
     const send = session.send.bind(session);
     let first = true;
@@ -1847,7 +1921,8 @@ export class Workspace {
         this.sessionPrompts.save(prompt.key, prompt.record);
       }
       if (earlier && chat.forkContext === earlier) {
-        delete chat.forkContext;
+        chat.forkContext = undefined;
+        if (Object.getOwnPropertyDescriptor(chat, "forkContext")?.value !== undefined) delete chat.forkContext;
         this.save();
       }
       return result;
@@ -1937,11 +2012,12 @@ export class Workspace {
     for (const provider of [...this.providers.list, ...this.providers.harnesses]) provider.releaseSessions({ busy: true }).catch(() => {});
   }
   releaseBotSessions(botId, { busy = false } = {}) {
+    const def = this.providers.default.id;
     for (const chat of this.state.chats.flatMap(conversations)) {
       const sessions = [
-        ...(chat.botId === botId && !isGroup(chat) && chat.established ? [[chat.sessionId ?? chat.id, chat.sessionProvider]] : []),
-        ...(chat.members?.[botId]?.established ? [[memberSessionId(chat, botId), chat.members[botId].sessionProvider]] : []),
-        ...(chat.helpers?.[botId]?.established ? [[helperSessionId(chat, botId), chat.helpers[botId].sessionProvider]] : []),
+        ...(chat.botId === botId && !isGroup(chat) ? holderSessions(chat, chat.sessionId ?? chat.id, def) : []),
+        ...(chat.members?.[botId] ? holderSessions(chat.members[botId], memberSessionId(chat, botId), def) : []),
+        ...(chat.helpers?.[botId] ? holderSessions(chat.helpers[botId], helperSessionId(chat, botId), def) : []),
       ];
       for (const [id, provider] of sessions) this.providers.get(provider).releaseSession(id, { busy }).catch(() => {});
     }
@@ -2356,6 +2432,9 @@ export class Workspace {
         if (task.stopped || this.closing) return true;
         text = reply?.text || task.stream;
         this.commitAssistantReply(chat, run, task, text, bot);
+        if (session?.providerId && chat.sessions?.[session.providerId]) {
+          chat.sessions[session.providerId].through = chat.messages.length;
+        }
         this.save();
       }
     } finally {
@@ -2366,6 +2445,12 @@ export class Workspace {
   async memberTurn(chat, bot, members, run, task) {
     chat.members ??= {};
     const member = (chat.members[bot.id] ??= { seen: 0, established: false });
+    if (member.established && !member.sessions) {
+      // Legacy group member: initialize per-harness `through` from `member.seen` so switching
+      // harnesses hands off everything the target harness hasn't seen yet.
+      const legacyProvider = member.sessionProvider ?? this.providers.default.id;
+      member.sessions = { [legacyProvider]: { ...(member.sessionFolder !== undefined && { folder: member.sessionFolder }), through: member.seen ?? 0 } };
+    }
     // The member's view of the chat: the group's id for approvals and requests, its own session,
     // model and instructions. Writes to `established` and `approvals` reach the real records.
     const view = {
@@ -2384,6 +2469,13 @@ export class Workspace {
       set restartSession(value) { member.restartSession = value; },
       get sessionFolder() { return member.sessionFolder; },
       set sessionFolder(value) { member.sessionFolder = value; },
+      get sessions() { return member.sessions; },
+      set sessions(value) { member.sessions = value; },
+      get forkContext() { return member.forkContext; },
+      set forkContext(value) {
+        if (value === undefined) delete member.forkContext;
+        else member.forkContext = value;
+      },
       get established() {
         return member.established;
       },
@@ -2452,9 +2544,18 @@ export class Workspace {
       });
       const handoff = task.recovering ? "" : await this.todoHandoff(session, chat);
       if (task.stopped || this.closing) return "";
-      const { text } = await this.sendTurn(session, run, task, bot, { prompt: catchUp(chat, bot, this.state.bots, this.speakerNamer(chat)) + handoff });
+      const memberProviderId = session.providerId ?? member.sessionProvider;
+      const memberSeenBefore = member.sessions?.[memberProviderId]?.through ?? 0;
+      // When this harness has seen fewer turns than `member.seen`, pass `memberSeenBefore` so it
+      // receives the member's own prior replies on other harnesses too. When it is up to date with
+      // `member.seen`, omit `since` so catchUp preserves its standard filter.
+      const catchUpText = catchUp(chat, bot, this.state.bots, this.speakerNamer(chat), memberSeenBefore < (member.seen ?? 0) ? memberSeenBefore : undefined);
+      const { text } = await this.sendTurn(session, run, task, bot, { prompt: catchUpText + handoff });
       if (task.stopped) return "";
       if (!text && task.reactedBy !== bot.id && !botSteps(run.steps).length && !task.stream?.trim()) throw new Error(bot.name + " finished without a reply.");
+      if (memberProviderId && member.sessions?.[memberProviderId]) {
+        member.sessions[memberProviderId].through = chat.messages.length + (text ? 1 : 0);
+      }
       return text;
     } catch (error) {
       failed = true;
@@ -2719,6 +2820,9 @@ export class Workspace {
           throw new Error(bot.name + " finished without a reply.");
         const said = text || task.stream;
         if (!noOutput) this.commitAssistantReply(chat, run, task, said, bot);
+        if (session?.providerId && chat.sessions?.[session.providerId]) {
+          chat.sessions[session.providerId].through = chat.messages.length;
+        }
         // A plan with open steps, or a reply that stopped short of its next step, gets another turn in this session (bounded).
         if (!noOutput && this.keepsMoving(chat, run, check, routine) && (await this.keepMoving(session, chat, bot, run, task, said))) return;
       } else {
@@ -2794,6 +2898,9 @@ export class Workspace {
           task.stream = "";
           if (isSilent(recovered)) Object.assign(run, { noOutput: true, silent: true });
           else if (!noOutput) this.commitAssistantReply(chat, run, task, recovered, bot);
+          if (session?.providerId && chat.sessions?.[session.providerId]) {
+            chat.sessions[session.providerId].through = chat.messages.length;
+          }
           run.status = "Completed";
           run.detail = "";
           return;

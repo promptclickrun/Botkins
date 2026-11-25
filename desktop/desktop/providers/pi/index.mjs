@@ -24,7 +24,7 @@ import { fileURLToPath } from "node:url";
 import { ModelProvider, ProviderSession, usageData } from "../provider.mjs";
 import { cliEnv, findBinary, run, versionOf } from "../cli.mjs";
 import { buildInventory, resolvePrompt } from "../commands.mjs";
-import { SessionStore, serversWithTokens, transcriptContext, uuidFor } from "../sessions.mjs";
+import { SessionStore, resumeOrRecover, serversWithTokens, uuidFor } from "../sessions.mjs";
 import { skillChoices, skillSupport } from "../skills.mjs";
 import { displayValue } from "../../display.mjs";
 import { PLAN_INSTRUCTIONS, updatePlanTool } from "./plan.mjs";
@@ -361,11 +361,24 @@ class PiSession extends ProviderSession {
     this.bridge ??= await provider.bridge?.open(tools, spec.temporary ? {} : { key: provider.id + ":" + spec.sessionId });
     this.bridge?.set(tools);
     const known = provider.sessions.get(spec.sessionId);
-    // A conversation the harness doesn't hold (new to it, or its folder moved) goes on from Botkins' transcript.
-    if (spec.established && spec.hasReplies && (!known || known.folder !== spec.folder)) this.lost = transcriptContext(spec);
+    const folderChanged = !!(known && known.folder !== spec.folder);
     const described = await this.describe();
-    this.live = await provider.process(this, described);
-    if (!spec.temporary && !known) provider.sessions.set(spec.sessionId, { ref: this.live.ref, folder: spec.folder });
+    const { value: live, recovered, lost } = await resumeOrRecover({
+      spec,
+      hasRef: !!(known && !folderChanged),
+      resume: () => provider.process(this, described, { ref: known.ref }),
+      onMissing: () => {
+        if (!spec.temporary) provider.sessions.delete(spec.sessionId);
+      },
+      create: () => provider.process(this, described, { fresh: true }),
+    });
+    this.live = live;
+    // Only inject transcript context when the workspace believed this harness already held the session
+    // (or when resuming a stale ref failed). A brand-new session on a fresh chat needs no transcript.
+    if (recovered && lost && (spec.established || known)) this.lost = lost;
+    if (!spec.temporary && (!known || recovered || known.ref !== this.live.ref || known.folder !== spec.folder)) {
+      provider.sessions.set(spec.sessionId, { ref: this.live.ref, folder: spec.folder });
+    }
     return this.live;
   }
   /**
@@ -847,7 +860,7 @@ export class PiProvider extends ModelProvider {
     ];
   }
   /** The harness process for a session, started when it has none or when its startup inputs changed. */
-  async process(session, described) {
+  async process(session, described, { ref: explicitRef, fresh = false } = {}) {
     const { spec } = session;
     const target = session.target();
     // Both harnesses take connections and package state at start; OMP also takes its isolated MCP config.
@@ -856,7 +869,7 @@ export class PiProvider extends ModelProvider {
     const retention = spec.cacheRetention === "long" ? "long" : "short";
     const key = hash([spec.folder, described.providers, spec.temporary, packages, retention, ...(this.runtime === OMP_ID ? [described.servers] : [])]);
     let live = this.live.get(spec.sessionId);
-    if (live && (live.key !== key || live.rpc.closed)) {
+    if (live && (fresh || live.key !== key || live.rpc.closed)) {
       this.live.delete(spec.sessionId);
       await live.rpc.close().catch(() => {});
       live = null;
@@ -873,8 +886,12 @@ export class PiProvider extends ModelProvider {
     }
     const file = await this.locate();
     if (!file) throw new Error(this.name + " isn't installed. Install it in Settings › Harness, or choose another harness.");
-    const remembered = this.sessions.get(spec.sessionId)?.ref;
-    const ref = this.runtime === OMP_ID ? remembered : remembered ?? piSessionId(spec.sessionId);
+    const remembered = fresh ? undefined : (explicitRef ?? this.sessions.get(spec.sessionId)?.ref);
+    const ref = this.runtime === OMP_ID
+      ? remembered
+      : (fresh && explicitRef === undefined && this.sessions.get(spec.sessionId) === undefined && spec.established
+          ? piSessionId(spec.sessionId + ":" + randomBytes(4).toString("hex"))
+          : remembered ?? piSessionId(spec.sessionId));
     const dir = join(this.dataDir, "run");
     // Files left by processes of an earlier run of Botkins (they hold session secrets) go first.
     if (!this.runCleared) {

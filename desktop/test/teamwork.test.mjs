@@ -88,7 +88,9 @@ test("asking a teammate runs it in its own session and returns its reply to the 
     { botId: "scout", fromBotId: "pip", message: "Find sources on tide tables", expecting: "three links", status: "answered", reply: "Scout found 3 sources for: Find sources on tide tables" },
   );
   assert.ok(ask.finished >= ask.started);
-  assert.deepEqual(chat.helpers.scout, { established: true, sessionProvider: "copilot" });
+  assert.equal(chat.helpers.scout.established, true);
+  assert.equal(chat.helpers.scout.sessionProvider, "copilot");
+  assert.deepEqual(chat.helpers.scout.sessions, { copilot: { through: 2 } });
   assert.equal(ws.state.runs[0].status, "Completed");
   // A second turn asks the same teammate again: its session for this chat continues.
   await ws.send(id, "And tide charts");

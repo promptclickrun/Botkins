@@ -24,7 +24,7 @@ import { sendAnswers, startAnswers } from "./answers";
 import { ALL_CARD, cardOver } from "../../link-host/cards.mjs";
 import { botsWithWork, hasWork, MAX_CARDS, phoneCard } from "./cards";
 import { answerPendingAsks } from "./device";
-import { api, attempt, chatOnScreen, syncForPush, onChatOnScreen, restIfAway, switchComputer, tellOthers } from "./link";
+import { api, attempt, chatOnScreen, holdBackgroundLink, syncForPush, onChatOnScreen, restIfAway, switchComputer, tellOthers, wakeForNotification } from "./link";
 import { useApp } from "./store";
 import { createRegistrar } from "./pushRegistrar";
 
@@ -267,6 +267,8 @@ function takeAlert(alert: { bot: string; run: string }, serverId?: string) {
 const ANSWERED_THERE = /^(approve|remember|deny|reply|choice\.\d)$/;
 function openFrom(response: import("expo-notifications").NotificationResponse | null) {
   if (!response || !native) return;
+  // Reopen the link immediately on notification tap (even before AppState flips to "active").
+  wakeForNotification();
   const chatId = chatOf(response);
   const host = hostOf(response);
   const kind = kindOf(response);
@@ -564,6 +566,7 @@ if (native) {
     native.TaskManager.defineTask(TASK, async () => {
       // Woken in the background, the link is at rest (or the app was just started): follow until one
       // sync has come back, so what follows reads the computer's state now, not what was held before.
+      const releaseHold = holdBackgroundLink("push");
       try {
         await syncForPush(20_000);
         // The same wake brings a chat's card up to date (a turn ended while the app was closed) and
@@ -573,6 +576,7 @@ if (native) {
         const answered = await answerPendingAsks().catch(() => 0);
         return answered > 0 ? native.Notifications.BackgroundNotificationTaskResult.NewData : native.Notifications.BackgroundNotificationTaskResult.NoData;
       } finally {
+        releaseHold();
         // Back to rest: a phone in the background does no work for the link.
         restIfAway();
       }

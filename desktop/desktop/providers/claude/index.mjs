@@ -18,7 +18,7 @@ import { dirname, join } from "node:path";
 import { ModelProvider, ProviderSession, usageData } from "../provider.mjs";
 import { cliEnv, findBinary, run, versionOf } from "../cli.mjs";
 import { buildInventory, resolvePrompt } from "../commands.mjs";
-import { SessionStore, mcpText, missingConversation, serversWithTokens, transcriptContext, uuidFor } from "../sessions.mjs";
+import { SessionStore, mcpText, missingConversation, resumeOrRecover, serversWithTokens, transcriptContext, uuidFor } from "../sessions.mjs";
 import { skillChoices, skillSupport } from "../skills.mjs";
 import { displayValue } from "../../display.mjs";
 import { env } from "../../home.mjs";
@@ -212,88 +212,106 @@ class ClaudeSession extends ProviderSession {
     const { provider, spec } = this;
     const { query } = await provider.sdk();
     this.bridge ??= await provider.bridge.open(spec.handlers ? [...spec.tools, ...this.skills.tools] : []);
-    const { record, exists } = await this.target();
-    const abort = new AbortController();
-    const turn = (this.turn = { text: [], streamed: 0, seen: 0, any: false, live: null, last: null, abort, userId: randomUUID(), failure: "", stderr: "", context: 0, jobs: new Map(), level: null });
-    let release;
-    const held = new Promise((resolve) => (release = resolve));
-    // A conversation Claude Code doesn't hold continues from Botkins' own transcript, told once
-    // with this message: in the system prompt it would be sent on every later turn too.
-    const lost = !exists && spec.established && spec.hasReplies ? transcriptContext(spec) : "";
-    const prompt =
-      (lost ? lost + "\n\n" : "") +
-      message.prompt + ((message.attachments ?? []).length ? "\n\nAttached:\n" + message.attachments.map((a) => "- " + a.path + (a.kind === "directory" ? " (folder)" : "")).join("\n") : "");
-    // Approvals need the channel to Claude Code kept open, so the message goes in as a stream that
-    // stays open until the reply is complete.
-    const input = (async function* () {
-      yield { type: "user", uuid: turn.userId, session_id: "", parent_tool_use_id: null, message: { role: "user", content: prompt } };
-      await held;
-    })();
-    const options = await this.options({
-      abortController: abort,
-      systemPrompt: {
-        type: "preset",
-        preset: "claude_code",
-        append: spec.instructions + this.skills.instructions + (spec.coding ? projectInstructions(spec.folder) : "") + (spec.context ?? ""),
-      },
-      ...(exists ? { resume: record.ref } : { sessionId: record.ref }),
-      ...(spec.handlers && {
-        canUseTool: (toolName, toolInput, hints) => this.decide(toolName, toolInput, hints),
-        onElicitation: async (request) => {
-          const reply = await spec.handlers.form({ message: request.message, requestedSchema: request.requestedSchema, mode: request.mode === "url" ? "url" : "form", url: request.url });
-          return reply?.action === "accept" ? { action: "accept", content: reply.content ?? {} } : { action: "cancel" };
+    const { record: initialRecord, exists: initialExists } = await this.target();
+    const runTurn = async (record, exists, lost) => {
+      const abort = new AbortController();
+      const turn = (this.turn = { text: [], streamed: 0, seen: 0, any: false, live: null, last: null, abort, userId: randomUUID(), failure: "", stderr: "", context: 0, jobs: new Map(), level: null });
+      let release;
+      const held = new Promise((resolve) => (release = resolve));
+      const prompt =
+        (lost ? lost + "\n\n" : "") +
+        message.prompt + ((message.attachments ?? []).length ? "\n\nAttached:\n" + message.attachments.map((a) => "- " + a.path + (a.kind === "directory" ? " (folder)" : "")).join("\n") : "");
+      // Approvals need the channel to Claude Code kept open, so the message goes in as a stream that
+      // stays open until the reply is complete.
+      const input = (async function* () {
+        yield { type: "user", uuid: turn.userId, session_id: "", parent_tool_use_id: null, message: { role: "user", content: prompt } };
+        await held;
+      })();
+      const options = await this.options({
+        abortController: abort,
+        systemPrompt: {
+          type: "preset",
+          preset: "claude_code",
+          append: spec.instructions + this.skills.instructions + (spec.coding ? projectInstructions(spec.folder) : "") + (spec.context ?? ""),
         },
-      }),
-      stderr: (text) => (turn.stderr = (turn.stderr + text).slice(-4000)),
-    });
-    let timer;
-    if (timeoutMs > 0) {
-      timer = setTimeout(() => {
-        turn.timeout = Object.assign(new Error("Claude didn't finish in time."), {code:"BOTKINS_TURN_TIMEOUT"});
-        abort.abort();
-      }, timeoutMs);
-      timer.unref?.();
-    }
-    let result;
-    const q = (turn.query = query({ prompt: input, options }));
-    try {
-      this.emit("user.message", {}, turn.userId);
-      // Read by hand: leaving a `for await` early would wait for Claude Code to exit before the reply is returned.
-      const events = q[Symbol.asyncIterator]();
-      for (;;) {
-        const { value: event, done } = await events.next();
-        if (done) break;
-        this.received(event);
-        if (event.type === "result") {
-          result = event;
-          break;
-        }
+        ...(exists ? { resume: record.ref } : { sessionId: record.ref }),
+        ...(spec.handlers && {
+          canUseTool: (toolName, toolInput, hints) => this.decide(toolName, toolInput, hints),
+          onElicitation: async (request) => {
+            const reply = await spec.handlers.form({ message: request.message, requestedSchema: request.requestedSchema, mode: request.mode === "url" ? "url" : "form", url: request.url });
+            return reply?.action === "accept" ? { action: "accept", content: reply.content ?? {} } : { action: "cancel" };
+          },
+        }),
+        stderr: (text) => (turn.stderr = (turn.stderr + text).slice(-4000)),
+      });
+      let timer;
+      if (timeoutMs > 0) {
+        timer = setTimeout(() => {
+          turn.timeout = Object.assign(new Error("Claude didn't finish in time."), {code:"BOTKINS_TURN_TIMEOUT"});
+          abort.abort();
+        }, timeoutMs);
+        timer.unref?.();
       }
-    } catch (error) {
-      if (turn.timeout) throw turn.timeout;
-      if (!turn.stopped) throw new Error(turn.failure || this.problem(error, turn.stderr));
-    } finally {
-      clearTimeout(timer);
-      release();
-      if (!turn.stopped) this.settleBackground(turn);
+      let result;
+      const q = (turn.query = query({ prompt: input, options }));
       try {
-        q.close?.();
-      } catch {
-        // Already closed.
+        this.emit("user.message", {}, turn.userId);
+        // Read by hand: leaving a `for await` early would wait for Claude Code to exit before the reply is returned.
+        const events = q[Symbol.asyncIterator]();
+        for (;;) {
+          const { value: event, done } = await events.next();
+          if (done) break;
+          this.received(event);
+          if (event.type === "result") {
+            result = event;
+            break;
+          }
+        }
+      } catch (error) {
+        if (turn.timeout) throw turn.timeout;
+        if (!turn.stopped) throw new Error(turn.failure || this.problem(error, turn.stderr));
+      } finally {
+        clearTimeout(timer);
+        release();
+        if (!turn.stopped) this.settleBackground(turn);
+        try {
+          q.close?.();
+        } catch {
+          // Already closed.
+        }
+        this.turn = null;
       }
-      this.turn = null;
-    }
+      const text = turn.text.map((t) => t.trim()).filter(Boolean).join("\n\n");
+      if (!turn.stopped && !turn.timeout && result && (result.subtype !== "success" || (result.is_error && !text))) {
+        const message = turn.failure || (result.errors ?? []).join(" ") || (typeof result.result === "string" && result.result) || "Claude couldn't finish this reply.";
+        throw new Error(message);
+      }
+      return { record, turn, result, text };
+    };
+    const { value: ran } = await resumeOrRecover({
+      spec,
+      hasRef: initialExists,
+      resume: () => runTurn(initialRecord, true, ""),
+      onMissing: () => {
+        if (!spec.temporary) provider.sessions.delete(this.id);
+      },
+      create: async () => {
+        const freshRecord = initialExists
+          ? { ref: randomUUID(), dir: spec.folder, turns: [] }
+          : initialRecord;
+        const lost = (initialExists || spec.established) && spec.hasReplies ? transcriptContext(spec) : "";
+        return runTurn(freshRecord, false, lost);
+      },
+    });
+    const { record, turn, result, text } = ran;
     if (!spec.temporary && (result || turn.last)) {
       const turns = [...(provider.sessions.get(this.id)?.turns ?? record.turns ?? []), { user: turn.userId, last: turn.last }].slice(-400);
       provider.sessions.set(this.id, { ref: record.ref, dir: spec.folder, turns });
     }
-    const text = turn.text.map((t) => t.trim()).filter(Boolean).join("\n\n");
     if (turn.stopped) return { text };
     if (turn.timeout) throw turn.timeout;
     if (!result) throw new Error(turn.failure || "Claude stopped before it finished this reply.");
     this.report(result, turn);
-    if (result.subtype !== "success" || (result.is_error && !text))
-      throw new Error(turn.failure || (result.errors ?? []).join(" ") || (typeof result.result === "string" && result.result) || "Claude couldn't finish this reply.");
     return { text: text || (typeof result.result === "string" ? result.result.trim() : "") };
   }
   /** A plain sentence for a failure of the Claude Code process. */
