@@ -156,3 +156,36 @@ test("waiting run summaries go with whatever comes next, in order", () => {
   batcher.flush();
   assert.deepEqual(commits[3], { runs: ["last"] });
 });
+
+test("a burst from a faster computer paints at most four times a second and completion clears the pending text", (t) => {
+  t.mock.timers.enable({ apis: ["Date", "setTimeout"], now: 10_000 });
+  const commits: Record<string, unknown>[] = [];
+  const batch = createPartsBatcher((parts) => commits.push(parts));
+  for (let n = 1; n <= 50; n++) {
+    batch.push({ "text:c": { stream: "x".repeat(n) } });
+    t.mock.timers.tick(20);
+  }
+  assert.equal(commits.length, 4, "fifty incoming bodies share four paints");
+  batch.push({ "text:c": { stream: "last" } });
+  batch.push({ "chat:c": { messages: ["finished"] }, "text:c": null });
+  t.mock.timers.tick(1000);
+  assert.deepEqual(commits.at(-1), { "chat:c": { messages: ["finished"] }, "text:c": null });
+  assert.equal(commits.length, 5);
+});
+
+test("a summary timer never holds the start, end or removal of a run", () => {
+  const { commits, clock, batcher } = paced();
+  const run = { id: "r", status: "Working", stepCount: 1 };
+  batcher.push({ runs: [run] });
+  clock.now += 20;
+  batcher.push({ runs: [{ ...run, stepCount: 2 }] });
+  assert.equal(commits.length, 1);
+  const ended = { ...run, status: "Completed", stepCount: 2 };
+  batcher.push({ runs: [ended] });
+  assert.deepEqual(commits.at(-1), { runs: [ended] });
+  const another = { ...run, id: "new" };
+  batcher.push({ runs: [another, ended] });
+  assert.deepEqual(commits.at(-1), { runs: [another, ended] });
+  batcher.push({ runs: [] });
+  assert.deepEqual(commits.at(-1), { runs: [] });
+});

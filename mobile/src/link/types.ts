@@ -1153,7 +1153,8 @@ export type UsageReport = {
  * "project-clone-v1" (clone from GitHub on the computer),
  * "project-artifacts-v1" (artifacts attached to a project: `Project.artifacts` and three calls).
  * "sync-push-v1" (sealed sync updates on an open relay request),
- * "stream-appends-v1" (boolean live indicators and cursor-based reply and thinking text for watched chats).
+ * "stream-appends-v1" (boolean indicators and cursor-based text), "text-chunks-v1" (word chunks), and
+ * "text-watch-v1" (restrict text to the conversations that display replies).
  * "run-summary-deltas-v1" (incremental visible run summaries with runSummaries: "delta").
  * "run-step-deltas-v1" (incremental working-run steps for a client that requests light steps and runSteps: "delta").
  * "step-details-v1" (steps without their long input and output for a client that asks; `link.step` reads one).

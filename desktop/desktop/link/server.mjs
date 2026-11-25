@@ -70,6 +70,7 @@ const RELAY_POLL_MS = 250;
 const FOLLOW_PUMP_MS = 100;
 const FOLLOW_QUIET_MS = 25_000;
 const FOLLOW_LIFE_MS = 4 * 60_000;
+const SUMMARY_PUMP_MS = 1000;
 const TEXT_PUMP_MS = 200; // Tuning value for text-only updates to a following phone.
 const MAX_WATCH = 4;
 const PROFILE_ORIGIN = "https://profile.botkins.app";
@@ -82,7 +83,7 @@ const PROFILE_REQUEST_TIMEOUT = 10_000;
 // "maintenance-v1": this copy lets a phone clear the cache and send the computer's own test notification.
 /** The link tells people of notes and changes in their spaces (space-alerts.mjs). Named only while the app has spaces. */
 const SPACE_ALERTS_CAPABILITY = "space-alerts-v1";
-const CAPABILITIES = ["sync-push-v1", "credentials-v1", "screen-v1", "prs-v1", "uploads-v1", "relay-v1", "push-v1", "device-v1", "voice-v1", "devices-v1", "device-person-v1", "maintenance-v1", "teams-v1", "stream-appends-v1", "reasoning-appends-v1", "separate-thinking-v1", "text-streaming-off-v1", "text-chunks-v1", "step-details-v1", "run-step-deltas-v1", "run-summary-deltas-v1", "team-people-v1", "chat-sections-v1", "chat-typing-v1", "activity-bots-v1", "activity-all-v1", "member-rename-v1", "profile-v1", "people-avatars-v1", GADGET_CAPABILITY, GADGET_SETTINGS_CAPABILITY, "pr-panel-v1"];
+const CAPABILITIES = ["sync-push-v1", "credentials-v1", "screen-v1", "prs-v1", "uploads-v1", "relay-v1", "push-v1", "device-v1", "voice-v1", "devices-v1", "device-person-v1", "maintenance-v1", "teams-v1", "stream-appends-v1", "reasoning-appends-v1", "separate-thinking-v1", "text-streaming-off-v1", "text-chunks-v1", "text-watch-v1", "step-details-v1", "run-step-deltas-v1", "run-summary-deltas-v1", "team-people-v1", "chat-sections-v1", "chat-typing-v1", "activity-bots-v1", "activity-all-v1", "member-rename-v1", "profile-v1", "people-avatars-v1", GADGET_CAPABILITY, GADGET_SETTINGS_CAPABILITY, "pr-panel-v1"];
 /** A custom view (an html block): the page a bot wrote and its data, at the sizes the desktop app keeps them to. */
 /** Calls that make a chat and answer its id. */
 const MAKES_CHAT = new Set(["createChat", "createGroupChat", "forkChat", "startProjectChat"]);
@@ -2473,7 +2474,7 @@ export class LinkHost extends EventEmitter {
   }
   /** Rebuilds the parts when something changed, or when a chat is watched for the first time. */
   refresh(watching, reasoningWatch = []) {
-    if (!this.dirty && watching.every((id) => this.parts.has("chat:" + id)) && reasoningWatch.every((id) => this.reasoningParts.has(id))) return;
+    if (!this.dirty && watching.every((id) => this.parts.has("run:" + id)) && reasoningWatch.every((id) => this.reasoningParts.has(id))) return;
     this.refreshing = true;
     try {
       this.rebuild(watching, reasoningWatch);
@@ -2528,12 +2529,14 @@ export class LinkHost extends EventEmitter {
     next.voice = this.voice.settings();
     const ids = new Set([...watching, ...reasoningWatch]);
     const wantedReasoning = new Set(reasoningWatch);
+    const keptPages = new Set();
     // A following phone is briefly between polls while its answer is in flight. Another phone
     // opening a different chat must not discard its versions or force a text replay.
     const now = Date.now();
     for (const session of this.sessions.values()) {
       if (session.watchUntil > now) {
         for (const id of session.watching) ids.add(id);
+        if (session.keepPage) keptPages.add(session.keepPage);
         for (const id of session.reasoningWatch ?? []) { ids.add(id); wantedReasoning.add(id); }
       }
     }
@@ -2541,7 +2544,10 @@ export class LinkHost extends EventEmitter {
       for (const id of waiter.watching) ids.add(id);
       for (const id of waiter.reasoningWatch ?? []) { ids.add(id); wantedReasoning.add(id); }
     }
-    const runs = runsByChat(state, [...ids]);
+    const runs = runsByChat(state, [...ids, ...keptPages]);
+    for (const id of keptPages) {
+      if (!ids.has(id)) next["chat:" + id] = chatPart(state, id, runs.get(id));
+    }
     for (const id of ids) {
       next["chat:" + id] = chatPart(state, id, runs.get(id));
       next["run:" + id] = runPart(state, id, runs.get(id));
@@ -2695,10 +2701,16 @@ export class LinkHost extends EventEmitter {
     const loose = chunks && session.heldSince !== undefined && now - session.heldSince >= this.chunkTiming.holdMax;
     let held = false;
     let textOnly = true;
+    let progress = false;
+    let wordsIn = Infinity;
     let live = false; // reply text goes out in this answer
     let first = false; // and it is the first of a reply: the phone holds none of it yet
     const parts = [];
     const versions = {};
+    // Keep the phone's actual acknowledgement while its page is out of view. If the page
+    // changes, the normal authorized view sends the new version when the person returns.
+    const kept = "chat:" + session.keepPage;
+    if (session.keepPage && Object.hasOwn(known, kept)) versions[kept] = known[kept];
     const deliveredRuns = [];
     const deliveredReasoning = [];
     const deliveredText = [];
@@ -2708,7 +2720,6 @@ export class LinkHost extends EventEmitter {
       versions[name] = part.v;
       if (known[name] === part.v) continue;
       const legacyTextOnly = name === "live" && !quiet && known.live > (values.get("quietLive")?.v ?? Infinity);
-      if (!legacyTextOnly) textOnly = false;
       // A chat's page and its run with light steps ("step-details-v1"), made once for each version.
       const light = session.light && (name.startsWith("chat:") || name.startsWith("run:"));
       const summaries = name === "runs";
@@ -2717,8 +2728,10 @@ export class LinkHost extends EventEmitter {
       if (bases) {
         const delivery = runRowsFor(part, summaries, bases.get(name), known[name]);
         deliveredRuns.push([bases, name, delivery.snapshot]);
+        if (summaries) progress = delivery.progress === true && runBases.paceSummaries;
         json = delivery.json;
       } else json = light ? (part.light ??= JSON.stringify(lightPart(JSON.parse(part.json)))) : part.json;
+      if (!legacyTextOnly && !(summaries && progress)) textOnly = false;
       parts.push(JSON.stringify(name) + ":" + json);
     }
     for (const chat of partWatching) {
@@ -2726,7 +2739,7 @@ export class LinkHost extends EventEmitter {
       const followsReasoning = session.reasoningWatch?.includes(chat);
       if (cursors && watching.includes(chat)) {
         const cursor = Object.hasOwn(cursors, chat) ? cursors[chat] : null;
-        const raw = shown && !session.noText ? this.texts.get(chat) : undefined;
+        const raw = shown && !session.noText && (!session.textWatch || session.textWatch.has(chat)) ? this.texts.get(chat) : undefined;
         const text = session.separateThinking && !followsReasoning ? raw?.reply : (followsReasoning && raw?.projected ? raw.projected : raw);
         let delta = textDelta(text, cursor);
         if (chunks && delta) {
@@ -2734,8 +2747,16 @@ export class LinkHost extends EventEmitter {
           delta = cut.delta;
           held ||= cut.held;
           if (delta?.stream.add) {
-            live = true;
-            first ||= delta.stream.from === 0;
+            // A structural change can go at once without also repainting a growing paragraph.
+            // Leave the cursor where it is until the next words are actually sent.
+            const wait = (session.lastWords ?? -Infinity) + this.chunkTiming.live - now;
+            if (throttle && delta.stream.from > 0 && wait > 0) {
+              wordsIn = wait;
+              delta = undefined;
+            } else {
+              live = true;
+              first ||= delta.stream.from === 0;
+            }
           }
         }
         if (text?.preview) {
@@ -2767,19 +2788,28 @@ export class LinkHost extends EventEmitter {
       }
     }
     if (held) session.heldSince ??= now;
-    else delete session.heldSince;
-    // Held text with nothing to send yet: look again when it has waited long enough.
-    if (!parts.length) return held && (throttle || advance) ? Math.max(1, session.heldSince + this.chunkTiming.holdMax - now) : null;
-    // The first words of a reply never wait for the clock: time to first text is what a phone shows most plainly.
-    const remaining = (session.lastNews ?? 0) + (chunks && textOnly ? (live ? this.chunkTiming.live : this.chunkTiming.every) : interval || TEXT_PUMP_MS) - now;
-    if (throttle && (textOnly || interval) && remaining > 0 && !(first && textOnly)) return remaining;
+    else if (!Number.isFinite(wordsIn)) delete session.heldSince;
+    const pending = Math.min(wordsIn, held ? Math.max(1, session.heldSince + this.chunkTiming.holdMax - now) : Infinity);
+    if (!parts.length) return (throttle || advance) && Number.isFinite(pending) ? pending : null;
+    // Keep the long poll open for an approval, a send or the watched chat. Only progress on
+    // existing runs waits here, and the next change can wake the same waiter before its timer.
+    if (progress && parts.length === 1) {
+      const remaining = Math.max((session.lastProgress ?? -Infinity) + SUMMARY_PUMP_MS, throttle && interval ? (session.lastNews ?? 0) + interval : 0) - now;
+      if (remaining > 0) return Math.min(remaining, pending);
+    } else {
+      const gap = chunks && textOnly ? (live ? this.chunkTiming.live : this.chunkTiming.every) : interval || TEXT_PUMP_MS;
+      const last = chunks && live && textOnly ? session.lastWords : session.lastNews;
+      const remaining = (last ?? 0) + gap - now;
+      if (throttle && (textOnly || interval) && remaining > 0 && !(first && textOnly)) return Math.min(remaining, pending);
+    }
+    if (progress) session.lastProgress = now;
+    if (live) session.lastWords = now;
     for (const [bases, name, sent] of deliveredRuns) {
       if (sent) bases.set(name, sent);
       else bases.delete(name);
     }
     for (const [chat, sent] of deliveredReasoning) session.reasoningSent.set(chat, sent);
     advance?.(versions, deliveredText);
-    if (held) session.heldSince = now;
     session.lastNews = Date.now();
     session.watchUntil = session.lastNews + MAX_WAIT;
     return new Json('{"epoch":' + JSON.stringify(this.epoch) + ',"v":' + JSON.stringify(versions) + ',"parts":{' + parts.join(",") + "}}");
@@ -2840,7 +2870,13 @@ export class LinkHost extends EventEmitter {
     const steps = forGadget ? undefined : request.steps;
     const reasoningWatch = forGadget ? undefined : request.reasoningWatch;
     const watching = (Array.isArray(watch) ? watch : []).filter((id) => typeof id === "string").slice(0, MAX_WATCH);
+    // A hidden chat can keep one page warm without receiving text, reasoning or step updates.
+    const keepPage = typeof request.keepPage === "string" &&
+      (session.watching?.includes(request.keepPage) || request.keepPage === session.keepPage) ? request.keepPage : undefined;
+    if (keepPage !== session.keepPage) this.dirty = true;
+    session.keepPage = keepPage;
     session.watching = watching;
+    session.textWatch = Array.isArray(request.textWatch) ? new Set(request.textWatch.slice(0, MAX_WATCH)) : null;
     session.noText = text === false;
     session.textMode = text === false ? "whole" : text === "chunks" ? "chunks" : "live";
     const previousReasoningWatch = session.reasoningWatch ?? [];
@@ -2865,7 +2901,7 @@ export class LinkHost extends EventEmitter {
     if (!forGadget && request.runSummaries === "delta") session.runSummaryBases ??= new Map();
     else delete session.runSummaryBases;
     // Capture the negotiation for this request. A concurrent full-snapshot reader cannot opt in an older wait.
-    const runBases = { steps: session.runStepBases, summaries: session.runSummaryBases };
+    const runBases = { steps: session.runStepBases, summaries: session.runSummaryBases, paceSummaries: !!push || Number(wait) > 0 };
     session.watchUntil = Date.now() + MAX_WAIT;
     let known = epoch === this.epoch && have && typeof have === "object" ? have : {};
     this.refresh(watching, session.reasoningWatch);

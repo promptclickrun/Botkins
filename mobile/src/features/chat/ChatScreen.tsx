@@ -51,7 +51,7 @@ import { type FoldHold, FoldRow } from "./FoldRow";
 import { Island } from "./Island";
 import { capsuleShown, islandOn } from "./islandModel";
 import { Aside } from "./Aside";
-import { chatTimeline, createTimelineRunSelector, indexMessageOwnership, liveRowVisible, resolveLiveBody, type Item, reuseItems, TIMELINE_V1, underWay } from "./turn";
+import { chatTimeline, createTimelineRunSelector, indexMessageOwnership, liveRowVisible, type Item, reuseItems, TIMELINE_V1, underWay } from "./turn";
 import { ProjectPill, projectActions, runProjectChoice, type Side, SideAnswer } from "./ChatProject";
 import { quoteOf, sideQuestionOf } from "./side";
 import { useAppActive } from "@/state/useAppActive";
@@ -315,15 +315,6 @@ type RowProps = {
   openPanel: (id: string) => void;
 };
 
-function ActiveLiveLeaf({ chatId, bot, group, bots, item }: { chatId: string; bot?: Bot; group: boolean; bots: Map<string, Bot>; item: Extract<Item, { kind: "live" }> }) {
-  // The list owns the structural row. Only this leaf subscribes to body appends, so history and
-  // FlatList data keep their identities while stream/reasoning text grows.
-  const body = useApp((state) => state.texts[chatId]);
-  const latestRun = useApp((state) => state.running[chatId]);
-  const resolved = resolveLiveBody(item, body, latestRun);
-  return <LiveTurn chatId={chatId} bot={bot} group={group} bots={bots} item={{ ...item, ...resolved }} />;
-}
-
 const TimelineRow = memo(function TimelineRow({ item, chatId, group, bot, bots, sendText, draftText, messageActions, openPanel, holdFold, viewport, active, replyRef, continues }: RowProps & {
   item: Item;
   continues?: boolean;
@@ -358,7 +349,7 @@ const TimelineRow = memo(function TimelineRow({ item, chatId, group, bot, bots, 
       <Aside kind="thinking" text={item.text} bot={bot} />
     </View>
   ) : (
-    <ActiveLiveLeaf chatId={chatId} bot={bot} group={group} bots={bots} item={item} />
+    <LiveTurn chatId={chatId} bot={bot} group={group} bots={bots} item={item} />
   );
   return row;
 });
@@ -668,7 +659,8 @@ function ChatScreenScreen({ pane: paneId, onLeave: leavePane, onList }: { pane?:
   const keyboardHeight = useKeyboardState((state) => state.height);
   const requestRoom = Math.max(200, Math.min(screenHeight * 0.6, screenHeight - (keyboardUp ? keyboardHeight : insets.bottom) - insets.top - 168));
   const chat = useChat(chatId);
-  const view = useWatchedChat(chatId);
+  const focused = useIsFocused();
+  const view = useWatchedChat(chatId, focused);
   const pending = useSyncExternalStore(pendingSends.subscribe, () => pendingSends.rows(chatId));
   const bot = useBot(chat?.botId);
   const allBots = useBots();
@@ -700,7 +692,6 @@ function ChatScreenScreen({ pane: paneId, onLeave: leavePane, onList }: { pane?:
   // Unfolding on a chat that came from the Chats list: it goes back beside the list, still chosen.
   // Only while this page is in front: with a sheet over it, going back would close the sheet.
   const splitActive = useChatSplit((split) => split.active);
-  const focused = useIsFocused();
   useEffect(() => {
     if (paneId || !splitActive || !focused || useChatSplit.getState().pushed !== chatId) return;
     useChatSplit.setState({ id: chatId, pushed: null });

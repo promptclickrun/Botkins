@@ -37,14 +37,28 @@ export const useCapability = (name: string) => useApp((state) => state.parts.met
 
 export { activityLabel, botActivity, chatActivity, type AvatarState } from "./sessionActivity";
 export function useBotActivity(botId: string): AvatarState {
-  return useApp((state) => botActivity(state.parts.live, state.parts.chats ?? NONE, botId));
+  // The mounted bot rows share many store updates that change neither the chats nor their activity.
+  const select = useMemo(() => {
+    let live: PhoneParts["live"] | undefined;
+    let chats: ChatSummary[] | undefined;
+    let value: AvatarState = "idle";
+    return ({ parts }: { parts: Partial<PhoneParts> }) => {
+      if (parts.live !== live || parts.chats !== chats) {
+        live = parts.live;
+        chats = parts.chats;
+        value = botActivity(live, chats ?? NONE, botId);
+      }
+      return value;
+    };
+  }, [botId]);
+  return useApp(select);
 }
 export const useChatActivity = (chatId: string): AvatarState => useApp((state) => chatActivity(state.parts.live, chatId));
 
 /** Keeps a chat's messages and running turn in step while the calling screen is shown. */
-export function useWatchedChat(chatId: string | undefined): ChatView | undefined {
+export function useWatchedChat(chatId: string | undefined, showsReply = false): ChatView | undefined {
   const visible = useAppActive(useOnShow(!!chatId));
-  useEffect(() => (chatId && visible ? watchChat(chatId) : undefined), [chatId, visible]);
+  useEffect(() => (chatId && visible ? watchChat(chatId, showsReply) : undefined), [chatId, visible, showsReply]);
   return useApp((state) => (chatId ? state.chats[chatId] : undefined));
 }
 

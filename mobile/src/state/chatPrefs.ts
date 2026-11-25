@@ -43,12 +43,16 @@ export type ChatPrefs = {
   readAloud: boolean;
   /** The person chose `readAloud` on this phone. Until then it follows the computer's Settings › Voice. */
   readAloudPicked?: boolean;
-  /** A reply as the bot writes it. Through the relay this requests updates of a few words every half second or so; the phone shows each received update whole. */
+  /** A reply as the bot writes it. The link asks for complete words a few times a second; the phone shows each received update whole. */
   textStreaming: boolean;
 };
 
-/** How a reply's text is followed on this route: as it is written, in chunks through the relay, or whole. */
-export const textMode = (on: boolean, route: "direct" | "relay" | null): "live" | "chunks" | "whole" => (!on ? "whole" : route === "relay" ? "chunks" : "live");
+/** Both routes ask for words together so painting a long reply leaves time to scroll. */
+export function textMode(on: boolean, route: "direct" | "relay" | null, capabilities?: readonly string[]): "chunks" | "live" | "whole" {
+  if (!on || !capabilities?.includes("stream-appends-v1")) return "whole";
+  if (capabilities.includes("text-chunks-v1")) return "chunks";
+  return route === "direct" ? "live" : "whole";
+}
 
 export const chatPrefDefaults: ChatPrefs = {
   // Open, the live island, for both (settleSteps and settleThinking say how a saved choice is read).

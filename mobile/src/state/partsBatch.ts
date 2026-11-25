@@ -1,30 +1,19 @@
-// Frame-coalescing batcher for streaming text updates from the link client.
-// Text-only ticks (`text:<chatId>`) are buffered and flushed at most once per animation frame so
-// rapid LAN/direct chunks do not re-render Markdown multiple times per frame. Any structural part
-// (`live`, `chat:*`, `run:*`, `chats`, `bots`, etc.) merges pending text and flushes immediately
-// so completion commits and live-state clears stay atomic and ordered.
-//
-// Run summaries alone (`runs`) reach the store at most once per `SUMMARY_FLUSH_MS`. A computer
-// changes them with every tool step of every bot at work, and each one that reached the store ran
-// every selector on every mounted screen: Home, a list being scrolled, a page sliding in. The first
-// after a quiet spell goes at once; the ones that follow within the spell wait for its end. The
-// link already spaces its own syncs after such an answer (LinkClient's `summaryPaceMs`); through
-// the relay the computer pushes them as they happen, up to ten a second, and this is what spaces
-// those. Whatever comes next that is not a summary takes the waiting ones with it, so nothing
-// arrives out of order.
-
+// The first reply words paint on a frame. A faster computer can send many more updates than a
+// person can read. Keep its newest expanded text or run list until the next paint is due.
+// A message, approval or other structural change takes the pending parts with it in order.
 export type FrameScheduler = {
   schedule: (fn: () => void) => unknown;
   cancel: (handle: unknown) => void;
-  /** A plain timer for the summaries' wait. Left out, it is `setTimeout`. */
+  /** Runs the next update when its minimum interval has elapsed. */
   later?: (fn: () => void, ms: number) => unknown;
   cancelLater?: (handle: unknown) => void;
-  /** The clock the summaries' spell is measured by. Left out, it is `Date.now`. */
+  /** The clock used for timing both kinds of updates. */
   now?: () => number;
 };
 
 /** The least time between two store updates that hold nothing but run summaries. */
 export const SUMMARY_FLUSH_MS = 1000;
+const TEXT_FLUSH_MS = 250;
 
 const defaultScheduler: FrameScheduler = {
   schedule(fn) {
@@ -53,78 +42,69 @@ export function createPartsBatcher(
   scheduler: FrameScheduler = defaultScheduler,
 ) {
   let pending: Record<string, unknown> | null = null;
-  // What will flush `pending`: the next frame (text is waiting) or the summaries' timer.
-  let scheduled: { frame: unknown } | { later: unknown } | null = null;
-  const later = scheduler.later ?? ((fn: () => void, ms: number) => setTimeout(fn, ms));
-  const cancelLater = scheduler.cancelLater ?? ((handle: unknown) => clearTimeout(handle as ReturnType<typeof setTimeout>));
-  const now = scheduler.now ?? Date.now;
-  // When summaries last reached the store by themselves.
-  let summariesAt = -Infinity;
+  let hasText = false;
+  let lastRuns: { id?: string; status?: string }[] | undefined;
+  let lastText = -Infinity;
+  let lastSummary = -Infinity;
+  let scheduled: { frame: unknown } | { timer: unknown; due: number } | null = null;
+  const later = scheduler.later ?? ((fn, ms) => setTimeout(fn, ms));
+  const cancelLater = scheduler.cancelLater ?? ((handle) => clearTimeout(handle as ReturnType<typeof setTimeout>));
+  const now = scheduler.now ?? (() => Date.now());
 
-  const cancelScheduled = () => {
-    if (scheduled === null) return;
-    if ("frame" in scheduled) scheduler.cancel(scheduled.frame);
-    else cancelLater(scheduled.later);
+  function cancel() {
+    if (scheduled && "frame" in scheduled) scheduler.cancel(scheduled.frame);
+    else if (scheduled) cancelLater(scheduled.timer);
     scheduled = null;
-  };
+  }
 
-  const flush = () => {
-    cancelScheduled();
+  function flush() {
+    cancel();
     if (!pending) return;
     const batch = pending;
     pending = null;
+    if (Array.isArray(batch.runs)) lastRuns = batch.runs;
+    if (hasText) lastText = now();
+    if (isSummaryOnlyParts(batch)) lastSummary = now();
+    hasText = false;
     commit(batch);
-  };
-  const fire = () => {
-    scheduled = null;
-    flush();
-  };
+  }
 
-  const push = (incoming: Record<string, unknown>) => {
-    if (isTextOnlyParts(incoming)) {
-      if (!pending) pending = { ...incoming };
-      else Object.assign(pending, incoming);
-      // Text goes with the next frame, and summaries that were waiting go with it.
-      if (scheduled && "later" in scheduled) cancelScheduled();
-      if (scheduled === null) scheduled = { frame: scheduler.schedule(fire) };
+  function push(incoming: Record<string, unknown>) {
+    const keys = Object.keys(incoming);
+    hasText ||= keys.some((key) => key.startsWith("text:"));
+    const runs = incoming.runs;
+    const previous = lastRuns;
+    const transition = Array.isArray(runs) && previous && (runs.length !== previous.length ||
+      runs.some((run, i) => run?.id !== previous[i]?.id || run?.status !== previous[i]?.status));
+    if (transition || !keys.length || keys.some((key) => key !== "runs" && !key.startsWith("text:"))) {
+      if (pending) Object.assign(pending, incoming);
+      else pending = incoming;
+      flush();
       return;
     }
-    if (isSummaryOnlyParts(incoming)) {
-      const wait = summariesAt + SUMMARY_FLUSH_MS - now();
-      if (!pending && wait <= 0) {
-        summariesAt = now();
-        commit(incoming);
-        return;
+    pending = Object.assign(pending ?? {}, incoming);
+    const interval = hasText ? TEXT_FLUSH_MS : SUMMARY_FLUSH_MS;
+    const time = now();
+    const wait = Math.min(interval, (hasText ? lastText : lastSummary) + interval - time);
+    if (wait <= 0) {
+      if (!hasText) flush();
+      else if (!scheduled || !("frame" in scheduled)) {
+        cancel();
+        scheduled = { frame: scheduler.schedule(flush) };
       }
-      if (!pending) pending = { ...incoming };
-      else Object.assign(pending, incoming);
-      // Text that is waiting takes them along with its frame. Else they wait for the spell's end;
-      // the ones that follow replace them and keep that deadline.
-      if (scheduled === null) {
-        scheduled = {
-          later: later(() => {
-            summariesAt = now();
-            fire();
-          }, Math.max(1, wait)),
-        };
-      }
-      return;
+    } else if (!scheduled || !("timer" in scheduled) || scheduled.due !== time + wait) {
+      cancel();
+      scheduled = { timer: later(flush, wait), due: time + wait };
     }
-    // Structural update: merge any buffered text before committing so order and atomicity hold.
-    cancelScheduled();
-    if (pending) {
-      const merged = Object.assign(pending, incoming);
-      pending = null;
-      commit(merged);
-    } else {
-      commit(incoming);
-    }
-  };
+  }
 
-  const clear = () => {
-    cancelScheduled();
+  function clear() {
+    cancel();
     pending = null;
-  };
+    hasText = false;
+    lastRuns = undefined;
+    lastText = lastSummary = -Infinity;
+  }
 
   return { push, flush, clear };
 }

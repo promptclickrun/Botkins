@@ -22,7 +22,9 @@ function become(state: string) {
   for (const listener of listeners) listener(state);
 }
 /** Every set of chats the link was told to follow. */
-const watches: string[][] = [];
+const watches: [string[], string | undefined][] = [];
+let textOn = true;
+let mode: () => string;
 
 test("locked background boot parks storage recovery, and a later push restores the link for one sync", async () => {
   standIn("react-native", { AppState: appState, Platform: { OS: "ios" } });
@@ -33,7 +35,10 @@ test("locked background boot parks storage recovery, and a later push restores t
   standIn("../src/state/nearby", {});
   standIn("../src/state/presence", {});
   standIn("../src/state/prefs", { usePrefs: { getState: () => ({ primaryHost: null }) }, loadPrefs: async () => {} });
-  standIn("../src/state/chatPrefs", { useChatPrefs: { subscribe() {} } });
+  standIn("../src/state/chatPrefs", {
+    useChatPrefs: { subscribe() {}, getState: () => ({ textStreaming: textOn }) },
+    textMode: (on: boolean) => on ? "chunks" : "whole",
+  });
   const pairing = { serverId: "host", secretKey: "s", serverKey: "k", name: "Desktop", deviceId: "phone", hosts: ["localhost"] };
   let locked = true;
   let reads = 0;
@@ -47,8 +52,11 @@ test("locked background boot parks storage recovery, and a later push restores t
   let wakes = 0;
   let rests = 0;
   standIn("../src/link/client", { LinkClient: class {
-    constructor(_: unknown, readonly options: { onSync(): void }) {}
-    watch(ids: string[]) { watches.push(ids); }
+    constructor(_: unknown, readonly options: { onSync(): void; textStreaming(route: string): string }) {
+      mode = () => options.textStreaming("direct");
+    }
+    watch(ids: string[], kept?: string) { watches.push([ids, kept]); }
+    textStreamingChanged() {}
     watchReasoning() {}
     start(options: { resting: boolean }) { assert.equal(options.resting, true); starts++; }
     wake() { wakes++; this.options.onSync(); }
@@ -67,26 +75,36 @@ test("locked background boot parks storage recovery, and a later push restores t
   assert.deepEqual([reads, starts, wakes], [4, 1, 2]);
 });
 
-test("a chat on screen is still followed after a moment away, and a push's sync lets it go", async () => {
+test("only a foreground message view streams replies and a push releases the kept page", async () => {
   const { watchChat, chatOnScreen, syncForPush } = load("../src/state/link");
   watches.length = 0;
-  let stop = watchChat("chat");
-  assert.deepEqual(watches, [["chat"]]);
-  assert.equal(chatOnScreen(), "chat");
-  // Another app for a moment: the chat's screen stops watching as the app goes to the background.
+  assert.equal(mode(), "whole");
+  const closeSheet = watchChat("chat", false);
+  assert.equal(mode(), "whole", "the activity sheet follows steps without streaming words");
+  let closeChat = watchChat("chat", true);
+  assert.equal(mode(), "chunks");
+  textOn = false;
+  assert.equal(mode(), "whole");
+  textOn = true;
+  closeChat();
+  assert.equal(mode(), "whole", "the sheet still holds the page after the reply goes out of view");
+  closeSheet();
+  assert.deepEqual(watches.at(-1), [[], "chat"]);
+  assert.equal(chatOnScreen(), undefined);
+
+  closeChat = watchChat("chat", true);
   become("background");
-  stop();
-  assert.equal(chatOnScreen(), undefined, "no chat is on screen, so its notifications arrive");
-  // Back in front: the link wakes first, then the screen watches again. The link is told nothing,
-  // so the wake's quick check is not cut short and the chat is not loaded again.
+  assert.equal(mode(), "whole", "a push can wake before a screen has released its watch");
+  closeChat();
   become("active");
-  stop = watchChat("chat");
-  assert.deepEqual(watches, [["chat"]]);
+  closeChat = watchChat("chat", true);
   assert.equal(chatOnScreen(), "chat");
-  // Away again, and a push wakes the app: that sync follows no chat.
+  assert.deepEqual(watches.at(-1), [["chat"], undefined]);
+  assert.equal(mode(), "chunks");
   become("background");
-  stop();
+  closeChat();
   assert.equal(await syncForPush(100), true);
-  assert.deepEqual(watches, [["chat"], []]);
+  assert.deepEqual(watches.at(-1), [[], undefined]);
   become("active");
+  assert.equal(mode(), "whole");
 });
