@@ -8,7 +8,7 @@ Two running desktop or terminal hosts bound to the same owner profile can discov
 
 ## Proposed setup
 
-1. Choose **Set Up as Node Host** on the desktop welcome screen, or **Set Up as Node Host** in the terminal setup flow. Sign in to the same Botkins profile as the other computers. Confirm the new device from an already trusted device when the profile requests it.
+1. Choose **Set Up as Node Host** on the desktop welcome screen or in terminal setup. The new install displays a QR code and a short code. On an already trusted device, scan or enter the code, check the node name, and approve enrollment under the same owner profile. The pairing must bind the local Link public key to that profile. A headless node can complete this flow from its terminal.
 2. Name the node, then choose what it offers. For a bot, select the local bot and its model provider. For a project tool, select the operation and folder on the node. A machine that only serves project tools can skip model sign-in and bot creation.
 3. Show the node name, the named capabilities and the hosts that may use them. Let the owner authorize recurring use from a specific source host and bot. The node records and enforces that grant. A file or tool operation needs its own grant even if the same bot already has permanent permission to send messages.
 4. Offer to start the host when the computer starts. Show **Online**, the last completed request, **Pause**, and **Disconnect** in Settings and the terminal dashboard. On other hosts, list the node and its advertised capabilities with its name. A sleeping node is unavailable. A retry uses the original request ID so waking or reconnecting cannot run a job twice.
