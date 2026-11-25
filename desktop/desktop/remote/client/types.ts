@@ -614,6 +614,9 @@ export type RunSummary = {
   trigger?: "manual" | "scheduled";
   finished?: number;
   summary?: string;
+  stepKinds?: string[];
+  stepCount?: number;
+  failedCount?: number;
   panelId?: string;
   scheduleId?: number;
   notifyTargets?: RunNotifyTargets;
@@ -939,6 +942,8 @@ export type Preferences = {
   appearance: Appearance;
   foldTools: boolean;
   showThinking: boolean;
+  foldThinking?: boolean;
+  showUpdates?: boolean;
   linkPreviews?: boolean;
   readAloud?: boolean;
   onboarded?: boolean;

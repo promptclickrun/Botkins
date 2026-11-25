@@ -12,6 +12,7 @@ import {
   workSummary,
 } from "../desktop/canvas.mjs";
 import { changeSettings, defaultSettings } from "../desktop/preferences.mjs";
+import { liveTurnDisplay } from "../src/liveDisplay.ts";
 
 /** A fake Copilot session: `script(emit, options)` runs during send. */
 function fakeSession(script) {
@@ -364,8 +365,48 @@ test("todo statuses map to Botkins' set", () => {
   assert.deepEqual(mapTodos(undefined), []);
 });
 
-test("showThinking is a boolean setting that defaults on", () => {
+test("showThinking and showUpdates are independent boolean settings that default on", () => {
   assert.equal(defaultSettings.showThinking, true);
-  assert.equal(changeSettings(defaultSettings, { showThinking: false }).showThinking, false);
+  assert.equal(defaultSettings.showUpdates, true);
+
+  const updatesOnly = changeSettings(defaultSettings, { showThinking: false });
+  assert.equal(updatesOnly.showThinking, false);
+  assert.equal(updatesOnly.showUpdates, true);
+
+  const thinkingOnly = changeSettings(defaultSettings, { showUpdates: false });
+  assert.equal(thinkingOnly.showThinking, true);
+  assert.equal(thinkingOnly.showUpdates, false);
+
   assert.throws(() => changeSettings(defaultSettings, { showThinking: "no" }));
+  assert.throws(() => changeSettings(defaultSettings, { showUpdates: "no" }));
+});
+
+test("liveTurnDisplay gates chain of thought and interim updates independently", () => {
+  const sample = { stream: "Checking calendar…", thinking: "Step 1: inspect dates", intent: "Reading calendar" };
+
+  assert.deepEqual(
+    liveTurnDisplay({ settings: { showThinking: true, showUpdates: true }, ...sample }),
+    { showThinking: true, showUpdates: true, liveThinking: "Step 1: inspect dates", liveStream: "Checking calendar…", liveIntent: "Reading calendar" },
+  );
+
+  assert.deepEqual(
+    liveTurnDisplay({ settings: { showThinking: false, showUpdates: true }, ...sample }),
+    { showThinking: false, showUpdates: true, liveThinking: undefined, liveStream: "Checking calendar…", liveIntent: "Reading calendar" },
+  );
+
+  assert.deepEqual(
+    liveTurnDisplay({ settings: { showThinking: true, showUpdates: false }, ...sample }),
+    { showThinking: true, showUpdates: false, liveThinking: "Step 1: inspect dates", liveStream: "", liveIntent: "" },
+  );
+
+  assert.deepEqual(
+    liveTurnDisplay({ settings: { showThinking: false, showUpdates: false }, ...sample }),
+    { showThinking: false, showUpdates: false, liveThinking: undefined, liveStream: "", liveIntent: "" },
+  );
+
+  // Older remote hosts that omit showUpdates default to showing updates.
+  assert.equal(
+    liveTurnDisplay({ settings: { showThinking: true }, ...sample }).liveStream,
+    "Checking calendar…",
+  );
 });

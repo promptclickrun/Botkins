@@ -7,9 +7,9 @@ import type { Bot, BotTask, ChatSchedule, ChatSummary, Panel } from "@/link/type
 import { type RoutineEntry, useBots, useCan, useChats, useMember, usePart, useRoutines } from "@/state/hooks";
 import { api, attempt } from "@/state/link";
 import { useApp } from "@/state/store";
-import { ago, upcoming } from "@/state/time";
+import { upcoming } from "@/state/time";
 import { BotAvatar, Button, Dot, EmptyState, Group, haptic, HoldMenu, IconButton, IconTile, Label, Loading, Mascot, Page, Row, Segmented, space, switchColors, T, useTheme } from "@/ui";
-import { isFinished, routineName, routineSubtitle, RunIcon, SplitRow, taskSubtitle } from "./bits";
+import { isFinished, routineName, routineSubtitle, SplitRow, taskSubtitle } from "./bits";
 import { buildNotifyTargetView } from "./notifyTargets";
 import { ProjectList } from "@/features/projects/Projects";
 import { ActivityList } from "./Activity";
