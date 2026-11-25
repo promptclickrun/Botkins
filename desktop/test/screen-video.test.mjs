@@ -13,7 +13,7 @@ function viewer(openVideo, idleMs = 5000) {
     permissions: async () => ({ screenRecording: state.recording, accessibility: true }),
     openVideo,
   };
-  const screen = new Screen({ adapter: () => source, mode: () => state.mode, paired: () => state.paired, idleMs });
+  const screen = new Screen({ dirs: [], adapter: () => source, mode: () => state.mode, paired: () => state.paired, idleMs });
   return { state, screen };
 }
 
