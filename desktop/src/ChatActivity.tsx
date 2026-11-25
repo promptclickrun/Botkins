@@ -27,7 +27,6 @@ import {
   X,
 } from "lucide-react";
 import { todoLabel } from "../desktop/link/session-todos";
-import { activitySteps } from "../desktop/link/activity-steps.mjs";
 import { toolKind } from "../desktop/tool-kind.mjs";
 import "./apps.css";
 import { ConnectCard } from "./ConnectCard";
@@ -409,7 +408,7 @@ export function stepIcon(step: Step) {
  * muted with a band of ink sweeping across it (`Shimmer`, T3 Code's live row) while the bot is on
  * it (`live`; off while it waits for the person), a failed one has a faded danger icon and a small
  * X. A row opens to its input and output. */
-export function WorkSteps({ steps, live = false, follow = false }: { steps: Step[]; live?: boolean; follow?: boolean }) {
+export function WorkSteps({ steps, live = false, follow = false, onOpen }: { steps: Step[]; live?: boolean; follow?: boolean; /** A row opens the side pane's Activity on its step instead of opening in place. */ onOpen?: (step: Step) => void }) {
   if (!steps.length) return null;
   return (
     <ol className="work-steps">
@@ -421,6 +420,15 @@ export function WorkSteps({ steps, live = false, follow = false }: { steps: Step
         const detail = s.input || s.progress || s.output;
         return (
           <li key={s.id} className={"work-step" + (running ? " running" : "") + (failed ? " failed" : "")}>
+            {onOpen ? (
+              <button type="button" className="work-step-open" title={s.name + " · " + s.status} onClick={() => onOpen(s)}>
+                <Shimmer on={running && live} className="work-step-main">
+                  <span className="work-step-icon" aria-hidden="true"><Icon size={16} /></span>
+                  <span className="work-step-label">{label}</span>
+                </Shimmer>
+                {failed && <X size={12} className="work-step-failed" aria-label="Failed" />}
+              </button>
+            ) : (
             <details>
               <summary title={s.name + " · " + s.status}>
                 <Shimmer on={running && live} className="work-step-main">
@@ -448,6 +456,7 @@ export function WorkSteps({ steps, live = false, follow = false }: { steps: Step
                 </div>
               )}
             </details>
+            )}
             {running && (s.progress || s.output) && (
               <code className="work-step-output">{(s.progress || s.output || "").trim().split("\n").at(-1)?.slice(-220)}</code>
             )}
@@ -730,19 +739,20 @@ function Elapsed({ since }: { since: number }) {
 }
 
 /**
- * The row under a turn. Live, it is the status line: "Crumb is coding · 0:42 · 3 steps".
- * Finished, it is the fold: the bot's still face, "Worked for 41s · 5 steps" and a chevron,
- * opening to the turn's work in order, with Details for everything the chat settings hide.
+ * The row under a turn. Live, it is the status line: "Crumb is coding · 0:42 · 3 steps", and a
+ * click opens the side pane's Activity on the turn. Finished, it is the fold: the bot's still face,
+ * "Worked for 41s · 5 steps" and a chevron, opening to the turn's chapters, with Details for the
+ * whole story in the side pane.
  */
 export function TimelineFold({
   line,
   live = false,
   since,
   body,
-  detailsBody,
   avatar,
   count,
   onDetails,
+  onToggle,
   todoRail,
 }: {
   line: string;
@@ -750,32 +760,28 @@ export function TimelineFold({
   /** When the live turn started, for its clock. */
   since?: number;
   body?: ReactNode;
-  /** The complete work timeline, including content hidden by the chat preferences. */
-  detailsBody?: ReactNode;
   /** The bot's still face, at the start of the finished row. */
   avatar?: ReactNode;
   count?: string;
+  /** Opens the side pane's Activity tab on this turn. */
   onDetails?: () => void;
+  /** The fold opened or closed in place. */
+  onToggle?: () => void;
   todoRail?: ReactNode;
 }) {
   const [open, setOpen] = useState(false);
-  const [detailsOpen, setDetailsOpen] = useState(false);
   const toggle = () => {
     if (live) {
       onDetails?.();
-      setDetailsOpen((value) => !value);
       return;
     }
+    onToggle?.();
     setOpen((value) => !value);
-  };
-  const showDetails = () => {
-    onDetails?.();
-    setDetailsOpen(true);
   };
   return (
     <section className={"timeline-fold" + (live ? " live" : "")} aria-label={live ? "Turn status" : "Turn activity"}>
       <div className="turn-rails">
-        <button className="timeline-fold-line" aria-expanded={live ? detailsOpen : open} onClick={toggle}>
+        <button className="timeline-fold-line" aria-expanded={live ? undefined : open} onClick={toggle}>
           {!live && avatar}
           <span>
             {line}
@@ -789,16 +795,7 @@ export function TimelineFold({
       {open && !live && (
         <div className="timeline-fold-body">
           {body}
-          <button className="timeline-details" onClick={showDetails}>Details</button>
-        </div>
-      )}
-      {detailsOpen && (
-        <div className="timeline-activity" role="dialog" aria-label="Work activity">
-          <div className="timeline-activity-head">
-            <strong>Work activity</strong>
-            <button className="timeline-activity-close" aria-label="Close work activity" onClick={() => setDetailsOpen(false)}>Close</button>
-          </div>
-          <div className="timeline-activity-body">{detailsBody ?? body}</div>
+          {onDetails && <button className="timeline-details" onClick={() => onDetails()}>Details</button>}
         </div>
       )}
     </section>
@@ -1048,91 +1045,13 @@ export function TaskDrawer({ todos, transfer }: { todos: Todo[]; transfer?: () =
   );
 }
 
-/** "In the background · 2 running" for the latest turn's helpers. */
-export function HelperChip({
-  agents,
-  open,
-  toggle,
-}: {
-  agents: Subagent[];
-  open: boolean;
-  toggle: () => void;
-}) {
-  const running = agents.filter((a) => a.status === "Running").length;
+/** "In the background · 2 running" for the latest turn's helpers and background commands. It opens the side pane's Crew tab. */
+export function HelperChip({ running, total, onOpen }: { running: number; total: number; onOpen: () => void }) {
   return (
-    <button className="canvas-chip" aria-expanded={open} aria-controls="helper-drawer" onClick={toggle}>
+    <button className="canvas-chip" onClick={onOpen}>
       {running ? <LoaderCircle size={14} className="spin" /> : <Users size={14} />}
-      In the background · {running ? running + " running" : agents.length + " finished"}
+      In the background · {running ? running + " running" : total + " finished"}
     </button>
-  );
-}
-
-function HelperItems({ agents, byAgent }: { agents: Subagent[]; byAgent?: Map<string, Step[]> }) {
-  const now = useNow(agents.some((a) => a.status === "Running"));
-  return (
-    <ol>
-      {agents.map((a) => (
-        <li key={a.id} className={"helper " + a.status.toLowerCase()}>
-          {a.status === "Running" ? (
-            <LoaderCircle size={14} className="spin" />
-          ) : a.status === "Done" ? (
-            <Check size={14} />
-          ) : a.status === "Stopped" ? (
-            <Ban size={14} />
-          ) : (
-            <CircleAlert size={14} />
-          )}
-          <div className="helper-info">
-            <details>
-              <summary><strong>{a.name}</strong></summary>
-              {a.description && <p>{a.description}</p>}
-              {a.detail && a.detail !== a.description && (a.status !== "Running" || a.detail !== a.intent) && <p>{a.detail}</p>}
-              {byAgent?.get(a.id)?.length ? <WorkSteps steps={byAgent.get(a.id)!} live={a.status === "Running"} follow /> : byAgent && <small>{a.status === "Running" ? "No steps yet." : "No steps recorded."}</small>}
-            </details>
-            {a.status === "Running" && (a.intent || a.detail) && <small>{a.intent || a.detail}</small>}
-          </div>
-          <em>
-            {a.status === "Running" ? "Running" : a.status} · {duration((a.finished ?? now) - a.started)}
-          </em>
-        </li>
-      ))}
-    </ol>
-  );
-}
-
-export function HelperDrawer({ agents }: { agents: Subagent[] }) {
-  return (
-    <section className="canvas-drawer" id="helper-drawer" aria-label="Background helpers">
-      <HelperItems agents={agents} />
-    </section>
-  );
-}
-
-/** Tasks, helpers and background commands lead the activity feed. */
-export function ActivitySections({ run, steps }: { run: Run; steps?: Step[] }) {
-  const { tools, background, byAgent } = activitySteps(steps, run.agents);
-  return (
-    <>
-      {!!run.todos?.length && (
-        <section className="run-lead" aria-label="Tasks">
-          <h4>Tasks</h4>
-          <TodoItems todos={run.todos} />
-        </section>
-      )}
-      {(!!run.agents?.length || background.length > 0) && (
-        <section className="run-lead" aria-label="Subagents">
-          <h4>Subagents</h4>
-          {!!run.agents?.length && <HelperItems agents={run.agents} byAgent={byAgent} />}
-          <WorkSteps steps={background} live follow />
-        </section>
-      )}
-      {!!tools.length && (
-        <section className="activity-tools" aria-label="Tool calls">
-          <h4>Tool calls</h4>
-          <WorkSteps steps={tools} />
-        </section>
-      )}
-    </>
   );
 }
 

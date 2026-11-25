@@ -17,8 +17,9 @@ import "./island.css";
 
 type WaitLine = { kind: "wait"; key: string; text: string };
 
-/** The chat shows a step: a tool's quiet bookkeeping (report_intent, think) stays out, unless it failed. */
-const shown = (step: Step) => !!classifyStep(step);
+/** The chat shows a step: a tool's quiet bookkeeping (report_intent, think) stays out, unless it
+ * failed. A helper's own steps and a background command are the crew card's (ActivityInspector.tsx). */
+const shown = (step: Step) => !step.agentId && !step.background && !!classifyStep(step);
 
 function stepSeconds(step: Step) {
   return step.finished ? Math.max(1, Math.round((step.finished - step.started) / 1000)) + "s" : "";
@@ -62,8 +63,8 @@ function Line({ line }: { line: IslandLine | WaitLine }) {
   );
 }
 
-/** Every line, each opening to its details as the chat's step rows do. Stays pinned to the newest. */
-function FullList({ lines, close, onToggle }: { lines: IslandLine[]; close: () => void; onToggle?: () => void }) {
+/** Every line, each opening the side pane's Activity on it (or, without `onOpen`, its details in place). Stays pinned to the newest. */
+function FullList({ lines, close, onToggle, onOpen }: { lines: IslandLine[]; close: () => void; onToggle?: () => void; onOpen?: (key?: string) => void }) {
   const list = useRef<HTMLDivElement>(null);
   const pinned = useRef(true);
   useLayoutEffect(() => {
@@ -82,7 +83,15 @@ function FullList({ lines, close, onToggle }: { lines: IslandLine[]; close: () =
           pinned.current = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
         }}
       >
-        {lines.map((line) => (
+        {lines.map((line) => onOpen ? (
+          <div key={line.key} className="island-item" role="listitem">
+            <button type="button" className="island-item-open" onClick={() => onOpen(line.key)}>
+              <Line line={line} />
+              {line.kind === "step" && <span className="island-seconds">{stepSeconds(line.step)}</span>}
+              <ChevronRight size={13} className="island-item-chevron" aria-hidden="true" />
+            </button>
+          </div>
+        ) : (
           <details key={line.key} className="island-item" role="listitem" onToggle={onToggle}>
             <summary>
               <Line line={line} />
@@ -142,10 +151,12 @@ export type IslandProps = {
   /** Thinking is not Hidden: the full list keeps the thoughts. */
   thoughts: boolean;
   onToggle?: () => void;
+  /** Opens the side pane's Activity on this turn, at a line's key ("step-…", "thought-…", "update-…"). */
+  onOpen?: (key?: string) => void;
 };
 
 /** The live island under a running turn. */
-export const ActivityIsland = memo(function ActivityIsland({ run, who, avatar, waiting, waitingFor, steps, thinking, thoughts, onToggle }: IslandProps) {
+export const ActivityIsland = memo(function ActivityIsland({ run, who, avatar, waiting, waitingFor, steps, thinking, thoughts, onToggle, onOpen }: IslandProps) {
   const [open, setOpen] = useState(false);
   // Every line in order (the thoughts too, unless Thinking is Hidden), for the label and the full list.
   const all = useMemo(() => islandLines(run, { thoughts, keep: shown }), [run.steps, run.reasoning, thoughts]);
@@ -176,7 +187,7 @@ export const ActivityIsland = memo(function ActivityIsland({ run, who, avatar, w
         <ChevronRight size={14} className="island-chevron" aria-hidden="true" />
       </button>
       {open ? (
-        <FullList lines={all} close={toggle} onToggle={onToggle} />
+        <FullList lines={all} close={toggle} onToggle={onToggle} onOpen={onOpen} />
       ) : view ? (
         !!view.shown.length && (
           <div className={"island-window" + (view.clipped ? " clipped" : "")} aria-hidden="true">
@@ -195,8 +206,8 @@ export const ActivityIsland = memo(function ActivityIsland({ run, who, avatar, w
 });
 
 /** A finished turn's island, folded into a receipt under the answer: "Worked 42s · 9 steps".
- * Clicking it opens the same full list in place. */
-export const IslandReceipt = memo(function IslandReceipt({ run, thoughts, updates, onToggle }: { run: Run; thoughts: boolean; /** What the bot wrote before it moved on: it folds in here with the thinking. */ updates?: IslandUpdate[]; onToggle?: () => void }) {
+ * Clicking it opens the side pane's Activity on the turn (`onOpen`), or else the same full list in place. */
+export const IslandReceipt = memo(function IslandReceipt({ run, thoughts, updates, onToggle, onOpen }: { run: Run; thoughts: boolean; /** What the bot wrote before it moved on: it folds in here with the thinking. */ updates?: IslandUpdate[]; onToggle?: () => void; onOpen?: (key?: string) => void }) {
   const [open, setOpen] = useState(false);
   const card = useRef<HTMLElement>(null);
   const all = useMemo(() => islandLines(run, { thoughts, keep: shown, updates }), [run.steps, run.reasoning, thoughts, updates]);
@@ -207,6 +218,7 @@ export const IslandReceipt = memo(function IslandReceipt({ run, thoughts, update
   const elapsed = run.finished === undefined ? run.usage?.durationMs : run.finished - run.time;
   const label = receiptLabel(elapsed, all.filter((line) => line.kind === "step").length);
   const toggle = () => {
+    if (onOpen) return onOpen();
     onToggle?.();
     setOpen((value) => !value);
   };
@@ -228,7 +240,7 @@ export const IslandReceipt = memo(function IslandReceipt({ run, thoughts, update
         <span className="island-label">{label}</span>
         <ChevronRight size={14} className="island-chevron" aria-hidden="true" />
       </button>
-      <FullList lines={all} close={toggle} onToggle={onToggle} />
+      <FullList lines={all} close={toggle} onToggle={onToggle} onOpen={onOpen} />
     </section>
   );
-}, (a, b) => a.run === b.run && a.thoughts === b.thoughts && a.onToggle === b.onToggle && sameUpdates(a.updates, b.updates));
+}, (a, b) => a.run === b.run && a.thoughts === b.thoughts && a.onToggle === b.onToggle && a.onOpen === b.onOpen && sameUpdates(a.updates, b.updates));

@@ -1,0 +1,827 @@
+/* The turn's work (ActivityInspector.tsx): the side pane's Activity and Crew tabs, the crew card in
+   the chat and the chapters in a finished turn's fold. Tokens only, so light and dark both follow
+   the theme. Nothing here moves on its own except the Shimmer of a live line (canvas.css). */
+
+:root {
+  /* Steady colors for the crew's faces and lanes: one hue each, a step lighter in the dark. */
+  --crew-1: #3b82f6;
+  --crew-2: #8b5cf6;
+  --crew-3: #0d9488;
+  --crew-4: #d97706;
+}
+:root[data-mode="dark"] {
+  --crew-1: #60a5fa;
+  --crew-2: #a78bfa;
+  --crew-3: #2dd4bf;
+  --crew-4: #fbbf24;
+}
+
+:is(.inspector, .crew-card, .chapter-summary) .ok {
+  color: var(--success);
+}
+:is(.inspector, .crew-card, .chapter-summary) .bad {
+  color: var(--danger);
+}
+:is(.inspector, .crew-card) .mono {
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+}
+.insp-muted {
+  color: var(--muted);
+}
+
+/* ── The pane's tabs ─────────────────────────────────────────────────────────────────────────── */
+.side-pane.wide.inspector {
+  width: clamp(400px, 46vw, 780px);
+}
+.side-pane.drawer.wide.inspector {
+  width: min(720px, calc(100% - 48px));
+}
+.pane-count {
+  min-width: 16px;
+  padding: 0 4px;
+  border-radius: 8px;
+  background: var(--sunken);
+  color: var(--muted);
+  font-size: calc(11px * var(--text-scale));
+  font-weight: 600;
+  line-height: 16px;
+  text-align: center;
+}
+.pane-body.inspect {
+  padding: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ── Inspector frame ─────────────────────────────────────────────────────────────────────────── */
+.inspector {
+  container-type: inline-size;
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  color: var(--ink);
+  font-size: calc(13px * var(--text-scale));
+}
+.insp-head {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px 16px 12px;
+  border-bottom: 1px solid var(--line);
+}
+.insp-title {
+  margin: 0;
+  font-size: calc(14.5px * var(--text-scale));
+  font-weight: 650;
+  line-height: 1.35;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.insp-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  font-variant-numeric: tabular-nums;
+}
+.insp-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: calc(12px * var(--text-scale));
+  font-weight: 600;
+  line-height: 20px;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.insp-pill.ok {
+  background: var(--success-soft);
+  color: var(--success);
+}
+.insp-pill.run {
+  background: var(--accent-soft);
+  color: var(--accent-text);
+}
+.insp-pill.bad {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+.insp-pill.quiet {
+  background: var(--sunken);
+  color: var(--muted);
+}
+.insp-link {
+  margin-left: auto;
+  padding: 2px 8px;
+  border-radius: 999px;
+  gap: 5px;
+  color: var(--accent-text);
+  font-size: calc(12px * var(--text-scale));
+  font-weight: 600;
+}
+.insp-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.insp-chip {
+  min-height: 26px;
+  padding: 2px 10px;
+  gap: 5px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--ink-2);
+  font-size: calc(12px * var(--text-scale));
+  font-weight: 600;
+}
+.insp-chip-n {
+  color: var(--muted);
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+.insp-chip.bad,
+.insp-chip.bad .insp-chip-n {
+  color: var(--danger);
+}
+.insp-chip[aria-pressed="true"] {
+  border-color: transparent;
+  background: var(--ink);
+  color: var(--canvas);
+}
+.insp-chip[aria-pressed="true"] .insp-chip-n {
+  color: inherit;
+  opacity: 0.7;
+}
+.insp-empty {
+  margin: 0;
+  padding: 24px 16px;
+  color: var(--muted);
+}
+
+/* The story and the detail: side by side when there is room, else one at a time. */
+.insp-body {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(220px, 44%) minmax(0, 1fr);
+}
+.insp-list {
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding: 6px 6px 16px;
+  border-right: 1px solid var(--line);
+}
+.insp-detail {
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding: 14px 16px 20px;
+}
+.insp-back {
+  display: none;
+}
+@container (max-width: 559px) {
+  .insp-body {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .insp-list {
+    border-right: 0;
+  }
+  .activity-inspector .insp-detail {
+    display: none;
+  }
+  .activity-inspector.showing-detail .insp-list {
+    display: none;
+  }
+  .activity-inspector.showing-detail .insp-detail {
+    display: block;
+  }
+  .insp-back {
+    display: inline-flex;
+    gap: 6px;
+    margin: -6px 0 10px -8px;
+    padding: 4px 8px;
+    border-radius: 8px;
+    color: var(--accent-text);
+    font-size: calc(12.5px * var(--text-scale));
+    font-weight: 600;
+  }
+}
+
+/* Rows in the story. A chapter's heading, then its steps indented under it. */
+.insp-chapter,
+.insp-row {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 8px;
+  width: 100%;
+  min-height: 30px;
+  padding: 0 8px;
+  border-radius: 8px;
+  text-align: left;
+}
+.insp-chapter {
+  margin-top: 6px;
+  font-weight: 600;
+  color: var(--ink);
+}
+.insp-chapter:first-child {
+  margin-top: 0;
+}
+.insp-chapter > svg {
+  flex: none;
+  color: var(--muted);
+}
+.insp-row {
+  padding-left: 30px;
+  color: var(--ink-2);
+}
+.insp-row > svg:first-child {
+  flex: none;
+  color: var(--muted);
+}
+.insp-row.update {
+  color: var(--muted);
+  font-style: italic;
+}
+.insp-row.failed > svg:first-child,
+.insp-row.failed .insp-text {
+  color: var(--danger);
+}
+.insp-row.running .insp-text {
+  color: var(--ink);
+  font-weight: 500;
+}
+.insp-chapter.on,
+.insp-row.on {
+  background: var(--accent-soft);
+}
+.insp-chapter.on:hover,
+.insp-row.on:hover {
+  background: var(--accent-soft);
+}
+.insp-list button:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: -2px;
+}
+.insp-text {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.insp-mark {
+  flex: none;
+  color: var(--muted);
+  font-size: calc(12px * var(--text-scale));
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+.insp-mark.bad {
+  color: var(--danger);
+}
+
+/* The selected item in full. */
+.insp-sel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.insp-sel-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.insp-sel-head > span:first-child {
+  display: grid;
+  flex: none;
+}
+.insp-sel-title {
+  margin: 0;
+  min-width: 0;
+  font-size: calc(14px * var(--text-scale));
+  font-weight: 650;
+  overflow-wrap: anywhere;
+}
+.insp-sel-head .insp-sel-title {
+  flex: 0 1 auto;
+}
+.insp-kv {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  color: var(--muted);
+  font-size: calc(12px * var(--text-scale));
+  font-variant-numeric: tabular-nums;
+}
+.insp-sel .step-detail {
+  padding: 0;
+}
+.insp-sel .step-detail pre,
+.crew-steps .step-detail pre {
+  max-height: min(52vh, 520px);
+  background: var(--sunken);
+}
+.insp-sel .diff-body {
+  max-height: min(52vh, 520px);
+  border-radius: var(--radius-sm);
+  background: var(--sunken);
+}
+.insp-thought {
+  color: var(--ink-2);
+  user-select: text;
+}
+.insp-thought .md > :first-child {
+  margin-top: 0;
+}
+.insp-open-crew {
+  align-self: flex-start;
+  gap: 6px;
+}
+.insp-why {
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--accent-soft) 60%, transparent);
+  color: var(--ink-2);
+}
+.insp-why b {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 4px;
+  color: var(--accent-text);
+  font-size: calc(12px * var(--text-scale));
+}
+.insp-why p {
+  margin: 0;
+  line-height: 1.5;
+  user-select: text;
+}
+.insp-error {
+  margin: 8px 0 0;
+  color: var(--danger);
+  font-size: calc(12.5px * var(--text-scale));
+}
+
+/* ── Crew: lanes ─────────────────────────────────────────────────────────────────────────────── */
+.crew-inspector {
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+.crew-lanes {
+  --who: clamp(96px, 32%, 160px);
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  padding: 12px 12px 10px;
+  border-bottom: 1px solid var(--line);
+}
+.crew-lane {
+  display: grid;
+  grid-template-columns: var(--who) minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 30px;
+  padding: 0 6px;
+  border-radius: 8px;
+  text-align: left;
+}
+.crew-lane.on {
+  background: var(--accent-soft);
+}
+.crew-lane-who {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  color: var(--ink-2);
+  font-size: calc(12.5px * var(--text-scale));
+  font-weight: 500;
+}
+.crew-lane.bot .crew-lane-who {
+  font-weight: 600;
+  color: var(--ink);
+}
+.crew-lane-name {
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.crew-track {
+  position: relative;
+  height: 10px;
+  border-radius: 5px;
+  background: var(--sunken);
+}
+.crew-bar {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  border-radius: 5px;
+  background: var(--bar);
+}
+.crew-bar.wait {
+  background: color-mix(in srgb, var(--bar) 28%, transparent);
+}
+/* Still running: the bar's end is hatched. */
+.crew-bar.live,
+.crew-swatch.live {
+  background-image: repeating-linear-gradient(45deg, color-mix(in srgb, var(--canvas) 45%, transparent) 0 3px, transparent 3px 6px);
+}
+.crew-ticks {
+  position: relative;
+  height: 16px;
+  margin: 2px 6px 0 calc(var(--who) + 16px);
+  color: var(--faint);
+  font-size: calc(11px * var(--text-scale));
+  font-variant-numeric: tabular-nums;
+}
+.crew-ticks span {
+  position: absolute;
+  top: 0;
+  transform: translateX(-50%);
+  white-space: nowrap;
+}
+.crew-ticks span:first-child {
+  transform: none;
+}
+.crew-ticks span:last-child {
+  transform: translateX(-100%);
+}
+.crew-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  margin: 4px 0 0 calc(var(--who) + 16px);
+  color: var(--muted);
+  font-size: calc(11px * var(--text-scale));
+}
+.crew-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.crew-swatch {
+  display: inline-block;
+  width: 16px;
+  height: 7px;
+  border-radius: 4px;
+}
+.crew-swatch.wait {
+  background: color-mix(in srgb, var(--accent) 28%, transparent);
+}
+.crew-swatch.live {
+  background-color: var(--muted);
+}
+
+/* ── Crew: the selected member ───────────────────────────────────────────────────────────────── */
+.crew-member {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px 16px 20px;
+}
+.crew-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.crew-head-name {
+  min-width: 0;
+  font-size: calc(14.5px * var(--text-scale));
+  overflow-wrap: anywhere;
+}
+.crew-sub {
+  margin: -6px 0 0;
+  color: var(--muted);
+  font-size: calc(12px * var(--text-scale));
+}
+.crew-face {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  color: var(--on-accent);
+  font-weight: 700;
+  line-height: 1;
+}
+.crew-face.command {
+  border-radius: 6px;
+  background: var(--sunken);
+  color: var(--ink-2);
+}
+.crew-said {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.crew-said-who {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: calc(11.5px * var(--text-scale));
+  font-weight: 600;
+}
+.crew-bubble {
+  max-width: 100%;
+  padding: 8px 12px;
+  border-radius: 4px 14px 14px 14px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  color: var(--ink);
+  user-select: text;
+}
+.crew-bubble.asked {
+  background: var(--sunken);
+  border-color: transparent;
+}
+.crew-bubble .md > :first-child {
+  margin-top: 0;
+}
+.crew-bubble .md > :last-child {
+  margin-bottom: 0;
+}
+.crew-steps {
+  list-style: none;
+  margin: 0;
+  padding: 2px 0;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--line);
+}
+.crew-steps summary {
+  padding-left: 10px;
+  list-style: none;
+  cursor: pointer;
+}
+.crew-steps summary::-webkit-details-marker {
+  display: none;
+}
+.crew-steps summary:hover {
+  background: var(--hover);
+}
+.crew-steps details[open] .crew-step-chevron {
+  transform: rotate(90deg);
+}
+.crew-step-chevron {
+  flex: none;
+  color: var(--faint);
+}
+.crew-steps .step-detail {
+  padding: 2px 10px 8px 32px;
+}
+.crew-none {
+  margin: 0;
+}
+.crew-live {
+  margin: 0;
+  color: var(--muted);
+}
+.crew-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.crew-links .secondary {
+  gap: 6px;
+  font-family: var(--font-mono);
+  color: var(--accent-text);
+}
+.crew-out-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: var(--muted);
+  font-size: calc(11.5px * var(--text-scale));
+  font-weight: 600;
+}
+.crew-term {
+  margin: 0;
+  max-height: min(48vh, 460px);
+  min-height: 80px;
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--sunken);
+  color: var(--ink-2);
+  font: calc(11.5px * var(--text-scale)) / 1.55 var(--font-mono);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+.crew-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.crew-actions:empty {
+  display: none;
+}
+.crew-actions .secondary,
+.crew-row-stop {
+  gap: 6px;
+  min-height: 30px;
+}
+
+/* ── The crew card in the chat ───────────────────────────────────────────────────────────────── */
+.crew-card {
+  max-width: 560px;
+  margin: 0 0 14px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--surface);
+  color: var(--muted);
+}
+.crew-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 8px;
+  width: 100%;
+  min-height: 36px;
+  padding: 0 12px;
+  border-radius: 14px;
+  font-size: calc(13px * var(--text-scale));
+  text-align: left;
+}
+.crew-card.open .crew-card-head {
+  border-radius: 14px 14px 0 0;
+}
+.crew-card-line {
+  min-width: 0;
+  color: var(--ink-2);
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-variant-numeric: tabular-nums;
+}
+.crew-marks {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  margin-left: auto;
+}
+.crew-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  margin: 0 2px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+.crew-card-chevron {
+  flex: none;
+  color: var(--faint);
+}
+.crew-card-head[aria-expanded="true"] .crew-card-chevron {
+  transform: rotate(90deg);
+}
+.crew-rows {
+  display: flex;
+  flex-direction: column;
+  padding: 2px 6px 6px;
+  border-top: 1px solid var(--line);
+}
+.crew-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.crew-row-main {
+  flex: 1;
+  min-width: 0;
+  justify-content: flex-start;
+  gap: 10px;
+  min-height: 44px;
+  padding: 4px 6px;
+  border-radius: 10px;
+  text-align: left;
+}
+.crew-row-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.crew-row-name {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  color: var(--ink);
+  font-weight: 600;
+  font-size: calc(13px * var(--text-scale));
+}
+.crew-row-line {
+  min-width: 0;
+  color: var(--muted);
+  font-size: calc(12.5px * var(--text-scale));
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.crew-row-line .shimmer-host {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.crew-row-meta {
+  flex: none;
+  color: var(--faint);
+  font-size: calc(12px * var(--text-scale));
+  font-variant-numeric: tabular-nums;
+}
+.crew-row .insp-error {
+  flex-basis: 100%;
+  margin: 0 0 6px 38px;
+}
+.crew-row-stop {
+  margin-right: 4px;
+}
+
+/* ── A finished turn's chapters, in its fold ─────────────────────────────────────────────────── */
+.chapter-summary {
+  list-style: none;
+  margin: 0 0 4px;
+  padding: 0 0 0 30px;
+  max-width: 600px;
+}
+.chapter-summary button {
+  display: flex;
+  align-items: flex-start;
+  justify-content: flex-start;
+  gap: 8px;
+  width: 100%;
+  padding: 5px 8px;
+  border-radius: 8px;
+  text-align: left;
+  color: var(--muted);
+}
+.chapter-summary button > svg {
+  flex: none;
+  margin-top: 3px;
+}
+.chapter-summary-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.chapter-summary-heading {
+  color: var(--ink-2);
+  font-weight: 600;
+  font-size: calc(13.5px * var(--text-scale));
+}
+.chapter-summary-line {
+  font-size: calc(12.5px * var(--text-scale));
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.chapter-summary-failed {
+  flex: none;
+  font-size: calc(12px * var(--text-scale));
+}
+/* A step row in the chat opens the Activity tab on it. */
+.work-step-open {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 6px;
+  width: 100%;
+  min-height: 24px;
+  padding: 0 2px;
+  border-radius: 6px;
+  color: var(--muted);
+  font-size: calc(14px * var(--text-scale));
+  line-height: 1.625;
+  text-align: left;
+}
+.work-step-open:hover {
+  color: var(--ink-2);
+}
+.work-step.running .work-step-open {
+  color: var(--ink);
+}

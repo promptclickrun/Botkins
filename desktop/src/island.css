@@ -226,8 +226,11 @@
   border-top: 1px solid var(--line);
   overscroll-behavior: contain;
 }
-.island-item summary {
+.island-item summary,
+.island-item-open {
   display: flex;
+  justify-content: flex-start;
+  width: 100%;
   align-items: center;
   gap: 8px;
   min-height: 32px;
@@ -239,10 +242,21 @@
 .island-item summary::-webkit-details-marker {
   display: none;
 }
-.island-item summary:hover {
+.island-item-open {
+  padding: 0 4px 0 0;
+  border-radius: 8px;
+  text-align: left;
+  font: inherit;
+}
+.island-item-open:focus-visible {
+  outline-offset: -2px;
+}
+.island-item summary:hover,
+.island-item-open:hover {
   background: var(--hover);
 }
-.island-item summary .island-row {
+.island-item summary .island-row,
+.island-item-open .island-row {
   flex: 1;
   height: 32px;
 }
