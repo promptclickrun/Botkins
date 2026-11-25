@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { normalizePanelFrameId, panelKeyFromInput } from "../desktop/frames.mjs";
+import { MAX_PANEL_OPEN_FRAMES, normalizePanelFrameId, normalizePanelFrameIds, panelKeyFromInput } from "../desktop/frames.mjs";
 import {
   PANEL_FULLSCREEN_SUFFIX,
   isPanelFullscreenShortcut,
@@ -134,5 +134,24 @@ describe("panelOpen helpers", () => {
     assert.equal(normalizePanelFrameId("frame-" + id), null);
     assert.equal(normalizePanelFrameId(id.toUpperCase()), null);
     assert.equal(normalizePanelFrameId("not-a-frame-id"), null);
+  });
+
+  it("validates, deduplicates, and caps opened-panel frame id lists", () => {
+    const ids = [
+      "9f8e7d6c-5b4a-4321-89ab-cdef01234561",
+      "9f8e7d6c-5b4a-4321-89ab-cdef01234562",
+      "9f8e7d6c-5b4a-4321-89ab-cdef01234563",
+      "9f8e7d6c-5b4a-4321-89ab-cdef01234564",
+      "9f8e7d6c-5b4a-4321-89ab-cdef01234565",
+    ];
+    assert.deepEqual(normalizePanelFrameIds([ids[0], ids[1]]), [ids[0], ids[1]]);
+    assert.deepEqual(
+      normalizePanelFrameIds([ids[0], "bad", ids[0], null, ids[1], "frame-" + ids[2], ids[2], ids[3], ids[4]]),
+      ids.slice(0, MAX_PANEL_OPEN_FRAMES),
+    );
+    assert.deepEqual(normalizePanelFrameIds([]), []);
+    assert.deepEqual(normalizePanelFrameIds(null), []);
+    assert.deepEqual(normalizePanelFrameIds(undefined), []);
+    assert.deepEqual(normalizePanelFrameIds(ids[0]), []);
   });
 });
