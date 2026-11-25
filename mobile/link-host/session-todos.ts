@@ -1,6 +1,8 @@
 type TaskStatus = { status: string };
 
-function closed(todo: TaskStatus) {
+export const TRANSFER_TODOS = "Transfer the current chat checklist into this session’s todo tool, preserving each step and its status, then continue the open steps.";
+
+export function closed(todo: TaskStatus) {
   return todo.status === "done" || todo.status === "cancelled" || todo.status === "failed";
 }
 

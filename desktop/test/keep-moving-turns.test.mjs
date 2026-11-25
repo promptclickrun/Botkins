@@ -437,3 +437,34 @@ test("a question dismissed or whose chat is deleted does not come back, but a wa
   ws.flushSave();
   assert.deepEqual(reopen(dir, fakeSession(() => "x")).interactions.snapshot().map((view) => view.id), [kept]);
 });
+
+test("a fresh session receives the chat checklist and its replacement survives reload", async (t) => {
+  const before = [{ id: "a", title: "Inspect receipts", status: "done" }, { id: "b", title: "Verify receipts", status: "blocked", dependsOn: ["a"] }];
+  const { ws, session, chat, dir } = setup(t, (_n, { session }) => {
+    plan(session, ["a", "Inspect receipts", "done"], ["b", "Verify receipts", "done"]);
+    return "Verified.";
+  });
+  ws.chat(chat).todos = before;
+  await ws.send(chat, "Finish the verification");
+  assert.ok(session.sent[0].prompt.includes(JSON.stringify(before)));
+  assert.deepEqual(ws.chat(chat).todos.map(({ id, status }) => [id, status]), [["a", "done"], ["b", "done"]]);
+  assert.deepEqual(new Workspace(dir, async () => ({}), () => {}).chat(chat).todos, ws.chat(chat).todos);
+  await ws.send(chat, "Thanks");
+  assert.equal(session.sent.at(-1).prompt, "Thanks");
+});
+
+test("a legacy open checklist can be cleared without reviving an older turn on reload", async (t) => {
+  const { ws, chat, session, dir } = setup(t, (n, { session }) => {
+    if (n === 1) plan(session, ["old", "Old step", "pending"]);
+    else plan(session);
+    return "Ready?";
+  });
+  await ws.send(chat, "Plan");
+  delete ws.chat(chat).todos;
+  session.todos = null;
+  await ws.send(chat, "Clear the checklist");
+  assert.match(session.sent.at(-1).prompt, /Old step/);
+  assert.deepEqual(new Workspace(dir, async () => ({}), () => {}).chat(chat).todos, []);
+  await ws.send(chat, "Hello");
+  assert.equal(session.sent.at(-1).prompt, "Hello");
+});

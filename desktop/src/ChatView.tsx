@@ -71,7 +71,7 @@ import { FolderKanban, ShieldAlert, UserPlus } from "lucide-react";
 import { PeopleDialog } from "./ChatPeople";
 import { authorName, chatPeopleView, formatTypingLabel } from "./peopleView";
 import type { Bot, Chat, ChatMode, Message, State } from "./types";
-import { sessionTodos } from "../desktop/link/session-todos";
+import { closed, sessionTodos, TRANSFER_TODOS } from "../desktop/link/session-todos";
 import { CONTINUE_OPEN_STEPS, keptLine, openLine } from "./keep";
 import { orderedRunEvents, type RunTimelineEvent } from "./chatTimeline";
 import { teamCan } from "./teamAccess";
@@ -1305,7 +1305,7 @@ function ChatViewBody({
               {!todoBesideFold && todoRail}
             </div>
             {drawer === "helpers" && <HelperDrawer agents={agents} />}
-            {drawer === "tasks" && todos.length > 0 && <TaskDrawer todos={todos} />}
+            {drawer === "tasks" && todos.length > 0 && <TaskDrawer todos={todos} transfer={!busy && todos.some(todo => !closed(todo)) ? () => void window.botkins.send(chat.id, TRANSFER_TODOS).catch(e => setNotice(e.message)) : undefined} />}
           </>
         )}
         {blocked.length > 0 && project && (

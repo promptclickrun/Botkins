@@ -14,9 +14,9 @@ import type { ProfileHost } from "@/link/profile";
 import { relayFetch } from "@/link/relay";
 import type { Calls, ChatDetail, ScreenFrame, ScreenInput } from "@/link/types";
 import { textMode, useChatPrefs } from "./chatPrefs";
-import { loadPrefs } from "./prefs";
+import { loadPrefs, usePrefs } from "./prefs";
 import { newPresenceKey, removePresenceKey } from "./presence";
-import { currentOf, hasRoom, indexOf, type Kept, NO_COMPUTERS, pairingKey, readKeptComputers, savedIds, tidy, TOO_MANY, using, withDetails, withPairing, without } from "./computers";
+import { currentOf, hasRoom, indexOf, type Kept, NO_COMPUTERS, pairingKey, readKeptComputers, savedIds, startupComputers, tidy, TOO_MANY, using, withDetails, withPairing, without } from "./computers";
 import { applyParts, forgetComputer, mergeChat, onComputerChange, showToast, useApp } from "./store";
 import { createPartsBatcher } from "./partsBatch";
 import { canBrowse, NearbyPace } from "./reconnect";
@@ -157,8 +157,9 @@ async function retrySavedStorage() {
     savedStorageRetry = null;
     // Do not overwrite a pairing made while protected storage was locked. It will be persisted by
     // that flow once storage is available; the next launch can read the complete index.
+    await loadPrefs();
     if (kept.list.length || useApp.getState().pairings.length) return;
-    kept = saved.kept;
+    kept = startupComputers(saved.kept, usePrefs.getState().primaryHost);
     useApp.setState({ pairing: currentOf(kept), pairings: kept.list, link: "connecting" });
     const pairing = currentOf(kept);
     if (pairing) follow(pairing);
@@ -203,6 +204,7 @@ export async function boot() {
     }
   }
   await loadPrefs();
+  kept = startupComputers(kept, usePrefs.getState().primaryHost);
   const held = useApp.getState();
   const pairing = savedStorageLocked ? held.pairing : currentOf(kept);
   useApp.setState(savedStorageLocked ? { booted: true, pairing, pairings: held.pairings, link: held.link } : { booted: true, pairing, pairings: kept.list, link: "connecting" });
