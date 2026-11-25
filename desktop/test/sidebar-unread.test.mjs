@@ -350,3 +350,68 @@ test("RemoteHosts markChatsRead chunks above the 2,000-id protocol limit and sto
   assert.deepEqual(sentA, [2000]);
   assert.deepEqual(sentB, []);
 });
+
+test("RemoteHosts markChatsRead fallback skips the host's real reply for a team member's deleted chat but keeps other refusals", async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "botkins-remote-member-fallback-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const snapshot = {
+    bots: [
+      { id: "bot-vis", name: "Pip" },
+      { id: "bot-hidden", name: "Ghost" },
+    ],
+    chats: [
+      { id: "c_vis", botId: "bot-vis", title: "Visible", time: 100, unread: true, createdBy: "m_view", messages: [] },
+      { id: "c_other", botId: "bot-vis", title: "Other member", time: 200, unread: true, createdBy: "m_other", messages: [] },
+      { id: "c_hidden_own", botId: "bot-hidden", title: "Lost bot access", time: 300, unread: true, createdBy: "m_view", messages: [] },
+    ],
+    requests: [],
+    runs: [],
+  };
+  const host = new LinkHost({
+    dir: join(dir, "host"),
+    backend: {
+      snapshot: () => snapshot,
+      subscribe: () => () => {},
+      call: async () => null,
+    },
+  });
+  host.store.data.devices = [{ id: "dev-1", name: "Val's Mac", memberId: "m_view", pub: "x", role: "member" }];
+  host.store.data.team = {
+    name: "Crew",
+    roles: [{ id: "r_viewer", name: "Viewer", perms: { agents: ["view"], today: [], skills: [], mcp: [], plugins: [], settings: [] }, bots: ["bot-vis"] }],
+    groups: [{ id: "g_viewers", name: "Viewers", roleId: "r_viewer" }],
+    members: [
+      { id: "m_view", name: "Val", groupId: "g_viewers" },
+      { id: "m_other", name: "Sam", groupId: "g_viewers" },
+    ],
+    chats: {},
+    views: {},
+  };
+  const session = { deviceId: "dev-1" };
+
+  // Confirm the host's real reply for a deleted chat is the shared not-found/not-allowed message.
+  await assert.rejects(
+    () => host.dispatch(session, { m: "setChatFlags", a: ["c_deleted", { unread: false }] }),
+    (err) => err.message === "That chat belongs to the owner or another member.",
+  );
+
+  const remote = new RemoteHosts({ file: join(dir, "hosts.json"), protect: null, lib: {} });
+  t.after(() => remote.stop());
+  remote.hosts = [{ id: "h_a", name: "Studio" }];
+  remote.current = "h_a";
+  remote.state = "online";
+  remote.parts = { meta: { capabilities: [] } };
+  remote.client = {
+    stop() {},
+    call: (method, ...args) => host.dispatch(session, { m: method, a: args }),
+  };
+
+  assert.equal(await remote.call("markChatsRead", [["c_vis", "c_deleted", "c_other"]]), null);
+  assert.deepEqual(host.store.data.team.views.m_view?.chats, { c_vis: { seen: 100 } });
+
+  // Other real host refusals (such as a bot removed from the member's role) still report as failures.
+  await assert.rejects(
+    () => remote.call("markChatsRead", [["c_deleted", "c_hidden_own"]]),
+    (err) => /bot isn't available to your team role/i.test(err.message),
+  );
+});

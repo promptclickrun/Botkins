@@ -78,9 +78,16 @@ export type MarkReadResult = { ok: true } | { ok: false; failed: number; error: 
 
 const UNKNOWN_BATCH_RE = /unknown method|not supported|not allowed|unsupported|not a function|not found|can't be done from a phone/i;
 const MISSING_CHAT_RE = /^unknown chat\b(?!\s+flag\b)|\bchat\b.*\b(?:no longer (?:exists|available)|not found|gone)\b/i;
+const UNAVAILABLE_MEMBER_CHAT = "That chat belongs to the owner or another member.";
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error ?? "");
+}
+
+/** Per-chat `setChatFlags` fallback errors that mean the chat is gone or not visible to this member. */
+export function isSkippedMarkReadError(error: unknown): boolean {
+  const text = errorMessage(error).trim();
+  return text === UNAVAILABLE_MEMBER_CHAT || MISSING_CHAT_RE.test(text);
 }
 
 /**
@@ -117,7 +124,7 @@ export async function runMarkChatsRead(ids: readonly string[], client: MarkReadC
       await client.setChatFlags(id, { unread: false });
     } catch (error) {
       if (!isCurrent()) return { ok: true };
-      if (MISSING_CHAT_RE.test(errorMessage(error))) continue;
+      if (isSkippedMarkReadError(error)) continue;
       errors.push(error);
     }
   }

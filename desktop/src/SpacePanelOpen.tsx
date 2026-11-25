@@ -42,6 +42,7 @@ export default function OpenedPanel({
   children,
   ask,
   asks = [],
+  frameId = null,
   initialFullscreen,
   close,
 }: {
@@ -54,6 +55,8 @@ export default function OpenedPanel({
   ask?: (text: string) => Promise<void>;
   /** The panel's asks, cleaned (`asksOf`). Shown only with the ask bar. */
   asks?: string[];
+  /** Active custom HTML frame id inside this opened panel, if any. */
+  frameId?: string | null;
   /** Explicit opening mode (e.g. "Open full screen"); otherwise uses the remembered choice. */
   initialFullscreen?: boolean;
   close: () => void;
@@ -77,7 +80,7 @@ export default function OpenedPanel({
   const finishClose = () => {
     if (closedRef.current) return;
     closedRef.current = true;
-    window.botkins.setPanelOpen?.(false);
+    window.botkins.setPanelOpen?.(null);
     closeRef.current();
   };
 
@@ -90,11 +93,15 @@ export default function OpenedPanel({
   useLayoutEffect(() => {
     const dialog = ref.current;
     if (dialog && !dialog.open) dialog.showModal();
-    window.botkins.setPanelOpen?.(true);
-    return () => {
-      window.botkins.setPanelOpen?.(false);
-    };
   }, []);
+
+  useLayoutEffect(() => {
+    if (closedRef.current) return;
+    window.botkins.setPanelOpen?.(frameId ?? null);
+    return () => {
+      window.botkins.setPanelOpen?.(null);
+    };
+  }, [frameId]);
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {

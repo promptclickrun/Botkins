@@ -416,7 +416,7 @@ export async function restartProfileAttempt() {
 export async function finishPending(): Promise<ProfileSession | null | undefined> {
   const attempt = useProfile.getState().attempt;
   if (!attempt || useProfile.getState().busy) return undefined;
-  const generation = authGeneration;
+  let generation = authGeneration;
   useProfile.setState({ busy: true, error: null });
   const session = await profileCall(() => profileApi.finish(attempt), generation);
   if (generation !== authGeneration || useProfile.getState().attempt !== attempt) return undefined;
@@ -430,19 +430,35 @@ export async function finishPending(): Promise<ProfileSession | null | undefined
   }
   const previous = useProfile.getState().session;
   if (previous && previous.profileId !== session.profileId) {
-    authGeneration += 1;
+    generation = ++authGeneration;
     await clearProfilePairings(previous.profileId, Object.keys(useProfile.getState().pairings));
     await clearCurrent();
     await dropProfileBoundPairings(useProfile.getState().boundLocal);
     await clearBound();
     await clearExcluded();
     await clearPendingRemovals();
+    if (generation !== authGeneration) return undefined;
     useProfile.setState({ pairings: {}, boundLocal: [], excluded: [], pendingRemovals: [] });
   }
-  await saveSession(session);
-  await keep(PROFILE_CHOICE_KEY, "enrolled");
-  await forget(PROFILE_ATTEMPT_KEY).catch(() => {});
-  useProfile.setState({ session, attempt: null, prompt: null, busy: false, error: null });
+  let committed = false;
+  await queueProfileStorage(async () => {
+    if (generation !== authGeneration) return;
+    let wroteSession = false;
+    try {
+      await keep(PROFILE_SESSION_KEY, JSON.stringify(session));
+      wroteSession = true;
+      if (generation !== authGeneration) return;
+      await keep(PROFILE_CHOICE_KEY, "enrolled");
+      if (generation !== authGeneration) return;
+      await forget(PROFILE_ATTEMPT_KEY).catch(() => {});
+      if (generation !== authGeneration) return;
+      committed = true;
+      useProfile.setState({ session, attempt: null, prompt: null, busy: false, error: null });
+    } finally {
+      if (wroteSession && !committed) await forget(PROFILE_SESSION_KEY).catch(() => {});
+    }
+  });
+  if (!committed || generation !== authGeneration) return undefined;
   await refreshProfile();
   void syncLocalPairings();
   return session;

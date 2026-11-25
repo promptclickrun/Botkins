@@ -129,6 +129,11 @@ export function panelKeyFromInput(input) {
   return null;
 }
 
+/** Validates an opened panel's active frame id reported by the renderer, or returns null. */
+export function normalizePanelFrameId(frameId) {
+  return typeof frameId === "string" && /^[0-9a-f-]{36}$/.test(frameId) ? frameId : null;
+}
+
 const BASE_STYLE =
   // The Ink theme in light, until the app sends the colors in use (src/HtmlFrame.tsx).
   ":root{color-scheme:light dark;--ink:#000000;--muted:#595959;--line:#e7e7e4;--paper:#f5f5f3;--surface:#f5f5f3;--canvas:#ffffff;--rail:#f7f7f5;--sunken:#ededea;--accent:#000000;--active:#ededea;" +

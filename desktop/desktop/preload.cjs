@@ -474,7 +474,7 @@ api.onPanelKey = (fn) => {
   ipcRenderer.on("panel-key", listener);
   return () => ipcRenderer.removeListener("panel-key", listener);
 };
-api.setPanelOpen = (open) => ipcRenderer.send("panel-open", open === true);
+api.setPanelOpen = (frameId) => ipcRenderer.send("panel-open", typeof frameId === "string" ? frameId : null);
 // The window uses the Botkins bridge.
 // Only the window's own page gets it. This script runs in the frames of custom views too (see the
 // top of this file), and a page a bot wrote must never hold the app's bridge.
