@@ -333,7 +333,10 @@ export class SecureInputs {
         const target = parseTarget(args.target, plan.operation);
         if (plan.operation === "native_fill") {
           checkPrivate();
-          plan.native = target;
+          if (typeof this.ws.computerUse?.resolveCachedSecureTarget !== "function") {
+            throw new Error("Native secure fill is unavailable on this computer.");
+          }
+          plan.native = this.ws.computerUse.resolveCachedSecureTarget(target);
         }
         if (plan.operation === "page_fill") {
           if (target) {
@@ -368,8 +371,8 @@ export class SecureInputs {
         }
         const detail = plan.native
           ? [
-              `${operations.native_fill}${plan.native.app ? ` (${plan.native.app})` : ""}`,
-              ...(plan.native.window_title ? [`Window: ${plan.native.window_title}`] : []),
+              `${operations.native_fill}${cleanLine(plan.native.app, 120) ? ` (${cleanLine(plan.native.app, 120)})` : ""}`,
+              ...(cleanLine(plan.native.window_title, 160) ? [`Window: ${cleanLine(plan.native.window_title, 160)}`] : []),
               `PID: ${plan.native.pid} · Element: ${plan.native.element_token}`,
               ...plan.fields.map(f => `${f.label} → ${f.key}`),
             ].join("\n")
@@ -470,6 +473,9 @@ export class SecureInputs {
           }
           if (err?.secureCode === "type_mismatch") {
             throw new Error("Refused secure fill: the target input type does not match the requested field kind. Nothing was filled.");
+          }
+          if (err?.secureCode === "native_target_mismatch") {
+            throw new Error("Refused secure fill: the native target field is no longer a secure/password field in the approved window. Nothing was filled.");
           }
           throw new Error("Botkins could not apply the secure input. Check the destination and request fresh input to retry.");
         } finally {

@@ -29,6 +29,7 @@ import {
   verifyExecBinding,
 } from "./node-exec.mjs";
 import { nodeScreenCapture, nodeScreenInfo, nodeScreenInput } from "./node-screen.mjs";
+import { formatVisibleText } from "./computer-use.mjs";
 
 export const CAPABILITIES_VERSION = 1;
 export const LIST_FILES_OPERATION = "project.list_files";
@@ -312,7 +313,17 @@ function summarizeArgs(operation, params = {}, extra = {}) {
   if (operation === "computer.observe") return `pid=${params.pid ?? "?"}${params.window_id ? ` window=${params.window_id}` : ""}`;
   if (operation === "computer.act") {
     const target = params.element_token ? `token=${params.element_token}` : params.x != null && params.y != null ? `(${params.x},${params.y})` : "";
-    return `${params.action || "act"} pid=${params.pid ?? "?"}${target ? ` ${target}` : ""} (${params.delivery_mode || "background"})`;
+    const base = `${params.action || "act"} pid=${params.pid ?? "?"}${target ? ` ${target}` : ""} (${params.delivery_mode || "background"})`;
+    if ((params.action === "type_text" || params.action === "set_value") && typeof params.text === "string") {
+      return `${base} text="${formatVisibleText(params.text, 200)}"`;
+    }
+    if (params.action === "hotkey" && Array.isArray(params.keys) && params.keys.length) {
+      return `${base} keys=${params.keys.join("+")}`;
+    }
+    if (params.action === "press_key" && typeof params.key === "string") {
+      return `${base} key=${params.key}`;
+    }
+    return base;
   }
   if (operation === "node.notify") return safeText(params.title || "", 120);
   return "";
@@ -923,7 +934,7 @@ export class NodeHost {
   }
 
   /** Prepares operation metadata, validates inputs, and computes grant scope on submit. */
-  planOperation(identity, peer, { sourceBotId, sourceBotName, jobOp, resourceId, path, params }) {
+  async planOperation(identity, peer, { sourceBotId, sourceBotName, jobOp, resourceId, path, params }) {
     if (!ALL_OPERATIONS.has(jobOp)) {
       throw new Error("This node host does not support that operation.");
     }
@@ -1059,10 +1070,14 @@ export class NodeHost {
     }
 
     if (COMPUTER_OPERATIONS.has(jobOp)) {
-      if (!this.computerUseAdapter()) {
+      const cu = this.computerUseAdapter();
+      if (!cu) {
         throw new Error("Native computer use is off on this node. Turn it on in Settings › Access.");
       }
       const cuParams = params && typeof params === "object" ? params : {};
+      if (jobOp === "computer.act" && typeof cu.preflightAct === "function") {
+        await cu.preflightAct(cuParams);
+      }
       return {
         grantOperation: jobOp,
         resourceId: COMPUTER_RESOURCE,
@@ -1137,7 +1152,7 @@ export class NodeHost {
         const now = Date.now();
         if (createdAt < now - WEEK || createdAt > now + 300_000)
           throw new Error("Job timestamp is outside the retry window.");
-        const planned = this.planOperation(identity, peer, {
+        const planned = await this.planOperation(identity, peer, {
           sourceBotId,
           sourceBotName,
           jobOp,

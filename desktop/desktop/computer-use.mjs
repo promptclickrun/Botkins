@@ -20,7 +20,29 @@ const CALL_TIMEOUT_MS = 30_000;
 const MAX_TRACKED_TOKENS = 1000;
 const ACTIONS = ["click", "double_click", "right_click", "type_text", "press_key", "hotkey", "scroll", "drag", "set_value"];
 const DELIVERY_MODES = ["background", "foreground"];
+const NON_REMEMBERED_ACTIONS = new Set(["type_text", "set_value", "hotkey"]);
 const SECURE_ROLE_RE = /secure|password|secret/i;
+const FOCUSED_SECURE_TTL_MS = 5 * 60_000;
+const TURN_WATCH_MS = 200;
+
+export function formatVisibleText(text, max = 200) {
+  if (typeof text !== "string") return "";
+  let escaped = "";
+  for (const ch of text) {
+    const code = ch.codePointAt(0);
+    if (ch === "\n") escaped += "\\n";
+    else if (ch === "\r") escaped += "\\r";
+    else if (ch === "\t") escaped += "\\t";
+    else if (ch === "\0") escaped += "\\0";
+    else if (code < 0x20 || code === 0x7f) {
+      escaped += `\\x${code.toString(16).padStart(2, "0")}`;
+    } else {
+      escaped += ch;
+    }
+  }
+  if (escaped.length <= max) return escaped;
+  return `${escaped.slice(0, max)}… (${text.length} chars)`;
+}
 
 function execProgram(file, args, { timeout = 10_000 } = {}) {
   return new Promise((resolve) => {
@@ -38,7 +60,16 @@ function execProgram(file, args, { timeout = 10_000 } = {}) {
 
 function isSecureNode(node) {
   if (!node || typeof node !== "object") return false;
-  if (node.secure === true || node.is_secure === true || node.isSecure === true || node.password === true) return true;
+  if (
+    node.secure === true ||
+    node.is_secure === true ||
+    node.isSecure === true ||
+    node.password === true ||
+    node.is_password === true ||
+    node.isPassword === true
+  ) {
+    return true;
+  }
   for (const field of [node.role, node.subrole, node.control_type, node.type, node.ax_role, node.ax_subrole]) {
     if (typeof field === "string" && SECURE_ROLE_RE.test(field)) return true;
   }
@@ -56,7 +87,12 @@ function collectNodes(value, out = [], depth = 0) {
     out.push({
       token,
       secure: isSecureNode(value),
-      focused: value.focused === true || value.is_focused === true,
+      focused:
+        value.focused === true ||
+        value.is_focused === true ||
+        value.isFocused === true ||
+        value.has_keyboard_focus === true ||
+        value.hasKeyboardFocus === true,
       role: typeof value.role === "string" ? value.role : typeof value.subrole === "string" ? value.subrole : undefined,
       title: typeof value.title === "string" ? value.title : typeof value.label === "string" ? value.label : undefined,
     });
@@ -198,17 +234,16 @@ export class CuaDriverClient {
       stderrBuf = (stderrBuf + String(chunk)).slice(-2000);
     });
     const failAll = (reason) => {
+      if (this.#child !== child) return;
+      this.#child = null;
+      this.#rl?.close();
+      this.#rl = null;
+      this.#ready = null;
       for (const entry of this.#pending.values()) {
         clearTimeout(entry.timer);
         entry.reject(new Error(reason));
       }
       this.#pending.clear();
-      if (this.#child === child) {
-        this.#child = null;
-        this.#rl?.close();
-        this.#rl = null;
-        this.#ready = null;
-      }
     };
     child.on("error", (err) => failAll(`Failed to start cua-driver: ${err.message}`));
     child.on("exit", (code, signal) => {
@@ -217,6 +252,7 @@ export class CuaDriverClient {
     });
     this.#rl = createInterface({ input: child.stdout, crlfDelay: Infinity });
     this.#rl.on("line", (line) => {
+      if (this.#child !== child) return;
       const trimmed = line.trim();
       if (!trimmed) return;
       let msg;
@@ -225,12 +261,31 @@ export class CuaDriverClient {
       } catch {
         return;
       }
+      if (!msg || typeof msg !== "object") return;
+      // Ignore server notifications; reject server-initiated requests with -32601 so they never collide with pending client calls.
+      if (typeof msg.method === "string") {
+        if (msg.id !== undefined && msg.id !== null && child.stdin?.writable) {
+          try {
+            child.stdin.write(
+              JSON.stringify({
+                jsonrpc: "2.0",
+                id: msg.id,
+                error: { code: -32601, message: `Method not found: ${msg.method}` },
+              }) + "\n",
+            );
+          } catch {
+            // ignore write error on closing stdin
+          }
+        }
+        return;
+      }
       if (msg.id == null) return;
+      if (!Object.hasOwn(msg, "result") && !Object.hasOwn(msg, "error")) return;
       const entry = this.#pending.get(msg.id);
       if (!entry) return;
       this.#pending.delete(msg.id);
       clearTimeout(entry.timer);
-      if (msg.error) {
+      if (Object.hasOwn(msg, "error") && msg.error != null) {
         const err = new Error(msg.error.message || "cua-driver RPC error");
         err.code = msg.error.code;
         entry.reject(err);
@@ -285,6 +340,7 @@ export class CuaDriverClient {
         this.#pending.delete(id);
         signal?.removeEventListener("abort", onAbort);
         reject(new Error(`cua-driver timed out waiting for ${method}.`));
+        this.stop();
       }, timeoutMs);
       timer.unref?.();
       signal?.addEventListener("abort", onAbort, { once: true });
@@ -396,7 +452,7 @@ function validateActArgs(args) {
 
 export class ComputerUse {
   #tokens = new Map(); // `${pid}:${token}` -> { secure, role, title, app, windowTitle, windowId, at }
-  #focusedSecure = new Map(); // `${pid}:${windowId ?? ""}` -> { token, app, windowTitle, at }
+  #focusedSecure = new Map(); // `${pid}:${windowId ?? ""}` -> { pid, windowId, token, app, windowTitle, at }
 
   constructor(
     ws,
@@ -428,13 +484,57 @@ export class ComputerUse {
     return this.ws?.state?.settings?.computerUse === true;
   }
 
-  #rememberObserved(pid, windowId, data) {
+  #normalizeWindowId(windowId, data) {
+    if (windowId !== undefined && windowId !== null && String(windowId).trim() !== "") return String(windowId);
+    const fromData = data?.window_id ?? data?.windowId;
+    if (fromData !== undefined && fromData !== null && String(fromData).trim() !== "") return String(fromData);
+    return undefined;
+  }
+
+  #setFocusedSecure(pid, windowId, { token, app, windowTitle }) {
+    const wid = windowId !== undefined && windowId !== null && String(windowId).trim() !== "" ? String(windowId) : "";
+    const focusKey = `${pid}:${wid}`;
+    this.#focusedSecure.set(focusKey, { pid, windowId: wid || undefined, token, app, windowTitle, at: Date.now() });
+  }
+
+  #clearFocusedSecure(pid, windowId) {
+    const wid = windowId !== undefined && windowId !== null && String(windowId).trim() !== "" ? String(windowId) : "";
+    this.#focusedSecure.delete(`${pid}:${wid}`);
+    this.#focusedSecure.delete(`${pid}:`);
+    if (!wid) {
+      for (const key of [...this.#focusedSecure.keys()]) {
+        if (key.startsWith(`${pid}:`)) this.#focusedSecure.delete(key);
+      }
+    }
+  }
+
+  #findFocusedSecure(pid, windowId) {
+    const now = Date.now();
+    const fresh = (entry) => entry && now - entry.at < FOCUSED_SECURE_TTL_MS;
+    const wid = windowId !== undefined && windowId !== null && String(windowId).trim() !== "" ? String(windowId) : undefined;
+    if (wid !== undefined) {
+      const exact = this.#focusedSecure.get(`${pid}:${wid}`);
+      if (fresh(exact)) return exact;
+      const wildcard = this.#focusedSecure.get(`${pid}:`);
+      if (fresh(wildcard)) return wildcard;
+      return null;
+    }
+    const wildcard = this.#focusedSecure.get(`${pid}:`);
+    if (fresh(wildcard)) return wildcard;
+    for (const [key, entry] of this.#focusedSecure.entries()) {
+      if (key.startsWith(`${pid}:`) && fresh(entry)) return entry;
+    }
+    return null;
+  }
+
+  #rememberObserved(pid, windowId, data, { filtered = false } = {}) {
     const app = typeof data?.app === "string" ? data.app : typeof data?.app_name === "string" ? data.app_name : undefined;
     const windowTitle = typeof data?.window_title === "string" ? data.window_title : typeof data?.title === "string" ? data.title : undefined;
+    const resolvedWindowId = this.#normalizeWindowId(windowId, data);
     const nodes = collectNodes(data);
-    const focusKey = `${pid}:${windowId ?? ""}`;
-    this.#focusedSecure.delete(focusKey);
     const now = Date.now();
+    let sawSecureFocus = false;
+    let sawNonSecureFocus = false;
     for (const node of nodes) {
       const key = `${pid}:${node.token}`;
       this.#tokens.delete(key);
@@ -444,40 +544,149 @@ export class ComputerUse {
         title: node.title,
         app,
         windowTitle,
-        windowId,
+        windowId: resolvedWindowId,
         at: now,
       });
-      if (node.secure && node.focused) {
-        this.#focusedSecure.set(focusKey, { token: node.token, app, windowTitle, at: now });
+      if (node.focused) {
+        if (node.secure) {
+          sawSecureFocus = true;
+          this.#setFocusedSecure(pid, resolvedWindowId, { token: node.token, app, windowTitle });
+        } else {
+          sawNonSecureFocus = true;
+        }
       }
       if (this.#tokens.size > MAX_TRACKED_TOKENS) {
         this.#tokens.delete(this.#tokens.keys().next().value);
       }
     }
-    return { app, windowTitle };
+    // Never clear focused-secure on a filtered observe, nor when no non-secure node is positively focused.
+    if (!filtered && !sawSecureFocus && sawNonSecureFocus) {
+      this.#clearFocusedSecure(pid, resolvedWindowId);
+    }
+    return { app, windowTitle, windowId: resolvedWindowId, nodes };
   }
 
-  #checkSecureFieldRefusal(args) {
-    if (args.action !== "type_text" && args.action !== "set_value") return;
-    if (args.element_token) {
-      const meta = this.#tokens.get(`${args.pid}:${args.element_token}`);
-      if (meta?.secure) {
-        throw new Error(
-          `Refused ${args.action} on secure/password field "${args.element_token}" (${meta.role ?? "AXSecureTextField"}). ` +
-            `Never type secrets directly; call request_secure_input with operation: "native_fill" and target: { pid: ${args.pid}, element_token: "${args.element_token}"${args.window_id ? `, window_id: "${args.window_id}"` : ""} } so the person fills it through the Botkins vault.`,
-        );
-      }
-    } else if (args.action === "type_text") {
-      const focused =
-        this.#focusedSecure.get(`${args.pid}:${args.window_id ?? ""}`) ??
-        this.#focusedSecure.get(`${args.pid}:`);
-      if (focused && Date.now() - focused.at < 5 * 60_000) {
-        throw new Error(
-          `Refused type_text because the focused field (${focused.token}) is a secure/password field. ` +
-            `Call request_secure_input with operation: "native_fill" and target: { pid: ${args.pid}, element_token: "${focused.token}"${args.window_id ? `, window_id: "${args.window_id}"` : ""} }.`,
-        );
-      }
+  async #inspectWindowNoScreenshot(pid, windowId, { signal } = {}) {
+    const callArgs = {
+      pid,
+      ...(windowId !== undefined && { window_id: String(windowId) }),
+      include_screenshot: false,
+    };
+    const { data } = await this.client.callTool("get_window_state", callArgs, { signal });
+    const observed = this.#rememberObserved(pid, windowId, data, { filtered: false });
+    const dataPid = data?.pid !== undefined && data?.pid !== null ? Number(data.pid) : pid;
+    const dataWindowId =
+      data?.window_id !== undefined && data?.window_id !== null
+        ? String(data.window_id)
+        : data?.windowId !== undefined && data?.windowId !== null
+          ? String(data.windowId)
+          : undefined;
+    return { ...observed, data, dataPid, dataWindowId };
+  }
+
+  /**
+   * Verifies a `native_fill` target against the observed token cache before creating
+   * a vault approval card. Never trusts model-supplied app/window titles.
+   */
+  resolveCachedSecureTarget(target) {
+    if (!this.enabled()) throw new Error("Computer use is off on this computer. Turn it on in Settings › Access.");
+    if (!target || typeof target !== "object" || Array.isArray(target)) {
+      throw new Error("Invalid native secure field target.");
     }
+    const { pid, element_token, window_id } = target;
+    if (!Number.isInteger(pid) || pid < 1 || typeof element_token !== "string" || !element_token.trim()) {
+      throw new Error("Invalid native secure field target.");
+    }
+    const meta = this.#tokens.get(`${pid}:${element_token}`);
+    if (!meta || meta.secure !== true) {
+      throw new Error(
+        `Refused native_fill: element "${element_token}" on PID ${pid} is not a verified secure/password field in the observed window state. Call computer_observe first.`,
+      );
+    }
+    if (window_id !== undefined && meta.windowId !== undefined && String(window_id) !== String(meta.windowId)) {
+      throw new Error(
+        `Refused native_fill: element "${element_token}" does not belong to window "${window_id}".`,
+      );
+    }
+    const effectiveWindowId = window_id !== undefined ? String(window_id) : meta.windowId;
+    return {
+      pid,
+      element_token,
+      ...(effectiveWindowId !== undefined && { window_id: effectiveWindowId }),
+      ...(meta.app && { app: meta.app }),
+      ...(meta.windowTitle && { window_title: meta.windowTitle }),
+    };
+  }
+
+  /**
+   * Re-reads live window state (without screenshot) before every `type_text`/`set_value`
+   * and fails closed if the target or focused element is secure or cannot be resolved.
+   */
+  async verifyWritableTarget(args, { signal } = {}) {
+    if (args.action !== "type_text" && args.action !== "set_value") return null;
+    let fresh;
+    try {
+      fresh = await this.#inspectWindowNoScreenshot(args.pid, args.window_id, { signal });
+    } catch (err) {
+      throw new Error(
+        `Refused ${args.action}: could not verify the target window state (${err?.message || "window check failed"}).`,
+      );
+    }
+    if (fresh.dataPid !== args.pid) {
+      throw new Error(`Refused ${args.action}: window state PID (${fresh.dataPid}) did not match requested PID (${args.pid}).`);
+    }
+    if (args.window_id !== undefined && fresh.dataWindowId !== undefined && String(args.window_id) !== fresh.dataWindowId) {
+      throw new Error(`Refused ${args.action}: window "${args.window_id}" no longer matches active window "${fresh.dataWindowId}".`);
+    }
+    const effectiveWindowId = args.window_id !== undefined ? String(args.window_id) : fresh.windowId;
+
+    if (args.element_token) {
+      const node = fresh.nodes.find((n) => n.token === args.element_token);
+      if (!node) {
+        throw new Error(
+          `Refused ${args.action}: element_token "${args.element_token}" could not be resolved in the current window state (unknown or stale token). Call computer_observe first.`,
+        );
+      }
+      if (node.secure) {
+        throw new Error(
+          `Refused ${args.action} on secure/password field "${args.element_token}" (${node.role ?? "AXSecureTextField"}). ` +
+            `Never type secrets directly; call request_secure_input with operation: "native_fill" and target: { pid: ${args.pid}, element_token: "${args.element_token}"${effectiveWindowId ? `, window_id: "${effectiveWindowId}"` : ""} } so the person fills it through the Botkins vault.`,
+        );
+      }
+      return fresh;
+    }
+
+    // No element_token: fail closed if the focused element is secure, previously clicked secure, or unresolvable.
+    const focusedNodes = fresh.nodes.filter((n) => n.focused);
+    const focusedSecureNode = focusedNodes.find((n) => n.secure);
+    if (focusedSecureNode) {
+      throw new Error(
+        `Refused ${args.action} because the focused field (${focusedSecureNode.token}) is a secure/password field. ` +
+          `Call request_secure_input with operation: "native_fill" and target: { pid: ${args.pid}, element_token: "${focusedSecureNode.token}"${effectiveWindowId ? `, window_id: "${effectiveWindowId}"` : ""} }.`,
+      );
+    }
+    const cachedFocusedSecure = this.#findFocusedSecure(args.pid, effectiveWindowId);
+    if (cachedFocusedSecure) {
+      throw new Error(
+        `Refused ${args.action} because the focused field (${cachedFocusedSecure.token}) is a secure/password field. ` +
+          `Call request_secure_input with operation: "native_fill" and target: { pid: ${args.pid}, element_token: "${cachedFocusedSecure.token}"${effectiveWindowId ? `, window_id: "${effectiveWindowId}"` : ""} }.`,
+      );
+    }
+    if (!focusedNodes.length) {
+      throw new Error(
+        `Refused ${args.action}: the focused element could not be resolved in the current window state. Pass a non-secure element_token from computer_observe, or use request_secure_input with operation: "native_fill" for password fields.`,
+      );
+    }
+    return fresh;
+  }
+
+  /**
+   * Validates arguments and runs fail-closed secure-field checks before approval (used by node-host).
+   */
+  async preflightAct(rawArgs, { signal } = {}) {
+    const validated = validateActArgs(rawArgs);
+    await this.verifyWritableTarget(validated, { signal });
+    return validated;
   }
 
   #emitActivity(marker, image) {
@@ -501,6 +710,7 @@ export class ComputerUse {
   async observe(args = {}, { botId, botName, signal } = {}) {
     if (!Number.isInteger(args.pid) || args.pid < 1) throw new Error("pid must be a positive integer.");
     const includeScreenshot = args.include_screenshot === true;
+    const filtered = typeof args.query === "string" && args.query.trim().length > 0;
     const callArgs = {
       pid: args.pid,
       ...(args.window_id !== undefined && { window_id: String(args.window_id) }),
@@ -510,7 +720,7 @@ export class ComputerUse {
       include_screenshot: true,
     };
     const { data, image } = await this.client.callTool("get_window_state", callArgs, { signal });
-    const meta = this.#rememberObserved(args.pid, args.window_id, data);
+    const meta = this.#rememberObserved(args.pid, args.window_id, data, { filtered });
     this.#emitActivity(
       {
         botId,
@@ -562,7 +772,7 @@ export class ComputerUse {
 
   async act(rawArgs, { botId, botName, signal } = {}) {
     const args = validateActArgs(rawArgs);
-    this.#checkSecureFieldRefusal(args);
+    await this.verifyWritableTarget(args, { signal });
     const meta = args.element_token ? this.#tokens.get(`${args.pid}:${args.element_token}`) : null;
     const toolArgs = {
       pid: args.pid,
@@ -582,6 +792,15 @@ export class ComputerUse {
     };
     const driverTool = args.action;
     const { data, image } = await this.client.callTool(driverTool, toolArgs, { signal });
+    // Clicking a secure field marks it focused-secure immediately so a subsequent token-less type_text is refused.
+    if ((args.action === "click" || args.action === "double_click" || args.action === "right_click") && args.element_token && meta?.secure) {
+      const effectiveWindowId = this.#normalizeWindowId(args.window_id ?? meta.windowId, data);
+      this.#setFocusedSecure(args.pid, effectiveWindowId, {
+        token: args.element_token,
+        app: meta.app ?? data?.app,
+        windowTitle: meta.windowTitle ?? data?.window_title,
+      });
+    }
     const actualDelivery =
       data?.delivery_mode === "foreground" || data?.used_foreground === true || args.delivery_mode === "foreground"
         ? "foreground"
@@ -606,20 +825,49 @@ export class ComputerUse {
 
   /**
    * Vault-backed fill for SecureInputs (`operation: "native_fill"`).
-   * Writes the approved secret directly via cua-driver `set_value` without returning or logging it.
+   * Re-verifies the target via get_window_state (no screenshot) immediately before set_value,
+   * fails closed unless the token still resolves to a secure node in the same pid/window,
+   * and never emits the value or a screenshot frame to the Screen stream.
    */
-  async secureSetValue({ pid, window_id, element_token, app, window_title, value }, { botId, botName, signal } = {}) {
+  async secureSetValue({ pid, window_id, element_token, value }, { botId, botName, signal } = {}) {
     if (!this.enabled()) throw new Error("Computer use is off on this computer. Turn it on in Settings › Access.");
     if (!Number.isInteger(pid) || pid < 1 || typeof element_token !== "string" || !element_token.trim()) {
       throw new Error("Invalid native secure field target.");
     }
     if (typeof value !== "string" || !value.length) throw new Error("Missing secure value.");
-    const meta = this.#tokens.get(`${pid}:${element_token}`);
-    const { data, image } = await this.client.callTool(
+
+    const failNativeTarget = (message) => {
+      const err = new Error(message);
+      err.secureCode = "native_target_mismatch";
+      throw err;
+    };
+    let fresh;
+    try {
+      fresh = await this.#inspectWindowNoScreenshot(pid, window_id, { signal });
+    } catch (err) {
+      failNativeTarget(
+        `Refused native_fill: could not verify target window state (${err?.message || "window check failed"}). Nothing was filled.`,
+      );
+    }
+    if (fresh.dataPid !== pid) {
+      failNativeTarget(`Refused native_fill: window PID (${fresh.dataPid}) did not match approved PID (${pid}). Nothing was filled.`);
+    }
+    if (window_id !== undefined && fresh.dataWindowId !== undefined && String(window_id) !== fresh.dataWindowId) {
+      failNativeTarget(`Refused native_fill: window changed after approval. Nothing was filled.`);
+    }
+    const node = fresh.nodes.find((n) => n.token === element_token);
+    if (!node || node.secure !== true) {
+      failNativeTarget(
+        `Refused native_fill: element "${element_token}" no longer resolves to a secure/password field in the approved window. Nothing was filled.`,
+      );
+    }
+
+    const effectiveWindowId = window_id !== undefined ? String(window_id) : fresh.windowId;
+    const { data } = await this.client.callTool(
       "set_value",
       {
         pid,
-        ...(window_id !== undefined && { window_id: String(window_id) }),
+        ...(effectiveWindowId !== undefined && { window_id: effectiveWindowId }),
         element_token,
         text: value,
         value,
@@ -627,18 +875,19 @@ export class ComputerUse {
       },
       { signal },
     );
+    // Never emit a screenshot frame or the filled value in the Screen stream for secure_fill.
     this.#emitActivity(
       {
         botId,
         botName,
         action: "secure_fill",
-        summary: `Filled a secure field in ${app ?? meta?.app ?? `PID ${pid}`} from the vault`,
-        app: app ?? meta?.app,
-        windowTitle: window_title ?? meta?.windowTitle,
+        summary: `Filled a secure field in ${fresh.app ?? `PID ${pid}`} from the vault`,
+        app: fresh.app,
+        windowTitle: fresh.windowTitle,
         deliveryMode: "background",
         pointerUntouched: true,
       },
-      image,
+      null,
     );
     return {
       applied: true,
@@ -655,11 +904,28 @@ export class ComputerUse {
     if (!this.enabled()) return [];
     if (!chat || chat.helper) return [];
     if (this.ws.accessForTurn(chat, task).member) return [];
+    const isActive = () =>
+      !(task?.stopped || task?.ended || this.ws.closing || (run && this.ws.active?.get(chat.id) !== task));
     const checkActive = () => {
-      if (task?.stopped || task?.ended || this.ws.closing || (run && this.ws.active?.get(chat.id) !== task)) {
-        throw new Error("This turn is no longer active.");
-      }
+      if (!isActive()) throw new Error("This turn is no longer active.");
       if (!this.enabled()) throw new Error("Computer use was turned off in Settings.");
+    };
+    const withTurnSignal = async (fn) => {
+      checkActive();
+      const gone = new AbortController();
+      const onTaskAbort = () => gone.abort();
+      if (task?.signal?.aborted) gone.abort();
+      else task?.signal?.addEventListener?.("abort", onTaskAbort, { once: true });
+      const watch = setInterval(() => {
+        if (!isActive() || !this.enabled()) gone.abort();
+      }, TURN_WATCH_MS);
+      watch.unref?.();
+      try {
+        return await fn(gone.signal);
+      } finally {
+        clearInterval(watch);
+        task?.signal?.removeEventListener?.("abort", onTaskAbort);
+      }
     };
 
     return [
@@ -674,11 +940,11 @@ export class ComputerUse {
           },
         },
         skipPermission: true,
-        handler: async (args) => {
-          checkActive();
-          const result = await this.apps(args ?? {});
-          return JSON.stringify(result);
-        },
+        handler: async (args) =>
+          withTurnSignal(async (signal) => {
+            const result = await this.apps(args ?? {}, { signal });
+            return JSON.stringify(result);
+          }),
       }),
       defineTool("computer_observe", {
         description:
@@ -696,11 +962,11 @@ export class ComputerUse {
           },
         },
         skipPermission: true,
-        handler: async (args) => {
-          checkActive();
-          const result = await this.observe(args, { botId: bot?.id, botName: bot?.name });
-          return JSON.stringify(result);
-        },
+        handler: async (args) =>
+          withTurnSignal(async (signal) => {
+            const result = await this.observe(args, { botId: bot?.id, botName: bot?.name, signal });
+            return JSON.stringify(result);
+          }),
       }),
       defineTool("computer_act", {
         description:
@@ -728,31 +994,37 @@ export class ComputerUse {
           },
         },
         skipPermission: true,
-        handler: async (args) => {
-          checkActive();
-          const validated = validateActArgs(args);
-          // Refuse secure fields before even asking approval.
-          this.#checkSecureFieldRefusal(validated);
-          const meta = validated.element_token ? this.#tokens.get(`${validated.pid}:${validated.element_token}`) : null;
-          const summary = summarizeAction(validated);
-          const decision = await this.ws.interactions.permission(chat, task, {
-            kind: "custom-tool",
-            label: "Computer action",
-            title: summary,
-            detail: [
-              meta?.app ? `App: ${meta.app} (PID ${validated.pid})` : `PID: ${validated.pid}`,
-              ...(meta?.windowTitle ? [`Window: ${meta.windowTitle}`] : []),
-              `Delivery: ${validated.delivery_mode}${validated.delivery_mode === "background" ? " (leaves your pointer untouched)" : ""}`,
-            ].join("\n"),
-            preview: validated.action === "type_text" || validated.action === "set_value" ? `${validated.action} (${validated.text.length} chars)` : summary,
-            readOnly: false,
-            remember: ["Allow computer actions in this chat", "computer_act"],
-          });
-          if (!decision?.allow) throw new Error("The person declined this computer action.");
-          checkActive();
-          const result = await this.act(validated, { botId: bot?.id, botName: bot?.name });
-          return JSON.stringify(result);
-        },
+        handler: async (args) =>
+          withTurnSignal(async (signal) => {
+            const validated = validateActArgs(args);
+            // Re-read live window state and refuse secure/unresolvable fields before even asking approval.
+            await this.verifyWritableTarget(validated, { signal });
+            const meta = validated.element_token ? this.#tokens.get(`${validated.pid}:${validated.element_token}`) : null;
+            const summary = summarizeAction(validated);
+            const hasTypedText = validated.action === "type_text" || validated.action === "set_value";
+            const visibleText = hasTypedText ? formatVisibleText(validated.text, 200) : "";
+            const preview = hasTypedText ? `${validated.action}: "${visibleText}"` : summary;
+            const decision = await this.ws.interactions.permission(chat, task, {
+              kind: "custom-tool",
+              label: "Computer action",
+              title: summary,
+              detail: [
+                meta?.app ? `App: ${meta.app} (PID ${validated.pid})` : `PID: ${validated.pid}`,
+                ...(meta?.windowTitle ? [`Window: ${meta.windowTitle}`] : []),
+                ...(hasTypedText ? [`Text: ${visibleText}`] : []),
+                `Delivery: ${validated.delivery_mode}${validated.delivery_mode === "background" ? " (leaves your pointer untouched)" : ""}`,
+              ].join("\n"),
+              preview,
+              readOnly: false,
+              ...(!NON_REMEMBERED_ACTIONS.has(validated.action) && {
+                remember: ["Allow computer actions in this chat", "computer_act"],
+              }),
+            });
+            if (!decision?.allow) throw new Error("The person declined this computer action.");
+            checkActive();
+            const result = await this.act(validated, { botId: bot?.id, botName: bot?.name, signal });
+            return JSON.stringify(result);
+          }),
       }),
       defineTool("computer_desktop", {
         description:
@@ -765,11 +1037,11 @@ export class ComputerUse {
           },
         },
         skipPermission: true,
-        handler: async (args) => {
-          checkActive();
-          const result = await this.desktop(args ?? {}, { botId: bot?.id, botName: bot?.name });
-          return JSON.stringify(result);
-        },
+        handler: async (args) =>
+          withTurnSignal(async (signal) => {
+            const result = await this.desktop(args ?? {}, { botId: bot?.id, botName: bot?.name, signal });
+            return JSON.stringify(result);
+          }),
       }),
     ];
   }

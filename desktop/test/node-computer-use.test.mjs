@@ -120,14 +120,48 @@ test("node host advertises computer.* only when computerUse is enabled and relay
   assert.equal(actJob.result.effect.delivered, true);
   assert.equal(readLog().filter((c) => c.name === "click").length, 1);
 
-  // Secure-field refusal applies on node hosts too!
-  const secureJob = await runRelayedJob(ws, peer, {
-    operation: "computer.act",
-    params: { action: "type_text", pid: 4242, element_token: "tok-password", text: "secret" },
-  });
-  assert.equal(secureJob.status, "failed");
-  assert.match(secureJob.error, /secure\/password field/i);
+  // Secure-field refusal runs while building the job (BEFORE askSource / approval)!
+  const recordsBefore = ws.nodeHost.records.length;
+  await assert.rejects(
+    () =>
+      ws.nodeHost.receive(peer, "job.submit", {
+        id: randomUUID(),
+        sourceBotId: "pip",
+        sourceBotName: "Pip",
+        operation: "computer.act",
+        params: { action: "type_text", pid: 4242, element_token: "tok-password", text: "secret" },
+        createdAt: Date.now(),
+        relayApproval: true,
+      }),
+    /secure\/password field/i,
+  );
+  assert.equal(ws.nodeHost.records.length, recordsBefore, "refused secure-field computer.act must not create a job or askSource");
   assert.equal(readLog().filter((c) => c.name === "type_text").length, 0);
+
+  // Non-secure type_text on node host shows visible typed text (with control chars) in the relayed approval preview!
+  const typeId = randomUUID();
+  let typeStatus = await ws.nodeHost.receive(peer, "job.submit", {
+    id: typeId,
+    sourceBotId: "pip",
+    sourceBotName: "Pip",
+    operation: "computer.act",
+    params: { action: "type_text", pid: 4242, element_token: "tok-search", text: "hello\nnode\t\x07" },
+    createdAt: Date.now(),
+    relayApproval: true,
+  });
+  for (let i = 0; i < 40 && !typeStatus.ask; i++) {
+    await new Promise((r) => setTimeout(r, 15));
+    typeStatus = await ws.nodeHost.receive(peer, "job.status", { id: typeId });
+  }
+  assert.ok(typeStatus.ask, "relayed approval ask was created");
+  assert.match(typeStatus.ask.preview, /hello\\nnode\\t\\x07/, "node approval preview must show typed text with visible control characters");
+  assert.match(typeStatus.ask.detail, /hello\\nnode\\t\\x07/, "node approval detail must show typed text with visible control characters");
+  typeStatus = await ws.nodeHost.receive(peer, "job.answer", { id: typeId, askId: typeStatus.ask.id, action: "deny" });
+  for (let i = 0; i < 40 && typeStatus.status === "pending"; i++) {
+    await new Promise((r) => setTimeout(r, 15));
+    typeStatus = await ws.nodeHost.receive(peer, "job.status", { id: typeId });
+  }
+  assert.equal(typeStatus.status, "denied");
 });
 
 test("teamwork exposes node_computer_apps, node_computer_observe, and node_computer_act tools", (t) => {
