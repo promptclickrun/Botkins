@@ -47,6 +47,7 @@ import {
   checkSpaceDelete,
   checkSpacePut,
   joinPage,
+  mcpAuthRedirect,
   plain,
   prefixed,
   readU32,
@@ -170,6 +171,7 @@ export default {
       if (url.pathname === "/") return plain("Botkins relay. Messages pass through sealed.");
       if (url.pathname === "/v1/health") return Response.json({ ok: true });
       if (url.pathname === "/join") return joinPage();
+      if (url.pathname === "/mcp-auth") return mcpAuthRedirect(url);
       // A shared space's page is the same for every id: the relay never learns what a link opens.
       if (url.pathname === "/s/frame") return spaceFrame(spaceFrameScript);
       const page = SPACE_PAGE_ROUTE.exec(url.pathname);
