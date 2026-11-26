@@ -222,7 +222,9 @@ async function launchChromium(chromeBin) {
         resolve();
       });
     });
-    rmSync(userDataDir, { recursive: true, force: true });
+    try {
+      rmSync(userDataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    } catch {}
   }
 
   return {
