@@ -209,6 +209,21 @@ export const chatsCommands = {
           context.print(await context.client.call("chats.get", one(context, CHAT)), chatText);
         },
       },
+      messages: {
+        summary: "Print a chat's latest messages, oldest first",
+        usage: "botkins chats messages <chat> [--last <n>] [--role user|assistant]",
+        options: { last: { type: "string", value: "n", about: "How many messages, 1 to 100 (10)" }, role: { type: "string", value: "role", about: "Only the person's (user) or the bot's (assistant)" } },
+        details: "Each message has its index, role, text and time. A routine's script can read it with --json, for example to see whether the person answered.",
+        async run(context) {
+          const ref = one(context, CHAT);
+          const last = context.options.last === undefined ? undefined : Number(context.options.last);
+          if (last !== undefined && (!Number.isInteger(last) || last < 1 || last > 100)) throw usage("--last is a whole number from 1 to 100.");
+          const options = { ...(last !== undefined && { last }), ...(context.options.role !== undefined && { role: context.options.role }) };
+          context.print(await context.client.call("chats.messages", ref, options), (view) =>
+            view.messages.length ? view.messages.map((message) => "[" + message.index + "] " + message.role + ": " + safe(message.text.replace(/\s+/g, " ").slice(0, 300))).join("\n") : "No messages.",
+          );
+        },
+      },
       rename: {
         summary: "Give a chat another title",
         usage: "botkins chats rename <chat> <title>…",

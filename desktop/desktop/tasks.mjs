@@ -242,7 +242,7 @@ export class Tasks {
       ),
       tool(
         "task_list",
-        "List tasks on the board that are given to you or that you created, with their status and results.",
+        "List tasks on the board that are given to you or that you created, with their status, priority, bot, result and problem. To watch a task on a schedule, don't poll with this from an instructions routine: use routine_create with a script that reads `botkins tasks list --json` and wakes you (followUp) only when a status changes.",
         {},
         [],
         () => this.all.filter((t) => t.botId === bot.id || t.createdBy === bot.id).slice(0, 50).map(view),
