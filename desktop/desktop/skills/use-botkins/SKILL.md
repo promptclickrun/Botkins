@@ -55,7 +55,7 @@ For a website login, API call, or CLI secret, use the Botkins tools your harness
 
 ## What you cannot do here
 
-Unlocking a password manager, what is inside one, linking or copying a field of one, creating standing credential grants, and using a saved credential by reference are done in the app's window or on a paired phone, where a person is known to be there. No CLI command does them, and the service refuses them on the control socket. Tell your person where to do it. Do not look for a way round.
+Unlocking a password manager, what is inside one, linking or copying a field of one, creating standing credential grants, and using a saved credential by reference are done in the app's window or on a paired phone, where a person is known to be there. No command does them, and the service refuses them on the control socket. Tell your person where to do it. Do not look for a way round.
 
 ## After a change
 

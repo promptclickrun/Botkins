@@ -239,6 +239,9 @@ test(
   "HTTPS login integration: Ask -> approve fill+submit, Always allow -> no card, redirect & different origin refused, TOTP in same-origin iframe",
   { skip: !chromeBin ? "No Chromium/Chrome binary available on this host" : false },
   async (t) => {
+    if (!existsSync(driverBundlePath)) {
+      execFileSync(process.execPath, [join(repoRoot, "extension", "scripts", "build.mjs")], { stdio: "pipe" });
+    }
     assert.ok(existsSync(driverBundlePath), "extension/dist/dom-driver.js must exist");
     const driverCode = readFileSync(driverBundlePath, "utf8");
 
