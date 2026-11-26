@@ -1,7 +1,8 @@
 // Two-host end-to-end test:
 // Source host runs `uname -a` on the node host under default `ask` policy over real LinkHost +
-// TeamworkPeers transport, approves the request via the real `botkins node approve` CLI against
-// the node's control socket, and gets the real `uname -a` output and exit code 0 back.
+// TeamworkPeers transport. The node hands the approval back to the source, which approves it via the
+// real `botkins node approve` CLI against its own control socket, and gets the real `uname -a` output
+// and exit code 0 back.
 import assert from "node:assert/strict";
 import test from "node:test";
 import { execFileSync } from "node:child_process";
@@ -117,19 +118,21 @@ test("two-host E2E: source runs uname -a on node under ask, approves via CLI, ge
     argv: ["uname", "-a"],
   });
 
-  // Poll the node's CLI `botkins node approvals --json` until the pending request arrives
+  // The approval is asked where the owner is: on the source host, in the asking chat. Poll the source's
+  // CLI `botkins node approvals --json` until it arrives; the node has nothing to answer.
   const pending = await until(async () => {
-    const res = await node.botkins(["node", "approvals", "--json"]);
+    const res = await source.botkins(["node", "approvals", "--json"]);
     if (res.exit !== 0) return null;
     const list = JSON.parse(res.out);
     return list.length ? list[0] : null;
   });
-  assert.equal(pending.nodeJob, true);
+  assert.equal(pending.chatId, chatId);
   assert.equal(pending.operation, "system.run");
   assert.equal(pending.sourceBotName, "Operator");
+  assert.deepEqual(JSON.parse((await node.botkins(["node", "approvals", "--json"])).out), []);
 
   // Approve via real CLI `botkins node approve <request-id>` with interactive TTY choosing "1" (Allow once)
-  const approveRes = await node.botkins(["node", "approve", pending.id], { input: "1\n", tty: true });
+  const approveRes = await source.botkins(["node", "approve", pending.id], { input: "1\n", tty: true });
   assert.equal(approveRes.exit, 0, approveRes.err);
 
   // Source receives the real `uname -a` output back

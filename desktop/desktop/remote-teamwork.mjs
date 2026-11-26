@@ -244,8 +244,42 @@ export async function remoteJob(ws, bot, chat, run, task, entry, payload, pin, {
     path: payload.path ?? "",
     ...(payload.params !== undefined && { params: payload.params }),
     createdAt: entry.started,
+    // The node hands its approval back here, so the owner answers it in this chat (and on their phone)
+    // instead of on the node. An older node ignores this and asks on its own screen.
+    relayApproval: true,
   };
   const receipt = { id: entry.id };
+  // The node's approval, shown in this chat: which ask it is, and the owner's answer once given.
+  let asked = "";
+  let answer = null;
+  const withdraw = (askId) => {
+    for (const [id, item] of ws.interactions.entries)
+      if (item.view.nodeAsk === askId) ws.interactions.respond(id, { action: "cancel" }, false);
+  };
+  const ask = (view) => {
+    const before = asked;
+    const askId = view.id;
+    asked = askId;
+    // A new ask (the node restarted) replaces the old card; its withdrawal is no answer.
+    if (before) withdraw(before);
+    void ws.interactions
+      .request(chat, task, {
+        kind: "permission",
+        dispatch: true,
+        nodeAsk: askId,
+        title: view.title,
+        ...(view.preview && { preview: view.preview }),
+        detail: view.detail,
+        label: view.label,
+        sourceBotName: bot.name,
+        targetHostName: view.targetHostName || entry.remote.hostName,
+        operation: view.operation,
+        resourceName: view.resourceName,
+      })
+      .then(({ action }) => {
+        if (asked === askId) answer = { askId, action };
+      });
+  };
   const controller = new AbortController();
   const outgoing = ws.teamwork.outgoing;
   outgoing.start(entry, pin, { cancelOp: "job.cancel" });
@@ -259,15 +293,23 @@ export async function remoteJob(ws, bot, chat, run, task, entry, payload, pin, {
       requireRemoteTurn(ws, bot, chat, run, task);
       if (delay) await wait(delay, undefined, { signal: controller.signal });
       requireRemoteTurn(ws, bot, chat, run, task);
+      // The owner answered the node's approval here: send it back (a dismissal ends the job).
+      if (answer) {
+        if (answer.action === "cancel") throw new Error("The approval was dismissed.");
+        operation = "job.answer";
+      }
       let result;
       try {
-        result = await peers.call(hostId, operation, operation === "job.submit" ? submit : receipt, pin);
+        const body = operation === "job.submit" ? submit : operation === "job.answer" ? { ...receipt, askId: answer.askId, action: answer.action } : receipt;
+        result = await peers.call(hostId, operation, body, pin);
+        if (operation === "job.answer") answer = null;
       } catch (error) {
         if (error.code !== "TEAMWORK_OFFLINE") throw error;
         delay = Math.min(15000, Math.max(1500, delay * 2));
         continue;
       }
       requireRemoteTurn(ws, bot, chat, run, task);
+      if (result?.status === "pending" && result.ask && typeof result.ask.id === "string" && result.ask.id !== asked) ask(result.ask);
       if (result?.status === "pending" || result?.status === "working") {
         const status = result.status === "pending" ? "waiting" : "working";
         const outputChanged =
@@ -296,6 +338,11 @@ export async function remoteJob(ws, bot, chat, run, task, entry, payload, pin, {
     }
   } finally {
     task.helpers.delete(helper);
+    if (asked) {
+      const last = asked;
+      asked = "";
+      withdraw(last);
+    }
     if (finished) outgoing.finish(entry.id);
     else await outgoing.cancel(entry.id);
   }

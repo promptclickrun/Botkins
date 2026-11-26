@@ -194,15 +194,18 @@ test("acceptance flow: pair fresh empty node, restart, approve list_node_files, 
   });
 
   const chat = hostA.workspace.mainChat("pip");
+  // The node's approval is asked in the chat that asked, on Laptop, not on the node.
+  const nodeCard = (not) => hostA.workspace.interactions.snapshot().find((item) => item.chatId === chat && item.nodeAsk && item.id !== not);
 
-  // Step 3: First run asks on the trusted device; approve with Always allow ("remember").
+  // Step 3: First run asks in the asking chat; approve with Always allow ("remember").
   const firstTurn = hostA.workspace.send(chat, "discover-and-list");
-  const card1 = await until(() => parts.live?.requests?.find((item) => item.nodeJob));
+  const card1 = await until(() => nodeCard());
   assert.equal(card1.dispatch, true);
-  assert.equal(card1.nodeJob, true);
   assert.match(card1.title, /Pip.*Laptop.*Studio Assets.*Studio Mac/);
   assert.match(card1.detail, /project\.list_files/);
-  await owner.call("respond", card1.id, { action: "remember" });
+  assert.equal(node.workspace.interactions.snapshot().length, 0);
+  assert.ok(!parts.live?.requests?.some((item) => item.nodeJob), "nothing to answer on the node's phone");
+  hostA.workspace.interactions.respond(card1.id, { action: "remember" });
   await firstTurn;
   assert.equal(hostA.workspace.chat(chat).messages.at(-1).text, "FILES:manifest.json,renders");
   assert.equal(node.workspace.nodeHost.view().grants.length, 1);
@@ -226,16 +229,16 @@ test("acceptance flow: pair fresh empty node, restart, approve list_node_files, 
 
   // Step 6: Next run asks for approval again! Deny it first, then verify denial returns cleanly.
   const deniedTurn = hostA.workspace.send(chat, "discover-and-list");
-  const card2 = await until(() => parts.live?.requests?.find((item) => item.nodeJob && item.id !== card1.id));
-  await owner.call("respond", card2.id, { action: "deny" });
+  const card2 = await until(() => nodeCard(card1.id));
+  hostA.workspace.interactions.respond(card2.id, { action: "deny" });
   await deniedTurn;
   assert.match(hostA.workspace.chat(chat).messages.at(-1).text, /declined|denied/i);
   assert.equal(node.workspace.nodeHost.view().grants.length, 0);
 
   // Ask one more time and approve once ("approve"): succeeds without persisting a grant.
   const onceTurn = hostA.workspace.send(chat, "discover-and-list");
-  const card3 = await until(() => parts.live?.requests?.find((item) => item.nodeJob && item.id !== card2.id));
-  await owner.call("respond", card3.id, { action: "approve" });
+  const card3 = await until(() => nodeCard(card2.id));
+  hostA.workspace.interactions.respond(card3.id, { action: "approve" });
   await onceTurn;
   assert.equal(hostA.workspace.chat(chat).messages.at(-1).text, "FILES:manifest.json,renders");
   assert.equal(node.workspace.nodeHost.view().grants.length, 0);
@@ -314,9 +317,9 @@ test("conversation Always allow does not grant node file listing, and a sleeping
 
   // 2. Listing files from the exact same bot (Pip) on the exact same node (Studio) MUST STILL ASK.
   const fileTurn = hostA.workspace.send(chat, "list-files");
-  const fileCard = await until(() => parts.live?.requests?.find((item) => item.nodeJob));
-  assert.equal(fileCard.nodeJob, true);
-  await owner.call("respond", fileCard.id, { action: "approve" });
+  const fileCard = await until(() => hostA.workspace.interactions.snapshot().find((item) => item.chatId === chat && item.nodeAsk));
+  assert.equal(fileCard.dispatch, true);
+  hostA.workspace.interactions.respond(fileCard.id, { action: "approve" });
   await fileTurn;
   assert.equal(hostA.workspace.chat(chat).messages.at(-1).text, "FILES:plan.md");
 
