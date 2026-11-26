@@ -517,11 +517,12 @@ export class Integrations {
    * Signs the person in to a remote server through their browser and keeps the tokens in the
    * vault. Also turns sign-in on for a server that turned out to need it.
    */
-  async signIn(id, { open, patience, finished, followed } = {}) {
+  async signIn(id, { open, patience, finished, followed, redirect } = {}) {
     const server = this.server(id);
     if (server.type === "stdio") throw new Error("A local server signs in with its environment values.");
-    // (`open`, `patience`, `finished` and `followed` are a terminal host's: desktop/terminal/signin.mjs. The window and a phone pass none.)
-    await this.oauth.signIn(server, { client: this.client(server), scope: server.oauth?.scope, ...(open && { open }), ...(patience && { patience }), ...(finished && { finished }), ...(followed && { followed }) });
+    // (`open`, `patience`, `finished` and `followed` are a terminal host's: desktop/terminal/signin.mjs. `redirect` is a
+    // phone's own return address, for a sign-in in the phone's browser (desktop/phone-signin.mjs). The window passes none.)
+    await this.oauth.signIn(server, { client: this.client(server), scope: server.oauth?.scope, ...(open && { open }), ...(patience && { patience }), ...(finished && { finished }), ...(followed && { followed }), ...(redirect && { redirect }) });
     // The server was removed while the browser was open: its sign-in goes with it.
     if (!this.servers.includes(server)) {
       this.sweep();

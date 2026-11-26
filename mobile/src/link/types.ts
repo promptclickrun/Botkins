@@ -2296,6 +2296,10 @@ export type Calls = {
   "link.voice.endLive"(id: string): void;
   /** Hands the desktop a sign-in the phone finished, for an MCP server that signs in with OAuth. */
   "link.adoptMcpSignIn"(serverId: string, grant: { clientId: string; accessToken: string; refreshToken?: string; expiresIn?: number; scope?: string; redirectUri: string }): { status: string; tools: string[] };
+  /** Starts a tool's OAuth sign-in for the phone's own browser (capability "startMcpSignIn"): the page to open and the app address it comes back to. */
+  "link.startMcpSignIn"(serverId: string): { url: string; redirect: string };
+  /** The address the phone's browser came back to. Answers the tool's sign-in state once the computer keeps the tokens. */
+  "link.finishMcpSignIn"(serverId: string, address: string): McpAuth | undefined;
   // ---- The wiki. Paths are relative to the wiki and use "/". Every change bumps revs.wiki.
   wikiTree(): WikiTree;
   /** What an export of the whole wiki, or of one page and the pages around it, would hold. Needs "files-v1". */

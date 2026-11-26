@@ -14,6 +14,7 @@ import { showToast } from "@/state/store";
 import { Button, EmptyState, Group, Label, Loading, radius, Row, Sheet, space, T, useTheme } from "@/ui";
 import { shownText } from "@/ui/shownText";
 import { SecretField } from "../credentials/shared";
+import { signInTool } from "../tools/signIn";
 import { addOptions, connectsLines, entryPlan, entryState, keysFilled, needsConfirm, openableUrl } from "./catalog";
 import { BrandIcon, useBrandTint } from "./art";
 import { loadMcpCatalog, useMcpCatalog } from "./data";
@@ -23,7 +24,7 @@ const HERO_ICON = 72;
 
 /** The browser sign-in, as a tool's page starts it: not awaited for long, "Signed in" when it is. */
 function startSignIn(id: string, done?: () => void) {
-  void attempt(api.signInMcpServer(id)).then((auth) => {
+  void attempt(signInTool(id)).then((auth) => {
     done?.();
     void loadMcpCatalog();
     if (auth?.type === "oauth" && auth.signedIn) showToast("Signed in", "success");
@@ -179,7 +180,7 @@ function Entry({ entry }: { entry: McpCatalogEntry }) {
             (entry.signedIn ? (
               <Row title="Signed in" />
             ) : entry.signingIn || signing ? (
-              <Row title="Signing in…" subtitle="Finish in the browser on your computer" />
+              <Row title="Signing in…" subtitle="Finish on the sign-in page" />
             ) : owner && !!entry.serverId ? (
               <Row title="Sign in" tone="accent" disabled={!online} onPress={() => (setSigning(true), startSignIn(entry.serverId!, () => setSigning(false)))} />
             ) : (

@@ -11,6 +11,7 @@ import { api, attempt } from "@/state/link";
 import { showToast } from "@/state/store";
 import { Button, Group, IconTile, Label, radius, Row, space, T, Tap, useTheme } from "@/ui";
 import { shownText } from "@/ui/shownText";
+import { signInTool } from "../../tools/signIn";
 import { addsNothing, type Fact, groupHooks, hookFacts, notRunRows, otherFilesRows, showsAll, toolFacts, toolLine } from "./logic";
 
 /** A plugin in a list: its name, one line of what it does, and who made it. "Installed" at the right where it is. */
@@ -149,12 +150,12 @@ function ToolRow({ server, installed }: { server: PluginTool; installed: boolean
   const signedIn = usePart("mcp")?.find((item) => item.id === server.serverId)?.auth;
   const [busy, setBusy] = useState(false);
   const done = signedIn?.type === "oauth" && signedIn.signedIn;
-  const line = toolLine(server) + (server.oauth && installed ? (done ? " · Signed in" : " · Sign in on your computer") : "");
+  const line = toolLine(server) + (server.oauth && installed ? (done ? " · Signed in" : " · Needs sign-in") : "");
   const name = shownText(server.name);
   const signIn = async () => {
     if (!server.serverId) return;
     setBusy(true);
-    const auth = await attempt(api.signInMcpServer(server.serverId));
+    const auth = await attempt(signInTool(server.serverId));
     setBusy(false);
     if (auth?.type === "oauth" && auth.signedIn) showToast("Signed in", "success");
   };

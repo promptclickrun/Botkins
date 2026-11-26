@@ -11,6 +11,7 @@ import { Badge, Button, EmptyState, Field, Group, IconTile, Loading, Row, Segmen
 import { CredentialPicker, PickedCredential } from "@/features/credentials/CredentialPicker";
 import { type PickedRef, refValue, SavedValue, type Secret, SecretList, secretRecord, storedSecret } from "./Secrets";
 import { keyHeaderOf } from "./shared";
+import { signInTool } from "./signIn";
 
 type Where = "web" | "computer";
 type SignIn = "none" | "key" | "browser";
@@ -127,7 +128,7 @@ function inputOf(draft: Draft, server: McpServer | undefined): McpServerInput {
 
 /** Starts a sign-in on the computer. It can take minutes, so nothing waits for it. */
 function startSignIn(id: string, done?: () => void) {
-  void attempt(api.signInMcpServer(id)).then((auth) => {
+  void attempt(signInTool(id)).then((auth) => {
     done?.();
     if (auth?.type === "oauth" && auth.signedIn) showToast("Signed in", "success");
   });
@@ -223,7 +224,7 @@ function Editor({ server }: { server: McpServer | undefined }) {
     setSaving(false);
     if (!id) return;
     if (isNew && draft.signIn === "browser") {
-      Alert.alert("Sign in to " + draft.name.trim() + "?", "You finish on your computer.", [
+      Alert.alert("Sign in to " + draft.name.trim() + "?", "You finish on its sign-in page.", [
         { text: "Later", style: "cancel", onPress: () => router.back() },
         {
           text: "Sign in",
@@ -458,7 +459,7 @@ function Editor({ server }: { server: McpServer | undefined }) {
                     <ActivityIndicator color={colors.accent} />
                   </View>
                 }
-                title="Finish signing in on your computer"
+                title="Finish on the sign-in page"
                 trailing={<Button title="Cancel" variant="ghost" size="sm" onPress={cancelSignIn} />}
               />
             ) : auth.signedIn ? (
