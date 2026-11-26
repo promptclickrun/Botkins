@@ -1,6 +1,6 @@
 import { type Href, router, Stack, useLocalSearchParams } from "expo-router";
 import { MenuView } from "@react-native-menu/menu";
-import { Check, ChevronDown, ChevronUp, FolderMinus, FolderOpen, MessagesSquare, Paperclip, Plus, Trash2 } from "lucide-react-native";
+import { Check, ChevronDown, ChevronUp, FolderMinus, FolderOpen, MessagesSquare, Paperclip, Plus, SquarePen, Trash2 } from "lucide-react-native";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Alert, ScrollView, TextInput, type TextInputInstance, View } from "react-native";
 import { openChat } from "@/features/chat/navigate";
@@ -10,7 +10,7 @@ import { PanelCard as SpacePanelCard } from "@/features/spaces/SpaceView";
 import { PanelCard } from "@/features/today/Today";
 import { ArtifactRow } from "@/features/artifacts/ArtifactBits";
 import type { Artifact, ChatMode, Panel, Project, ProjectColor, ProjectTodo } from "@/link/types";
-import { useBots, useCapability, useChats, useOnline, usePart } from "@/state/hooks";
+import { useBots, useCan, useCapability, useChats, useOnline, usePart } from "@/state/hooks";
 import { api, attempt } from "@/state/link";
 import { useApp } from "@/state/store";
 import { ago } from "@/state/time";
@@ -18,7 +18,8 @@ import { BotAvatar, Button, Chip, EmptyState, Field, Group, HoldMenu, IconButton
 import { CloneForm, FolderChoice } from "./ProjectFolders";
 import { PROJECT_COLORS, projectColor } from "./colors";
 import { canUseProject, globalAccess, grantOf, toggleProject } from "@/features/bots/projectAccess";
-import { ACCESS_REASON, accessVia, artifactCount, MODES, moveSteps, orderedTodos } from "./logic";
+import { ACCESS_REASON, accessVia, artifactCount, folderLabel, MODES, moveSteps, orderedTodos } from "./logic";
+import { projectProgress } from "@/features/work/overview";
 
 export default function ProjectPage() {
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -39,23 +40,43 @@ function BarButton({ title, onPress }: { title: string; onPress: () => void }) {
   );
 }
 
+/** Under the name: the to-dos' progress, the project's folders, and its one main action, a new chat in it. */
+function Summary({ project }: { project: Project }) {
+  const theme = useTheme();
+  const { colors } = theme;
+  const canChat = useCan("agents", "chat");
+  const color = projectColor(project.color, theme);
+  const progress = projectProgress(project);
+  const folders = project.folders?.length ? project.folders : project.folder ? [project.folder] : [];
+  return (
+    <View style={{ gap: space.md, marginTop: -space.sm }}>
+      <View style={{ flexDirection: "row", alignItems: "center", gap: space.sm }} accessible accessibilityLabel={progress.line + ", used " + ago(project.lastUsed)}>
+        <View style={{ width: 10, height: 10, borderRadius: 5, backgroundColor: color }} />
+        <View style={{ flex: 1, height: 6, borderRadius: 3, backgroundColor: colors.sunken, overflow: "hidden" }}>
+          <View style={{ width: `${Math.round(progress.share * 100)}%`, height: 6, borderRadius: 3, backgroundColor: colors.accent }} />
+        </View>
+        <T variant="footnote" weight="600" color="ink2">
+          {progress.line}
+        </T>
+      </View>
+      {folders.length > 0 && (
+        <View style={{ flexDirection: "row", flexWrap: "wrap", gap: space.sm }}>
+          <Chip label={folderLabel(folders[0]!)} icon={FolderOpen} accessibilityLabel={"Folder " + folders[0]} />
+          {folders.length > 1 && <Chip label={"+" + (folders.length - 1) + (folders.length === 2 ? " folder" : " folders")} />}
+        </View>
+      )}
+      {canChat && <Button title="New chat in this project" icon={SquarePen} wide onPress={() => router.push({ pathname: "/chat/new", params: { project: project.id } } as unknown as Href)} />}
+    </View>
+  );
+}
+
 function ProjectDetail({ project }: { project: Project }) {
   const theme = useTheme();
   const [editing, setEditing] = useState(false);
-  const color = projectColor(project.color, theme);
   return (
     <Page title={editing ? undefined : project.name} caption={editing ? undefined : project.description} keyboard>
       <Stack.Screen options={{ headerRight: () => <BarButton title={editing ? "Cancel" : "Edit"} onPress={() => setEditing(!editing)} /> }} />
-      {editing ? (
-        <EditProject project={project} onDone={() => setEditing(false)} />
-      ) : (
-        <View style={{ flexDirection: "row", alignItems: "center", gap: space.sm, marginTop: -space.sm }}>
-          <View style={{ width: 10, height: 10, borderRadius: 5, backgroundColor: color }} />
-          <T variant="footnote" color="muted">
-            {"Used " + ago(project.lastUsed)}
-          </T>
-        </View>
-      )}
+      {editing ? <EditProject project={project} onDone={() => setEditing(false)} /> : <Summary project={project} />}
       <Todos project={project} />
       <Chats project={project} />
       <Artifacts project={project} />
@@ -256,12 +277,12 @@ function Todos({ project }: { project: Project }) {
   const DoneIcon = showDone ? ChevronUp : ChevronDown;
   return (
     <View>
-      <Label>To-do</Label>
+      <Label>{open.length ? "To-do · " + open.length + " open" : "To-do"}</Label>
       <Group>
+        <AddTodo key="add" projectId={project.id} />
         {open.map((todo, index) => (
           <TodoRow key={todo.id} project={project} todo={todo} first={index === 0} last={index === open.length - 1} />
         ))}
-        <AddTodo key="add" projectId={project.id} />
         {done.length > 0 && <Row key="done" title={"Done · " + done.length} tone="accent" onPress={() => setShowDone(!showDone)} trailing={<DoneIcon size={18} color={colors.faint} strokeWidth={2.2} />} />}
         {showDone ? done.map((todo) => <TodoRow key={todo.id} project={project} todo={todo} first last />) : []}
       </Group>

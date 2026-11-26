@@ -39,6 +39,46 @@ export function arrangeChats(chats: ChatSummary[], sections: Section[] | undefin
   return groups;
 }
 
+/**
+ * The Chats list as one list (the phone's layout since the redesign): every chat that isn't pinned,
+ * newest first, under "Recent", whatever its section; pinned chats are drawn above it as a row of
+ * their own. While a chat is dragged, Pinned and each section show as places to drop it on, above
+ * the list. The chips above it choose which chats it holds (`chatsForFilter`).
+ */
+export function arrangeChatsFlat(chats: ChatSummary[], sections: Section[] | undefined, { dragging = false }: { dragging?: boolean } = {}): ChatGroup[] {
+  const recent = [...chats].filter((chat) => !chat.pinned).sort((a, b) => b.time - a.time);
+  const groups: ChatGroup[] = [];
+  if (dragging) {
+    groups.push({ key: "pinned", title: "Pinned", chats: [] });
+    for (const section of sections ?? []) groups.push({ key: "section:" + section.id, title: section.name, chats: [], section });
+  }
+  if (recent.length || dragging) groups.push({ key: "recent", title: "Recent", chats: recent });
+  return groups;
+}
+
+/** What the chips over the Chats list show: every chat, the unread ones, or one of the person's sections. */
+export type ChatFilter = "all" | "unread" | `section:${string}`;
+
+/** The chats a chip shows. A section that is gone shows every chat. */
+export function chatsForFilter<T extends Pick<ChatSummary, "id" | "sectionId">>(chats: T[], filter: ChatFilter, sections: Section[] | undefined, unread: ReadonlySet<string>): T[] {
+  if (filter === "unread") return chats.filter((chat) => unread.has(chat.id));
+  if (filter.startsWith("section:")) {
+    const id = filter.slice("section:".length);
+    if (!sections?.some((section) => section.id === id)) return chats;
+    return chats.filter((chat) => chat.sectionId === id);
+  }
+  return chats;
+}
+
+/** The chips, in order: All, Unread (with its count, only for someone who may read chats), then each section. */
+export function chatChips(sections: Section[] | undefined, unreadCount: number, canView: boolean): { value: ChatFilter; label: string; count?: number }[] {
+  return [
+    { value: "all", label: "All" },
+    ...(canView ? [{ value: "unread" as const, label: "Unread", ...(unreadCount ? { count: unreadCount } : {}) }] : []),
+    ...(sections ?? []).map((section) => ({ value: ("section:" + section.id) as ChatFilter, label: section.name })),
+  ];
+}
+
 /** The list as a flat run of items: each group's heading, then its chats unless the section is folded. */
 export type ListItem = { key: string; kind: "head"; group: string } | { key: string; kind: "row"; group: string; chatId: string };
 export function listItems(groups: ChatGroup[], folded: readonly string[]): ListItem[] {
@@ -92,6 +132,9 @@ export function chatDropPlan(chat: Pick<ChatSummary, "pinned" | "sectionId">, se
     if (!sections?.some((section) => section.id === id)) return undefined;
     if (chat.pinned) plan.pinned = false;
     if (own !== id) plan.sectionId = id;
+  } else if (group === "recent") {
+    // The one list under the chips holds every chat, in a section or not: a drop there only unpins.
+    if (chat.pinned) plan.pinned = false;
   } else if (group === "none" || group.startsWith("day:")) {
     if (chat.pinned) plan.pinned = false;
     if (own) plan.sectionId = null;
