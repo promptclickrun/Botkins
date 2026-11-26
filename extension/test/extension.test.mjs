@@ -936,4 +936,131 @@ test("browser_open with active: false waits past initial about:blank while pendi
   assert.equal(listeners.size, 0);
 });
 
+test("BrowserController secret-bearing guard persists via session storage, fails closed on scripting errors, and clears on reload/onUpdated/close", async () => {
+  const sessionStore = new Map();
+  const updatedListeners = new Set();
+  const removedListeners = new Set();
+  const tab = {
+    id: 91,
+    windowId: 1,
+    title: "Login",
+    url: "https://portal.example.test/login",
+    active: true,
+    pinned: false,
+    groupId: -1,
+    incognito: false,
+    status: "complete",
+  };
+  let driverThrows = false;
+  let cdpCalls = 0;
+
+  globalThis.chrome = {
+    storage: {
+      session: {
+        get: async (key) => ({ [key]: sessionStore.get(key) }),
+        set: async (obj) => {
+          for (const [k, v] of Object.entries(obj)) sessionStore.set(k, v);
+        },
+      },
+    },
+    tabs: {
+      query: async () => [tab],
+      get: async () => tab,
+      reload: async () => {},
+      remove: async (id) => {
+        for (const fn of removedListeners) fn(id);
+      },
+      onUpdated: {
+        addListener: (fn) => updatedListeners.add(fn),
+        removeListener: (fn) => updatedListeners.delete(fn),
+      },
+      onRemoved: {
+        addListener: (fn) => removedListeners.add(fn),
+        removeListener: (fn) => removedListeners.delete(fn),
+      },
+    },
+    windows: { update: async () => ({}) },
+    tabGroups: { query: async () => [] },
+    scripting: {
+      executeScript: async (injection) => {
+        if (driverThrows) throw new Error("Transient scripting error");
+        if (injection.world === "MAIN") return [{ frameId: 0, result: { ok: true, value: "eval-ok" } }];
+        const [action] = injection.args || [];
+        if (action === "secureFill") {
+          return [{ frameId: 0, result: { ok: true, filled: ["password"], missing: [], docToken: "doc-1", secretActive: true } }];
+        }
+        if (action === "secretStatus") {
+          return [{ frameId: 0, result: { ok: true, sameDoc: true, active: true, docToken: "doc-1" } }];
+        }
+        return [{ frameId: 0, result: { ok: true } }];
+      },
+    },
+    debugger: {
+      onDetach: { addListener: () => {} },
+      attach: async () => {},
+      detach: async () => {},
+      sendCommand: async () => {
+        cdpCalls++;
+        return { result: { value: "cdp-ok" } };
+      },
+    },
+  };
+
+  const makeCtrl = () =>
+    new BrowserController({
+      getSettings: async () => ({ enabled: true, mode: "all", groupName: "Botkins", groupColor: "orange", pausedTabIds: [] }),
+    });
+
+  const ctrl1 = makeCtrl();
+  const sentinel = "SENTINEL_SW_RESTART_PW";
+  await ctrl1.runSecureFill({
+    tabId: 91,
+    origin: "https://portal.example.test",
+    fields: [{ key: "password", kind: "password", value: sentinel }],
+  });
+  // Session storage records only tab metadata, never secret values.
+  assert.equal(JSON.stringify([...sessionStore.entries()]).includes(sentinel), false);
+
+  // Fresh controller (simulating MV3 service worker restart) hydrates mark and still blocks eval/cdp.
+  const ctrl2 = makeCtrl();
+  await assert.rejects(() => ctrl2.run("browser_eval", { tabId: 91, expression: "1+1" }), /securely filled value/i);
+  await assert.rejects(() => ctrl2.run("browser_cdp", { tabId: 91, method: "Runtime.evaluate" }), /securely filled value/i);
+  assert.equal(cdpCalls, 0);
+
+  // Transient scripting failure fails closed (still blocks eval/cdp and CDP snapshot fallback).
+  driverThrows = true;
+  await assert.rejects(() => ctrl2.run("browser_eval", { tabId: 91, expression: "1+1" }), /securely filled value/i);
+  await assert.rejects(() => ctrl2.run("browser_cdp", { tabId: 91, method: "Runtime.evaluate" }), /securely filled value/i);
+  await assert.rejects(() => ctrl2.run("browser_snapshot", { tabId: 91 }), /securely filled value/i);
+  assert.equal(cdpCalls, 0);
+  driverThrows = false;
+
+  // Loading -> complete navigation via tabs.onUpdated clears the mark.
+  for (const fn of updatedListeners) fn(91, { status: "loading" }, tab);
+  for (const fn of updatedListeners) fn(91, { status: "complete" }, tab);
+  const evalAfterUpdate = await ctrl2.run("browser_eval", { tabId: 91, expression: "1+1" });
+  assert.equal(evalAfterUpdate.result, "eval-ok");
+
+  // Re-mark and verify browser_navigate reload clears the mark.
+  await ctrl2.runSecureFill({
+    tabId: 91,
+    origin: "https://portal.example.test",
+    fields: [{ key: "password", kind: "password", value: sentinel }],
+  });
+  await assert.rejects(() => ctrl2.run("browser_eval", { tabId: 91, expression: "1+1" }), /securely filled value/i);
+  await ctrl2.run("browser_navigate", { tabId: 91, action: "reload" });
+  const evalAfterReload = await ctrl2.run("browser_eval", { tabId: 91, expression: "1+1" });
+  assert.equal(evalAfterReload.result, "eval-ok");
+
+  // Re-mark and verify close clears the mark.
+  await ctrl2.runSecureFill({
+    tabId: 91,
+    origin: "https://portal.example.test",
+    fields: [{ key: "password", kind: "password", value: sentinel }],
+  });
+  await ctrl2.run("browser_close_tab", { tabId: 91 });
+  assert.equal(ctrl2.secretTabs.has(91), false);
+});
+
+
 

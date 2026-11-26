@@ -22,6 +22,8 @@ import { DRIVER_VERSION } from "./dom-driver.mjs";
 const BLOCKED_SCHEMES = ["chrome:", "edge:", "chrome-extension:", "devtools:", "view-source:", "chrome-untrusted:"];
 const CDP_VERSION = "1.3";
 const DOM_DRIVER_FILE = "dist/dom-driver.js";
+const SECRET_TAB_ERROR = "This tab holds a securely filled value. Submit the form or navigate first.";
+const SECRET_TABS_SESSION_KEY = "botkinsSecretTabs";
 
 export function isEligibleUrl(url) {
   if (typeof url !== "string" || !url) return true; // newly created blank/loading tab
@@ -74,6 +76,12 @@ function urlOrigin(url) {
   } catch {
     return "";
   }
+}
+
+function stripUrlHash(url) {
+  const s = String(url || "");
+  const idx = s.indexOf("#");
+  return idx >= 0 ? s.slice(0, idx) : s;
 }
 
 function screenshotAbortedError(message) {
@@ -258,6 +266,31 @@ export class BrowserController {
     this.attached = new Set(); // active ephemeral debugger sessions
     this.cdpQueues = new Map(); // tabId -> Promise chain
     this.tabRefs = new Map(); // tabId -> Map<globalRef, { frameId, localRef, tag, type, role }>
+    this.secretTabs = new Map(); // tabId -> { origin, urlNoHash, navGen, docToken }
+    this.tabNavGen = new Map(); // tabId -> number
+    this.secretTabsHydrated = false;
+    this._secretWatchersAttached = false;
+    this._onSecretTabUpdated = (tabId, changeInfo) => {
+      if (typeof tabId !== "number") return;
+      if (changeInfo?.status === "loading") {
+        this.tabNavGen.set(tabId, (this.tabNavGen.get(tabId) || 0) + 1);
+      }
+      const entry = this.secretTabs.get(tabId);
+      if (!entry) return;
+      if (typeof changeInfo?.url === "string" && urlOrigin(changeInfo.url) !== entry.origin) {
+        this.clearSecretTab(tabId);
+        return;
+      }
+      if (changeInfo?.status === "complete" && (this.tabNavGen.get(tabId) || 0) !== entry.navGen) {
+        this.clearSecretTab(tabId);
+      }
+    };
+    this._onSecretWebNav = (details) => {
+      if (details?.frameId === 0 && typeof details.tabId === "number") {
+        this.tabNavGen.set(details.tabId, (this.tabNavGen.get(details.tabId) || 0) + 1);
+        this.clearSecretTab(details.tabId);
+      }
+    };
 
     if (typeof chrome !== "undefined" && chrome.debugger?.onDetach) {
       chrome.debugger.onDetach.addListener((source) => {
@@ -270,7 +303,122 @@ export class BrowserController {
       chrome.tabs.onRemoved.addListener((tabId) => {
         this.tabRefs.delete(tabId);
         this.attached.delete(tabId);
+        this.tabNavGen.delete(tabId);
+        this.clearSecretTab(tabId);
       });
+    }
+  }
+
+  syncSecretWatchers() {
+    if (typeof chrome === "undefined") return;
+    const need = this.secretTabs.size > 0;
+    if (need && !this._secretWatchersAttached) {
+      chrome.tabs?.onUpdated?.addListener?.(this._onSecretTabUpdated);
+      chrome.webNavigation?.onCommitted?.addListener?.(this._onSecretWebNav);
+      this._secretWatchersAttached = true;
+    } else if (!need && this._secretWatchersAttached) {
+      chrome.tabs?.onUpdated?.removeListener?.(this._onSecretTabUpdated);
+      chrome.webNavigation?.onCommitted?.removeListener?.(this._onSecretWebNav);
+      this._secretWatchersAttached = false;
+    }
+  }
+
+  async hydrateSecretTabs() {
+    if (this.secretTabsHydrated) return;
+    this.secretTabsHydrated = true;
+    if (typeof chrome === "undefined" || typeof chrome.storage?.session?.get !== "function") return;
+    try {
+      const data = await chrome.storage.session.get(SECRET_TABS_SESSION_KEY);
+      const saved = data?.[SECRET_TABS_SESSION_KEY];
+      if (!saved || typeof saved !== "object") return;
+      for (const [k, v] of Object.entries(saved)) {
+        const tabId = Number(k);
+        if (!Number.isInteger(tabId) || this.secretTabs.has(tabId)) continue;
+        if (v && typeof v === "object" && typeof v.origin === "string") {
+          this.secretTabs.set(tabId, {
+            origin: v.origin,
+            urlNoHash: typeof v.urlNoHash === "string" ? v.urlNoHash : "",
+            navGen: Number(v.navGen) || 0,
+            docToken: typeof v.docToken === "string" ? v.docToken : "",
+          });
+        }
+      }
+      this.syncSecretWatchers();
+    } catch {}
+  }
+
+  persistSecretTabs() {
+    if (typeof chrome === "undefined" || typeof chrome.storage?.session?.set !== "function") return;
+    const obj = {};
+    for (const [tabId, entry] of this.secretTabs.entries()) {
+      obj[String(tabId)] = entry;
+    }
+    try {
+      const res = chrome.storage.session.set({ [SECRET_TABS_SESSION_KEY]: obj });
+      if (res && typeof res.catch === "function") res.catch(() => {});
+    } catch {}
+  }
+
+  markSecretTab(tabId, info) {
+    this.secretTabs.set(tabId, info);
+    this.syncSecretWatchers();
+    this.persistSecretTabs();
+  }
+
+  clearSecretTab(tabId) {
+    if (this.secretTabs.delete(tabId)) {
+      this.syncSecretWatchers();
+      this.persistSecretTabs();
+    }
+  }
+
+  async isTabSecretBearing(tab) {
+    if (!tab || typeof tab.id !== "number") return false;
+    await this.hydrateSecretTabs();
+    const entry = this.secretTabs.get(tab.id);
+    if (!entry) return false;
+
+    const currentUrl = tab.url || "";
+    const currentOrigin = urlOrigin(currentUrl);
+    if (currentOrigin && currentOrigin !== entry.origin) {
+      this.clearSecretTab(tab.id);
+      return false;
+    }
+
+    if (this.hasScripting()) {
+      try {
+        const { frames } = await this.execDriver(
+          tab.id,
+          "secretStatus",
+          { docToken: entry.docToken },
+          { frameIds: [0] },
+        );
+        const status = frames[0]?.result;
+        if (status?.ok === true) {
+          if (!status.sameDoc || status.active === false) {
+            this.clearSecretTab(tab.id);
+            return false;
+          }
+          return true;
+        }
+      } catch {
+        // Fail closed while the tab is marked secret-bearing.
+        return true;
+      }
+    }
+
+    if ((this.tabNavGen.get(tab.id) || 0) !== entry.navGen && tab.status === "complete") {
+      this.clearSecretTab(tab.id);
+      return false;
+    }
+    return true;
+  }
+
+  async assertNotSecretBearing(tab) {
+    if (await this.isTabSecretBearing(tab)) {
+      const err = new Error(SECRET_TAB_ERROR);
+      err.code = "secret_tab_restricted";
+      throw err;
     }
   }
 
@@ -624,10 +772,11 @@ export class BrowserController {
           };
         }
       } catch {
-        // Fall through to ephemeral CDP fallback only when scripting fails.
+        // Fall through to ephemeral CDP fallback only when scripting fails and tab is not secret-bearing.
       }
     }
 
+    await this.assertNotSecretBearing(tab);
     const snap = await this.evaluateCdp(tab.id, CDP_SNAPSHOT_EXPR(maxChars), false, "page snapshot");
     this.tabRefs.delete(tab.id);
     return { tabId: tab.id, ...(snap || {}) };
@@ -1101,6 +1250,9 @@ export class BrowserController {
         if (domRes?.ok) {
           return { typed: true, tabId: tab.id, length: text.length };
         }
+        if (domRes?.secretProtected) {
+          throw new Error(domRes.error || "This input holds a securely filled value. Submit the form or navigate first.");
+        }
         if (domRes?.reason === "file-input") {
           throw new Error(domRes.error || "File inputs cannot be filled by typing; use browser_cdp with DOM.setFileInputFiles.");
         }
@@ -1108,13 +1260,14 @@ export class BrowserController {
           throw new Error(domRes.error || "Input element not found.");
         }
       } catch (err) {
-        if (err instanceof Error && /not found|disabled|file input|option not found|no focused/i.test(err.message)) {
+        if (err instanceof Error && /not found|disabled|file input|option not found|no focused|securely filled value/i.test(err.message)) {
           throw err;
         }
-        // Otherwise fall back to ephemeral CDP typing.
+        // Otherwise fall back to ephemeral CDP typing unless tab is secret-bearing.
       }
     }
 
+    await this.assertNotSecretBearing(tab);
     return await this.typeViaCdp(tab, args);
   }
 
@@ -1307,6 +1460,7 @@ export class BrowserController {
   }
 
   async runEval(tab, args) {
+    await this.assertNotSecretBearing(tab);
     const expression = String(args.expression || "");
     const awaitPromise = args.awaitPromise !== false;
 
@@ -1439,6 +1593,14 @@ export class BrowserController {
 
       const filled = Array.isArray(res.filled) ? res.filled.filter((k) => allowedKeys.has(k)) : [];
       const missing = Array.isArray(res.missing) ? res.missing.filter((k) => allowedKeys.has(k)) : [];
+      if (filled.length > 0 && res.secretActive !== false) {
+        this.markSecretTab(tab.id, {
+          origin: approvedOrigin,
+          urlNoHash: stripUrlHash(tab.url || ""),
+          navGen: this.tabNavGen.get(tab.id) || 0,
+          docToken: typeof res.docToken === "string" ? res.docToken : "",
+        });
+      }
       return { filled, missing };
     } finally {
       for (const f of fields) f.value = "";
@@ -1493,11 +1655,14 @@ export class BrowserController {
 
       case "browser_navigate": {
         const tab = await this.resolveTab(args.tabId);
+        const prevUrlNoHash = stripUrlHash(tab.url || "");
         this.tabRefs.delete(tab.id);
         const action = args.action || (args.url ? "goto" : "reload");
+        let isHashOnlyGoto = false;
         if (action === "goto") {
           const url = String(args.url || "").trim();
           if (!url || !isEligibleUrl(url)) throw new Error("Provide a valid http:// or https:// URL.");
+          isHashOnlyGoto = url.includes("#") && stripUrlHash(url) === prevUrlNoHash;
           await chrome.tabs.update(tab.id, { url });
         } else if (action === "back") {
           await chrome.tabs.goBack(tab.id);
@@ -1507,12 +1672,19 @@ export class BrowserController {
           await chrome.tabs.reload(tab.id);
         }
         const settled = await this.waitForLoad(tab.id, 10_000);
+        const nextUrlNoHash = stripUrlHash(settled?.url || "");
+        if (action === "reload" || (action === "goto" && !isHashOnlyGoto) || (nextUrlNoHash && nextUrlNoHash !== prevUrlNoHash)) {
+          this.tabNavGen.set(tab.id, (this.tabNavGen.get(tab.id) || 0) + 1);
+          this.clearSecretTab(tab.id);
+        }
         return { tabId: tab.id, title: settled?.title || "", url: settled?.url || "" };
       }
 
       case "browser_close_tab": {
         const tab = await this.resolveTab(args.tabId);
         this.tabRefs.delete(tab.id);
+        this.tabNavGen.delete(tab.id);
+        this.clearSecretTab(tab.id);
         await this.detach(tab.id);
         await chrome.tabs.remove(tab.id);
         return { closed: true, tabId: tab.id };
@@ -1565,6 +1737,7 @@ export class BrowserController {
 
       case "browser_cdp": {
         const tab = await this.resolveTab(args.tabId);
+        await this.assertNotSecretBearing(tab);
         const method = String(args.method || "").trim();
         if (!method) throw new Error("CDP `method` is required.");
         const result = await this.cdp(

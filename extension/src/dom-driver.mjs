@@ -292,14 +292,95 @@ function cssPathWithinRoot(el) {
   return parts.join(" > ");
 }
 
-function getValueState(el) {
+const SENSITIVE_FIELD_KINDS = new Set(["password", "secret", "code"]);
+const SECRET_INPUT_REFUSED_ERROR = "This input holds a securely filled value. Submit the form or navigate first.";
+
+function getSecretStore(el, fallbackWin) {
+  const elWin = getWin(el, fallbackWin);
+  if (!elWin) return null;
+  if (!elWin.__botkinsSecretElements) {
+    try {
+      Object.defineProperty(elWin, "__botkinsSecretElements", {
+        value: new WeakMap(),
+        configurable: true,
+        enumerable: false,
+        writable: true,
+      });
+    } catch {
+      elWin.__botkinsSecretElements = new WeakMap();
+    }
+  }
+  return elWin.__botkinsSecretElements;
+}
+
+function getSecretMeta(el, fallbackWin) {
+  const elWin = getWin(el, fallbackWin);
+  return elWin?.__botkinsSecretElements?.get(el) || null;
+}
+
+function markSecretElement(el, meta, fallbackWin) {
+  const store = getSecretStore(el, fallbackWin);
+  if (store) store.set(el, meta);
+}
+
+function unmarkSecretElement(el, fallbackWin) {
+  const elWin = getWin(el, fallbackWin);
+  elWin?.__botkinsSecretElements?.delete(el);
+}
+
+function isSensitiveSecretMeta(meta) {
+  return Boolean(meta && (SENSITIVE_FIELD_KINDS.has(meta.kind) || meta.wasPassword));
+}
+
+function isSecretRedactedElement(el, fallbackWin) {
+  if (!el || el.nodeType !== 1) return false;
+  if (isPasswordInput(el)) return true;
+  const meta = getSecretMeta(el, fallbackWin);
+  if (!isSensitiveSecretMeta(meta)) return false;
+  // Once an SPA empties a non-password input, the secret is gone from that input.
+  if (String(el.value ?? "").length === 0) {
+    unmarkSecretElement(el, fallbackWin);
+    return false;
+  }
+  return true;
+}
+
+function isSecretProtectedElement(el, fallbackWin) {
+  if (!el || el.nodeType !== 1) return false;
+  const meta = getSecretMeta(el, fallbackWin);
+  if (!isSensitiveSecretMeta(meta)) return false;
+  if (String(el.value ?? "").length === 0) {
+    unmarkSecretElement(el, fallbackWin);
+    return false;
+  }
+  return true;
+}
+
+function isLiveFilledElement(el, topDoc) {
+  if (!el) return false;
+  try {
+    if (!el.isConnected) return false;
+    const ownerDoc = el.ownerDocument;
+    if (!ownerDoc || !ownerDoc.defaultView) return false;
+    if (ownerDoc !== topDoc) {
+      const frameEl = ownerDoc.defaultView.frameElement;
+      if (!frameEl || !frameEl.isConnected) return false;
+    }
+    return String(el.value ?? "").length > 0;
+  } catch {
+    return false;
+  }
+}
+
+function getValueState(el, fallbackWin) {
   const tag = el.tagName.toLowerCase();
   const state = {};
+  const secretRedacted = isSecretRedactedElement(el, fallbackWin);
 
   if (tag === "input") {
     const t = (el.type || "text").toLowerCase();
-    if (t === "password") {
-      // Never expose password values in snapshots.
+    if (t === "password" || secretRedacted) {
+      // Never expose password or securely filled secret/code values in snapshots.
       const filled = Boolean(el.value && el.value.length > 0);
       state.hasValue = filled;
       state.valueState = filled ? "filled" : "empty";
@@ -313,7 +394,13 @@ function getValueState(el) {
       state.value = String(el.value ?? "").slice(0, 200);
     }
   } else if (tag === "textarea") {
-    state.value = String(el.value ?? "").slice(0, 200);
+    if (secretRedacted) {
+      const filled = Boolean(el.value && el.value.length > 0);
+      state.hasValue = filled;
+      state.valueState = filled ? "filled" : "empty";
+    } else {
+      state.value = String(el.value ?? "").slice(0, 200);
+    }
   } else if (tag === "select") {
     state.value = String(el.value ?? "");
     const opts = [...(el.options || [])];
@@ -418,6 +505,7 @@ function collectVisibleText(root, win, opts) {
     if (node.nodeType === 1) {
       const tag = node.tagName.toLowerCase();
       if (SKIP_TEXT_TAGS.has(tag)) return;
+      if (isSecretRedactedElement(node, win)) return;
       if (tag === "iframe") {
         if (allowAllSameOrigin || includeBlankIframes) {
           const subDoc = tryGetIframeDocument(node, allowAllSameOrigin);
@@ -760,6 +848,48 @@ function selectOptionOnElement(el, opts, win) {
 
 export function createDomDriver(win = globalThis) {
   const refs = new Map(); // ref -> Element (persists until next snapshot)
+  const docToken = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+  const secretEntries = new Map(); // Element -> { kind, wasPassword }
+  let docHadSensitiveFill = false;
+
+  function pruneSecretEntries() {
+    const doc = win.document;
+    for (const [el] of [...secretEntries.entries()]) {
+      if (!isLiveFilledElement(el, doc)) {
+        secretEntries.delete(el);
+        unmarkSecretElement(el, win);
+      }
+    }
+  }
+
+  function hasActiveSecretFields() {
+    pruneSecretEntries();
+    if (secretEntries.size === 0) {
+      docHadSensitiveFill = false;
+      return false;
+    }
+    if (docHadSensitiveFill) {
+      for (const meta of secretEntries.values()) {
+        if (isSensitiveSecretMeta(meta)) {
+          return true;
+        }
+      }
+      // All sensitive (password/secret/code) inputs have been emptied or removed by the SPA.
+      secretEntries.clear();
+      docHadSensitiveFill = false;
+      return false;
+    }
+    return true;
+  }
+
+  function secretStatus(opts = {}) {
+    const expectedToken = typeof opts.docToken === "string" ? opts.docToken : "";
+    if (expectedToken && expectedToken !== docToken) {
+      return { ok: true, sameDoc: false, active: false, docToken };
+    }
+    const active = hasActiveSecretFields();
+    return { ok: true, sameDoc: true, active, docToken };
+  }
 
   function resolveElement({ ref, selector, text, allowAllSameOrigin = false }) {
     const doc = win.document;
@@ -842,7 +972,7 @@ export function createDomDriver(win = globalThis) {
           const tag = el.tagName.toLowerCase();
           const role = implicitRole(el);
           const name = computeAccessibleName(el);
-          const valueState = getValueState(el);
+          const valueState = getValueState(el, win);
 
           const entry = {
             ref,
@@ -987,6 +1117,14 @@ export function createDomDriver(win = globalThis) {
       }
     }
 
+    if (isSecretProtectedElement(el, win)) {
+      return {
+        ok: false,
+        found: true,
+        secretProtected: true,
+        error: SECRET_INPUT_REFUSED_ERROR,
+      };
+    }
     if (isFileInput(el)) {
       return {
         ok: false,
@@ -1130,6 +1268,14 @@ export function createDomDriver(win = globalThis) {
   function select(opts = {}) {
     const el = resolveElement(opts);
     if (!el) return { ok: false, found: false, error: "Select element not found." };
+    if (isSecretProtectedElement(el, win)) {
+      return {
+        ok: false,
+        found: true,
+        secretProtected: true,
+        error: SECRET_INPUT_REFUSED_ERROR,
+      };
+    }
     if (el.tagName.toLowerCase() !== "select") {
       return { ok: false, found: true, error: `Element <${el.tagName.toLowerCase()}> is not a <select>.` };
     }
@@ -1504,6 +1650,12 @@ export function createDomDriver(win = globalThis) {
           } catch {}
         }
         setNativeValue(el, item.value, elWin);
+        const meta = { kind: item.kind, wasPassword: isPasswordInput(el) };
+        secretEntries.set(el, meta);
+        if (isSensitiveSecretMeta(meta)) {
+          docHadSensitiveFill = true;
+          markSecretElement(el, meta, elWin);
+        }
         el.dispatchEvent(
           makeInputEvent(elWin, "input", {
             bubbles: true,
@@ -1542,7 +1694,8 @@ export function createDomDriver(win = globalThis) {
         }
       }
 
-      return { ok: true, filled, missing };
+      const secretActive = filled.length > 0 ? hasActiveSecretFields() : false;
+      return { ok: true, filled, missing, docToken, secretActive };
     } finally {
       for (const item of resolved) {
         item.value = "";
@@ -1578,6 +1731,8 @@ export function createDomDriver(win = globalThis) {
         return probe(payload);
       case "secureFill":
         return secureFill(payload);
+      case "secretStatus":
+        return secretStatus(payload);
       default:
         return { ok: false, error: `Unknown DOM driver action: ${action}` };
     }
@@ -1585,6 +1740,7 @@ export function createDomDriver(win = globalThis) {
 
   return {
     version: DRIVER_VERSION,
+    docToken,
     refs,
     snapshot,
     click,
@@ -1595,6 +1751,7 @@ export function createDomDriver(win = globalThis) {
     checkWait,
     probe,
     secureFill,
+    secretStatus,
     dispatch,
   };
 }
