@@ -10,7 +10,7 @@
 // often it runs, and that each run uses the model and can cost money. The socket refuses such a schedule
 // unless the call carries { fastSchedule: true }; the command sends that only after the yes.
 import { readFileSync } from "node:fs";
-import { CliError, EXIT, table, usage } from "../output.mjs";
+import { ago, CliError, EXIT, table, usage } from "../output.mjs";
 import { confirm, readAll } from "./input.mjs";
 import { safe, shellWord } from "./tools.mjs";
 
@@ -230,6 +230,20 @@ export const routinesCommands = {
         details: "The times are in the routine's time zone, and the zone is printed.",
         async run(context) {
           context.print(await context.client.call("routines.get", one(context, "Name the routine (its name or id).")), routineText);
+        },
+      },
+      runs: {
+        summary: "List a routine's latest runs: how each ended and what it said",
+        usage: "botkins routines runs <routine> [--limit <n>]",
+        options: { limit: { type: "string", value: "n", about: "How many runs, 1 to 50 (10)" } },
+        details: "Newest first. A run that its script ended with {\"wakeAgent\": false} is `silent`. In a routine's own script, `botkins routines runs \"$BOTKINS_ROUTINE_ID\" --json` reads its earlier runs.",
+        async run(context) {
+          const ref = one(context, "Name the routine (its name or id).");
+          const limit = context.options.limit === undefined ? undefined : Number(context.options.limit);
+          if (limit !== undefined && (!Number.isInteger(limit) || limit < 1 || limit > 50)) throw usage("--limit is a whole number from 1 to 50.");
+          context.print(await context.client.call("routines.runs", ref, ...(limit === undefined ? [] : [limit])), (list) =>
+            list.length ? table(["WHEN", "STATUS", "TRIGGER", "REPLY"], list.map((run) => [ago(run.time), run.silent ? "silent" : run.status, run.trigger ?? "", clip(safe(run.reply ?? run.detail ?? ""), 60)])) : "This routine has not run yet.",
+          );
         },
       },
       when: {
