@@ -25,7 +25,7 @@ import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { assemble, ClaudePool, claudeTurn, PlanError } from "./claude.mjs";
 import { chatgptTurn, completeOutput } from "./chatgpt.mjs";
-import { COPILOT_ENDPOINTS, copilotHeaders, copilotUrl } from "./copilot.mjs";
+import { COPILOT_ENDPOINTS, copilotBody, copilotHeaders, copilotUrl } from "./copilot.mjs";
 import { completion } from "./opencode.mjs";
 import { KEYED, KEY_PATHS } from "../providers/keyed/config.mjs";
 
@@ -222,6 +222,7 @@ export class Gateway {
     const relay = this.copilot();
     if (!relay) throw new PlanError(503, "api_error", "GitHub Copilot isn't set up on this computer. Sign in to it in Settings › Model providers.");
     const api = COPILOT_ENDPOINTS[endpoint];
+    text = copilotBody(api, body, text);
     const borrow = async (fresh) => {
       try {
         return await relay.credentials(body?.model, { fresh });
