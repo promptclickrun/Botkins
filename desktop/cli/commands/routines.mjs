@@ -259,7 +259,7 @@ export const routinesCommands = {
       },
       add: {
         summary: "Make a routine: a bot does a prompt on a schedule",
-        usage: "botkins routines add <name> --bot <bot> (--prompt <text> | --file <path> | - | --script <text> | --script-file <path>) [--follow-up] [--model <provider/model>] [--effort <level>] (--cadence <kind> [--at <HH:MM>] [--days <list>] [--date <YYYY-MM-DD>] | --cron <five fields>) [--timezone <zone>] [--deliver <where>] [--chat <chat>] [--category <name>] [--quiet] [--yes]",
+        usage: "botkins routines add <name> --bot <bot> (--prompt <text> | --file <path> | - | --script <text> | --script-file <path>) [--follow-up] [--model <provider/model>] [--effort <level>] (--cadence <kind> [--at <HH:MM>] [--days <list>] [--date <YYYY-MM-DD>] | --cron <five fields>) [--timezone <zone>] [--deliver <where>] [--chat <chat>] [--category <name>] [--quiet] [--allow-ready-tasks] [--yes]",
         arguments: [{ name: "name", required: true }],
         options: {
           bot: { type: "string", value: "bot", about: "The bot that does the work (its name or id)" },
@@ -268,6 +268,7 @@ export const routinesCommands = {
           ...CADENCE_OPTIONS,
           ...RESULT_OPTIONS,
           quiet: { type: "boolean", about: "No notification when a run ends" },
+          "allow-ready-tasks": { type: "boolean", about: "Let this routine create Ready tasks assigned to a bot (starts automatically)" },
           ...YES,
         },
         details: CADENCE_DETAILS + RUN_DETAILS + " The prompt is a long text: give it with --prompt, with --file, or on standard input with the word -. The command shows the whole routine first (the bot, the schedule in words, the next two times and the prompt), because the bot then runs with nobody watching, and asks. With no terminal it needs --yes. A schedule that runs more often than a bot's own routine tool allows has one more line: how often it runs, and that each run uses the model and can cost money.",
@@ -289,6 +290,7 @@ export const routinesCommands = {
             ...(o.timezone !== undefined && { timezone: o.timezone }),
             ...(deliverFrom(o) && { deliver: deliverFrom(o) }),
             ...(o.quiet && { notify: false }),
+            ...(o["allow-ready-tasks"] && { allowReadyTasks: true }),
           };
           const review = await context.client.call("routines.review", null, data);
           show(context, reviewText(review, true));
@@ -301,7 +303,7 @@ export const routinesCommands = {
       },
       edit: {
         summary: "Change a routine",
-        usage: "botkins routines edit <routine> [-] [--name <text>] [--prompt <text>] [--file <path>] [--script <text> | --script-file <path> | --no-script] [--follow-up | --no-follow-up] [--model <provider/model|default>] [--effort <level>] [--cadence <kind>] [--at <HH:MM>] [--days <list>] [--date <YYYY-MM-DD>] [--cron <five fields>] [--timezone <zone>] [--deliver <where>] [--chat <chat>] [--category <name>] [--quiet] [--notify] [--yes]",
+        usage: "botkins routines edit <routine> [-] [--name <text>] [--prompt <text>] [--file <path>] [--script <text> | --script-file <path> | --no-script] [--follow-up | --no-follow-up] [--model <provider/model|default>] [--effort <level>] [--cadence <kind>] [--at <HH:MM>] [--days <list>] [--date <YYYY-MM-DD>] [--cron <five fields>] [--timezone <zone>] [--deliver <where>] [--chat <chat>] [--category <name>] [--quiet] [--notify] [--allow-ready-tasks] [--no-ready-tasks] [--yes]",
         arguments: [{ name: "routine", required: true }],
         options: {
           name: { type: "string", value: "text", about: "A new name" },
@@ -313,6 +315,8 @@ export const routinesCommands = {
           ...RESULT_OPTIONS,
           quiet: { type: "boolean", about: "No notification when a run ends" },
           notify: { type: "boolean", about: "Notify when a run ends (the usual way)" },
+          "allow-ready-tasks": { type: "boolean", about: "Let this routine create Ready tasks assigned to a bot" },
+          "no-ready-tasks": { type: "boolean", about: "Keep tasks created by this routine in Later (default)" },
           ...YES,
         },
         details: "Only what you name changes." + RUN_DETAILS + " A schedule option changes that part of the schedule: `--at 10:00` moves a daily routine to ten o'clock, and a new --cadence replaces the schedule, so give its fields too. " + CADENCE_DETAILS + " The prompt can come from --prompt, --file, or standard input with the word -. The command shows the whole routine as it will be, and asks. With no terminal it needs --yes. A routine that is paused stays paused (`botkins routines resume`). A schedule that runs more often than a bot's own routine tool allows has one more line in what it shows: how often it runs, and that each run uses the model and can cost money.",
@@ -321,6 +325,7 @@ export const routinesCommands = {
           const o = context.options;
           if (o.quiet && o.notify) throw usage("Give --quiet or --notify, not both.");
           if (o["follow-up"] && o["no-follow-up"]) throw usage("Give --follow-up or --no-follow-up, not both.");
+          if (o["allow-ready-tasks"] && o["no-ready-tasks"]) throw usage("Give --allow-ready-tasks or --no-ready-tasks, not both.");
           const script = await scriptFrom(context);
           if (script !== undefined && o["no-script"]) throw usage("Give a script or --no-script, not both.");
           const prompt = await promptFrom(context, false);
@@ -335,6 +340,7 @@ export const routinesCommands = {
             ...(o.timezone !== undefined && { timezone: o.timezone }),
             ...(deliverFrom(o) && { deliver: deliverFrom(o) }),
             ...((o.quiet || o.notify) && { notify: o.notify === true }),
+            ...((o["allow-ready-tasks"] || o["no-ready-tasks"]) && { allowReadyTasks: o["allow-ready-tasks"] === true }),
           };
           if (!Object.keys(patch).length) throw usage("Say what to change. `botkins help routines edit` lists the options.");
           const review = await context.client.call("routines.review", ref, patch);

@@ -64,7 +64,7 @@ test("progress list vs Ready task: distinct guidance, truncation-safe first line
   const taskUpdateHead = firstLine300(tools.get("task_update").description);
   assert.match(taskUpdateHead, /Task Board job/i);
   assert.match(taskUpdateHead, /"ready".*start background work/i);
-
+  assert.match(taskUpdateHead, /To send work back, set status "ready" with a note; the same bot continues in the same chat/i);
   // Synthetic dry-run: update_plan does not add anything to the Task Board; task_create does.
   await planTool.handler({ steps: [{ id: "1", text: "Inspect files", status: "in_progress" }] });
   assert.equal(planEvents.length, 1);

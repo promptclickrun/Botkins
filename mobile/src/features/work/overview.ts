@@ -7,18 +7,24 @@ import type { BotTask, Project, TaskStatus } from "@/link/types";
 export type TaskView = "active" | "later" | "done";
 
 const VIEW_OF: Record<TaskStatus, TaskView> = { review: "active", blocked: "active", working: "active", ready: "active", later: "later", done: "done" };
-/** Within Active: what needs the person first, then what is working, then what is ready to start. */
-const STATUS_RANK: Record<TaskStatus, number> = { review: 0, blocked: 0, working: 1, ready: 2, later: 3, done: 4 };
+/** Within Active: what needs the person first, then bot-reviewed tasks, then working, then ready. */
+const STATUS_RANK: Record<TaskStatus, number> = { review: 0, blocked: 0, working: 2, ready: 3, later: 4, done: 5 };
 const PRIORITY_RANK = { urgent: 0, high: 1, normal: 2, low: 3 } as const;
 
-type TaskLike = Pick<BotTask, "id" | "status" | "priority" | "updatedAt">;
+type TaskLike = Pick<BotTask, "id" | "status" | "priority" | "updatedAt" | "reviewerBotId">;
+
+const rankOf = (task: TaskLike) => (task.status === "review" && task.reviewerBotId ? 1 : STATUS_RANK[task.status as TaskStatus]);
+
+/** Whether a task waits for the person rather than an orchestrating creator bot. */
+export const taskNeedsPerson = (task: Pick<BotTask, "status" | "reviewerBotId">) =>
+  task.status === "blocked" || (task.status === "review" && !task.reviewerBotId);
 
 /** The tasks a chip shows, in order. Archived tasks show under none. Done is newest first; the others go by status, then priority, then the latest change. */
 export function tasksIn<T extends TaskLike>(tasks: T[], view: TaskView): T[] {
   const shown = tasks.filter((task) => task.status !== "archived" && VIEW_OF[task.status as TaskStatus] === view);
   if (view === "done") return shown.sort((a, b) => b.updatedAt - a.updatedAt);
   return shown.sort(
-    (a, b) => STATUS_RANK[a.status as TaskStatus] - STATUS_RANK[b.status as TaskStatus] || PRIORITY_RANK[a.priority] - PRIORITY_RANK[b.priority] || b.updatedAt - a.updatedAt,
+    (a, b) => rankOf(a) - rankOf(b) || PRIORITY_RANK[a.priority] - PRIORITY_RANK[b.priority] || b.updatedAt - a.updatedAt,
   );
 }
 
@@ -29,11 +35,12 @@ export function taskCounts(tasks: TaskLike[]): Record<TaskView, number> {
   return counts;
 }
 
-/** The Tasks page's Active chip in its three groups, each already in order. */
-export function activeGroups<T extends TaskLike>(tasks: T[]): { title: "Needs you" | "Working" | "Ready"; tasks: T[] }[] {
+/** The Tasks page's Active chip in its groups, each already in order. */
+export function activeGroups<T extends TaskLike>(tasks: T[]): { title: "Needs you" | "Reviewing" | "Working" | "Ready"; tasks: T[] }[] {
   const active = tasksIn(tasks, "active");
   return [
-    { title: "Needs you" as const, tasks: active.filter((task) => task.status === "review" || task.status === "blocked") },
+    { title: "Needs you" as const, tasks: active.filter((task) => taskNeedsPerson(task)) },
+    { title: "Reviewing" as const, tasks: active.filter((task) => task.status === "review" && Boolean(task.reviewerBotId)) },
     { title: "Working" as const, tasks: active.filter((task) => task.status === "working") },
     { title: "Ready" as const, tasks: active.filter((task) => task.status === "ready") },
   ].filter((group) => group.tasks.length);

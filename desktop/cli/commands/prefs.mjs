@@ -46,6 +46,7 @@ const KEYS = [
   ["autoSummarize", "off | 5 to 30", "Turns between a chat's summaries into a new title, on the Default routines model"],
   ["tasksMax", "1 to 16 | default", "Task Board tasks that run at once on this computer (default: $BOTKINS_TASKS_MAX, else 2)"],
   ["tasksPerBot", "1 to 8 | default", "Task Board tasks that one bot runs at once, each in its own chat (default: $BOTKINS_TASKS_PER_BOT, else 1)"],
+  ["tasksCreatorReviewExisting", "on | off", "Hand existing bot-created tasks currently in Review to their creator bot"],
   ["approval", "ask | read | assisted | all", "How tool requests are approved (see below)"],
   ["clarify", "missing, choices, changes, or none", "When a bot asks a clarifying question"],
   ["clarificationInstructions", "text (up to 4000 characters)", "Your own words for when a bot asks a clarifying question"],

@@ -55,10 +55,15 @@ export const STATUS_LABEL: Record<TaskStatus | "archived", string> = { later: "L
 export const STATUS_TONE: Record<TaskStatus | "archived", Tone> = { later: "neutral", ready: "info", working: "accent", review: "warning", blocked: "danger", done: "success", archived: "neutral" };
 export const PRIORITY_LABEL: Record<TaskPriority, string> = { low: "Low", normal: "Normal", high: "High", urgent: "Urgent" };
 
-/** "Quill · High", "No bot". */
-export function taskSubtitle(task: BotTask, bot: Bot | undefined) {
+/** "Quill · High", "Quill · Reviewing: Alfie", "No bot". */
+export function taskSubtitle(task: BotTask, bot: Bot | undefined, reviewer?: Bot) {
   const who = task.botId ? (bot?.name ?? "A bot") : "No bot";
-  return task.priority === "normal" ? who : who + " · " + PRIORITY_LABEL[task.priority] + " priority";
+  const parts = [who];
+  if (task.status === "review" && task.reviewerBotId) {
+    parts.push("Reviewing: " + (reviewer?.name ?? "Creator"));
+  }
+  if (task.priority !== "normal") parts.push(PRIORITY_LABEL[task.priority] + " priority");
+  return parts.join(" · ");
 }
 
 // Runs

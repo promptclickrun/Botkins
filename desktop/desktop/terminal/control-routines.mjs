@@ -212,6 +212,7 @@ export function routinesApi({ workspace, handlers, bot, selection }) {
           ...(notify !== undefined && { notify }),
           ...(data.script !== undefined && { script: data.script }),
           ...(data.followUp !== undefined && { followUp: data.followUp }),
+          ...(data.allowReadyTasks !== undefined && { allowReadyTasks: Boolean(data.allowReadyTasks) }),
           ...(model !== undefined && { model }),
         }
       : {
@@ -223,6 +224,7 @@ export function routinesApi({ workspace, handlers, bot, selection }) {
           ...(deliver && { deliver }),
           ...(notify === false && { notify: false }),
           ...(data.script != null && { script: data.script, followUp: data.followUp === true }),
+          ...(data.allowReadyTasks === true && { allowReadyTasks: true }),
           ...(model && { model }),
         };
     if (found && !Object.keys(app).length) throw new ControlError("Say what to change.", "BAD_ARGUMENT");
@@ -252,6 +254,7 @@ export function routinesApi({ workspace, handlers, bot, selection }) {
         ...(finalDeliver && { deliver: finalDeliver }),
         ...(deliverChat(finalDeliver) && { deliverChat: deliverChat(finalDeliver) }),
         notify: finalNotify,
+        ...(data.allowReadyTasks !== undefined ? (data.allowReadyTasks ? { allowReadyTasks: true } : {}) : entry?.allowReadyTasks === true ? { allowReadyTasks: true } : {}),
         ...(found && {
           enabled: entry.enabled !== false,
           changes: [
@@ -264,6 +267,7 @@ export function routinesApi({ workspace, handlers, bot, selection }) {
             ...(data.script !== undefined && (fields.script ?? null) !== (entry.script ?? null) ? ["script"] : []),
             ...(data.followUp !== undefined && (fields.followUp === true) !== (entry.followUp === true) ? ["follow-up action"] : []),
             ...(model !== undefined && JSON.stringify(model ?? null) !== JSON.stringify(found.chat.model ?? null) ? ["model"] : []),
+            ...(data.allowReadyTasks !== undefined && Boolean(data.allowReadyTasks) !== (entry.allowReadyTasks === true) ? ["ready tasks"] : []),
           ],
         }),
       },

@@ -793,7 +793,7 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
     linkPreview: (url) => (workspace.state.settings.linkPreviews ? linkPreviews.preview(String(url)) : null),
     // Tasks board (desktop/tasks.mjs)
     saveTask: (data) => workspace.tasks.save(data),
-    moveTask: (id, status) => workspace.tasks.move(id, status),
+    moveTask: (id, status, options) => workspace.tasks.move(id, status, options),
     startTask: (id) => workspace.tasks.start(id),
     deleteTask: (id) => workspace.tasks.remove(id),
     // Event-based Workflows (desktop/workflows.mjs)

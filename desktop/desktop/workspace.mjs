@@ -643,6 +643,9 @@ export class Workspace {
   setPreferences(patch) {
     this.state.settings = changeSettings(this.state.settings, patch);
     if (patch && Object.hasOwn(patch, "proactive")) this.proactive.sync();
+    if (patch && Object.hasOwn(patch, "tasksCreatorReviewExisting") && patch.tasksCreatorReviewExisting === true) {
+      this.tasks?.applyCreatorReviewMigration(true);
+    }
     this.save();
   }
   /**
