@@ -125,7 +125,24 @@ test("empty node host finishes setup without creating a bot, persists across res
   assert.equal(caps.role, "node");
   assert.equal(caps.name, "Studio Mac");
   assert.equal(caps.online, true);
-  assert.deepEqual(caps.operations, [{ id: LIST_FILES_OPERATION, version: LIST_FILES_VERSION, readOnly: true }]);
+  assert.equal(caps.wholeComputer, false);
+  assert.deepEqual(caps.execPolicy, { mode: "ask" });
+  const opIds = caps.operations.map((o) => o.id);
+  for (const expected of [
+    LIST_FILES_OPERATION,
+    "fs.read",
+    "fs.write",
+    "fs.mkdir",
+    "fs.move",
+    "fs.delete",
+    "fs.stat",
+    "fs.search",
+    "system.run",
+    "system.which",
+    "node.notify",
+  ]) {
+    assert.ok(opIds.includes(expected), `expected operation ${expected}`);
+  }
   assert.deepEqual(caps.projects, [{ id: projectId, name: "Assets" }]);
 });
 

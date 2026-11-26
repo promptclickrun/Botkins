@@ -548,6 +548,36 @@ export function controlApi(service) {
           const chat = state().chats.find((entry) => entry.id === run.chatId);
           return { id: run.id, chatId: run.chatId, title: run.title, status: run.status, ...(run.detail && { detail: String(run.detail).slice(0, 300) }), time: run.time ? new Date(run.time).toISOString() : null, bot: state().bots.find((entry) => entry.id === chat?.botId)?.name ?? null, ...(run.scheduleId != null && { routine: true }) };
         }),
+    /** Pending interactions (approvals, questions, forms, secure inputs, and node-job requests). */
+    "interactions.list": ([options = {}] = []) => {
+      const onlyNode = options?.nodeJob === true;
+      return workspace.interactions
+        .snapshot()
+        .filter((entry) => !onlyNode || entry.nodeJob === true)
+        .map((entry) => ({
+          id: entry.id,
+          kind: entry.kind,
+          title: entry.title,
+          ...(entry.label && { label: entry.label }),
+          ...(entry.preview && { preview: entry.preview }),
+          ...(entry.detail && { detail: entry.detail }),
+          chatId: entry.chatId,
+          botId: entry.botId,
+          ...(entry.nodeJob && { nodeJob: true }),
+          ...(entry.dispatch && { dispatch: true }),
+          ...(entry.review && { review: true }),
+          ...(entry.operation && { operation: entry.operation }),
+          ...(entry.resourceId && { resourceId: entry.resourceId }),
+          ...(entry.resourceName && { resourceName: entry.resourceName }),
+          ...(entry.sourceBotName && { sourceBotName: entry.sourceBotName }),
+          ...(entry.sourceHostName && { sourceHostName: entry.sourceHostName }),
+          ...(entry.targetHostName && { targetHostName: entry.targetHostName }),
+          ...(entry.remember && { remember: entry.remember }),
+          ...(entry.choices && { choices: entry.choices }),
+          ...(entry.freeform !== undefined && { freeform: entry.freeform }),
+          ...(entry.time !== undefined && { time: entry.time }),
+        }));
+    },
     // The answer says which chat and which kind of request (never its text or the answer's), for the log line (coverage.mjs). The request is gone once it is answered, so it is read first.
     // A yes to a request (`approve`, `today` or `remember`) needs the mark `{ agreed: true }` as the last argument: a bot's shell must not approve its own request by a quiet call. A no, a cancel and an answer to a question need none.
     "chat.respond": async ([requestId, answer, mark]) => {

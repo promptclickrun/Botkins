@@ -74,6 +74,8 @@ export async function peerCapabilities(peers, hostId) {
           role: capabilities?.role || "standard",
           online: capabilities?.online !== false,
           paused: !!capabilities?.paused,
+          wholeComputer: !!capabilities?.wholeComputer,
+          ...(capabilities?.execPolicy && { execPolicy: capabilities.execPolicy }),
           unavailable: false,
           version: capabilities?.version ?? 1,
           bots: Array.isArray(capabilities?.bots) ? capabilities.bots : [],
@@ -229,7 +231,7 @@ export async function remoteReply(ws, bot, chat, run, task, entry, message, pin)
  * Runs a bounded operation on another same-owner node host.
  * Retries reuse the same request ID so a reconnect never executes the job twice.
  */
-export async function remoteJob(ws, bot, chat, run, task, entry, payload, pin) {
+export async function remoteJob(ws, bot, chat, run, task, entry, payload, pin, { pollMs = 1000 } = {}) {
   const { hostId } = entry.remote;
   const peers = ws.teamworkPeers;
   const submit = {
@@ -237,8 +239,9 @@ export async function remoteJob(ws, bot, chat, run, task, entry, payload, pin) {
     sourceBotId: bot.id,
     sourceBotName: bot.name,
     operation: payload.operation,
-    resourceId: payload.resourceId,
+    resourceId: payload.resourceId ?? "",
     path: payload.path ?? "",
+    ...(payload.params !== undefined && { params: payload.params }),
     createdAt: entry.started,
   };
   const receipt = { id: entry.id };
@@ -266,12 +269,16 @@ export async function remoteJob(ws, bot, chat, run, task, entry, payload, pin) {
       requireRemoteTurn(ws, bot, chat, run, task);
       if (result?.status === "pending" || result?.status === "working") {
         const status = result.status === "pending" ? "waiting" : "working";
-        if (entry.status !== status) {
+        const outputChanged =
+          result.output &&
+          (entry.output?.stdout !== result.output.stdout || entry.output?.stderr !== result.output.stderr);
+        if (result.output) entry.output = result.output;
+        if (entry.status !== status || outputChanged) {
           entry.status = status;
           ws.notify();
         }
         operation = "job.status";
-        delay = 3000;
+        delay = result.status === "working" ? Math.min(pollMs, 500) : pollMs;
         continue;
       }
       if (result?.status === "completed" && result.result && typeof result.result === "object") {

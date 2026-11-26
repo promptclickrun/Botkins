@@ -322,6 +322,11 @@ export const WORKSPACE = {
   nodeSetup: cmd("node setup"),
   nodeRename: cmd("node rename"),
   nodePause: cmd("node pause"),
+  nodeSetWholeComputer: cmd("node whole-computer"),
+  nodeSetExecMode: cmd("node policy"),
+  nodeAddAllowlistRule: cmd("node allowlist"),
+  nodeRemoveAllowlistRule: cmd("node allowlist"),
+  nodeAuditLog: cmd("node audit"),
   nodeShareProject: cmd("node share"),
   nodeRevokeGrant: cmd("node revoke"),
   nodeDisconnect: cmd("node disconnect"),
@@ -669,16 +674,22 @@ export const CHANGES = {
   // The owner's own picture: set or cleared, never the picture.
   "profile.picture": (args) => (args?.[0] ? "set" : "cleared"),
   // ── Node host (control-node.mjs) ──
-  // Logs the node name, project name, grant id, or pause state — never local folder paths.
+  // Logs the node name, policy mode, project name, grant id, or pause state — never local folder paths or command args.
   "node.setup": (args, value) => value?.name ?? args?.[0],
   "node.rename": (args, value) => value?.name ?? args?.[0],
   "node.pause": (args, value) => (value?.paused === true || args?.[0] === true ? "paused" : "online"),
+  "node.wholeComputer": (args, value) => (value?.wholeComputer === true || args?.[0] === true ? "on" : "off"),
+  "node.execMode": (args, value) =>
+    value?.execPolicy?.mode ??
+    (["deny", "allowlist", "ask", "full"].includes(String(args?.[0] ?? "").toLowerCase()) ? String(args[0]).toLowerCase() : null),
+  "node.allowlist.add": (args) => (typeof args?.[1] === "string" && args[1].trim() ? args[1].trim() : "*"),
+  "node.allowlist.remove": (args, value) => value?.removed ?? args?.[0] ?? "all",
   "node.share": (args, value) => levelOf(value?.project?.name ?? args?.[0], (value?.project?.shared ?? args?.[1] !== false) ? "shared" : "unshared"),
   "node.revoke": (args, value) => value?.revoked ?? args?.[0] ?? "all",
   "node.disconnect": null,
 };
 /** The service's own calls that only read, wait or talk in a chat: no line. Every call is in this list, in CHANGES or in LOGS_ITSELF. */
-export const READS = ["skills.review", "chat.scriptCommand", "skillsCatalog.search", "skillsCatalog.preview", "skillsCatalog.featured", "mcpCatalog.list", "piPackages.browse", "piPackages.preview", "piPackages.list", "status", "logs.read", "doctor", "events.wait", "pair.status", "devices.list", "bots.list", "bots.get", "providers.list", "providers.services", "providers.login.read", "providers.login.input", "providers.login.cancel", "models", "chat.open", "chat.list", "chat.send", "chat.read", "chat.stop", "runs.list", "routines.list", "plugins.list", "plugins.marketplaces", "plugins.refresh", "plugins.browse", "plugins.preview", "config.get", "config.describe", "relay.status", "update.status", "update.check", "methods", "plugins.get", "tools.list", "tools.get", "tools.import.preview", "tools.signIn.read", "tools.signIn.input", "tools.signIn.cancel", "skills.list", "skills.get", "bots.tools", "bots.access", "bots.menu", "folders.list", "gadgets.get", "profile.status", "profile.home"];
+export const READS = ["interactions.list", "skills.review", "chat.scriptCommand", "skillsCatalog.search", "skillsCatalog.preview", "skillsCatalog.featured", "mcpCatalog.list", "piPackages.browse", "piPackages.preview", "piPackages.list", "status", "logs.read", "doctor", "events.wait", "pair.status", "devices.list", "bots.list", "bots.get", "providers.list", "providers.services", "providers.login.read", "providers.login.input", "providers.login.cancel", "models", "chat.open", "chat.list", "chat.send", "chat.read", "chat.stop", "runs.list", "routines.list", "plugins.list", "plugins.marketplaces", "plugins.refresh", "plugins.browse", "plugins.preview", "config.get", "config.describe", "relay.status", "update.status", "update.check", "methods", "plugins.get", "tools.list", "tools.get", "tools.import.preview", "tools.signIn.read", "tools.signIn.input", "tools.signIn.cancel", "skills.list", "skills.get", "bots.tools", "bots.access", "bots.menu", "folders.list", "gadgets.get", "profile.status", "profile.home"];
 // The reads of the rest of the workspace, one line for each area (each area's builder writes only its own line).
 export const MORE_READS = {
   bots: ["bots.flags", "bots.proactive", "bots.memory", "bots.sections", "bots.sections.get", "bots.importable", "bots.import.preview", "templates.list", "templates.get", "templates.import.preview", "templates.browse", "templates.market"],
@@ -698,7 +709,7 @@ export const MORE_READS = {
   // (Marketplace › Apps: the person's Composio apps, control-apps.mjs)
   apps: ["apps.list", "apps.connected", "apps.accounts", "apps.card"], // (`apps.card` looks at a chat's Connect card again; when the app is connected, the chat goes on as it would for the window.)
   // (Node host, control-node.mjs)
-  node: ["node.status"],
+  node: ["node.status", "node.approvals", "node.audit"],
 };
 READS.push(...Object.values(MORE_READS).flat());
 
