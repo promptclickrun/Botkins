@@ -534,10 +534,10 @@ export class Workspace {
       steerable: Object.fromEntries(this.shownTurns().map(([id, task]) => [id, !!task.deliverSteer])),
       queued: Object.fromEntries(
         [...this.queues]
-          .filter(([, list]) => list.length)
           .map(([id, list]) => [
             id,
             list.filter(item => {
+              if (item.taskReviewId) return false;
               const task = this.active.get(id);
               return task?.session?.interruptsForSteering || (item.id !== task?.delivering && !(item.steer && task?.deliverSteer && !item.text.startsWith("/")));
             }).map(({ id, text, attachments, clientMessageId }) => ({
@@ -546,7 +546,8 @@ export class Workspace {
               text,
               ...(attachments?.length && { attachments }),
             })),
-          ]),
+          ])
+          .filter(([, list]) => list.length),
       ),
     };
   }
@@ -1122,7 +1123,7 @@ export class Workspace {
       ...(options.author && { author: options.author }),
     };
     const list = this.queues.get(chat.id) ?? [];
-    if (list.length >= 20) throw new Error("Up to 20 messages can wait at once.");
+    if (list.filter((q) => !q.taskReviewId).length >= 20) throw new Error("Up to 20 messages can wait at once.");
     list.push(item);
     this.queues.set(chat.id, list);
     this.save();
@@ -1206,6 +1207,12 @@ export class Workspace {
     const remaining = list.filter(item => !consumed.has(item));
     if (remaining.length) this.queues.set(chatId, remaining);
     else this.queues.delete(chatId);
+    // Pending creator reviews are skipped if the task was already resolved, reassigned, or overridden.
+    if (next.taskReviewId && !this.tasks?.needsCreatorReview(next.taskReviewId, chat)) {
+      this.save();
+      if (this.queues.has(chatId)) setImmediate(() => this.drain(chatId));
+      return;
+    }
     try {
       this.send(chatId, next.text, {
         attachments: next.attachments,
@@ -1213,11 +1220,14 @@ export class Workspace {
         mentions: next.mentions,
         author: next.author,
         ...(next.notify === false && { notify: false }),
+        ...(next.title && { title: next.title }),
+        ...(next.taskReviewId && { taskReviewId: next.taskReviewId }),
         ...(next.allowScript === true && !rest.length && { allowScript: true }),
         voiceId: next.voiceId,
         clientMessageId: next.clientMessageId,
         ...(rest.length && { merged: rest }),
       }).catch((err) => console.error("Queued turn:", err.message));
+      if (next.taskReviewId) this.tasks?.creatorReviewStarted(next.taskReviewId, chatId);
     } catch (err) {
       // The message can't be sent as it is (a mentioned record is gone, or access changed).
       // It is kept in the chat as a failed turn, and the messages behind it still go out.
@@ -2485,7 +2495,7 @@ export class Workspace {
       for (;;) {
         // The plan as it is now: the last change may still have been being read when the reply ended.
         if (task.todoRead) await this.readSessionTodos(session, chat, run, task);
-        const blocked = task.stopped || this.closing || !!this.queues.get(chat.id)?.length || this.interactions.openFor(task).length > 0;
+        const blocked = task.stopped || this.closing || !!this.queues.get(chat.id)?.some(item => !item.taskReviewId) || this.interactions.openFor(task).length > 0;
         const move = nextMove({ text, todos: run.todos, chain, blocked });
         if (move.move === "stop") return !!(task.stopped || this.closing);
         chain.count++;

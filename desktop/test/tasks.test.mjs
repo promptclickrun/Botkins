@@ -466,3 +466,156 @@ test("routine-created tasks default to Later, and owner-approved routine opt-in 
     /Only the computer's owner/,
   );
 });
+
+test("creator review queues while creator chat is busy, wakes automatically once idle, runs once, and skips resolved or overridden tasks", async (t) => {
+  let releaseBusyCreator;
+  const busyCreatorTurn = new Promise((resolve) => {
+    releaseBusyCreator = resolve;
+  });
+  const creatorPrompts = [];
+  let activeCreatorReviewPrompt = null;
+
+  const dir = mkdtempSync(join(tmpdir(), "botkins-tasks-busy-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+
+  const makeSession = () => {
+    const handlers = new Set();
+    const session = {
+      on: (handler) => (handlers.add(handler), () => handlers.delete(handler)),
+      emit: (event) => handlers.forEach((handler) => handler(event)),
+      disconnect: async () => {},
+      abort: async () => {},
+      send: async ({ prompt }) => {
+        const messageId = "msg:" + Math.random().toString(36).slice(2, 8);
+        if (prompt.includes("Hold creator busy")) {
+          await busyCreatorTurn;
+          session.emit({ type: "user.message", id: messageId, data: { messageId } });
+          session.emit({ type: "assistant.message", data: { originatingMessageId: messageId, content: "Creator finished busy turn." } });
+          session.emit({ type: "session.idle", data: { mode: "interactive" } });
+          return messageId;
+        }
+        if (prompt.includes("[Task ready for your review]")) {
+          creatorPrompts.push(prompt);
+          activeCreatorReviewPrompt = prompt;
+          session.emit({ type: "user.message", id: messageId, data: { messageId } });
+          session.emit({ type: "assistant.message", data: { originatingMessageId: messageId, content: "Reviewed and verified." } });
+          session.emit({ type: "session.idle", data: { mode: "interactive" } });
+          return messageId;
+        }
+        session.emit({ type: "user.message", id: messageId, data: { messageId } });
+        session.emit({ type: "assistant.message", data: { originatingMessageId: messageId, content: "Worker finished: " + prompt.slice(0, 40) } });
+        session.emit({ type: "session.idle", data: { mode: "interactive" } });
+        return messageId;
+      },
+    };
+    return session;
+  };
+
+  const ws = new Workspace(
+    dir,
+    async () => ({ createSession: async () => makeSession(), resumeSession: async () => makeSession() }),
+    () => {},
+  );
+  const tasks = ws.tasks;
+  const pip = ws.state.bots[0].id;
+  const scout = ws.state.bots[1].id;
+
+  const creatorChatId = ws.createChat(pip, "Orchestrator");
+  const notified = [];
+  ws.events.on("task.creatorNotified", (ev) => notified.push(ev));
+
+  // Start an in-flight turn in the creator chat so it is busy.
+  const busyPromise = ws.send(creatorChatId, "Hold creator busy");
+  assert.equal(ws.active.has(creatorChatId), true, "creator chat is busy");
+
+  // Creator bot creates two ready tasks assigned to worker Scout while busy.
+  const active = ws.active.get(creatorChatId);
+  const pipTools = Object.fromEntries(tasks.tools(ws.bot(pip), ws.chat(creatorChatId), { id: "r-busy" }, active).map((x) => [x.name, x]));
+  const taskA = JSON.parse(await pipTools.task_create.handler({ title: "Deliver after busy", bot: ws.bot(scout).name, status: "ready" }));
+  const taskB = JSON.parse(await pipTools.task_create.handler({ title: "Person overrides before idle", bot: ws.bot(scout).name, status: "ready" }));
+
+  // Allow two concurrent tasks for Scout so both finish while creator is still busy.
+  ws.setPreferences({ tasksPerBot: 2 });
+  tasks.tick();
+  await Promise.all([ws.locks.get(tasks.get(taskA.id).chatId), ws.locks.get(tasks.get(taskB.id).chatId)]);
+
+  assert.equal(tasks.get(taskA.id).status, "review");
+  assert.equal(tasks.get(taskA.id).reviewerBotId, pip);
+  assert.equal(tasks.get(taskB.id).status, "review");
+  assert.equal(tasks.get(taskB.id).reviewerBotId, pip);
+  assert.equal(taskNeedsPerson(tasks.get(taskA.id)), false, "creator-review task is excluded from Needs you");
+  assert.equal(creatorPrompts.length, 0, "review does not interrupt busy creator");
+  assert.deepEqual(
+    notified.map((e) => [e.task.id, e.mode]),
+    [
+      [taskA.id, "queued"],
+      [taskB.id, "queued"],
+    ],
+    "both completions are queued durably while creator is busy",
+  );
+  assert.equal(ws.snapshot().queued[creatorChatId], undefined, "internal review items stay hidden from user queued bar");
+
+  // Person overrides taskB to done before the creator chat becomes idle; taskB must be skipped.
+  tasks.move(taskB.id, "done", { by: "person" });
+  assert.equal(tasks.get(taskB.id).status, "done");
+
+  // Let the creator chat finish its busy turn; queued review for taskA must wake automatically without user input.
+  releaseBusyCreator();
+  await busyPromise;
+  // Drain is scheduled on setImmediate after executeTurn's finally block.
+  for (let i = 0; i < 6 && creatorPrompts.length === 0; i++) {
+    await new Promise((r) => setImmediate(r));
+    await settle(ws);
+  }
+  await settle(ws);
+  await new Promise((r) => setImmediate(r));
+  await settle(ws);
+
+  assert.equal(creatorPrompts.length, 1, "only taskA woke a review turn, exactly once");
+  assert.match(activeCreatorReviewPrompt, new RegExp(taskA.id));
+  assert.doesNotMatch(activeCreatorReviewPrompt, new RegExp(taskB.id));
+  assert.equal(
+    ws.state.runs.filter((r) => r.chatId === creatorChatId && r.taskReviewId === taskA.id).length,
+    1,
+    "taskA review run started once",
+  );
+  assert.equal(
+    ws.state.runs.filter((r) => r.chatId === creatorChatId && r.taskReviewId === taskB.id).length,
+    0,
+    "overridden taskB never started a review run",
+  );
+  assert.equal(ws.queues.has(creatorChatId), false, "queue is empty after drain");
+  assert.deepEqual(
+    notified.filter((e) => e.mode === "turn").map((e) => e.task.id),
+    [taskA.id],
+    "creatorNotified turn event fired once for taskA only",
+  );
+
+  // Re-ticking / re-draining does not re-trigger the already-delivered review.
+  tasks.tick();
+  ws.drain(creatorChatId);
+  await settle(ws);
+  assert.equal(creatorPrompts.length, 1, "review does not repeat on subsequent ticks or drains");
+});
+
+test("stale queued creator review left in durable queue is skipped on drain when task was resolved or reassigned", async (t) => {
+  const { ws, tasks, pip, scout } = setup(t);
+  const creatorChatId = ws.createChat(pip, "Orchestrator");
+  const id = tasks.save({ title: "Already done", botId: scout, status: "ready", createdBy: pip, createdChatId: creatorChatId });
+  tasks.get(id).status = "review";
+  tasks.get(id).reviewerBotId = pip;
+
+  // Simulate a durable queued review surviving restart, followed by external/manual state override before drain.
+  ws.queues.set(creatorChatId, [
+    { id: "q-review-1", steer: false, notify: false, title: "Review · Already done", taskReviewId: id, text: "[Task ready for your review]", attachments: [] },
+  ]);
+  // Simulate override directly on task state (e.g. reassigned reviewer or moved to done) so drain's guard is exercised.
+  tasks.get(id).status = "done";
+  delete tasks.get(id).reviewerBotId;
+
+  ws.drain(creatorChatId);
+  await settle(ws);
+
+  assert.equal(ws.queues.has(creatorChatId), false, "stale review item removed from queue");
+  assert.equal(ws.state.runs.filter((r) => r.taskReviewId === id).length, 0, "no review turn started for resolved task");
+});
