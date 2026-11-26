@@ -346,6 +346,13 @@ export const WORKSPACE = {
   nodeShareProject: cmd("node share"),
   nodeRevokeGrant: cmd("node revoke"),
   nodeDisconnect: cmd("node disconnect"),
+  nodeConvertInspect: cmd("node convert"),
+  nodeConvertPlan: cmd("node convert"),
+  nodeConvertRun: cmd("node convert"),
+  nodeConvertStatus: cmd("node convert"),
+  nodeConvertUndo: cmd("node convert"),
+  nodeRemoteStatus: cmd("node remote"),
+  nodeRemoteControl: cmd("node remote"),
   // ── What needs a window ──
   ...each("chooseFiles chooseProjectFolder pickPluginFolder pickSkillUpload addSkillFolder", no("window")), // a file or folder dialog (a path is given to the command instead)
   ...each("revealProject revealSkill revealWiki revealWikiExport openChatPath openLink openAppRelease", no("window")), // opens a folder, a file or a link on the computer's screen
@@ -700,7 +707,7 @@ export const CHANGES = {
   // The owner's own picture: set or cleared, never the picture.
   "profile.picture": (args) => (args?.[0] ? "set" : "cleared"),
   // ── Node host (control-node.mjs) ──
-  // Logs the node name, policy mode, project name, grant id, or pause state — never local folder paths or command args.
+  // Logs the node name, policy mode, project name, grant id, or pause state — never local folder paths, command args, or vault secrets.
   "node.setup": (args, value) => value?.name ?? args?.[0],
   "node.rename": (args, value) => value?.name ?? args?.[0],
   "node.pause": (args, value) => (value?.paused === true || args?.[0] === true ? "paused" : "online"),
@@ -713,6 +720,9 @@ export const CHANGES = {
   "node.share": (args, value) => levelOf(value?.project?.name ?? args?.[0], (value?.project?.shared ?? args?.[1] !== false) ? "shared" : "unshared"),
   "node.revoke": (args, value) => value?.revoked ?? args?.[0] ?? "all",
   "node.disconnect": null,
+  "node.convert.run": (args, value) => levelOf(value?.job?.nodeName ?? args?.[0]?.nodeName, value?.job?.status ?? "run"),
+  "node.convert.undo": (args, value) => value?.snapshotId ?? args?.[0] ?? "latest",
+  "node.remote.control": (args, value) => levelOf(value?.hostName ?? args?.[0], args?.[1]),
 };
 /** The service's own calls that only read, wait or talk in a chat: no line. Every call is in this list, in CHANGES or in LOGS_ITSELF. */
 export const READS = ["interactions.list", "skills.review", "chat.scriptCommand", "skillsCatalog.search", "skillsCatalog.preview", "skillsCatalog.featured", "mcpCatalog.list", "piPackages.browse", "piPackages.preview", "piPackages.list", "status", "logs.read", "doctor", "events.wait", "pair.status", "devices.list", "bots.list", "bots.get", "providers.list", "providers.services", "providers.login.read", "providers.login.input", "providers.login.cancel", "models", "chat.open", "chat.list", "chat.send", "chat.read", "chat.stop", "runs.list", "routines.list", "plugins.list", "plugins.marketplaces", "plugins.refresh", "plugins.browse", "plugins.preview", "config.get", "config.describe", "relay.status", "update.status", "update.check", "methods", "plugins.get", "tools.list", "tools.get", "tools.import.preview", "tools.signIn.read", "tools.signIn.input", "tools.signIn.cancel", "skills.list", "skills.get", "bots.tools", "bots.access", "bots.menu", "folders.list", "gadgets.get", "profile.status", "profile.home"];
@@ -735,7 +745,7 @@ export const MORE_READS = {
   // (Marketplace › Apps: the person's Composio apps, control-apps.mjs)
   apps: ["apps.list", "apps.connected", "apps.accounts", "apps.card"], // (`apps.card` looks at a chat's Connect card again; when the app is connected, the chat goes on as it would for the window.)
   // (Node host, control-node.mjs)
-  node: ["node.status", "node.approvals", "node.audit"],
+  node: ["node.status", "node.approvals", "node.audit", "node.convert.inspect", "node.convert.plan", "node.convert.status", "node.remote.status"],
 };
 READS.push(...Object.values(MORE_READS).flat());
 

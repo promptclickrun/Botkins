@@ -572,7 +572,8 @@ export type TeamJoinState = { id: string; team: string; status: "pending" | "app
 export type NodeHostProject = {
   id: string;
   name: string;
-  path: string;
+  path?: string;
+  folder?: string;
   shared?: boolean;
 };
 export type NodeHostGrant = {
@@ -583,19 +584,173 @@ export type NodeHostGrant = {
   operation: string;
   resourceId: string;
   resourceName: string;
+  scope?: "always" | "today";
   until: number | null;
   createdAt: number;
 };
 export type NodeHostLastCompleted = {
-  requestId: string;
+  id?: string;
+  requestId?: string;
   operation: string;
   resourceId: string;
   resourceName: string;
   sourceHostName: string;
   sourceBotName: string;
   status: string;
-  at: number;
+  at?: number;
+  finishedAt?: number;
+  summary?: string;
+};
+export type NodeConversionAction = "move" | "keep" | "delete";
+export type NodeConversionTarget = {
+  serverId: string;
+  name: string;
+  role: string;
+  online: boolean;
+  unavailable?: boolean;
+  paused?: boolean;
+  botCount: number;
+};
+export type NodeConversionBotInventory = {
+  id: string;
+  name: string;
+  role: string;
   summary: string;
+  hidden: boolean;
+  teamwork: boolean;
+  chatCount: number;
+  messageCount: number;
+  groupChatCount: number;
+  routineCount: number;
+  activeRoutineCount: number;
+  routineTimezones: string[];
+  memoryBytes: number;
+  memoryEntries: number;
+  profileFiles: string[];
+  panelCount: number;
+  skillCount: number;
+  skills: string[];
+  plugins: Array<{ id: string; name: string }>;
+  projectRefs: Array<{ id: string; name: string; folder: string; sharedOnSource: boolean }>;
+};
+export type NodeConversionSnapshotSummary = {
+  id: string;
+  path: string;
+  createdAt: number;
+  botCount: number;
+  chatCount: number;
+  nodeName: string;
+};
+export type NodeConversionJobItem = {
+  botId: string;
+  botName: string;
+  action: NodeConversionAction;
+  targetHostId: string | null;
+  targetHostName: string | null;
+  transferId: string | null;
+  targetBotId: string | null;
+  stage: string;
+  error: string | null;
+  verification: {
+    chatCount: number;
+    messageCount: number;
+    routineCount: number;
+    panelCount: number;
+    contentSha256: string;
+  } | null;
+};
+export type NodeConversionJob = {
+  id: string;
+  status: "running" | "completed" | "paused" | "failed" | "undone";
+  nodeName: string;
+  sharedProjects: string[];
+  snapshotId: string | null;
+  snapshotPath: string | null;
+  createdAt: number;
+  updatedAt: number;
+  error: string | null;
+  items: NodeConversionJobItem[];
+};
+export type NodeConversionInspect = {
+  hasLocalData: boolean;
+  suggestedName: string;
+  bots: NodeConversionBotInventory[];
+  targets: NodeConversionTarget[];
+  shared: {
+    wiki: { pageCount: number; pages: string[]; note: string };
+    skills: { customCount: number; linkedCount: number; names: string[] };
+    plugins: { count: number; items: Array<{ id: string; name: string; enabled: boolean; bots: "all" | string[] }> };
+    panels: { count: number; botOwnedCount: number; otherCount: number };
+    vault: { count: number; locked: boolean; entries: Array<{ id: string; label: string; kind: string; owner: string }>; note: string };
+    projects: { count: number; items: Array<{ id: string; name: string; folder: string; hasFolder: boolean; shared: boolean }> };
+    groupChats: { count: number; items: Array<{ id: string; title: string; botIds: string[]; messageCount: number }> };
+  };
+  snapshot: NodeConversionSnapshotSummary | null;
+  activeJob: NodeConversionJob | null;
+  nodeHost?: NodeHostState;
+};
+export type NodeConversionPlan = {
+  valid: boolean;
+  errors: string[];
+  warnings: string[];
+  nodeName: string;
+  sharedProjects: string[];
+  botPlans: Array<{
+    botId: string;
+    botName: string;
+    role: string;
+    action: NodeConversionAction;
+    targetHostId: string | null;
+    targetHostName: string | null;
+    chatCount: number;
+    messageCount: number;
+    routineCount: number;
+    activeRoutineCount: number;
+    panelCount: number;
+    memoryBytes: number;
+    profileFileCount: number;
+    skillCount: number;
+    pluginCount: number;
+    projectRefCount: number;
+  }>;
+  counts: {
+    totalBots: number;
+    moveBots: number;
+    keepBots: number;
+    deleteBots: number;
+    chatsMoving: number;
+    chatsKeeping: number;
+    chatsDeleting: number;
+    messagesMoving: number;
+    routinesMoving: number;
+    routinesKeeping: number;
+    routinesDeleting: number;
+    panelsMoving: number;
+    panelsDeleting: number;
+    memoryBotsMoving: number;
+    profileFilesMoving: number;
+    skillsMoving: number;
+    pluginEnablementsMoving: number;
+    projectRefsMoving: number;
+    vaultEntriesLeftBehind: number;
+    wikiPagesKept: number;
+    projectsToShare: number;
+  };
+  requiresDeleteConfirmation: boolean;
+  deleteConfirmationPhrase: string;
+  deleteConfirmed: boolean;
+  snapshotDir: string;
+};
+export type NodeConversionUndoResult = {
+  undone: boolean;
+  snapshotId: string;
+  snapshotPath: string;
+  restoredBots: number;
+  restoredChats: number;
+  nodeHost: NodeHostState;
+  rolledBackRemoteBots: string[];
+  unreachableTargets: Array<{ botId: string; botName: string; targetHostName: string }>;
+  pausedToPreventDupes: Array<{ botId: string; routineName: string }>;
 };
 export type NodeHostAllowlistRule = {
   id: string;
@@ -635,18 +790,27 @@ export type NodeHostPendingApproval = {
 };
 export type NodeHostState = {
   enabled: boolean;
+  role?: "node" | "standard";
   name: string;
-  status: "off" | "online" | "paused";
+  status?: "off" | "online" | "paused";
+  online?: boolean;
   paused: boolean;
+  listening?: boolean;
   wholeComputer?: boolean;
   execPolicy?: NodeHostExecPolicy;
   capabilitiesVersion: number;
+  remoteControlSupported?: boolean;
+  hasLocalData?: boolean;
   sharedProjects: NodeHostProject[];
   availableProjects: NodeHostProject[];
   grants: NodeHostGrant[];
   pendingApprovals?: NodeHostPendingApproval[];
   auditLog?: NodeHostAuditEntry[];
   lastCompleted: NodeHostLastCompleted | null;
+  conversion?: {
+    activeJob: NodeConversionJob | null;
+    snapshot: NodeConversionSnapshotSummary | null;
+  };
 };
 export type State = {
   /** Which computer's workspace this is: null for this one, else the paired computer in use. */
@@ -1505,6 +1669,17 @@ declare global {
       nodeShareProject(projectId: string, shared: boolean): Promise<NodeHostState>;
       nodeRevokeGrant(grantId?: string | null): Promise<NodeHostState>;
       nodeDisconnect(): Promise<NodeHostState>;
+      nodeConvertInspect(): Promise<NodeConversionInspect>;
+      nodeConvertPlan(input?: Record<string, unknown>): Promise<NodeConversionPlan>;
+      nodeConvertRun(input?: Record<string, unknown>): Promise<{ job: NodeConversionJob; nodeHost: NodeHostState }>;
+      nodeConvertStatus(): Promise<NodeHostState & { jobs: NodeConversionJob[] }>;
+      nodeConvertUndo(input?: { snapshotId?: string }): Promise<NodeConversionUndoResult>;
+      nodeRemoteStatus(hostId: string): Promise<{ hostId: string; hostName: string; nodeHost: NodeHostState }>;
+      nodeRemoteControl(
+        hostId: string,
+        action: string,
+        params?: Record<string, unknown>,
+      ): Promise<{ hostId: string; hostName: string; action: string; nodeHost: NodeHostState }>;
       /** Each connected provider's plan and limits. `refresh` reads every provider again first. */
       providerUsage(options?: { refresh?: boolean }): Promise<ProviderUsage[]>;
       /** A read that nobody waited for has come in: ask again. */

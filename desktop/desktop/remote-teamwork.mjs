@@ -1,5 +1,6 @@
 // The source turn waits for Host B's decision and reply. A lost response repeats the same
 // request ID. The only context sent to the other computer is the message shown in its card.
+import { randomUUID } from "node:crypto";
 import { setTimeout as wait } from "node:timers/promises";
 import { globalAccess } from "./access.mjs";
 import { isGroup } from "./groups.mjs";
@@ -297,5 +298,87 @@ export async function remoteJob(ws, bot, chat, run, task, entry, payload, pin, {
     task.helpers.delete(helper);
     if (finished) outgoing.finish(entry.id);
     else await outgoing.cancel(entry.id);
+  }
+}
+
+/**
+ * Fetches live status from another same-owner node host (read-only).
+ * Same-owner authorization is enforced by teamwork-peers (never phones or team members).
+ */
+export async function remoteNodeStatus(peers, hostId) {
+  if (!peers?.available()) throw new Error("Cross-host controls require sign-in and host linking.");
+  const hosts = await peers.hosts(true);
+  const host = hosts.find((item) => item.serverId === hostId);
+  if (!host) throw new Error("Unknown or unreachable same-owner host.");
+  const status = await peers.call(host.serverId, "control.status", {}, host.pin);
+  return { hostId: host.serverId, hostName: host.name, nodeHost: status };
+}
+
+/**
+ * Runs an owner-only remote node management control on another same-owner host
+ * (pause, resume, share, unshare, revoke, rename, disconnect) using the node's
+ * trusted-device approval and grant model. Retries reuse the same request ID.
+ */
+export async function remoteNodeControl(
+  peers,
+  hostId,
+  action,
+  params = {},
+  { pollMs = 1500, timeoutMs = 5 * 60_000, signal } = {},
+) {
+  if (!peers?.available()) throw new Error("Cross-host controls require sign-in and host linking.");
+  const hosts = await peers.hosts(true);
+  const host = hosts.find((item) => item.serverId === hostId);
+  if (!host) throw new Error("Unknown or unreachable same-owner host.");
+
+  const requestId = params.requestId || randomUUID();
+  const submit = {
+    id: requestId,
+    action,
+    ...(params.projectId && { projectId: params.projectId }),
+    ...(params.grantId && { grantId: params.grantId }),
+    ...(params.name && { name: params.name }),
+    createdAt: Date.now(),
+  };
+  const receipt = { id: requestId };
+  let operation = "control.submit";
+  let delay = 0;
+  const deadline = Date.now() + timeoutMs;
+
+  while (true) {
+    if (signal?.aborted) {
+      await peers.call(host.serverId, "control.cancel", receipt, host.pin).catch(() => {});
+      throw new Error("Remote node control was cancelled.");
+    }
+    if (Date.now() > deadline) {
+      await peers.call(host.serverId, "control.cancel", receipt, host.pin).catch(() => {});
+      throw new Error("Timed out waiting for approval on the node host.");
+    }
+    if (delay) await wait(delay, undefined, { signal });
+    let result;
+    try {
+      result = await peers.call(
+        host.serverId,
+        operation,
+        operation === "control.submit" ? submit : receipt,
+        host.pin,
+      );
+    } catch (error) {
+      if (error.code !== "TEAMWORK_OFFLINE") throw error;
+      delay = Math.min(10_000, Math.max(pollMs, delay * 2));
+      continue;
+    }
+    if (result?.status === "pending" || result?.status === "working") {
+      operation = "control.poll";
+      delay = pollMs;
+      continue;
+    }
+    if (result?.status === "completed" && result.result && typeof result.result === "object") {
+      return { hostId: host.serverId, hostName: host.name, ...result.result };
+    }
+    if (result?.status === "denied") throw new Error("The owner declined this remote node control request.");
+    if (result?.status === "cancelled") throw new Error("The remote node control request was cancelled.");
+    if (result?.status === "failed") throw new Error(result.error || "The node host could not complete this control request.");
+    throw new Error("The node host returned an invalid remote control response.");
   }
 }
