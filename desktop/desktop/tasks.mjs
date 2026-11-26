@@ -64,6 +64,7 @@ export class Tasks {
     };
     this.all.unshift(task);
     this.ws.save();
+    this.ws.events?.emit("task.created", { task, from: null, to: task.status });
     return task.id;
   }
   /** Moves a task between lanes. Only the dispatcher puts a task in Working. */
@@ -72,10 +73,12 @@ export class Tasks {
     if (!LANES.includes(status) && status !== "archived") throw new Error("Unknown lane");
     if (status === "working") throw new Error("Tasks start working on their own once they're Ready with a bot.");
     if (task.status === "working") throw new Error("Stop the task's chat before moving it.");
+    const from = task.status;
     task.status = status;
     if (status === "ready" || status === "later") delete task.problem;
     task.updatedAt = Date.now();
     this.ws.save();
+    if (from !== status) this.ws.events?.emit("task.status", { task, from, to: status });
   }
   remove(id) {
     const task = this.get(id);
@@ -118,12 +121,14 @@ export class Tasks {
     const reuse = task.chatId && this.ws.state.chats.some((c) => c.id === task.chatId && c.botId === task.botId) && !this.ws.active.has(task.chatId);
     const chatId = reuse ? task.chatId : this.ws.createChat(task.botId, "Task · " + task.title.slice(0, 80));
     let turn;
+    const from = task.status;
     try {
       const invoked = this.invocation(task);
       turn = this.ws.send(chatId, invoked?.text ?? this.prompt(task), { taskId: task.id, title: "Task · " + task.title.slice(0, 90), ...(invoked && { allowScript: true }) });
     } catch (error) {
       Object.assign(task, { chatId, status: "blocked", problem: error.message, updatedAt: Date.now() });
       this.ws.save();
+      if (from !== "blocked") this.ws.events?.emit("task.status", { task, from, to: "blocked" });
       throw error;
     }
     Object.assign(task, { chatId, status: "working", updatedAt: Date.now() });
@@ -131,17 +136,21 @@ export class Tasks {
     this.ws.chat(chatId).title = "Task · " + task.title.slice(0, 80);
     task.runId = this.ws.state.runs.find((r) => r.chatId === chatId)?.id;
     this.ws.save();
+    if (from !== "working") this.ws.events?.emit("task.status", { task, from, to: "working" });
     turn.catch((error) => console.error("Task:", error.message));
   }
   finished(run) {
     const task = this.all.find((t) => t.id === run.taskId);
     if (!task || task.status !== "working") return;
+    const from = task.status;
     const chat = this.ws.state.chats.find((c) => c.id === run.chatId);
     const reply = chat?.messages.findLast((m) => m.runId === run.id && m.role === "assistant" && !m.interim)?.text;
+    const nextStatus = run.status === "Completed" ? "review" : "blocked";
     if (run.status === "Completed") Object.assign(task, { status: "review", result: (reply ?? "").slice(0, 4000) });
     else Object.assign(task, { status: "blocked", problem: run.detail || run.status });
     task.updatedAt = Date.now();
     this.ws.save();
+    if (from !== nextStatus) this.ws.events?.emit("task.status", { task, from, to: nextStatus });
   }
   /** Starts the most urgent Ready task whose bot is free, up to MAX_RUNNING at once. */
   tick() {

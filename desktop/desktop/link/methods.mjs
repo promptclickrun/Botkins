@@ -66,6 +66,12 @@ export const SPACE_METHODS = [
   "spaces.read", "spaces.create", "spaces.rename", "spaces.remove", "spaces.setProject", "spaces.setPanelProject",
   "spaces.newPanel", "spaces.ask", "spaces.movePanel", "spaces.patchState", "spaces.note", "spaces.removeNote",
 ];
+/** Event-based Workflows in Routines ("workflows-v1", desktop/workflows.mjs). */
+export const WORKFLOW_METHODS = [
+  "workflowsList", "workflowCreate", "workflowUpdate", "workflowDelete", "workflowPause", "workflowResume",
+  "workflowRun", "workflowRetryRun", "workflowRespondApproval", "workflowCancelRun",
+  "workflowRotateWebhookSecret", "workflowExportText", "workflowImportText",
+];
 /** How a new panel may start, and the limits of what people write into a space. */
 export const PANEL_STARTS = ["checklist", "tracker", "chart", "table", "notes", "app"];
 export const SPACE_SIZES = { name: 40, prompt: 4000, note: 2000, label: 80, state: 64 * 1024, stateKeys: 200 };
@@ -95,6 +101,7 @@ export const REMOTE_METHODS = new Set([
   // Routines and tasks
   "createRoutine", "updateRoutine", "setRoutineEnabled", "deleteRoutine", "runRoutine", "duplicateRoutine",
   "previewCadence", "changeSchedule",
+  ...WORKFLOW_METHODS,
   "saveTask", "moveTask", "startTask", "deleteTask",
   // Today
   "refreshPanel", "changePanel", "routine", "boardAct",

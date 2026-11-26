@@ -3,7 +3,7 @@ import { useAppActive } from "./useAppActive";
 // How screens read the computer's state.
 import { useEffect, useMemo } from "react";
 import { botActivity, chatActivity, type AvatarState } from "./sessionActivity";
-import type { Bot, ChatSchedule, ChatSummary, ModelInfo, ProviderStatus, Scope, SkillInfo } from "@/link/types";
+import type { Bot, ChatSchedule, ChatSummary, ModelInfo, ProviderStatus, Scope, SkillInfo, Workflow, WorkflowRun } from "@/link/types";
 import { api, watchChat } from "./link";
 import { type ChatView, type PhoneParts, useApp } from "./store";
 import { can } from "./team";
@@ -14,6 +14,11 @@ export function usePart<K extends keyof PhoneParts>(key: K): PhoneParts[K] | und
   return useApp((state) => state.parts[key]);
 }
 export const useBots = (): Bot[] => usePart("bots") ?? NONE;
+export const useWorkflows = (): Workflow[] => usePart("workflows") ?? NONE;
+export const useWorkflowRuns = (workflowId?: string): WorkflowRun[] => {
+  const runs = usePart("workflowRuns") ?? NONE;
+  return useMemo(() => (workflowId ? runs.filter((r) => r.workflowId === workflowId) : runs), [runs, workflowId]);
+};
 export const useBot = (id: string | undefined) => useApp((state) => state.parts.bots?.find((bot) => bot.id === id));
 export const useChats = (): ChatSummary[] => usePart("chats") ?? NONE;
 export const useChat = (id: string | undefined) => useApp((state) => state.parts.chats?.find((chat) => chat.id === id));
