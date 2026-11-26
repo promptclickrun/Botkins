@@ -271,14 +271,21 @@ test("paths are asked 20 at a time, once per chat and path, and a failed call ca
   assert.equal(run, undefined);
   assert.equal(calls.length, 0);
 
-  // The index changed: only the paths that had nothing are asked again.
+  // The index changed: only the paths that had nothing are asked again, at once, without waiting for
+  // a message to want them (a picture recorded just after its reply arrived shows without a restart).
   resolver.forgetMissing();
   assert.equal(found.c1?.["/Users/sam/f1.txt"], undefined);
   assert.equal(found.c1?.["/Users/sam/f10.txt"]?.id, "/Users/sam/f10.txt");
-  resolver.want("c1", ["/Users/sam/f1.txt", "/Users/sam/f10.txt"]);
+  assert.ok(run, "the missing paths are asked again on their own");
+  resolver.want("c1", ["/Users/sam/f1.txt", "/Users/sam/f10.txt"]); // already waiting: not asked twice
   run!();
   await new Promise((done) => setImmediate(done));
-  assert.deepEqual(calls.map((call) => call.paths), [["/Users/sam/f1.txt"]]);
+  // Each chat asks again for its own missing paths, once each.
+  const again = calls.filter((call) => call.chatId === "c1").flatMap((call) => call.paths);
+  assert.ok(again.includes("/Users/sam/f1.txt"));
+  assert.ok(!again.includes("/Users/sam/f10.txt"), "a path it knows is not asked again");
+  assert.equal(again.length, new Set(again).size, "each missing path once");
+  assert.deepEqual(calls.filter((call) => call.chatId === "c2").flatMap((call) => call.paths).sort(), ["/Users/sam/f1.txt", "/Users/sam/f2.txt"]);
 
   // A call that fails is forgotten, so the next want asks again.
   calls.length = 0;

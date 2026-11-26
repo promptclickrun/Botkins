@@ -472,11 +472,13 @@ function ChatViewBody({
     if (!onScreen || computer?.state !== "online" || watching?.hostId !== hostId || watching?.chatId !== chat.id) setWatching(null);
   }, [onScreen, computer?.state, hostId, chat.id, watching]);
   const remoteHost = !!state.remote?.using;
-  const files = useMemo(() => ({ chatId: chat.id, botId: bot.id, hostId, remote: remoteHost, preview: (file: FilePreview) => {
+  // The index's revision: a reply's attachments are recorded just after it is written, so its paths are checked again then.
+  const artifactRevision = state.artifacts?.revision ?? 0;
+  const files = useMemo(() => ({ chatId: chat.id, botId: bot.id, hostId, remote: remoteHost, revision: artifactRevision, preview: (file: FilePreview) => {
     setPull(undefined);
     setPreview({ ...file, chatId: chat.id });
     showPaneNow.current(true);
-  } }), [chat.id, bot.id, hostId, remoteHost]);
+  } }), [chat.id, bot.id, hostId, remoteHost, artifactRevision]);
   const closePane = () => {
     showPane(false);
     paneAction(chat.id, "closed");
