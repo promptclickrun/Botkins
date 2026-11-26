@@ -191,7 +191,10 @@ export function Routines({ routines, chats, bots }: { routines: RoutineEntry[]; 
         </View>
       )}
       {routines.length === 0 && workflows.length === 0 ? (
-        <EmptyState art={<Mascot size={104} state="planning" />} title="No routines yet" action={canCreate ? "New routine" : undefined} onAction={canCreate ? () => openRoutine("new") : undefined} />
+        <View style={{ gap: space.sm }}>
+          <EmptyState art={<Mascot size={104} state="planning" />} title="No routines yet" action={canCreate ? "New routine" : undefined} onAction={canCreate ? () => openRoutine("new") : undefined} />
+          {canCreate && <Button title="New workflow" variant="ghost" size="sm" icon={Plus} style={{ alignSelf: "center" }} onPress={() => openWorkflow("new")} />}
+        </View>
       ) : routines.length > 0 ? (
         <Group>
           {routines.map((routine) => (
