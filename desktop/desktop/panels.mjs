@@ -654,7 +654,7 @@ export class Panels {
         ),
         tool(
           "today_routine",
-          "Manage a recurring refresh for one fixed Today/space panel; updates that panel silently and notifies only on failure (use routine_create for notifications on each run or delivery elsewhere). Set a five-field cron expression, optional IANA timezone (defaults to host timezone), and instructions. Confirm only unspecified cadence and target panel/space before setting. A space's Notify me covers people's edits and notes, not bot refreshes.",
+          "Manage a recurring refresh for one fixed Today/space panel; updates that panel silently and notifies only on failure (use routine_create for notifications on each run or delivery elsewhere). Each refresh is a model turn: choose the slowest cron that keeps the panel useful. Set a five-field cron expression, optional IANA timezone (defaults to host timezone), and instructions. Confirm only unspecified cadence and target panel/space before setting. A space's Notify me covers people's edits and notes, not bot refreshes. To alert only when something changes, use routine_create with a script and followUp instead.",
           {
             key: string,
             space: string,
