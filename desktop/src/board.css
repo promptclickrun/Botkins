@@ -1,27 +1,42 @@
 /*
- * Today: its panels and the Feed, Ideas and Goals board. A panel is a calm surface card with no
- * border; the base .live-panel rules live in style.css, and `.today-panel` restyles them here.
- * Colors come from the tokens in tokens.css.
+ * Panels and the Feed, Ideas and Goals board, wherever a panel is drawn (Today, a space, a project).
+ * A panel is a calm card like the shared .group (ui.css): the card fill, its radius, glass under a
+ * backdrop, no border. Its header is the bot (avatar and name), its badges and, at the right, Open
+ * and ⋯; then the title; then the blocks; then one faint footer line with Refresh. The base
+ * .live-panel rules are in style.css; `.today-panel` restyles them here. Colors are the theme's.
  */
 .live-panel.today-panel {
-  background: var(--surface);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+  background: var(--card);
   border: 0;
-  border-radius: var(--radius);
-  padding: 16px 20px 14px;
+  border-radius: var(--card-radius);
+  padding: 14px 14px 10px 18px;
+}
+:root:not([data-backdrop="clean"]) .live-panel.today-panel {
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
+  box-shadow: inset 0 0 0 1px var(--glass-edge);
 }
 .today-panel .panel-top {
+  display: flex;
+  align-items: center;
   gap: 8px;
   min-height: 32px;
 }
 .today-panel .panel-top > small {
-  color: var(--muted);
+  color: var(--ink-2);
   font-size: calc(13px * var(--text-scale));
+  font-weight: 600;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
   min-width: 0;
 }
-/* The menu and refresh are quiet icon buttons. */
+/* Open, ⋯ and Refresh are quiet icon buttons, as .icon-btn. The first one in the header takes the
+   free room, so they stand together at the right. */
 .today-panel .panel-top > button,
 .today-panel footer > button {
   flex: none;
@@ -29,26 +44,67 @@
   place-items: center;
   width: 32px;
   height: 32px;
+  margin-block: -4px;
   padding: 0;
   border: 0;
-  border-radius: var(--radius-sm);
+  border-radius: 9px;
   background: transparent;
   color: var(--muted);
+}
+.today-panel .panel-top > button + button {
+  margin-left: 0;
+}
+.today-panel .panel-top > button svg,
+.today-panel footer > button svg {
+  width: 16px;
+  height: 16px;
 }
 .today-panel .panel-top > button:hover,
 .today-panel footer > button:hover {
   background: var(--hover);
   color: var(--ink);
 }
-.today-panel h2 {
-  font-size: calc(19px * var(--text-scale));
-  margin: 6px 0 12px;
+/* The title sits under the bot's line, at the size of a row's title, not of a heading. */
+.live-panel.today-panel h2 {
+  margin: 0;
+  font-family: inherit;
+  font-size: calc(16px * var(--text-scale));
+  font-weight: 650;
+  letter-spacing: -0.1px;
+  line-height: 1.3;
+  color: var(--ink);
   overflow-wrap: anywhere;
 }
-.today-panel footer {
-  border-top: 0;
+.live-panel.today-panel .panel-blocks {
+  gap: 12px;
+}
+/* A number: its label, the number, one line under it. No box of its own. */
+.live-panel.today-panel .metric {
+  display: grid;
+  gap: 6px;
+  padding: 0;
+  border-radius: 0;
+  background: none;
+}
+.live-panel.today-panel .metric small {
+  color: var(--muted);
+  font-size: calc(12.5px * var(--text-scale));
+}
+.live-panel.today-panel .metric strong {
+  font-size: calc(32px * var(--text-scale));
+  font-weight: 700;
+  letter-spacing: -0.6px;
+  line-height: 1;
+}
+/* The footer is one faint line, with no rule above it, and Refresh at its right. */
+.live-panel.today-panel footer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 28px;
+  margin-top: 0;
   padding-top: 0;
-  margin-top: 12px;
+  border-top: 0;
 }
 .today-panel footer > div {
   display: flex;
@@ -56,8 +112,8 @@
   gap: 2px 12px;
   min-width: 0;
 }
-.today-panel footer small {
-  color: var(--muted);
+.live-panel.today-panel footer small {
+  color: var(--faint);
   font-size: calc(12px * var(--text-scale));
 }
 .today-panel .panel-table th {
@@ -94,6 +150,7 @@
 /* Feed, Ideas and Goals. */
 .board-panel {
   margin-top: 20px;
+  padding-top: 12px;
 }
 .board-head {
   display: flex;
@@ -105,14 +162,16 @@
   margin: 0;
   gap: 4px;
 }
-.board-head > .textbutton {
+.board-head > .board-finished {
   margin-left: auto;
-  font-size: calc(13px * var(--text-scale));
 }
-.board-tabs button {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
+.board-head > .board-finished[aria-pressed="true"] {
+  background: transparent;
+}
+/* A tab's count of unread items sits inside its chip; on the selected chip it turns to the chip's ink. */
+.board-tabs .chip[aria-pressed="true"] .board-count {
+  background: var(--on-accent);
+  color: var(--accent);
 }
 .board-count {
   min-width: 18px;
@@ -191,7 +250,7 @@
 .board-detail {
   display: grid;
   gap: 10px;
-  padding: 0 12px 12px 52px;
+  padding: 0 12px 12px 56px;
 }
 .board-detail .actionrow {
   flex-wrap: wrap;

@@ -6,6 +6,7 @@ import { SearchField } from "glisse";
 import {
   Activity,
   BookOpen,
+  CalendarDays,
   ChevronLeft,
   ChevronRight,
   CircleHelp,
@@ -24,6 +25,8 @@ import {
   Pencil,
   Plus,
   Search,
+  Target,
+  Users,
   Sparkles,
   Trash2,
   Inbox,
@@ -642,7 +645,7 @@ export default function Wiki({
   if (query.trim())
     main = <SearchResults query={query.trim()} results={results} open={(p) => void go({ kind: "page", path: p })} tree={tree} />;
   else if (!tree)
-    main = treeError ? <Problem text={treeError} retry={loadTree} /> : <p className="wiki-muted wiki-pad">Loading the wiki…</p>;
+    main = treeError ? <Problem text={treeError} retry={loadTree} /> : <div className="page"><p className="group-foot">Loading the wiki…</p></div>;
   else if (view.kind === "home")
     main = (
       <Home
@@ -650,7 +653,7 @@ export default function Wiki({
         state={state}
         open={openPage}
         openSection={(folder) => void go({ kind: "section", folder })}
-        newPage={() => newPage("")}
+        newPage={(folder) => newPage(folder ?? "")}
         exportWiki={() => exportFrom()}
         addSuggested={addSuggested}
         startChat={startChat}
@@ -669,10 +672,16 @@ export default function Wiki({
       />
     );
   else if (pageError) main = <Problem text={pageError} retry={() => void go(view)} home={() => void go({ kind: "home" })} />;
-  else if (!page) main = <p className="wiki-muted wiki-pad">Opening the page…</p>;
-  else
+  else if (!page) main = <div className="page narrow"><p className="group-foot">Opening the page…</p></div>;
+  else {
+    // The page's own first heading reads as the page title, with a quiet line under it saying when it
+    // changed and where it lives. The heading stays inside the article so it is still the page's h1.
+    const top = /^#[ \t]+[^\n]*\n?/.exec(page.content);
+    const heading = top ? top[0] : "";
+    const body = top ? page.content.slice(heading.length) : page.content;
+    const section = sectionOf(page.path);
     main = (
-      <div className={"wiki-page" + (edit ? " editing" : "")}>
+      <div className={"page narrow wiki-page" + (edit ? " editing" : "")}>
         <div className="wiki-page-head">
           <Crumbs
             page={page}
@@ -682,11 +691,10 @@ export default function Wiki({
           />
           {!edit && !page.generated && (
             <div className="wiki-actions">
-              <span className="wiki-updated">Updated {when(page.updatedAt)}</span>
               {!page.template && page.path !== GUIDE && (
                 <button
                   type="button"
-                  className="secondary wiki-ask"
+                  className="btn small quiet wiki-ask"
                   title="Ask about this page"
                   aria-label="Ask about this page"
                   onClick={() => startChat("", { path: page.path, title: page.title })}
@@ -695,13 +703,13 @@ export default function Wiki({
                   <span>Ask about this page</span>
                 </button>
               )}
-              <button type="button" className="primary wiki-edit" onClick={() => void startEdit(page.path)}>
+              <button type="button" className="btn small primary wiki-edit" onClick={() => void startEdit(page.path)}>
                 <Pencil size={14} />
                 Edit
               </button>
               <button
                 type="button"
-                className="wiki-icon-button menu-button"
+                className="icon-btn menu-button"
                 aria-label="More for this page"
                 aria-haspopup="menu"
                 onClick={(e) => menu.show(e, "Page options", pageMenu(page))}
@@ -715,10 +723,10 @@ export default function Wiki({
               <span className="wiki-updated" aria-live="polite">
                 {edit.saving ? "Saving…" : dirty ? "Unsaved changes" : "No changes yet"}
               </span>
-              <button type="button" className="secondary" onClick={() => void cancelEdit()}>
+              <button type="button" className="btn small" onClick={() => void cancelEdit()}>
                 Cancel
               </button>
-              <button type="button" className="primary" disabled={edit.saving} onClick={() => void save()}>
+              <button type="button" className="btn small primary" disabled={edit.saving} onClick={() => void save()}>
                 Save
               </button>
             </div>
@@ -734,10 +742,10 @@ export default function Wiki({
           <div className="wiki-banner warn" role="alert">
             <span>Someone else changed this page while you were editing. Which version do you want?</span>
             <span className="wiki-banner-actions">
-              <button type="button" className="secondary" onClick={() => void save(true)}>
+              <button type="button" className="btn small" onClick={() => void save(true)}>
                 Keep my version
               </button>
-              <button type="button" className="secondary" onClick={() => void loadTheirs()}>
+              <button type="button" className="btn small" onClick={() => void loadTheirs()}>
                 Load the new version
               </button>
             </span>
@@ -749,7 +757,7 @@ export default function Wiki({
             </p>
           )
         )}
-        <div className={"wiki-page-body" + (page.generated || edit ? " single" : "")}>
+        <div className="wiki-page-body">
           {edit ? (
             <Suspense fallback={<p className="wiki-muted">Opening the editor…</p>}>
               <WikiEditor
@@ -768,7 +776,18 @@ export default function Wiki({
             </Suspense>
           ) : (
             <article className="wiki-article" aria-label={page.title}>
-              <RichText text={page.content} link={link} />
+              {heading && <RichText text={heading} link={link} />}
+              {!page.generated && (
+                <p className="wiki-meta">
+                  <span className="wiki-updated">Updated {when(page.updatedAt)}</span>
+                  {page.template ? (
+                    <span>Template for {humanize(section)}</span>
+                  ) : (
+                    section && <span>{humanize(section)}</span>
+                  )}
+                </p>
+              )}
+              <RichText text={body} link={link} />
             </article>
           )}
           {!page.generated && !edit && (
@@ -783,6 +802,7 @@ export default function Wiki({
         </div>
       </div>
     );
+  }
 
   return (
     <div className="wiki-frame">
@@ -800,51 +820,56 @@ export default function Wiki({
           menu={(e, folder) => menu.show(e, humanize(folder.split("/").pop()!) + " options", sectionMenu(folder))}
         />
         <section className="wiki-main" aria-label="Wiki page">
-          {showing && (
-            <button type="button" className="wiki-back narrow-wiki" onClick={() => void go({ kind: "home" })}>
-              <ChevronLeft size={15} />
-              All pages
-            </button>
-          )}
-          {error && (
-            <div role="alert" className="wiki-banner warn">
-              <span>{error}</span>
-              <button type="button" className="secondary" onClick={() => setError("")}>
-                Dismiss
-              </button>
-            </div>
-          )}
-          {notice && !error && (
-            <p role="status" className="wiki-notice">
-              {notice}
-            </p>
-          )}
-          {kept && !edit && (
-            <div className="wiki-banner" role="status">
-              <span>
-                You have unsaved changes to “{titleOf(kept.path)}” from {when(kept.time)}.
-              </span>
-              <span className="wiki-banner-actions">
-                <button type="button" className="secondary" onClick={() => void restoreDraft(kept)}>
-                  Restore
+          {/* Notices sit above the view, in the same column as it. */}
+          {(showing || error || (notice && !error) || (kept && !edit) || (edit?.restored && !edit.conflict)) && (
+            <div className={"wiki-banners" + (view.kind === "page" || view.kind === "activity" ? " narrow" : "")}>
+              {showing && (
+                <button type="button" className="wiki-back narrow-wiki" onClick={() => void go({ kind: "home" })}>
+                  <ChevronLeft size={15} />
+                  All pages
                 </button>
-                <button
-                  type="button"
-                  className="secondary"
-                  onClick={() => {
-                    dropDraft();
-                    setKept(undefined);
-                  }}
-                >
-                  Discard
-                </button>
-              </span>
+              )}
+              {error && (
+                <div role="alert" className="wiki-banner warn">
+                  <span>{error}</span>
+                  <button type="button" className="btn small" onClick={() => setError("")}>
+                    Dismiss
+                  </button>
+                </div>
+              )}
+              {notice && !error && (
+                <p role="status" className="wiki-notice">
+                  {notice}
+                </p>
+              )}
+              {kept && !edit && (
+                <div className="wiki-banner" role="status">
+                  <span>
+                    You have unsaved changes to “{titleOf(kept.path)}” from {when(kept.time)}.
+                  </span>
+                  <span className="wiki-banner-actions">
+                    <button type="button" className="btn small" onClick={() => void restoreDraft(kept)}>
+                      Restore
+                    </button>
+                    <button
+                      type="button"
+                      className="btn small"
+                      onClick={() => {
+                        dropDraft();
+                        setKept(undefined);
+                      }}
+                    >
+                      Discard
+                    </button>
+                  </span>
+                </div>
+              )}
+              {edit?.restored && !edit.conflict && (
+                <p className="wiki-banner" role="status">
+                  <span>These are your unsaved changes from before. Save to keep them, or Cancel to discard them.</span>
+                </p>
+              )}
             </div>
-          )}
-          {edit?.restored && !edit.conflict && (
-            <p className="wiki-banner" role="status">
-              <span>These are your unsaved changes from before. Save to keep them, or Cancel to discard them.</span>
-            </p>
           )}
           {main}
         </section>
@@ -959,9 +984,6 @@ function WikiNav({
     : [];
   return (
     <nav className="wiki-nav" aria-label="Wiki">
-      <div className="wiki-nav-head">
-        <h2>Wiki</h2>
-      </div>
       <SearchField
         className="wiki-search-field"
         aria-label="Search the wiki"
@@ -981,7 +1003,7 @@ function WikiNav({
           <span id="wiki-sections-label">Sections</span>
           <button
             type="button"
-            className="wiki-icon-button small"
+            className="icon-btn wiki-icon-button small"
             aria-label="New section"
             title="New section"
             onClick={newSection}
@@ -1005,11 +1027,11 @@ function WikiNav({
         {item("Activity", <Activity size={15} />, view.kind === "activity", () => go({ kind: "activity" }))}
       </div>
       <div className="wiki-nav-foot">
-        <button type="button" className="secondary" onClick={newPage} disabled={!tree}>
+        <button type="button" className="btn small quiet" onClick={newPage} disabled={!tree}>
           <Plus size={14} />
           New page
         </button>
-        <button type="button" className="secondary" onClick={newSection} disabled={!tree}>
+        <button type="button" className="btn small quiet" onClick={newSection} disabled={!tree}>
           <FolderPlus size={14} />
           New section
         </button>
@@ -1072,130 +1094,173 @@ function Home({
   state: State;
   open: (path: string) => void;
   openSection: (folder: string) => void;
-  newPage: () => void;
+  newPage: (folder?: string) => void;
   exportWiki: () => void;
   addSuggested: () => Promise<void>;
   startChat: (text: string) => void;
 }) {
   const [adding, setAdding] = useState(false);
+  const newest = (a: WikiPageInfo, b: WikiPageInfo) => b.updatedAt - a.updatedAt;
   const recent = listed(tree)
     .filter((p) => p.path !== GUIDE)
-    .sort((a, b) => b.updatedAt - a.updatedAt)
-    .slice(0, 8);
+    .sort(newest)
+    .slice(0, 5);
   const { projects } = tree.suggested;
   const missing = projects.length;
   const names = projects.map((r) => r.name);
   const bot = state.bots[0]?.name ?? "your bot";
   return (
-    <div className="wiki-home">
-      <div className="wiki-home-head">
-        <div>
-          <h1>Wiki</h1>
-          <p className="wiki-muted">What your team knows, kept current by you and your bots.</p>
+    <div className="page wiki-home">
+      <div className="page-head wiki-home-head">
+        <div className="page-heading">
+          <h1 className="page-title">Wiki</h1>
+          <p className="page-sub">What your team knows, kept current by you and your bots.</p>
         </div>
-        <span className="wiki-home-actions">
-          <button type="button" className="secondary" onClick={exportWiki}>
+        <span className="page-actions wiki-home-actions">
+          <button type="button" className="btn" onClick={exportWiki}>
             <FileDown size={15} />
             Export…
           </button>
-          <button type="button" className="primary" onClick={newPage}>
+          <button type="button" className="btn primary" onClick={() => newPage("")}>
             <Plus size={15} />
             New page
           </button>
         </span>
       </div>
       {missing > 0 && (
-        <div className="wiki-suggest" role="region" aria-label="Records without a page">
-          <Inbox size={18} aria-hidden="true" />
-          <div>
-            <strong>
-              {plural(projects.length, "project")} {missing === 1 ? "has" : "have"} no page yet
-            </strong>
-            <small>{names.length > 3 ? names.slice(0, 3).join(", ") + " and " + (names.length - 3) + " more" : names.join(", ")}</small>
+        <div className="group wiki-suggest" role="region" aria-label="Records without a page">
+          <div className="group-row">
+            <span className="icon-tile clay" aria-hidden="true">
+              <Inbox size={15} />
+            </span>
+            <span className="row-main">
+              <strong className="row-title">
+                {plural(projects.length, "project")} {missing === 1 ? "has" : "have"} no page yet
+              </strong>
+              <small className="row-sub">
+                {names.length > 3 ? names.slice(0, 3).join(", ") + " and " + (names.length - 3) + " more" : names.join(", ")}
+              </small>
+            </span>
+            <button
+              type="button"
+              className="btn small"
+              disabled={adding}
+              onClick={() => {
+                setAdding(true);
+                void addSuggested().finally(() => setAdding(false));
+              }}
+            >
+              {adding ? "Adding…" : missing === 1 ? "Add page" : "Add pages"}
+            </button>
           </div>
-          <button
-            type="button"
-            className="secondary"
-            disabled={adding}
-            onClick={() => {
-              setAdding(true);
-              void addSuggested().finally(() => setAdding(false));
-            }}
-          >
-            {adding ? "Adding…" : missing === 1 ? "Add page" : "Add pages"}
-          </button>
         </div>
       )}
-      <section className="wiki-block" aria-labelledby="wiki-sections-title">
-        <h2 id="wiki-sections-title">Sections</h2>
+      <section className="page-section" aria-labelledby="wiki-recent-title">
+        <h2 className="group-label" id="wiki-recent-title">
+          Recently updated
+        </h2>
+        {recent.length ? (
+          <ul className="group wiki-rows">
+            {recent.map((p) => (
+              <li key={p.path}>
+                <PageRow page={p} open={open} where />
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="group-foot">No pages yet. Create one, or ask {bot} to write down what it learns.</p>
+        )}
+      </section>
+      {/* Each section is a label over a card of its newest pages; the label opens the whole section. */}
+      <section className="page-section" aria-labelledby="wiki-sections-title">
+        <h2 className="sr-only" id="wiki-sections-title">
+          Sections
+        </h2>
         {sections(tree).length ? (
           <ul className="wiki-section-grid">
             {sections(tree).map((folder) => {
-              const n = pagesIn(tree, folder).length;
+              const all = pagesIn(tree, folder);
+              const n = all.length;
+              const shown = [...all].sort(newest).slice(0, 4);
               return (
-                <li key={folder}>
-                  <button type="button" className="wiki-section-card" onClick={() => openSection(folder)}>
-                    <SectionIcon folder={folder} />
-                    <span>
-                      <strong>{humanize(folder)}</strong>
-                      <small>{n ? plural(n, "page") : "No pages yet"}</small>
-                    </span>
-                  </button>
+                <li key={folder} className="page-section">
+                  <div className="group-label">
+                    <button type="button" className="wiki-section-card" onClick={() => openSection(folder)}>
+                      <span className="wiki-section-name">{humanize(folder)}</span>
+                      <small className="wiki-section-count">{n ? plural(n, "page") : "No pages yet"}</small>
+                    </button>
+                  </div>
+                  <div className="group">
+                    {shown.map((p) => (
+                      <PageRow key={p.path} page={p} open={open} />
+                    ))}
+                    {n > shown.length && (
+                      <button type="button" className="group-row wiki-more-row" onClick={() => openSection(folder)}>
+                        <span className="row-main">
+                          <span className="row-sub">All {plural(n, "page")}</span>
+                        </span>
+                        <ChevronRight size={15} className="row-chevron" aria-hidden="true" />
+                      </button>
+                    )}
+                    {!n && (
+                      <button type="button" className="group-row wiki-more-row" onClick={() => newPage(folder)}>
+                        <SectionIcon folder={folder} />
+                        <span className="row-main">
+                          <span className="row-sub">Nothing here yet. Add the first page.</span>
+                        </span>
+                        <Plus size={15} className="row-chevron" aria-hidden="true" />
+                      </button>
+                    )}
+                  </div>
                 </li>
               );
             })}
           </ul>
         ) : (
-          <p className="wiki-muted">No sections yet. Add one with New section.</p>
-        )}
-      </section>
-      <section className="wiki-block" aria-labelledby="wiki-recent-title">
-        <h2 id="wiki-recent-title">Recently updated</h2>
-        {recent.length ? (
-          <ul className="wiki-rows">
-            {recent.map((p) => (
-              <li key={p.path}>
-                <PageRow page={p} open={open} />
-              </li>
-            ))}
-          </ul>
-        ) : (
-          <p className="wiki-muted">No pages yet. Create one, or ask {bot} to write down what it learns.</p>
+          <p className="group-foot">No sections yet. Add one with New section.</p>
         )}
       </section>
       {state.bots[0] && (
-        <section className="wiki-block" aria-labelledby="wiki-bots-title">
-          <h2 id="wiki-bots-title">Ask {bot}</h2>
-          <div className="wiki-bot-actions">
+        <section className="page-section" aria-labelledby="wiki-bots-title">
+          <h2 className="group-label" id="wiki-bots-title">
+            Ask {bot}
+          </h2>
+          <div className="group wiki-bot-actions">
             <button
               type="button"
-              className="wiki-bot-action"
+              className="group-row wiki-bot-action"
               onClick={() =>
                 startChat(
                   "Please file this into the wiki. Put each fact on the page where it belongs, add the links, and tell me what you changed:\n\n",
                 )
               }
             >
-              <FileText size={16} aria-hidden="true" />
-              <span>
-                <strong>File something into the wiki</strong>
-                <small>Paste notes, an email or a document</small>
+              <span className="icon-tile tide" aria-hidden="true">
+                <FileText size={15} />
               </span>
+              <span className="row-main">
+                <strong className="row-title">File something into the wiki</strong>
+                <small className="row-sub">Paste notes, an email or a document</small>
+              </span>
+              <ChevronRight size={15} className="row-chevron" aria-hidden="true" />
             </button>
             <button
               type="button"
-              className="wiki-bot-action"
+              className="group-row wiki-bot-action"
               onClick={() =>
                 startChat(
                   "Please tidy the wiki: look for pages that disagree, facts that are out of date, pages nothing links to, and names mentioned often that have no page yet. Tell me what you find and fix what is clear.",
                 )
               }
             >
-              <Sparkles size={16} aria-hidden="true" />
-              <span>
-                <strong>Tidy the wiki</strong>
-                <small>Find gaps, conflicts and stale facts</small>
+              <span className="icon-tile honey" aria-hidden="true">
+                <Sparkles size={15} />
               </span>
+              <span className="row-main">
+                <strong className="row-title">Tidy the wiki</strong>
+                <small className="row-sub">Find gaps, conflicts and stale facts</small>
+              </span>
+              <ChevronRight size={15} className="row-chevron" aria-hidden="true" />
             </button>
           </div>
         </section>
@@ -1204,26 +1269,44 @@ function Home({
   );
 }
 
+// Each of the usual sections gets its own icon and tile color, so a page's section reads at a glance.
+const SECTION_LOOK: Record<string, [typeof BookOpen, string]> = {
+  goals: [Target, "honey"],
+  meetings: [CalendarDays, "tide"],
+  people: [Users, "rose"],
+  playbooks: [BookOpen, "fern"],
+  projects: [FolderKanban, "clay"],
+};
 function SectionIcon({ folder }: { folder: string }) {
-  const Icon = folder === "projects" ? FolderKanban : BookOpen;
+  const [Icon, tint] = SECTION_LOOK[folder.split("/")[0]] ?? [Folder, ""];
   return (
-    <span className="wiki-section-icon" aria-hidden="true">
-      <Icon size={16} />
+    <span className={"icon-tile " + tint} aria-hidden="true">
+      <Icon size={15} />
     </span>
   );
 }
 
-function PageRow({ page, open, detail }: { page: WikiPageInfo; open: (path: string) => void; detail?: string }) {
+/** A page as a row: its section's tile, title, one quiet line and when it changed. */
+function PageRow({ page, open, detail, where }: { page: WikiPageInfo; open: (path: string) => void; detail?: string; where?: boolean }) {
   const section = sectionOf(page.path);
+  const line = detail ?? page.summary ?? "";
   return (
-    <button type="button" className="wiki-row" onClick={() => open(page.path)}>
-      <FileText size={15} aria-hidden="true" />
-      <span className="wiki-row-text">
-        <strong>{page.title}</strong>
-        <small>{detail ?? page.summary ?? ""}</small>
+    <button type="button" className="group-row wiki-row" onClick={() => open(page.path)}>
+      {section ? (
+        <SectionIcon folder={section} />
+      ) : (
+        <span className="icon-tile" aria-hidden="true">
+          <FileText size={15} />
+        </span>
+      )}
+      <span className="row-main">
+        <strong className="row-title">{page.title}</strong>
+        {(line || (where && section)) && (
+          <small className="row-sub">{line || humanize(section)}</small>
+        )}
       </span>
-      <span className="wiki-row-meta">
-        {section && <span>{humanize(section)}</span>}
+      <span className="row-value wiki-row-meta">
+        {where && section && line && <span>{humanize(section)} · </span>}
         <time dateTime={new Date(page.updatedAt).toISOString()}>{when(page.updatedAt)}</time>
       </span>
     </button>
@@ -1255,81 +1338,92 @@ function SectionView({
   const children = tree.folders.filter((f) => folderOf(f) === folder);
   const template = templateOf(tree, sectionOf(folder + "/x"));
   return (
-    <div className="wiki-section-view">
-      <nav className="wiki-crumbs" aria-label="Breadcrumb">
-        <ol>
-          <li>
-            <button type="button" onClick={home}>
-              Wiki
-            </button>
-          </li>
-          {parts.map((part, i) => (
-            <li key={i}>
-              <ChevronRight size={13} aria-hidden="true" />
-              {i === parts.length - 1 ? (
-                <span aria-current="page">{humanize(part)}</span>
-              ) : (
-                <button type="button" onClick={() => openFolder(parts.slice(0, i + 1).join("/"))}>
-                  {humanize(part)}
-                </button>
-              )}
+    <div className="page wiki-section-view">
+      <div className="wiki-section-top">
+        <nav className="wiki-crumbs" aria-label="Breadcrumb">
+          <ol>
+            <li>
+              <button type="button" onClick={home}>
+                Wiki
+              </button>
             </li>
-          ))}
-        </ol>
-      </nav>
-      <div className="wiki-home-head">
-        <div>
-          <h1>{humanize(parts.at(-1)!)}</h1>
-          <p className="wiki-muted">
-            {plural(pagesIn(tree, folder).length, "page")}
-            {template && !folder.includes("/") ? " · New pages start from this section's template" : ""}
-          </p>
-        </div>
-        <div className="wiki-actions">
-          <button type="button" className="primary" onClick={newPage}>
-            <Plus size={15} />
-            New page
-          </button>
-          <button
-            type="button"
-            className="wiki-icon-button menu-button"
-            aria-label={"More for " + humanize(parts.at(-1)!)}
-            aria-haspopup="menu"
-            onClick={menu}
-          >
-            <Ellipsis size={17} />
-          </button>
+            {parts.map((part, i) => (
+              <li key={i}>
+                <ChevronRight size={13} aria-hidden="true" />
+                {i === parts.length - 1 ? (
+                  <span aria-current="page">{humanize(part)}</span>
+                ) : (
+                  <button type="button" onClick={() => openFolder(parts.slice(0, i + 1).join("/"))}>
+                    {humanize(part)}
+                  </button>
+                )}
+              </li>
+            ))}
+          </ol>
+        </nav>
+        <div className="page-head wiki-home-head">
+          <div className="page-heading">
+            <h1 className="page-title">{humanize(parts.at(-1)!)}</h1>
+            <p className="page-sub">
+              {plural(pagesIn(tree, folder).length, "page")}
+              {template && !folder.includes("/") ? " · New pages start from this section's template" : ""}
+            </p>
+          </div>
+          <div className="page-actions wiki-actions">
+            <button
+              type="button"
+              className="icon-btn menu-button"
+              aria-label={"More for " + humanize(parts.at(-1)!)}
+              aria-haspopup="menu"
+              onClick={menu}
+            >
+              <Ellipsis size={17} />
+            </button>
+            <button type="button" className="btn primary" onClick={newPage}>
+              <Plus size={15} />
+              New page
+            </button>
+          </div>
         </div>
       </div>
       {children.length > 0 && (
-        <ul className="wiki-rows folders">
-          {children.map((f) => (
-            <li key={f}>
-              <button type="button" className="wiki-row" onClick={() => openFolder(f)}>
-                <Folder size={15} aria-hidden="true" />
-                <span className="wiki-row-text">
-                  <strong>{humanize(f.split("/").pop()!)}</strong>
-                  <small>{plural(pagesIn(tree, f).length, "page")}</small>
-                </span>
-              </button>
-            </li>
-          ))}
-        </ul>
+        <section className="page-section" aria-label="Folders">
+          <h2 className="group-label">Folders</h2>
+          <ul className="group wiki-rows folders">
+            {children.map((f) => (
+              <li key={f}>
+                <button type="button" className="group-row wiki-row" onClick={() => openFolder(f)}>
+                  <span className="icon-tile" aria-hidden="true">
+                    <Folder size={15} />
+                  </span>
+                  <span className="row-main">
+                    <strong className="row-title">{humanize(f.split("/").pop()!)}</strong>
+                    <small className="row-sub">{plural(pagesIn(tree, f).length, "page")}</small>
+                  </span>
+                  <ChevronRight size={15} className="row-chevron" aria-hidden="true" />
+                </button>
+              </li>
+            ))}
+          </ul>
+        </section>
       )}
       {here.length ? (
-        <ul className="wiki-rows">
-          {here.map((p) => (
-            <li key={p.path}>
-              <PageRow page={p} open={open} />
-            </li>
-          ))}
-        </ul>
+        <section className="page-section" aria-label="Pages">
+          {children.length > 0 && <h2 className="group-label">Pages</h2>}
+          <ul className="group wiki-rows">
+            {here.map((p) => (
+              <li key={p.path}>
+                <PageRow page={p} open={open} />
+              </li>
+            ))}
+          </ul>
+        </section>
       ) : (
         !children.length && (
-          <div className="wiki-empty">
-            <FileText size={22} aria-hidden="true" />
+          <div className="group wiki-empty">
+            <SectionIcon folder={folder} />
             <p>No pages in this section yet.</p>
-            <button type="button" className="secondary" onClick={newPage}>
+            <button type="button" className="btn small" onClick={newPage}>
               <Plus size={14} /> New page
             </button>
           </div>
@@ -1338,6 +1432,9 @@ function SectionView({
     </div>
   );
 }
+
+/** A search snippet as it reads: links show their words, not their Markdown. */
+const plainSnippet = (text: string) => text.replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1");
 
 function SearchResults({
   query,
@@ -1351,26 +1448,33 @@ function SearchResults({
   tree?: WikiTree;
 }) {
   return (
-    <div className="wiki-search-view" role="region" aria-label="Search results">
-      <h2 className="wiki-view-title">Results for “{query}”</h2>
+    <div className="page wiki-search-view" role="region" aria-label="Search results">
+      <div className="page-head">
+        <div className="page-heading">
+          <h2 className="page-title wiki-view-title">Results for “{query}”</h2>
+          {results && results.length > 0 && <p className="page-sub">{plural(results.length, "page")}</p>}
+        </div>
+      </div>
       {!results ? (
-        <p className="wiki-muted">Searching…</p>
+        <p className="group-foot">Searching…</p>
       ) : !results.length ? (
-        <p className="wiki-muted">No pages match “{query}”.</p>
+        <p className="group-foot">No pages match “{query}”.</p>
       ) : (
-        <ul className="wiki-rows" aria-live="polite">
+        <ul className="group wiki-rows" aria-live="polite">
           {results.map((r) => {
             const info = tree?.pages.find((p) => p.path === r.path);
             return (
               <li key={r.path}>
                 {info ? (
-                  <PageRow page={info} open={open} detail={r.snippet} />
+                  <PageRow page={info} open={open} detail={plainSnippet(r.snippet)} where />
                 ) : (
-                  <button type="button" className="wiki-row" onClick={() => open(r.path)}>
-                    <FileText size={15} aria-hidden="true" />
-                    <span className="wiki-row-text">
-                      <strong>{r.title}</strong>
-                      <small>{r.snippet}</small>
+                  <button type="button" className="group-row wiki-row" onClick={() => open(r.path)}>
+                    <span className="icon-tile" aria-hidden="true">
+                      <FileText size={15} />
+                    </span>
+                    <span className="row-main">
+                      <strong className="row-title">{r.title}</strong>
+                      <small className="row-sub">{plainSnippet(r.snippet)}</small>
                     </span>
                   </button>
                 )}
@@ -1383,7 +1487,7 @@ function SearchResults({
   );
 }
 
-/** What relates to the open page: what links to it, what it links to, its record and its missing links. */
+/** What relates to the open page, after it: its record, what links to it, what it links to and its missing links. */
 function Related({
   page,
   tree,
@@ -1398,38 +1502,38 @@ function Related({
   openProject: (id: string) => void;
 }) {
   const info = (path: string) => tree.pages.find((p) => p.path === path);
-  const group = (paths: string[]) => {
-    const out = new Map<string, WikiPageInfo[]>();
-    for (const path of paths) {
-      const p = info(path);
-      if (!p) continue;
-      const key = p.path === GUIDE ? "Guide" : humanize(sectionOf(p.path) || "Wiki");
-      out.set(key, [...(out.get(key) ?? []), p]);
-    }
-    return [...out].sort(([a], [b]) => a.localeCompare(b));
-  };
+  // Each row's button holds only the page's title (what it is called); its section shows beside it.
   const list = (title: string, paths: string[], empty: string) => {
-    const groups = group(paths);
+    const items = paths
+      .map(info)
+      .filter((p): p is WikiPageInfo => !!p)
+      .map((p) => ({ page: p, section: p.path === GUIDE ? "Guide" : humanize(sectionOf(p.path) || "Wiki") }))
+      .sort((a, b) => a.section.localeCompare(b.section) || byTitle(a.page, b.page));
     return (
-      <section className="wiki-related-block" aria-label={title}>
-        <h3>{title}</h3>
-        {groups.length ? (
-          groups.map(([name, items]) => (
-            <div key={name} className="wiki-related-group">
-              <span className="wiki-related-section">{name}</span>
-              <ul>
-                {items.sort(byTitle).map((p) => (
-                  <li key={p.path}>
-                    <button type="button" className="wiki-related-link" onClick={() => open(p.path)}>
-                      {p.title}
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          ))
+      <section className="page-section wiki-related-block" aria-label={title}>
+        <h3 className="group-label">{title}</h3>
+        {items.length ? (
+          <ul className="group">
+            {items.map(({ page: p, section }) => (
+              <li key={p.path} className="group-row wiki-related-row">
+                {sectionOf(p.path) ? (
+                  <SectionIcon folder={sectionOf(p.path)} />
+                ) : (
+                  <span className="icon-tile" aria-hidden="true">
+                    <FileText size={15} />
+                  </span>
+                )}
+                <span className="row-main">
+                  <button type="button" className="row-title wiki-related-link" onClick={() => open(p.path)}>
+                    {p.title}
+                  </button>
+                </span>
+                <span className="row-value wiki-related-section">{section}</span>
+              </li>
+            ))}
+          </ul>
         ) : (
-          <p className="wiki-muted">{empty}</p>
+          <p className="group-foot">{empty}</p>
         )}
       </section>
     );
@@ -1438,27 +1542,37 @@ function Related({
   return (
     <aside className="wiki-related" aria-label="Related">
       {page.record && (
-        <section className="wiki-related-block" aria-label="Record">
-          <h3>Project record</h3>
-          <button type="button" className="wiki-record" onClick={() => openProject(page.record!.id)}>
-            <FolderKanban size={15} aria-hidden="true" />
-            <span>{page.record.name}</span>
-            <ChevronRight size={14} aria-hidden="true" />
-          </button>
+        <section className="page-section wiki-related-block" aria-label="Record">
+          <h3 className="group-label">Project record</h3>
+          <div className="group">
+            <button type="button" className="group-row wiki-record" onClick={() => openProject(page.record!.id)}>
+              <span className="icon-tile clay" aria-hidden="true">
+                <FolderKanban size={15} />
+              </span>
+              <span className="row-main">
+                <span className="row-title">{page.record.name}</span>
+              </span>
+              <ChevronRight size={15} className="row-chevron" aria-hidden="true" />
+            </button>
+          </div>
         </section>
       )}
       {list("Linked from", page.backlinks, "No other pages link here yet.")}
       {list("Links to", page.links, "This page doesn't link to other pages.")}
       {page.missing.length > 0 && (
-        <section className="wiki-related-block" aria-label="Not created yet">
-          <h3>Not created yet</h3>
-          <ul>
+        <section className="page-section wiki-related-block" aria-label="Not created yet">
+          <h3 className="group-label">Not created yet</h3>
+          <ul className="group">
             {page.missing.map((m) => (
-              <li key={m.path}>
-                <button type="button" className="wiki-related-link missing" onClick={() => create(m.path, m.label)}>
-                  <Plus size={13} aria-hidden="true" />
-                  {m.label}
-                </button>
+              <li key={m.path} className="group-row wiki-related-row">
+                <span className="icon-tile" aria-hidden="true">
+                  <Plus size={15} />
+                </span>
+                <span className="row-main">
+                  <button type="button" className="row-title wiki-related-link missing" onClick={() => create(m.path, m.label)}>
+                    {m.label}
+                  </button>
+                </span>
               </li>
             ))}
           </ul>
@@ -1470,20 +1584,22 @@ function Related({
 
 function Problem({ text, retry, home }: { text: string; retry?: () => void; home?: () => void }) {
   return (
-    <div className="wiki-empty" role="alert">
-      <p>{text}</p>
-      <span className="wiki-banner-actions">
-        {retry && (
-          <button type="button" className="secondary" onClick={retry}>
-            Try again
-          </button>
-        )}
-        {home && (
-          <button type="button" className="secondary" onClick={home}>
-            Wiki home
-          </button>
-        )}
-      </span>
+    <div className="page narrow">
+      <div className="group wiki-empty" role="alert">
+        <p>{text}</p>
+        <span className="wiki-banner-actions">
+          {retry && (
+            <button type="button" className="btn small" onClick={retry}>
+              Try again
+            </button>
+          )}
+          {home && (
+            <button type="button" className="btn small" onClick={home}>
+              Wiki home
+            </button>
+          )}
+        </span>
+      </div>
     </div>
   );
 }

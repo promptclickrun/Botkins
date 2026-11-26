@@ -21,25 +21,27 @@ function Breakdown<Row extends UsageTotals & { key: string }>({ title, rows, lab
   return (
     <section className="usage-breakdown" aria-label={title}>
       <h3>{title}</h3>
-      {rows.length ? (
-        rows.map((r) => (
-          <div className="usage-line" key={r.key}>
-            <span className="usage-name">
-              <strong>{label(r)}</strong>
-              <small>
-                {r.turns} {r.turns === 1 ? "turn" : "turns"} · {tokens(r.input)} in · {tokens(r.output)} out
-                {hasRate(r) ? " · " + percent(r.cacheHitRate) + " cached" : ""}
-                {r.priced ? " · " + money(r.cost) : ""}
-              </small>
-            </span>
-            <i aria-hidden="true">
-              <i style={{ width: ((r.input + r.output) / max) * 100 + "%" }} />
-            </i>
-          </div>
-        ))
-      ) : (
-        <small>No turns in this range.</small>
-      )}
+      <div className="usage-lines">
+        {rows.length ? (
+          rows.map((r) => (
+            <div className="usage-line" key={r.key}>
+              <span className="usage-name">
+                <strong>{label(r)}</strong>
+                <small>
+                  {r.turns} {r.turns === 1 ? "turn" : "turns"} · {tokens(r.input)} in · {tokens(r.output)} out
+                  {hasRate(r) ? " · " + percent(r.cacheHitRate) + " cached" : ""}
+                  {r.priced ? " · " + money(r.cost) : ""}
+                </small>
+              </span>
+              <i aria-hidden="true">
+                <i style={{ width: ((r.input + r.output) / max) * 100 + "%" }} />
+              </i>
+            </div>
+          ))
+        ) : (
+          <small>No turns in this range.</small>
+        )}
+      </div>
     </section>
   );
 }
@@ -85,15 +87,16 @@ export default function Usage({ runCount }: { runCount: number }) {
     <div className="usage">
       <ProviderLimits />
       <div className="usage-top">
-        <div className="filters" role="group" aria-label="Range">
+        <div className="chip-row usage-range" role="group" aria-label="Range">
           {RANGES.map((d) => (
-            <button key={d} aria-pressed={days === d} onClick={() => setDays(d)}>
+            <button type="button" className="chip" key={d} aria-pressed={days === d} onClick={() => setDays(d)}>
               {d} days
             </button>
           ))}
         </div>
         <button
-          className="secondary"
+          type="button"
+          className="btn small"
           disabled={!t?.turns}
           onClick={() =>
             api

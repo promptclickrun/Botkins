@@ -1,10 +1,10 @@
 import { saveChatDisplay } from "./chatDisplay";
-import { useEffect, useRef, useState, type KeyboardEvent } from "react";
+import { useEffect, useRef, useState, type CSSProperties, type KeyboardEvent } from "react";
 import { Check } from "lucide-react";
 import { Button, Slider } from "glisse";
 import type { Preferences as Values, Appearance, HarnessStatus } from "./types";
 import { BackdropPreview } from "./Backdrop";
-import { GlassSegmented } from "./GlisseUI";
+import { GlassSegmented, tabWidthFor } from "./GlisseUI";
 import { ProviderInstall } from "./ProviderSetup";
 import { Group, Row, SwitchRow, ValueRow } from "./SettingsRows";
 import { modeOf, previewContrast } from "./appearance";
@@ -112,6 +112,8 @@ export function Choices<T extends string>({ label, value, options, onChange }: {
     <GlassSegmented
       aria-label={label}
       value={value}
+      // A little tighter than the default, so three choices fit at the right of a Settings row.
+      style={{ "--lg-tab-width": tabWidthFor(options.map((option) => option.name), 64, 128) + "px" } as CSSProperties}
       items={options.map((option) => ({ value: option.id, label: option.name }))}
       onValueChange={(next) => onChange(next as T)}
     />

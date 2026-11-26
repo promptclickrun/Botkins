@@ -83,11 +83,12 @@ export default function BoardPanel({
   return (
     <section className="live-panel today-panel wide board-panel" aria-label={only ? tab.label : "Feed, Ideas and Goals"}>
       <div className="board-head">
-        {only ? <span /> : <div className="filters chips board-tabs" role="tablist" aria-label="Board">
+        {only ? <span /> : <div className="chip-row board-tabs" role="tablist" aria-label="Board">
           {tabs.map((t) => (
             <button
               key={t.kind}
               role="tab"
+              className="chip"
               aria-selected={kind === t.kind}
               aria-pressed={kind === t.kind}
               onClick={() => {
@@ -100,7 +101,7 @@ export default function BoardPanel({
             </button>
           ))}
         </div>}
-        <button className="textbutton" aria-pressed={finished} onClick={() => setFinished(!finished)}>
+        <button className="link-button board-finished" aria-pressed={finished} onClick={() => setFinished(!finished)}>
           {finished ? "Show open" : "Show finished"}
         </button>
       </div>
@@ -108,7 +109,7 @@ export default function BoardPanel({
         <div className="board-empty">
           <p>{finished ? "Nothing finished yet." : tab.empty}</p>
           {!finished && (
-            <button className="textbutton" onClick={() => startChat(primary.id, tab.ask, false).catch(fail)}>
+            <button className="link-button" onClick={() => startChat(primary.id, tab.ask, false).catch(fail)}>
               <Sparkles size={15} /> Ask {primary.name}
             </button>
           )}
@@ -122,7 +123,7 @@ export default function BoardPanel({
             return (
               <li key={item.id} className={"board-item" + (open ? " open" : "")}>
                 <button className="board-row" aria-expanded={open} onClick={() => toggle(item)}>
-                  <BotAvatar bot={bot} size={30} />
+                  <BotAvatar bot={bot} size={34} />
                   <span className="board-text">
                     <small>
                       {bot.name}

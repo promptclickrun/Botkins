@@ -55,36 +55,36 @@
   display: flex;
   flex-direction: column;
 }
-.content.space-page {
-  padding-bottom: 104px;
+/* The page: the shared header (ui.css), the panels under it. Its column is the shared wide page;
+   the bottom keeps room for the ask bar. */
+.space-shell > .content.space-page {
+  padding: 0 0 112px;
 }
-/* The name and its tags on the left, the actions on the right. The name, who can open it and the
-   project stay on one line: the project's tag is the one that shortens. In a narrow window the
-   actions go under it all. */
+/* The page pads its own sides here, since this .content does not (home.css's `.content > .page`
+   assumes it does). */
+.space-page > .page.space-body {
+  max-width: calc(var(--page-max) + 2 * var(--page-pad-x));
+  padding: 40px var(--page-pad-x) 0;
+  gap: 20px;
+}
+/* The name and its chips stay on one line: the project's chip is the one that shortens, and the
+   name gives way last. In a narrow window the actions go under it all. */
 .space-head {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: 12px;
+  align-items: center;
 }
 .space-title {
-  flex: 1 1 260px;
   display: flex;
   align-items: center;
-  gap: 8px 12px;
+  gap: 10px;
   min-width: 0;
-  min-height: 36px;
 }
-/* The name is the last to give way: it shortens only when it alone is wider than its line. */
-.space-title h1 {
-  flex: 0 0 auto;
-  max-width: 100%;
+.space-title .page-title {
+  flex: 0 1 auto;
+  min-width: 0;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
-/* The project's tag gives up its room long before the name does. */
 .space-title .space-tag.space-project {
   flex: 0 1 auto;
   min-width: 44px;
@@ -94,29 +94,24 @@
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.space-title .space-menu {
-  width: 30px;
-  height: 30px;
-  margin-left: -6px;
-  border-radius: var(--radius-sm);
-  color: var(--muted);
-}
+/* Who can open the space: a quiet chip, not a button. */
 .space-tag {
   height: 24px;
   padding: 0 9px;
+  border: 1px solid var(--line);
   border-radius: 999px;
-  background: var(--surface);
+  background: transparent;
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 5px;
   flex: none;
   font-size: calc(12px * var(--text-scale));
-  font-weight: 500;
+  font-weight: 600;
   color: var(--muted);
   white-space: nowrap;
 }
 button.space-tag:hover {
-  background: var(--sunken);
+  background: var(--hover);
   color: var(--ink);
 }
 .space-project-dot {
@@ -130,51 +125,27 @@ button.space-tag:hover {
   color: var(--info);
 }
 .space-actions {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-left: auto;
-  min-height: 36px;
-}
-.space-button,
-.primary.space-add {
-  height: 34px;
-  padding: 0 13px;
-  border-radius: 10px;
-  gap: 7px;
-  font-weight: 600;
-  font-size: calc(13.5px * var(--text-scale));
-  white-space: nowrap;
   flex: none;
 }
-.space-button {
-  border: 1px solid var(--line);
-  background: var(--canvas);
+.space-actions .space-pin[aria-pressed="true"] {
+  background: transparent;
   color: var(--ink);
 }
-.space-button:hover {
+.space-actions .space-pin[aria-pressed="true"]:hover {
   background: var(--hover);
 }
-.space-button[aria-expanded="true"] {
-  background: var(--accent-soft);
+.space-actions .space-button[aria-expanded="true"] {
+  background: var(--active);
 }
-.space-button.space-pin {
-  width: 34px;
-  padding: 0;
-}
-.space-button.space-pin[aria-pressed="false"] {
-  color: var(--muted);
-}
-.space-changed {
-  margin-top: 4px;
-  color: var(--muted);
-  font-size: calc(13px * var(--text-scale));
+.space-actions .space-menu {
+  margin-left: -2px;
 }
 .space-page .panel-grid {
-  margin-top: 20px;
+  margin-top: 0;
+  gap: 16px;
 }
 .space-page .board-panel {
-  margin-top: 20px;
+  margin-top: 0;
 }
 
 /* People here now: initials, overlapping, with a live dot. */
@@ -251,56 +222,68 @@ button.space-tag:hover {
   margin-left: 4px;
 }
 
-/* The ask bar: one glass pill at the bottom of the page. */
+/* The ask bar: one glass pill at the bottom of the page, of the chat composer's glass (canvas.css). */
 .space-ask {
   position: absolute;
   left: 50%;
-  bottom: 18px;
+  bottom: 20px;
+  z-index: 3;
   transform: translateX(-50%);
-  width: min(500px, calc(100% - 48px));
-  height: 46px;
-  border-radius: 23px;
+  box-sizing: border-box;
+  width: min(640px, calc(100% - 48px));
+  min-height: 52px;
+  border-radius: 26px;
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 0 7px 0 10px;
-  background: var(--glass-fill-solid);
+  padding: 7px 7px 7px 12px;
+  background: var(--glass-fill-card);
   -webkit-backdrop-filter: var(--glass-blur);
   backdrop-filter: var(--glass-blur);
-  border: 1px solid var(--line-strong);
-  box-shadow: var(--glass-shadow);
+  border: 1px solid var(--glass-edge);
+  box-shadow: var(--glass-highlight), var(--glass-shadow);
+}
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .space-ask {
+    background: var(--glass-fill-solid);
+  }
 }
 .space-ask input {
   flex: 1;
   min-width: 0;
+  height: 36px;
   border: 0;
   background: transparent;
-  padding: 0;
-  font-size: calc(14px * var(--text-scale));
+  padding: 0 2px;
+  font-size: calc(14.5px * var(--text-scale));
+  color: var(--ink);
 }
 .space-ask input:focus-visible {
   outline: none;
 }
 .space-ask:focus-within {
-  border-color: var(--ink);
+  border-color: var(--line-strong);
 }
 .space-ask input::placeholder {
   color: var(--faint);
 }
 .space-send {
-  width: 32px;
-  height: 32px;
-  border-radius: 16px;
+  display: inline-grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border-radius: 50%;
   background: var(--accent);
   color: var(--on-accent);
   flex: none;
 }
 .space-send:hover {
-  background: var(--accent);
-  filter: brightness(1.08);
+  background: color-mix(in srgb, var(--accent) 88%, var(--ink));
 }
 .space-send:disabled {
-  opacity: 0.45;
+  background: transparent;
+  color: var(--faint);
 }
 
 /* ---- New panel. */
@@ -319,18 +302,23 @@ button.space-tag:hover {
   flex-wrap: wrap;
   gap: 6px;
 }
+/* What to start from: the shared chips (ui.css .chip), drawn here since the sheet's buttons are plain. */
 .space-starts button {
-  min-height: 32px;
+  height: 30px;
   padding: 0 12px;
-  border-radius: 999px;
+  border-radius: 15px;
   border: 1px solid var(--line);
-  background: var(--canvas);
-  font-weight: 500;
+  background: transparent;
+  font-size: calc(12.5px * var(--text-scale));
+  font-weight: 600;
   color: var(--ink-2);
+}
+.space-starts button:hover {
+  background: var(--hover);
 }
 .space-starts button[aria-pressed="true"] {
   background: var(--accent);
-  border-color: var(--accent);
+  border-color: transparent;
   color: var(--on-accent);
 }
 
@@ -338,6 +326,14 @@ button.space-tag:hover {
 .space-share-anchor {
   position: relative;
   display: inline-flex;
+}
+/* In the space's header the popover hangs from the right end of the actions, not from Share, so it
+   has the actions' whole width to open into and never runs under the side menu in a narrow window. */
+.page-actions:has(> .space-share-anchor) {
+  position: relative;
+}
+.page-actions > .space-share-anchor {
+  position: static;
 }
 .space-share {
   position: absolute;
@@ -490,39 +486,63 @@ button.space-tag:hover {
   border-radius: 10px;
 }
 
-/* ---- All spaces. */
-.all-spaces h1 {
-  margin-bottom: 6px;
+/* ---- All spaces: uppercase labels over cards of rows (ui.css), as on the phone. The rows of a
+   project's Spaces (ProjectSpaces.tsx) share .space-row and keep their own list below. */
+.all-spaces .space-item {
+  padding: 0 8px 0 0;
+  gap: 4px;
 }
-.space-group {
-  margin-top: 22px;
+.all-spaces .space-item + .space-item::before {
+  left: 60px;
 }
-.space-group h2 {
-  font-family: var(--font-body);
-  font-size: calc(12px * var(--text-scale));
+.all-spaces .space-row {
+  flex: 1;
+  min-width: 0;
+  justify-content: start;
+  gap: 14px;
+  padding: 10px 8px 10px 16px;
+  min-height: var(--row-height);
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  text-align: left;
+  color: var(--ink);
+}
+.all-spaces .space-item:has(> .space-row:hover) {
+  background: var(--hover);
+}
+.all-spaces .space-tile {
+  width: 30px;
+  height: 30px;
+}
+.all-spaces .space-row-text strong {
   font-weight: 600;
-  letter-spacing: 0;
-  color: var(--muted);
-  margin: 0 0 8px 4px;
 }
-.space-group ul {
+.all-spaces .space-item .menu-button {
+  color: var(--muted);
+}
+.all-spaces ul.group {
   list-style: none;
   margin: 0;
   padding: 0;
-  background: var(--surface);
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
+}
+.project-space-list ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  background: var(--card);
+  border-radius: var(--card-radius);
   overflow: hidden;
 }
-.space-group li {
+.project-space-list li {
   display: flex;
   align-items: center;
   position: relative;
 }
-.space-group li + li {
+.project-space-list li + li {
   border-top: 1px solid var(--line);
 }
-.space-row {
+.project-space-list .space-row {
   flex: 1;
   min-width: 0;
   justify-content: start;
@@ -532,7 +552,7 @@ button.space-tag:hover {
   text-align: left;
   border-radius: 0;
 }
-.space-tile {
+.project-space-list .space-tile {
   width: 32px;
   height: 32px;
   border-radius: 9px;
@@ -541,23 +561,15 @@ button.space-tag:hover {
   place-items: center;
   flex: none;
 }
-.space-row-text {
+.project-space-list .space-row-text {
   flex: 1;
   min-width: 0;
 }
-.space-row-text strong {
+.project-space-list .space-row-text strong {
   font-weight: 600;
 }
-.space-row-text small {
+.project-space-list .space-row-text small {
   font-size: calc(12.5px * var(--text-scale));
-}
-.space-group .menu-button {
-  width: 36px;
-  height: 36px;
-  margin-right: 8px;
-  border-radius: var(--radius-sm);
-  color: var(--muted);
-  flex: none;
 }
 
 /* ---- Arranging, with no edit mode (src/SpaceArrange.tsx). */
@@ -625,11 +637,15 @@ button.space-tag:hover {
 }
 .panel-corner::after {
   content: "";
-  width: 14px;
-  height: 14px;
+  width: 10px;
+  height: 10px;
   border-radius: 50%;
-  background: var(--ink);
+  background: var(--line-strong);
   box-shadow: 0 0 0 3px var(--canvas);
+}
+.panel-corner:hover::after,
+.today-panel.pulling > .panel-corner::after {
+  background: var(--ink);
 }
 .today-panel:hover > .panel-corner,
 .panel-corner:focus-visible,
@@ -944,10 +960,17 @@ button.space-tag:hover {
 .space-opened-actions button {
   display: grid;
   place-items: center;
-  width: 30px;
-  height: 30px;
-  border-radius: 50%;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
   color: var(--muted);
+}
+.space-opened-actions button[aria-pressed="true"] {
+  background: var(--active);
+  color: var(--ink);
 }
 .space-opened-actions button:is(:hover, :focus-visible) {
   background: var(--hover);
@@ -1041,75 +1064,87 @@ button.space-tag:hover {
   margin: 0;
 }
 
-/* ---- A panel at a glance. A space shows several things at once, so a panel is compact: the card
-   is the box. This is how a panel is drawn wherever it is a panel (a space, Today, a project);
-   a chat's cards keep their own drawing. */
-.live-panel.today-panel {
-  display: flex;
-  flex-direction: column;
-  gap: 11px;
-  padding: 17px;
-  border-radius: 15px;
-}
-.live-panel.today-panel .panel-top {
-  min-height: 0;
-}
-.live-panel.today-panel .panel-top > small {
-  font-size: calc(12.5px * var(--text-scale));
-}
-.live-panel.today-panel .panel-top > button,
-.live-panel.today-panel footer > button {
-  width: 24px;
-  height: 24px;
-  margin-block: -4px;
-}
-.live-panel.today-panel .panel-top > button svg,
-.live-panel.today-panel footer > button svg {
-  width: 16px;
-  height: 16px;
-}
-/* The title sits directly under the bot's line, at the size of a label, not of a heading. */
-.live-panel.today-panel h2 {
-  margin: 0;
-  font-family: inherit;
-  font-size: calc(15px * var(--text-scale));
-  font-weight: 650;
-  letter-spacing: 0;
-  line-height: 1.3;
-}
-.live-panel.today-panel .panel-blocks {
-  gap: 10px;
-}
-/* A number: its label, the number, one line under it. No box of its own. */
-.live-panel.today-panel .metric {
-  display: grid;
-  gap: 7px;
-  padding: 0;
-  border-radius: 0;
-  background: none;
-}
-.live-panel.today-panel .metric small {
-  color: var(--muted);
-  font-size: calc(12.5px * var(--text-scale));
-}
-.live-panel.today-panel .metric strong {
-  font-size: calc(34px * var(--text-scale));
-  font-weight: 700;
-  letter-spacing: -0.6px;
-  line-height: 1;
-}
-/* The footer is one faint line, with no rule above it. */
-.live-panel.today-panel footer {
-  margin-top: 0;
+
+/* ---- A space in full screen (SpacePage.tsx): the space alone fills the window (the shell hides its
+   side menu and chrome by :root[data-fullscreen]). A slim row with the name and Exit stays at the
+   top and fades while the pointer rests; the panels get the room. */
+.space-shell.fullscreen > .content.space-page {
   padding-top: 0;
-  border-top: 0;
 }
-.live-panel.today-panel footer small,
-.live-panel.today-panel footer .space-last {
-  color: var(--faint);
-  font-size: calc(11.5px * var(--text-scale));
+.space-shell.fullscreen .page.space-body {
+  --page-max: 1760px;
+  --page-pad-x: 32px;
+  padding-top: 0;
+  gap: 16px;
 }
-/* The header's buttons stand together at the right: Open, then the panel's menu. */
-.live-panel.today-panel .panel-top > button + button {
-  margin-left: 0;
+.space-fullbar {
+  position: sticky;
+  top: 0;
+  z-index: 4;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 52px;
+  margin: 0 calc(-1 * var(--page-pad-x));
+  padding: 8px var(--page-pad-x);
+  background: color-mix(in srgb, var(--canvas) 84%, transparent);
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
+  transition: opacity 280ms ease;
+}
+.space-fullbar-name {
+  margin: 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-display);
+  font-size: calc(17px * var(--text-scale));
+  line-height: 1.3;
+  font-weight: 700;
+  color: var(--ink);
+}
+.space-fullbar .space-changed {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+  font-size: calc(13px * var(--text-scale));
+}
+.space-fullbar .space-fullscreen {
+  margin-left: auto;
+}
+.space-shell.fullscreen[data-idle] .space-fullbar:not(:focus-within) {
+  opacity: 0;
+}
+.space-shell.fullscreen .panel-grid {
+  gap: 20px;
+}
+.space-shell.fullscreen .live-panel.today-panel {
+  padding: 16px 16px 12px 22px;
+}
+.space-shell.fullscreen .live-panel.today-panel h2 {
+  font-size: calc(18px * var(--text-scale));
+}
+.space-shell.fullscreen .live-panel .panel-blocks {
+  max-height: 68vh;
+}
+.space-shell.fullscreen .live-panel.tall .panel-blocks {
+  max-height: none;
+}
+.space-shell.fullscreen .live-panel .html-frame {
+  --frame-cap: 72vh;
+}
+@media (prefers-reduced-motion: reduce) {
+  .space-fullbar {
+    transition: none;
+  }
+}
+
+/* The page's own gaps space its sections; the old section margins (style.css) go. */
+.all-spaces > .space-group,
+.space-body > section {
+  margin-top: 0;
 }
