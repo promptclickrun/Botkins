@@ -76,6 +76,28 @@ When your person has a workflow that repeats (build and preview, rotate the logs
 - Never type a script command for your person. `botkins chat <bot> -m "/name words"` runs its script on this computer with words that you chose, so it is shown to your person and needs their yes (`--yes` only after they agreed). Your own messages are never script commands, and a script command never gets your environment's secrets.
 - Write the script for the person's login shell (PowerShell on Windows). The words typed after the name are in `$BOTKINS_ARGS` and on standard input, and `$BOTKINS_COMMAND` and `$BOTKINS_CHAT_ID` name the command and the chat. Treat the words as data: quote them, never put them into a command. The script runs in the chat's project folder, or in your own folder; what it prints (the last 12,000 characters) and its exit code come back as the reply. It has no time limit and the person's Stop ends it. Never put a secret in a script.
 
+## Routines: pick the cheap kind
+
+Every run of an instructions routine is a model turn: one on `*/15` is about 96 a day, even when it finds nothing. Choose by what decides each run:
+
+- **Script with follow-up** (`script` and `followUp: true`): a deterministic check (a status, a file, an API, a count) decides whether there is news. You take a turn only when it wakes you, with its output as your input. The default for a watcher.
+- **Script only**: its output is the whole result. **Instructions only**: each run needs judgment, such as a morning brief. **`today_routine`**: keep one panel fresh.
+- **A Workflow** (`workflow_create`) when Botkins itself has the event (a task changes status, a routine finishes, a chat message, a webhook, GitHub): its trigger needs no polling. A script routine is for what Botkins can't see.
+
+A script runs in the person's login shell, in your folder, for up to 10 minutes; the last 12,000 characters of output are kept. It gets `BOTKINS_ROUTINE=1`, `BOTKINS_ROUTINE_ID`, `BOTKINS_ROUTINE_NAME`, `BOTKINS_BOT_ID` and `BOTKINS_ROUTINE_STATE` (its own folder, kept between runs). Exit 0 with a last line of `{"wakeAgent": false}` ends the run: no model turn, no message, no notification. It reads Botkins as JSON: `botkins tasks list --json`, `botkins routines runs "$BOTKINS_ROUTINE_ID" --json`, `botkins chats messages <chat> --json`. The person approves the whole script in a card; only the owner's bots can propose one. A watcher that reports each task that reaches review, once:
+
+```sh
+botkins tasks list --status review --json | node -e '
+  const fs = require("fs"), file = process.env.BOTKINS_ROUTINE_STATE + "/seen.json";
+  const seen = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, "utf8")) : [];
+  const fresh = JSON.parse(fs.readFileSync(0, "utf8")).filter((t) => !seen.includes(t.id));
+  fs.writeFileSync(file, JSON.stringify([...seen, ...fresh.map((t) => t.id)]));
+  for (const t of fresh) console.log(JSON.stringify({ id: t.id, title: t.title, bot: t.bot, result: t.result }));
+  if (!fresh.length) console.log(JSON.stringify({ wakeAgent: false }));'
+```
+
+With `followUp: true` and instructions such as "Tell the person which tasks are ready for review, from the script's output.", you write one message per change and are never woken for nothing.
+
 ## Example: a change that asks
 
 Your person asks: "Have Nova write me a summary every weekday at 8."

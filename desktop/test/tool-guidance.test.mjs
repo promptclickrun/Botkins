@@ -136,6 +136,43 @@ test("quiet report routine vs panel refresh: distinct destinations, alerts, unsp
   assert.equal(refresh.cron, "0 8 * * *");
 });
 
+test("routine kind: script + followUp for deterministic checks, the wake gate and the cost come before truncation, and the prompt has the decision rule", (t) => {
+  const { tools, instructions } = setup(t);
+
+  // The decision rule and the watcher pattern are in every bot's prompt.
+  assert.match(instructions, /Choose the cheapest routine that does the job/);
+  assert.match(instructions, /one on \*\/15 is about 96 a day/);
+  assert.match(instructions, /a script with followUp when a deterministic check/);
+  assert.match(instructions, /a script alone when its output is the whole result/);
+  assert.match(instructions, /instructions alone when each run needs judgment/);
+  assert.match(instructions, /today_routine to keep one panel fresh/);
+  assert.match(instructions, /A watcher is a script: it polls .*\$BOTKINS_ROUTINE_STATE.*\{"wakeAgent": false\}.*followUp turn writes the message/);
+  assert.match(instructions, /Never poll with instructions and reply \[SILENT\]/);
+  assert.match(instructions, /When Botkins itself has the event .* a Workflow \(workflow_create\) with that trigger needs no polling/);
+
+  // The main condition is first, and the existing destination/notify cues still fit in 300 characters.
+  const createHead = firstLine300(tools.get("routine_create").description);
+  assert.match(createHead, /^Create a scheduled routine\. Use a script when the check is deterministic \(status, file, API, count\); the model runs only when the script wakes it/);
+  for (const cue of [/deliver/, /notify: false/, /today_routine/]) assert.match(createHead, cue);
+  assert.match(tools.get("routine_create").description, /\*\/15 is about 96 a day/);
+  assert.match(firstLine300(tools.get("routine_update").description), /script and followUp/);
+  assert.match(firstLine300(tools.get("routine_list").description), /script and followUp/);
+
+  // The script parameter states the whole contract.
+  const { script, followUp } = tools.get("routine_create").parameters.properties;
+  assert.match(script.description, /^A shell script that runs on schedule with no model: use it when the check is deterministic/);
+  for (const part of [/bot's own folder/, /up to 10 minutes/, /last 12,000 characters/, /BOTKINS_ROUTINE=1/, /BOTKINS_ROUTINE_STATE/, /botkins tasks list --json/, /exits 0 and its last line is \{"wakeAgent": false\}/, /script's whole output as its input/, /approval card/])
+    assert.match(script.description, part);
+  assert.equal(followUp.type, "boolean");
+  assert.deepEqual(tools.get("routine_create").parameters.required, ["name", "cadence"], "a script-only routine needs no instructions");
+  assert.ok(tools.get("routine_update").parameters.properties.script);
+
+  // The neighbors point to it.
+  assert.match(tools.get("task_list").description, /routine_create with a script/);
+  assert.match(tools.get("today_routine").description, /Each refresh is a model turn/);
+  assert.match(tools.get("script_command_create").description, /For a script that runs on a schedule, use routine_create with `script`/);
+});
+
 test("UI surfaces: inline card, launched app, side pane, and persistent Today panel are distinct before truncation", (t) => {
   const { tools, instructions } = setup(t);
 

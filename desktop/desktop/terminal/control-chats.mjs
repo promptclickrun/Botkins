@@ -9,6 +9,8 @@
 // and the app's calls for them are `link.chats.*` (desktop/chat-sections-ipc.mjs). They are read from the
 // window's snapshot, which holds the list and the section of each chat.
 import { ControlError } from "./socket.mjs";
+import { isSilentMessage } from "../link/silent-reply.mjs";
+import { withoutProactiveAlerts } from "../link/team.mjs";
 
 const MODES = ["default", "plan", "yolo"];
 const FLAGS = ["pinned", "archived", "unread"];
@@ -141,6 +143,23 @@ export function chatsApi({ workspace, handlers, bot }) {
       const found = chat(ref);
       const latest = latestTurn(found);
       return { ...view(found, held()), ...(latest && { latestTurn: { id: latest.id, status: latest.status ?? null, ...(latest.time && { time: new Date(latest.time).toISOString() }) } }) };
+    },
+    /**
+     * A chat's latest messages, oldest first: { chatId, title, working, count, messages: [{ index, role, text, time }] }. `options`:
+     * { last?: 1 to 100 (10), role?: "user" | "assistant" }. What a routine's script reads to see whether the person answered.
+     */
+    "chats.messages"([ref, options = {}]) {
+      const found = chat(ref);
+      const last = Math.max(1, Math.min(100, Math.floor(Number(options?.last)) || 10));
+      const role = options?.role;
+      if (role !== undefined && role !== "user" && role !== "assistant") throw new ControlError("A role is user or assistant.", "BAD_ARGUMENT");
+      const shown = workspace.inChat(found.id, "owner") ? found : withoutProactiveAlerts(found);
+      const messages = shown.messages
+        .map((message, index) => ({ index, role: message.role, text: message.text ?? "", ...(message.time && { time: new Date(message.time).toISOString() }), interim: message.interim }))
+        .filter((message) => !message.interim && !isSilentMessage(message) && (message.role === "user" || message.role === "assistant") && (!role || message.role === role))
+        .slice(-last)
+        .map(({ interim, ...message }) => message);
+      return { chatId: found.id, title: found.title, working: workspace.active.has(found.id), count: found.messages.length, messages };
     },
     async "chats.rename"([ref, title]) {
       const found = chat(ref);
