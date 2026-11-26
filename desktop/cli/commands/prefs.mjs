@@ -41,6 +41,7 @@ const KEYS = [
   ["onboarded", "on | off", "The welcome is done"],
   ["linkPreviews", "on | off", "Show a preview of a linked page (this computer fetches the page)"],
   ["readAloud", "on | off", "Read replies aloud"],
+  ["showRoutineChats", "on | off", "Show routine-owned chats in the chat list"],
   ["teamwork", "on | off", "Bots may ask each other for help from a chat"],
   ["longPromptCache", "on | off", "Keep a chat's prompt cache for about an hour where the provider supports it"],
   ["autoSummarize", "off | 5 to 30", "Turns between a chat's summaries into a new title, on the Default routines model"],

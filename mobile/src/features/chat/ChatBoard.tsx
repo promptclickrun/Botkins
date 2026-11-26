@@ -16,6 +16,7 @@ import { DRAG } from "@/features/home/drag";
 import type { Bot, ChatSummary, Section } from "@/link/types";
 import { activityLabel, useCan, useChatActivity, usePart } from "@/state/hooks";
 import { api, attempt } from "@/state/link";
+import { isRoutineChat } from "../../../link-host/routine-chat.mjs";
 import { useApp } from "@/state/store";
 import { ago } from "@/state/time";
 import { openFromList, useChatSplit } from "./split";
@@ -76,7 +77,7 @@ function ChatRow({ chat, bots, sections, actions }: { chat: ChatSummary; bots: M
     : [
         { id: "pin", title: chat.pinned ? "Unpin" : "Pin", image: chat.pinned ? "pin.slash" : "pin" },
         ...filing,
-        { id: "unread", title: chat.unread ? "Mark as read" : "Mark as unread", image: chat.unread ? "envelope.open" : "envelope.badge" },
+        ...(!isRoutineChat(chat) ? [{ id: "unread", title: chat.unread ? "Mark as read" : "Mark as unread", image: chat.unread ? "envelope.open" : "envelope.badge" }] : []),
         ...starters,
         ...(chat.main ? [] : [{ id: "archive", title: "Archive", image: "archivebox" }]),
         ...ends,
@@ -116,10 +117,10 @@ function ChatRow({ chat, bots, sections, actions }: { chat: ChatSummary; bots: M
           {group ? <GroupFace bots={chat.botIds!.slice(0, 2).map((id) => bots.get(id))} size={48} state={state} /> : <BotAvatar bot={bot} size={48} state={state} />}
           <View style={{ flex: 1, minWidth: 0, gap: 2 }}>
             <View style={{ flexDirection: "row", alignItems: "center", gap: space.sm }}>
-              <T variant="callout" weight={chat.unread ? "700" : "600"} numberOfLines={1} style={{ flex: 1 }}>
+              <T variant="callout" weight={chat.unread && !isRoutineChat(chat) ? "700" : "600"} numberOfLines={1} style={{ flex: 1 }}>
                 {title}
               </T>
-              <T variant="footnote" color={chat.unread ? "accentText" : "faint"} weight={chat.unread ? "600" : "400"}>
+              <T variant="footnote" color={chat.unread && !isRoutineChat(chat) ? "accentText" : "faint"} weight={chat.unread && !isRoutineChat(chat) ? "600" : "400"}>
                 {chat.time ? ago(chat.time) : ""}
               </T>
             </View>
@@ -129,11 +130,11 @@ function ChatRow({ chat, bots, sections, actions }: { chat: ChatSummary; bots: M
                   {live}
                 </T>
               ) : (
-                <T variant="subhead" color={chat.unread ? "ink2" : "muted"} numberOfLines={1} style={{ flex: 1 }}>
+                <T variant="subhead" color={chat.unread && !isRoutineChat(chat) ? "ink2" : "muted"} numberOfLines={1} style={{ flex: 1 }}>
                   {preview}
                 </T>
               )}
-              {chat.unread && <Dot size={9} />}
+              {chat.unread && !isRoutineChat(chat) && <Dot size={9} />}
             </View>
           </View>
         </View>

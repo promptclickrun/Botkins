@@ -19,6 +19,7 @@ import { parseSkill } from "./skill-format.mjs";
 import { botVoiceField } from "./voice.mjs";
 import { currentBotBundle, templateBundle, templateFileBundle, templateForReader } from "./template-bundle.mjs";
 import { hasAction, roleOfMember } from "./team.mjs";
+import { isRoutineChat } from "./routine-chat.mjs";
 import { proactiveChats, proactivePatch, proactiveSees, proactiveStart } from "./proactive-rules.mjs";
 import { findMainChat, makeMainChat, migrateMainChats, changeMainContext, visibleChat } from "./main-chat.mjs";
 import { Failure } from "./tools.mjs";
@@ -484,6 +485,7 @@ export function seed() {
       showUpdates: true,
       linkPreviews: false,
       readAloud: false,
+      showRoutineChats: false,
       onboarded: true,
       approval: "ask",
       clarify: ["missing"],
@@ -2179,7 +2181,7 @@ export class MockBackend {
     for (const key of ["streams", "thinking", "intents", "steerable"]) delete this.state[key][id];
     this.turns.delete(id);
     chat.time = finished;
-    chat.unread = true;
+    if (!isRoutineChat(chat)) chat.unread = true;
     this.changed();
     const next = this.state.queued[id]?.shift();
     if (next) {
@@ -2370,7 +2372,7 @@ export class MockBackend {
     else Object.assign(run, { status: "Completed", finished, summary: "Worked for " + Math.max(1, Math.round((finished - run.time) / 1000)) + "s · " + (run.steps?.length ?? 0) + " step", usage: { input: 1800, output: 240 } });
     if (said) chat.messages.push({ role: "assistant", text: said, runId: run.id, time: finished });
     chat.time = finished;
-    chat.unread = true;
+    if (!isRoutineChat(chat)) chat.unread = true;
     // Auto-summarize, as the desktop does it: every few completed turns a chat the person didn't name gets a new title.
     const every = this.state.settings.autoSummarize;
     if (run.status === "Completed" && every && !chat.main && !chat.titleSet && (chat.titleTurns = (chat.titleTurns ?? 0) + 1) >= every) {
@@ -2427,6 +2429,7 @@ export class MockBackend {
       if ("showThinking" in rest && typeof rest.showThinking !== "boolean") throw new Error("Choose whether to show thinking");
       if ("foldThinking" in rest && typeof rest.foldThinking !== "boolean") throw new Error("Choose a thinking display preference");
       if ("showUpdates" in rest && typeof rest.showUpdates !== "boolean") throw new Error("Choose whether to show updates");
+      if ("showRoutineChats" in rest && typeof rest.showRoutineChats !== "boolean") throw new Error("Choose on or off");
       if (typeof rest.clarificationInstructions === "string" && rest.clarificationInstructions.length > 4000) throw new Error("Keep the instructions under 4,000 characters.");
       if (appearance?.bubble !== undefined && !(appearance.bubble === "theme" || /^#[0-9a-f]{6}$/i.test(appearance.bubble))) throw new Error("Invalid appearance choice");
       if (appearance?.avatarAnimations !== undefined && typeof appearance.avatarAnimations !== "boolean") throw new Error("Invalid appearance choice");
@@ -2687,8 +2690,9 @@ export class MockBackend {
       return chat.id;
     },
     setChatFlags(id, flags) {
-      if (flags.archived && this.chat(id).main) throw new Error("Main chat stays in your chats.");
-      Object.assign(this.chat(id), flags);
+      const chat = this.chat(id);
+      if (flags.archived && chat.main) throw new Error("Main chat stays in your chats.");
+      Object.assign(chat, isRoutineChat(chat) && flags.unread ? { ...flags, unread: false } : flags);
     },
     markChatsRead(ids) {
       if (!Array.isArray(ids)) throw new Error("Choose valid chats to mark as read.");
@@ -2707,7 +2711,7 @@ export class MockBackend {
     },
     regenerateChatTitle(id) {
       const chat = this.chat(id);
-      if (chat.main || chat.temporary || chat.panelId || chat.schedules?.some((entry) => entry.routine)) throw new Error("This chat's title can't be regenerated.");
+      if (chat.main || chat.temporary || chat.panelId || isRoutineChat(chat)) throw new Error("This chat's title can't be regenerated.");
       const opening = chat.messages.find((message) => message.role === "user" && message.text?.trim());
       if (!opening) throw new Error("Send a message before regenerating the title.");
       return (chat.title = opening.text.trim().replace(/\s+/g, " ").slice(0, 80));

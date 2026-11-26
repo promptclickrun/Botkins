@@ -62,6 +62,7 @@ export default function Chat() {
   const chatMode = usePart("proactive")?.chatMode;
   const online = useOnline();
   const canManage = useCan("settings", "manage");
+  const canViewAgents = useCan("agents", "view");
   return (
     <Page title="Chat">
       {/* Approvals live here as on the computer, whose Chat settings say when bots ask first. */}
@@ -91,6 +92,14 @@ export default function Chat() {
           {chatMode && <ChoiceMenu title="Proactive signals" subtitle="Where your bots send alerts delivered to chat." value={chatMode}
             options={[{ value: "main", label: "Main chat" }, { value: "new", label: "New chat every time" }]}
             onChange={mode => void attempt(api.setProactiveChatMode(mode))} />}
+          <Row
+            title="Show routine chats"
+            subtitle="Include chats created and owned by routines in your chat list"
+            subtitleLines={2}
+            toggled={!!settings?.showRoutineChats}
+            disabled={!online || !canViewAgents}
+            onToggle={(showRoutineChats) => void attempt(api.setPreferences({ showRoutineChats }))}
+          />
         </Group>
       </View>
 

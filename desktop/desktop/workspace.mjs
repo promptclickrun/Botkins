@@ -2,6 +2,7 @@ import { addUserMessage, recordVoiceLine } from "./link/voice-history.mjs";
 import { reasoningPreview } from "./link/reasoning-preview.mjs";
 import { commitInterim, finishReply, wholeMessage } from "./transcript.mjs";
 import { changeMainContext, conversations, findMainChat, makeMainChat, migrateMainChats, visibleChat } from "./link/main-chat.mjs";
+import { isRoutineChat } from "./link/routine-chat.mjs";
 import { findHumanMentions } from "./human-mentions.mjs";
 import { stripVTControlCharacters } from "node:util";
 import { createHash, randomUUID } from "node:crypto";
@@ -293,6 +294,9 @@ export class Workspace {
         if (message.role === "user") index++;
         if (history[index]) message.runId ??= history[index].id;
       }
+    }
+    for (const chat of this.state.chats) {
+      if (chat.unread && isRoutineChat(chat)) chat.unread = false;
     }
     migrateAgents(this.state);
     migrateMainChats(this.state.bots, this.state.chats);
@@ -1228,7 +1232,7 @@ export class Workspace {
             ...(next.quote && { quote: next.quote }),
           }, next.voiceId);
           chat.time = time;
-          chat.unread = true;
+          if (!isRoutineChat(chat)) chat.unread = true;
           this.save();
         } else this.notify();
       } catch (failure) {
@@ -2398,7 +2402,7 @@ export class Workspace {
       this.subagents.releaseRun(run.id);
       run.finished = Date.now();
       chat.time = Date.now();
-      if (run.status !== "Stopped" && !run.silent) chat.unread = true;
+      if (run.status !== "Stopped" && !run.silent && !isRoutineChat(chat)) chat.unread = true;
       this.catalogs.delete(chat.id);
       this.active.delete(chat.id);
       this.events.emit("turn", { chat, run });
@@ -3025,7 +3029,7 @@ export class Workspace {
         if (panel) this.spaces.touch(panel.spaceId);
       }
       // A finished reply marks its conversation unread until the person opens it. Panel refreshes stay quiet.
-      if (run.status !== "Stopped" && !run.panelId && !chat.temporary && !hiddenRun(run) && !run.silent) chat.unread = true;
+      if (run.status !== "Stopped" && !run.panelId && !chat.temporary && !hiddenRun(run) && !run.silent && !isRoutineChat(chat)) chat.unread = true;
       this.catalogs.delete(chat.id);
       this.active.delete(chat.id);
       // Routine delivery may make a chat or Feed card and call save several times.

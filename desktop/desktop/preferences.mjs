@@ -146,6 +146,8 @@ export const defaultSettings = {
   // Off until the person turns it on: a preview fetches the linked page from this computer.
   linkPreviews: false,
   readAloud: false,
+  // Off by default: routine-owned chats stay out of the chat list unless shown.
+  showRoutineChats: false,
   // Set once the person finishes the welcome screen (desktop/main.mjs never sets it on its own).
   onboarded: false,
   approval: "ask",
@@ -266,6 +268,7 @@ export function changeSettings(settings, patch) {
         break;
       case "linkPreviews":
       case "readAloud":
+      case "showRoutineChats":
       case "teamwork":
       case "longPromptCache":
         if (typeof value !== "boolean") throw new Error("Choose on or off");

@@ -2390,6 +2390,8 @@ export type Preferences = {
   linkPreviews?: boolean;
   /** Speak each new reply aloud in the open chat. */
   readAloud?: boolean;
+  /** Show routine-owned chats in the chat list (off by default). */
+  showRoutineChats?: boolean;
   /** The person finished the welcome screen. */
   onboarded?: boolean;
   /** A new workspace has no default model until a provider is connected (desktop/workspace.mjs firstDefaultModel). */

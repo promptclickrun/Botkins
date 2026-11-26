@@ -1,12 +1,13 @@
 import type { Chat } from "./types";
+import { isRoutineChat } from "../desktop/link/routine-chat.mjs";
 
 /** Whether a chat counts toward its bot's unread dot in the side menu. */
-export function isUnreadChat(chat: Pick<Chat, "panelId" | "archived" | "unread">): boolean {
-  return !chat.panelId && !chat.archived && !!chat.unread;
+export function isUnreadChat(chat: Pick<Chat, "panelId" | "archived" | "unread" | "schedules">): boolean {
+  return !chat.panelId && !chat.archived && !isRoutineChat(chat) && !!chat.unread;
 }
 
 /** The chats that make a bot's unread dot in the side menu. */
-export function botUnreadChats<T extends Pick<Chat, "id" | "botId" | "panelId" | "archived" | "unread">>(
+export function botUnreadChats<T extends Pick<Chat, "id" | "botId" | "panelId" | "archived" | "unread" | "schedules">>(
   chats: readonly T[],
   botId: string,
 ): T[] {
@@ -15,7 +16,7 @@ export function botUnreadChats<T extends Pick<Chat, "id" | "botId" | "panelId" |
 
 /** Bot IDs that currently have an unread dot in the side menu. */
 export function unreadBotIds(
-  chats: readonly Pick<Chat, "botId" | "panelId" | "archived" | "unread">[],
+  chats: readonly Pick<Chat, "botId" | "panelId" | "archived" | "unread" | "schedules">[],
 ): Set<string> {
   const out = new Set<string>();
   for (const chat of chats) {
@@ -25,7 +26,7 @@ export function unreadBotIds(
 }
 
 /** Every non-archived, non-panel unread chat across all bots. */
-export function allUnreadChats<T extends Pick<Chat, "id" | "panelId" | "archived" | "unread">>(
+export function allUnreadChats<T extends Pick<Chat, "id" | "panelId" | "archived" | "unread" | "schedules">>(
   chats: readonly T[],
 ): T[] {
   return chats.filter(isUnreadChat);

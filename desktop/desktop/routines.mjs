@@ -17,6 +17,7 @@ import { CronExpressionParser } from "cron-parser";
 import { nextTime, textField } from "./panels.mjs";
 import { BOARD_KINDS, GOAL_CATEGORIES } from "./board.mjs";
 import { spaceShare } from "./link/team.mjs";
+import { isRoutineChat } from "./link/routine-chat.mjs";
 import { isGroup } from "./groups.mjs";
 import {
   ROUTINE_NOTIFY_TARGETS,
@@ -1121,7 +1122,7 @@ function runScriptRoutine(ws, chat, entry, trigger) {
     delete run.stopRequested;
     run.finished = Date.now();
     chat.time = run.finished;
-    if (run.status !== "Stopped") chat.unread = true;
+    if (run.status !== "Stopped" && !isRoutineChat(chat)) chat.unread = true;
     ws.events.emit("turn", { chat, run });
     ws.save();
     if (ws.queues.has(chat.id)) setImmediate(() => ws.drain(chat.id));

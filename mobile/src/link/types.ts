@@ -1043,6 +1043,8 @@ export type Preferences = {
   showUpdates?: boolean;
   linkPreviews?: boolean;
   readAloud?: boolean;
+  /** Show routine-owned chats in the chat list (off by default; per person). */
+  showRoutineChats?: boolean;
   onboarded?: boolean;
   /** ask: every request. read: reads are allowed. assisted: the model decides. all: nothing asks. */
   approval: "ask" | "read" | "assisted" | "all";

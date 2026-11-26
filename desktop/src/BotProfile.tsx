@@ -24,6 +24,7 @@ import { availableHeads, lookOf, sameLook } from "./botkins";
 import ModelPicker from "./ModelPicker";
 import { openProviderSettings } from "./providers";
 import { ChatRow, deleteBot, useAsk, type PageActions } from "./Pages";
+import { isRoutineChat } from "../desktop/link/routine-chat.mjs";
 import { BotRoutines } from "./Routines";
 import BotAccess from "./BotAccess";
 import BotProactive, { showsProactive } from "./BotProactive";
@@ -126,7 +127,8 @@ export default function BotProfile({
   const primary = state.bots[0]?.id === bot.id;
   const activity = botActivity(state, bot.id);
   const status = activityLabel(activity);
-  const chats = state.chats.filter((c) => c.botId === bot.id).sort((a, b) => b.time - a.time);
+  const showRoutineChats = !!state.settings.showRoutineChats;
+  const chats = state.chats.filter((c) => c.botId === bot.id && (showRoutineChats || !isRoutineChat(c))).sort((a, b) => b.time - a.time);
   const live = chats.filter((c) => !c.archived);
   const archived = chats.length - live.length;
   const panels = state.panels.filter((p) => p.botId === bot.id && !p.hidden).length;

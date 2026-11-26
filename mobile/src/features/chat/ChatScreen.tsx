@@ -16,6 +16,7 @@ import type { Bot, ChatSummary, Message, Preferences, Project, QueuedMessage, Ru
 import { useChatPrefs } from "@/state/chatPrefs";
 import { activityLabel, type AvatarState, useBot, useBots, useCan, useCapability, useChat, useChatActivity, useModels, usePart, useSettings, useWatchedChat } from "@/state/hooks";
 import { api, attempt, loadEarlier, reactToMessage } from "@/state/link";
+import { isRoutineChat } from "../../../link-host/routine-chat.mjs";
 import { effectiveModel, effortLabel, findModel, modelName } from "@/state/models";
 import { type ChatView, pendingSends, showToast, useApp } from "@/state/store";
 import { usePrefs } from "@/state/prefs";
@@ -774,7 +775,7 @@ function ChatScreenScreen({ pane: paneId, onLeave: leavePane, onList }: { pane?:
       if (archivesWhenLeft(now.parts.chats?.find((item) => item.id === chatId), left)) api.setChatFlags(chatId, { archived: true }).catch(() => {});
     };
   }, [chatId]);
-  const unread = !!chat?.unread;
+  const unread = !!chat?.unread && !isRoutineChat(chat);
   useEffect(() => {
     if (chatId && unread) api.setChatFlags(chatId, { unread: false }).catch(() => {});
   }, [chatId, unread]);

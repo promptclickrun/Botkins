@@ -1,7 +1,8 @@
 import { storageKey } from "./storage";
 import { useBotDrag } from "./useBotDrag";
 import { useChatDrag } from "./useChatDrag";
-import { chatGroups, chatsPageUnreadChats, hasChatSections, movedSection, type ChatGroup } from "./chatSections";
+import { chatGroups, chatsPageUnreadChats, hasChatSections, isVisibleInChatList, movedSection, type ChatGroup } from "./chatSections";
+import { isRoutineChat } from "../desktop/link/routine-chat.mjs";
 import {
   useEffect,
   useLayoutEffect,
@@ -1016,11 +1017,15 @@ function chatMenuItems(state: State, chat: Chat, actions: PageActions, ask: AskF
     },
     // Only when the computer in use keeps sections; without them the menu is as before.
     ...(hasChatSections(state) ? [chatSectionItem(state, chat, actions, ask)] : []),
-    {
-      label: chat.unread ? "Mark read" : "Mark unread",
-      icon: chat.unread ? MailOpen : Mail,
-      run: () => run(actions, api().setChatFlags(chat.id, { unread: !chat.unread })),
-    },
+    ...(!isRoutineChat(chat)
+      ? [
+          {
+            label: chat.unread ? "Mark read" : "Mark unread",
+            icon: chat.unread ? MailOpen : Mail,
+            run: () => run(actions, api().setChatFlags(chat.id, { unread: !chat.unread })),
+          },
+        ]
+      : []),
   ];
   if (chat.main) return common;
   return [
@@ -1105,7 +1110,8 @@ export function ChatRow({
   const dialogs = useAsk();
   if (!b) return null;
   const canChat = teamCan(state, "agents", "chat");
-  const canMarkRead = !canChat && !!chat.unread && teamCan(state, "agents");
+  const unread = !!chat.unread && !isRoutineChat(chat);
+  const canMarkRead = !canChat && unread && teamCan(state, "agents");
   const controls = canChat || canMarkRead ? actions : undefined;
   const items = (): MenuItem[] =>
     canChat
@@ -1139,7 +1145,7 @@ export function ChatRow({
     );
   const row = (
     <button
-      className={"row chatrow" + (chat.unread ? " unread" : "")}
+      className={"row chatrow" + (unread ? " unread" : "")}
       aria-current={selected ? "true" : undefined}
       onClick={() => open(chat.id)}
     >
@@ -1167,7 +1173,7 @@ export function ChatRow({
               </>
             )}
           </small>
-          {chat.unread && <i className="unread-dot" aria-label="Unread" />}
+          {unread && <i className="unread-dot" aria-label="Unread" />}
         </span>
         {project && (
           <small className="row-folder">
@@ -1426,10 +1432,24 @@ const foldedChatSections = new Set<string>();
 
 type ChatFilterName = "All" | "Unread" | "Archived";
 
-/** The All / Unread / Archived chips over a chat list. */
-function ChatFilterChips({ state, filter, setFilter }: { state: State; filter: ChatFilterName; setFilter: (f: ChatFilterName) => void }) {
+/** The All / Unread / Archived chips plus the "Show routine chats" toggle over a chat list. */
+function ChatFilterChips({
+  state,
+  actions,
+  filter,
+  setFilter,
+  selectedChatId,
+}: {
+  state: State;
+  actions: PageActions;
+  filter: ChatFilterName;
+  setFilter: (f: ChatFilterName) => void;
+  selectedChatId?: string;
+}) {
+  const showRoutineChats = !!state.settings.showRoutineChats;
   const unread = chatsPageUnreadChats(state.chats).length;
-  const archived = state.chats.filter((c) => c.archived).length;
+  const archived = state.chats.filter((c) => c.archived && isVisibleInChatList(c, { showRoutineChats, selectedChatId })).length;
+  const hasRoutines = state.chats.some((c) => isRoutineChat(c));
   return (
     <div className="chip-row chat-filters" role="group" aria-label="Show chats">
       {(
@@ -1443,6 +1463,15 @@ function ChatFilterChips({ state, filter, setFilter }: { state: State; filter: C
           {label}
         </button>
       ))}
+      {(hasRoutines || showRoutineChats) && (
+        <button
+          className="chip"
+          aria-pressed={showRoutineChats}
+          onClick={() => run(actions, api().setPreferences({ showRoutineChats: !showRoutineChats }))}
+        >
+          Show routine chats
+        </button>
+      )}
     </div>
   );
 }
@@ -1485,10 +1514,11 @@ function ChatList({
   const menu = useMenu();
   const dialogs = useAsk();
   const drag = useChatDrag(state.chats, (e) => runSection(actions, Promise.reject(e)));
+  const showRoutineChats = !!state.settings.showRoutineChats;
   const chats = state.chats;
   // Sections are there only when the computer in use keeps them ("chat-sections-v1").
   const sections = hasChatSections(state) ? state.chatSections ?? [] : undefined;
-  const groups = chatGroups({ chats, sections, query, filter, botName: (c) => state.bots.find((b) => b.id === c.botId)?.name });
+  const groups = chatGroups({ chats, sections, query, filter, showRoutineChats, selectedChatId, botName: (c) => state.bots.find((b) => b.id === c.botId)?.name });
   const matched = groups.some((group) => group.chats.length);
   // A chat is dragged into a section only where its menu could move it there.
   const movable = !!sections && filter !== "Archived" && teamCan(state, "agents", "chat");
@@ -1585,7 +1615,9 @@ function ChatList({
               ? "You're all caught up."
               : filter === "Archived"
                 ? "No archived chats."
-                : "No chats. Restore one from Archived."}
+                : !showRoutineChats && chats.some((c) => !c.archived && isRoutineChat(c))
+                  ? "Routine chats are hidden."
+                  : "No chats. Restore one from Archived."}
         </p>
       )}
       {menu.node}
@@ -1647,7 +1679,7 @@ export function ChatsPage({
           value={query}
           onValueChange={setQuery}
         />
-        <ChatFilterChips state={state} filter={filter} setFilter={setFilter} />
+        <ChatFilterChips state={state} actions={actions} filter={filter} setFilter={setFilter} />
       </div>
       <ChatList state={state} actions={actions} query={query} filter={filter} />
       {dialogs.node}
@@ -1704,7 +1736,7 @@ export function ChatListColumn({
           value={query}
           onValueChange={setQuery}
         />
-        <ChatFilterChips state={state} filter={filter} setFilter={setFilter} />
+        <ChatFilterChips state={state} actions={actions} filter={filter} setFilter={setFilter} selectedChatId={selectedChatId} />
       </div>
       <div className="chatlist-scroll">
         <ChatList state={state} actions={actions} query={query} filter={filter} selectedChatId={selectedChatId} />
