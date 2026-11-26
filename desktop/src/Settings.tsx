@@ -33,7 +33,7 @@ import { Button, Input } from "glisse";
 import { GlassTabBar } from "./GlisseUI";
 import type { AppUpdate, AppInfo, Bot, Catalog, MarketAgentTemplate, Preferences, State, NotificationSettings } from "./types";
 import ModelPicker from "./ModelPicker";
-import { AppearanceSettings, BehaviorSettings, ChatDisplaySettings, BackgroundSettings, HarnessSettings, SummarySettings } from "./Preferences";
+import { AppearanceSettings, BehaviorSettings, ChatDisplaySettings, BackgroundSettings, HarnessSettings, SummarySettings, TaskSettings } from "./Preferences";
 import Usage from "./Usage";
 import { ComputersAndTeams } from "./RemoteHosts";
 import AccessSettings from "./AccessSettings";
@@ -448,6 +448,7 @@ export default function Settings({
                 setup={!state.remote?.using || state.remote.using.capabilities.includes("provider-signin-v1")}
                 windows={!state.remote?.using && /Windows/i.test(navigator.userAgent)}
               />
+              <TaskSettings settings={preferences} limits={state.taskLimits} change={changePreferences} fail={fail} />
               <BackgroundSettings settings={preferences} change={changePreferences} fail={fail} />
             </>
           )}

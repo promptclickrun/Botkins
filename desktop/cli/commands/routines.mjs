@@ -415,4 +415,118 @@ export const routinesCommands = {
       },
     },
   },
+  workflows: {
+    summary: "Manage event-based workflows",
+    commands: {
+      list: {
+        summary: "List workflows and their status",
+        usage: "botkins workflows list",
+        async run(context) {
+          context.print(await context.client.call("workflows.list"), (list) =>
+            list.length
+              ? table(["NAME", "STATE", "STEPS", "ID"], list.map((w) => [safe(w.name), w.enabled ? "Active" : "Paused", String((w.nodes ?? []).length), w.id]))
+              : "No workflows yet.",
+          );
+        },
+      },
+      add: {
+        summary: "Create a workflow from a JSON definition file",
+        usage: "botkins workflows add <file>",
+        async run(context) {
+          const raw = await textFrom(context, one(context, "Give a JSON file (or - for stdin)."), "workflow file");
+          const created = await context.client.call("workflows.add", JSON.parse(raw));
+          context.print(created, (w) => "Created workflow " + safe(w.name) + " (" + w.id + ").");
+        },
+      },
+      edit: {
+        summary: "Update a workflow from a JSON patch file",
+        usage: "botkins workflows edit <id> <file>",
+        async run(context) {
+          if (context.args.length !== 2) throw usage("Give the workflow id and a JSON patch file.");
+          const [id, file] = context.args;
+          const raw = await textFrom(context, file, "workflow patch file");
+          const updated = await context.client.call("workflows.edit", id, JSON.parse(raw));
+          context.print(updated, (w) => "Updated workflow " + safe(w.name) + ".");
+        },
+      },
+      remove: {
+        summary: "Delete a workflow and its run history",
+        usage: "botkins workflows remove <id> [--yes]",
+        options: YES,
+        async run(context) {
+          const id = one(context, "Give the workflow id.");
+          if (!(await confirm(context, "Remove workflow " + id + "?"))) return EXIT.failed;
+          context.print(await context.client.call("workflows.remove", id), (done) => "Removed workflow " + safe(done.name) + ".");
+        },
+      },
+      pause: {
+        summary: "Pause a workflow (stops event and schedule triggers; manual runs still work)",
+        usage: "botkins workflows pause <id>",
+        async run(context) {
+          const id = one(context, "Give the workflow id.");
+          context.print(await context.client.call("workflows.pause", id), (w) => "Paused " + safe(w.name) + ".");
+        },
+      },
+      resume: {
+        summary: "Resume a paused workflow",
+        usage: "botkins workflows resume <id>",
+        async run(context) {
+          const id = one(context, "Give the workflow id.");
+          context.print(await context.client.call("workflows.resume", id), (w) => "Resumed " + safe(w.name) + ".");
+        },
+      },
+      run: {
+        summary: "Run a workflow manually",
+        usage: "botkins workflows run <id>",
+        async run(context) {
+          const id = one(context, "Give the workflow id.");
+          context.print(await context.client.call("workflows.run", id, {}), (run) => "Started run " + run.id + " (" + run.status + ").");
+        },
+      },
+      retry: {
+        summary: "Retry a failed workflow run from the failed step",
+        usage: "botkins workflows retry <runId>",
+        async run(context) {
+          const runId = one(context, "Give the run id.");
+          context.print(await context.client.call("workflows.retry", runId), (run) => "Retrying run " + run.id + ".");
+        },
+      },
+      approve: {
+        summary: "Approve or reject a workflow step waiting for approval",
+        usage: "botkins workflows approve <runId> <approved|rejected> [--note <text>]",
+        options: { note: { type: "string", value: "text", about: "Optional note passed to downstream steps" } },
+        async run(context) {
+          if (context.args.length !== 2) throw usage("Give the run id and approved or rejected.");
+          const [runId, decision] = context.args;
+          context.print(await context.client.call("workflows.approve", runId, undefined, decision, context.options.note ?? ""), (run) => "Recorded " + decision + " on run " + run.id + ".");
+        },
+      },
+      cancel: {
+        summary: "Cancel a running or waiting workflow run",
+        usage: "botkins workflows cancel <runId>",
+        async run(context) {
+          const runId = one(context, "Give the run id.");
+          context.print(await context.client.call("workflows.cancel", runId), (run) => "Cancelled run " + run.id + ".");
+        },
+      },
+      export: {
+        summary: "Export a workflow as portable JSON (no secrets)",
+        usage: "botkins workflows export <id>",
+        async run(context) {
+          const id = one(context, "Give the workflow id.");
+          const json = await context.client.call("workflows.export", id);
+          context.print(json, (text) => text);
+        },
+      },
+      import: {
+        summary: "Import a workflow from a portable JSON file (starts paused)",
+        usage: "botkins workflows import <file>",
+        async run(context) {
+          const raw = await textFrom(context, one(context, "Give a workflow JSON file (or - for stdin)."), "workflow file");
+          const res = await context.client.call("workflows.import", raw, {});
+          context.print(res, (r) => "Imported workflow " + safe(r.workflow.name) + " (paused).");
+        },
+      },
+    },
+  },
 };

@@ -1991,6 +1991,15 @@ export class LinkHost extends EventEmitter {
       };
       if (route === "hello" && req.method === "GET") return answer(await this.serve({ route, from }));
       if (req.method !== "POST") throw new Refused(405, "method");
+      if (route.startsWith("webhooks/")) {
+        const routeId = route.slice("webhooks/".length);
+        if (!routeId || routeId.includes("/") || typeof this.backend.webhook !== "function") throw new Refused(404, "not_found");
+        const maxWebhook = 64 * 1024;
+        if (Number(req.headers["content-length"]) > maxWebhook) throw new Refused(413, "too_large");
+        const rawBody = await readBody(req, maxWebhook);
+        const result = await this.backend.webhook(routeId, { method: req.method, headers: req.headers, rawBody });
+        return answer({ status: result?.status ?? 200, body: Buffer.from(JSON.stringify(result?.body ?? {}), "utf8"), json: true });
+      }
       if (route !== "rpc" && route !== "pair" && route !== "join" && route !== "session" && route !== "profile") throw new Refused(404, "not_found");
       // A call needs a known session and a body that fits before any of the body is read.
       const sessionId = String(req.headers["x-botkins-session"] ?? "");

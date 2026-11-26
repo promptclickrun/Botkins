@@ -307,6 +307,116 @@ export type Run = {
   /** Teammates the bot asked for help during this turn, in order (desktop/teamwork.mjs). */
   teamwork?: TeamAsk[];
 };
+export type WorkflowNodeKind = "trigger" | "agent" | "model" | "condition" | "approval" | "output";
+export type WorkflowTriggerKind = "task" | "schedule" | "manual" | "routine" | "chat" | "webhook" | "github";
+export type WorkflowOutputDestination = "chat" | "feed" | "idea" | "goal" | "notification";
+
+export interface WorkflowFieldDef {
+  name: string;
+  type?: "string" | "number" | "boolean";
+  choices?: string[];
+  description?: string;
+  required?: boolean;
+  path?: string;
+}
+
+export interface WorkflowConditionRule {
+  field: string;
+  op:
+    | "equals"
+    | "not_equals"
+    | "contains"
+    | "not_contains"
+    | "starts_with"
+    | "ends_with"
+    | "matches"
+    | "in"
+    | "gt"
+    | "gte"
+    | "lt"
+    | "lte"
+    | "exists"
+    | "empty";
+  value?: string;
+}
+
+export interface WorkflowNode {
+  id: string;
+  kind: WorkflowNodeKind;
+  triggerKind?: WorkflowTriggerKind;
+  label: string;
+  position: { x: number; y: number };
+  config: Record<string, any>;
+}
+
+export interface WorkflowEdge {
+  id: string;
+  from: string;
+  to: string;
+  branch?: "default" | "yes" | "no" | "approved" | "rejected" | string;
+}
+
+export interface Workflow {
+  id: string;
+  name: string;
+  description?: string;
+  enabled: boolean;
+  pausedAt?: number | null;
+  nodes: WorkflowNode[];
+  edges: WorkflowEdge[];
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface WorkflowInput {
+  name: string;
+  description?: string;
+  enabled?: boolean;
+  nodes: Array<Omit<WorkflowNode, "position"> & { position?: { x: number; y: number } }>;
+  edges: Array<{ id?: string; from: string; to: string; branch?: string }>;
+}
+
+export type WorkflowStepStatus = "pending" | "running" | "waiting_approval" | "completed" | "failed" | "skipped" | "rejected";
+export type WorkflowRunStatus = "running" | "waiting_approval" | "completed" | "failed" | "cancelled";
+
+export interface WorkflowStepRun {
+  nodeId: string;
+  kind: WorkflowNodeKind;
+  label: string;
+  status: WorkflowStepStatus;
+  startedAt?: number | null;
+  finishedAt?: number | null;
+  error?: string | null;
+  summary?: string;
+  branch?: string;
+  decision?: "approved" | "rejected";
+  note?: string;
+  chatId?: string;
+  outputs?: Record<string, unknown>;
+}
+
+export interface WorkflowRun {
+  id: string;
+  workflowId: string;
+  workflowName: string;
+  triggerNodeId: string;
+  triggerKind?: WorkflowTriggerKind;
+  manual?: boolean;
+  status: WorkflowRunStatus;
+  startedAt: number;
+  finishedAt?: number | null;
+  retriedAt?: number | null;
+  error?: string | null;
+  pendingApproval?: {
+    nodeId: string;
+    label: string;
+    message: string;
+    requestedAt: number;
+  } | null;
+  context: Record<string, unknown>;
+  steps: Record<string, WorkflowStepRun>;
+}
+
 /** One request from a bot to a teammate, and what came of it. */
 export type TeamAsk = {
   id: string;
@@ -462,7 +572,8 @@ export type TeamJoinState = { id: string; team: string; status: "pending" | "app
 export type NodeHostProject = {
   id: string;
   name: string;
-  path: string;
+  path?: string;
+  folder?: string;
   shared?: boolean;
 };
 export type NodeHostGrant = {
@@ -473,19 +584,173 @@ export type NodeHostGrant = {
   operation: string;
   resourceId: string;
   resourceName: string;
+  scope?: "always" | "today";
   until: number | null;
   createdAt: number;
 };
 export type NodeHostLastCompleted = {
-  requestId: string;
+  id?: string;
+  requestId?: string;
   operation: string;
   resourceId: string;
   resourceName: string;
   sourceHostName: string;
   sourceBotName: string;
   status: string;
-  at: number;
+  at?: number;
+  finishedAt?: number;
+  summary?: string;
+};
+export type NodeConversionAction = "move" | "keep" | "delete";
+export type NodeConversionTarget = {
+  serverId: string;
+  name: string;
+  role: string;
+  online: boolean;
+  unavailable?: boolean;
+  paused?: boolean;
+  botCount: number;
+};
+export type NodeConversionBotInventory = {
+  id: string;
+  name: string;
+  role: string;
   summary: string;
+  hidden: boolean;
+  teamwork: boolean;
+  chatCount: number;
+  messageCount: number;
+  groupChatCount: number;
+  routineCount: number;
+  activeRoutineCount: number;
+  routineTimezones: string[];
+  memoryBytes: number;
+  memoryEntries: number;
+  profileFiles: string[];
+  panelCount: number;
+  skillCount: number;
+  skills: string[];
+  plugins: Array<{ id: string; name: string }>;
+  projectRefs: Array<{ id: string; name: string; folder: string; sharedOnSource: boolean }>;
+};
+export type NodeConversionSnapshotSummary = {
+  id: string;
+  path: string;
+  createdAt: number;
+  botCount: number;
+  chatCount: number;
+  nodeName: string;
+};
+export type NodeConversionJobItem = {
+  botId: string;
+  botName: string;
+  action: NodeConversionAction;
+  targetHostId: string | null;
+  targetHostName: string | null;
+  transferId: string | null;
+  targetBotId: string | null;
+  stage: string;
+  error: string | null;
+  verification: {
+    chatCount: number;
+    messageCount: number;
+    routineCount: number;
+    panelCount: number;
+    contentSha256: string;
+  } | null;
+};
+export type NodeConversionJob = {
+  id: string;
+  status: "running" | "completed" | "paused" | "failed" | "undone";
+  nodeName: string;
+  sharedProjects: string[];
+  snapshotId: string | null;
+  snapshotPath: string | null;
+  createdAt: number;
+  updatedAt: number;
+  error: string | null;
+  items: NodeConversionJobItem[];
+};
+export type NodeConversionInspect = {
+  hasLocalData: boolean;
+  suggestedName: string;
+  bots: NodeConversionBotInventory[];
+  targets: NodeConversionTarget[];
+  shared: {
+    wiki: { pageCount: number; pages: string[]; note: string };
+    skills: { customCount: number; linkedCount: number; names: string[] };
+    plugins: { count: number; items: Array<{ id: string; name: string; enabled: boolean; bots: "all" | string[] }> };
+    panels: { count: number; botOwnedCount: number; otherCount: number };
+    vault: { count: number; locked: boolean; entries: Array<{ id: string; label: string; kind: string; owner: string }>; note: string };
+    projects: { count: number; items: Array<{ id: string; name: string; folder: string; hasFolder: boolean; shared: boolean }> };
+    groupChats: { count: number; items: Array<{ id: string; title: string; botIds: string[]; messageCount: number }> };
+  };
+  snapshot: NodeConversionSnapshotSummary | null;
+  activeJob: NodeConversionJob | null;
+  nodeHost?: NodeHostState;
+};
+export type NodeConversionPlan = {
+  valid: boolean;
+  errors: string[];
+  warnings: string[];
+  nodeName: string;
+  sharedProjects: string[];
+  botPlans: Array<{
+    botId: string;
+    botName: string;
+    role: string;
+    action: NodeConversionAction;
+    targetHostId: string | null;
+    targetHostName: string | null;
+    chatCount: number;
+    messageCount: number;
+    routineCount: number;
+    activeRoutineCount: number;
+    panelCount: number;
+    memoryBytes: number;
+    profileFileCount: number;
+    skillCount: number;
+    pluginCount: number;
+    projectRefCount: number;
+  }>;
+  counts: {
+    totalBots: number;
+    moveBots: number;
+    keepBots: number;
+    deleteBots: number;
+    chatsMoving: number;
+    chatsKeeping: number;
+    chatsDeleting: number;
+    messagesMoving: number;
+    routinesMoving: number;
+    routinesKeeping: number;
+    routinesDeleting: number;
+    panelsMoving: number;
+    panelsDeleting: number;
+    memoryBotsMoving: number;
+    profileFilesMoving: number;
+    skillsMoving: number;
+    pluginEnablementsMoving: number;
+    projectRefsMoving: number;
+    vaultEntriesLeftBehind: number;
+    wikiPagesKept: number;
+    projectsToShare: number;
+  };
+  requiresDeleteConfirmation: boolean;
+  deleteConfirmationPhrase: string;
+  deleteConfirmed: boolean;
+  snapshotDir: string;
+};
+export type NodeConversionUndoResult = {
+  undone: boolean;
+  snapshotId: string;
+  snapshotPath: string;
+  restoredBots: number;
+  restoredChats: number;
+  nodeHost: NodeHostState;
+  rolledBackRemoteBots: string[];
+  unreachableTargets: Array<{ botId: string; botName: string; targetHostName: string }>;
+  pausedToPreventDupes: Array<{ botId: string; routineName: string }>;
 };
 export type NodeHostAllowlistRule = {
   id: string;
@@ -525,18 +790,27 @@ export type NodeHostPendingApproval = {
 };
 export type NodeHostState = {
   enabled: boolean;
+  role?: "node" | "standard";
   name: string;
-  status: "off" | "online" | "paused";
+  status?: "off" | "online" | "paused";
+  online?: boolean;
   paused: boolean;
+  listening?: boolean;
   wholeComputer?: boolean;
   execPolicy?: NodeHostExecPolicy;
   capabilitiesVersion: number;
+  remoteControlSupported?: boolean;
+  hasLocalData?: boolean;
   sharedProjects: NodeHostProject[];
   availableProjects: NodeHostProject[];
   grants: NodeHostGrant[];
   pendingApprovals?: NodeHostPendingApproval[];
   auditLog?: NodeHostAuditEntry[];
   lastCompleted: NodeHostLastCompleted | null;
+  conversion?: {
+    activeJob: NodeConversionJob | null;
+    snapshot: NodeConversionSnapshotSummary | null;
+  };
 };
 export type State = {
   /** Which computer's workspace this is: null for this one, else the paired computer in use. */
@@ -559,6 +833,7 @@ export type State = {
   streams: Record<string, string>;
   intents: Record<string, string>;
   settings: Preferences;
+  taskLimits?: TaskLimits;
   requests: AgentRequest[];
   sections: Section[];
   /** The person's own sections on the Chats page, in their order ("chat-sections-v1"). Left out when the computer in use has none. */
@@ -578,6 +853,10 @@ export type State = {
   adminMode?: boolean;
   /** The Kanban board of work for bots. */
   tasks?: BotTask[];
+  /** Event-based Workflows in Routines (`workflows-v1`). */
+  workflows?: Workflow[];
+  /** Recent runs of event-based Workflows (`workflows-v1`). */
+  workflowRuns?: WorkflowRun[];
   /** The Proactive agent: the computer's switch, and each bot's agent with what it did (desktop/proactive.mjs). Missing on an older computer. */
   proactive?: ProactivePart;
   /** Project workspaces. One with a folder is also a coding project. */
@@ -789,8 +1068,11 @@ declare global {
         fastMode?: FastMode | null,
       ): Promise<void>;
       setPreferences(
-        patch: Partial<Omit<Preferences, "model" | "appearance" | "proactive">> & {
+        patch: Partial<Omit<Preferences, "model" | "appearance" | "proactive" | "tasksMax" | "tasksPerBot">> & {
           appearance?: Partial<Appearance>;
+          /** null clears the setting: the limit is then the environment's, else the default. */
+          tasksMax?: number | null;
+          tasksPerBot?: number | null;
           /** Only what changes: the computer lays it over what it has (desktop/proactive-settings.mjs). */
           proactive?: Partial<ProactiveSettings>;
         },
@@ -939,6 +1221,22 @@ declare global {
       moveTask(id: string, status: TaskStatus | "archived"): Promise<void>;
       startTask(id: string): Promise<void>;
       deleteTask(id: string): Promise<void>;
+      // Event-based Workflows
+      workflowsList(): Promise<{ workflows: Workflow[]; runs: WorkflowRun[] }>;
+      workflowCreate(data: WorkflowInput): Promise<Workflow>;
+      workflowUpdate(id: string, patch: Partial<WorkflowInput>): Promise<Workflow>;
+      workflowDelete(id: string): Promise<boolean>;
+      workflowPause(id: string): Promise<Workflow>;
+      workflowResume(id: string): Promise<Workflow>;
+      workflowRun(id: string, options?: { triggerNodeId?: string; inputs?: Record<string, unknown> }): Promise<WorkflowRun>;
+      workflowRetryRun(runId: string, nodeId?: string): Promise<WorkflowRun>;
+      workflowRespondApproval(runId: string, nodeId: string | null, decision: "approved" | "rejected", note?: string): Promise<WorkflowRun>;
+      workflowCancelRun(runId: string): Promise<WorkflowRun>;
+      workflowRotateWebhookSecret(workflowId: string, nodeId: string): Promise<{ routeId: string; secret: string }>;
+      workflowExport(id: string): Promise<boolean>;
+      workflowImport(): Promise<{ workflow: Workflow; unresolvedAgents: string[] } | null>;
+      workflowExportText(id: string): Promise<string>;
+      workflowImportText(raw: string, agentMap?: Record<string, string>): Promise<{ workflow: Workflow; unresolvedAgents: string[] }>;
       onPrefill(fn: (data: { chatId?: string; text: string; panelId?: string; spaceId?: string }) => void): () => void;
       /** The person really clicked or pressed a key inside a custom view (its id). Missing on an older main process. */
       onFrameGesture?(fn: (data: { frame: string }) => void): () => void;
@@ -1371,6 +1669,17 @@ declare global {
       nodeShareProject(projectId: string, shared: boolean): Promise<NodeHostState>;
       nodeRevokeGrant(grantId?: string | null): Promise<NodeHostState>;
       nodeDisconnect(): Promise<NodeHostState>;
+      nodeConvertInspect(): Promise<NodeConversionInspect>;
+      nodeConvertPlan(input?: Record<string, unknown>): Promise<NodeConversionPlan>;
+      nodeConvertRun(input?: Record<string, unknown>): Promise<{ job: NodeConversionJob; nodeHost: NodeHostState }>;
+      nodeConvertStatus(): Promise<NodeHostState & { jobs: NodeConversionJob[] }>;
+      nodeConvertUndo(input?: { snapshotId?: string }): Promise<NodeConversionUndoResult>;
+      nodeRemoteStatus(hostId: string): Promise<{ hostId: string; hostName: string; nodeHost: NodeHostState }>;
+      nodeRemoteControl(
+        hostId: string,
+        action: string,
+        params?: Record<string, unknown>,
+      ): Promise<{ hostId: string; hostName: string; action: string; nodeHost: NodeHostState }>;
       /** Each connected provider's plan and limits. `refresh` reads every provider again first. */
       providerUsage(options?: { refresh?: boolean }): Promise<ProviderUsage[]>;
       /** A read that nobody waited for has come in: ask again. */
@@ -2126,7 +2435,13 @@ export type Preferences = {
   autoSummarize?: number;
   /** Settings › Experimental › Proactive agent: the computer's switch (desktop/proactive.mjs). Each bot's own is `State.proactive`. Missing on an older computer. */
   proactive?: ProactiveSettings;
+  /** Task Board tasks that run at once on the computer, 1 to 16, when the person set it (desktop/task-limits.mjs). */
+  tasksMax?: number;
+  /** Task Board tasks that one bot runs at once, 1 to 8, when the person set it. */
+  tasksPerBot?: number;
 };
+/** The Task Board's limits in force, and each one's value without the person's setting (the environment's, else the default). Missing on an older computer. */
+export type TaskLimits = { tasksMax: number; tasksPerBot: number; defaults: { tasksMax: number; tasksPerBot: number } };
 export type ProactiveWatch = "runs" | "tasks" | "requests" | "context";
 /** The computer's switch for the Proactive agent. Off pauses every bot's agent without forgetting its settings. */
 export type ProactiveSettings = { enabled: boolean };
