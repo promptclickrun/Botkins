@@ -344,5 +344,40 @@ export function routinesApi({ workspace, handlers, bot, selection }) {
       await handlers.changeSchedule(chat.id, id, action);
       return { chatId: chat.id, chat: chat.title, id, action, ...(action === "delete" ? { removed: true } : { enabled: action === "resume" }) };
     },
+    // ── Event-based Workflows ──
+    "workflows.list": () => handlers.workflowsList(),
+    async "workflows.add"([input]) {
+      return await handlers.workflowCreate(input);
+    },
+    async "workflows.edit"([id, patch]) {
+      return await handlers.workflowUpdate(id, patch);
+    },
+    async "workflows.remove"([id]) {
+      const wf = (state().workflows ?? []).find((w) => w.id === id);
+      await handlers.workflowDelete(id);
+      return { id, name: wf?.name ?? id, removed: true };
+    },
+    async "workflows.pause"([id]) {
+      return await handlers.workflowPause(id);
+    },
+    async "workflows.resume"([id]) {
+      return await handlers.workflowResume(id);
+    },
+    async "workflows.run"([id, options]) {
+      return await handlers.workflowRun(id, options);
+    },
+    async "workflows.retry"([runId, fromNodeId]) {
+      return await handlers.workflowRetryRun(runId, fromNodeId);
+    },
+    async "workflows.approve"([runId, nodeId, decision, note]) {
+      return await handlers.workflowRespondApproval(runId, nodeId, decision, note);
+    },
+    async "workflows.cancel"([runId]) {
+      return await handlers.workflowCancelRun(runId);
+    },
+    "workflows.export": ([id]) => handlers.workflowExportText(id),
+    async "workflows.import"([raw, agentMap]) {
+      return await handlers.workflowImportText(raw, agentMap);
+    },
   };
 }

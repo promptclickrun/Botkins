@@ -5,7 +5,7 @@
 // headless one in the terminal host (`botkins serve`). A host without something says so with
 // `unavailable`, and the call fails with that sentence instead of a crash.
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { extname, join } from "node:path";
@@ -27,7 +27,7 @@ import { PROVIDER_USAGE, ProviderUsage } from "./providerusage.mjs";
 import { ARTIFACTS, SIDE_PANE } from "./sidepane.mjs";
 import { cloneProjectRepository } from "./project-clone.mjs";
 import { PROJECT_ARTIFACTS, PROJECT_ARTIFACT_CALLS } from "./projects.mjs";
-import { MCP_APP_METHODS, PI_PACKAGE_METHODS, REMOTE_METHODS } from "./link/methods.mjs";
+import { MCP_APP_METHODS, PI_PACKAGE_METHODS, REMOTE_METHODS, WORKFLOW_METHODS } from "./link/methods.mjs";
 import { chunk, fileDetails, openChatPath, publicFile, thumbnail } from "./artifact-files.mjs";
 import { REMOTE_HOSTS } from "./remotehosts.mjs";
 import { FILES, usageFile, wikiExportName, wikiFile } from "./phonefiles.mjs";
@@ -132,13 +132,15 @@ const CHAT_TITLE_REGENERATION = "chat-title-regeneration-v1";
 const MARK_CHATS_READ = "mark-chats-read-v1";
 /** One helper or background command of a turn can be stopped alone (`stopHelper`); each item says so with `stoppable`. */
 const STOP_HELPER = "stop-helper-v1";
-export const CAPABILITIES = ["main-chat-v1", "message-reactions-v1", "client-message-id-v1", "voice-turns-v1", "voice-history-v1", "quiet-replies-v1", "models-v2", "fast-mode-v1", LOOKS_CAPABILITY, ...headCapabilities, BOT_VOICE, ROUTINE_DELIVERY, "routine-no-output-v1", ROUTINE_OWNER, ROUTINE_SCRIPTS, ROUTINE_MODELS, ROUTINE_SILENT, ROUTINE_NOTIFY_TARGETS, PROACTIVE, PROACTIVE_LEARNING, PROACTIVE_TEAM, BOARD_MENTIONS, PROVIDER_USAGE, SIDE_PANE, REMOTE_HOSTS, FILES, FOLDERS, ARTIFACTS, PROJECT_ARTIFACTS, "project-folders-v1", "project-mode-v1", "project-clone-v1", "secure-input-v1", "turn-timeline-v1", PLUGINS, PLUGIN_STARTS, PROVIDER_SIGNIN, SPACES, AGENT_TEMPLATES, "agent-template-bundles-v1", COMPOSIO_APPS, MARKET_REFRESH, MCP_APPS, "pi-packages-v1", "pi-packages-remove-v1", "skill-upload-v1", "skills-catalog-v1", "skills-featured-v1", SCRIPT_COMMANDS_CAPABILITY, MCP_CATALOG_CAPABILITY, CHAT_TITLE_REGENERATION, MARK_CHATS_READ, STOP_HELPER, KEYED_PROVIDERS];
+/** Event-based Workflows in the Routines area (`workflows-v1`). */
+export const WORKFLOWS = "workflows-v1";
+export const CAPABILITIES = ["main-chat-v1", "message-reactions-v1", "client-message-id-v1", "voice-turns-v1", "voice-history-v1", "quiet-replies-v1", "models-v2", "fast-mode-v1", LOOKS_CAPABILITY, ...headCapabilities, BOT_VOICE, ROUTINE_DELIVERY, "routine-no-output-v1", ROUTINE_OWNER, ROUTINE_SCRIPTS, ROUTINE_MODELS, ROUTINE_SILENT, ROUTINE_NOTIFY_TARGETS, WORKFLOWS, PROACTIVE, PROACTIVE_LEARNING, PROACTIVE_TEAM, BOARD_MENTIONS, PROVIDER_USAGE, SIDE_PANE, REMOTE_HOSTS, FILES, FOLDERS, ARTIFACTS, PROJECT_ARTIFACTS, "project-folders-v1", "project-mode-v1", "project-clone-v1", "secure-input-v1", "turn-timeline-v1", PLUGINS, PLUGIN_STARTS, PROVIDER_SIGNIN, SPACES, AGENT_TEMPLATES, "agent-template-bundles-v1", COMPOSIO_APPS, MARKET_REFRESH, MCP_APPS, "pi-packages-v1", "pi-packages-remove-v1", "skill-upload-v1", "skills-catalog-v1", "skills-featured-v1", SCRIPT_COMMANDS_CAPABILITY, MCP_CATALOG_CAPABILITY, CHAT_TITLE_REGENERATION, MARK_CHATS_READ, STOP_HELPER, KEYED_PROVIDERS];
 /**
  * What a paired device is told this app supports. A feature whose calls the link does not carry
  * (desktop/link/methods.mjs) is left out, so a device never asks for what it cannot reach.
  */
 export const linkCapabilities = (methods = REMOTE_METHODS) =>
-  CAPABILITIES.filter((name) => (name !== "agent-template-bundles-v1" || (methods.has("addBot") && methods.has("agents.template"))) && (name !== "message-reactions-v1" || methods.has("reactToMessage")) && (!["voice-history-v1", "voice-turns-v1"].includes(name) || methods.has("recordVoiceLine")) && (name !== "project-folders-v1" || (methods.has("editProjectFolder") && methods.has("setChatFolder") && methods.has("chatProjectFolder"))) && (name !== "project-clone-v1" || methods.has("cloneProjectRepository")) && (name !== "project-mode-v1" || methods.has("updateProject")) && (name !== PROJECT_ARTIFACTS || PROJECT_ARTIFACT_CALLS.every((call) => methods.has(call))) && (name !== SPACES || SPACE_CALLS.every((call) => methods.has(call))) && (name !== MARKET_REFRESH || methods.has("plugins.refresh")) && (name !== "pi-packages-v1" || PI_PACKAGE_METHODS.every((call) => methods.has(call))) && (name !== "pi-packages-remove-v1" || methods.has("piPackages.remove")) && (name !== "skill-upload-v1" || methods.has("skills.upload")) && (name !== "skills-catalog-v1" || ["search", "preview", "install"].every(key => methods.has("skillsCatalog." + key))) && (name !== "skills-featured-v1" || methods.has("skillsCatalog.featured")) && (name !== SCRIPT_COMMANDS_CAPABILITY || ["skills.saveScript", "skills.readScript"].every((call) => methods.has(call))) && (name !== MCP_CATALOG_CAPABILITY || MCP_CATALOG_METHODS.every((call) => methods.has(call))) && (name !== MCP_APPS || MCP_APP_METHODS.every((call) => methods.has(call))) && (name !== CHAT_TITLE_REGENERATION || methods.has("regenerateChatTitle")) && (name !== MARK_CHATS_READ || methods.has("markChatsRead")) && (name !== STOP_HELPER || methods.has("stopHelper")));
+  CAPABILITIES.filter((name) => (name !== "agent-template-bundles-v1" || (methods.has("addBot") && methods.has("agents.template"))) && (name !== "message-reactions-v1" || methods.has("reactToMessage")) && (!["voice-history-v1", "voice-turns-v1"].includes(name) || methods.has("recordVoiceLine")) && (name !== "project-folders-v1" || (methods.has("editProjectFolder") && methods.has("setChatFolder") && methods.has("chatProjectFolder"))) && (name !== "project-clone-v1" || methods.has("cloneProjectRepository")) && (name !== "project-mode-v1" || methods.has("updateProject")) && (name !== PROJECT_ARTIFACTS || PROJECT_ARTIFACT_CALLS.every((call) => methods.has(call))) && (name !== SPACES || SPACE_CALLS.every((call) => methods.has(call))) && (name !== MARKET_REFRESH || methods.has("plugins.refresh")) && (name !== "pi-packages-v1" || PI_PACKAGE_METHODS.every((call) => methods.has(call))) && (name !== "pi-packages-remove-v1" || methods.has("piPackages.remove")) && (name !== "skill-upload-v1" || methods.has("skills.upload")) && (name !== "skills-catalog-v1" || ["search", "preview", "install"].every(key => methods.has("skillsCatalog." + key))) && (name !== "skills-featured-v1" || methods.has("skillsCatalog.featured")) && (name !== SCRIPT_COMMANDS_CAPABILITY || ["skills.saveScript", "skills.readScript"].every((call) => methods.has(call))) && (name !== MCP_CATALOG_CAPABILITY || MCP_CATALOG_METHODS.every((call) => methods.has(call))) && (name !== MCP_APPS || MCP_APP_METHODS.every((call) => methods.has(call))) && (name !== CHAT_TITLE_REGENERATION || methods.has("regenerateChatTitle")) && (name !== MARK_CHATS_READ || methods.has("markChatsRead")) && (name !== STOP_HELPER || methods.has("stopHelper")) && (name !== WORKFLOWS || WORKFLOW_METHODS.every((call) => methods.has(call))));
 /** The calls of spaces (docs/spaces.md). The capability is named to a device only when the link carries them all. */
 export const SPACE_CALLS = ["read", "create", "rename", "remove", "setProject", "setPanelProject", "newPanel", "ask", "movePanel", "patchState", "note", "removeNote"].map((name) => "spaces." + name);
 
@@ -794,6 +796,42 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
     moveTask: (id, status) => workspace.tasks.move(id, status),
     startTask: (id) => workspace.tasks.start(id),
     deleteTask: (id) => workspace.tasks.remove(id),
+    // Event-based Workflows (desktop/workflows.mjs)
+    workflowsList: () => ({ workflows: workspace.workflows.list(), runs: workspace.workflows.listRuns(null, 100) }),
+    workflowCreate: (data) => workspace.workflows.create(data),
+    workflowUpdate: (id, patch) => workspace.workflows.update(id, patch),
+    workflowDelete: (id) => workspace.workflows.remove(id),
+    workflowPause: (id) => workspace.workflows.pause(id),
+    workflowResume: (id) => workspace.workflows.resume(id),
+    workflowRun: (id, options) => workspace.workflows.runManual(id, options ?? {}),
+    workflowRetryRun: (runId, nodeId) => workspace.workflows.retryRun(runId, nodeId ?? null),
+    workflowRespondApproval: (runId, nodeId, decision, note) => workspace.workflows.respondApproval(runId, nodeId ?? null, decision, note ?? ""),
+    workflowCancelRun: (runId) => workspace.workflows.cancelRun(runId),
+    workflowRotateWebhookSecret: (workflowId, nodeId) => workspace.workflows.rotateWebhookSecret(workflowId, nodeId),
+    workflowExportText: (id) => JSON.stringify(workspace.workflows.exportJson(id, host.version), null, 2),
+    workflowImportText: (raw, agentMap) => workspace.workflows.importJson(raw, agentMap ?? {}),
+    workflowExport: async (id) => {
+      const doc = workspace.workflows.exportJson(id, host.version);
+      const safeName = String(doc.workflow.name || "workflow").replace(/[\\/:*?"<>|]+/g, " ").trim() || "workflow";
+      const filePath = await host.dialogs.save({
+        title: "Export workflow",
+        defaultPath: safeName + ".botkins-workflow.json",
+        filters: [{ name: "Botkins Workflow", extensions: ["json"] }],
+      });
+      if (!filePath) return false;
+      await writeFile(filePath, JSON.stringify(doc, null, 2) + "\n", "utf8");
+      return true;
+    },
+    workflowImport: async () => {
+      const paths = await host.dialogs.open({
+        title: "Import workflow",
+        properties: ["openFile"],
+        filters: [{ name: "Botkins Workflow", extensions: ["json"] }],
+      });
+      if (!paths?.[0]) return null;
+      const text = readFileSync(paths[0], "utf8");
+      return workspace.workflows.importJson(text);
+    },
     // Projects and Project Changes (desktop/projects.mjs)
     // Folders for a window that can't show the system's chooser (desktop/folders.mjs). A folder
     // is taken only when the browser could have shown it.
@@ -1312,6 +1350,7 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
     // LinkHost only passes names in REMOTE_METHODS. What a paired device sends is checked and,
     // for a team member, marked as theirs on its way to the handlers (desktop/device-call.mjs).
     call: deviceCall({ workspace, handlers, folders }),
+    webhook: (routeId, req) => workspace.workflows.handleWebhook(routeId, req),
     subscribe: (listener) => {
       changeListeners.add(listener);
       return () => changeListeners.delete(listener);
@@ -1478,6 +1517,11 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
       workspace.tasks.tick();
     } catch (error) {
       console.error("Task dispatcher:", error.message);
+    }
+    try {
+      workspace.workflows.tick();
+    } catch (error) {
+      console.error("Workflows:", error.message);
     }
     return workspace.panels
       .tick()
