@@ -698,27 +698,32 @@ export class Integrations {
       throw new Error("The agent skills folder cannot be a symbolic link.");
     return join(root, createHash("sha256").update(bot.id).digest("hex"));
   }
+  checkBotCatalogSkill(bot, files, meta) {
+    if (!SKILL_NAME.test(meta.name) || meta.name === COMMAND_SKILL || Object.hasOwn(this.skillState.scripts ?? {}, meta.name) || bot.bundle?.skills?.some((s) => s.name === meta.name))
+      throw new Error("This bot already has a skill or command named " + meta.name + ".");
+    const other = bot.catalogSkills?.find((s) => s.name === meta.name && s.catalog !== meta.catalog);
+    if (other) throw new Error("This bot already has " + meta.name + " from " + other.catalog + ".");
+    if (files.size > 512) throw new Error("Too many files in this skill.");
+    let size = 0;
+    for (const [path, data] of files) {
+      size += data.length;
+      if (size > 12 * 1024 * 1024) throw new Error("This skill is larger than 12 MiB.");
+      // The same portable paths as every skill import; a path that leaves the folder is refused.
+      if (path.split("/").some((part) => !part || part === "." || part === ".." || /[\\:<>"|?*\x00-\x1f]/.test(part))) throw new Error("Unsafe skill file path.");
+    }
+  }
   /**
    * Installs a marketplace skill's pinned files for one bot only. The same listing installed again
    * (an update) replaces that bot's copy. `meta` is { catalog, name, version, commit, files } and is
    * kept on the bot as `catalogSkills`.
    */
   installBotCatalogSkill(bot, files, executable, meta) {
-    if (!SKILL_NAME.test(meta.name) || meta.name === COMMAND_SKILL || Object.hasOwn(this.skillState.scripts ?? {}, meta.name) || bot.bundle?.skills?.some((s) => s.name === meta.name))
-      throw new Error("This bot already has a skill or command named " + meta.name + ".");
-    const other = bot.catalogSkills?.find((s) => s.name === meta.name && s.catalog !== meta.catalog);
-    if (other) throw new Error("This bot already has " + meta.name + " from " + other.catalog + ".");
+    this.checkBotCatalogSkill(bot, files, meta);
     const root = this.botCatalogDirectory(bot);
     mkdirSync(root, { recursive: true, mode: 0o700 });
     const stage = mkdtempSync(join(root, ".install-"));
     try {
-      let size = 0;
-      if (files.size > 512) throw new Error("Too many files in this skill.");
       for (const [path, data] of files) {
-        size += data.length;
-        if (size > 12 * 1024 * 1024) throw new Error("This skill is larger than 12 MiB.");
-        // The same portable paths as every skill import; a path that leaves the folder is refused.
-        if (path.split("/").some((part) => !part || part === "." || part === ".." || /[\\:<>"|?*\x00-\x1f]/.test(part))) throw new Error("Unsafe skill file path.");
         const target = join(stage, path);
         mkdirSync(dirname(target), { recursive: true });
         writeFileSync(target, data, { flag: "wx", mode: executable.has(path) ? 0o755 : 0o644 });

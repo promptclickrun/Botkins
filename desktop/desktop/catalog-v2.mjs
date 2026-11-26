@@ -11,6 +11,7 @@ import { randomUUID } from "node:crypto";
 import { existsSync, statSync } from "node:fs";
 import { basename, delimiter, join } from "node:path";
 import { AGENT_CATEGORIES } from "./plugin-catalog.mjs";
+import { slug } from "./link/skill-format.mjs";
 import { REFERENCE, storedBundle } from "./link/template-bundle.mjs";
 import { MARKET_V2_METHODS } from "./link/methods.mjs";
 
@@ -383,13 +384,15 @@ export class MarketV2 {
     });
   }
   /**
-   * Gives plugins, at the revisions reviewed, to `bots`: installs one that isn't installed, and
-   * widens the bots of one that is only after verifying its installed copy is intact and still at
-   * the reviewed revision. Rolls back earlier plugin changes if a later one fails.
+   * Gives plugins, at the revisions reviewed, to `bots`, returning `{ plugins, rollback }`.
+   * Rolls back earlier plugin changes automatically if a later plugin fails.
    */
-  async givePlugins(plugins, bots) {
+  async applyPlugins(plugins, bots) {
     const done = [];
     const rollback = [];
+    const undoAll = async () => {
+      while (rollback.length) await rollback.pop()().catch(() => {});
+    };
     const run = typeof this.plugins.serialize === "function" ? (fn) => this.plugins.serialize(fn) : (fn) => Promise.resolve().then(fn);
     try {
       for (const { id, revision } of plugins) {
@@ -416,11 +419,48 @@ export class MarketV2 {
         }
         done.push(id);
       }
-      return done;
+      return { plugins: done, rollback: undoAll };
     } catch (error) {
-      for (const undo of rollback.reverse()) await undo().catch(() => {});
+      await undoAll();
       throw error;
     }
+  }
+  /**
+   * Gives plugins, at the revisions reviewed, to `bots`: installs one that isn't installed, and
+   * widens the bots of one that is only after verifying its installed copy is intact and still at
+   * the reviewed revision. Rolls back earlier plugin changes if a later one fails.
+   */
+  async givePlugins(plugins, bots) {
+    return (await this.applyPlugins(plugins, bots)).plugins;
+  }
+  /**
+   * Captures which targets did not already have `name` before a pack skill commits, returning a
+   * rollback function that removes only newly installed copies without touching pre-existing ones.
+   */
+  skillRollback(name, bots) {
+    if (bots === "all") {
+      const id = slug(name);
+      const existed = this.ws.integrations.skills().some((s) => s.origin === "botkins" && (s.name === name || slug(s.name) === id));
+      return (installedName) => {
+        if (existed) return;
+        const target = installedName ?? name;
+        const hit = this.ws.integrations.skills().find((s) => s.origin === "botkins" && (s.name === target || slug(s.name) === id));
+        if (hit) {
+          try {
+            this.ws.integrations.removeSkill(hit.name);
+          } catch {}
+        }
+      };
+    }
+    const freshBots = bots.filter((id) => !this.ws.bot(id).catalogSkills?.some((s) => s.name === name));
+    return () => {
+      for (const id of freshBots) {
+        try {
+          const bot = this.ws.bot(id);
+          if (bot.catalogSkills?.some((s) => s.name === name)) this.ws.integrations.removeBotCatalogSkill(bot, name);
+        } catch {}
+      }
+    };
   }
   /** Installs every skill and plugin of a reviewed pack for `bots` ("all" or bot ids). Shared skills that would replace one need `replace`. */
   async packInstall(token, options = {}) {
@@ -430,13 +470,38 @@ export class MarketV2 {
     const bots = this.botScope(options.bots);
     const replace = options.replace ?? [];
     await this.preflightPlugins(review.plugins);
-    const added = [];
+    const prepared = [];
+    const conflicts = [];
     for (const skill of review.skills) {
-      const result = await this.skills.install(skill, replace, { bots });
-      if (result.conflicts?.length) return { added, conflicts: result.conflicts, plugins: [] };
-      added.push(...result.added);
+      const plan = await this.skills.prepare(skill, replace, { bots });
+      if (plan.conflicts?.length) conflicts.push(...plan.conflicts);
+      else prepared.push(plan);
     }
-    const plugins = await this.givePlugins(review.plugins, bots);
+    if (conflicts.length) return { added: [], conflicts: [...new Set(conflicts)], plugins: [] };
+    const { plugins, rollback: rollbackPlugins } = await this.applyPlugins(review.plugins, bots);
+    const added = [];
+    const rollbackSkills = [];
+    try {
+      for (const plan of prepared) {
+        let installedName = plan.name;
+        const undo = this.skillRollback(plan.name, bots);
+        rollbackSkills.push(() => undo(installedName));
+        const result = plan.commit();
+        if (result.conflicts?.length) {
+          while (rollbackSkills.length) rollbackSkills.pop()();
+          await rollbackPlugins();
+          return { added: [], conflicts: result.conflicts, plugins: [] };
+        }
+        if (result.added.length) {
+          installedName = result.added[0];
+          added.push(...result.added);
+        }
+      }
+    } catch (error) {
+      while (rollbackSkills.length) rollbackSkills.pop()();
+      await rollbackPlugins();
+      throw error;
+    }
     this.reviews.delete(token);
     return { added, conflicts: [], plugins };
   }

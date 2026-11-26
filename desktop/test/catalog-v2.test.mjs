@@ -359,3 +359,104 @@ test("post-preview plugin drift, tampered copies, and mid-install failures never
   );
   assert.equal(ws.plugins.records.find((r) => r.preview.id === pluginId), undefined, "earlier newly installed plugin was rolled back");
 });
+
+test("pack install leaves no newly installed skills and preserves pre-existing ones when plugin revision changes between preflight and commit", async (t) => {
+  const { ws, root, id, v2 } = await setup(t);
+  const pluginId = "timer@" + id;
+  const revA = (await ws.plugins.preview(pluginId)).revision;
+  await ws.plugins.install(pluginId, { revision: revA, bots: ["pip"] });
+
+  // Pre-install speaker-notes on scout (with distinct content) and in shared skills, while visual-presentation is absent.
+  writeFileSync(join(root, "skills", "speaker-notes", "SKILL.md"), skillMd("speaker-notes", "Original pre-existing notes."));
+  await reread(ws, id);
+  const preBotReview = await v2.skillPreview("speaker-notes@" + id);
+  await v2.skillInstall(preBotReview.token, { bots: ["scout"] });
+  const preSharedReview = await v2.skillPreview("speaker-notes@" + id);
+  await v2.skillInstall(preSharedReview.token, { bots: "all" });
+
+  // Update speaker-notes in the catalog so a pack install would also update it, while plugin still matches revA at preview/preflight.
+  writeFileSync(join(root, "skills", "speaker-notes", "SKILL.md"), skillMd("speaker-notes", "Updated pack notes."));
+  await reread(ws, id);
+
+  const botPackReview = await v2.packPreview("presentation-studio@" + id);
+  assert.equal(botPackReview.plugins[0].installed.matchesRevision, true);
+
+  // Synthetic race: plugin revision changes after preflightPlugins passes, during skill preparation before commit.
+  const realPrepare = v2.skills.prepare;
+  let drifted = false;
+  v2.skills.prepare = async (...args) => {
+    const plan = await realPrepare(...args);
+    if (!drifted) {
+      drifted = true;
+      writeFileSync(join(root, "plugins", "timer", "plugin.json"), JSON.stringify({ name: "timer", version: "1.0.0", description: "Drifted mid-pack (bot)" }));
+      await reread(ws, id);
+      const revB = (await ws.plugins.preview(pluginId)).revision;
+      assert.notEqual(revB, revA);
+      await ws.plugins.update(pluginId, { revision: revB });
+    }
+    return plan;
+  };
+
+  await assert.rejects(
+    v2.packInstall(botPackReview.token, { bots: ["scout"], commit: botPackReview.commit }),
+    /already installed at revision .* not the reviewed revision/,
+  );
+  v2.skills.prepare = realPrepare;
+
+  const scout = ws.bot("scout");
+  assert.deepEqual(scout.catalogSkills.map((s) => s.name), ["speaker-notes"], "no newly installed bot skill remains and pre-existing skill stays");
+  assert.equal(existsSync(join(ws.integrations.botCatalogDirectory(scout), "visual-presentation")), false, "new bot skill folder was not left on disk");
+  assert.match(readFileSync(join(ws.integrations.botCatalogDirectory(scout), "speaker-notes", "SKILL.md"), "utf8"), /Original pre-existing notes\./, "pre-existing bot skill was neither removed nor overwritten");
+  assert.deepEqual(ws.plugins.records.find((r) => r.preview.id === pluginId).bots, ["pip"], "plugin scope was not widened");
+
+  // Same race for a shared ("all") pack install: newly installed shared skills are absent and pre-existing shared skills remain untouched.
+  const revB = ws.plugins.records.find((r) => r.preview.id === pluginId).revision;
+  const sharedPackReview = await v2.packPreview("presentation-studio@" + id);
+  assert.equal(sharedPackReview.plugins[0].installed.matchesRevision, true);
+
+  let driftedShared = false;
+  v2.skills.prepare = async (...args) => {
+    const plan = await realPrepare(...args);
+    if (!driftedShared) {
+      driftedShared = true;
+      writeFileSync(join(root, "plugins", "timer", "plugin.json"), JSON.stringify({ name: "timer", version: "1.0.0", description: "Drifted mid-pack (shared)" }));
+      await reread(ws, id);
+      const revC = (await ws.plugins.preview(pluginId)).revision;
+      assert.notEqual(revC, revB);
+      await ws.plugins.update(pluginId, { revision: revC });
+    }
+    return plan;
+  };
+
+  await assert.rejects(
+    v2.packInstall(sharedPackReview.token, { bots: "all", commit: sharedPackReview.commit }),
+    /already installed at revision .* not the reviewed revision/,
+  );
+  v2.skills.prepare = realPrepare;
+
+  assert.equal(ws.integrations.skills().some((s) => s.name === "visual-presentation"), false, "no newly installed shared skill remains");
+  assert.equal(ws.integrations.skillState.listings["visual-presentation"], undefined);
+  assert.equal(existsSync(join(ws.integrations.skillsDir, "visual-presentation")), false);
+  assert.equal(ws.integrations.skills().some((s) => s.name === "speaker-notes"), true, "pre-existing shared skill stays installed");
+  assert.match(readFileSync(join(ws.integrations.ownSkillDir("speaker-notes"), "SKILL.md"), "utf8"), /Original pre-existing notes\./, "pre-existing shared skill was neither removed nor overwritten");
+  assert.deepEqual(ws.plugins.records.find((r) => r.preview.id === pluginId).bots, ["pip"], "plugin scope was not widened to all");
+
+  // If a later skill fails during commit after plugins succeed, newly installed skills and plugin widening both roll back while pre-existing skills stay.
+  const commitFailReview = await v2.packPreview("presentation-studio@" + id);
+  let preparedCount = 0;
+  v2.skills.prepare = async (...args) => {
+    const plan = await realPrepare(...args);
+    preparedCount += 1;
+    if (preparedCount === 2) return { ...plan, commit: () => { throw new Error("disk full"); } };
+    return plan;
+  };
+  await assert.rejects(
+    v2.packInstall(commitFailReview.token, { bots: ["scout"], commit: commitFailReview.commit }),
+    /disk full/,
+  );
+  v2.skills.prepare = realPrepare;
+
+  assert.deepEqual(ws.bot("scout").catalogSkills.map((s) => s.name), ["speaker-notes"], "newly committed skill rolled back and pre-existing skill preserved");
+  assert.equal(existsSync(join(ws.integrations.botCatalogDirectory(ws.bot("scout")), "visual-presentation")), false);
+  assert.deepEqual(ws.plugins.records.find((r) => r.preview.id === pluginId).bots, ["pip"], "widened plugin rolled back on commit failure");
+});
