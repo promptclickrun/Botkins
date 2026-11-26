@@ -13,6 +13,10 @@ export class PendingRequests {
     return this.items.length;
   }
 
+  nextExpiry(): number {
+    return this.items.length ? this.items[0]!.at + PENDING_LIFE : Infinity;
+  }
+
   add(ids: Uint8Array, body: Uint8Array): PendingRequest | null {
     if (body.length < 5 || body[0] !== REQUEST || this.length >= MAX_PENDING_REQUESTS) return null;
     const total = this.items.reduce((size, item) => size + item.body.length, body.length);

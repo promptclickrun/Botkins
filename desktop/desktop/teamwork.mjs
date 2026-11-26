@@ -51,7 +51,7 @@ export class Teamwork {
   brief(bot, chat) {
     const team = this.roster(bot, chat);
     const remote = remoteTeamworkAllowed(this.ws, bot, chat, this.ws.active.get(chat.id)?.run, this.ws.active.get(chat.id))
-      ? "\nUse list_host_teammates to find teammates on the owner’s other computers, and use list_node_hosts and list_node_files to inspect folders shared by the owner’s node hosts. Their computer handles approval." : "";
+      ? "\nUse list_host_teammates to find teammates on the owner’s other computers, and use list_node_hosts with node_* tools (list_node_files, node_read_file, node_write_file, node_mkdir, node_move_file, node_delete_file, node_stat_file, node_search_files, node_exec, node_which, node_screen_info, node_screen_capture, node_screen_input, node_notify) to work on the owner’s node hosts. The node enforces its own policy and approval." : "";
     if (!team.length) return remote;
     return (
       "\n\n## Your team\nYou're " + bot.name + ". Your teammates:\n" + team.map(line).join("\n") +
@@ -116,6 +116,206 @@ export class Teamwork {
           additionalProperties: false,
         },
         handler: (args) => this.listNodeFiles(chat, bot, run, task, args ?? {}),
+      }),
+      defineTool("node_read_file", {
+        description: "Read a file on a node host (inside a shared project folder, or anywhere when whole-computer scope is enabled on that node with project='@computer').",
+        parameters: {
+          type: "object",
+          properties: {
+            host: { type: "string", description: "Node host ID from list_node_hosts." },
+            project: { type: "string", description: "Shared project ID, or '@computer' if whole-computer scope is enabled." },
+            path: { type: "string", description: "Relative path inside the project, or absolute path for '@computer'." },
+            encoding: { type: "string", enum: ["utf8", "base64"], description: "Output encoding (default utf8)." },
+            offset: { type: "number", description: "Optional byte offset." },
+            maxBytes: { type: "number", description: "Optional maximum bytes to read (up to 262144)." },
+            truncate: { type: "boolean", description: "Allow reading a prefix of a larger file." },
+          },
+          required: ["host", "path"],
+          additionalProperties: false,
+        },
+        handler: (args) => this.runNodeOperation(chat, bot, run, task, "fs.read", args ?? {}),
+      }),
+      defineTool("node_write_file", {
+        description: "Create or overwrite a file on a node host (max 256 KiB). Overwriting an existing file requires overwrite: true and a separate destructive grant.",
+        parameters: {
+          type: "object",
+          properties: {
+            host: { type: "string", description: "Node host ID from list_node_hosts." },
+            project: { type: "string", description: "Shared project ID, or '@computer' if whole-computer scope is enabled." },
+            path: { type: "string", description: "Target file path." },
+            content: { type: "string", description: "File contents (utf8 or base64)." },
+            encoding: { type: "string", enum: ["utf8", "base64"], description: "Content encoding (default utf8)." },
+            overwrite: { type: "boolean", description: "Must be true to overwrite an existing file." },
+            createParents: { type: "boolean", description: "Create missing parent folders inside scope." },
+          },
+          required: ["host", "path", "content"],
+          additionalProperties: false,
+        },
+        handler: (args) => this.runNodeOperation(chat, bot, run, task, "fs.write", args ?? {}),
+      }),
+      defineTool("node_mkdir", {
+        description: "Create a directory on a node host.",
+        parameters: {
+          type: "object",
+          properties: {
+            host: { type: "string", description: "Node host ID from list_node_hosts." },
+            project: { type: "string", description: "Shared project ID, or '@computer' if whole-computer scope is enabled." },
+            path: { type: "string", description: "Directory path to create." },
+            recursive: { type: "boolean", description: "Create parent directories as needed (default true)." },
+          },
+          required: ["host", "path"],
+          additionalProperties: false,
+        },
+        handler: (args) => this.runNodeOperation(chat, bot, run, task, "fs.mkdir", args ?? {}),
+      }),
+      defineTool("node_move_file", {
+        description: "Move or rename a file or folder on a node host.",
+        parameters: {
+          type: "object",
+          properties: {
+            host: { type: "string", description: "Node host ID from list_node_hosts." },
+            project: { type: "string", description: "Shared project ID, or '@computer' if whole-computer scope is enabled." },
+            from: { type: "string", description: "Source path." },
+            to: { type: "string", description: "Destination path." },
+            overwrite: { type: "boolean", description: "Must be true to overwrite an existing destination." },
+          },
+          required: ["host", "from", "to"],
+          additionalProperties: false,
+        },
+        handler: (args) => this.runNodeOperation(chat, bot, run, task, "fs.move", args ?? {}),
+      }),
+      defineTool("node_delete_file", {
+        description: "Delete a file or directory on a node host (always requires its own destructive grant).",
+        parameters: {
+          type: "object",
+          properties: {
+            host: { type: "string", description: "Node host ID from list_node_hosts." },
+            project: { type: "string", description: "Shared project ID, or '@computer' if whole-computer scope is enabled." },
+            path: { type: "string", description: "Path to delete." },
+            recursive: { type: "boolean", description: "Required to delete a non-empty directory." },
+          },
+          required: ["host", "path"],
+          additionalProperties: false,
+        },
+        handler: (args) => this.runNodeOperation(chat, bot, run, task, "fs.delete", args ?? {}),
+      }),
+      defineTool("node_stat_file", {
+        description: "Inspect metadata (exists, type, size, mtime, mode) of a path on a node host.",
+        parameters: {
+          type: "object",
+          properties: {
+            host: { type: "string", description: "Node host ID from list_node_hosts." },
+            project: { type: "string", description: "Shared project ID, or '@computer' if whole-computer scope is enabled." },
+            path: { type: "string", description: "Path to inspect." },
+          },
+          required: ["host", "path"],
+          additionalProperties: false,
+        },
+        handler: (args) => this.runNodeOperation(chat, bot, run, task, "fs.stat", args ?? {}),
+      }),
+      defineTool("node_search_files", {
+        description: "Search for files by filename pattern or text query on a node host.",
+        parameters: {
+          type: "object",
+          properties: {
+            host: { type: "string", description: "Node host ID from list_node_hosts." },
+            project: { type: "string", description: "Shared project ID, or '@computer' if whole-computer scope is enabled." },
+            path: { type: "string", description: "Optional subfolder or root directory to search." },
+            pattern: { type: "string", description: "Optional filename glob pattern (e.g. '*.ts')." },
+            query: { type: "string", description: "Optional case-insensitive text query inside files." },
+            limit: { type: "number", description: "Maximum results (up to 200)." },
+            maxDepth: { type: "number", description: "Maximum directory depth (up to 12)." },
+          },
+          required: ["host"],
+          additionalProperties: false,
+        },
+        handler: (args) => this.runNodeOperation(chat, bot, run, task, "fs.search", args ?? {}),
+      }),
+      defineTool("node_exec", {
+        description: "Run a command on a node host (gated by the node's exec policy and exact-request approval binding). Prefer argv array over a shell string.",
+        parameters: {
+          type: "object",
+          properties: {
+            host: { type: "string", description: "Node host ID from list_node_hosts." },
+            argv: { type: "array", items: { type: "string" }, description: "Command and arguments as an array (e.g. ['uname', '-a'])." },
+            command: { type: "string", description: "Command string (simple commands run without a shell; shell metacharacters require full mode)." },
+            project: { type: "string", description: "Optional shared project ID to run inside." },
+            cwd: { type: "string", description: "Optional working directory (relative to project if project is given, otherwise absolute)." },
+            env: { type: "object", additionalProperties: { type: "string" }, description: "Optional safe environment variable overrides." },
+            timeoutMs: { type: "number", description: "Optional timeout in milliseconds (default 30000, max 300000)." },
+          },
+          required: ["host"],
+          additionalProperties: false,
+        },
+        handler: (args) => this.runNodeOperation(chat, bot, run, task, "system.run", args ?? {}),
+      }),
+      defineTool("node_which", {
+        description: "Locate executable paths on a node host's PATH.",
+        parameters: {
+          type: "object",
+          properties: {
+            host: { type: "string", description: "Node host ID from list_node_hosts." },
+            names: { type: "array", items: { type: "string" }, description: "Executable names to look up (e.g. ['git', 'node'])." },
+          },
+          required: ["host", "names"],
+          additionalProperties: false,
+        },
+        handler: (args) => this.runNodeOperation(chat, bot, run, task, "system.which", args ?? {}),
+      }),
+      defineTool("node_screen_info", {
+        description: "Inspect available displays and screen/accessibility permission status on a node host.",
+        parameters: {
+          type: "object",
+          properties: {
+            host: { type: "string", description: "Node host ID from list_node_hosts." },
+          },
+          required: ["host"],
+          additionalProperties: false,
+        },
+        handler: (args) => this.runNodeOperation(chat, bot, run, task, "screen.info", args ?? {}),
+      }),
+      defineTool("node_screen_capture", {
+        description: "Capture a JPEG screenshot of a display on a node host.",
+        parameters: {
+          type: "object",
+          properties: {
+            host: { type: "string", description: "Node host ID from list_node_hosts." },
+            display: { type: "string", description: "Optional display ID from node_screen_info." },
+            maxWidth: { type: "number", description: "Optional max width in pixels (320-1920, default 1280)." },
+            quality: { type: "number", description: "Optional JPEG quality (25-85, default 65)." },
+          },
+          required: ["host"],
+          additionalProperties: false,
+        },
+        handler: (args) => this.runNodeOperation(chat, bot, run, task, "screen.capture", args ?? {}),
+      }),
+      defineTool("node_screen_input", {
+        description: "Send mouse, scroll, or keyboard input events to a display on a node host.",
+        parameters: {
+          type: "object",
+          properties: {
+            host: { type: "string", description: "Node host ID from list_node_hosts." },
+            display: { type: "string", description: "Optional display ID from node_screen_info." },
+            events: { type: "array", items: { type: "object" }, description: "Array of screen input events (move, click, doubleClick, rightClick, down, up, scroll, text, key)." },
+          },
+          required: ["host", "events"],
+          additionalProperties: false,
+        },
+        handler: (args) => this.runNodeOperation(chat, bot, run, task, "screen.input", args ?? {}),
+      }),
+      defineTool("node_notify", {
+        description: "Show a desktop notification on a node host.",
+        parameters: {
+          type: "object",
+          properties: {
+            host: { type: "string", description: "Node host ID from list_node_hosts." },
+            title: { type: "string", description: "Notification title." },
+            body: { type: "string", description: "Optional notification message body." },
+          },
+          required: ["host", "title"],
+          additionalProperties: false,
+        },
+        handler: (args) => this.runNodeOperation(chat, bot, run, task, "node.notify", args ?? {}),
       })] : []),
       defineTool("ask_teammate", {
         description:
@@ -258,6 +458,67 @@ export class Teamwork {
       entry.status = task.stopped || task.ended ? "stopped" : "failed";
       entry.error = String(error.message).slice(0, 600);
       throw new Error(discovered.host.name + " couldn't list files: " + entry.error);
+    } finally {
+      entry.finished = Date.now();
+      delete entry.intent;
+      this.ws.notify();
+    }
+  }
+  async runNodeOperation(chat, bot, run, task, operation, args = {}) {
+    if (!run || task.stopped || this.ws.closing || this.ws.active.get(chat.id) !== task)
+      throw new Error("This turn is no longer active");
+    requireRemoteTurn(this.ws, bot, chat, run, task);
+    const { host, ...rest } = args;
+    const hostId = typeof host === "string" ? host.trim() : "";
+    if (!hostId) throw new Error("Choose a node host ID from list_node_hosts.");
+    const discovered = await peerCapabilities(this.ws.teamworkPeers, hostId);
+    requireRemoteTurn(this.ws, bot, chat, run, task);
+    if (discovered.unavailable || !discovered.online) {
+      throw new Error(discovered.host.name + " is currently unavailable.");
+    }
+    const caps = discovered.capabilities;
+    const ops = Array.isArray(caps?.operations) ? caps.operations : [];
+    if (!ops.some((op) => op === operation || op?.id === operation)) {
+      throw new Error(`${discovered.host.name} does not advertise ${operation}.`);
+    }
+    const asks = (run.teamwork ??= []);
+    if (asks.length >= MAX_ASKS) {
+      throw new Error("You can make up to " + MAX_ASKS + " teamwork or node requests in one reply. Answer with what you have.");
+    }
+    const resourceId = typeof rest.project === "string" && rest.project.trim() ? rest.project.trim() : "";
+    const label =
+      operation === "system.run"
+        ? (Array.isArray(rest.argv) ? rest.argv.join(" ") : String(rest.command ?? "")).slice(0, 80)
+        : rest.path || rest.from || rest.title || operation;
+    const entry = {
+      id: randomUUID(),
+      botId: "node:" + operation,
+      fromBotId: bot.id,
+      remote: { hostId, hostName: discovered.host.name, botName: operation },
+      message: `${operation}: ${label}`.slice(0, 200),
+      status: "waiting",
+      started: Date.now(),
+    };
+    asks.push(entry);
+    this.ws.notify();
+    try {
+      const result = await remoteJob(
+        this.ws,
+        bot,
+        chat,
+        run,
+        task,
+        entry,
+        { operation, resourceId, params: rest },
+        discovered.pin,
+      );
+      entry.reply = JSON.stringify(result).slice(0, REPLY_MAX);
+      entry.status = "answered";
+      return JSON.stringify({ host: discovered.host, operation, ...result });
+    } catch (error) {
+      entry.status = task.stopped || task.ended ? "stopped" : "failed";
+      entry.error = String(error.message).slice(0, 600);
+      throw new Error(`${discovered.host.name} couldn't run ${operation}: ${entry.error}`);
     } finally {
       entry.finished = Date.now();
       delete entry.intent;

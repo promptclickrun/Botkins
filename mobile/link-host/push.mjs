@@ -382,7 +382,9 @@ export class Push {
   onRequest(sends, targets, request, chats, bots) {
     const chat = chats.get(request.chatId);
     const bot = bots.get(request.botId ?? chat?.botId);
-    const name = bot?.name ?? "A bot";
+    const name = request.nodeJob
+      ? (request.sourceBotName && request.sourceHostName ? `${request.sourceBotName} on ${request.sourceHostName}` : request.sourceBotName || "Node host")
+      : (bot?.name ?? "A bot");
     // A secure input ("secure-input-v1") is named as what it is: its answer is typed into a prompt of
     // its own, never into the chat.
     const title = request.kind === "permission" ? name + " needs your approval" : request.kind === "secure" ? name + " needs a secure input" : name + " has a question";
@@ -392,15 +394,28 @@ export class Push {
       if ((request.dispatch || request.review) && device.kind === "gadget") continue;
       const ownerOnly = request.kind === "permission" || request.kind === "secure";
       if (ownerOnly ? !!device.memberId : !this.maySeeChat(device, chat)) continue;
-      if (!this.wants(device, "requests") || this.present(device.id, request.chatId)) continue;
+      if (!this.wants(device, "requests") || (!request.nodeJob && this.present(device.id, request.chatId))) continue;
       const record = this.store.push(device.id);
       const text = record.prefs.previews ? firstLine(request.title) || "Open Botkins to answer." : "Open Botkins to answer.";
       // What the notification's buttons are (docs/live-cards.md, section 6). With previews off they
       // would show the bot's words, so the notification only opens the app.
-      const alert = this.alert(device.id, record, { t: title, m: text, c: request.chatId, k: "request", r: request.id, ...(record.prefs.previews && { q: askDetail(request) }) }, { urgent: true, expiration: 300 });
+      const alert = this.alert(
+        device.id,
+        record,
+        {
+          t: title.slice(0, 80),
+          m: text,
+          c: request.chatId,
+          k: "request",
+          r: request.id,
+          ...(request.nodeJob && { nj: true }),
+          ...(record.prefs.previews && { q: askDetail(request) }),
+        },
+        { urgent: true, expiration: 300 },
+      );
       // A phone with the card for all Botkins running hears of it from the card (Push.cards), which
       // falls back to this notification when the card doesn't show the request.
-      if (!this.hold(device.id, record, request.chatId, alert, "request")) sends.push(alert);
+      if (request.nodeJob || !this.hold(device.id, record, request.chatId, alert, "request")) sends.push(alert);
     }
   }
 

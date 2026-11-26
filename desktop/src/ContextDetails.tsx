@@ -10,19 +10,29 @@ const ago = (t?: number) => {
   return m < 1 ? "just now" : m < 60 ? m + " min ago" : new Date(t).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
 };
 
-/** The context window's makeup and this chat's token use, opened from the header meter. */
+/**
+ * The context window's makeup and this chat's token use, opened from the header's context ring.
+ * The ring is the header's only context control, so what to do about the context is here too:
+ * Compact, and for the person's own main chat, its threads and Reset context.
+ */
 export default function ContextDetails({
   chat,
   runs,
   busy,
   close,
   compact,
+  reset,
+  switchFork,
 }: {
   chat: Chat;
   runs: Run[];
   busy: boolean;
   close: () => void;
   compact: () => void;
+  /** Starts the main chat's context over (a new thread); the earlier one stays to switch back to. */
+  reset?: () => void;
+  /** Switches the main chat to another of its threads. */
+  switchFork?: (id: string) => void;
 }) {
   const box = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -177,11 +187,30 @@ export default function ContextDetails({
           )}
         </dl>
       )}
+      {switchFork && (chat.forks?.length ?? 0) > 1 && (
+        <label className="cd-thread">
+          <span>Thread</span>
+          <select aria-label="Main chat thread" disabled={busy} value={chat.activeFork} onChange={(e) => switchFork(e.target.value)}>
+            {chat.forks!.map((f) => (
+              <option key={f.id} value={f.id}>
+                {f.name}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
       <div className="cd-actions">
         <small>Compact summarizes earlier turns to free space. The chat itself stays.</small>
-        <button className="secondary" disabled={busy} onClick={compact}>
-          Compact
-        </button>
+        <span className="cd-buttons">
+          {reset && (
+            <button className="btn small quiet danger" disabled={busy} onClick={reset}>
+              Reset context
+            </button>
+          )}
+          <button className="btn small" disabled={busy} onClick={compact}>
+            Compact
+          </button>
+        </span>
       </div>
     </div>
   );

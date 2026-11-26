@@ -1,0 +1,396 @@
+/*
+ * The shared page parts of the desktop app, drawn like the phone: a page header, uppercase group
+ * labels, grouped cards whose rows are split by hairlines, chips, buttons and icon buttons. Every
+ * screen builds on these so the app reads as one thing. Colors come from the theme
+ * (src/tokens.css); a backdrop other than Clean turns the cards to glass.
+ */
+:root {
+  --page-max: 1040px;
+  --page-pad-x: 44px;
+  --card: var(--surface);
+  --card-radius: 18px;
+  --row-inset: 16px;
+  --row-height: 52px;
+}
+:root:not([data-backdrop="clean"]) {
+  --card: var(--glass-fill-card);
+}
+
+/* ---- Page ---------------------------------------------------------------------------------- */
+.page {
+  box-sizing: border-box;
+  width: 100%;
+  max-width: calc(var(--page-max) + 2 * var(--page-pad-x));
+  margin: 0 auto;
+  padding: 32px var(--page-pad-x) 56px;
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+/* In the shell's content area (which pads the sides), a page adds only room above and below. */
+.content > .page {
+  max-width: var(--page-max);
+  padding: 20px 0 24px;
+}
+/* An older rule styles every <header> as the shell's top bar (style.css); a page's header is not one. */
+header.page-head {
+  height: auto;
+  padding: 0;
+  justify-content: normal;
+}
+.page.narrow {
+  --page-max: 760px;
+}
+.page.wide {
+  --page-max: 1240px;
+}
+.page-head {
+  display: flex;
+  align-items: flex-end;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.page-head > .page-heading {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.page-title {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: calc(28px * var(--text-scale));
+  line-height: 1.22;
+  font-weight: 700;
+  letter-spacing: -0.4px;
+  color: var(--ink);
+}
+.page-sub {
+  margin: 4px 0 0;
+  font-size: calc(14px * var(--text-scale));
+  line-height: 1.4;
+  color: var(--muted);
+}
+.page-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.page-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+.page-columns {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 28px;
+}
+.page-columns > * {
+  flex: 1 1 320px;
+  min-width: 0;
+}
+.page-columns > .main-column {
+  flex: 1.45 1 440px;
+}
+
+/* ---- Groups: a label over a card of rows ----------------------------------------------------- */
+.group-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 20px;
+  margin: 0 4px;
+  font-size: calc(12px * var(--text-scale));
+  line-height: 1.35;
+  font-weight: 700;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.group-label > .spacer {
+  flex: 1 1 auto;
+}
+.group-label button {
+  text-transform: none;
+  letter-spacing: 0;
+}
+.group-foot {
+  margin: 0 4px;
+  font-size: calc(12.5px * var(--text-scale));
+  line-height: 1.45;
+  color: var(--muted);
+}
+.group {
+  background: var(--card);
+  border-radius: var(--card-radius);
+  overflow: hidden;
+}
+:root:not([data-backdrop="clean"]) .group {
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
+  box-shadow: inset 0 0 0 1px var(--glass-edge);
+}
+.group.padded {
+  padding: 14px 16px;
+}
+.group-row {
+  position: relative;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: var(--row-height);
+  padding: 10px 16px;
+  color: var(--ink);
+}
+.group-row + .group-row::before,
+.group > * + .group-row::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: var(--row-inset);
+  right: 0;
+  height: 1px;
+  background: var(--line);
+  pointer-events: none;
+}
+button.group-row,
+a.group-row {
+  width: 100%;
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  text-align: left;
+  text-decoration: none;
+  font: inherit;
+  color: inherit;
+  cursor: default;
+}
+button.group-row:hover,
+a.group-row:hover {
+  background: var(--hover);
+}
+.group-row.selected,
+.group-row[aria-current="page"],
+.group-row[aria-current="true"] {
+  background: var(--active);
+}
+.row-main {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.row-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: calc(14px * var(--text-scale));
+  line-height: 1.4;
+  font-weight: 600;
+  color: var(--ink);
+}
+.row-sub {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: calc(13px * var(--text-scale));
+  line-height: 1.4;
+  color: var(--muted);
+}
+.row-value {
+  flex: none;
+  white-space: nowrap;
+  font-size: calc(13px * var(--text-scale));
+  color: var(--muted);
+}
+.row-chevron {
+  flex: none;
+  color: var(--faint);
+}
+
+/* ---- Icon tiles: a soft square of the kit's colors behind an icon, as in the phone's lists ---- */
+.icon-tile {
+  --tile: var(--ink-2);
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  color: var(--tile);
+  background: color-mix(in srgb, var(--tile) 14%, transparent);
+}
+:root[data-mode="dark"] .icon-tile {
+  background: color-mix(in srgb, var(--tile) 24%, transparent);
+}
+.icon-tile.tide { --tile: #548376; }
+.icon-tile.clay { --tile: #b45432; }
+.icon-tile.fern { --tile: #70834b; }
+.icon-tile.rose { --tile: #bb6776; }
+.icon-tile.honey { --tile: #a8741f; }
+:root[data-mode="dark"] .icon-tile.tide { --tile: #8dbbad; }
+:root[data-mode="dark"] .icon-tile.clay { --tile: #e3967a; }
+:root[data-mode="dark"] .icon-tile.fern { --tile: #afc28a; }
+:root[data-mode="dark"] .icon-tile.rose { --tile: #e59eab; }
+:root[data-mode="dark"] .icon-tile.honey { --tile: #e8bc6a; }
+/* Ink has no color of its own, so its tiles are drawn in ink, as on the phone. */
+:root[data-theme="ink"] .icon-tile { --tile: var(--ink); }
+
+/* ---- Chips, buttons and icon buttons ---------------------------------------------------------- */
+.chip-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: transparent;
+  color: var(--ink-2);
+  font-size: calc(12.5px * var(--text-scale));
+  font-weight: 600;
+  white-space: nowrap;
+}
+.chip:hover {
+  background: var(--hover);
+}
+.chip[aria-pressed="true"],
+.chip[aria-selected="true"],
+.chip.on {
+  border-color: transparent;
+  background: var(--accent);
+  color: var(--on-accent);
+}
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  height: 34px;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: transparent;
+  color: var(--ink);
+  font-size: calc(13px * var(--text-scale));
+  font-weight: 600;
+  white-space: nowrap;
+}
+.btn:hover {
+  background: var(--hover);
+}
+.btn.primary {
+  border-color: transparent;
+  background: var(--accent);
+  color: var(--on-accent);
+}
+.btn.primary:hover {
+  background: color-mix(in srgb, var(--accent) 88%, var(--ink));
+}
+.btn.quiet {
+  border-color: transparent;
+}
+.btn.soft {
+  border-color: transparent;
+  background: var(--sunken);
+}
+.btn.soft:hover {
+  background: color-mix(in srgb, var(--sunken) 80%, var(--ink) 8%);
+}
+.btn.small {
+  height: 30px;
+  padding: 0 10px;
+  border-radius: 9px;
+  font-size: calc(12.5px * var(--text-scale));
+}
+.btn.danger {
+  color: var(--danger);
+}
+.link-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 28px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--accent-text);
+  font-size: calc(13px * var(--text-scale));
+  font-weight: 600;
+}
+.link-button:hover {
+  background: var(--hover);
+}
+.icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--muted);
+}
+.icon-btn:hover {
+  background: var(--hover);
+  color: var(--ink);
+}
+.icon-btn[aria-pressed="true"],
+.icon-btn[aria-expanded="true"] {
+  background: var(--active);
+  color: var(--ink);
+}
+
+/* ---- Small marks -------------------------------------------------------------------------- */
+.status-dot {
+  flex: none;
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent-text);
+}
+.status-dot.working { background: var(--success); }
+.status-dot.waiting { background: var(--warning); }
+.status-dot.failed { background: var(--danger); }
+.count-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  box-sizing: border-box;
+  border-radius: 9px;
+  background: var(--accent);
+  color: var(--on-accent);
+  font-size: 11px;
+  font-weight: 700;
+}
+.count-badge.waiting {
+  background: var(--warning-soft);
+  color: var(--warning);
+}
+
+/* ---- Narrow windows ------------------------------------------------------------------------- */
+@media (max-width: 900px) {
+  :root {
+    --page-pad-x: 22px;
+  }
+}

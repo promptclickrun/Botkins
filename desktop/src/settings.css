@@ -113,34 +113,54 @@ input.switch:focus-visible {
 }
 
 /* ------------------------------------------------------------ grouped rows */
-/* A group is a soft card on the canvas: no outline, hairlines between its rows. */
-.set-group,
-section.set-group + section.set-group {
-  margin: 0 0 22px;
+/* Drawn like ui.css's .group-label, .group and .group-row, so Settings reads like every other
+   page and like the phone: an uppercase label over a rounded card, inset hairlines between rows. */
+.set-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  min-width: 0;
 }
 .set-group > h3 {
-  margin: 0 0 7px 2px;
-  font-size: calc(13px * var(--text-scale));
-  font-weight: 600;
+  margin: 0 4px;
+  font-size: calc(12px * var(--text-scale));
+  line-height: 1.35;
+  font-weight: 700;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
   color: var(--muted);
 }
 .set-card {
-  background: var(--surface);
-  border-radius: var(--radius);
+  background: var(--card);
+  border-radius: var(--card-radius);
   overflow: hidden;
 }
+:root:not([data-backdrop="clean"]) .set-card {
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
+  box-shadow: inset 0 0 0 1px var(--glass-edge);
+}
 .set-row {
+  position: relative;
+  box-sizing: border-box;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  min-height: 48px;
-  padding: 9px 16px;
+  min-height: var(--row-height);
+  padding: 10px 16px;
 }
-.set-row + .set-row,
-.set-card > * + .set-row,
-.set-card > .set-row + * {
-  border-top: 1px solid var(--line);
+/* The hairline between rows starts at the row's inset, as on the phone. */
+.set-card > * + .set-row::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: var(--row-inset);
+  right: 0;
+  height: 1px;
+  background: var(--line);
+  pointer-events: none;
 }
 .set-row.stacked {
   flex-direction: column;
@@ -161,12 +181,13 @@ section.set-group + section.set-group {
   display: block;
   margin: 0 !important;
   font-size: calc(14px * var(--text-scale));
-  font-weight: 400;
+  line-height: 1.4;
+  font-weight: 500;
   color: var(--ink);
 }
 .set-label small,
 .set-row small {
-  font-size: calc(12px * var(--text-scale));
+  font-size: calc(12.5px * var(--text-scale));
   line-height: 1.4;
   color: var(--muted);
 }
@@ -197,7 +218,7 @@ section.set-group + section.set-group {
 .set-control select.completion-position {
   max-width: 100%;
 }
-.set-control input:not([type="checkbox"]):not([type="color"]) {
+.set-control input:not([type="checkbox"]):not([type="color"]):not([type="range"]):not([role="slider"]) {
   height: 32px;
   width: 260px;
   max-width: 100%;
@@ -205,6 +226,9 @@ section.set-group + section.set-group {
   font-size: calc(13px * var(--text-scale));
   border-radius: var(--radius-sm);
   background: var(--canvas);
+}
+.set-row.stacked .set-control input:not([type="checkbox"]):not([type="color"]):not([type="range"]) {
+  width: 100%;
 }
 .set-row.stacked textarea {
   width: 100%;
@@ -230,13 +254,22 @@ section.set-group + section.set-group {
   color: var(--ink);
 }
 .set-actions {
+  position: relative;
   display: flex;
   justify-content: flex-end;
   align-items: center;
   flex-wrap: wrap;
   gap: 8px;
   padding: 10px 16px;
-  border-top: 1px solid var(--line);
+}
+.set-card > * + .set-actions::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: var(--row-inset);
+  right: 0;
+  height: 1px;
+  background: var(--line);
 }
 .set-wait {
   margin-right: auto;
@@ -244,13 +277,13 @@ section.set-group + section.set-group {
   color: var(--muted);
 }
 p.set-foot {
-  margin: 7px 2px 0;
-  font-size: calc(12px * var(--text-scale));
+  margin: 0 4px;
+  font-size: calc(12.5px * var(--text-scale));
   line-height: 1.45;
   color: var(--muted);
 }
 p.set-status {
-  margin: 0 2px 14px;
+  margin: 0 4px;
   font-size: calc(13px * var(--text-scale));
   color: var(--muted);
 }
@@ -368,7 +401,7 @@ p.set-status.error-text {
 /* ------------------------------------------------------------ segmented control */
 /* The base .segmented rule lives in routines.css. Inside Settings, the model picker and the
    Create a bot sheet it is a soft track with the chosen segment raised on it. */
-:is(.settings-window, .model-picker, .bot-sheet, .profile-card) .segmented {
+:is(.settings-window, .settings-page, .model-picker, .bot-sheet, .profile-card) .segmented {
   display: inline-flex;
   flex-wrap: wrap;
   max-width: 100%;
@@ -378,7 +411,7 @@ p.set-status.error-text {
   border-radius: var(--radius-sm);
   background: color-mix(in srgb, var(--ink) 7%, transparent);
 }
-:is(.settings-window, .model-picker, .bot-sheet, .profile-card) .segmented button {
+:is(.settings-window, .settings-page, .model-picker, .bot-sheet, .profile-card) .segmented button {
   border-radius: 6px;
   padding: 3px 12px;
   min-height: 28px;
@@ -387,61 +420,164 @@ p.set-status.error-text {
   color: var(--muted);
   box-shadow: none;
 }
-:is(.settings-window, .model-picker, .bot-sheet, .profile-card) .segmented button:hover {
+:is(.settings-window, .settings-page, .model-picker, .bot-sheet, .profile-card) .segmented button:hover {
   filter: none;
   background: none;
   color: var(--ink);
 }
-:is(.settings-window, .model-picker, .bot-sheet, .profile-card) .segmented button:is([aria-selected="true"], [aria-pressed="true"], [aria-checked="true"]) {
+:is(.settings-window, .settings-page, .model-picker, .bot-sheet, .profile-card) .segmented button:is([aria-selected="true"], [aria-pressed="true"], [aria-checked="true"]) {
   background: var(--raised);
   color: var(--ink);
   font-weight: 600;
   box-shadow: 0 1px 2px color-mix(in srgb, var(--ink) 12%, transparent);
 }
 
-/* ------------------------------------------------------------ the settings window */
-/* The window is on the canvas so its groups, on the card color, stand out without outlines. */
+/* ------------------------------------------------------------ the Settings page */
+/* Settings fills the window in place of the app's side menu and page: the side list on the rail
+   color where the side menu was, and one centered column of groups on the canvas. */
+.settings-page {
+  flex: 1;
+  display: grid;
+  grid-template-columns: 264px minmax(0, 1fr);
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  background: var(--canvas);
+  color: var(--ink);
+}
+/* While the app still shows Settings in its dialog, the dialog fills the window too. */
 dialog.settings-window {
-  width: min(920px, calc(100vw - 32px));
-  height: min(680px, calc(100vh - 32px));
+  width: 100vw;
+  height: 100vh;
+  max-width: none;
   max-height: none;
+  margin: 0;
   padding: 0;
   overflow: hidden;
   background: var(--canvas);
   border: 0;
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow);
+  border-radius: 0;
+  box-shadow: none;
 }
-.settings-window-body {
-  display: grid;
-  grid-template-columns: 210px minmax(0, 1fr);
-  height: 100%;
+dialog.settings-window::backdrop {
+  background: var(--canvas);
+}
+/* Under a backdrop the picture shows through the page, as it does behind the app's own pages. */
+:root:not([data-backdrop="clean"]) .settings-page {
+  background: transparent;
 }
 .set-sidebar {
-  background: var(--rail);
-  padding: 18px 10px;
-  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
   min-height: 0;
+  overflow-y: auto;
+  padding: 14px 12px 20px;
+  background: var(--rail);
+  /* The list is long; its scroll bar shows only while the pointer is over it. */
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
 }
-.set-sidebar h2 {
-  font-size: calc(17px * var(--text-scale));
-  margin: 2px 10px 14px;
+.set-sidebar:hover {
+  scrollbar-color: var(--line-strong) transparent;
+}
+:root:not([data-backdrop="clean"]) .set-sidebar {
+  background: var(--glass-fill-card);
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
+}
+.set-back {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 32px;
+  margin: 0 0 6px;
+  padding: 0 10px 0 4px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--ink-2);
+  font-size: calc(13.5px * var(--text-scale));
+  font-weight: 600;
+}
+.set-back:hover {
+  background: var(--hover);
+  color: var(--ink);
+  filter: none;
+}
+.set-title {
+  margin: 4px 8px 12px;
+  font-family: var(--font-display);
+  font-size: calc(22px * var(--text-scale));
+  line-height: 1.27;
+  font-weight: 700;
+  letter-spacing: -0.3px;
+  color: var(--ink);
+}
+.set-search {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 34px;
+  margin: 0 0 10px;
+  padding: 0 10px;
+  border-radius: 10px;
+  background: var(--sunken);
+  color: var(--muted);
+}
+.set-search:focus-within {
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 45%, transparent);
+}
+.set-search input {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--ink);
+  font-size: calc(13px * var(--text-scale));
+  box-shadow: none;
+}
+.set-search input::-webkit-search-cancel-button {
+  filter: grayscale(1);
 }
 .set-sidebar [role="tablist"] {
-  display: grid;
+  display: flex;
+  flex-direction: column;
   gap: 1px;
 }
+.set-group-label {
+  margin: 14px 8px 4px;
+  font-size: calc(11px * var(--text-scale));
+  line-height: 1.4;
+  font-weight: 700;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.set-rule {
+  height: 1px;
+  margin: 12px 8px 8px;
+  background: var(--line);
+}
 .set-sidebar [role="tab"] {
-  white-space: nowrap;
+  display: flex;
+  align-items: center;
   justify-content: flex-start;
   gap: 10px;
   width: 100%;
-  /* Nineteen sections fit the window's full height (680px) without the menu scrolling. */
-  min-height: 30px;
-  padding: 3px 10px;
-  border-radius: var(--radius-sm);
-  font-size: calc(14px * var(--text-scale));
+  min-height: 32px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  font-size: calc(13.5px * var(--text-scale));
+  font-weight: 500;
   text-align: left;
+  white-space: nowrap;
   color: var(--ink-2);
 }
 .set-sidebar [role="tab"]:hover {
@@ -453,61 +589,88 @@ dialog.settings-window {
   color: var(--ink);
   font-weight: 600;
 }
+.set-tab-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .set-tab-badge {
-  min-width: 18px;
-  height: 18px;
   margin-left: auto;
-  padding: 0 5px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 9px;
-  background: var(--accent);
-  color: var(--on-accent);
-  font-size: calc(11px * var(--text-scale));
-  font-weight: 700;
 }
-/* Plain line icons: muted, and in ink on the chosen section. */
-.set-icon {
-  display: grid;
-  place-items: center;
-  width: 18px;
-  height: 18px;
+/* The section's icon on a small tile in its group's color (ui.css .icon-tile). */
+.set-icon.icon-tile {
+  width: 24px;
+  height: 24px;
+  border-radius: 7px;
+}
+.set-none {
+  margin: 8px;
+  font-size: calc(13px * var(--text-scale));
   color: var(--muted);
-  flex: none;
-}
-[aria-selected="true"] > .set-icon {
-  color: var(--ink);
 }
 .set-pane {
+  position: relative;
   display: flex;
   flex-direction: column;
   min-width: 0;
   min-height: 0;
 }
-.set-pane-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 18px 16px 12px 28px;
-  flex: none;
-}
-.set-pane-head h2 {
-  font-size: calc(22px * var(--text-scale));
-}
+/* Close sits at the top right of the page, over the scrolling column. */
 .set-close {
-  width: 32px;
-  height: 32px;
-  border-radius: var(--radius-sm);
-  color: var(--muted);
+  position: absolute;
+  top: 12px;
+  right: 16px;
+  z-index: 2;
 }
 .set-scroll {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
   overscroll-behavior: contain;
-  padding: 4px 28px 24px;
+}
+/* One centered column, like the mockup: the title, then groups 22px apart. */
+.set-page {
+  box-sizing: border-box;
+  width: 100%;
+  max-width: calc(720px + 2 * var(--page-pad-x));
+  margin: 0 auto;
+  padding: 32px var(--page-pad-x) 64px;
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+}
+/* A section that lays out its own groups (Model providers, MCP servers…) gets the same spacing. */
+.set-page > .set-stack,
+.set-page > .int-section,
+.set-page > .set-groups {
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+  min-width: 0;
+}
+.set-page.wide {
+  max-width: calc(960px + 2 * var(--page-pad-x));
+}
+/* Sections still put a status line or a sub-heading between groups; the gap spaces them. */
+.set-page > p.set-status {
+  margin: -10px 4px 0;
+}
+.set-bot {
+  gap: 9px;
+  min-width: 0;
+}
+.set-bot select {
+  height: 32px;
+  min-width: 150px;
+  max-width: 240px;
+  padding: 2px 8px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--surface);
+  color: inherit;
+  font: inherit;
+  font-size: calc(13px * var(--text-scale));
 }
 .set-toolbar {
   display: flex;
@@ -515,16 +678,10 @@ dialog.settings-window {
   justify-content: space-between;
   gap: 10px;
   flex-wrap: wrap;
-  margin: 0 0 16px;
+  margin: 0;
 }
-.set-bot {
-  display: inline-flex;
-  align-items: center;
-  gap: 9px;
-  min-width: 0;
-}
-.set-toolbar select {
-  min-width: 150px;
+.set-views {
+  margin-top: -6px;
 }
 /* Usage inside Settings: the range buttons read as one segmented control. */
 .set-scroll .usage .filters {
@@ -532,13 +689,13 @@ dialog.settings-window {
   padding: 3px;
   gap: 2px;
   border: 0;
-  border-radius: var(--radius-sm);
-  background: color-mix(in srgb, var(--ink) 7%, transparent);
+  border-radius: 10px;
+  background: var(--sunken);
   margin: 0;
 }
 .set-scroll .usage .filters button {
   border: 0;
-  border-radius: 6px;
+  border-radius: 7px;
   padding: 3px 12px;
   min-height: 28px;
   font-size: calc(13px * var(--text-scale));
@@ -560,63 +717,34 @@ dialog.settings-window {
   font-weight: 600;
   background: color-mix(in srgb, var(--ink) 7%, transparent);
 }
-@media (max-width: 820px) {
-  .settings-window-body {
-    grid-template-columns: 190px minmax(0, 1fr);
+@media (max-width: 900px) {
+  .settings-page {
+    grid-template-columns: 220px minmax(0, 1fr);
   }
   .set-sidebar [role="tab"] {
-    font-size: calc(13px * var(--text-scale));
     gap: 8px;
-  }
-  .set-scroll {
-    padding-left: 20px;
-    padding-right: 20px;
-  }
-  .set-pane-head {
-    padding-left: 20px;
+    font-size: calc(13px * var(--text-scale));
   }
   .set-control select {
     min-width: 150px;
   }
 }
-/* A window too short for the full-height Settings (680px and its margin) gets the tighter menu. */
+/* A short window keeps the side list compact so most of it shows without scrolling. */
 @media (max-height: 720px) {
   .set-sidebar {
-    padding-top: 12px;
-    padding-bottom: 8px;
+    padding-top: 10px;
   }
-  .set-sidebar h2 {
-    margin-bottom: 6px;
+  .set-title {
+    margin-bottom: 8px;
   }
-  /* Nineteen sections fit the smallest window (760×560) without the menu scrolling. A section
-     added to Settings has to fit here too: test/sidebar-smoke.mjs measures it. */
   .set-sidebar [role="tab"] {
-    min-height: 24px;
-    padding-top: 1px;
-    padding-bottom: 1px;
+    min-height: 28px;
   }
-  /* The smallest window leaves the page 528px (560 less the title bar), and Settings 496 of them. */
-  @media (max-height: 560px) {
-    .set-sidebar [role="tablist"] {
-      gap: 0;
-    }
-    .set-sidebar [role="tab"] {
-      min-height: 23px;
-      padding-top: 0;
-      padding-bottom: 0;
-    }
+  .set-group-label {
+    margin-top: 10px;
   }
-  .set-pane-head {
-    padding-top: 12px;
-    padding-bottom: 8px;
-  }
-  .set-row {
-    min-height: 42px;
-    padding-top: 7px;
-    padding-bottom: 7px;
-  }
-  .set-group {
-    margin-bottom: 16px;
+  .set-page {
+    padding-top: 22px;
   }
 }
 
@@ -1505,10 +1633,10 @@ p.phone-note {
 .set-control:has(> .set-choices) {
   max-width: none;
 }
-.settings-window .segmented.set-choices {
+:is(.settings-window, .settings-page) .segmented.set-choices {
   flex-wrap: nowrap;
 }
-.settings-window .segmented.set-choices button {
+:is(.settings-window, .settings-page) .segmented.set-choices button {
   padding-left: 11px;
   padding-right: 11px;
   white-space: nowrap;
@@ -1557,4 +1685,44 @@ p.phone-note {
 }
 .phone-away-state small {
   color: var(--muted);
+}
+
+/* ------------------------------------------------------------ the model picker in a Settings card */
+/* One card per topic: the model list stays a well (it is long), and Thinking and Fast mode are
+   plain parts of the same card, split by hairlines, not cards of their own inside it. */
+.set-picker .model-picker .thinking-control {
+  position: relative;
+  padding: 12px 0 0;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+.set-picker .model-picker .thinking-control::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 1px;
+  background: var(--line);
+}
+.set-picker .mp-list {
+  background: var(--canvas);
+  border-radius: 12px;
+}
+:root:not([data-backdrop="clean"]) .set-picker .mp-list {
+  background: color-mix(in srgb, var(--canvas) 55%, transparent);
+}
+/* The page's gap spaces a section's toolbar and tab bars from its groups. */
+.set-page .int-section > .int-toolbar,
+.set-page .int-section > .plugin-top-bar,
+.set-page .int-section > .team-views {
+  margin-bottom: 0;
+}
+.set-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
 }

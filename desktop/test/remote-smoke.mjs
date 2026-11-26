@@ -81,18 +81,17 @@ try {
   // The switcher appears in the side menu once a computer is paired.
   let switcher = b.page.getByRole("button", { name: /^Computer: / });
   await switcher.waitFor({ timeout: 15000 });
-  // The side menu's bottom rows stay together: Settings, the switcher, then Models, with all the
-  // free space above them. (The switcher once claimed that space too, which left Settings alone in
-  // the middle of the menu with a gap on each side.) Checked with the menu open and narrow.
+  // The side menu's bottom row stays at its bottom: the switcher (whose line and menu carry the
+  // model providers) and Settings, with all the free space above them. Checked open and narrow.
   for (const collapsed of [false, true]) {
     await b.page.evaluate(async (narrow) => window.botkins.setPreferences({ sidebar: { ...(await window.botkins.snapshot()).settings.sidebar, collapsed: narrow } }), collapsed);
     await b.page.waitForFunction((narrow) => document.querySelector(".shell")?.classList.contains("collapsed") === narrow, collapsed);
     const rows = await b.page.evaluate(() => {
       const box = (selector) => document.querySelector(selector).getBoundingClientRect();
-      const [foot, host, models, menu] = [box(".sidebar-foot"), box(".host-switch"), box(".models-status"), box(".sidebar-foot").top && document.querySelector(".sidebar-foot").parentElement.getBoundingClientRect()];
-      return { settingsToSwitcher: Math.round(host.top - foot.bottom), switcherToModels: Math.round(models.top - host.bottom), modelsToEnd: Math.round(menu.bottom - models.bottom) };
+      const [foot, host, settings, menu] = [box(".sidebar-foot"), box(".sidebar-foot .host-switch"), box(".sidebar-foot .settings-link"), document.querySelector(".sidebar-foot").parentElement.getBoundingClientRect()];
+      return { switcherInRow: Math.round(host.top - foot.top), settingsInRow: Math.round(settings.top - foot.top), rowToEnd: Math.round(menu.bottom - foot.bottom) };
     });
-    for (const [name, gap] of Object.entries(rows)) assert.ok(gap >= 0 && gap <= 16, "the bottom rows of the side menu sit together (" + (collapsed ? "narrow" : "open") + "): " + JSON.stringify(rows) + ", " + name);
+    for (const [name, gap] of Object.entries(rows)) assert.ok(gap >= 0 && gap <= (collapsed ? 60 : 16), "the bottom row of the side menu sits at its bottom (" + (collapsed ? "narrow" : "open") + "): " + JSON.stringify(rows) + ", " + name);
     await b.shot("3a-b-side-menu-" + (collapsed ? "narrow" : "open") + ".png");
   }
   assert.equal(await switcher.getAttribute("aria-label"), "Computer: This computer. Switch computer");
@@ -100,11 +99,12 @@ try {
   await b.page.getByRole("menu", { name: "Computers" }).waitFor();
   await b.shot("3-b-switcher-menu.png");
   await b.page.getByRole("menuitemradio", { name: /Studio Mac/ }).click();
+  // While the other computer answers, the switcher says whose bots these are; the line across the
+  // top is only for trouble (offline, removed).
   let banner = b.page.getByRole("status", { name: "Computer in use" });
-  await banner.getByText("Connected", { exact: false }).waitFor({ timeout: 60000 });
+  await until("the switcher to say Studio Mac is connected", async () => (await switcher.getAttribute("aria-label")) === "Computer: Studio Mac. Connected. Switch computer");
   await until("A's chat to be listed on B", async () => (await b.snap()).chats.length === 1);
-  assert.match((await banner.textContent()).replace(/\s+/g, " "), /Using Studio Mac · Connected/);
-  assert.equal(await switcher.getAttribute("aria-label"), "Computer: Studio Mac. Connected. Switch computer");
+  assert.equal(await banner.count(), 0, "no line across the top while Studio Mac answers");
   assert.deepEqual((await b.snap()).bots.map((bot) => bot.id), (await a.snap()).bots.map((bot) => bot.id), "the window shows the host's bots");
   const choices = await b.page.evaluate(() => window.botkins.savedCredentials());
   assert.deepEqual(choices.entries.map(entry => entry.name), ["Fixture login"]);
@@ -124,8 +124,7 @@ try {
   b = await launch("b", {}, folder);
   switcher = b.page.getByRole("button", { name: /^Computer: / });
   banner = b.page.getByRole("status", { name: "Computer in use" });
-  await banner.getByText("Connected", { exact: false }).waitFor({ timeout: 60000 });
-  assert.match((await banner.textContent()).replace(/\s+/g, " "), /Using Studio Mac · Connected/, "the app opened again is on the computer it was on");
+  await until("the app opened again to be on the computer it was on", async () => (await switcher.getAttribute("aria-label")) === "Computer: Studio Mac. Connected. Switch computer");
   await until("Studio Mac's chat to be listed again", async () => (await b.snap()).chats.length === 1);
   assert.equal((await b.snap()).remote.hosts.length, 1, "and the pairing is still there");
   await b.shot("4b-b-opened-again-still-on-studio-mac.png");
@@ -160,7 +159,7 @@ try {
   await b.shot("8-b-offline.png");
   assert.equal((await b.snap()).bots.length > 0, true, "what was known is still shown");
   await a.page.evaluate(() => window.botkins.setPhoneLink(true));
-  await banner.getByText("Connected", { exact: false }).waitFor({ timeout: 120000 });
+  await banner.waitFor({ state: "detached", timeout: 120000 });
   // The host removes this computer.
   const mine = (await a.page.evaluate(() => window.botkins.phoneLink())).devices.find((d) => d.kind === "desktop");
   await a.page.evaluate((id) => window.botkins.removePhone(id), mine.id);

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type KeyboardEvent } from "react";
+import { Fragment, useEffect, useRef, useState, type KeyboardEvent } from "react";
 import {
   Bell,
   Bug,
@@ -24,6 +24,8 @@ import {
   Users,
   UsersRound,
   UserCircle,
+  ChevronLeft,
+  Search,
   X,
   type LucideIcon,
 } from "lucide-react";
@@ -83,32 +85,41 @@ export type SectionId =
   | "feedback"
   | "about";
 type BotView = "profile" | "model" | "capabilities" | "memory";
-const SECTIONS: { id: SectionId; label: string; icon: LucideIcon }[] = [
-  { id: "general", label: "General", icon: Settings2 },
-  { id: "profile", label: "Profile", icon: UserCircle },
-  { id: "appearance", label: "Appearance", icon: Palette },
-  { id: "sidebar", label: "Side menu", icon: PanelLeft },
-  { id: "chats", label: "Chat", icon: MessageSquareMore },
-  { id: "notifications", label: "Notifications", icon: Bell },
-  { id: "bots", label: "Bots & capabilities", icon: BotIcon },
-  { id: "skills", label: "Skills", icon: Sparkles },
-  { id: "marketplace", label: "Marketplace", icon: Store },
-  { id: "mcp", label: "MCP servers", icon: Server },
-  { id: "credentials", label: "Credentials", icon: LockKeyhole },
-  { id: "teamwork", label: "Teamwork", icon: UsersRound },
-  { id: "team", label: "Team", icon: Users },
-  { id: "access", label: "Access", icon: KeyRound },
-  { id: "computers", label: "Computers and teams", icon: MonitorSmartphone },
-  { id: "node", label: "Node host", icon: Cpu },
-  { id: "phone", label: "Phone", icon: Smartphone },
-  { id: "voice", label: "Voice", icon: Mic },
-  { id: "usage", label: "Usage", icon: ChartColumn },
-  { id: "storage", label: "Storage", icon: HardDrive },
+/** The groups of the side list, as the phone's Settings groups them. A group with no title is drawn with a gap, or a rule (`rule`). */
+type SectionGroup = { title?: string; tile?: string; rule?: boolean; ids: SectionId[] };
+const GROUPS: SectionGroup[] = [
+  { tile: "tide", ids: ["general", "profile", "computers", "team", "phone", "node"] },
+  { title: "Your bots\u2019 toolbox", tile: "clay", ids: ["account", "bots", "mcp", "skills", "marketplace", "credentials"] },
+  { title: "How bots work", tile: "fern", ids: ["chats", "access", "teamwork", "voice", "notifications"] },
+  { title: "This computer", tile: "rose", ids: ["appearance", "sidebar", "storage"] },
+  { rule: true, ids: ["usage", "experimental", "feedback", "about"] },
+];
+const SECTIONS: { id: SectionId; label: string; icon: LucideIcon; about: string; words?: string }[] = [
+  { id: "general", label: "General", icon: Settings2, about: "The models your bots use, the harness they run in, and what runs in the background.", words: "default model routines harness background fast mode thinking" },
+  { id: "profile", label: "Profile", icon: UserCircle, about: "Who you are to your bots and to the people you work with.", words: "name picture photo about me account" },
+  { id: "appearance", label: "Appearance", icon: Palette, about: "How Botkins looks on this computer. Your phone keeps its own choices.", words: "theme dark light mode color backdrop font text size avatar animations" },
+  { id: "sidebar", label: "Side menu", icon: PanelLeft, about: "What the side menu shows, and in what order.", words: "places order hide show sidebar" },
+  { id: "chats", label: "Chat", icon: MessageSquareMore, about: "How chats look, how they are summed up, and when bots ask first.", words: "thinking tool calls summary approvals clarification completion bubble" },
+  { id: "notifications", label: "Notifications", icon: Bell, about: "What alerts you, and when Botkins stays quiet.", words: "replies routines questions reminders quiet hours test" },
+  { id: "bots", label: "Bots & capabilities", icon: BotIcon, about: "Each bot\u2019s model, profile, tools and memory.", words: "model profile instructions role capabilities memory integrations inspect" },
+  { id: "skills", label: "Skills", icon: Sparkles, about: "Know-how your bots can use, from you, plugins and catalogs.", words: "skill scripts commands" },
+  { id: "marketplace", label: "Marketplace", icon: Store, about: "Apps, bots, plugins, Pi packages and skills to add.", words: "market apps plugins agents bots pi packages composio" },
+  { id: "mcp", label: "MCP servers", icon: Server, about: "Tools your bots reach through the Model Context Protocol.", words: "server tools oauth catalog" },
+  { id: "credentials", label: "Credentials", icon: LockKeyhole, about: "Keys and sign-ins your bots and tools use, kept encrypted.", words: "vault keys secrets passwords proton pass" },
+  { id: "teamwork", label: "Teamwork", icon: UsersRound, about: "How your bots hand work to each other.", words: "handoff delegate together" },
+  { id: "team", label: "Team", icon: Users, about: "The people on your team, what they may do, and their requests.", words: "requests invite members groups roles admin" },
+  { id: "access", label: "Access", icon: KeyRound, about: "What bots may do on this computer without asking.", words: "permissions files folders shell approve allow" },
+  { id: "computers", label: "Computers and teams", icon: MonitorSmartphone, about: "Other computers you use from here, and teams you joined.", words: "remote host pair join link" },
+  { id: "node", label: "Node host", icon: Cpu, about: "Let this computer run work for another Botkins.", words: "node host server headless" },
+  { id: "phone", label: "Phone", icon: Smartphone, about: "Phones and computers paired with this one.", words: "pair devices mobile qr" },
+  { id: "voice", label: "Voice", icon: Mic, about: "How bots listen and speak, in chats and live calls.", words: "speech live voice microphone tts transcription" },
+  { id: "usage", label: "Usage", icon: ChartColumn, about: "What your bots used, by day, bot and model.", words: "tokens cost spend runs" },
+  { id: "storage", label: "Storage", icon: HardDrive, about: "What Botkins keeps on this computer to stay fast.", words: "cache clear" },
   // The id stays "account" so /login and older callers still land here.
-  { id: "account", label: "Model providers", icon: Boxes },
-  { id: "experimental", label: "Experimental", icon: FlaskConical },
-  { id: "feedback", label: "Send feedback", icon: Bug },
-  { id: "about", label: "About", icon: Info },
+  { id: "account", label: "Model providers", icon: Boxes, about: "Where your bots\u2019 models come from, and the keys and sign-ins for them.", words: "login sign in api key copilot claude openai providers limits" },
+  { id: "experimental", label: "Experimental", icon: FlaskConical, about: "Early features you can try. They may change.", words: "proactive beta" },
+  { id: "feedback", label: "Send feedback", icon: Bug, about: "Report a bug or ask for a feature on GitHub.", words: "bug feature issue report" },
+  { id: "about", label: "About", icon: Info, about: "The version of Botkins and its updates.", words: "version update electron chromium platform" },
 ];
 
 /** Where an older tab name, a section id or a section label opens. Callers still pass "Capabilities", "Bot", "Behavior"… */
@@ -167,7 +178,10 @@ export function openBotViewNext(view: BotView) {
   nextView = view;
 }
 
-/** The Settings window: a side menu of sections and one pane of grouped rows. */
+/**
+ * Settings: a full-window page in place of the app's side menu and page. On the left, Back, a
+ * search and the sections in the phone's groups; on the right, one column of grouped rows.
+ */
 export default function Settings({
   state,
   bots,
@@ -289,61 +303,127 @@ export default function Settings({
     }
   }
   const fail = (e: unknown) => setError(e instanceof Error ? e.message : String(e));
+  // The search over the side list: a section's name, and the words of the rows inside it.
+  const [find, setFind] = useState("");
+  const query = find.trim().toLowerCase();
+  const shown = query ? sections.filter((s) => (s.label + " " + (s.words ?? "")).toLowerCase().includes(query)) : sections;
   function move(e: KeyboardEvent<HTMLDivElement>) {
-    const at = sections.findIndex((s) => s.id === section);
+    const at = shown.findIndex((s) => s.id === section);
     const next =
       e.key === "ArrowDown"
-        ? (at + 1) % sections.length
+        ? (at + 1) % shown.length
         : e.key === "ArrowUp"
-          ? (at - 1 + sections.length) % sections.length
+          ? (at - 1 + shown.length) % shown.length
           : e.key === "Home"
             ? 0
             : e.key === "End"
-              ?               sections.length - 1
+              ? shown.length - 1
               : -1;
-    if (next < 0) return;
+    if (next < 0 || !shown.length) return;
     e.preventDefault();
-    setSection(sections[next].id);
+    setSection(shown[next].id);
     menu.current?.querySelectorAll<HTMLElement>("[role=tab]")[next]?.focus();
   }
   const current = sections.find((s) => s.id === section) ?? sections[0];
+  const focusable = shown.some((s) => s.id === section) ? section : shown[0]?.id;
+  const requests = state.team && "requests" in state.team ? state.team.requests.length : 0;
   return (
-    <div className="settings-window-body">
-      <div className="set-sidebar">
-        <h2>Settings</h2>
+    <div className="settings-page">
+      <nav className="set-sidebar" aria-label="Settings sections">
+        {close && (
+          <button type="button" className="set-back" aria-label="Back to Botkins" onClick={close}>
+            <ChevronLeft size={18} strokeWidth={2} aria-hidden="true" />
+            Back
+          </button>
+        )}
+        <h2 className="set-title">Settings</h2>
+        <label className="set-search">
+          <Search size={15} aria-hidden="true" />
+          <input
+            type="search"
+            aria-label="Search settings"
+            placeholder="Search settings"
+            value={find}
+            onChange={(e) => setFind(e.target.value)}
+            onKeyDown={(e) => {
+              // The first Escape clears the search; the next one closes Settings.
+              if (e.key === "Escape" && find) {
+                e.preventDefault();
+                e.stopPropagation();
+                setFind("");
+              }
+              if (e.key === "ArrowDown" && shown.length) {
+                e.preventDefault();
+                setSection(shown[0].id);
+                menu.current?.querySelector<HTMLElement>("[role=tab]")?.focus();
+              }
+            }}
+          />
+        </label>
         <div role="tablist" aria-orientation="vertical" aria-label="Settings" ref={menu} onKeyDown={move}>
-          {sections.map(({ id: s, label, icon: Icon }) => (
-            <button
-              key={s}
-              type="button"
-              role="tab"
-              id={"set-tab-" + s}
-              aria-selected={section === s}
-              aria-controls="set-pane"
-              tabIndex={section === s ? 0 : -1}
-              onClick={() => setSection(s)}
-            >
-              <span className="set-icon" aria-hidden="true">
-                <Icon size={17} strokeWidth={1.8} />
-              </span>
-              {label}
-              {s === "team" && state.team && "requests" in state.team && state.team.requests.length > 0 && (
-                <span className="set-tab-badge" aria-hidden="true">{state.team.requests.length}</span>
-              )}
-            </button>
-          ))}
+          {GROUPS.map((group, at) => {
+            const items = group.ids.map((id) => shown.find((s) => s.id === id)).filter((s) => !!s);
+            if (!items.length) return null;
+            return (
+              <Fragment key={at}>
+                {!query && group.title && <span className="set-group-label" role="presentation">{group.title}</span>}
+                {!query && group.rule && <span className="set-rule" role="presentation" />}
+                {items.map(({ id: s, label, icon: Icon }) => (
+                  <button
+                    key={s}
+                    type="button"
+                    role="tab"
+                    id={"set-tab-" + s}
+                    aria-selected={section === s}
+                    aria-controls="set-pane"
+                    tabIndex={focusable === s ? 0 : -1}
+                    onClick={() => setSection(s)}
+                  >
+                    <span className={"icon-tile set-icon" + (group.tile ? " " + group.tile : "")} aria-hidden="true">
+                      <Icon size={14} strokeWidth={2} />
+                    </span>
+                    <span className="set-tab-label">{label}</span>
+                    {s === "team" && requests > 0 && (
+                      <span className="count-badge set-tab-badge" aria-hidden="true">{requests}</span>
+                    )}
+                  </button>
+                ))}
+              </Fragment>
+            );
+          })}
         </div>
-      </div>
+        {!shown.length && <p className="set-none" role="status">No settings match “{find.trim()}”.</p>}
+      </nav>
       <div className="set-pane" id="set-pane" role="tabpanel" aria-labelledby={"set-tab-" + section}>
-        <div className="set-pane-head">
-          <h2>{current.label}</h2>
-          {close && (
-            <button type="button" className="set-close" aria-label="Close dialog" onClick={close}>
-              <X size={17} />
-            </button>
-          )}
-        </div>
+        {/* Escape closes Settings too (the app listens for it). Smokes close Settings by this name. */}
+        {close && (
+          <button type="button" className="icon-btn set-close" aria-label="Close dialog" title="Close (Esc)" onClick={close}>
+            <X size={18} />
+          </button>
+        )}
         <div className="set-scroll" key={section}>
+          <div className={"set-page" + (section === "marketplace" || section === "usage" ? " wide" : "")}>
+          <div className="page-head set-pane-head">
+            <div className="page-heading">
+              <h2 className="page-title">{current.label}</h2>
+              <p className="page-sub">{current.about}</p>
+            </div>
+            {section === "bots" && bot && (
+              <div className="page-actions set-bot">
+                <BotAvatar bot={bot} size={28} />
+                <label className="visually-hidden" htmlFor="set-bot">
+                  Bot
+                </label>
+                <select id="set-bot" disabled={busy} value={bot.id} onChange={(e) => setId(e.target.value)}>
+                  {bots.map((b) => (
+                    <option key={b.id} value={b.id}>
+                      {b.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
+          </div>
           {section === "general" && (
             <>
               <Group
@@ -397,20 +477,7 @@ export default function Settings({
           )}
           {section === "bots" && bot && (
             <>
-              <div className="set-toolbar">
-                <span className="set-bot">
-                  <BotAvatar bot={bot} size={30} />
-                  <label className="visually-hidden" htmlFor="set-bot">
-                    Bot
-                  </label>
-                  <select id="set-bot" disabled={busy} value={bot.id} onChange={(e) => setId(e.target.value)}>
-                    {bots.map((b) => (
-                      <option key={b.id} value={b.id}>
-                        {b.name}
-                      </option>
-                    ))}
-                  </select>
-                </span>
+              <div className="set-toolbar set-views">
                 <GlassTabBar
                   aria-label={bot.name + " settings"}
                   value={view}
@@ -590,6 +657,7 @@ export default function Settings({
               {message}
             </p>
           )}
+          </div>
         </div>
       </div>
     </div>
@@ -680,9 +748,9 @@ function Feedback() {
   if (sent) return (
     <Group>
       <Row label={"Thanks. It\u2019s issue #" + sent.number + "."} help="You can follow it, and add to it, on GitHub.">
-        {(id) => <div>
-          <button id={id} className="secondary" onClick={() => void api.openLink(sent.url)}>Open on GitHub</button>
-          <button className="secondary" onClick={() => setSent(null)}>Send another</button>
+        {(id) => <div className="set-buttons">
+          <button id={id} type="button" className="set-button" onClick={() => void api.openLink(sent.url)}>Open on GitHub</button>
+          <button type="button" className="set-button" onClick={() => setSent(null)}>Send another</button>
         </div>}
       </Row>
     </Group>
@@ -690,7 +758,7 @@ function Feedback() {
   return (
     <Group
       footer="This opens a public issue on GitHub with what you write here, the app version and your platform. Leave out names, chats and anything private."
-      actions={<button disabled={!ready} onClick={() => void send()}>{busy ? "Sending\u2026" : kind === "bug" ? "Report bug" : "Send request"}</button>}
+      actions={<button type="button" className="set-button primary" disabled={!ready} onClick={() => void send()}>{busy ? "Sending\u2026" : kind === "bug" ? "Report bug" : "Send request"}</button>}
     >
       <Row label="Kind">
         {(id) => <select id={id} value={kind} onChange={(e) => setKind(e.target.value === "feature" ? "feature" : "bug")}>
@@ -747,9 +815,9 @@ function About() {
       <Group>
         <ValueRow label="Version" value={info?.version ?? "…"} />
         <Row label="Updates" help={problem || update?.message || label || "Botkins checks GitHub Releases automatically."}>
-          {(id) => <div>
-            <button id={id} className="secondary" disabled={working || status === "downloading" || status === "restarting"} onClick={() => void updateAction(!!update?.canInstall)}>{update?.canInstall ? "Update and restart" : "Check for updates"}</button>
-            {(status === "error" || (status === "available" && !update?.canInstall)) && <button className="secondary" onClick={() => void api.openAppRelease()}>Open release</button>}
+          {(id) => <div className="set-buttons">
+            <button id={id} type="button" className="set-button" disabled={working || status === "downloading" || status === "restarting"} onClick={() => void updateAction(!!update?.canInstall)}>{update?.canInstall ? "Update and restart" : "Check for updates"}</button>
+            {(status === "error" || (status === "available" && !update?.canInstall)) && <button type="button" className="set-button" onClick={() => void api.openAppRelease()}>Open release</button>}
           </div>}
         </Row>
         {typeof update?.auto === "boolean" && <SwitchRow label="Install updates automatically"

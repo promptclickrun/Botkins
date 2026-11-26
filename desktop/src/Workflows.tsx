@@ -14,7 +14,6 @@ import {
   Upload,
   Workflow as WorkflowIcon,
 } from "lucide-react";
-import { Button } from "glisse";
 import { WorkflowCanvas } from "./WorkflowCanvas";
 import { WorkflowInspector } from "./WorkflowInspector";
 import { analyzeWorkflowFields } from "./workflowAnalysis";
@@ -529,59 +528,60 @@ export function WorkflowsView({
       <div className="wf-empty-shell">
         {notice && <div className={`wf-toast wf-toast-${notice.tone}`}>{notice.text}</div>}
 
-        <div className="wf-empty-head">
-          <div>
-            <h2>Event-based Workflows</h2>
-            <p className="muted">
-              Chain triggers, bots, deterministic conditions, approvals, and outputs on a visual canvas.
-            </p>
-          </div>
-          <div className="wf-empty-actions">
-            <Button variant="glass" onClick={handleImport}>
-              <Upload size={14} /> Import JSON
-            </Button>
-            <Button variant="filled" onClick={() => handleCreate()}>
-              <Plus size={14} /> New workflow
-            </Button>
-          </div>
+        <div className="wf-empty-actions">
+          <button type="button" className="btn" onClick={handleImport}>
+            <Upload size={14} aria-hidden="true" /> Import JSON
+          </button>
+          <button type="button" className="btn primary" onClick={() => handleCreate()}>
+            <Plus size={14} aria-hidden="true" /> New workflow
+          </button>
         </div>
 
         {workflows.length > 0 && (
-          <div className="wf-card-list">
-            {workflows.map((wf) => {
-              const latest = allRuns.find((r) => r.workflowId === wf.id);
-              return (
-                <div key={wf.id} className="wf-list-card" onClick={() => setActiveId(wf.id)}>
-                  <div className="wf-list-card-main">
-                    <div className="wf-list-card-title">
-                      <WorkflowIcon size={15} />
-                      <strong>{wf.name}</strong>
-                      <span className={"wf-state-pill " + (wf.enabled ? "active" : "paused")}>
-                        {wf.enabled ? "Active" : "Paused"}
+          <section className="page-section" aria-label="Workflows">
+            <h2 className="group-label">Workflows · {workflows.length}</h2>
+            <div className="group">
+              {workflows.map((wf) => {
+                const latest = allRuns.find((r) => r.workflowId === wf.id);
+                return (
+                  <div key={wf.id} className="group-row wf-list-row">
+                    <button type="button" className="wf-list-open" onClick={() => setActiveId(wf.id)}>
+                      <span className="icon-tile tide" aria-hidden="true">
+                        <WorkflowIcon size={15} />
                       </span>
+                      <span className="row-main">
+                        <span className="row-title wf-list-title">
+                          {wf.name}
+                          <span className={"wf-state-pill " + (wf.enabled ? "active" : "paused")}>
+                            {wf.enabled ? "Active" : "Paused"}
+                          </span>
+                        </span>
+                        <span className="row-sub">
+                          {wf.description || `${wf.nodes.length} steps · ${wf.edges.length} connections`}
+                          {latest ? ` · Last run: ${latest.status}` : ""}
+                        </span>
+                      </span>
+                    </button>
+                    <div className="wf-list-card-actions">
+                      <button type="button" className="btn soft small" onClick={() => handlePauseToggle(wf)}>
+                        {wf.enabled ? <Pause size={13} aria-hidden="true" /> : <Play size={13} aria-hidden="true" />}
+                        {wf.enabled ? "Pause" : "Resume"}
+                      </button>
+                      <button type="button" className="icon-btn danger" onClick={() => handleDelete(wf)} aria-label="Delete workflow" title="Delete workflow">
+                        <Trash2 size={14} aria-hidden="true" />
+                      </button>
                     </div>
-                    <p className="muted">{wf.description || `${wf.nodes.length} steps · ${wf.edges.length} connections`}</p>
-                    {latest && <span className="wf-hint">Last run: {latest.status}</span>}
                   </div>
-                  <div className="wf-list-card-actions" onClick={(e) => e.stopPropagation()}>
-                    <Button variant="glass" onClick={() => handlePauseToggle(wf)}>
-                      {wf.enabled ? <Pause size={13} /> : <Play size={13} />}
-                      {wf.enabled ? "Pause" : "Resume"}
-                    </Button>
-                    <Button variant="glass" onClick={() => handleDelete(wf)} aria-label="Delete workflow">
-                      <Trash2 size={13} />
-                    </Button>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
+                );
+              })}
+            </div>
+          </section>
         )}
 
-        <div className="wf-templates">
-          <div className="wf-templates-head">
-            <Sparkles size={14} /> <span>Starter workflows</span>
-          </div>
+        <section className="page-section wf-templates" aria-label="Starter workflows">
+          <h2 className="group-label">
+            <Sparkles size={13} aria-hidden="true" /> Starter workflows
+          </h2>
           <div className="wf-template-grid">
             {templates.map((tpl) => (
               <button key={tpl.id} type="button" className="wf-template-card" onClick={() => handleCreate(tpl.build())}>
@@ -590,7 +590,7 @@ export function WorkflowsView({
               </button>
             ))}
           </div>
-        </div>
+        </section>
       </div>
     );
   }
@@ -603,8 +603,8 @@ export function WorkflowsView({
       {/* Top editor bar */}
       <div className="wf-topbar">
         <div className="wf-topbar-left">
-          <button type="button" className="wf-back-btn" onClick={() => { setActiveId(null); setDraft(null); }} title="All workflows">
-            <ArrowLeft size={14} />
+          <button type="button" className="icon-btn" onClick={() => { setActiveId(null); setDraft(null); }} title="All workflows" aria-label="All workflows">
+            <ArrowLeft size={15} aria-hidden="true" />
           </button>
           {workflows.length > 1 && (
             <select
@@ -633,25 +633,25 @@ export function WorkflowsView({
         </div>
 
         <div className="wf-topbar-right">
-          <Button variant="glass" onClick={handleImport} title="Import workflow JSON">
-            <Upload size={13} /> Import
-          </Button>
-          <Button variant="glass" onClick={handleExport} title="Export portable JSON (no secrets)">
-            <Download size={13} /> Export
-          </Button>
-          <Button variant="glass" onClick={() => handlePauseToggle(draft)}>
-            {draft.enabled ? <Pause size={13} /> : <Play size={13} />}
+          <button type="button" className="btn small" onClick={handleImport} title="Import workflow JSON">
+            <Upload size={13} aria-hidden="true" /> Import
+          </button>
+          <button type="button" className="btn small" onClick={handleExport} title="Export portable JSON (no secrets)">
+            <Download size={13} aria-hidden="true" /> Export
+          </button>
+          <button type="button" className="btn soft small" onClick={() => handlePauseToggle(draft)}>
+            {draft.enabled ? <Pause size={13} aria-hidden="true" /> : <Play size={13} aria-hidden="true" />}
             {draft.enabled ? "Pause" : "Resume"}
-          </Button>
-          <Button variant="filled" onClick={handleRunNow}>
-            <Play size={13} /> Run now
-          </Button>
-          <Button variant="glass" onClick={() => handleCreate()} title="New workflow">
-            <Plus size={13} />
-          </Button>
-          <Button variant="glass" onClick={() => handleDelete(draft)} title="Delete workflow" aria-label="Delete workflow">
-            <Trash2 size={13} />
-          </Button>
+          </button>
+          <button type="button" className="btn primary small" onClick={handleRunNow}>
+            <Play size={13} aria-hidden="true" /> Run now
+          </button>
+          <button type="button" className="icon-btn" onClick={() => handleCreate()} title="New workflow" aria-label="New workflow">
+            <Plus size={15} aria-hidden="true" />
+          </button>
+          <button type="button" className="icon-btn danger" onClick={() => handleDelete(draft)} title="Delete workflow" aria-label="Delete workflow">
+            <Trash2 size={15} aria-hidden="true" />
+          </button>
         </div>
       </div>
 

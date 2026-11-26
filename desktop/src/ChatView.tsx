@@ -13,15 +13,16 @@ import {
 import {
   ArrowDown,
   ArrowLeft,
+  BrainCircuit,
   Clock,
   Copy,
   Ellipsis,
   File,
   Folder,
   FileDiff,
-  FoldVertical,
   FolderGit2,
   GitFork,
+  PanelLeft,
   PanelRight,
   Monitor,
   Smile,
@@ -32,7 +33,7 @@ import {
   Volume2,
   Square,
 } from "lucide-react";
-import { Button, Glass, Menu as GlisseMenu } from "glisse";
+import { Button, Glass, Menu as GlisseMenu, type MenuEntry } from "glisse";
 import { type CompletionScroll, finalReplyIndex } from "./completionScroll";
 import { isSilentMessage } from "../desktop/link/silent-reply.mjs";
 import { pullRequestUrl } from "../desktop/link/pr-url.mjs";
@@ -67,6 +68,7 @@ import type { IslandUpdate } from "./island";
 import { clearReadingError, readAloud, useReading } from "./voice";
 import ContextDetails from "./ContextDetails";
 import { BotAvatar, activityLabel, botActivity, chatActivity, useOutcome } from "./Avatar";
+import type { ChatDetails } from "./ChatSide";
 import SidePane, { paneAction, useNarrow, usePaneAsk, type Inspect } from "./SidePane";
 import ComputerScreen from "./ComputerScreen";
 import { chatDefault, ModelBadge, modelLabel, useDefaultProvider } from "./ModelPicker";
@@ -87,6 +89,8 @@ import { regenerateTitleItem, useAsk, useMenu } from "./Pages";
 import "./canvas.css";
 import "./projects.css";
 import "./groups.css";
+// Last, so the simplified chat (header, column, message box, Details) wins over the older rules.
+import "./chat.css";
 
 /** A bot's face in a mention tag (src/PersonBadge.tsx): one function, so the chat's mention directory stays the same object. */
 const mentionBotFace = (bot: Bot) => <BotAvatar bot={bot} size={14} badge={false} />;
@@ -169,26 +173,57 @@ function ReactionList({ message, state }: { message: Message; state: State }) {
   })}</div>;
 }
 
-function ChatOptions({ state, chat, fail }: { state: State; chat: Chat; fail: (error: unknown) => void }) {
+/**
+ * The chat's ⋯ menu: Regenerate title, and what moved out of the header (model and thinking,
+ * Invite, Bot settings). Details in the side pane has the same, for when the pane is open.
+ */
+function ChatOptions({
+  state,
+  chat,
+  fail,
+  pickModel,
+  invite,
+  botSettings,
+}: {
+  state: State;
+  chat: Chat;
+  fail: (error: unknown) => void;
+  pickModel?: () => void;
+  invite?: () => void;
+  botSettings?: () => void;
+}) {
   const item = regenerateTitleItem(state, chat, fail);
-  if (!item || item === "separator") return null;
-  const Icon = item.icon;
+  const items: MenuEntry[] = [];
+  if (item && item !== "separator") {
+    const Icon = item.icon;
+    items.push({
+      label: item.label,
+      icon: Icon ? <Icon size={14} aria-hidden="true" /> : undefined,
+      onSelect: item.run,
+      disabled: item.disabled,
+      destructive: item.danger,
+    });
+  }
+  const more: MenuEntry[] = [
+    ...(pickModel ? [{ label: "Model and thinking…", icon: <BrainCircuit size={14} aria-hidden="true" />, onSelect: pickModel }] : []),
+    ...(invite ? [{ label: "Invite…", icon: <UserPlus size={14} aria-hidden="true" />, onSelect: invite }] : []),
+    ...(botSettings ? [{ label: "Bot settings", icon: <SlidersHorizontal size={14} aria-hidden="true" />, onSelect: botSettings }] : []),
+  ];
+  if (items.length && more.length) items.push("separator");
+  items.push(...more);
+  if (!items.length) return null;
+  return <GlisseMenu className="chathead-menu" aria-label="Chat options" align="end" icon={<Ellipsis size={17} />} items={items} />;
+}
+
+/** The header's context use: a small ring filled to the percent used, warning past 80%. */
+function ContextRing({ percent }: { percent: number }) {
+  const r = 7;
+  const around = 2 * Math.PI * r;
   return (
-    <GlisseMenu
-      className="chathead-menu"
-      aria-label="Chat options"
-      align="end"
-      icon={<Ellipsis size={17} />}
-      items={[
-        {
-          label: item.label,
-          icon: Icon ? <Icon size={14} aria-hidden="true" /> : undefined,
-          onSelect: item.run,
-          disabled: item.disabled,
-          destructive: item.danger,
-        },
-      ]}
-    />
+    <svg className={"context-ring-mark" + (percent >= 80 ? " high" : "")} width="16" height="16" viewBox="0 0 18 18" aria-hidden="true">
+      <circle cx="9" cy="9" r={r} className="ring-track" />
+      <circle cx="9" cy="9" r={r} className="ring-fill" strokeDasharray={(around * Math.max(percent, 2)) / 100 + " " + around} transform="rotate(-90 9 9)" />
+    </svg>
   );
 }
 
@@ -223,6 +258,8 @@ function ChatViewBody({
   openToday,
   openRoutines,
   openBot,
+  listShown,
+  toggleList,
 }: {
   updates: WindowState;
   completions: CompletionScroll;
@@ -249,6 +286,10 @@ function ChatViewBody({
   openRoutines?: (target: { id?: string; botId?: string }) => void;
   /** Opens this bot's page. */
   openBot?: () => void;
+  /** Whether the chat list beside the chat is showing; given with toggleList. */
+  listShown?: boolean;
+  /** Shows or hides the chat list beside the chat. Without it the header's left button goes back to Chats. */
+  toggleList?: () => void;
 }) {
   const scroller = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
@@ -676,6 +717,29 @@ function ChatViewBody({
   const context = chat.context;
   const percent = context ? Math.min(100, Math.round((context.current / context.limit) * 100)) : 0;
   const [contextOpen, setContextOpen] = useState(false);
+  // The context actions the header used to carry; now in the context popover and in Details.
+  const compactNow = () => void window.botkins.compact(chat.id).catch((e) => setNotice(e.message));
+  const resetContext = () => void window.botkins.changeMainFork(chat.id, "reset", undefined, chat.activeFork).catch((e) => setNotice(e.message));
+  const switchFork = (id: string) => void window.botkins.changeMainFork(chat.id, "switch", id, chat.activeFork).catch((e) => setNotice(e.message));
+  // What Details in the side pane offers for this chat (ChatSide.tsx).
+  const chatDetails: ChatDetails = {
+    model: !group && canManageAgents ? { label: modelLabel(model, models, defaultProvider), badge: <ModelBadge choice={model} models={models} />, change: pickModel } : undefined,
+    context: context && context.limit > 0 ? { current: context.current, limit: context.limit, percent } : undefined,
+    busy,
+    compact: (context && context.limit > 0) || ownMain ? compactNow : undefined,
+    reset: ownMain ? resetContext : undefined,
+    forks: ownMain ? chat.forks : undefined,
+    activeFork: chat.activeFork,
+    switchFork: ownMain ? switchFork : undefined,
+    todos,
+    people: peopleView
+      ? {
+          summary: chatPeopleList.length <= 1 ? "Only you are in this chat" : chatPeopleList.length + " people in this chat",
+          invite: !chat.main ? () => setShowPeople(true) : undefined,
+        }
+      : undefined,
+    botSettings: canManageAgents ? botSettings : undefined,
+  };
 
   // With "Read replies aloud" on, each new final reply in the open chat is spoken. Interim
   // messages are activity markers, not replies, and must never be read aloud as a finished turn.
@@ -961,10 +1025,26 @@ function ChatViewBody({
             }}
           />
         )}
+      {/* The header keeps what a person reaches for in every chat: the chat list (or back), who
+          this is with one line of status, the project, a context ring, the side pane and the ⋯
+          menu. The model is in the message box and in Details; threads, Compact and Reset context
+          are in the ring's popover and in Details; Invite and Bot settings are in ⋯ and Details. */}
       <div className="chathead">
-        <button className="chathead-back" aria-label="Back to chats" title="Back to chats" onClick={back}>
-          <ArrowLeft size={18} />
-        </button>
+        {toggleList ? (
+          <button
+            className="chathead-icon chathead-list"
+            aria-label={listShown ? "Hide chat list" : "Show chat list"}
+            title={listShown ? "Hide chat list" : "Show chat list"}
+            aria-pressed={!!listShown}
+            onClick={toggleList}
+          >
+            <PanelLeft size={18} />
+          </button>
+        ) : (
+          <button className="chathead-back" aria-label="Back to chats" title="Back to chats" onClick={back}>
+            <ArrowLeft size={18} />
+          </button>
+        )}
         {group ? (
           <span className="group-avatars" aria-hidden="true">
             {members.map((m) => (
@@ -972,11 +1052,12 @@ function ChatViewBody({
             ))}
           </span>
         ) : (
-          <BotAvatar bot={bot} state={face} size={30} animated />
+          <BotAvatar bot={bot} state={face} size={32} animated />
         )}
         <div className="chathead-title">
           <h2>{group ? chat.title : bot.name}</h2>
           <small className={doing ? "doing" : undefined}>
+            {doing && <i className="status-dot working" aria-hidden="true" />}
             {doing || (chat.main && "Main chat") ||
               (group
                 ? chat.title === members.map((m) => m.name).join(", ")
@@ -986,19 +1067,6 @@ function ChatViewBody({
           </small>
         </div>
         <div className="chathead-tools">
-          {ownMain && <select aria-label="Main chat context" title="Main chat context" disabled={busy}
-            value={chat.activeFork} onChange={e => {
-              const id = e.target.value;
-              if (id === "compact") {
-                void window.botkins.compact(chat.id).catch(err => setNotice(err.message));
-                return;
-              }
-              void (id === "reset" ? window.botkins.changeMainFork(chat.id, "reset", undefined, chat.activeFork) : window.botkins.changeMainFork(chat.id, "switch", id, chat.activeFork)).catch(err => setNotice(err.message));
-            }}>
-            {chat.forks?.map(f => <option key={f.id} value={f.id}>{f.name}</option>)}
-            <option value="compact">Compact</option>
-            <option value="reset">Reset context</option>
-          </select>}
           {project && (
             <div className="project-tag">
               <span className="project-label" title={chat.folder ?? project.folder ?? project.name}>
@@ -1023,19 +1091,15 @@ function ChatViewBody({
           {context && context.limit > 0 && (
             <div className="context-meter">
               <button
-                className="context-open"
+                className="context-open context-ring"
                 aria-haspopup="dialog"
                 aria-expanded={contextOpen}
                 aria-label={"Context window: " + percent + "% used. Show details"}
                 title="Context window"
                 onClick={() => setContextOpen(!contextOpen)}
               >
-                <span className="meter" aria-hidden="true">
-                  <i style={{ width: percent + "%" }} className={percent >= 80 ? "high" : ""} />
-                </span>
-                <small>
-                  {percent}%<span className="context-words"> of context</span>
-                </small>
+                <ContextRing percent={percent} />
+                <small>{percent}%</small>
               </button>
               {contextOpen && (
                 <ContextDetails
@@ -1045,40 +1109,16 @@ function ChatViewBody({
                   close={() => setContextOpen(false)}
                   compact={() => {
                     setContextOpen(false);
-                    void window.botkins.compact(chat.id).catch((e) => setNotice(e.message));
+                    compactNow();
                   }}
+                  reset={ownMain ? () => {
+                    setContextOpen(false);
+                    resetContext();
+                  } : undefined}
+                  switchFork={ownMain ? switchFork : undefined}
                 />
               )}
-              <button
-                className="chathead-icon"
-                aria-label="Compact"
-                disabled={busy}
-                title="Compact: summarize earlier turns to free up context"
-                onClick={() => void window.botkins.compact(chat.id).catch((e) => setNotice(e.message))}
-              >
-                <FoldVertical size={17} />
-              </button>
             </div>
-          )}
-          {!group && canManageAgents && (
-            <button
-              className="chat-model"
-              aria-label={"Model: " + modelLabel(model, models, defaultProvider) + ". Change model and thinking"}
-              title="Model and thinking"
-              onClick={pickModel}
-            >
-              <ModelBadge choice={model} models={models} />
-            </button>
-          )}
-          {!chat.main && peopleView && (
-            <button className="chathead-icon chat-invite" aria-label="Invite" title="Invite" aria-haspopup="dialog" onClick={() => setShowPeople(true)}>
-              <UserPlus size={17} />
-            </button>
-          )}
-          {canManageAgents && (
-            <button className="chathead-icon bot-settings" aria-label="Bot settings" title="Bot settings" onClick={botSettings}>
-              <SlidersHorizontal size={17} />
-            </button>
           )}
           {paneAllowed && (
             <button
@@ -1094,7 +1134,15 @@ function ChatViewBody({
               {unseen && <i className="pane-dot" aria-hidden="true" />}
             </button>
           )}
-          <ChatOptions key={chat.id} state={state} chat={chat} fail={(error) => setNotice(error instanceof Error ? error.message : String(error))} />
+          <ChatOptions
+            key={chat.id}
+            state={state}
+            chat={chat}
+            fail={(error) => setNotice(error instanceof Error ? error.message : String(error))}
+            pickModel={!group && canManageAgents ? pickModel : undefined}
+            invite={!chat.main && peopleView ? () => setShowPeople(true) : undefined}
+            botSettings={canManageAgents ? botSettings : undefined}
+          />
         </div>
       </div>
       <div className="messages-wrap">
@@ -1526,7 +1574,7 @@ function ChatViewBody({
       </div>
       {paneShown && narrow && <div className="pane-scrim" aria-hidden="true" onClick={closePane} />}
       {paneShown && (
-        <SidePane key={chat.id} inspect={inspect?.chatId === chat.id ? inspect : undefined} latestRunId={latest?.id} pull={pull?.chatId === chat.id ? pull : undefined} preview={preview?.chatId === chat.id ? preview : undefined} state={state} chat={chat} bot={bot} face={face} group={group} drawer={narrow} close={closePane} openComputer={openComputer} openRoutines={openRoutines} openBot={openBot} openChat={openChat} />
+        <SidePane key={chat.id} inspect={inspect?.chatId === chat.id ? inspect : undefined} latestRunId={latest?.id} pull={pull?.chatId === chat.id ? pull : undefined} preview={preview?.chatId === chat.id ? preview : undefined} state={state} chat={chat} bot={bot} face={face} group={group} drawer={narrow} close={closePane} openComputer={openComputer} openRoutines={openRoutines} openBot={openBot} openChat={openChat} details={chatDetails} />
       )}
       {computer && !computer.member && computer.state === "online" && onScreen && watching?.hostId === computer.id && watching.chatId === chat.id &&
         <ComputerScreen key={computer.id + "/" + chat.id} host={computer} close={closeComputer} />}

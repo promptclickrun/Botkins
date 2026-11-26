@@ -3,10 +3,13 @@
 // table, a website in the app's own viewer, or the Screen panel. The tabs live in the chat's state,
 // so a phone sees the same ones; what the person does with them goes back through sidePane().
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode, type Ref } from "react";
-import { AppWindow, ArrowLeft, ArrowRight, ExternalLink, File, FileAudio, FileImage, FileText, FileVideo, Folder, Globe, Info, ListTree, MonitorUp, Pin, RotateCw, Table2, TriangleAlert, Users, X } from "lucide-react";
+import { AppWindow, ArrowLeft, ArrowRight, ExternalLink, File, FileAudio, FileImage, FileText, FileVideo, Folder, Globe, Info, ListTree, Maximize2, MonitorUp, Pin, RotateCw, Table2, TriangleAlert, Users, X } from "lucide-react";
 import { BotAvatar, type AvatarState } from "./Avatar";
 import { PullRequestPanel } from "./PullRequestPanel";
-import ChatSide from "./ChatSide";
+import ChatSide, { type ChatDetails } from "./ChatSide";
+import OpenedPanel from "./SpacePanelOpen";
+import { isPanelFullscreenShortcut } from "./panelOpen";
+import { MOD } from "./places";
 import HtmlFrame from "./HtmlFrame";
 import { ScreenPanel } from "./ScreenSettings";
 import { ComputerScreenGate } from "./ComputerScreen";
@@ -16,6 +19,7 @@ import { crewOf, storySteps, type StoryUpdate } from "./activityStory";
 import type { Artifact, Bot, Chat, PanePanel, State } from "./types";
 import "./blocks.css";
 import "./sidepane.css";
+import "./spaces.css";
 
 // The website viewer is Electron's <webview>. The main process lets one in only with this partition
 // and an http(s) address, and sets everything else about it (desktop/webviewer.mjs).
@@ -118,6 +122,7 @@ export default function SidePane({
   pull,
   inspect,
   latestRunId,
+  details,
 }: {
   state: State;
   chat: Chat;
@@ -140,6 +145,8 @@ export default function SidePane({
   inspect?: Inspect;
   /** The chat's latest turn: what Activity and Crew show until something in the chat is clicked. */
   latestRunId?: string;
+  /** What Details shows about the chat itself (ChatSide.tsx). */
+  details?: ChatDetails;
 }) {
   const panels = chat.pane?.panels ?? [];
   const active = chat.pane?.active ?? null;
@@ -221,12 +228,42 @@ export default function SidePane({
   };
 
   const opener = shownPanel ? botOf(shownPanel.botId) : undefined;
+  // A bot's panel opened to fill the window (the opened panel of a space, SpacePanelOpen.tsx). While
+  // it is open the pane shows a note in its place, so a website or page isn't loaded twice.
+  const [full, setFull] = useState<string | null>(null);
+  const fullPanel = full ? panels.find((p) => p.id === full) : undefined;
+  useEffect(() => {
+    if (full && !fullPanel) setFull(null);
+  }, [full, fullPanel]);
+  const panelBody = (panel: PanePanel, large: boolean) =>
+    panel.kind === "web" ? (
+      <WebPanel panel={panel} />
+    ) : panel.kind === "table" ? (
+      <TablePanel panel={panel} />
+    ) : panel.kind === "rich_ui" ? (
+      panel.frame ? (
+        <div className="pane-rich">
+          <HtmlFrame key={panel.frame} frame={panel.frame} height={large ? 720 : 480} title={panel.title} />
+        </div>
+      ) : null
+    ) : state.remote?.using ? (
+      <ComputerScreenGate host={state.remote.using} open={openComputer} />
+    ) : (
+      <ScreenPanel state={state} />
+    );
   return (
     <aside
       className={"side-pane" + (shownPanel || inspecting ? " wide" : "") + (inspecting ? " inspector" : "") + (drawer ? " drawer" : "")}
       aria-label="Side pane"
       onKeyDown={(e) => {
-        if (drawer && e.key === "Escape" && !e.defaultPrevented) {
+        // ⇧⌘F on a panel in front opens it full screen; the opened panel takes the key from there.
+        if (shownPanel && front === shownPanel.id && !full && isPanelFullscreenShortcut(e.nativeEvent)) {
+          e.preventDefault();
+          setFull(shownPanel.id);
+          return;
+        }
+        // Esc in the full-screen panel is that dialog's own.
+        if (drawer && e.key === "Escape" && !e.defaultPrevented && !(e.target instanceof Element && e.target.closest("dialog"))) {
           e.preventDefault();
           close();
         }
@@ -306,6 +343,15 @@ export default function SidePane({
           >
             <Pin size={14} aria-hidden="true" />
           </button>
+          <button
+            type="button"
+            className="pane-tool"
+            aria-label={"Full screen: " + shownPanel.title}
+            title={"Full screen (" + (MOD === "⌘" ? "⇧⌘F" : "Ctrl+Shift+F") + ")"}
+            onClick={() => setFull(shownPanel.id)}
+          >
+            <Maximize2 size={14} aria-hidden="true" />
+          </button>
           <button type="button" className="pane-tool" aria-label={"Close " + shownPanel.title} title="Close tab" onClick={() => remove(shownPanel)}>
             <X size={15} aria-hidden="true" />
           </button>
@@ -314,7 +360,7 @@ export default function SidePane({
       <div className="pane-bodies">
         {!group && front === DETAILS && (
           <Body chatId={chat.id} id={DETAILS} tabs={showTabs}>
-            <ChatSide state={state} bot={bot} face={face} openRoutines={openRoutines} openBot={openBot} />
+            <ChatSide state={state} bot={bot} face={face} openRoutines={openRoutines} openBot={openBot} details={details} />
           </Body>
         )}
         {front === "pull" && pull && <Body chatId={chat.id} id="pull" tabs><PullRequestPanel key={pull.url} url={pull.url} /></Body>}
@@ -350,23 +396,32 @@ export default function SidePane({
         {panels.map((panel) =>
           panel.id === front || panel.kind === "web" ? (
             <Body key={panel.id} chatId={chat.id} id={panel.id} tabs={showTabs} away={panel.id !== front} kind={panel.kind}>
-              {panel.kind === "web" ? (
-                <WebPanel panel={panel} />
-              ) : panel.kind === "table" ? (
-                <TablePanel panel={panel} />
-              ) : panel.kind === "rich_ui" ? (
-                panel.frame ? (
-                  <div className="pane-rich">
-                    <HtmlFrame key={panel.frame} frame={panel.frame} height={480} title={panel.title} />
-                  </div>
-                ) : null
+              {panel.id === full ? (
+                <p className="pane-empty pane-full-note">Shown full screen.</p>
               ) : (
-                state.remote?.using ? <ComputerScreenGate host={state.remote.using} open={openComputer} /> : <ScreenPanel state={state} />
+                panelBody(panel, false)
               )}
             </Body>
           ) : null,
         )}
       </div>
+      {fullPanel && (
+        <OpenedPanel
+          key={fullPanel.id}
+          title={fullPanel.title}
+          frameIds={fullPanel.kind === "rich_ui" && fullPanel.frame ? [fullPanel.frame] : []}
+          initialFullscreen
+          close={() => setFull(null)}
+        >
+          <div className={"pane-opened " + fullPanel.kind}>
+            <div className="pane-opened-head">
+              {botOf(fullPanel.botId) && <BotAvatar bot={botOf(fullPanel.botId)!} size={22} badge={false} />}
+              <strong>{fullPanel.title}</strong>
+            </div>
+            {panelBody(fullPanel, true)}
+          </div>
+        </OpenedPanel>
+      )}
     </aside>
   );
 }

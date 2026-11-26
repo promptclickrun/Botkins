@@ -1,16 +1,72 @@
-// Node host: lets a computer advertise its shared bots and read-only project folder listing
-// to the owner's other Botkins hosts without creating local bots or falling back to first-run setup.
-// Grants live on this node, keyed by (source host, source bot, operation, resource), and are
-// separate from cross-host conversation grants.
+// Node host: lets a computer act as a remote-controlled node for the owner's other Botkins hosts,
+// offering scoped file operations, policy-gated shell execution, computer control, and notifications.
+// Policy and grants live strictly on this node, keyed by (source host, source bot, operation, resource),
+// and are separate from cross-host conversation grants.
 import { createHash, randomUUID } from "node:crypto";
-import { readdirSync, realpathSync, statSync } from "node:fs";
+import { existsSync, readdirSync, realpathSync, statSync } from "node:fs";
+import { homedir } from "node:os";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
+import {
+  inspectWriteTarget,
+  nodeDelete,
+  nodeMkdir,
+  nodeMove,
+  nodeReadFile,
+  nodeSearch,
+  nodeStat,
+  nodeWriteFile,
+  resolveFileScope,
+  WHOLE_COMPUTER_RESOURCE,
+} from "./node-files.mjs";
+import {
+  DEFAULT_EXEC_MODE,
+  evaluateExecPolicy,
+  EXEC_MODES,
+  nodeWhich,
+  prepareExecRequest,
+  runBoundExec,
+  verifyExecBinding,
+} from "./node-exec.mjs";
+import { nodeScreenCapture, nodeScreenInfo, nodeScreenInput } from "./node-screen.mjs";
 
 export const CAPABILITIES_VERSION = 1;
 export const LIST_FILES_OPERATION = "project.list_files";
 export const LIST_FILES_VERSION = 1;
 export const MAX_LISTING_ENTRIES = 500;
 export const MAX_LISTING_BYTES = 64 * 1024;
+export const MAX_AUDIT_ENTRIES = 250;
+export const NODE_OPERATIONS = Object.freeze([
+  "project.list_files",
+  "fs.read",
+  "fs.write",
+  "fs.mkdir",
+  "fs.move",
+  "fs.delete",
+  "fs.stat",
+  "fs.search",
+  "system.run",
+  "system.which",
+  "screen.info",
+  "screen.capture",
+  "screen.input",
+  "node.notify",
+]);
+
+const FILE_OPERATIONS = new Set([
+  "fs.read",
+  "fs.write",
+  "fs.mkdir",
+  "fs.move",
+  "fs.delete",
+  "fs.stat",
+  "fs.search",
+]);
+const SCREEN_OPERATIONS = new Set(["screen.info", "screen.capture", "screen.input"]);
+const SYSTEM_OPERATIONS = new Set(["system.run", "system.which"]);
+const ALL_OPERATIONS = new Set(NODE_OPERATIONS);
+const SYSTEM_RESOURCE = "@system";
+const SCREEN_RESOURCE = "@screen";
+const NOTIFY_RESOURCE = "@notify";
 
 const WEEK = 7 * 24 * 60 * 60 * 1000;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -143,6 +199,7 @@ export function listProjectFiles(rootDir, relPath = "", { maxEntries = MAX_LISTI
 function jobResult(row) {
   return {
     status: row.status,
+    ...(row.status === "working" && row.output && { output: row.output }),
     ...(row.result && { result: row.result }),
     ...(row.error && { error: row.error }),
   };
@@ -178,6 +235,158 @@ function summarizeLastCompleted(item) {
   };
 }
 
+function cleanAllowlistRule(rule) {
+  if (!rule || typeof rule !== "object") return null;
+  const pattern = safeText(rule.pattern, 240);
+  if (!pattern) return null;
+  const botId = safeText(rule.botId, 160) || "*";
+  return {
+    id: typeof rule.id === "string" && rule.id ? rule.id : randomUUID(),
+    botId,
+    pattern,
+    createdAt: Number.isFinite(rule.createdAt) ? rule.createdAt : Date.now(),
+  };
+}
+
+function cleanAuditEntry(entry) {
+  if (!entry || typeof entry !== "object" || typeof entry.id !== "string") return null;
+  return {
+    id: entry.id,
+    time: Number.isFinite(entry.time) ? entry.time : Date.now(),
+    operation: safeText(entry.operation, 80),
+    sourceHostName: safeText(entry.sourceHostName, 160),
+    sourceBotId: safeText(entry.sourceBotId, 160),
+    sourceBotName: safeText(entry.sourceBotName, 160),
+    resourceId: safeText(entry.resourceId, 160),
+    resourceName: safeText(entry.resourceName, 160),
+    argsSummary: safeText(entry.argsSummary, 240),
+    status: safeText(entry.status, 32),
+    ...(entry.exitCode !== undefined && entry.exitCode !== null && { exitCode: entry.exitCode }),
+    ...(entry.error && { error: safeText(entry.error, 240) }),
+    ...(Number.isFinite(entry.durationMs) && { durationMs: entry.durationMs }),
+  };
+}
+
+function summarizeArgs(operation, params = {}, extra = {}) {
+  if (operation === LIST_FILES_OPERATION) return params.path ? `path=${params.path}` : "root";
+  if (operation === "fs.read" || operation === "fs.stat" || operation === "fs.mkdir" || operation === "fs.delete") {
+    return `${params.path || ""}${params.recursive ? " (recursive)" : ""}`.trim();
+  }
+  if (operation === "fs.write") {
+    const bytes = typeof params.content === "string" ? Buffer.byteLength(params.content, params.encoding === "base64" ? "base64" : "utf8") : 0;
+    return `${params.path || ""} (${bytes}B${params.overwrite ? ", overwrite" : ""})`;
+  }
+  if (operation === "fs.move") {
+    return `${params.from || ""} -> ${params.to || ""}${params.overwrite ? " (overwrite)" : ""}`;
+  }
+  if (operation === "fs.search") {
+    return [params.path && `in ${params.path}`, params.pattern && `pattern=${params.pattern}`, params.query && `query=${params.query}`].filter(Boolean).join(" ");
+  }
+  if (operation === "system.run") {
+    const cmd = extra.binding?.argv?.join(" ") || (Array.isArray(params.argv) ? params.argv.join(" ") : String(params.command || ""));
+    return cmd.slice(0, 220);
+  }
+  if (operation === "system.which") {
+    return Array.isArray(params.names) ? params.names.join(", ") : "";
+  }
+  if (operation === "screen.info") return "displays";
+  if (operation === "screen.capture") return `display=${params.display || "primary"}`;
+  if (operation === "screen.input") return `display=${params.display || "primary"} events=${Array.isArray(params.events) ? params.events.length : 0}`;
+  if (operation === "node.notify") return safeText(params.title || "", 120);
+  return "";
+}
+
+function describeApproval(row, nodeLabel) {
+  const op = row.grantOperation || row.operation;
+  const who = `${row.sourceBotName} on ${row.sourceHostName}`;
+  if (row.operation === LIST_FILES_OPERATION) {
+    const folderDetail = row.path ? `${row.resourceName} (${row.resourceFolder || ""}${sep}${row.path})` : `${row.resourceName} (${row.resourceFolder || ""})`;
+    return {
+      title: `${who} wants to list files in ${row.resourceName} on ${nodeLabel}`,
+      detail: `Operation: list files (${row.operation})\nFolder: ${folderDetail}`,
+      label: "Allow for today and Always allow apply only to list files in this shared folder for this source bot on these two computers.",
+    };
+  }
+  if (FILE_OPERATIONS.has(row.operation)) {
+    const verb =
+      op === "fs.write.overwrite"
+        ? "overwrite a file"
+        : op === "fs.move.overwrite"
+          ? "overwrite on move"
+          : {
+              "fs.read": "read a file",
+              "fs.write": "write a file",
+              "fs.mkdir": "create a folder",
+              "fs.move": "move/rename",
+              "fs.delete": "delete",
+              "fs.stat": "inspect",
+              "fs.search": "search files",
+            }[row.operation] || row.operation;
+    const summary = summarizeArgs(row.operation, row.params);
+    return {
+      title: `${who} wants to ${verb} in ${row.resourceName} on ${nodeLabel}`,
+      preview: summary || undefined,
+      detail: `Operation: ${op}\nScope: ${row.resourceName} (${row.resourceId})\nTarget: ${summary}`,
+      label: `Allow for today and Always allow apply only to ${op} in ${row.resourceName} for this source bot on these two computers.`,
+    };
+  }
+  if (row.operation === "system.run") {
+    const b = row.execBinding;
+    const lines = [
+      `Operation: system.run`,
+      `Executable: ${b.resolvedExecutable}`,
+      `Argv: ${JSON.stringify(b.argv)}`,
+      `Working dir: ${b.cwd}`,
+      `Env overrides: ${b.env.length ? b.env.map(([k]) => k).join(", ") : "(none)"}`,
+      ...(b.pinnedScript ? [`Pinned script: ${b.pinnedScript.path} (sha256:${b.pinnedScript.hash.slice(0, 12)})`] : []),
+      `Binding: ${b.bindingHash.slice(0, 16)}`,
+    ];
+    return {
+      title: `${who} wants to run a command on ${nodeLabel}`,
+      preview: b.argv.join(" "),
+      detail: lines.join("\n"),
+      label: "Approval binds this exact command, executable, working directory, and environment. Allow for today / Always allow covers only this exact bound command.",
+    };
+  }
+  if (row.operation === "system.which") {
+    const names = Array.isArray(row.params?.names) ? row.params.names.join(", ") : "";
+    return {
+      title: `${who} wants to locate commands on ${nodeLabel}`,
+      preview: names,
+      detail: `Operation: system.which\nCommands: ${names}`,
+      label: "Allow for today and Always allow apply only to system.which for this source bot on these two computers.",
+    };
+  }
+  if (SCREEN_OPERATIONS.has(row.operation)) {
+    const verb =
+      row.operation === "screen.info"
+        ? "inspect displays"
+        : row.operation === "screen.capture"
+          ? "take a screenshot"
+          : "send mouse/keyboard input";
+    const summary = summarizeArgs(row.operation, row.params);
+    return {
+      title: `${who} wants to ${verb} on ${nodeLabel}`,
+      preview: summary || undefined,
+      detail: `Operation: ${row.operation}\nDetails: ${summary}`,
+      label: `Allow for today and Always allow apply only to ${row.operation} for this source bot on these two computers.`,
+    };
+  }
+  if (row.operation === "node.notify") {
+    return {
+      title: `${who} wants to show a notification on ${nodeLabel}`,
+      preview: row.params?.title || undefined,
+      detail: `Operation: node.notify\nTitle: ${row.params?.title || ""}${row.params?.body ? `\nBody: ${row.params.body}` : ""}`,
+      label: "Allow for today and Always allow apply only to notifications for this source bot on these two computers.",
+    };
+  }
+  return {
+    title: `${who} wants to run ${row.operation} on ${nodeLabel}`,
+    detail: `Operation: ${row.operation}`,
+    label: "Allow for today and Always allow apply only to this operation and resource.",
+  };
+}
+
 export class NodeHost {
   live = new Map();
   constructor(ws, data = {}) {
@@ -185,10 +394,20 @@ export class NodeHost {
     this.enabled = data?.enabled === true;
     this.name = safeText(data?.name, 80);
     this.paused = data?.paused === true;
+    this.wholeComputer = data?.wholeComputer === true;
+    this.execPolicy = {
+      mode: EXEC_MODES.includes(data?.execPolicy?.mode) ? data.execPolicy.mode : DEFAULT_EXEC_MODE,
+      allowlist: Array.isArray(data?.execPolicy?.allowlist)
+        ? data.execPolicy.allowlist.map(cleanAllowlistRule).filter(Boolean)
+        : [],
+    };
     this.sharedProjects = Array.isArray(data?.sharedProjects)
       ? [...new Set(data.sharedProjects.filter((id) => typeof id === "string" && id.trim()))]
       : [];
     this.lastCompleted = summarizeLastCompleted(data?.lastCompleted);
+    this.auditLog = Array.isArray(data?.auditLog)
+      ? data.auditLog.map(cleanAuditEntry).filter(Boolean).slice(-MAX_AUDIT_ENTRIES)
+      : [];
     this.grants = Array.isArray(data?.grants)
       ? data.grants
           .filter((g) => g && typeof g.scope === "string" && (g.until === null || Number.isFinite(g.until)))
@@ -217,13 +436,22 @@ export class NodeHost {
     }
   }
 
+  /** Runtime adapters (screen capture, input injector, desktop notifier); injectable in tests. */
+  adapters() {
+    return this.ws.nodeAdapters ?? {};
+  }
+
   persisted() {
+    const hasCustomPolicy = this.execPolicy.mode !== DEFAULT_EXEC_MODE || this.execPolicy.allowlist.length > 0;
     if (
       !this.enabled &&
       !this.name &&
       !this.paused &&
+      !this.wholeComputer &&
+      !hasCustomPolicy &&
       !this.sharedProjects.length &&
       !this.lastCompleted &&
+      !this.auditLog.length &&
       !this.grants.length &&
       !this.records.length
     )
@@ -233,8 +461,11 @@ export class NodeHost {
         enabled: this.enabled,
         name: this.name,
         paused: this.paused,
+        wholeComputer: this.wholeComputer,
+        execPolicy: this.execPolicy,
         sharedProjects: this.sharedProjects,
         lastCompleted: this.lastCompleted,
+        auditLog: this.auditLog.slice(-MAX_AUDIT_ENTRIES),
         grants: this.grants,
         records: this.records,
       },
@@ -253,6 +484,14 @@ export class NodeHost {
       .filter((project) => project && typeof project.folder === "string" && project.folder.trim());
   }
 
+  sharedProjectsForFiles() {
+    return this.sharedProjectRecords().map((project) => ({
+      id: project.id,
+      name: project.name,
+      path: project.folder,
+    }));
+  }
+
   /** Public summary included in workspace snapshots, CLI status and Settings. */
   view() {
     const shared = this.sharedProjectRecords().map((project) => ({
@@ -269,6 +508,20 @@ export class NodeHost {
         folder: project.folder,
         shared: sharedSet.has(project.id),
       }));
+    const pendingApprovals = this.ws.interactions
+      .snapshot()
+      .filter((entry) => entry.nodeJob === true)
+      .map((entry) => ({
+        id: entry.id,
+        chatId: entry.chatId,
+        title: entry.title,
+        operation: entry.operation,
+        resourceId: entry.resourceId,
+        resourceName: entry.resourceName,
+        sourceBotName: entry.sourceBotName,
+        sourceHostName: entry.sourceHostName,
+        time: entry.time,
+      }));
     return {
       enabled: this.enabled,
       role: this.enabled ? "node" : "standard",
@@ -276,9 +529,16 @@ export class NodeHost {
       paused: this.paused,
       online: this.enabled && !this.paused,
       capabilitiesVersion: CAPABILITIES_VERSION,
+      wholeComputer: this.wholeComputer,
+      execPolicy: {
+        mode: this.execPolicy.mode,
+        allowlist: this.execPolicy.allowlist.map((rule) => ({ ...rule })),
+      },
       sharedProjects: shared,
       availableProjects,
       grants: this.activeGrants().map(summarizeGrant),
+      pendingApprovals,
+      auditLog: this.auditLog.slice(-50).reverse(),
       lastCompleted: this.lastCompleted,
     };
   }
@@ -289,16 +549,47 @@ export class NodeHost {
     const projects = this.enabled
       ? this.sharedProjectRecords().map(({ id, name }) => ({ id, name }))
       : [];
+    const operations = [];
+    if (this.enabled) {
+      if (projects.length > 0) {
+        operations.push({ id: LIST_FILES_OPERATION, version: LIST_FILES_VERSION, readOnly: true });
+      }
+      if (projects.length > 0 || this.wholeComputer) {
+        operations.push(
+          { id: "fs.read", version: 1, readOnly: true },
+          { id: "fs.stat", version: 1, readOnly: true },
+          { id: "fs.search", version: 1, readOnly: true },
+          { id: "fs.write", version: 1, readOnly: false },
+          { id: "fs.mkdir", version: 1, readOnly: false },
+          { id: "fs.move", version: 1, readOnly: false },
+          { id: "fs.delete", version: 1, readOnly: false },
+        );
+      }
+      if (this.execPolicy.mode !== "deny") {
+        operations.push(
+          { id: "system.run", version: 1, readOnly: false },
+          { id: "system.which", version: 1, readOnly: true },
+        );
+      }
+      if (this.adapters().screen) {
+        operations.push(
+          { id: "screen.info", version: 1, readOnly: true },
+          { id: "screen.capture", version: 1, readOnly: true },
+          { id: "screen.input", version: 1, readOnly: false },
+        );
+      }
+      operations.push({ id: "node.notify", version: 1, readOnly: false });
+    }
     return {
       version: CAPABILITIES_VERSION,
       role: this.enabled ? "node" : "standard",
       name: this.enabled && this.name ? this.name : undefined,
       online: this.enabled ? !this.paused : true,
       paused: this.enabled ? this.paused : false,
+      wholeComputer: this.enabled ? this.wholeComputer : false,
+      execPolicy: this.enabled ? { mode: this.execPolicy.mode } : undefined,
       bots,
-      operations: this.enabled && projects.length
-        ? [{ id: LIST_FILES_OPERATION, version: LIST_FILES_VERSION, readOnly: true }]
-        : [],
+      operations,
       projects,
     };
   }
@@ -323,11 +614,74 @@ export class NodeHost {
     return this.view();
   }
 
+  /** Toggle whole-computer file scope on this node. Turning it off cancels pending/working @computer jobs. */
+  setWholeComputer(enabled) {
+    this.wholeComputer = enabled === true;
+    if (!this.wholeComputer) {
+      for (const row of this.records) {
+        if (row.resourceId === WHOLE_COMPUTER_RESOURCE && active(row)) this.cancel(row, "Whole-computer access was turned off.");
+      }
+    }
+    this.ws.save();
+    return this.view();
+  }
+
+  /** Update this node's exec policy mode (`deny` | `allowlist` | `ask` | `full`). */
+  setExecMode(mode) {
+    if (!EXEC_MODES.includes(mode)) {
+      throw new Error(`Invalid exec policy mode. Choose one of: ${EXEC_MODES.join(", ")}.`);
+    }
+    this.execPolicy.mode = mode;
+    if (mode === "deny") {
+      for (const row of this.records) {
+        if (row.operation === "system.run" && active(row)) {
+          this.cancel(row, "Exec policy was changed to deny.");
+        }
+      }
+    }
+    this.ws.save();
+    return this.view();
+  }
+
+  /** Add an allowlist rule for `system.run` (per node `botId: "*"` or per source bot `botId`). */
+  addAllowlistRule({ pattern, botId = "*" } = {}) {
+    const cleanPattern = safeText(pattern, 240);
+    if (!cleanPattern) throw new Error("Provide a command or executable path pattern.");
+    const cleanBot = safeText(botId, 160) || "*";
+    const exists = this.execPolicy.allowlist.find(
+      (rule) => rule.botId === cleanBot && rule.pattern === cleanPattern,
+    );
+    if (!exists) {
+      this.execPolicy.allowlist.push({
+        id: randomUUID(),
+        botId: cleanBot,
+        pattern: cleanPattern,
+        createdAt: Date.now(),
+      });
+      this.ws.save();
+    }
+    return this.view();
+  }
+
+  /** Remove an allowlist rule by id (or all rules when no id is provided). */
+  removeAllowlistRule(ruleId) {
+    if (ruleId) {
+      const before = this.execPolicy.allowlist.length;
+      this.execPolicy.allowlist = this.execPolicy.allowlist.filter((rule) => rule.id !== ruleId);
+      if (this.execPolicy.allowlist.length === before) throw new Error("Unknown allowlist rule.");
+    } else {
+      this.execPolicy.allowlist = [];
+    }
+    this.ws.save();
+    return this.view();
+  }
+
+  /** Kill switch: immediately stops all pending and running operations, including active shell processes. */
   setPaused(paused) {
     this.paused = paused === true;
     if (this.paused) {
       for (const row of this.records) {
-        if (row.status === "pending") this.cancel(row);
+        if (active(row)) this.cancel(row, "Node host paused.");
       }
     }
     this.ws.save();
@@ -343,9 +697,8 @@ export class NodeHost {
       if (!this.sharedProjects.includes(project.id)) this.sharedProjects.push(project.id);
     } else {
       this.sharedProjects = this.sharedProjects.filter((id) => id !== projectId);
-      // Cancel pending requests targeting the unshared project.
       for (const row of this.records) {
-        if (row.resourceId === projectId && row.status === "pending") this.cancel(row);
+        if (row.resourceId === projectId && active(row)) this.cancel(row, "Folder was unshared.");
       }
     }
     this.ws.save();
@@ -366,10 +719,16 @@ export class NodeHost {
     return this.view();
   }
 
-  /** Disconnect this node host: cancel active jobs and disable node hosting. */
+  /** Returns the node's audit log (newest first). */
+  getAuditLog(limit = 50) {
+    const count = Number.isFinite(limit) && limit > 0 ? Math.min(Math.floor(limit), MAX_AUDIT_ENTRIES) : 50;
+    return this.auditLog.slice(-count).reverse();
+  }
+
+  /** Disconnect this node host: cancel active jobs (killing running processes) and disable node hosting. */
   disconnect() {
     for (const row of this.records) {
-      if (active(row)) this.cancel(row);
+      if (active(row)) this.cancel(row, "Node host disconnected.");
     }
     this.enabled = false;
     this.paused = false;
@@ -379,26 +738,63 @@ export class NodeHost {
 
   close() {
     for (const row of this.records) {
-      if (active(row)) this.cancel(row);
+      if (active(row)) this.cancel(row, "Node host closed.");
     }
   }
 
-  cancel(row) {
+  cancel(row, reason = "Cancelled.") {
     const task = this.live.get(row);
+    const wasActive = active(row);
     row.status = "cancelled";
+    if (reason && !row.error) row.error = reason;
     if (task) {
       task.stopped = true;
+      if (typeof task.kill === "function") {
+        try {
+          task.kill(reason);
+        } catch {
+          // Process already exited.
+        }
+      }
       task.sourceReady?.resolve();
       this.ws.interactions.cancel("node-job-" + row.id);
+    }
+    if (wasActive && row.operation) {
+      this.recordAudit(row, { status: "cancelled", error: reason });
     }
     this.ws.save();
   }
 
-  recordCompletion(row) {
+  recordAudit(row, { status = row.status, exitCode = null, error = row.error, durationMs } = {}) {
+    if (!row?.operation || row._audited) return;
+    row._audited = true;
+    const entry = cleanAuditEntry({
+      id: row.id || randomUUID(),
+      time: Date.now(),
+      operation: row.grantOperation || row.operation,
+      sourceHostName: row.sourceHostName || "Other computer",
+      sourceBotId: row.sourceBotId || "",
+      sourceBotName: row.sourceBotName || "Bot",
+      resourceId: row.resourceId || "",
+      resourceName: row.resourceName || row.resourceId || "",
+      argsSummary: summarizeArgs(row.operation, row.params || { path: row.path }, { binding: row.execBinding }),
+      status,
+      exitCode,
+      error,
+      durationMs,
+    });
+    if (!entry) return;
+    this.auditLog.push(entry);
+    if (this.auditLog.length > MAX_AUDIT_ENTRIES) {
+      this.auditLog = this.auditLog.slice(-MAX_AUDIT_ENTRIES);
+    }
+  }
+
+  recordCompletion(row, extra = {}) {
     if (!row.operation || !row.resourceId) return;
     this.lastCompleted = {
       id: row.id,
-      operation: row.operation,
+      operation: row.grantOperation || row.operation,
       resourceId: row.resourceId,
       resourceName: row.resourceName || row.resourceId,
       sourceBotId: row.sourceBotId || "",
@@ -407,6 +803,181 @@ export class NodeHost {
       status: row.status,
       finishedAt: Date.now(),
     };
+    this.recordAudit(row, { status: row.status, ...extra });
+  }
+
+  resolveExecCwd(params = {}) {
+    if (typeof params.project === "string" && params.project.trim() && params.project !== WHOLE_COMPUTER_RESOURCE) {
+      const project = this.sharedProjectRecords().find((item) => item.id === params.project);
+      if (!project) throw new Error("That project folder is not shared by this node host.");
+      const root = realpathSync(project.folder);
+      if (typeof params.cwd === "string" && params.cwd.trim()) {
+        const sub = normalizeRelativePath(params.cwd);
+        const candidate = sub ? resolve(root, sub) : root;
+        const real = realpathSync(candidate);
+        if (!isInsideRoot(root, real)) throw new Error("Working directory cannot escape the shared folder.");
+        return real;
+      }
+      return root;
+    }
+    const rawCwd = typeof params.cwd === "string" && params.cwd.trim() ? params.cwd.trim() : homedir();
+    const expanded = rawCwd === "~" ? homedir() : rawCwd.startsWith("~/") ? join(homedir(), rawCwd.slice(2)) : rawCwd;
+    if (!existsSync(expanded)) throw new Error("Working directory does not exist on this node.");
+    return realpathSync(expanded);
+  }
+
+  /** Prepares operation metadata, validates inputs, and computes grant scope on submit. */
+  planOperation(identity, peer, { sourceBotId, sourceBotName, jobOp, resourceId, path, params }) {
+    if (!ALL_OPERATIONS.has(jobOp)) {
+      throw new Error("This node host does not support that operation.");
+    }
+    if (jobOp === LIST_FILES_OPERATION) {
+      if (!validName(resourceId)) throw new Error("Invalid node job payload.");
+      const project = this.sharedProjectRecords().find((item) => item.id === resourceId);
+      if (!project) throw new Error("That project folder is not shared by this node host.");
+      const normalizedPath = normalizeRelativePath(path ?? params?.path ?? "");
+      return {
+        grantOperation: LIST_FILES_OPERATION,
+        resourceId: project.id,
+        resourceName: project.name,
+        resourceFolder: project.folder,
+        path: normalizedPath,
+        params: { path: normalizedPath },
+        scope: digest(["node-job", ...identity, sourceBotId, LIST_FILES_OPERATION, project.id]),
+      };
+    }
+
+    if (FILE_OPERATIONS.has(jobOp)) {
+      const fileParams = params && typeof params === "object" ? params : {};
+      const scopeObj = resolveFileScope({
+        projectId: resourceId || fileParams.project,
+        projects: this.sharedProjectsForFiles(),
+        wholeComputer: this.wholeComputer,
+      });
+      let grantOperation = jobOp;
+      if (jobOp === "fs.write") {
+        const check = inspectWriteTarget(scopeObj, String(fileParams.path ?? ""));
+        if (check.isOverwrite) {
+          if (fileParams.overwrite !== true) {
+            throw new Error("File already exists. Pass overwrite: true to replace it.");
+          }
+          grantOperation = "fs.write.overwrite";
+        }
+      } else if (jobOp === "fs.move") {
+        // Validate both endpoints immediately so traversal/symlink escapes fail at submit time.
+        inspectWriteTarget(scopeObj, String(fileParams.from ?? ""));
+        const dest = inspectWriteTarget(scopeObj, String(fileParams.to ?? ""));
+        if (dest.isOverwrite) {
+          if (fileParams.overwrite !== true) {
+            throw new Error("Destination already exists. Pass overwrite: true to replace it.");
+          }
+          grantOperation = "fs.move.overwrite";
+        }
+      } else if (jobOp === "fs.read" || jobOp === "fs.delete" || jobOp === "fs.stat" || jobOp === "fs.mkdir" || jobOp === "fs.search") {
+        // Validate path boundaries early.
+        const allowMissing = jobOp === "fs.mkdir" || jobOp === "fs.stat";
+        const targetPath = jobOp === "fs.search"
+          ? String(fileParams.path ?? (scopeObj.wholeComputer ? homedir() : ""))
+          : String(fileParams.path ?? "");
+        inspectWriteTarget(scopeObj, targetPath);
+        if (!allowMissing && jobOp !== "fs.search" && !targetPath.trim() && scopeObj.wholeComputer) {
+          throw new Error("Provide an absolute path for whole-computer file access.");
+        }
+      }
+      return {
+        grantOperation,
+        resourceId: scopeObj.resourceId,
+        resourceName: scopeObj.resourceName,
+        params: fileParams,
+        scope: digest(["node-job", ...identity, sourceBotId, grantOperation, scopeObj.resourceId]),
+      };
+    }
+
+    if (jobOp === "system.which") {
+      const sysParams = params && typeof params === "object" ? params : {};
+      if (!Array.isArray(sysParams.names) || sysParams.names.length === 0) {
+        throw new Error("Provide at least one command name for system.which.");
+      }
+      return {
+        grantOperation: "system.which",
+        resourceId: SYSTEM_RESOURCE,
+        resourceName: "System commands",
+        params: sysParams,
+        scope: digest(["node-job", ...identity, sourceBotId, "system.which", SYSTEM_RESOURCE]),
+      };
+    }
+
+    if (jobOp === "system.run") {
+      const execParams = params && typeof params === "object" ? params : {};
+      const prepared = prepareExecRequest(execParams, {
+        resolveCwd: (p) => this.resolveExecCwd(p),
+      });
+      const decision = evaluateExecPolicy(prepared, {
+        mode: this.execPolicy.mode,
+        allowlist: this.execPolicy.allowlist,
+        sourceBotId,
+      });
+      if (decision.decision === "deny") {
+        this.recordAudit(
+          {
+            id: randomUUID(),
+            operation: "system.run",
+            sourceHostName: peer.name,
+            sourceBotId,
+            sourceBotName,
+            resourceId: SYSTEM_RESOURCE,
+            resourceName: prepared.binding.resolvedExecutable,
+            params: execParams,
+            execBinding: prepared.binding,
+          },
+          { status: "denied", error: decision.reason },
+        );
+        this.ws.save();
+        throw new Error(decision.reason);
+      }
+      return {
+        grantOperation: "system.run",
+        resourceId: prepared.binding.bindingHash.slice(0, 16),
+        resourceName: prepared.binding.argv.join(" ").slice(0, 120),
+        params: execParams,
+        execBinding: prepared.binding,
+        execDecision: decision.decision,
+        timeoutMs: prepared.timeoutMs,
+        // Grant is bound strictly to this exact command + cwd + env + resolved executable + pinned script!
+        scope: digest(["node-job", ...identity, sourceBotId, "system.run", prepared.binding.bindingHash]),
+      };
+    }
+
+    if (SCREEN_OPERATIONS.has(jobOp)) {
+      if (!this.adapters().screen) {
+        throw new Error("Screen control is not available on this node.");
+      }
+      const screenParams = params && typeof params === "object" ? params : {};
+      return {
+        grantOperation: jobOp,
+        resourceId: SCREEN_RESOURCE,
+        resourceName: "Screen",
+        params: screenParams,
+        scope: digest(["node-job", ...identity, sourceBotId, jobOp, SCREEN_RESOURCE]),
+      };
+    }
+
+    if (jobOp === "node.notify") {
+      const notifyParams = params && typeof params === "object" ? params : {};
+      if (!validName(notifyParams.title)) throw new Error("Notification title is required.");
+      return {
+        grantOperation: "node.notify",
+        resourceId: NOTIFY_RESOURCE,
+        resourceName: "Notifications",
+        params: {
+          title: safeText(notifyParams.title, 120),
+          body: safeText(notifyParams.body ?? "", 400),
+        },
+        scope: digest(["node-job", ...identity, sourceBotId, "node.notify", NOTIFY_RESOURCE]),
+      };
+    }
+
+    throw new Error("This node host does not support that operation.");
   }
 
   async receive(peer, operation, payload = {}) {
@@ -432,39 +1003,48 @@ export class NodeHost {
 
     if (operation === "job.submit") {
       if (row?.status === "cancelled" && !row.fingerprint) return jobResult(row);
-      const { sourceBotId, sourceBotName, operation: jobOp, resourceId, path: relPath = "", createdAt } = payload;
+      const { sourceBotId, sourceBotName, operation: jobOp, resourceId = "", path: relPath = "", params, createdAt } = payload;
       if (
-        ![sourceBotId, sourceBotName, jobOp, resourceId].every(validName) ||
+        ![sourceBotId, sourceBotName, jobOp].every(validName) ||
+        typeof resourceId !== "string" ||
         typeof relPath !== "string" ||
         relPath.length > 1024 ||
+        (params !== undefined && (typeof params !== "object" || params === null || Array.isArray(params))) ||
         !Number.isSafeInteger(createdAt)
       )
         throw new Error("Invalid node job payload.");
-      const fingerprint = digest([sourceBotId, sourceBotName, jobOp, resourceId, relPath, createdAt]);
+      const fingerprint = digest([sourceBotId, sourceBotName, jobOp, resourceId, relPath, params ?? null, createdAt]);
       if (row && row.fingerprint !== fingerprint)
         throw new Error("This request ID already identifies a different job.");
       if (!row) {
         if (!this.enabled) throw new Error("Node host mode is not enabled on this computer.");
         if (this.paused) throw new Error("This node host is paused.");
-        if (jobOp !== LIST_FILES_OPERATION) throw new Error("This node host does not support that operation.");
         const now = Date.now();
         if (createdAt < now - WEEK || createdAt > now + 300_000)
           throw new Error("Job timestamp is outside the retry window.");
-        const project = this.sharedProjectRecords().find((item) => item.id === resourceId);
-        if (!project) throw new Error("That project folder is not shared by this node host.");
-        // Validate the path syntax early so obviously invalid boundary escapes fail immediately.
-        const normalizedPath = normalizeRelativePath(relPath);
-        // Key grants separately from conversation grants: (source host, source bot, operation, resource).
-        const scope = digest(["node-job", ...identity, sourceBotId, jobOp, project.id]);
+        const planned = this.planOperation(identity, peer, {
+          sourceBotId,
+          sourceBotName,
+          jobOp,
+          resourceId,
+          path: relPath,
+          params,
+        });
         row = {
           id: payload.id,
           host,
-          scope,
+          scope: planned.scope,
           fingerprint,
           operation: jobOp,
-          resourceId: project.id,
-          resourceName: project.name,
-          path: normalizedPath,
+          grantOperation: planned.grantOperation,
+          resourceId: planned.resourceId,
+          resourceName: planned.resourceName,
+          ...(planned.resourceFolder && { resourceFolder: planned.resourceFolder }),
+          ...(planned.path !== undefined && { path: planned.path }),
+          params: planned.params,
+          ...(planned.execBinding && { execBinding: planned.execBinding }),
+          ...(planned.execDecision && { execDecision: planned.execDecision }),
+          ...(planned.timeoutMs && { timeoutMs: planned.timeoutMs }),
           sourceBotId,
           sourceBotName,
           sourceHostName: peer.name,
@@ -478,7 +1058,7 @@ export class NodeHost {
     }
 
     if (!row) throw new Error("Unknown node job request.");
-    if (operation === "job.cancel" && active(row)) this.cancel(row);
+    if (operation === "job.cancel" && active(row)) this.cancel(row, "Cancelled by caller.");
     if (operation === "job.status" || operation === "job.submit") this.live.get(row)?.sourceReady?.resolve();
     if (row.status === "pending" && !this.live.has(row)) {
       const task = {};
@@ -489,37 +1069,57 @@ export class NodeHost {
   }
 
   async process(row, task, peer) {
+    const startedAt = Date.now();
     try {
-      const targetProject = () => {
+      const assertAvailable = () => {
         if (!this.enabled) throw new Error("Node host mode is not enabled on this computer.");
         if (this.paused) throw new Error("This node host is paused.");
-        const project = this.sharedProjectRecords().find((item) => item.id === row.resourceId);
-        if (!project || !project.folder) throw new Error("That project folder is no longer shared by this node host.");
-        return project;
       };
-      const project = targetProject();
-      const hasGrant = () => this.grants.some((grant) => grant.scope === row.scope && (grant.until === null || grant.until > Date.now()));
+      assertAvailable();
+
+      const hasGrant = () =>
+        this.grants.some((grant) => grant.scope === row.scope && (grant.until === null || grant.until > Date.now()));
       const nodeLabel = this.name || peer.targetName || "this node";
-      const folderDetail = row.path ? `${project.name} (${project.folder}${sep}${row.path})` : `${project.name} (${project.folder})`;
+
+      // Policy bypasses prompt only for `system.run` in `full` or matching `allowlist`.
+      let policyAutoAllow = false;
+      if (row.operation === "system.run") {
+        const prepared = prepareExecRequest(row.params, { resolveCwd: (p) => this.resolveExecCwd(p) });
+        const evalResult = evaluateExecPolicy(prepared, {
+          mode: this.execPolicy.mode,
+          allowlist: this.execPolicy.allowlist,
+          sourceBotId: row.sourceBotId,
+        });
+        if (evalResult.decision === "deny") {
+          row.status = "denied";
+          row.error = evalResult.reason;
+          this.recordCompletion(row, { error: evalResult.reason });
+          return;
+        }
+        policyAutoAllow = evalResult.decision === "allow";
+      }
+
       let action;
       let until;
 
-      if (!hasGrant()) {
+      if (!policyAutoAllow && !hasGrant()) {
+        const copy = describeApproval(row, nodeLabel);
         const syntheticChat = { id: "node-job-" + row.id };
         ({ action } = await this.ws.interactions.request(syntheticChat, task, {
           kind: "permission",
           dispatch: true,
           nodeJob: true,
-          title: `${row.sourceBotName} on ${peer.name} wants to list files in ${project.name} on ${nodeLabel}`,
-          detail: `Operation: list files (${row.operation})\nFolder: ${folderDetail}`,
+          title: copy.title,
+          ...(copy.preview && { preview: copy.preview }),
+          detail: copy.detail,
           sourceBotName: row.sourceBotName,
           targetBotName: nodeLabel,
           sourceHostName: peer.name,
           targetHostName: nodeLabel,
-          operation: row.operation,
-          resourceId: project.id,
-          resourceName: project.name,
-          label: "Allow for today and Always allow apply only to list files in this shared folder for this source bot on these two computers.",
+          operation: row.grantOperation || row.operation,
+          resourceId: row.resourceId,
+          resourceName: row.resourceName,
+          label: copy.label,
         }));
         if (task.stopped) return;
         if (action === "deny" || action === "cancel") {
@@ -539,20 +1139,23 @@ export class NodeHost {
       }
 
       if (task.stopped || this.ws.closing) return;
-      const freshProject = targetProject();
-      if (!action && (task.grantsCleared || !hasGrant()))
+      assertAvailable();
+      if (!policyAutoAllow && !action && (task.grantsCleared || !hasGrant())) {
         throw new Error("The node host grant expired or was revoked.");
+      }
 
       row.status = "working";
       this.ws.save();
 
       await peer.verify();
       if (task.stopped || this.ws.closing) return;
-      const verifiedProject = targetProject();
-      if (!action && (task.grantsCleared || !hasGrant()))
+      assertAvailable();
+      if (!policyAutoAllow && !action && (task.grantsCleared || !hasGrant())) {
         throw new Error("The node host grant expired or was revoked.");
+      }
 
-      if (!task.grantsCleared && (action === "remember" || (action === "today" && until > Date.now()))) {
+      // Persist grant if owner chose Allow for today / Always allow.
+      if (!policyAutoAllow && !task.grantsCleared && (action === "remember" || (action === "today" && until > Date.now()))) {
         this.grants = this.grants.filter((grant) => grant.until === null || grant.until > Date.now());
         const existing = this.grants.find((grant) => grant.scope === row.scope);
         if (!existing) {
@@ -562,15 +1165,15 @@ export class NodeHost {
             sourceHostName: peer.name,
             sourceBotId: row.sourceBotId,
             sourceBotName: row.sourceBotName,
-            operation: row.operation,
-            resourceId: verifiedProject.id,
-            resourceName: verifiedProject.name,
+            operation: row.grantOperation || row.operation,
+            resourceId: row.resourceId,
+            resourceName: row.resourceName,
             until: until ?? null,
             createdAt: Date.now(),
           });
         } else if (action === "remember") {
           existing.until = null;
-          existing.resourceName = verifiedProject.name;
+          existing.resourceName = row.resourceName;
           existing.sourceBotName = row.sourceBotName;
           existing.sourceHostName = peer.name;
         } else if (existing.until !== null) {
@@ -578,22 +1181,102 @@ export class NodeHost {
         }
       }
 
-      const listing = listProjectFiles(verifiedProject.folder, row.path);
+      // Execute the operation.
+      let exitCode = null;
+      if (row.operation === LIST_FILES_OPERATION) {
+        const project = this.sharedProjectRecords().find((item) => item.id === row.resourceId);
+        if (!project || !project.folder) throw new Error("That project folder is no longer shared by this node host.");
+        const listing = listProjectFiles(project.folder, row.path);
+        if (task.stopped || this.ws.closing) return;
+        row.result = {
+          projectId: project.id,
+          projectName: project.name,
+          ...listing,
+        };
+      } else if (FILE_OPERATIONS.has(row.operation)) {
+        const scopeObj = resolveFileScope({
+          projectId: row.resourceId,
+          projects: this.sharedProjectsForFiles(),
+          wholeComputer: this.wholeComputer,
+        });
+        // Re-check overwrite protection right before executing write/move.
+        if (row.operation === "fs.write") {
+          const check = inspectWriteTarget(scopeObj, String(row.params?.path ?? ""));
+          if (check.isOverwrite && row.grantOperation !== "fs.write.overwrite") {
+            throw new Error("File appeared after approval; overwrite requires a separate overwrite grant.");
+          }
+          row.result = { resourceId: scopeObj.resourceId, resourceName: scopeObj.resourceName, ...nodeWriteFile(scopeObj, row.params) };
+        } else if (row.operation === "fs.move") {
+          const check = inspectWriteTarget(scopeObj, String(row.params?.to ?? ""));
+          if (check.isOverwrite && row.grantOperation !== "fs.move.overwrite") {
+            throw new Error("Destination appeared after approval; overwrite requires a separate overwrite grant.");
+          }
+          row.result = { resourceId: scopeObj.resourceId, resourceName: scopeObj.resourceName, ...nodeMove(scopeObj, row.params) };
+        } else if (row.operation === "fs.read") {
+          row.result = { resourceId: scopeObj.resourceId, resourceName: scopeObj.resourceName, ...nodeReadFile(scopeObj, row.params) };
+        } else if (row.operation === "fs.mkdir") {
+          row.result = { resourceId: scopeObj.resourceId, resourceName: scopeObj.resourceName, ...nodeMkdir(scopeObj, row.params) };
+        } else if (row.operation === "fs.delete") {
+          row.result = { resourceId: scopeObj.resourceId, resourceName: scopeObj.resourceName, ...nodeDelete(scopeObj, row.params) };
+        } else if (row.operation === "fs.stat") {
+          row.result = { resourceId: scopeObj.resourceId, resourceName: scopeObj.resourceName, ...nodeStat(scopeObj, row.params) };
+        } else if (row.operation === "fs.search") {
+          row.result = { resourceId: scopeObj.resourceId, resourceName: scopeObj.resourceName, ...nodeSearch(scopeObj, row.params) };
+        }
+      } else if (row.operation === "system.which") {
+        row.result = nodeWhich(row.params?.names);
+      } else if (row.operation === "system.run") {
+        // Re-validate policy AND exact approval binding right before spawning!
+        const fresh = prepareExecRequest(row.params, { resolveCwd: (p) => this.resolveExecCwd(p) });
+        const recheck = evaluateExecPolicy(fresh, {
+          mode: this.execPolicy.mode,
+          allowlist: this.execPolicy.allowlist,
+          sourceBotId: row.sourceBotId,
+        });
+        if (recheck.decision === "deny") throw new Error(recheck.reason);
+        verifyExecBinding(row.execBinding, row.params, { resolveCwd: (p) => this.resolveExecCwd(p) });
+
+        const handle = runBoundExec(row.execBinding, {
+          timeoutMs: row.timeoutMs,
+          payload: row.params,
+          resolveCwd: (p) => this.resolveExecCwd(p),
+          onOutput: (chunk) => {
+            row.output = chunk;
+          },
+        });
+        task.kill = handle.kill;
+        const execResult = await handle.promise;
+        if (task.stopped || this.ws.closing) return;
+        exitCode = execResult.exitCode;
+        delete row.output;
+        row.result = execResult;
+      } else if (row.operation === "screen.info") {
+        row.result = await nodeScreenInfo(this.adapters().screen);
+      } else if (row.operation === "screen.capture") {
+        row.result = await nodeScreenCapture(this.adapters().screen, row.params);
+      } else if (row.operation === "screen.input") {
+        row.result = await nodeScreenInput(this.adapters(), row.params);
+      } else if (row.operation === "node.notify") {
+        const notify = this.adapters().notify;
+        if (typeof notify === "function") {
+          await notify({ title: row.params.title, body: row.params.body });
+        }
+        row.result = { delivered: true, title: row.params.title };
+      } else {
+        throw new Error("Unsupported node operation.");
+      }
+
       if (task.stopped || this.ws.closing) return;
-      row.result = {
-        projectId: verifiedProject.id,
-        projectName: verifiedProject.name,
-        ...listing,
-      };
       row.status = "completed";
-      this.recordCompletion(row);
+      this.recordCompletion(row, { exitCode, durationMs: Date.now() - startedAt });
     } catch (error) {
       if (!task.stopped) {
         row.status = "failed";
         row.error = String(error?.message || "The node host could not complete this request.").slice(0, 360);
-        this.recordCompletion(row);
+        this.recordCompletion(row, { durationMs: Date.now() - startedAt });
       }
     } finally {
+      delete row.output;
       if (active(row)) row.status = "cancelled";
       this.live.delete(row);
       this.ws.save();

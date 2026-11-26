@@ -1,0 +1,408 @@
+/*
+ * The side menu, drawn like the phone's lists: the logo with its two buttons, the places, Spaces,
+ * the bots as one-line rows, and one row at the bottom for the computer in use and Settings. Every
+ * rule starts at `.shell > aside` so it wins over the older rules in style.css, agents.css and
+ * remotehosts.css without depending on the order the files load in.
+ */
+.shell {
+  grid-template-columns: 248px 1fr;
+}
+.shell > aside {
+  padding: 14px 10px 10px;
+  gap: 0;
+  border-right: 1px solid color-mix(in srgb, var(--line) 70%, transparent);
+}
+:root:not([data-backdrop="clean"]) .shell > aside {
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
+}
+
+/* ---- The logo row ---------------------------------------------------------------------------- */
+.shell > aside > .brand {
+  margin: 0 0 14px;
+  padding: 0 0 0 8px;
+  min-height: 32px;
+  gap: 6px;
+}
+.shell > aside > .brand .brand-name {
+  height: 24px;
+}
+.shell > aside .brand-actions {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+.shell > aside .brand-actions > button {
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted);
+}
+.shell > aside .brand-actions > button:hover {
+  background: var(--hover);
+  color: var(--ink);
+}
+
+/* ---- Places ------------------------------------------------------------------------------- */
+.shell > aside > nav {
+  gap: 1px;
+}
+.shell:not(.collapsed) > aside > nav button {
+  min-height: 32px;
+  padding: 0 10px;
+  gap: 10px;
+  border-radius: 8px;
+  color: var(--ink-2);
+  font-size: calc(14px * var(--text-scale));
+  font-weight: 500;
+}
+.shell:not(.collapsed) > aside > nav button:hover {
+  background: var(--hover);
+}
+.shell:not(.collapsed) > aside > nav button.selected {
+  background: var(--active);
+  color: var(--ink);
+  font-weight: 600;
+}
+.shell > aside > nav button > .count-badge {
+  margin-left: auto;
+}
+.shell > aside > nav button > i + .count-badge {
+  margin-left: 6px;
+}
+.shell:not(.collapsed) > aside > nav button > i {
+  background: var(--success);
+}
+
+/* ---- Section labels: Spaces and Bots ---------------------------------------------------------- */
+.shell > aside .sidebarlabel {
+  margin-top: 18px;
+  padding: 0 2px 4px 10px;
+  font-size: calc(11px * var(--text-scale));
+  font-weight: 700;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.shell > aside .sidebarlabel button {
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+}
+.shell > aside .sidebarlabel button:hover {
+  background: var(--hover);
+  color: var(--ink);
+}
+
+/* ---- Spaces --------------------------------------------------------------------------------- */
+.shell:not(.collapsed) > aside .spacenav button {
+  min-height: 30px;
+  padding: 0 10px;
+  gap: 10px;
+  border-radius: 8px;
+  color: var(--ink-2);
+  font-size: calc(13.5px * var(--text-scale));
+  font-weight: 500;
+}
+.shell:not(.collapsed) > aside .spacenav button:hover {
+  background: var(--hover);
+}
+.shell:not(.collapsed) > aside .spacenav button.selected {
+  background: var(--active);
+  color: var(--ink);
+  font-weight: 600;
+}
+.shell:not(.collapsed) > aside .spacenav button > svg {
+  width: 18px;
+  height: 18px;
+  color: var(--muted);
+}
+
+.shell:not(.collapsed) > aside .spacenav .spacenav-all {
+  color: var(--muted);
+}
+.shell:not(.collapsed) > aside .spacenav .spacenav-all-icon {
+  display: inline-block;
+  width: 18px;
+  height: 18px;
+  color: var(--faint);
+}
+
+/* ---- Bots: one line each. The quiet line (status, last message) stays for screen readers. ------ */
+.shell:not(.collapsed) > aside .botnav {
+  gap: 1px;
+}
+.shell:not(.collapsed) > aside .botnav .botnav-item > button:first-child {
+  min-height: 34px;
+  padding: 0 8px;
+  gap: 9px;
+  border-radius: 8px;
+}
+.shell:not(.collapsed) > aside .botnav .botnav-item > button:first-child:hover {
+  background: var(--hover);
+}
+.shell:not(.collapsed) > aside .botnav .botnav-item.selected > button:first-child {
+  background: var(--active);
+}
+.shell:not(.collapsed) > aside .botnav-text {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+.shell:not(.collapsed) > aside .botnav-top {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.shell:not(.collapsed) > aside .botnav-name {
+  font-size: calc(14px * var(--text-scale));
+  font-weight: 500;
+  color: var(--ink-2);
+}
+.shell:not(.collapsed) > aside .botnav-item.selected .botnav-name {
+  color: var(--ink);
+  font-weight: 600;
+}
+.shell > aside .botnav-line {
+  position: absolute !important;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+.shell > aside .botnav-meta {
+  flex: none;
+  font-size: calc(11.5px * var(--text-scale));
+  font-weight: 600;
+  color: var(--faint);
+  white-space: nowrap;
+}
+.shell > aside .botnav-meta.busy {
+  color: var(--success);
+}
+.shell > aside .botnav-meta.waiting {
+  color: var(--warning);
+}
+.shell.collapsed > aside .botnav-meta {
+  display: none;
+}
+.shell:not(.collapsed) > aside .botnav-group {
+  margin-top: 6px;
+}
+.shell:not(.collapsed) > aside .botnav-label {
+  display: block;
+  padding: 4px 10px 2px;
+  font-size: calc(12px * var(--text-scale));
+  font-weight: 600;
+  color: var(--muted);
+}
+
+/* ---- The bottom row: the computer in use, and Settings ---------------------------------------- */
+.shell > aside > .sidebar-foot {
+  /* Auto: the row stays at the bottom of the menu however few bots there are. */
+  margin-top: auto;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+  gap: 4px;
+}
+.shell > aside .sidebar-foot .host-switch {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.shell > aside .sidebar-foot .host-button {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 9px;
+  width: 100%;
+  min-height: 44px;
+  margin: 0;
+  padding: 0 8px;
+  border-radius: 10px;
+  background: transparent;
+  text-align: left;
+}
+.shell > aside .sidebar-foot .host-button:hover,
+.shell > aside .sidebar-foot .host-button[aria-expanded="true"] {
+  background: var(--hover);
+}
+.shell > aside .host-glyph {
+  flex: none;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  align-items: center;
+  justify-content: center;
+  background: var(--sunken);
+  color: var(--ink-2);
+}
+.shell > aside .host-dot {
+  right: -2px;
+  bottom: -2px;
+  border-color: var(--rail);
+}
+.shell > aside .host-button > .nav-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+.shell > aside .host-name {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: calc(13px * var(--text-scale));
+  font-weight: 600;
+  color: var(--ink);
+}
+.shell > aside .host-button small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: calc(11.5px * var(--text-scale));
+  font-weight: 400;
+  color: var(--muted);
+}
+.shell > aside .host-chevron {
+  flex: none;
+  color: var(--faint);
+}
+.shell > aside .host-name .admin-tag {
+  padding: 1px 6px;
+  border-radius: 6px;
+  background: var(--warning-soft);
+  color: var(--warning);
+  font-size: calc(10.5px * var(--text-scale));
+  font-weight: 700;
+}
+.shell > aside .sidebar-foot .settings-link {
+  position: relative;
+  flex: none;
+  width: 36px;
+  height: 36px;
+  min-height: 36px;
+  margin: 0;
+  padding: 0;
+  justify-content: center;
+  border-radius: 10px;
+  color: var(--muted);
+}
+.shell > aside .sidebar-foot .settings-link:hover {
+  background: var(--hover);
+  color: var(--ink);
+}
+.shell > aside .sidebar-foot .settings-link > .nav-label {
+  position: absolute !important;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+.shell > aside .sidebar-foot .settings-badge {
+  position: absolute;
+  top: 2px;
+  right: 1px;
+  min-width: 16px;
+  height: 16px;
+  margin: 0;
+  padding: 0 4px;
+  font-size: 10px;
+}
+.host-menu .host-menu-icons {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 15px;
+}
+
+/* Collapsed to icons: the computer is its glyph and Settings its icon, one above the other. */
+.shell.collapsed > aside .brand-actions {
+  margin: 0;
+  flex-direction: column;
+  gap: 4px;
+}
+.shell.collapsed > aside > .sidebar-foot {
+  flex-direction: column;
+  align-items: center;
+}
+.shell.collapsed > aside .host-button > .nav-label,
+.shell.collapsed > aside .host-chevron {
+  display: none;
+}
+.shell.collapsed > aside .sidebar-foot .host-button {
+  width: 48px;
+  justify-content: center;
+  padding: 0;
+}
+
+/* ---- The line across the top: only while the other computer is in trouble --------------------- */
+.shell > main > .host-banner {
+  margin: 10px 16px 0;
+  padding: 8px 10px 8px 14px;
+  border: 0;
+  border-radius: 12px;
+  background: var(--warning-soft);
+  color: var(--warning);
+}
+.shell > main > .host-banner[data-state="revoked"] {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+/* ---- Full screen: a space (or anything else that asks) takes the whole window ------------------ */
+:root[data-fullscreen] .shell,
+:root[data-fullscreen] .shell.collapsed {
+  grid-template-columns: 1fr;
+}
+:root[data-fullscreen] .shell > aside,
+:root[data-fullscreen] .shell > main > .host-banner,
+:root[data-fullscreen] .shell > main > .request-banner {
+  display: none;
+}
+
+/* ---- An open chat, with the chat list beside it when the person shows it ---------------------- */
+.chat-with-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+}
+.chat-with-list > :last-child {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.chat-with-list > .chatlist-column,
+.chat-with-list > section[aria-label="Chat list"] {
+  flex: none;
+  height: 100%;
+  border-right: 1px solid var(--line);
+}
+
+/* ---- Settings: a page over the whole window --------------------------------------------------- */
+.settings-host {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: flex;
+  min-width: 0;
+  background: var(--canvas);
+  color: var(--ink);
+}
+.settings-host > * {
+  flex: 1 1 auto;
+  min-width: 0;
+}

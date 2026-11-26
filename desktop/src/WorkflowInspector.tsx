@@ -20,7 +20,6 @@ import {
   X,
   XCircle,
 } from "lucide-react";
-import { Button } from "glisse";
 import { categories as goalCategories } from "./Board";
 import { WorkflowFieldInput } from "./WorkflowFieldInput";
 import type {
@@ -858,8 +857,9 @@ export function WorkflowInspector({
                     </div>
                     <div className="wf-run-actions">
                       {selectedRun.status === "failed" && (
-                        <Button
-                          variant="filled"
+                        <button
+                          type="button"
+                          className="btn primary small"
                           disabled={busyAction === "retry"}
                           onClick={async () => {
                             setBusyAction("retry");
@@ -870,16 +870,17 @@ export function WorkflowInspector({
                             }
                           }}
                         >
-                          <RotateCcw size={12} /> Retry failed step
-                        </Button>
+                          <RotateCcw size={12} aria-hidden="true" /> Retry failed step
+                        </button>
                       )}
                       {(selectedRun.status === "running" || selectedRun.status === "waiting_approval") && (
-                        <Button
-                          variant="glass"
+                        <button
+                          type="button"
+                          className="btn soft small"
                           onClick={() => onCancelRun(selectedRun.id)}
                         >
                           Cancel
-                        </Button>
+                        </button>
                       )}
                     </div>
                   </div>
@@ -898,8 +899,9 @@ export function WorkflowInspector({
                         onChange={(e) => setApprovalNote(e.target.value)}
                       />
                       <div className="wf-approval-btns">
-                        <Button
-                          variant="filled"
+                        <button
+                          type="button"
+                          className="btn primary small"
                           disabled={busyAction === "approve"}
                           onClick={async () => {
                             setBusyAction("approve");
@@ -911,10 +913,11 @@ export function WorkflowInspector({
                             }
                           }}
                         >
-                          <Check size={13} /> Approve
-                        </Button>
-                        <Button
-                          variant="glass"
+                          <Check size={13} aria-hidden="true" /> Approve
+                        </button>
+                        <button
+                          type="button"
+                          className="btn soft small"
                           disabled={busyAction === "reject"}
                           onClick={async () => {
                             setBusyAction("reject");
@@ -926,8 +929,8 @@ export function WorkflowInspector({
                             }
                           }}
                         >
-                          <X size={13} /> Reject
-                        </Button>
+                          <X size={13} aria-hidden="true" /> Reject
+                        </button>
                       </div>
                     </div>
                   )}
