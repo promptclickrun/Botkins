@@ -58,7 +58,7 @@ const KEYS = [
   ["harness", "copilot | provider | pi | omp", "What runs a bot's turn (`botkins preferences harnesses` lists the choices)"],
   ["background.keepRunning", "on | off", "For the desktop app's window (this host runs as a service)"],
   ["background.runAtStartup", "on | off", "For the desktop app's window (this host starts with `botkins service install`)"],
-  ["sidebar.order", "Home, Today, Chats, Work, Wiki", "The order of the places in the side menu"],
+  ["sidebar.order", "Home, Today, Chats, Work, Wiki, Market", "The order of the places in the side menu"],
   ["sidebar.collapsed", "on | off", "The side menu shows icons only"],
   ["proactive.chatMode", "main | new", "Proactive signals: Main chat or New chat every time, for you on this computer"],
   ["proactive.enabled", "on | off", "Experimental: the computer's switch for the Proactive agent (each bot's own is `botkins bots proactive`)"],

@@ -24,7 +24,7 @@ const shots = process.env.SIDEBAR_SHOTS;
 if (shots) mkdirSync(shots, { recursive: true });
 // The places every workspace saves, in the usual order. On a computer with Spaces, Today is a
 // space, not a place: it is in what is saved, and not in the menu or in Settings › Side menu.
-const USUAL = ["Home", "Today", "Chats", "Work", "Wiki"];
+const USUAL = ["Home", "Today", "Chats", "Work", "Wiki", "Market"];
 let spaces = false;
 /** An order of places as the side menu shows it. */
 const shown = (order) => (spaces ? order.filter((place) => place !== "Today") : order);
@@ -163,9 +163,9 @@ try {
   await settings.getByRole("button", { name: "Move Wiki up" }).focus();
   await page.keyboard.press("Enter");
   await expect(settings.getByRole("button", { name: "Move Wiki up" })).toBeFocused();
-  // Two moves (Enter, then Space) take Wiki from last to third of five, or to second of four with Spaces.
+  // Two moves (Enter, then Space) take Wiki from fifth to third of six, or to second of five with Spaces.
   await page.keyboard.press("Space");
-  const moved = ["Home", "Today", "Wiki", "Chats", "Work"];
+  const moved = ["Home", "Today", "Wiki", "Chats", "Work", "Market"];
   await expect.poll(navOrder).toEqual(shown(moved));
   await expect.poll(savedOrder).toEqual(shown(moved));
   await expect(settings.getByRole("status").filter({ hasText: "Wiki moved to position " + (shown(moved).indexOf("Wiki") + 1) + " of " + shown(moved).length + "." })).toBeVisible();
@@ -173,13 +173,13 @@ try {
   await page.keyboard.press("Tab");
   await expect(settings.getByRole("button", { name: "Move Wiki down" })).toBeFocused();
   await page.keyboard.press("Enter");
-  await expect.poll(navOrder).toEqual(shown(["Home", "Today", "Chats", "Wiki", "Work"]));
+  await expect.poll(navOrder).toEqual(shown(["Home", "Today", "Chats", "Wiki", "Work", "Market"]));
   console.log("Move up and Move down by keyboard reorder the side menu at once; focus stays on the place that moved.");
 
   // ---- Dragging a place moves it too.
   const row = (name) => places.locator('[data-place="' + name + '"]');
   await row("Work").dragTo(row("Home"), { targetPosition: { x: 40, y: 4 } });
-  await expect.poll(navOrder).toEqual(shown(["Work", "Home", "Today", "Chats", "Wiki"]));
+  await expect.poll(navOrder).toEqual(shown(["Work", "Home", "Today", "Chats", "Wiki", "Market"]));
   console.log("Dragging Work above Home moves it to the top.");
   await shot("sidebar-settings");
 
@@ -193,7 +193,7 @@ try {
   // An order to keep across the relaunch: Home down two places.
   await settings.getByRole("button", { name: "Move Home down" }).click();
   await settings.getByRole("button", { name: "Move Home down" }).click();
-  const kept = spaces ? ["Chats", "Work", "Home", "Wiki"] : ["Today", "Chats", "Home", "Work", "Wiki"];
+  const kept = spaces ? ["Chats", "Work", "Home", "Wiki", "Market"] : ["Today", "Chats", "Home", "Work", "Wiki", "Market"];
   await expect.poll(navOrder).toEqual(kept);
   await settings.getByRole("button", { name: "Close dialog" }).click();
   await expect(settings).toHaveCount(0);
@@ -201,7 +201,7 @@ try {
   // ---- Open and collapse with the button. Opening it is the person's choice, and is saved as one.
   await page.getByRole("button", { name: "Expand side menu" }).click();
   await expect.poll(collapsed).toBe(false);
-  await expect.poll(railWidth).toBe(264);
+  await expect.poll(railWidth).toBe(248);
   await expect.poll(async () => ({ ...(await snap()).settings.sidebar, order: await savedOrder() })).toEqual({ order: kept, collapsed: false, picked: true });
   for (const name of kept) {
     await expect(nav().getByRole("button", { name, exact: true })).not.toHaveAttribute("title", /./);
@@ -221,8 +221,12 @@ try {
   await expect(nav().getByRole("button", { name: "Home", exact: true })).toHaveAttribute("aria-current", "page");
   await expect(nav().getByRole("button", { name: "Home", exact: true })).toHaveClass(/selected/);
   await expect(page.getByRole("button", { name: "Settings", exact: true })).toHaveAttribute("title", /Settings/);
-  await expect(page.getByRole("button", { name: /^Models/ })).toHaveAttribute("title", "Models · GitHub Copilot");
-  await expect(page.locator(".models-status .provider-icon[data-provider=copilot]")).toBeVisible();
+  // The model providers are on the computer row's menu (the row that stood under it before).
+  await page.getByRole("button", { name: /^Computer: / }).click();
+  await expect(page.getByRole("menuitem", { name: "Models · GitHub Copilot" })).toBeVisible();
+  await expect(page.locator(".host-menu .provider-icon[data-provider=copilot]")).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("menu", { name: "Computers" })).toBeHidden();
   const pip = page.locator(".botnav").getByRole("button", { name: "Pip", exact: true });
   await expect(pip).toHaveAttribute("title", "Pip");
   await expect(page.locator(".botnav .botnav-name").first()).toHaveCSS("clip-path", "inset(50%)");
@@ -242,8 +246,8 @@ try {
 
   // ---- ⌘B / Ctrl+B, from anywhere outside a text editor.
   await nav().getByRole("button", { name: "Home", exact: true }).click();
-  // Somewhere that is not a control: Home's question.
-  await page.getByRole("heading", { name: /on your mind/ }).click();
+  // Somewhere that is not a control: Home's greeting.
+  await page.getByText(/^Good (morning|afternoon|evening)$/).click();
   await page.keyboard.press(MOD + "+b");
   await expect.poll(collapsed).toBe(true);
   await page.keyboard.press(MOD + "+b");
@@ -271,9 +275,10 @@ try {
   await expect.poll(collapsed).toBe(true);
   await page.getByRole("button", { name: "Settings", exact: true }).click();
   await page.getByRole("dialog", { name: "Settings" }).getByRole("tab", { name: "Side menu", exact: true }).click();
-  // Every Settings section is reachable without scrolling the Settings side menu at the smallest size.
-  const menuScrolls = await page.locator(".set-sidebar").evaluate((el) => el.scrollHeight > el.clientHeight + 1);
-  assert.equal(menuScrolls, false, "the Settings side menu scrolls at 760×560");
+  // Settings' list of sections scrolls on its own at the smallest size, so its last section is still reachable.
+  const lastSection = page.getByRole("dialog", { name: "Settings" }).getByRole("tab", { name: "About", exact: true });
+  await lastSection.scrollIntoViewIfNeeded();
+  await expect(lastSection).toBeInViewport();
   await expect(page.getByRole("dialog", { name: "Settings" }).getByRole("switch", { name: "Show icons only" })).toBeChecked();
   await shot("sidebar-settings-min");
   await page.getByRole("dialog", { name: "Settings" }).getByRole("button", { name: "Close dialog" }).click();

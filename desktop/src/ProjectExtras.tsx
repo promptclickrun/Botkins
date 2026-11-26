@@ -146,15 +146,17 @@ export function ProjectArtifacts({ state, project, openChat }: { state: State; p
   const count = items?.length ?? project.artifacts?.length ?? 0;
   return (
     <div className="record-detail">
-      <section className="form-card" aria-labelledby="card-artifacts">
-        <div className="form-card-head">
-          <div>
-            <h3 id="card-artifacts">Artifacts</h3>
-            <small>{count ? plural(count, "artifact") : "Nothing attached yet."}</small>
-          </div>
-          <button type="button" className="secondary" onClick={() => setPicking(true)}>
-            <Paperclip size={14} /> Attach an artifact…
-          </button>
+      {/* Drawn like the page's other sections (Card in Projects.tsx): a label with its action, a card, a note. */}
+      <section className="page-section" aria-labelledby="card-artifacts">
+        <div className="group-label">
+          <h3 id="card-artifacts" className="card-title">
+            Artifacts
+          </h3>
+          <span className="card-action">
+            <button type="button" className="secondary" onClick={() => setPicking(true)}>
+              <Paperclip size={14} /> Attach an artifact…
+            </button>
+          </span>
         </div>
         {error && (
           <p className="field-error list-note" role="alert">
@@ -162,27 +164,30 @@ export function ProjectArtifacts({ state, project, openChat }: { state: State; p
           </p>
         )}
         {!!items?.length && (
-          <ul className="edit-list artifact-pick-list" aria-label="Attached artifacts">
-            {items.map((item) => (
-              <li key={item.id}>
-                <ArtifactLine state={state} item={item} />
-                {!remote && (
-                  <button type="button" className="secondary" aria-label={"Open " + item.name} onClick={() => act(api.openChatPath(item.path, "open"))}>
-                    Open
+          <div className="group rows">
+            <ul className="edit-list artifact-pick-list" aria-label="Attached artifacts">
+              {items.map((item) => (
+                <li key={item.id}>
+                  <ArtifactLine state={state} item={item} />
+                  {!remote && (
+                    <button type="button" className="secondary" aria-label={"Open " + item.name} onClick={() => act(api.openChatPath(item.path, "open"))}>
+                      Open
+                    </button>
+                  )}
+                  {item.chatId && state.chats.some((c) => c.id === item.chatId) && (
+                    <button type="button" className="icon-button" aria-label={"Go to the chat of " + item.name} title="Go to chat" onClick={() => openChat(item.chatId!, item.messageIndex)}>
+                      <MessageCircle size={16} />
+                    </button>
+                  )}
+                  <button type="button" className="icon-button" aria-label={"Remove " + item.name + " from project"} title="Remove from project" onClick={() => act(api.removeProjectArtifact(project.id, item.id))}>
+                    <X size={16} />
                   </button>
-                )}
-                {item.chatId && state.chats.some((c) => c.id === item.chatId) && (
-                  <button type="button" className="icon-button" aria-label={"Go to the chat of " + item.name} title="Go to chat" onClick={() => openChat(item.chatId!, item.messageIndex)}>
-                    <MessageCircle size={16} />
-                  </button>
-                )}
-                <button type="button" className="icon-button" aria-label={"Remove " + item.name + " from project"} title="Remove from project" onClick={() => act(api.removeProjectArtifact(project.id, item.id))}>
-                  <X size={16} />
-                </button>
-              </li>
-            ))}
-          </ul>
+                </li>
+              ))}
+            </ul>
+          </div>
         )}
+        <p className="group-foot">{count ? plural(count, "artifact") : "Nothing attached yet."}</p>
       </section>
       {picking && <AttachArtifactDialog state={state} project={project} close={() => setPicking(false)} />}
     </div>

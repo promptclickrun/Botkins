@@ -18,7 +18,6 @@ import {
   ArrowDown,
   ArrowRight,
   ArrowUp,
-  SlidersHorizontal,
   Check,
   ChevronDown,
   ChevronLeft,
@@ -29,7 +28,6 @@ import {
   Ellipsis,
   Eye,
   EyeOff,
-  Folder,
   FolderGit2,
   FolderKanban,
   FolderInput,
@@ -55,6 +53,8 @@ import { memberTeam, teamCan } from "./teamAccess";
 import { botUnreadChats, unreadBotIds } from "./unread";
 import "./agents.css";
 import "./groups.css";
+import "./home.css";
+import { upcomingRuns, whenLabel } from "./Routines";
 
 const api = () => window.botkins;
 
@@ -513,52 +513,73 @@ function sectionMenuItems(section: Section, actions: PageActions, ask: AskFn): M
 
 /* ------------------------------------------------------------- bot cards */
 
+/**
+ * Each bot's latest conversation and the bots with an unread chat, in one walk over the chats: the
+ * conversation the default bot selection opens (its Main chat, when that is the choice), as in the
+ * side menu, so a bot's row says the same thing in both places.
+ */
+function botLatest(state: State) {
+  const showMain = state.proactive?.chatMode && (state.settings.botTap ?? "main") === "main";
+  const creator = memberTeam(state)?.me.memberId;
+  const latest = new Map<string, Chat>();
+  for (const c of state.chats) {
+    if (c.panelId || c.archived) continue;
+    if (showMain && (!c.main || c.createdBy !== creator)) continue;
+    const seen = latest.get(c.botId);
+    if (!seen || c.time > seen.time) latest.set(c.botId, c);
+  }
+  return { latest, unread: unreadBotIds(state.chats) };
+}
+
+/** A bot as a row of a card, as on the phone: its avatar, its name, one quiet line, the time and the unread dot. */
 function BotCard({
   state,
   bot: b,
   actions,
   menu,
   drag,
-  large,
+  chat,
+  unread,
 }: {
   state: State;
   bot: Bot;
   actions: PageActions;
   menu: (e: ReactMouseEvent<HTMLElement>, b: Bot) => void;
   drag: ReturnType<ReturnType<typeof useBotDrag>["row"]>;
-  large?: boolean;
+  /** The bot's latest conversation, for the quiet line and the time. */
+  chat?: Chat;
+  unread?: boolean;
 }) {
   const activity = botActivity(state, b.id);
   const status = activityLabel(activity);
   const primary = state.bots[0]?.id === b.id;
+  const last = chat?.messages.at(-1)?.text;
+  // What it is doing, else what was said last, else what it is for.
+  const line = status || (last ? previewOf(last) : b.role);
   return (
     <div
       {...drag}
-      className={"botcard-wrap" + (b.hidden ? " is-hidden" : "")}
+      className={"botcard-wrap group-row" + (b.hidden ? " is-hidden" : "")}
       onContextMenu={(e) => menu(e, b)}
     >
       <button className="botcard" onClick={() => actions.botChat(b)}>
-        <BotAvatar bot={b} state={activity} size={large ? 88 : 48} />
+        <BotAvatar bot={b} state={activity} size={44} />
         <span className="botcard-text">
-          <strong>{b.name}</strong>
-          <small>
-            {primary && <span className="botbadge">Primary · </span>}
-            {b.role}
-          </small>
-          {status && (
-            <small className={"botstatus " + activity}>
-              <i />
-              {status}
-            </small>
-          )}
+          <span className="botcard-top">
+            <strong>{b.name}</strong>
+            {primary && <span className="botbadge">Primary</span>}
+            {!primary && b.pinned && <Pin size={12} className="botcard-flag" aria-label="Pinned" />}
+            {b.hidden && <EyeOff size={12} className="botcard-flag" aria-label="Hidden" />}
+            {chat && <time className={unread ? "unread" : undefined}>{shortTime(chat.time)}</time>}
+          </span>
+          <span className="botcard-line">
+            <small className={status ? "botcard-status " + activity : undefined}>{line}</small>
+            {unread && <i className="unread-dot" aria-label="Unread" />}
+          </span>
         </span>
       </button>
-      <span className="botflags">
-        {!primary && b.pinned && <Pin size={13} aria-label="Pinned" />}
-        {b.hidden && <EyeOff size={13} aria-label="Hidden" />}
-      </span>
       <button
-        className="menu-button"
+        className="menu-button icon-btn"
         aria-label={"Options for " + b.name}
         aria-haspopup="menu"
         onClick={(e) => menu(e, b)}
@@ -578,19 +599,21 @@ function readCollapsed(): string[] {
   }
 }
 
+/**
+ * The bots as the phone lists them: the primary bot and the pinned ones in the first card, then each
+ * section as an uppercase label (it folds, and has its ⋯) over a card of its bots. A search or a
+ * filter shows one card of the matches. Rows drag between sections.
+ */
 export function BotCards({
   state,
   actions,
   query = "",
   filter = "All",
-  large,
 }: {
   state: State;
   actions: PageActions;
   query?: string;
   filter?: string;
-  /** Home's row: each bot is its Botkin, large, with its name and role under it. */
-  large?: boolean;
 }) {
   const menu = useMenu();
   const dialogs = useAsk();
@@ -598,7 +621,19 @@ export function BotCards({
   const botMenu = (e: ReactMouseEvent<HTMLElement>, b: Bot) =>
     menu.show(e, b.name, botMenuItems(state, b, actions, dialogs.ask));
   const drag = useBotDrag(state.bots, actions.fail);
-  const card = (b: Bot) => <BotCard key={b.id} state={state} bot={b} actions={actions} menu={botMenu} drag={drag.row(b, large)} large={large} />;
+  const { latest, unread } = botLatest(state);
+  const card = (b: Bot) => (
+    <BotCard
+      key={b.id}
+      state={state}
+      bot={b}
+      actions={actions}
+      menu={botMenu}
+      drag={drag.row(b)}
+      chat={latest.get(b.id)}
+      unread={unread.has(b.id)}
+    />
+  );
   function toggle(id: string) {
     const next = collapsed.includes(id) ? collapsed.filter((x) => x !== id) : [...collapsed, id];
     setCollapsed(next);
@@ -617,9 +652,9 @@ export function BotCards({
         (!q || (b.name + " " + b.role + " " + (b.summary ?? "")).toLowerCase().includes(q)),
     );
     body = matches.length ? (
-      <div className="bots">{matches.map(card)}</div>
+      <div className="group bots">{matches.map(card)}</div>
     ) : (
-      <p className="muted bots-none">
+      <p className="group-foot bots-none">
         {filter === "Hidden" ? "No hidden bots." : filter === "Pinned" ? "No pinned bots. Pin one from its ⋯ menu." : "No matching bots."}
       </p>
     );
@@ -627,36 +662,38 @@ export function BotCards({
     const { primary, pinned, sections, rest } = arrangeBots(state);
     body = (
       <>
-        <div className="bots">
+        <div className="group bots">
           {primary && card(primary)}
           {pinned.map(card)}
           {!sections.length && rest.map(card)}
         </div>
         {sections.map(({ section, bots }) => {
           const open = !collapsed.includes(section.id);
+          const sectionMenu = (e: ReactMouseEvent<HTMLElement>) =>
+            menu.show(e, section.name, sectionMenuItems(section, actions, dialogs.ask));
           return (
-            <div {...drag.place({pinned:false, sectionId:section.id})} className="botgroup" key={section.id} onContextMenu={(e) => menu.show(e, section.name, sectionMenuItems(section, actions, dialogs.ask))}>
-              <div className="botgroup-head">
-                <button aria-expanded={open} onClick={() => toggle(section.id)}>
-                  <ChevronDown size={15} className="botgroup-chevron" />
-                  <Folder size={15} />
+            <div {...drag.place({ pinned: false, sectionId: section.id })} className="botgroup" key={section.id} onContextMenu={sectionMenu}>
+              <div className="botgroup-head group-label">
+                <button className="botgroup-toggle" aria-expanded={open} onClick={() => toggle(section.id)}>
                   <span>{section.name}</span>
-                  <small>{bots.length}</small>
+                  <small>· {bots.length}</small>
+                  <ChevronDown size={14} className="botgroup-chevron" />
                 </button>
+                <span className="spacer" />
                 <button
-                  className="menu-button"
+                  className="menu-button icon-btn"
                   aria-label={"Options for section " + section.name}
                   aria-haspopup="menu"
-                  onClick={(e) => menu.show(e, section.name, sectionMenuItems(section, actions, dialogs.ask))}
+                  onClick={sectionMenu}
                 >
                   <Ellipsis size={16} />
                 </button>
               </div>
               {open &&
                 (bots.length ? (
-                  <div className="bots">{bots.map(card)}</div>
+                  <div className="group bots">{bots.map(card)}</div>
                 ) : (
-                  <p className="muted bots-none">
+                  <p className="group-foot bots-none">
                     {state.bots.some((b) => b.sectionId === section.id && !b.hidden)
                       ? "Its bots are pinned above."
                       : "No bots here yet. Use “Move to section” in a bot’s ⋯ menu."}
@@ -667,10 +704,10 @@ export function BotCards({
         })}
         {sections.length > 0 && rest.length > 0 && (
           <div className="botgroup">
-            <div {...drag.place({pinned:false, sectionId:null})} className="botgroup-head plain">
-              <span>Other bots</span>
+            <div {...drag.place({ pinned: false, sectionId: null })} className="botgroup-head group-label plain">
+              <span>Other bots · {rest.length}</span>
             </div>
-            <div className="bots">{rest.map(card)}</div>
+            <div className="group bots">{rest.map(card)}</div>
           </div>
         )}
       </>
@@ -687,47 +724,51 @@ export function BotCards({
 }
 
 /**
- * The person's bots with their tools: search, the All / Pinned / Hidden filters, New section and
- * Add bot. On Chats everything is laid out. On Home (`home`) the bots are a row of Botkins and the
- * tools wait behind one quiet button, so the page stays calm and loses nothing.
+ * Home's "Your bots" board: the All / Pinned / Hidden chips, search (behind one button, and kept open
+ * while a search is typed), New section, and the bots. Add bot is in the page header.
  */
-function BotsSection({ state, actions, home }: { state: State; actions: PageActions; home?: boolean }) {
+function BotsSection({ state, actions, className }: { state: State; actions: PageActions; className?: string }) {
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState("All");
-  const [open, setOpen] = useState(false);
+  const [searching, setSearching] = useState(false);
   const dialogs = useAsk();
   const hidden = state.bots.filter((b) => b.hidden).length;
   const pinned = state.bots.filter((b) => b.pinned && !b.hidden).length;
-  // On Home the tools show when asked for, and stay while a search or a filter is in use.
-  const tools = home ? open || filter !== "All" || !!query : state.bots.length > 3 || hidden > 0 || filter !== "All" || !!query;
+  const search = searching || !!query;
   return (
-    <section className={"bots-section" + (home ? " home" : "")}>
-      <div className="sectionhead">
-        <h2>{home ? "Your Botkins" : "Your bots"}</h2>
-        <span className="sectionhead-actions">
-          {home && (
-            <button
-              className="textbutton bot-tools-toggle"
-              aria-label="Bot tools"
-              aria-expanded={tools}
-              title="Search, filters and sections"
-              onClick={() => {
-                // Closing puts everything back: no search or filter is left on out of sight.
-                if (tools) {
-                  setQuery("");
-                  setFilter("All");
-                }
-                setOpen(!tools);
-              }}
-            >
-              <SlidersHorizontal size={15} />
+    <section className={"page-section bots-section" + (className ? " " + className : "")} aria-labelledby="home-bots-title">
+      <div className="board-head">
+        <h2 id="home-bots-title" className="board-title">
+          Your bots
+        </h2>
+        <div className="chip-row" role="group" aria-label="Show bots">
+          {[
+            ["All", "All"],
+            ["Pinned", pinned ? "Pinned · " + pinned : "Pinned"],
+            ["Hidden", "Hidden · " + hidden],
+          ].map(([f, label]) => (
+            <button key={f} className="chip" aria-pressed={filter === f} onClick={() => setFilter(f)}>
+              {label}
             </button>
-          )}
-          {(!home || tools) && teamCan(state, "agents", "manage") && (
-          <Button
-            variant="glass"
-            className="lg-compact"
-            icon={<FolderPlus size={15} />}
+          ))}
+        </div>
+        <span className="spacer" />
+        <button
+          className="icon-btn"
+          aria-label="Bot tools"
+          aria-expanded={search}
+          title="Search bots"
+          onClick={() => {
+            // Closing clears the search, so nothing is left filtered out of sight.
+            if (search) setQuery("");
+            setSearching(!search);
+          }}
+        >
+          <Search size={16} />
+        </button>
+        {teamCan(state, "agents", "manage") && (
+          <button
+            className="link-button"
             onClick={() =>
               run(
                 actions,
@@ -743,39 +784,22 @@ function BotsSection({ state, actions, home }: { state: State; actions: PageActi
               )
             }
           >
+            <FolderPlus size={15} />
             New section
-          </Button>
-          )}
-          {teamCan(state, "agents", "create") && (
-            <Button variant="glass" className="lg-compact" icon={<Plus size={15} />} onClick={actions.addBot}>
-              Add bot
-            </Button>
-          )}
-        </span>
+          </button>
+        )}
       </div>
-      {tools && (
-        <div className="bot-tools">
-          <div className="filters" role="group" aria-label="Show bots">
-            {[
-              ["All", "All"],
-              ["Pinned", pinned ? "Pinned · " + pinned : "Pinned"],
-              ["Hidden", "Hidden · " + hidden],
-            ].map(([f, label]) => (
-              <button key={f} aria-pressed={filter === f} onClick={() => setFilter(f)}>
-                {label}
-              </button>
-            ))}
-          </div>
-          <SearchField
-            className="lg-search-compact"
-            aria-label="Search bots"
-            placeholder="Search bots"
-            value={query}
-            onValueChange={setQuery}
-          />
-        </div>
+      {search && (
+        <SearchField
+          className="lg-search-compact bots-search"
+          aria-label="Search bots"
+          placeholder="Search bots"
+          autoFocus
+          value={query}
+          onValueChange={setQuery}
+        />
       )}
-      <BotCards state={state} actions={actions} query={query} filter={filter} large={home} />
+      <BotCards state={state} actions={actions} query={query} filter={filter} />
       {dialogs.node}
     </section>
   );
@@ -788,7 +812,7 @@ function BotsSection({ state, actions, home }: { state: State; actions: PageActi
  * avatar, its name, and one line: what it is doing, else its latest chat's last message, else its role.
  * `compact`: the menu is collapsed to icons, so each bot is its avatar with its name as a tooltip.
  */
-export function SidebarBots({ state, actions, compact }: { state: State; actions: PageActions; compact?: boolean }) {
+export function SidebarBots({ state, actions, compact, selectedBotId }: { state: State; actions: PageActions; compact?: boolean; /** The bot whose chat is open, drawn selected. */ selectedBotId?: string }) {
   const drag = useBotDrag(state.bots, actions.fail);
   const menu = useMenu();
   const dialogs = useAsk();
@@ -815,14 +839,14 @@ export function SidebarBots({ state, actions, compact }: { state: State; actions
     const line = status || (last ? previewOf(last) : b.role);
     const lineId = "botnav-line-" + b.id;
     return (
-      <div {...drag.row(b)} className="botnav-item" key={b.id} onContextMenu={(e) => menu.show(e, b.name, items())}>
+      <div {...drag.row(b)} className={"botnav-item" + (b.id === selectedBotId ? " selected" : "")} key={b.id} onContextMenu={(e) => menu.show(e, b.name, items())}>
         <button
           onClick={() => actions.botChat(b)}
           aria-label={b.name}
           aria-describedby={compact ? undefined : lineId}
           title={compact ? b.name + (activity === "waiting" ? " · needs you" : "") : undefined}
         >
-          <BotAvatar bot={b} state={activity} size={compact ? 32 : 40} />
+          <BotAvatar bot={b} state={activity} size={compact ? 32 : 24} />
           <span className="botnav-text">
             <span className="botnav-top">
               <span className="botnav-name">{b.name}</span>
@@ -833,6 +857,12 @@ export function SidebarBots({ state, actions, compact }: { state: State; actions
               <span>{line}</span>
               {chat && !status && <time>{shortTime(chat.time)}</time>}
             </span>
+            {/* The row is one line: what the bot is doing, else nothing (the unread dot is beside the name). */}
+            {status && (
+              <span className={"botnav-meta " + (activity === "waiting" ? "waiting" : "busy")} aria-hidden="true">
+                {activity === "waiting" ? "Needs you" : "Working"}
+              </span>
+            )}
           </span>
           {activity === "waiting" && <i className="botnav-alert" aria-label="Needs you" />}
         </button>
@@ -1049,6 +1079,8 @@ export function ChatRow({
   open,
   actions,
   drag,
+  look = "list",
+  selected,
 }: {
   state: State;
   chat: Chat;
@@ -1057,6 +1089,10 @@ export function ChatRow({
   actions?: PageActions;
   /** On the Chats page with sections, the row can be dragged into one. */
   drag?: ReturnType<ReturnType<typeof useChatDrag>["row"]>;
+  /** "card": a row of a grouped card (the Chats page, the chat list column, the bot page). "list": the plain row other pages use. */
+  look?: "list" | "card";
+  /** The chat open beside the list, drawn selected. */
+  selected?: boolean;
 }) {
   const b = state.bots.find((b) => b.id === chat.botId);
   const members = (chat.botIds ?? []).map((id) => state.bots.find((x) => x.id === id)).filter((x): x is Bot => !!x);
@@ -1081,19 +1117,33 @@ export function ChatRow({
             run: () => run(controls!, api().setChatFlags(chat.id, { unread: false })),
           },
         ];
-  const last = chat.messages.at(-1)?.text;
+  const lastMessage = chat.messages.at(-1);
+  const last = lastMessage?.text;
+  const card = look === "card";
+  // On a card the quiet line says who spoke last, as the phone does: "You: …" or "Gordie: …".
+  const speaker =
+    lastMessage?.role === "user"
+      ? lastMessage.author?.name ?? "You"
+      : (lastMessage?.botId && state.bots.find((x) => x.id === lastMessage.botId)?.name) ||
+        (members.length > 1 ? members.map((m) => m.name).join(", ") : b.name);
+  const avatar =
+    members.length > 1 ? (
+      // Group chat: the members' avatars (desktop/groups.mjs).
+      <span className={"group-avatars " + (card ? "stack" : "side")} aria-hidden="true">
+        {(card ? members.slice(0, 2) : members.slice(0, 3)).map((m) => (
+          <BotAvatar key={m.id} bot={m} state={botActivity(state, m.id)} size={card ? 28 : members.length > 2 ? 24 : 28} />
+        ))}
+      </span>
+    ) : (
+      <BotAvatar bot={b} state={chatActivity(state, chat.id)} size={40} />
+    );
   const row = (
-    <button className={"row chatrow" + (chat.unread ? " unread" : "")} onClick={() => open(chat.id)}>
-      {members.length > 1 ? (
-        // Group chat: the members' avatars side by side (desktop/groups.mjs).
-        <span className="group-avatars side" aria-hidden="true">
-          {members.slice(0, 3).map((m) => (
-            <BotAvatar key={m.id} bot={m} state={botActivity(state, m.id)} size={members.length > 2 ? 24 : 28} />
-          ))}
-        </span>
-      ) : (
-        <BotAvatar bot={b} state={chatActivity(state, chat.id)} size={40} />
-      )}
+    <button
+      className={"row chatrow" + (chat.unread ? " unread" : "")}
+      aria-current={selected ? "true" : undefined}
+      onClick={() => open(chat.id)}
+    >
+      {avatar}
       <span className="rowtext">
         <span className="rowtop">
           <strong>
@@ -1104,9 +1154,18 @@ export function ChatRow({
         </span>
         <span className="rowline">
           <small>
-            {createdBy && <>{createdBy} · </>}
-            {members.length > 1 ? members.map((m) => m.name).join(", ") : b.name} ·{" "}
-            {last ? previewOf(last) : "Start a conversation"}
+            {card ? (
+              <>
+                {createdBy && lastMessage?.role !== "user" && <>{createdBy} · </>}
+                {last ? speaker + ": " + previewOf(last) : (members.length > 1 ? members.map((m) => m.name).join(", ") : b.name) + " · No messages yet"}
+              </>
+            ) : (
+              <>
+                {createdBy && <>{createdBy} · </>}
+                {members.length > 1 ? members.map((m) => m.name).join(", ") : b.name} ·{" "}
+                {last ? previewOf(last) : "Start a conversation"}
+              </>
+            )}
           </small>
           {chat.unread && <i className="unread-dot" aria-label="Unread" />}
         </span>
@@ -1116,15 +1175,16 @@ export function ChatRow({
           </small>
         )}
       </span>
-      {!controls && <ChevronRight size={16} />}
+      {!controls && <ChevronRight size={16} className={card ? "row-chevron" : undefined} />}
     </button>
   );
-  if (!controls) return row;
+  const wrap = "rowwrap" + (card ? " group-row chat-item" : "") + (selected ? " selected" : "");
+  if (!controls) return card ? <div className={wrap}>{row}</div> : row;
   return (
-    <div {...drag} className="rowwrap" onContextMenu={(e) => menu.show(e, chat.title, items())}>
+    <div {...drag} className={wrap} onContextMenu={(e) => menu.show(e, chat.title, items())}>
       {row}
       <button
-        className="menu-button"
+        className={"menu-button" + (card ? " icon-btn" : "")}
         aria-label="Chat options"
         aria-haspopup="menu"
         onClick={(e) => menu.show(e, chat.title, items())}
@@ -1139,71 +1199,293 @@ export function ChatRow({
 
 /* ----------------------------------------------------------------- pages */
 
+/** "Good morning", "Good afternoon" or "Good evening", by the computer's clock. */
+function greeting() {
+  const hour = new Date().getHours();
+  return hour < 5 ? "Good evening" : hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening";
+}
+
+type Need = { key: string; bot?: Bot; title: string; sub: string; action: string; go?: () => void };
+
 /**
- * Home: one question, the message box for the primary bot, that bot's Botkin, and the person's
- * Botkins in a row. Everything else a person can do with bots (search, filters, sections) is one
- * quiet button away here and laid out in full on Chats, where the chats themselves are too.
+ * What is waiting on the person: a bot's open question or approval, a turn that stopped for them, and
+ * tasks on the board in review or blocked. One row each, newest kind first.
  */
-export function HomePage({ state, actions, composer }: { state: State; actions: PageActions; composer: ReactNode }) {
-  const attention = state.runs.filter(
-    (r) => r.status === "Needs you" && state.runs.find((x) => x.chatId === r.chatId) === r,
-  );
-  const primary = state.bots[0];
-  const primaryActivity = botActivity(state, primary.id);
+function needsYou(state: State, actions: PageActions, openWork?: () => void): Need[] {
+  const chats = new Map(state.chats.map((c) => [c.id, c]));
+  const botOf = (id?: string | null) => (id ? state.bots.find((b) => b.id === id) : undefined);
+  const out: Need[] = [];
+  const asked = new Set<string>();
+  for (const r of state.requests ?? []) {
+    const chat = chats.get(r.chatId);
+    if (r.nodeJob || !chat) continue;
+    asked.add(r.chatId);
+    const bot = botOf(r.botId);
+    out.push({ key: "r:" + r.id, bot, title: r.title, sub: (bot?.name ?? "A bot") + " needs you · " + chat.title, action: "Open", go: () => actions.open(r.chatId) });
+  }
+  for (const r of state.runs) {
+    // A turn that stopped for the person, once per chat (the newest run comes first).
+    if (r.status !== "Needs you" || asked.has(r.chatId) || state.runs.find((x) => x.chatId === r.chatId) !== r) continue;
+    const chat = chats.get(r.chatId);
+    if (!chat) continue;
+    asked.add(r.chatId);
+    const bot = botOf(chat.botId);
+    out.push({ key: "u:" + r.id, bot, title: r.title, sub: (bot?.name ?? "A bot") + " needs you · " + chat.title, action: "Open", go: () => actions.open(r.chatId) });
+  }
+  for (const t of state.tasks ?? []) {
+    if (t.status !== "review" && t.status !== "blocked") continue;
+    const bot = botOf(t.botId);
+    const chatId = t.chatId && chats.has(t.chatId) ? t.chatId : undefined;
+    out.push({
+      key: "t:" + t.id,
+      bot,
+      title: t.title,
+      sub: (bot?.name ?? "Unassigned") + " · " + (t.status === "review" ? "task ready for review" : "task blocked" + (t.problem ? ": " + t.problem : "")),
+      action: t.status === "review" ? "Review" : "Open",
+      go: openWork ?? (chatId ? () => actions.open(chatId) : undefined),
+    });
+  }
+  return out;
+}
+
+/** The line under Home's greeting: who is working and how much waits on the person. */
+function homeStatus(state: State, needs: number) {
+  const busy = state.bots.filter((b) => {
+    const a = botActivity(state, b.id);
+    return a !== "idle" && a !== "waiting" && a !== "needs-input";
+  });
+  const working =
+    busy.length === 0
+      ? ""
+      : busy.length === 1
+        ? busy[0].name + " is working"
+        : busy.length === 2
+          ? busy[0].name + " and " + busy[1].name + " are working"
+          : busy.length + " bots are working";
+  const waiting = needs === 0 ? "" : needs === 1 ? "1 thing needs you" : needs + " things need you";
+  return [working, waiting].filter(Boolean).join(" · ") || "Nothing needs you right now";
+}
+
+const boardKind = { feed: "Feed", idea: "Idea", goal: "Goal" } as const;
+
+/**
+ * Home, laid out like the phone's: a greeting with what is going on, the message box for the primary
+ * bot, what needs the person, then the bots beside Today and the routines up next. The bots' tools
+ * (filters, search, sections, drag to arrange) live here; Chats is for conversations.
+ */
+export function HomePage({
+  state,
+  actions,
+  composer,
+  openWork,
+  openRoutines,
+  openToday,
+}: {
+  state: State;
+  actions: PageActions;
+  composer: ReactNode;
+  /** Opens Work, where tasks in review or blocked are handled. */
+  openWork?: () => void;
+  /** Opens Routines, on one routine (its chat's id) or on the list. */
+  openRoutines?: (target: { id?: string }) => void;
+  /** Opens Today. */
+  openToday?: () => void;
+}) {
+  const needs = needsYou(state, actions, openWork);
+  const now = Date.now();
+  const today = teamCan(state, "today")
+    ? (state.board ?? [])
+        .filter((i) => i.status === "open" && !(i.snoozedUntil && i.snoozedUntil > now))
+        .sort((a, b) => b.createdAt - a.createdAt)
+        .slice(0, 3)
+    : [];
+  const next = upcomingRuns(state).slice(0, 4);
+  const side = today.length > 0 || next.length > 0;
   return (
-    <>
-      {/* The page's name, for screen readers: what a person sees first is the question below. */}
+    <div className="page home-page">
+      {/* The page's name, for screen readers and tests: what a person sees first is the greeting. */}
       <h1 className="visually-hidden">Home</h1>
-      <section className="hero">
-        <div className="herobody">
-          <h2>What’s on your mind?</h2>
-          {composer}
+      <div className="page-head">
+        <div className="page-heading">
+          <p className="page-title">{greeting()}</p>
+          <p className="page-sub">{homeStatus(state, needs.length)}</p>
         </div>
-        <div className="heroface">
-          <BotAvatar bot={primary} state={primaryActivity} size={176} />
-          <strong>{primary.name}</strong>
-          <small>{primary.role}</small>
-        </div>
-      </section>
-      {attention.length > 0 && (
-        <section>
-          <h2>Needs you</h2>
-          {attention.map((r) => (
-            <button className="row" key={r.id} onClick={() => actions.open(r.chatId)}>
-              <CircleAlert size={19} />
-              {r.title}
-              <ChevronRight size={16} />
+        <div className="page-actions">
+          {teamCan(state, "agents", "create") && (
+            <button className="btn primary" onClick={actions.addBot}>
+              <Plus size={16} />
+              Add bot
             </button>
-          ))}
+          )}
+        </div>
+      </div>
+      {composer && (
+        <section className="home-composer" aria-label="Ask a bot">
+          {composer}
         </section>
       )}
-      <BotsSection state={state} actions={actions} home />
-    </>
+      {needs.length > 0 && (
+        <section className="page-section" aria-labelledby="home-needs-title">
+          <h2 id="home-needs-title" className="group-label">
+            Needs you · {needs.length}
+          </h2>
+          <div className="group">
+            {needs.map((n) => (
+              <div className="group-row need-row" key={n.key}>
+                {n.bot ? <BotAvatar bot={n.bot} state={botActivity(state, n.bot.id)} size={36} /> : <span className="icon-tile"><CircleAlert size={16} /></span>}
+                <span className="row-main">
+                  <span className="row-title">{n.title}</span>
+                  <span className="row-sub">{n.sub}</span>
+                </span>
+                <span className="status-dot waiting" aria-hidden="true" />
+                {n.go && (
+                  <button className="btn soft small" aria-label={n.action + " " + n.title} onClick={n.go}>
+                    {n.action}
+                  </button>
+                )}
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+      <div className="page-columns">
+        <BotsSection state={state} actions={actions} className="main-column" />
+        {side && (
+          <div className="home-side">
+            {today.length > 0 && (
+              <section className="page-section" aria-labelledby="home-today-title">
+                <div className="board-head">
+                  <h2 id="home-today-title" className="board-title">
+                    Today
+                  </h2>
+                  <span className="spacer" />
+                  {openToday && (
+                    <button className="link-button" onClick={openToday}>
+                      Open Today
+                      <ChevronRight size={14} />
+                    </button>
+                  )}
+                </div>
+                <div className="group">
+                  {today.map((item) => {
+                    const bot = state.bots.find((b) => b.id === item.botId);
+                    return (
+                      <div className="group-row today-item" key={item.id}>
+                        <span className="today-meta">
+                          {bot && <BotAvatar bot={bot} size={18} animated={false} />}
+                          {bot && <strong>{bot.name}</strong>}
+                          <span>
+                            {shortTime(item.createdAt)} · {item.category || boardKind[item.kind]}
+                          </span>
+                        </span>
+                        <h3 className="row-title">{item.title}</h3>
+                        {item.body && <p className="row-sub">{previewOf(item.body)}</p>}
+                      </div>
+                    );
+                  })}
+                </div>
+              </section>
+            )}
+            {next.length > 0 && (
+              <section className="page-section" aria-labelledby="home-next-title">
+                <div className="group-label">
+                  <h2 id="home-next-title">Up next</h2>
+                  <span className="spacer" />
+                  {openRoutines && (
+                    <button className="link-button" onClick={() => openRoutines({})}>
+                      All routines
+                    </button>
+                  )}
+                </div>
+                <div className="group">
+                  {next.map(({ chat, entry, bot, at }) => (
+                    <button
+                      className="group-row next-row"
+                      key={chat.id + ":" + entry.id}
+                      onClick={() => (entry.routine && openRoutines ? openRoutines({ id: chat.id }) : actions.open(chat.id))}
+                    >
+                      {bot && <BotAvatar bot={bot} size={32} animated={false} />}
+                      <span className="row-main">
+                        <span className="row-title">{entry.name || entry.prompt}</span>
+                      </span>
+                      <span className="row-value">{whenLabel(at)}</span>
+                    </button>
+                  ))}
+                </div>
+              </section>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
   );
 }
 
-/** The sections folded on the Chats page, kept while the app is open (not saved). */
+/** The sections folded in the chat lists, kept while the app is open (not saved). */
 const foldedChatSections = new Set<string>();
 
-export function ChatsPage({
+type ChatFilterName = "All" | "Unread" | "Archived";
+
+/** The All / Unread / Archived chips over a chat list. */
+function ChatFilterChips({ state, filter, setFilter }: { state: State; filter: ChatFilterName; setFilter: (f: ChatFilterName) => void }) {
+  const unread = chatsPageUnreadChats(state.chats).length;
+  const archived = state.chats.filter((c) => c.archived).length;
+  return (
+    <div className="chip-row chat-filters" role="group" aria-label="Show chats">
+      {(
+        [
+          ["All", "All"],
+          ["Unread", unread ? "Unread · " + unread : "Unread"],
+          ["Archived", archived ? "Archived · " + archived : "Archived"],
+        ] as const
+      ).map(([f, label]) => (
+        <button key={f} className="chip" aria-pressed={filter === f} onClick={() => setFilter(f)}>
+          {label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/** Makes a new chat section, from the Chats page header ("chat-sections-v1"). */
+function newChatSection(actions: PageActions, ask: AskFn) {
+  runSection(
+    actions,
+    (async () => {
+      const name = await ask({
+        title: "New section",
+        body: "Group chats into a section. Move chats in from their ⋯ menu, or drag them.",
+        confirm: "Create section",
+        field: { label: "Section name", value: "", max: 40 },
+      });
+      if (name) await api()["link.chats.addSection"](name);
+    })(),
+  );
+}
+
+/**
+ * The chats, grouped: Pinned, the person's sections (they fold, have a ⋯ menu and take dropped
+ * chats), then Today, Yesterday and Earlier, or the archived ones. Each group is an uppercase label
+ * over a card of rows. The Chats page and the chat list beside an open chat both draw this.
+ */
+function ChatList({
   state,
   actions,
   query,
-  setQuery,
+  filter,
+  selectedChatId,
 }: {
   state: State;
   actions: PageActions;
   query: string;
-  setQuery: (q: string) => void;
+  filter: ChatFilterName;
+  selectedChatId?: string;
 }) {
-  const [filter, setFilter] = useState<"All" | "Unread" | "Archived">("All");
   const [folded, setFolded] = useState(() => new Set(foldedChatSections));
   const menu = useMenu();
   const dialogs = useAsk();
   const drag = useChatDrag(state.chats, (e) => runSection(actions, Promise.reject(e)));
   const chats = state.chats;
-  const unread = chatsPageUnreadChats(chats).length;
-  const archived = chats.filter((c) => c.archived).length;
   // Sections are there only when the computer in use keeps them ("chat-sections-v1").
   const sections = hasChatSections(state) ? state.chatSections ?? [] : undefined;
   const groups = chatGroups({ chats, sections, query, filter, botName: (c) => state.bots.find((b) => b.id === c.botId)?.name });
@@ -1215,11 +1497,25 @@ export function ChatsPage({
     else foldedChatSections.add(id);
     setFolded(new Set(foldedChatSections));
   }
-  const rows = (list: Chat[]) =>
-    list.map((c) => <ChatRow key={c.id} state={state} chat={c} open={actions.open} actions={actions} drag={movable ? drag.row(c) : undefined} />);
+  const rows = (list: Chat[]) => (
+    <div className="group chat-rows">
+      {list.map((c) => (
+        <ChatRow
+          key={c.id}
+          state={state}
+          chat={c}
+          open={actions.open}
+          actions={actions}
+          drag={movable ? drag.row(c) : undefined}
+          look="card"
+          selected={c.id === selectedChatId}
+        />
+      ))}
+    </div>
+  );
   const plain = (group: ChatGroup) => (
-    <div className="chatgroup" key={group.key} role="group" aria-label={group.label}>
-      <h3 className="chatgroup-label">{group.label}</h3>
+    <div className="chatgroup page-section" key={group.key} role="group" aria-label={group.label}>
+      <h3 className="group-label chatgroup-label">{group.label}</h3>
       {rows(group.chats)}
     </div>
   );
@@ -1231,105 +1527,189 @@ export function ChatsPage({
     return (
       <div
         {...(movable ? drag.place(section.id) : {})}
-        className="chatgroup chatsection"
+        className="chatgroup chatsection page-section"
         key={group.key}
         role="group"
         aria-label={section.name}
         onContextMenu={movable ? sectionMenu : undefined}
       >
-        <div className="chatsection-head">
-          <button aria-expanded={open} onClick={() => fold(section.id)}>
-            <ChevronDown size={14} className="botgroup-chevron" />
-            <Folder size={14} />
+        <div className="chatsection-head group-label">
+          <button className="botgroup-toggle" aria-expanded={open} onClick={() => fold(section.id)}>
             <span>{section.name}</span>
-            <small>{group.chats.length}</small>
+            <small>· {group.chats.length}</small>
+            <ChevronDown size={14} className="botgroup-chevron" />
           </button>
+          <span className="spacer" />
           {movable && (
-            <button className="menu-button" aria-label={"Options for section " + section.name} aria-haspopup="menu" onClick={sectionMenu}>
+            <button className="menu-button icon-btn" aria-label={"Options for section " + section.name} aria-haspopup="menu" onClick={sectionMenu}>
               <Ellipsis size={16} />
             </button>
           )}
         </div>
-        {open && (group.chats.length ? rows(group.chats) : <p className="muted chatsection-none">No chats here yet.</p>)}
+        {open && (group.chats.length ? rows(group.chats) : <p className="group-foot chatsection-none">No chats here yet.</p>)}
       </div>
     );
   };
   const days = groups.filter((group) => group.kind === "day");
   return (
     <>
-      <h1>Chats</h1>
-      <BotsSection state={state} actions={actions} />
-      <section>
-        <div className="sectionhead">
-          <h2>Conversations</h2>
-          <Input
-            className="lg-search-compact"
-            icon={<Search size={15} />}
-            aria-label="Search chats"
-            placeholder="Search chats"
-            value={query}
-            onValueChange={setQuery}
-          />
-        </div>
-        <div className="chat-tools">
-          <div className="filters chat-filters" role="group" aria-label="Show chats">
-            {(
-              [
-                ["All", "All"],
-                ["Unread", unread ? "Unread · " + unread : "Unread"],
-                ["Archived", archived ? "Archived · " + archived : "Archived"],
-              ] as const
-            ).map(([f, label]) => (
-              <button key={f} aria-pressed={filter === f} onClick={() => setFilter(f)}>
-                {label}
-              </button>
-            ))}
+      {groups.map((group) => (group.kind === "pinned" ? plain(group) : group.kind === "section" ? sectionGroup(group) : null))}
+      {movable && sections!.length > 0 ? (
+        // The chats in no section are one place to drop a chat on, which takes it out of its section.
+        days.length > 0 ? (
+          <div {...drag.place(null)} className="chatgroups-loose">
+            {days.map(plain)}
           </div>
+        ) : (
+          drag.dragging?.sectionId && (
+            <div className="bot-drop-zones">
+              <div {...drag.place(null)}>None</div>
+            </div>
+          )
+        )
+      ) : (
+        days.map(plain)
+      )}
+      {!chats.length && teamCan(state, "agents", "chat") && (
+        <div className="chats-empty">
+          <button className="link-button" onClick={actions.newChat}>
+            Start your first chat <ArrowRight size={15} />
+          </button>
+        </div>
+      )}
+      {!!chats.length && !matched && (
+        <p className="group-foot bots-none">
+          {query
+            ? "No matching chats."
+            : filter === "Unread"
+              ? "You're all caught up."
+              : filter === "Archived"
+                ? "No archived chats."
+                : "No chats. Restore one from Archived."}
+        </p>
+      )}
+      {menu.node}
+      {dialogs.node}
+    </>
+  );
+}
+
+/** Chats: the person's conversations, with search, the filters, Mark all as read, New section and New chat. Bots are on Home. */
+export function ChatsPage({
+  state,
+  actions,
+  query,
+  setQuery,
+}: {
+  state: State;
+  actions: PageActions;
+  query: string;
+  setQuery: (q: string) => void;
+}) {
+  const [filter, setFilter] = useState<ChatFilterName>("All");
+  const dialogs = useAsk();
+  const unread = chatsPageUnreadChats(state.chats).length;
+  const canChat = teamCan(state, "agents", "chat");
+  return (
+    <div className="page chats-page">
+      <div className="page-head">
+        <div className="page-heading">
+          <h1 className="page-title">Chats</h1>
+        </div>
+        <div className="page-actions">
+          {hasChatSections(state) && canChat && (
+            <button className="btn quiet" onClick={() => newChatSection(actions, dialogs.ask)}>
+              <FolderPlus size={15} />
+              New section
+            </button>
+          )}
           {unread > 0 && teamCan(state, "agents") && (
-            <button className="ghost chat-mark-read" onClick={() => actions.markAllRead()}>
-              <MailOpen size={14} />
+            <button className="btn quiet chat-mark-read" onClick={() => actions.markAllRead()}>
+              <MailOpen size={15} />
               Mark all as read
             </button>
           )}
-        </div>
-        {groups.map((group) => (group.kind === "pinned" ? plain(group) : group.kind === "section" ? sectionGroup(group) : null))}
-        {movable && sections!.length > 0 ? (
-          // The chats in no section are one place to drop a chat on, which takes it out of its section.
-          days.length > 0 ? (
-            <div {...drag.place(null)} className="chatgroups-loose">
-              {days.map(plain)}
-            </div>
-          ) : (
-            drag.dragging?.sectionId && (
-              <div className="bot-drop-zones">
-                <div {...drag.place(null)}>None</div>
-              </div>
-            )
-          )
-        ) : (
-          days.map(plain)
-        )}
-        {!chats.length && teamCan(state, "agents", "chat") && (
-          <div className="empty">
-            <button className="textbutton" onClick={actions.newChat}>
-              Start your first chat <ArrowRight size={15} />
+          {canChat && (
+            // Named apart from the side menu's own New chat button, which the window keeps too.
+            <button className="btn primary" aria-label="Start a new chat" onClick={actions.newChat}>
+              <MessageSquarePlus size={15} />
+              New chat
             </button>
-          </div>
-        )}
-        {!!chats.length && !matched && (
-          <p className="muted bots-none">
-            {query
-              ? "No matching chats."
-              : filter === "Unread"
-                ? "You're all caught up."
-                : filter === "Archived"
-                  ? "No archived chats."
-                  : "No chats. Restore one from Archived."}
-          </p>
-        )}
-        {menu.node}
-        {dialogs.node}
-      </section>
-    </>
+          )}
+        </div>
+      </div>
+      <div className="chats-tools">
+        <Input
+          className="lg-search-compact chats-search"
+          icon={<Search size={15} />}
+          aria-label="Search chats"
+          placeholder="Search chats"
+          value={query}
+          onValueChange={setQuery}
+        />
+        <ChatFilterChips state={state} filter={filter} setFilter={setFilter} />
+      </div>
+      <ChatList state={state} actions={actions} query={query} filter={filter} />
+      {dialogs.node}
+    </div>
+  );
+}
+
+/**
+ * The chat list for beside an open chat: the same groups and rows as the Chats page in a narrow
+ * column (about 340px) with its own scroll, its own search and filters, and a small header with
+ * Chats, New section, Mark all as read and New chat. `selectedChatId` is drawn selected.
+ */
+export function ChatListColumn({
+  state,
+  actions,
+  selectedChatId,
+}: {
+  state: State;
+  actions: PageActions;
+  /** The chat open beside the list. */
+  selectedChatId?: string;
+}) {
+  const [query, setQuery] = useState("");
+  const [filter, setFilter] = useState<ChatFilterName>("All");
+  const dialogs = useAsk();
+  const unread = chatsPageUnreadChats(state.chats).length;
+  const canChat = teamCan(state, "agents", "chat");
+  return (
+    <section className="chatlist-column" aria-label="Chat list">
+      <div className="chatlist-head">
+        <div className="chatlist-title">
+          <h2>Chats</h2>
+          {hasChatSections(state) && canChat && (
+            <button className="icon-btn" aria-label="New section" title="New section" onClick={() => newChatSection(actions, dialogs.ask)}>
+              <FolderPlus size={16} />
+            </button>
+          )}
+          {unread > 0 && teamCan(state, "agents") && (
+            <button className="icon-btn" aria-label="Mark all as read" title="Mark all as read" onClick={() => actions.markAllRead()}>
+              <MailOpen size={16} />
+            </button>
+          )}
+          {canChat && (
+            <button className="icon-btn chatlist-new" aria-label="Start a new chat" title="New chat" onClick={actions.newChat}>
+              <Plus size={17} />
+            </button>
+          )}
+        </div>
+        <Input
+          className="lg-search-compact chats-search"
+          icon={<Search size={15} />}
+          aria-label="Search chats"
+          placeholder="Search chats"
+          value={query}
+          onValueChange={setQuery}
+        />
+        <ChatFilterChips state={state} filter={filter} setFilter={setFilter} />
+      </div>
+      <div className="chatlist-scroll">
+        <ChatList state={state} actions={actions} query={query} filter={filter} selectedChatId={selectedChatId} />
+      </div>
+      {dialogs.node}
+    </section>
   );
 }

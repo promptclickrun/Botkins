@@ -1,5 +1,5 @@
 import { createContext, useContext, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
-import { ArrowUp, Square, BrainCircuit, Plus, X, File, Folder, Quote, Sparkles, SquareSlash, Wrench } from "lucide-react";
+import { ArrowUp, Square, BrainCircuit, ChevronDown, Plus, X, File, Folder, Quote, Sparkles, SquareSlash, Wrench } from "lucide-react";
 import { Button, Glass } from "glisse";
 import {
   MAX_MENTIONS,
@@ -475,22 +475,6 @@ export default function Composer({
           if (!sending) void submit();
         }}
       >
-        {!members?.length && (
-        <button
-          type="button"
-          className="composer-model composer-attach"
-          aria-label="Attach files"
-          title="Attach files"
-          onClick={() =>
-            void window.botkins
-              .chooseFiles()
-              .then(addFiles)
-              .catch((e) => setAttachError(String(e.message || e)))
-          }
-        >
-          <Plus size={19} />
-        </button>
-        )}
         <textarea
           ref={input}
           role="combobox"
@@ -599,45 +583,68 @@ export default function Composer({
             }
           }}
         />
-        {voice.mic}
-        {pickModel && (
+        {/* Under the field, one row: + and the model at the left; dictate and the main button
+            (talk, send or stop) at the right. */}
+        <div className="composer-bar">
+          {!members?.length && (
           <button
             type="button"
-            className="composer-model"
-            aria-label={model ? "Chat model and thinking: " + model : "Chat model and thinking"}
-            title={"Model and thinking · " + model}
-            onClick={pickModel}
+            className="composer-model composer-attach"
+            aria-label="Attach files"
+            title="Attach files"
+            onClick={() =>
+              void window.botkins
+                .chooseFiles()
+                .then(addFiles)
+                .catch((e) => setAttachError(String(e.message || e)))
+            }
           >
-            {/* The mark of the model's provider, as on the phone; a provider without one keeps the brain. */}
-            {hasProviderMark(modelProvider) ? <ProviderIcon provider={modelProvider} size={18} /> : <BrainCircuit size={19} />}
+            <Plus size={19} />
           </button>
-        )}
-        {busy && !side && (
-          <Button
-            variant="glass"
-            icon={<Square size={15} />}
-            className={hasContent ? "send-glass stop-quiet" : "send-glass"}
-            aria-label="Stop reply"
-            onClick={stop}
-          />
-        )}
-        {busy && !side && ready && (
-          <Button variant="glass" className="lg-compact" aria-label="Queue message" title="Send after this reply" disabled={sending} onClick={() => void submit(true)}>
-            Queue
-          </Button>
-        )}
-        {!busy && !side && !ready && voice.live}
-        {(side || (busy ? hasContent : ready)) && (
-          <Button
-            type="submit"
-            variant="filled"
-            icon={<ArrowUp size={18} />}
-            className="send-glass"
-            aria-label={busy && !side ? "Guide reply" : "Send message"}
-            title={busy && !side ? "Guide the current reply when supported, or send after it finishes" : undefined}
-            disabled={sending || (!command && (!draft.trim() || draft.trim() === "/"))}
-          />
-        )}
+          )}
+          {pickModel && (
+            <button
+              type="button"
+              className="composer-model composer-model-pick"
+              aria-label={model ? "Chat model and thinking: " + model : "Chat model and thinking"}
+              title={"Model and thinking · " + model}
+              onClick={pickModel}
+            >
+              {/* The mark of the model's provider, as on the phone; a provider without one keeps the brain. */}
+              {hasProviderMark(modelProvider) ? <ProviderIcon provider={modelProvider} size={16} /> : <BrainCircuit size={16} />}
+              {model && <span className="composer-model-name">{model}</span>}
+              <ChevronDown size={13} aria-hidden="true" className="composer-model-more" />
+            </button>
+          )}
+          <span className="composer-bar-gap" />
+          {voice.mic}
+          {busy && !side && (
+            <Button
+              variant="glass"
+              icon={<Square size={15} />}
+              className={hasContent ? "send-glass stop-quiet" : "send-glass"}
+              aria-label="Stop reply"
+              onClick={stop}
+            />
+          )}
+          {busy && !side && ready && (
+            <Button variant="glass" className="lg-compact" aria-label="Queue message" title="Send after this reply" disabled={sending} onClick={() => void submit(true)}>
+              Queue
+            </Button>
+          )}
+          {!busy && !side && !ready && voice.live}
+          {(side || (busy ? hasContent : ready)) && (
+            <Button
+              type="submit"
+              variant="filled"
+              icon={<ArrowUp size={18} />}
+              className="send-glass"
+              aria-label={busy && !side ? "Guide reply" : "Send message"}
+              title={busy && !side ? "Guide the current reply when supported, or send after it finishes" : undefined}
+              disabled={sending || (!command && (!draft.trim() || draft.trim() === "/"))}
+            />
+          )}
+        </div>
       </form>
       </Glass>
       {mentioning && !visible && (

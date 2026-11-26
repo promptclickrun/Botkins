@@ -12,7 +12,6 @@ import * as Application from "expo-application";
 import { type Href, router } from "expo-router";
 import { createResponseDeduper } from "@/features/chat/chatNavigation";
 import { openChat } from "@/features/chat/navigate";
-import { spaceRoute } from "@/features/spaces/logic";
 import { keep, readKept } from "@/state/keep";
 import { AppState, Platform } from "react-native";
 import { create } from "zustand";
@@ -27,6 +26,7 @@ import { ALL_CARD, cardOver } from "../../link-host/cards.mjs";
 import { botsWithWork, hasWork, MAX_CARDS, phoneCard } from "./cards";
 import { answerPendingAsks } from "./device";
 import { api, attempt, chatOnScreen, holdBackgroundLink, syncForPush, onChatOnScreen, restIfAway, switchComputer, tellOthers, wakeForNotification } from "./link";
+import { routeForNotification } from "./pushRouting";
 import { useApp } from "./store";
 import { createRegistrar } from "./pushRegistrar";
 
@@ -264,6 +264,18 @@ function takeAlert(alert: { bot: string; run: string }, serverId?: string) {
     void send();
   });
 }
+function requestIdOf(response: import("expo-notifications").NotificationResponse): string | undefined {
+  const request = response.notification.request;
+  const payload = request.trigger && "payload" in request.trigger ? (request.trigger.payload as Record<string, unknown> | undefined) : undefined;
+  const id = payload?.requestId ?? (request.content.data as Record<string, unknown> | undefined)?.requestId;
+  return typeof id === "string" && id ? id : undefined;
+}
+function nodeJobOf(response: import("expo-notifications").NotificationResponse): boolean {
+  const request = response.notification.request;
+  const payload = request.trigger && "payload" in request.trigger ? (request.trigger.payload as Record<string, unknown> | undefined) : undefined;
+  const data = request.content.data as Record<string, unknown> | undefined;
+  return payload?.nodeJob === true || data?.nodeJob === true;
+}
 /** A notification's actions that answer a bot where they are (the native side queues them; src/state/answers.ts sends them). */
 const ANSWERED_THERE = /^(approve|remember|deny|reply|choice\.\d)$/;
 const handledResponses = createResponseDeduper();
@@ -271,43 +283,39 @@ function openFrom(response: import("expo-notifications").NotificationResponse | 
   if (!response || !native || !handledResponses.claim(response)) return;
   wakeForNotification();
   const chatId = chatOf(response);
+  const requestId = requestIdOf(response);
   const host = hostOf(response);
   const kind = kindOf(response);
+  const nodeJob = nodeJobOf(response);
   native.Notifications.clearLastNotificationResponse();
   if (ANSWERED_THERE.test(response.actionIdentifier)) return;
-  // "Allow once" on a risky approval opens the app: it asks for Face ID before it answers.
-  if (response.actionIdentifier === "approve.risky") {
-    const request = (response.notification.request.content.data as Record<string, unknown> | undefined)?.requestId;
-    if (typeof request === "string" && chatId) router.push({ pathname: "/open/answer", params: { request, chat: chatId, ...(host && { host }) } });
-    return;
-  }
   const about = spaceOf(response);
-  if (!chatId && kind !== "team" && kind !== "update" && kind !== "space") return;
-  // The app may still be starting: the chat opens once the pairing is read. An alert from another
+  // The app may still be starting: the target opens once the pairing is read. An alert from another
   // paired computer makes the phone use that computer first.
   const go = () => {
     const state = useApp.getState();
-    const other = !!host && host !== state.pairing?.serverId && state.pairings.some((pairing) => pairing.serverId === host);
-    if (other) void switchComputer(host);
-    if (kind === "team") {
-      router.push({ pathname: "/settings/team", params: { section: "requests" } });
-      return;
+    const decision = routeForNotification({
+      chatId,
+      requestId,
+      host,
+      kind,
+      nodeJob,
+      actionIdentifier: response.actionIdentifier,
+      spaceId: about.spaceId,
+      panelId: about.panelId,
+      activeHostId: state.pairing?.serverId,
+      pairedHostIds: state.pairings.map((pairing) => pairing.serverId),
+      chatOnScreen: chatOnScreen(),
+    });
+    if (decision.switchHost) void switchComputer(decision.switchHost);
+    if (response.actionIdentifier === "alert.take" && chatId) {
+      const offered = alertOf(response);
+      if (offered) takeAlert(offered, decision.switchHost ?? state.pairing?.serverId);
     }
-    // "A newer Botkins is out" ("app-update-v1"): the computer's page, where it is installed.
-    if (kind === "update") {
-      router.push("/settings/desktop");
-      return;
-    }
-    // A note or a change in a space: the panel it is about, else the space, else (several spaces changed) the list.
-    if (kind === "space") {
-      router.push(spaceRoute(about.spaceId, about.panelId) as unknown as Href);
-      return;
-    }
-    if (!chatId) return;
-    // The button on a proactive alert: the bot starts on what it offered, in the chat that opens.
-    const offered = response.actionIdentifier === "alert.take" ? alertOf(response) : undefined;
-    if (offered) takeAlert(offered, other ? host : state.pairing?.serverId);
-    openChat(chatId);
+    const { route } = decision;
+    if (!route) return;
+    if (typeof route === "object" && route.pathname === "/chat/[id]") openChat(route.params.id);
+    else router.push(route as unknown as Href);
   };
   if (useApp.getState().booted && useApp.getState().pairing) go();
   else {

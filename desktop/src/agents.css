@@ -33,72 +33,7 @@
 }
 
 /* -------------------------------------------------------------- bot list */
-.sectionhead-actions {
-  display: flex;
-  gap: 6px;
-}
-.bot-tools {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  flex-wrap: wrap;
-  margin: -4px 0 14px;
-}
-.bot-tools .filters,
-.chat-filters {
-  margin: 0;
-  flex-wrap: wrap;
-}
-.bot-tools .filters button,
-.chat-filters button {
-  padding: 5px 12px;
-  font-size: calc(13px * var(--text-scale));
-}
-.chat-filters {
-  margin: 0 0 6px;
-}
-.chat-tools {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  flex-wrap: wrap;
-  margin: 0 0 6px;
-}
-.chat-tools .chat-filters {
-  margin: 0;
-}
-.chat-mark-read {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 5px 10px;
-  border-radius: var(--radius-sm);
-  font-size: calc(13px * var(--text-scale));
-  color: var(--muted);
-}
-.bots-none {
-  padding: 6px 8px 2px;
-}
-/* A bot in the grid: the card, then its quiet flags and its ⋯ button on the same line. */
-.botcard-wrap {
-  position: relative;
-  display: flex;
-  align-items: center;
-  gap: 2px;
-  min-width: 0;
-  border-radius: var(--radius);
-}
-.botcard-wrap:hover {
-  background: var(--hover);
-}
-.botcard-wrap > .botcard:hover {
-  background: none;
-}
-.botcard-wrap.is-hidden > .botcard {
-  opacity: 0.6;
-}
+/* Home's bot rows and the chat lists are styled in home.css. These marks are shared with the bot page. */
 .botstatus {
   display: flex !important;
   align-items: center;
@@ -143,11 +78,6 @@
   font-size: calc(12px * var(--text-scale));
   color: var(--muted);
 }
-.botcard .botbadge {
-  display: inline;
-  font-size: inherit;
-  white-space: pre;
-}
 .botbadge.plain {
   color: var(--muted);
 }
@@ -157,42 +87,6 @@
   border-radius: var(--radius-sm);
   color: var(--muted);
   flex: none;
-}
-.botcard-wrap > .menu-button {
-  margin-right: 4px;
-}
-.botgroup {
-  margin-top: 18px;
-}
-.botgroup-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 4px;
-}
-.botgroup-head > button:first-child,
-.botgroup-head.plain > span {
-  gap: 7px;
-  padding: 4px 6px 4px 2px;
-  border-radius: var(--radius-sm);
-  font-size: calc(13px * var(--text-scale));
-  font-weight: 600;
-  color: var(--ink);
-}
-.botgroup-head.plain > span {
-  color: var(--muted);
-  padding-top: 7px;
-}
-.botgroup-head small {
-  font-weight: 400;
-  font-size: calc(12px * var(--text-scale));
-}
-.botgroup-chevron {
-  color: var(--muted);
-  transition: transform 0.15s;
-}
-.botgroup-head button[aria-expanded="false"] .botgroup-chevron {
-  transform: rotate(-90deg);
 }
 
 /* --------------------------------------------------------------- sidebar */
@@ -437,58 +331,6 @@
 }
 .chatrow .rowtop strong {
   font-weight: 600;
-}
-.chatgroup-label {
-  margin: 18px 0 2px;
-  padding: 0 8px;
-  font-size: calc(12px * var(--text-scale));
-  font-weight: 600;
-  color: var(--muted);
-}
-/* A section of the Chats page ("chat-sections-v1"): a heading that folds it, with its ⋯, over its chats. */
-.chatsection-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin: 14px 0 2px;
-}
-.chatsection-head > button:first-child {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  min-height: 28px;
-  padding: 2px 8px;
-  border-radius: var(--radius-sm);
-  font-size: calc(13px * var(--text-scale));
-  font-weight: 600;
-  color: var(--ink);
-}
-.chatsection-head > button:first-child:hover {
-  background: var(--hover);
-}
-.chatsection-head > button:first-child > svg:not(.botgroup-chevron) {
-  color: var(--muted);
-}
-.chatsection-head small {
-  font-weight: 400;
-  font-size: calc(12px * var(--text-scale));
-  color: var(--muted);
-}
-.chatsection-head button[aria-expanded="false"] .botgroup-chevron {
-  transform: rotate(-90deg);
-}
-.chatsection-head > .menu-button {
-  margin-right: 4px;
-}
-.chatsection-none {
-  margin: 2px 0 6px;
-  padding: 6px 8px 6px 34px;
-  font-size: calc(13px * var(--text-scale));
-}
-/* Dropping a chat here, or on a section, outlines where it will land. */
-.chatsection[data-drag-over="true"],
-.chatgroups-loose[data-drag-over="true"] {
-  border-radius: var(--radius);
 }
 .unread-dot {
   display: inline-block;

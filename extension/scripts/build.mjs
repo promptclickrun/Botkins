@@ -1,4 +1,5 @@
-// Bundles the MV3 service worker (src/background.mjs) into dist/background.js using esbuild.
+// Bundles the MV3 service worker (src/background.mjs -> dist/background.js) and the
+// content-side DOM driver (src/dom-driver.mjs -> dist/dom-driver.js) using esbuild.
 import { existsSync, mkdirSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -34,15 +35,26 @@ const nodePaths = [
   join(repo, "profiles/node_modules"),
 ].filter((p) => existsSync(p));
 
-await esbuild.build({
-  entryPoints: [join(root, "src/background.mjs")],
-  bundle: true,
-  format: "esm",
-  platform: "browser",
-  target: "chrome116",
-  nodePaths,
-  outfile: join(root, "dist/background.js"),
-  legalComments: "none",
-});
+await Promise.all([
+  esbuild.build({
+    entryPoints: [join(root, "src/background.mjs")],
+    bundle: true,
+    format: "esm",
+    platform: "browser",
+    target: "chrome116",
+    nodePaths,
+    outfile: join(root, "dist/background.js"),
+    legalComments: "none",
+  }),
+  esbuild.build({
+    entryPoints: [join(root, "src/dom-driver.mjs")],
+    bundle: true,
+    format: "iife",
+    platform: "browser",
+    target: "chrome116",
+    outfile: join(root, "dist/dom-driver.js"),
+    legalComments: "none",
+  }),
+]);
 
-console.log("Built extension/dist/background.js");
+console.log("Built extension/dist/background.js and extension/dist/dom-driver.js");
