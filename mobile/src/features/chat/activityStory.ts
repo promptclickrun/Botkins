@@ -42,8 +42,8 @@ export type StoryRun<S extends StoryStep = StoryStep> = {
   steps?: S[];
   reasoning?: StoryThought[];
   agents?: StoryHelper[];
-  teamwork?: { id: string }[];
-  taskHandoffs?: { id: string }[];
+  teamwork?: { id?: string; toolCallId?: string; botId?: string; message?: string; expecting?: string; reply?: string; remote?: { hostId?: string; botName?: string } }[];
+  taskHandoffs?: { id?: string; taskId?: string; toolCallId?: string }[];
 };
 /** Text the bot wrote before it moved on (an interim message), with its time. */
 export type StoryUpdate = { key: string; at: number; text: string };
@@ -103,8 +103,10 @@ export function isBackground(step: StoryStep): boolean {
 }
 
 /** The bot's own steps for the story: not a helper's, not a background command's, not quiet bookkeeping, and not already drawn by an agent-message rail card. */
-export const storySteps = <S extends StoryStep>(steps: S[] | undefined, run?: Pick<StoryRun<S>, "teamwork" | "taskHandoffs">): S[] =>
-  (steps ?? []).filter((step) => !step.agentId && !isBackground(step) && !!classifyStep(step) && !isStepCoveredByRail(step, run));
+export const storySteps = <S extends StoryStep>(steps: S[] | undefined, run?: Pick<StoryRun<S>, "steps" | "teamwork" | "taskHandoffs">): S[] => {
+  const runWithSteps = run && !run.steps && steps ? { ...run, steps } : run;
+  return (steps ?? []).filter((step) => !step.agentId && !isBackground(step) && !!classifyStep(step) && !isStepCoveredByRail(step, runWithSteps));
+};
 function countKinds(steps: StoryStep[]): { kind: StepKind; count: number }[] {
   const counts = new Map<StepKind, number>();
   for (const step of steps) {

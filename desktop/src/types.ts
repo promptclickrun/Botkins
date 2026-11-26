@@ -463,6 +463,8 @@ export interface WorkflowRun {
 /** One request from a bot to a teammate, and what came of it. */
 export type TeamAsk = {
   id: string;
+  /** Tool step ID that triggered this ask, when correlated. */
+  toolCallId?: string;
   /** The teammate that was asked. */
   botId: string;
   /** The bot that asked. */
@@ -488,6 +490,8 @@ export type TeamAsk = {
 export type TaskHandoff = {
   id: string;
   taskId: string;
+  /** Tool step ID that created this handoff, when correlated. */
+  toolCallId?: string;
   botId: string;
   fromBotId: string;
   from?: MessageFrom;
