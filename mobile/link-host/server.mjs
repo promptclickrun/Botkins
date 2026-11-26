@@ -609,6 +609,14 @@ export class LinkHost extends EventEmitter {
   callDeviceTool(name, args, options) {
     return this.device.call(name, args, options);
   }
+  /** Paired Chromium extensions and their live status. */
+  browserDevices() {
+    return this.browser.listDevices();
+  }
+  /** Sends an internal `secure.fill` request to a paired Chromium extension. */
+  secureFillBrowser(deviceId, payload, options) {
+    return this.browser.secureFill(deviceId, payload, options);
+  }
   /** Browser tools currently exposed by paired Chromium extensions (`browser-v1`). */
   browserTools() {
     return this.browser.tools();

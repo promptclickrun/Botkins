@@ -345,9 +345,11 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
       : () => link?.notifyTargetsContext?.(),
     formBrowser,
     savedLogins: (chatId, origin) => loginLookups ? loginLookups.find(chatId, origin) : link.loginNames(chatId, origin),
-    ...(host.headless && !formBrowser && { pageUnavailable: "Browser form filling needs the desktop viewer or a Linux host with Chromium and an X11 display. See A screen without Docker in the terminal guide." }),
-    secureUse: (plan, values, { signal }) => performSecureUse(plan, values, {
-      signal, fillPage: () => formBrowser ? formBrowser.fill(plan, values, signal) : host.window.fillSecurePage(plan, values, signal),
+    ...(host.headless && !formBrowser && { pageUnavailable: "Browser form filling needs a connected Botkins browser extension tab, the desktop viewer, or a Linux host with Chromium and an X11 display. See A screen without Docker in the terminal guide." }),
+    secureUse: (plan, values, { signal, fillExtension }) => performSecureUse(plan, values, {
+      signal,
+      fillExtension,
+      fillPage: () => formBrowser ? formBrowser.fill(plan, values, signal) : host.window.fillSecurePage(plan, values, signal),
     }),
     ...(keys && {
       vaultKey: keys,
@@ -366,7 +368,12 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
     // Tools a bot runs on a paired phone (desktop/phonetools.mjs). The link is made further down.
     phoneTools: () => (link ? { tools: () => link.deviceTools(), call: (name, args, options) => link.callDeviceTool(name, args, options) } : null),
     // Tools a bot runs on a paired Chromium browser extension (desktop/browsertools.mjs).
-    browserTools: () => (link ? { tools: () => link.browserTools(), call: (name, args, options) => link.callBrowserTool(name, args, options) } : null),
+    browserTools: () => (link ? {
+      tools: () => link.browserTools(),
+      call: (name, args, options) => link.callBrowserTool(name, args, options),
+      devices: () => link.browserDevices(),
+      secureFill: (deviceId, payload, options) => link.secureFillBrowser(deviceId, payload, options),
+    } : null),
   });
   // Conversations from builds that shared ~/.copilot keep their history.
   copilot.adoptSessions(workspace.sessionIds());

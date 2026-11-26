@@ -210,6 +210,289 @@ test("Workspace registers browser tools for owner turns and excludes them for me
   assert.ok(tools.some((tool) => tool.name === "browser_tabs"));
   assert.ok(tools.some((tool) => tool.name === "browser_click"));
   assert.ok(tools.some((tool) => tool.name === "browser_list"));
+  assert.equal(tools.some((tool) => tool.name === "secure.fill"), false, "secure.fill must never be a bot-callable browser tool");
   // Browser tools run unattended without per-click approval prompts.
   assert.equal(tools.find((tool) => tool.name === "browser_click").skipPermission, true);
+});
+
+async function runExtensionSecureFillE2E(t, { viaRelay }) {
+  const dir = mkdtempSync(join(tmpdir(), viaRelay ? "botkins-secfill-relay-" : "botkins-secfill-direct-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+
+  const sentinelEmail = "SENTINEL_LINK_EMAIL_a7c31f@example.test";
+  const sentinelPass = "SENTINEL_LINK_PASS_9d2e4b!";
+  const hostLogs = [];
+
+  const cleanups = [];
+  t.after(async () => {
+    for (const fn of cleanups.reverse()) await fn();
+  });
+
+  let relay = null;
+  let relayUrl = null;
+  if (viaRelay) {
+    const { createRelay } = await import("../../mobile/relay/node/server.mjs");
+    relay = createRelay({ limits: false, pushUpstream: "off" });
+    await new Promise((resolve) => relay.listen(0, "127.0.0.1", resolve));
+    relayUrl = "http://127.0.0.1:" + relay.address().port;
+    cleanups.push(async () => {
+      const closed = new Promise((resolve) => relay.close(resolve));
+      relay.closeAllConnections?.();
+      await closed;
+    });
+  }
+
+  let host;
+  const listeners = new Set();
+  const ws = new Workspace(
+    dir,
+    async () => ({
+      createSession: async () => ({ setTools: async () => {}, on: () => () => {}, disconnect: async () => {}, send: async () => "m1" }),
+      resumeSession: async () => ({ setTools: async () => {}, on: () => () => {}, disconnect: async () => {}, send: async () => "m1" }),
+      deleteSession: async () => {},
+    }),
+    () => {
+      for (const fn of listeners) fn();
+    },
+    {
+      browserTools: () => ({
+        tools: () => host?.browserTools() || [],
+        devices: () => host?.browserDevices() || [],
+        call: (name, args, ctx) => host.callBrowserTool(name, args, ctx),
+        secureFill: (deviceId, payload, options) => host.secureFillBrowser(deviceId, payload, options),
+      }),
+    },
+  );
+  const backend = {
+    info: () => ({ app: "botkins", version: "0.17.16", platform: "linux" }),
+    snapshot: () => ws.snapshot(),
+    call: async (method, args) => {
+      if (method === "respond") return ws.interactions.respond(...args);
+      return null;
+    },
+    subscribe: (fn) => {
+      listeners.add(fn);
+      return () => listeners.delete(fn);
+    },
+  };
+
+  host = new LinkHost({
+    dir: join(dir, "link"),
+    port: 0,
+    relay: viaRelay ? { url: relayUrl } : false,
+    backend,
+    log: (...args) => hostLogs.push(args.map((a) => (typeof a === "string" ? a : JSON.stringify(a))).join(" ")),
+  });
+  cleanups.push(async () => host.stop());
+  await host.setEnabled(true);
+  if (viaRelay) host.setRelay({ enabled: true, url: relayUrl });
+
+  if (viaRelay) {
+    const deadline = Date.now() + 8000;
+    while (!host.status().relay?.connected && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 25));
+    }
+    assert.equal(host.status().relay?.connected, true, "LinkHost should connect to local relay");
+  }
+
+  const pairingInfo = host.startPairing();
+  const target = lib.parsePairingUrl(pairingInfo.url);
+  assert.ok(target);
+
+  let clientFetch;
+  const wireFrames = [];
+  if (viaRelay) {
+    const relayHost = target.hosts.find((h) => lib.isRelayHost(h));
+    assert.ok(relayHost, "pairing URL must include relay host");
+    target.hosts = [relayHost];
+    const failDirect = () => Promise.reject(new TypeError("Direct LAN disabled in relay test"));
+    const BaseWS = globalThis.WebSocket;
+    class InspectingWebSocket extends BaseWS {
+      constructor(url, protocols) {
+        super(url, protocols);
+        this.addEventListener("message", async (ev) => {
+          const buf = ev.data instanceof Blob ? Buffer.from(await ev.data.arrayBuffer()) : Buffer.from(ev.data);
+          wireFrames.push(buf);
+        });
+      }
+      send(data) {
+        if (typeof data !== "string") wireFrames.push(Buffer.from(data));
+        return super.send(data);
+      }
+    }
+    clientFetch = lib.relayFetch(failDirect, { idleMs: 50, WebSocket: InspectingWebSocket });
+  } else {
+    target.hosts = [`127.0.0.1:${host.port}`];
+    const extOrigin = "chrome-extension://bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    clientFetch = (url, init = {}) => fetch(url, { ...init, headers: { ...(init.headers || {}), Origin: extOrigin } });
+  }
+
+  // Save the sentinel password in the host credential vault and pair an owner phone to answer via $credential ref.
+  const savedCredId = await host.credentials.save({ name: "Portal Login", value: sentinelPass });
+  const phonePairing = await lib.pair(
+    fetch,
+    { hosts: [`127.0.0.1:${host.port}`], code: host.startPairing().code },
+    { name: "Owner Phone", platform: "ios" },
+  );
+  const phoneUpdates = [];
+  const phone = new lib.LinkClient(phonePairing, {
+    fetch,
+    onState() {},
+    onParts: (p) => phoneUpdates.push(p),
+  });
+  cleanups.push(() => phone.stop());
+  phone.start();
+
+  const extPairingInfo = host.startPairing();
+  const extTarget = lib.parsePairingUrl(extPairingInfo.url);
+  extTarget.hosts = viaRelay ? extTarget.hosts.filter((h) => lib.isRelayHost(h)) : [`127.0.0.1:${host.port}`];
+
+  const pairing = await lib.pair(clientFetch, extTarget, {
+    name: viaRelay ? "Chrome (Relay)" : "Chrome (Direct)",
+    platform: "darwin",
+    kind: "browser",
+  });
+
+  const receivedSecureFills = [];
+  let onlineResolve;
+  const online = new Promise((r) => (onlineResolve = r));
+  const handledAsks = new Set();
+
+  const client = new lib.LinkClient(pairing, {
+    fetch: clientFetch,
+    onState: (s) => {
+      if (s === "online") onlineResolve?.();
+    },
+    onParts: (parts) => {
+      if (!Array.isArray(parts.asks)) return;
+      for (const ask of parts.asks) {
+        if (handledAsks.has(ask.id)) continue;
+        handledAsks.add(ask.id);
+        if (ask.tool === "browser_tabs") {
+          void client.call("link.browser.answer", ask.id, {
+            ok: true,
+            result: {
+              mode: "all",
+              tabs: [{ id: 70, title: "Portal Login", url: "https://portal.example.test/signin", active: true }],
+            },
+          });
+        } else if (ask.tool === "secure.fill") {
+          receivedSecureFills.push(JSON.parse(JSON.stringify(ask.args)));
+          // Return only { filled, missing } (never echoing values), just like BrowserController.runSecureFill.
+          void client.call("link.browser.answer", ask.id, {
+            ok: true,
+            result: {
+              filled: ask.args.fields.map((f) => f.key),
+              missing: [],
+              leakedFieldIgnoredByHost: "should-be-stripped",
+            },
+          });
+        }
+      }
+    },
+  });
+  cleanups.push(() => client.stop());
+  client.start();
+  await online;
+
+  await client.call("link.browser.state", {
+    enabled: true,
+    mode: "all",
+    browser: "Chrome",
+    profile: viaRelay ? "Relay" : "Direct",
+    version: "0.2.1",
+  });
+
+  // secure.fill cannot be invoked via callBrowserTool (bot-callable path).
+  await assert.rejects(() => host.callBrowserTool("secure.fill", { tabId: 70 }), /no browser tool/i);
+
+  const chat = ws.chat(ws.createChat("pip"));
+  const run = { id: "run-e2e", chatId: chat.id, botId: "pip" };
+  const task = { stopped: false, run };
+  ws.active.set(chat.id, task);
+  t.after(() => ws.active.delete(chat.id));
+
+  const [askTool, useTool] = ws.secureInputs.tools(ws.bot("pip"), chat, run, task);
+  const askPromise = askTool.handler({
+    title: "Sign in to portal",
+    operation: "page_fill",
+    url: "https://portal.example.test/signin",
+    fields: [
+      { key: "LoginModel.Email", label: "Email", kind: "text" },
+      { key: "LoginModel.Password", label: "Password", kind: "password" },
+    ],
+  });
+
+  // Wait for secure prompt to appear
+  const promptDeadline = Date.now() + 5000;
+  while (ws.interactions.snapshot().length === 0 && Date.now() < promptDeadline) {
+    await new Promise((r) => setTimeout(r, 20));
+  }
+  const [req] = ws.interactions.snapshot();
+  assert.equal(req.kind, "secure");
+  assert.match(req.detail, /https:\/\/portal\.example\.test/);
+  assert.match(req.detail, viaRelay ? /Browser: Chrome \(Relay\)/ : /Browser: Chrome \(Direct\)/);
+  assert.match(req.detail, /Tab: Portal Login/);
+
+  await phone.call("respond", req.id, {
+    action: "accept",
+    content: { "LoginModel.Email": sentinelEmail, "LoginModel.Password": { $credential: savedCredId } },
+  });
+
+  const askOut = await askPromise;
+  const handlesObj = JSON.parse(askOut);
+  assert.deepEqual(Object.keys(handlesObj.handles), ["LoginModel.Email", "LoginModel.Password"]);
+
+  const useOut = await useTool.handler({ handles: handlesObj.handles, submit: true });
+  const parsedUse = JSON.parse(useOut);
+  assert.deepEqual(parsedUse, {
+    applied: true,
+    filled: ["LoginModel.Email", "LoginModel.Password"],
+    missing: [],
+  });
+  assert.equal(Object.hasOwn(parsedUse, "leakedFieldIgnoredByHost"), false);
+
+  assert.equal(receivedSecureFills.length, 1);
+  assert.equal(receivedSecureFills[0].tabId, 70);
+  assert.equal(receivedSecureFills[0].origin, "https://portal.example.test");
+  assert.equal(receivedSecureFills[0].submit, true);
+  assert.deepEqual(receivedSecureFills[0].fields, [
+    { key: "LoginModel.Email", kind: "text", value: sentinelEmail },
+    { key: "LoginModel.Password", kind: "password", value: sentinelPass },
+  ]);
+
+  // Verify the host cleared pending asks and cached asks view for the extension immediately after completion.
+  assert.deepEqual(host.browser.asksFor(pairing.deviceId), []);
+  const cachedAsksJson = host.browser.views.get(pairing.deviceId)?.get("asks")?.json ?? "";
+  assert.equal(cachedAsksJson.includes(sentinelEmail), false, "sentinel leaked into cached browser view");
+  assert.equal(cachedAsksJson.includes(sentinelPass), false, "sentinel leaked into cached browser view");
+
+  // Sentinel redaction audit across host logs, workspace snapshot, persisted store, phone updates, wire frames, and tool outputs.
+  const allLogs = hostLogs.join("\n");
+  const snapStr = JSON.stringify(ws.snapshot());
+  const diskStr = readFileSync(join(dir, "workspace.json"), "utf8");
+  const phoneStr = JSON.stringify(phoneUpdates);
+  for (const sentinel of [sentinelEmail, sentinelPass]) {
+    assert.equal(allLogs.includes(sentinel), false, "sentinel leaked into host logs");
+    assert.equal(snapStr.includes(sentinel), false, "sentinel leaked into workspace snapshot");
+    assert.equal(diskStr.includes(sentinel), false, "sentinel leaked into workspace.json");
+    assert.equal(phoneStr.includes(sentinel), false, "sentinel leaked into phone sync parts");
+    assert.equal(askOut.includes(sentinel), false, "sentinel leaked into request_secure_input output");
+    assert.equal(useOut.includes(sentinel), false, "sentinel leaked into use_secure_input output");
+    if (viaRelay) {
+      assert.ok(wireFrames.length > 0, "relay test must have captured wire frames");
+      const needle = Buffer.from(sentinel, "utf8");
+      for (const frame of wireFrames) {
+        assert.equal(frame.includes(needle), false, "sentinel appeared unsealed in relay wire frame");
+      }
+    }
+  }
+}
+
+test("secure.fill works end-to-end over direct Link with dotted field keys and zero sentinel leakage", async (t) => {
+  await runExtensionSecureFillE2E(t, { viaRelay: false });
+});
+
+test("secure.fill works end-to-end sealed over the Botkins Relay with zero sentinel leakage", async (t) => {
+  await runExtensionSecureFillE2E(t, { viaRelay: true });
 });
