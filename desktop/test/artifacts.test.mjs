@@ -166,15 +166,16 @@ test("a picture a small model names loosely still shows: a relative path, a Mark
   assert.deepEqual(ws.artifacts.resolve({ chatId, paths: [elsewhere] }).items, [null]);
 });
 
-test("every chat's instructions say where to save a picture and how to write MEDIA:, with the bot's own folder", (t) => {
+test("every chat's instructions say how to write MEDIA:, with the bot's own folder", (t) => {
   const { dir } = fixture(t);
   const ws = new Workspace(dir, fakeClient().client, () => {});
   const chat = ws.chat(ws.createChat("pip"));
   const { head } = ws.instructionParts(chat, ws.bot("pip")).fixed;
   const folder = join(dir, "files", "pip");
-  assert.ok(head.includes("save it in " + folder), head);
-  assert.ok(head.includes("MEDIA: " + join(folder, "chart.png")));
-  assert.match(head, /Never a relative path, a Markdown image/);
+  assert.ok(head.includes("MEDIA: " + join(folder, "chart.png")), head);
+  assert.match(head, /A picture, sound or video shows from anywhere on this computer/);
+  assert.ok(head.includes("save other files you want to share in " + folder));
+  assert.match(head, /Write the full path, not a relative one or a Markdown image/);
 });
 
 test("a paired client pages and reads indexed artifacts over the link", async (t) => {
@@ -259,6 +260,8 @@ test("a picture that a bot wrote into its own session's folder shows in that cha
   const linked = join(sessionFiles(chatId), "duo", "linked.png");
   symlinkSync(unrelated, linked);
   reply = [...mine, theirs, unrelated, linked, join(sessionFiles(chatId), "..", "..", other, "files", "duo", "private.png")].map((path) => "MEDIA:" + path).join("\n");
+  // In a chat a team member started, only the bot's own folders count: a member can't ask a bot to show the owner's photos.
+  ws.chat(chatId).createdBy = "member-1";
   await ws.send(chatId, "Draw the anatomy");
   const shown = (workspace, id) => workspace.artifacts.list({ botId: "pip", chatId: id }).items.map((item) => [item.source, item.name]).sort();
   assert.deepEqual(shown(ws, chatId), [["media", "01-anatomy.png"], ["media", "02-layers.png"]]);
@@ -268,7 +271,15 @@ test("a picture that a bot wrote into its own session's folder shows in that cha
   reply = "MEDIA:" + theirs;
   await ws.send(other, "And mine");
   assert.deepEqual(shown(ws, other), [["media", "private.png"]]);
-  assert.deepEqual(shown(ws, chatId), [["media", "01-anatomy.png"], ["media", "02-layers.png"]], "and still not in the first chat");
+  assert.deepEqual(shown(ws, chatId), [["media", "01-anatomy.png"], ["media", "02-layers.png"]], "and still not in the member's chat");
+
+  // In the owner's own chat a picture shows from anywhere on the computer; a document still doesn't.
+  const owners = ws.createChat("pip");
+  const notes = put("notes.txt", "private notes");
+  reply = ["MEDIA:" + unrelated, "MEDIA:" + theirs, "MEDIA:" + notes].join("\n");
+  await ws.send(owners, "Show them");
+  assert.deepEqual(shown(ws, owners), [["media", "private.png"], ["media", "unrelated.png"]]);
+  assert.deepEqual(ws.artifacts.resolve({ chatId: owners, paths: [notes] }).items, [null], "a non-media file outside the bot's folders stays text");
   // A session id is one name. Nothing that is a path, or empty, names a folder.
   const provider = new CopilotProvider({ connect: fake.client, baseDirectory: base });
   assert.equal(provider.sessionFiles(chatId), sessionFiles(chatId));
@@ -283,13 +294,13 @@ test("a picture that a bot wrote into its own session's folder shows in that cha
   await ws.close?.();
   ws = open();
   const names = (id) => shown(ws, id).map(([, name]) => name);
-  assert.deepEqual(names(chatId).filter((name) => name !== "private.png"), ["01-anatomy.png", "02-layers.png"]);
+  assert.deepEqual(names(chatId).filter((name) => name !== "private.png" && name !== "unrelated.png"), ["01-anatomy.png", "02-layers.png"]);
   assert.deepEqual(names(other), ["private.png"]);
   // (The older rule stands beside the new one: a file that the bot already has a row for can be
   // named in another chat of that bot. So the first chat, which also named the other's picture,
   // may show it after this look, once that picture is the bot's by its own chat.)
   // That look happens once: the next start reads nothing again.
-  assert.equal(ws.state.mediaPass, 2);
+  assert.equal(ws.state.mediaPass, 3);
   ws.artifacts.rows.splice(0);
   ws.artifacts.save();
   ws.save();

@@ -109,7 +109,10 @@ export function normalizeMedia(text, folder) {
 
 /** Raised when the rule for which `MEDIA:` files are a bot's own widens, so old messages are read once more. */
 // 2: loosely written attachments in the bot's own folder count (normalizeMedia).
-const MEDIA_PASS = 2;
+// 3: a picture, sound or video counts wherever it is on the computer.
+const MEDIA_PASS = 3;
+/** The kinds of file a `MEDIA:` line may show from anywhere (fileDetails' kind, from the file's type). */
+const MEDIA_KINDS = new Set(["image", "audio", "video"]);
 
 export class ArtifactEvents {
   constructor(ws) {
@@ -154,6 +157,8 @@ export class ArtifactEvents {
     // A piece of a reply whose turn still runs is read again once the turn ends: finishReply compares
     // those pieces with the final text, so they are not rewritten before then. Recording is safe to repeat.
     let done = chat.messages.length;
+    // A chat a team member started is theirs; the owner's has no creator or names the owner.
+    const ownerChat = !chat.createdBy || chat.createdBy === "owner";
     for (let index = start; index < chat.messages.length; index++) {
       const message = chat.messages[index];
       const writing = message.interim && message.role === "assistant" && this.ws.state.runs.some((run) => run.id === message.runId && run.status === "Working");
@@ -168,10 +173,14 @@ export class ArtifactEvents {
         for (const { path, media } of findPathSpans(message.text)) {
           if (!media) continue;
           const file = fileDetails(path);
-          // Prose cannot grant remote access to an unrelated host path. Files outside
-          // the bot's own folders for this chat (its project or files folder, and the chat's
-          // session folder) need independent provenance from an upload or write.
-          if (file && file.kind !== "folder" && (roots.some((root) => contained(root, file.path)) || this.ws.artifacts.rows.some((r) => r.botId === botId && r.path === file.path && r.identity === file.identity))) {
+          // In the owner's own chat a picture, sound or video shows wherever it is on the computer: a
+          // bot often makes one with a tool that saves it somewhere of its own. Any other file a reply
+          // names (a key, a document, a config), and anything in a chat a team member started (who
+          // could ask a bot to name the owner's photos), needs to be in the bot's own folders for this
+          // chat (its project or files folder, and the chat's session folder) or to come from an
+          // upload or a write.
+          const anywhere = ownerChat && MEDIA_KINDS.has(file?.kind);
+          if (file && file.kind !== "folder" && (anywhere || roots.some((root) => contained(root, file.path)) || this.ws.artifacts.rows.some((r) => r.botId === botId && r.path === file.path && r.identity === file.identity))) {
             this.ws.artifacts.record(file.path, { ...context, source: "media" });
           }
         }
