@@ -9,6 +9,31 @@ export type CatalogSkill = { id: string; source: string; skillId: string; name: 
 /** Where a featured skill comes from: its repository at a pinned commit, its license and who wrote it. */
 export type SkillSource = { author: string; license: string; repo: string; commit: string; path: string; url: string; pack?: string };
 export type CatalogPreview = { name: string; description: string; text: string; token: string; installed?: string; /** A featured skill's source. */ source?: SkillSource; /** A featured skill's files, the license among them. */ files?: string[] };
+/** Marketplace format version 2 ("marketplace-v2-v1", desktop/catalog-v2.mjs). */
+export type MarketSkillTools = "shell" | "node" | "python" | "browser" | "network";
+export type MarketSkillListing = {
+  id: string; kind: "skill"; name: string; version: string; summary: string; category?: string; categoryName?: string; author?: string;
+  license: string; requires: { tools: MarketSkillTools[]; optional: MarketSkillTools[] }; hasPreview: boolean;
+  marketplace: string; marketplaceName: string; commit: string;
+  installed?: { shared?: { version: string; commit: string }; bots: { id: string; name: string; version: string }[] };
+  update?: boolean; warnings: string[];
+};
+export type MarketPackListing = { id: string; kind: "pack"; name: string; version: string; summary: string; skills: string[]; plugins: string[]; marketplace: string; marketplaceName: string; commit: string };
+export type MarketTemplateListing = MarketAgent & { kind: "template"; format: 3; commit: string; requires?: { skills?: string[]; packs?: string[]; plugins?: string[] }; routines?: number };
+export type MarketCatalog = { skills: MarketSkillListing[]; packs: MarketPackListing[]; templates: MarketTemplateListing[]; errors?: { marketplace: string; error: string }[] };
+export type MarketSkillReview = CatalogPreview & {
+  source: SkillSource & { catalog: string; version: string };
+  files: string[]; executable: string[]; size: number; listing: MarketSkillListing;
+  update?: { from: string; to: string; added: string[]; changed: string[]; removed: string[] };
+};
+export type MarketPluginReview = { id: string; name: string; version?: string; description?: string; revision: string; contents?: { mcpServers?: { name: string; kind: string; url?: string; command?: string; args?: string[] }[]; hooks?: { event?: string; command?: string }[] }; warnings?: string[]; installed?: { bots: "all" | string[]; enabled: boolean } };
+export type MarketPackReview = { id: string; name: string; version: string; summary: string; marketplaceName: string; commit: string; token: string; skills: MarketSkillReview[]; plugins: MarketPluginReview[] };
+export type MarketRoutineReview = { name: string; instructions: string; cadence: NonNullable<AgentTemplateBundle["routines"]>[number]["cadence"]; active: boolean };
+export type MarketTemplateReview = {
+  id: string; token: string; commit: string; marketplaceName: string; version: string; name: string; role: string; summary: string; instructions: string; look?: MarketAgent["look"];
+  packs: { name: string; version: string; summary: string }[]; skills: MarketSkillReview[]; privateSkills: { name: string; description: string; instructions: string }[];
+  plugins: MarketPluginReview[]; routines: MarketRoutineReview[];
+};
 /** A skill on the featured shelf ("skills-featured-v1"). Its id is `owner/repo/skill@commit7`: preview and install it as a catalog skill. */
 export type FeaturedSkill = SkillSource & { id: string; name: string; summary: string; group: string; installed?: string };
 
@@ -1403,6 +1428,14 @@ declare global {
       "skillsCatalog.preview"(id: string): Promise<CatalogPreview>;
       "skillsCatalog.install"(token: string, replace?: string[]): Promise<SkillImportResult>;
       "skillsCatalog.featured"(): Promise<FeaturedSkill[]>;
+      "market.catalog"(): Promise<MarketCatalog>;
+      "market.skillImage"(id: string): Promise<string>;
+      "market.skillPreview"(id: string): Promise<MarketSkillReview>;
+      "market.skillInstall"(token: string, options?: { bots?: "all" | string[]; replace?: string[] }): Promise<SkillImportResult>;
+      "market.packPreview"(id: string): Promise<MarketPackReview>;
+      "market.packInstall"(token: string, options?: { bots?: "all" | string[]; replace?: string[]; commit?: string }): Promise<SkillImportResult & { plugins: string[] }>;
+      "market.templatePreview"(id: string): Promise<MarketTemplateReview>;
+      "market.templateInstall"(token: string, options?: { routines?: string[]; commit?: string; name?: string }): Promise<{ botId: string; skills: string[]; plugins: string[] }>;
       "mcpCatalog.list"(): Promise<McpCatalog>;
       "mcpCatalog.add"(id: string, options?: { keys?: Record<string, string>; confirm?: string }): Promise<McpCatalogAdded>;
       "piPackages.browse"(query?: { query?: string; page?: number }): Promise<{ packages: PiPackageListing[]; nextPage?: number }>;

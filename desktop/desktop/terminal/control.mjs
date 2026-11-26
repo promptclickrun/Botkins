@@ -677,7 +677,7 @@ export function controlApi(service) {
     api[name] = call;
   }
   // The other plugin calls go by their own names ("plugins.browse", …), as a phone makes them.
-  for (const name of Object.keys(handlers)) if ((name.startsWith("plugins.") || name.startsWith("piPackages.") || name.startsWith("skillsCatalog.") || name.startsWith("mcpCatalog.") || name === "skills.upload") && !Object.hasOwn(api, name)) api[name] = (args) => handlers[name](...args);
+  for (const name of Object.keys(handlers)) if ((name.startsWith("plugins.") || name.startsWith("piPackages.") || name.startsWith("skillsCatalog.") || name.startsWith("market.") || name.startsWith("mcpCatalog.") || name === "skills.upload") && !Object.hasOwn(api, name)) api[name] = (args) => handlers[name](...args);
   // A reference to a saved credential is refused by the named call too, before its own work starts.
   for (const name of WITHOUT_REFERENCES) {
     if (!Object.hasOwn(api, name)) continue;

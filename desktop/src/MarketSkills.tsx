@@ -5,6 +5,7 @@ import type { CatalogSkill, CatalogPreview, FeaturedSkill, SkillInfo, SkillSourc
 import { Group, Sheet, errorText } from "./SettingsRows";
 import { useAsk } from "./Pages";
 import { teamCan } from "./teamAccess";
+import MarketCatalog, { supportsMarketV2 } from "./MarketCatalog";
 import "./plugins.css";
 
 // Marketplace › Skills: with no search, a featured shelf (skills from known repositories at a
@@ -137,6 +138,7 @@ export default function MarketSkills({ state, refreshed, openSkill }: { state: S
       {!detail && message}
       {!searching && (
         <>
+          {supportsMarketV2(state.remote) && <MarketCatalog state={state} refreshed={refreshed + revision} />}
           {shelf && !featured && !error && <p className="set-status">Loading skills…</p>}
           {groups.map(([group, skills]) => (
             <Group key={group} title={group}>
