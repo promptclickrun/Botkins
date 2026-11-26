@@ -126,11 +126,25 @@ async function ensureHostConnected(serverId, pairing) {
 
 async function executeAsk(serverId, client, controller, ask) {
   try {
-    const result = await controller.run(ask.tool, ask.args || {});
+    const result =
+      ask.tool === "secure.fill"
+        ? await controller.runSecureFill(ask.args || {})
+        : await controller.run(ask.tool, ask.args || {});
     await client.answerAsk(ask.id, { ok: true, result });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err || "Browser tool failed.");
-    await client.answerAsk(ask.id, { ok: false, error: message }).catch(() => {});
+    const payload = { ok: false, error: message };
+    if (err && typeof err === "object" && typeof err.secureCode === "string") {
+      payload.code = err.secureCode;
+    }
+    await client.answerAsk(ask.id, payload).catch(() => {});
+  } finally {
+    if (ask.tool === "secure.fill" && Array.isArray(ask.args?.fields)) {
+      for (const f of ask.args.fields) {
+        if (f && typeof f === "object") f.value = "";
+      }
+      ask.args.fields.length = 0;
+    }
   }
 }
 

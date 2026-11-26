@@ -237,3 +237,156 @@ test("a page_fill request waits for the submission, then the returned handles fi
   assert.deepEqual(JSON.parse(await use.handler(result)), { applied: true });
   assert.deepEqual(filled, [content]);
 });
+
+test("page_fill accepts dotted field keys, resolves extension targets, surfaces refusals, and never leaks sentinels", async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "botkins-secure-ext-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+
+  const sentinelEmail = "SENTINEL_EMAIL_9f2a1c@example.test";
+  const sentinelPass = "SENTINEL_PASS_7e4b8d!";
+  let tabs = [
+    { id: 10, title: "Example Portal Sign In", url: "https://portal.example.test/login", active: true },
+    { id: 11, title: "Docs", url: "https://docs.example.test/guide", active: false },
+  ];
+  const secureFillCalls = [];
+  let nextFillOutcome = { filled: ["LoginModel.Email", "LoginModel.Password"], missing: [] };
+
+  const { client } = fakeClient(async () => ({ data: { content: "ok" } }));
+  const ws = new Workspace(dir, client, () => {}, {
+    browserTools: () => ({
+      tools: () => [],
+      devices: () => [{ id: "dev-chrome-1", name: "Chrome (Work)", browser: "Chrome", profile: "Work", mode: "all", connected: true, enabled: true }],
+      call: async (name) => {
+        if (name === "browser_tabs") return { tabs };
+        throw new Error("unexpected tool " + name);
+      },
+      secureFill: async (deviceId, payload) => {
+        secureFillCalls.push({ deviceId, payload: JSON.parse(JSON.stringify(payload)) });
+        if (nextFillOutcome instanceof Error) throw nextFillOutcome;
+        return nextFillOutcome;
+      },
+    }),
+  });
+
+  const chat = ws.chat(ws.createChat("pip"));
+  const run = { id: "run-ext-1", chatId: chat.id, botId: "pip" };
+  const task = {};
+  ws.active.set(chat.id, task);
+  const [ask, use] = ws.secureInputs.tools(ws.bot("pip"), chat, run, task);
+
+  // Malformed dotted keys and prototype keys remain rejected.
+  for (const badKey of [".Email", "Email.", "Login..Email", "__proto__", "constructor"]) {
+    await assert.rejects(
+      ask.handler({
+        title: "Sign in",
+        operation: "page_fill",
+        url: "https://portal.example.test/login",
+        fields: [{ key: badKey, label: "Bad", kind: "text" }],
+      }),
+      /distinct field keys/,
+    );
+  }
+
+  // 1. With no screen browser open and exactly one matching extension tab, auto-picks that tab.
+  const askPromise = ask.handler({
+    title: "Sign in to Example Portal",
+    operation: "page_fill",
+    url: "https://portal.example.test/login",
+    fields: [
+      { key: "LoginModel.Email", label: "Email", kind: "text" },
+      { key: "LoginModel.Password", label: "Password", kind: "password" },
+    ],
+  });
+  await new Promise((r) => setImmediate(r));
+  const [req1] = ws.interactions.snapshot();
+  assert.equal(req1.kind, "secure");
+  assert.match(req1.detail, /https:\/\/portal\.example\.test/);
+  assert.match(req1.detail, /Browser: Chrome \(Work\)/);
+  assert.match(req1.detail, /Tab: Example Portal Sign In/);
+  assert.match(req1.detail, /LoginModel\.Email/);
+  assert.match(req1.detail, /LoginModel\.Password/);
+
+  ws.interactions.respond(req1.id, {
+    action: "accept",
+    content: { "LoginModel.Email": sentinelEmail, "LoginModel.Password": sentinelPass },
+  });
+  const handleResult = JSON.parse(await askPromise);
+  assert.deepEqual(Object.keys(handleResult.handles), ["LoginModel.Email", "LoginModel.Password"]);
+  assert.equal(JSON.stringify(handleResult).includes(sentinelEmail), false);
+  assert.equal(JSON.stringify(handleResult).includes(sentinelPass), false);
+
+  const useResult = JSON.parse(await use.handler({ handles: handleResult.handles, submit: true }));
+  assert.deepEqual(useResult, {
+    applied: true,
+    filled: ["LoginModel.Email", "LoginModel.Password"],
+    missing: [],
+  });
+  assert.equal(secureFillCalls.length, 1);
+  assert.equal(secureFillCalls[0].deviceId, "dev-chrome-1");
+  assert.equal(secureFillCalls[0].payload.tabId, 10);
+  assert.equal(secureFillCalls[0].payload.origin, "https://portal.example.test");
+  assert.equal(secureFillCalls[0].payload.submit, true);
+  assert.deepEqual(secureFillCalls[0].payload.fields, [
+    { key: "LoginModel.Email", kind: "text", value: sentinelEmail },
+    { key: "LoginModel.Password", kind: "password", value: sentinelPass },
+  ]);
+
+  // 2. When two extension tabs match the origin and target is omitted, asks the bot to specify target.
+  tabs = [
+    { id: 10, title: "Portal A", url: "https://portal.example.test/login", active: true },
+    { id: 12, title: "Portal B", url: "https://portal.example.test/settings", active: false },
+  ];
+  await assert.rejects(
+    ask.handler({
+      title: "Sign in",
+      operation: "page_fill",
+      url: "https://portal.example.test/login",
+      fields: [{ key: "LoginModel.Password", label: "Password", kind: "password" }],
+    }),
+    /Multiple open browser tabs match/,
+  );
+
+  // 3. Passing explicit target { browser, tabId } selects the specific tab and maps secureCode refusals cleanly.
+  const mismatchErr = new Error("raw internal error");
+  mismatchErr.secureCode = "origin_mismatch";
+  nextFillOutcome = mismatchErr;
+
+  const ask2 = ask.handler({
+    title: "Sign in",
+    operation: "page_fill",
+    url: "https://portal.example.test/login",
+    target: { browser: "Work", tabId: 12 },
+    fields: [{ key: "LoginModel.Password", label: "Password", kind: "password" }],
+  });
+  await new Promise((r) => setImmediate(r));
+  const [req2] = ws.interactions.snapshot();
+  assert.match(req2.detail, /Tab: Portal B/);
+  ws.interactions.respond(req2.id, { action: "accept", content: { "LoginModel.Password": sentinelPass } });
+  const h2 = JSON.parse(await ask2);
+  await assert.rejects(use.handler(h2), /navigated to a different origin/i);
+
+  const typeErr = new Error("raw type error");
+  typeErr.secureCode = "password_type_mismatch";
+  nextFillOutcome = typeErr;
+  const ask3 = ask.handler({
+    title: "Sign in",
+    operation: "page_fill",
+    url: "https://portal.example.test/login",
+    target: { browser: "Work", tabId: 12 },
+    fields: [{ key: "LoginModel.Email", label: "Password", kind: "password" }],
+  });
+  await new Promise((r) => setImmediate(r));
+  const [req3] = ws.interactions.snapshot();
+  ws.interactions.respond(req3.id, { action: "accept", content: { "LoginModel.Email": sentinelPass } });
+  const h3 = JSON.parse(await ask3);
+  await assert.rejects(use.handler(h3), /only be filled into a password input/i);
+
+  // 4. Sentinel redaction: neither sentinel appears in workspace snapshot, persisted workspace.json, or tool results.
+  const snapJson = JSON.stringify(ws.snapshot());
+  const diskJson = readFileSync(join(dir, "workspace.json"), "utf8");
+  for (const sentinel of [sentinelEmail, sentinelPass]) {
+    assert.equal(snapJson.includes(sentinel), false, "sentinel leaked into workspace snapshot");
+    assert.equal(diskJson.includes(sentinel), false, "sentinel leaked into workspace.json");
+    assert.equal(JSON.stringify(useResult).includes(sentinel), false, "sentinel leaked into tool result");
+  }
+});

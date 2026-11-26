@@ -3,7 +3,7 @@
 // containing other extensions' iframes (Proton Pass, 1Password, Bitwarden, Grammarly, etc.)
 // work normally.
 
-export const DRIVER_VERSION = "0.2.0";
+export const DRIVER_VERSION = "0.2.1";
 
 const BLOCKED_IFRAME_SCHEMES = [
   "chrome-extension:",
@@ -857,6 +857,15 @@ export function createDomDriver(win = globalThis) {
           if (tag === "input" && el.type) entry.type = el.type.toLowerCase();
           else if (tag === "button" && el.getAttribute("type")) entry.type = el.getAttribute("type").toLowerCase();
 
+          if (tag === "input" || tag === "textarea" || tag === "select") {
+            const rawName = (el.getAttribute("name") || "").trim();
+            const rawId = (el.id || "").trim();
+            if (rawName) entry.inputName = rawName.slice(0, 128);
+            if (rawId) entry.id = rawId.slice(0, 128);
+            const fieldKey = rawName || rawId;
+            if (fieldKey) entry.fieldKey = fieldKey.slice(0, 128);
+          }
+
           if (name) {
             entry.name = name;
             entry.text = name;
@@ -1307,6 +1316,248 @@ export function createDomDriver(win = globalThis) {
     return { ok: true, found: Boolean(el) };
   }
 
+  function isSameOriginSecureDoc(doc, expectedOrigin, ownerDoc) {
+    if (!doc) return false;
+    try {
+      const origin = String(doc.location?.origin || "");
+      if (origin && origin === expectedOrigin) return true;
+      const href = String(doc.location?.href || "").toLowerCase();
+      if ((href === "about:blank" || href === "about:srcdoc") && ownerDoc) {
+        return String(ownerDoc.location?.origin || "") === expectedOrigin;
+      }
+    } catch {}
+    return false;
+  }
+
+  function walkSecureTree(root, doc, expectedOrigin, visitor) {
+    if (!root) return;
+    const children = root.children || [];
+    for (let i = 0; i < children.length; i++) {
+      const el = children[i];
+      if (!el || el.nodeType !== 1) continue;
+      const tag = el.tagName.toLowerCase();
+      if (tag === "iframe") {
+        if (isBlockedIframe(el)) continue;
+        try {
+          const subDoc = el.contentDocument;
+          if (subDoc && subDoc.documentElement && isSameOriginSecureDoc(subDoc, expectedOrigin, doc)) {
+            walkSecureTree(subDoc.documentElement, subDoc, expectedOrigin, visitor);
+          }
+        } catch {}
+        continue;
+      }
+      if (visitor(el, doc) === false) continue;
+      if (el.shadowRoot) {
+        walkSecureTree(el.shadowRoot, doc, expectedOrigin, visitor);
+      }
+      if (el.children && el.children.length > 0) {
+        walkSecureTree(el, doc, expectedOrigin, visitor);
+      }
+    }
+  }
+
+  function isSecureFieldTypeCompatible(el, kind) {
+    const tag = el.tagName.toLowerCase();
+    if (tag !== "input" && tag !== "textarea") return false;
+    const inputType = tag === "input" ? (el.type || "text").toLowerCase() : "";
+    const disallowed = new Set([
+      "hidden",
+      "submit",
+      "button",
+      "reset",
+      "image",
+      "file",
+      "checkbox",
+      "radio",
+      "range",
+      "color",
+      "date",
+      "datetime-local",
+      "month",
+      "time",
+      "week",
+    ]);
+    if (tag === "input" && disallowed.has(inputType)) return false;
+    if (kind === "password") {
+      return tag === "input" && inputType === "password";
+    }
+    if (kind === "code") {
+      return tag === "input" && ["text", "tel", "number", "password", "search"].includes(inputType);
+    }
+    if (kind === "secret") {
+      return tag === "textarea" || (tag === "input" && ["password", "text", "search"].includes(inputType));
+    }
+    // kind === "text" (default)
+    return tag === "textarea" || (tag === "input" && ["text", "email", "tel", "search", "url", "number"].includes(inputType));
+  }
+
+  function findFormSubmitControl(form, frameWin) {
+    if (!form) return null;
+    const controls = form.querySelectorAll?.('button[type="submit"], button:not([type]), input[type="submit"], input[type="image"]') || [];
+    for (const ctrl of controls) {
+      if (ctrl.disabled) continue;
+      if (!isElementVisible(ctrl, frameWin)) continue;
+      return ctrl;
+    }
+    return null;
+  }
+
+  function secureFill(opts = {}) {
+    const fields = Array.isArray(opts.fields) ? opts.fields : [];
+    const expectedOrigin = String(opts.origin || "").trim();
+    const resolved = [];
+    try {
+      const currentOrigin = String(win.location?.origin || "");
+      if (!expectedOrigin || currentOrigin !== expectedOrigin) {
+        return {
+          ok: false,
+          code: "origin_mismatch",
+          error: "Tab origin does not match the approved origin.",
+        };
+      }
+
+      const doc = win.document;
+      if (!doc?.documentElement) {
+        return { ok: true, filled: [], missing: fields.map((f) => String(f?.key || "")).filter(Boolean) };
+      }
+
+      const candidates = [];
+      walkSecureTree(doc.documentElement, doc, expectedOrigin, (el, ownerDoc) => {
+        const tag = el.tagName.toLowerCase();
+        if (tag !== "input" && tag !== "textarea") return true;
+        if (tag === "input" && (el.type || "").toLowerCase() === "hidden") return true;
+        if (el.disabled || el.readOnly) return true;
+        const elWin = getWin(el, win);
+        if (!isElementVisible(el, elWin)) return true;
+        candidates.push({
+          el,
+          ownerDoc,
+          name: el.getAttribute("name") || "",
+          id: el.id || "",
+        });
+        return true;
+      });
+
+      const missing = [];
+      for (const field of fields) {
+        const key = String(field?.key || "");
+        const kind = String(field?.kind || "text");
+        const value = typeof field?.value === "string" ? field.value : "";
+        if (!key) continue;
+
+        let matched = candidates.filter((c) => c.name === key);
+        if (matched.length === 0) {
+          matched = candidates.filter((c) => c.id === key);
+        }
+        if (matched.length === 0) {
+          missing.push(key);
+          continue;
+        }
+
+        const compatible = matched.find((c) => isSecureFieldTypeCompatible(c.el, kind));
+        if (!compatible) {
+          if (kind === "password") {
+            return {
+              ok: false,
+              code: "password_type_mismatch",
+              error: `Refused to fill password field "${key}" into a non-password input.`,
+            };
+          }
+          return {
+            ok: false,
+            code: "type_mismatch",
+            error: `Refused to fill field "${key}" into an incompatible input type.`,
+          };
+        }
+
+        resolved.push({ key, kind, value, el: compatible.el, ownerDoc: compatible.ownerDoc });
+      }
+
+      // Re-verify top-level origin immediately before writing values.
+      if (String(win.location?.origin || "") !== expectedOrigin) {
+        return {
+          ok: false,
+          code: "origin_mismatch",
+          error: "Tab origin changed before filling.",
+        };
+      }
+
+      const filled = [];
+      for (const item of resolved) {
+        if (!isSameOriginSecureDoc(item.ownerDoc, expectedOrigin, doc)) {
+          return {
+            ok: false,
+            code: "origin_mismatch",
+            error: "Frame origin no longer matches the approved origin.",
+          };
+        }
+        const el = item.el;
+        const elWin = getWin(el, win);
+        if (typeof el.scrollIntoView === "function") {
+          try {
+            el.scrollIntoView({ block: "center", inline: "center", behavior: "instant" });
+          } catch {}
+        }
+        if (typeof el.focus === "function") {
+          try {
+            el.focus({ preventScroll: true });
+          } catch {}
+        }
+        setNativeValue(el, item.value, elWin);
+        el.dispatchEvent(
+          makeInputEvent(elWin, "input", {
+            bubbles: true,
+            composed: true,
+            inputType: "insertText",
+          }),
+        );
+        el.dispatchEvent(new (elWin?.Event || Event)("change", { bubbles: true }));
+        filled.push(item.key);
+      }
+
+      if (opts.submit === true && resolved.length > 0) {
+        const lastEl = resolved[resolved.length - 1].el;
+        const elWin = getWin(lastEl, win);
+        const form = lastEl.form || lastEl.closest?.("form");
+        const submitBtn = findFormSubmitControl(form, elWin);
+        if (submitBtn) {
+          dispatchPointerClickSequence(submitBtn, elWin, null, false);
+        } else {
+          const enterInit = {
+            key: "Enter",
+            code: "Enter",
+            keyCode: 13,
+            which: 13,
+            bubbles: true,
+            cancelable: true,
+            composed: true,
+          };
+          const kd = makeKeyboardEvent(elWin, "keydown", enterInit);
+          const notPrevented = lastEl.dispatchEvent(kd);
+          lastEl.dispatchEvent(makeKeyboardEvent(elWin, "keypress", { ...enterInit, charCode: 13 }));
+          if (notPrevented && lastEl.tagName.toLowerCase() !== "textarea") {
+            dispatchSubmitOnForm(lastEl);
+          }
+          lastEl.dispatchEvent(makeKeyboardEvent(elWin, "keyup", enterInit));
+        }
+      }
+
+      return { ok: true, filled, missing };
+    } finally {
+      for (const item of resolved) {
+        item.value = "";
+        item.el = null;
+        item.ownerDoc = null;
+      }
+      resolved.length = 0;
+      for (const field of fields) {
+        if (field && typeof field === "object") {
+          field.value = "";
+        }
+      }
+    }
+  }
+
   function dispatch(action, payload = {}) {
     switch (action) {
       case "snapshot":
@@ -1325,6 +1576,8 @@ export function createDomDriver(win = globalThis) {
         return checkWait(payload);
       case "probe":
         return probe(payload);
+      case "secureFill":
+        return secureFill(payload);
       default:
         return { ok: false, error: `Unknown DOM driver action: ${action}` };
     }
@@ -1341,6 +1594,7 @@ export function createDomDriver(win = globalThis) {
     scroll,
     checkWait,
     probe,
+    secureFill,
     dispatch,
   };
 }

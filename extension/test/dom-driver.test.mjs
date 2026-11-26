@@ -534,7 +534,199 @@ test(
         /different extension/i,
       );
       assert.equal(debuggerAttachAttempts, 2);
+
+      // Secure fill also works on the foreign-extension fixture without attaching chrome.debugger
+      await browser.cdp.evalInContext(`window.__submits = [];`);
+      const foreignFill = await ctrl.runSecureFill({
+        tabId: 101,
+        origin: new URL(pageUrl).origin,
+        fields: [
+          { key: "email", kind: "text", value: "member@example.test" },
+          { key: "password", kind: "password", value: "SENTINEL_FOREIGN_PASS_1!" },
+        ],
+        submit: true,
+      });
+      assert.deepEqual(foreignFill, { filled: ["email", "password"], missing: [] });
+      assert.equal(JSON.stringify(foreignFill).includes("SENTINEL_FOREIGN_PASS_1!"), false);
+      assert.equal(debuggerAttachAttempts, 2, "secure fill must never attach chrome.debugger");
+      const foreignSubmits = await browser.cdp.evalInContext(`window.__submits`);
+      assert.equal(foreignSubmits.length, 1);
+      assert.equal(foreignSubmits[0].email, "member@example.test");
+      assert.equal(foreignSubmits[0].passwordLength, "SENTINEL_FOREIGN_PASS_1!".length);
     } finally {
+      await browser.close();
+      server.close();
+    }
+  },
+);
+
+test(
+  "BrowserController.runSecureFill fills dotted-name forms, enforces origin and password-type checks, and never leaks sentinels",
+  { skip: !chromeBin ? "No Chromium/Chrome binary available on this host" : false },
+  async () => {
+    const driverCode = readFileSync(driverBundlePath, "utf8");
+    const { server, baseUrl } = await startFixtureServer();
+    const browser = await launchChromium(chromeBin);
+    const consoleLogs = [];
+    const origLog = console.log;
+    const origWarn = console.warn;
+    const origError = console.error;
+    const origInfo = console.info;
+    console.log = (...a) => consoleLogs.push(a.join(" "));
+    console.warn = (...a) => consoleLogs.push(a.join(" "));
+    console.error = (...a) => consoleLogs.push(a.join(" "));
+    console.info = (...a) => consoleLogs.push(a.join(" "));
+
+    try {
+      const pageUrl = `${baseUrl}/login-dotted-names.html`;
+      await browser.navigate(pageUrl);
+      const origin = new URL(pageUrl).origin;
+
+      const frameTree = await browser.cdp.send("Page.getFrameTree");
+      const topIso = await browser.cdp.send("Page.createIsolatedWorld", {
+        frameId: frameTree.frameTree.frame.id,
+        worldName: "botkins-secure-fill",
+      });
+      const tab = {
+        id: 202,
+        windowId: 1,
+        title: "Example Portal Sign In",
+        url: pageUrl,
+        active: true,
+        pinned: false,
+        groupId: -1,
+        incognito: false,
+        status: "complete",
+      };
+      let debuggerAttachAttempts = 0;
+
+      globalThis.chrome = {
+        tabs: {
+          query: async () => [tab],
+          get: async () => tab,
+          update: async (_id, patch) => Object.assign(tab, patch),
+        },
+        windows: { update: async () => ({}) },
+        tabGroups: { query: async () => [] },
+        scripting: {
+          executeScript: async (injection) => {
+            if (injection.files) {
+              await browser.cdp.evalInContext(driverCode, { contextId: topIso.executionContextId });
+              return [{ frameId: 0, result: undefined }];
+            }
+            const fnSrc = injection.func.toString();
+            const argsJson = JSON.stringify(injection.args || []);
+            const result = await browser.cdp.evalInContext(`(${fnSrc})(...${argsJson})`, {
+              contextId: topIso.executionContextId,
+            });
+            return [{ frameId: 0, result }];
+          },
+        },
+        debugger: {
+          onDetach: { addListener: () => {} },
+          attach: async () => {
+            debuggerAttachAttempts++;
+            throw new Error("Debugger must not be attached");
+          },
+          detach: async () => {},
+          sendCommand: async () => {
+            throw new Error("Debugger must not be called");
+          },
+        },
+      };
+
+      const ctrl = new BrowserController({
+        getSettings: async () => ({ enabled: true, mode: "all", groupName: "Botkins", groupColor: "orange", pausedTabIds: [] }),
+      });
+
+      // 1. Snapshot exposes dotted field keys (`LoginModel.Email`, `LoginModel.Password`) and `id` fallback (`tenant_code`).
+      const snap = await ctrl.run("browser_snapshot", { tabId: 202 });
+      const keys = snap.elements.map((e) => e.fieldKey).filter(Boolean);
+      assert.ok(keys.includes("LoginModel.Email"), `Expected LoginModel.Email in ${JSON.stringify(keys)}`);
+      assert.ok(keys.includes("LoginModel.Password"), `Expected LoginModel.Password in ${JSON.stringify(keys)}`);
+      assert.ok(keys.includes("tenant_code"), `Expected tenant_code in ${JSON.stringify(keys)}`);
+
+      // Enforce top-frame-only execution for all subsequent secureFill calls
+      const baseExec = globalThis.chrome.scripting.executeScript;
+      globalThis.chrome.scripting.executeScript = async (injection) => {
+        assert.deepEqual(injection.target.frameIds, [0], "secure fill must only execute in top frame [0]");
+        return baseExec(injection);
+      };
+
+      // 2. Origin mismatch is refused before touching the DOM.
+      const wrongEmailField = { key: "LoginModel.Email", kind: "text", value: "SENTINEL_BAD_ORIGIN_EMAIL" };
+      const wrongPassField = { key: "LoginModel.Password", kind: "password", value: "SENTINEL_BAD_ORIGIN_PASS" };
+      const wrongOriginFields = [wrongEmailField, wrongPassField];
+      await assert.rejects(
+        () => ctrl.runSecureFill({ tabId: 202, origin: "https://other.example.test", fields: wrongOriginFields }),
+        (err) => err.secureCode === "origin_mismatch",
+      );
+      assert.equal(wrongEmailField.value, "", "values must be zeroed even on refusal");
+      assert.equal(wrongPassField.value, "", "values must be zeroed even on refusal");
+      assert.equal(wrongOriginFields.length, 0, "fields array must be emptied after refusal");
+      assert.equal(await browser.cdp.evalInContext(`document.getElementById("login-email").value`), "");
+
+      // 3. Password value into a non-password input is refused atomically (nothing filled).
+      const mismatchPassField = { key: "LoginModel.Email", kind: "password", value: "SENTINEL_WRONG_TYPE_PASS" };
+      const mismatchTenantField = { key: "tenant_code", kind: "text", value: "acme" };
+      const mismatchFields = [mismatchPassField, mismatchTenantField];
+      await assert.rejects(
+        () => ctrl.runSecureFill({ tabId: 202, origin, fields: mismatchFields }),
+        (err) => err.secureCode === "password_type_mismatch",
+      );
+      assert.equal(mismatchPassField.value, "");
+      assert.equal(mismatchFields.length, 0);
+      assert.equal(await browser.cdp.evalInContext(`document.getElementById("login-email").value`), "");
+      assert.equal(await browser.cdp.evalInContext(`document.getElementById("tenant_code").value`), "");
+
+      // 4. Valid secureFill fills dotted names + id fallback, updates React state, submits, zeroes payload, and never echoes values.
+      const sentinelEmail = "SENTINEL_EMAIL_9f2a1c@example.test";
+      const sentinelPass = "SENTINEL_PASS_7e4b8d!";
+      const fillItems = [
+        { key: "LoginModel.Email", kind: "text", value: sentinelEmail },
+        { key: "LoginModel.Password", kind: "password", value: sentinelPass },
+        { key: "tenant_code", kind: "text", value: "north-42" },
+        { key: "nonexistent.field", kind: "text", value: "ignored" },
+      ];
+      const fillPayload = {
+        tabId: 202,
+        origin,
+        fields: [...fillItems],
+        submit: true,
+      };
+      const result = await ctrl.runSecureFill(fillPayload);
+      assert.deepEqual(result, {
+        filled: ["LoginModel.Email", "LoginModel.Password", "tenant_code"],
+        missing: ["nonexistent.field"],
+      });
+      assert.equal(JSON.stringify(result).includes(sentinelEmail), false);
+      assert.equal(JSON.stringify(result).includes(sentinelPass), false);
+      for (const f of fillItems) assert.equal(f.value, "", "payload field values must be zeroed after fill");
+      assert.equal(fillPayload.fields.length, 0, "payload fields array must be emptied after fill");
+
+      const state = await browser.cdp.evalInContext(`({
+        react: window.__reactState,
+        submits: window.__submits,
+        events: window.__vueEvents,
+      })`);
+      assert.equal(state.react.email, sentinelEmail);
+      assert.equal(state.react.password, sentinelPass);
+      assert.equal(state.submits.length, 1);
+      assert.equal(state.submits[0].email, sentinelEmail);
+      assert.equal(state.submits[0].passwordMatches, sentinelPass);
+      assert.equal(state.submits[0].tenant, "north-42");
+      assert.equal(state.events.some((e) => e.hasData), false, "InputEvent.data must never carry secret text");
+      assert.equal(debuggerAttachAttempts, 0);
+
+      // 5. Neither sentinel ever appeared in extension console logs.
+      const joinedLogs = consoleLogs.join("\n");
+      assert.equal(joinedLogs.includes(sentinelEmail), false);
+      assert.equal(joinedLogs.includes(sentinelPass), false);
+    } finally {
+      console.log = origLog;
+      console.warn = origWarn;
+      console.error = origError;
+      console.info = origInfo;
       await browser.close();
       server.close();
     }

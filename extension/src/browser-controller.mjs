@@ -323,26 +323,42 @@ export class BrowserController {
 
     await prev;
     let shouldDetach = false;
-    try {
-      if (!chrome.debugger?.attach || !chrome.debugger?.sendCommand) {
-        throw new Error("chrome.debugger API is unavailable.");
-      }
+    const attachOnce = async () => {
       try {
         await chrome.debugger.attach({ tabId }, CDP_VERSION);
         this.attached.add(tabId);
         shouldDetach = true;
       } catch (err) {
-        if (/already attached/i.test(String(err?.message || err))) {
+        const msg = String(err?.message || err || "");
+        if (/already attached/i.test(msg) && !/another debugger/i.test(msg)) {
           this.attached.add(tabId);
           shouldDetach = true;
         } else {
           throw formatCdpError(err, actionDesc);
         }
       }
+    };
+    try {
+      if (!chrome.debugger?.attach || !chrome.debugger?.sendCommand) {
+        throw new Error("chrome.debugger API is unavailable.");
+      }
+      await attachOnce();
       return await fn(async (method, params = {}) => {
         try {
           return await chrome.debugger.sendCommand({ tabId }, method, params);
         } catch (err) {
+          const msg = String(err?.message || err || "");
+          // Background tabs (active: false) can briefly lose debugger attachment across
+          // navigation / RenderFrameHost swaps right after attach; re-attach once and retry.
+          if (/debugger is not attached/i.test(msg)) {
+            this.attached.delete(tabId);
+            await attachOnce();
+            try {
+              return await chrome.debugger.sendCommand({ tabId }, method, params);
+            } catch (retryErr) {
+              throw formatCdpError(retryErr, actionDesc);
+            }
+          }
           throw formatCdpError(err, actionDesc);
         }
       });
@@ -399,6 +415,9 @@ export class BrowserController {
   async execDriver(tabId, action, payload = {}, { allFrames = false, frameIds = null } = {}) {
     let target = frameIds ? { tabId, frameIds } : allFrames ? { tabId, allFrames: true } : { tabId, frameIds: [0] };
     let usedAllFrames = Boolean(allFrames && !frameIds);
+    const canFallbackToTop = (tgt) =>
+      Boolean(tgt?.allFrames) ||
+      (usedAllFrames && Array.isArray(tgt?.frameIds) && !(tgt.frameIds.length === 1 && tgt.frameIds[0] === 0));
 
     const invoke = async (tgt, act, data) => {
       try {
@@ -407,7 +426,7 @@ export class BrowserController {
           args: [act, data, DRIVER_VERSION],
         });
       } catch (err) {
-        if (tgt.allFrames) {
+        if (canFallbackToTop(tgt)) {
           usedAllFrames = false;
           target = { tabId, frameIds: [0] };
           return await this.executeScripting(target, {
@@ -426,14 +445,15 @@ export class BrowserController {
       const installFrameIds = needingInstall
         .map((r) => r.frameId)
         .filter((id) => typeof id === "number");
-      const installTarget =
+      let installTarget =
         installFrameIds.length > 0 ? { tabId, frameIds: installFrameIds } : target;
       try {
         await this.executeScripting(installTarget, { files: [DOM_DRIVER_FILE] });
       } catch (err) {
-        if (installTarget.allFrames) {
+        if (canFallbackToTop(installTarget)) {
           usedAllFrames = false;
-          await this.executeScripting({ tabId, frameIds: [0] }, { files: [DOM_DRIVER_FILE] });
+          installTarget = { tabId, frameIds: [0] };
+          await this.executeScripting(installTarget, { files: [DOM_DRIVER_FILE] });
         } else {
           throw err;
         }
@@ -496,12 +516,18 @@ export class BrowserController {
     );
   }
 
-  async waitForLoad(tabId, timeoutMs = 10_000) {
+  async waitForLoad(tabId, timeoutMs = 10_000, expectedUrl = "") {
+    const expectNavigated = /^https?:\/\//i.test(String(expectedUrl || ""));
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
       try {
         const tab = await chrome.tabs.get(tabId);
-        if (tab.status === "complete") return tab;
+        const currentUrl = String(tab.url || "");
+        const stillInitialBlank =
+          expectNavigated &&
+          (!currentUrl || currentUrl === "about:blank") &&
+          Boolean(tab.pendingUrl);
+        if (tab.status === "complete" && !stillInitialBlank) return tab;
       } catch {
         return null;
       }
@@ -1332,6 +1358,98 @@ export class BrowserController {
     return { tabId: tab.id, result: value ?? null };
   }
 
+  // Dedicated secure-fill handler invoked ONLY for internal `secure.fill` asks from the
+  // Botkins host (never exposed via `run()` / bot-callable `browser_*` tools).
+  // Re-checks tab origin, targets top frame + same-origin frames only, never uses CDP/eval/type,
+  // never echoes values, never logs or persists values, and zeroes all field values after use.
+  async runSecureFill(args = {}) {
+    const rawFields = Array.isArray(args?.fields) ? args.fields : [];
+    const fields = [];
+    const allowedKeys = new Set();
+    try {
+      const settings = await this.getSettings();
+      if (settings.enabled === false) {
+        throw new Error("Botkins Browser Control is paused in the extension popup.");
+      }
+      const tabId = Number(args?.tabId);
+      if (!Number.isInteger(tabId) || tabId < 0) {
+        throw new Error("Secure fill requires a valid target tabId.");
+      }
+      const approvedOrigin = urlOrigin(String(args?.origin || "").trim());
+      if (!approvedOrigin || !/^https?:\/\//i.test(approvedOrigin)) {
+        throw new Error("Secure fill requires a valid approved origin.");
+      }
+      if (rawFields.length === 0) {
+        throw new Error("Secure fill requires at least one field.");
+      }
+      for (const item of rawFields) {
+        const key = String(item?.key || "").trim();
+        const kind = ["text", "password", "code", "secret"].includes(item?.kind) ? item.kind : "text";
+        const value = typeof item?.value === "string" ? item.value : "";
+        if (!key || !value) {
+          throw new Error("Each secure fill field requires a key and value.");
+        }
+        allowedKeys.add(key);
+        fields.push({ key, kind, value });
+      }
+
+      const tab = await this.resolveTab(tabId);
+      const currentOrigin = urlOrigin(tab.url || "");
+      const pendingOrigin = tab.pendingUrl ? urlOrigin(tab.pendingUrl) : "";
+      if (currentOrigin !== approvedOrigin || (pendingOrigin && pendingOrigin !== approvedOrigin)) {
+        const err = new Error("Refused secure fill: tab origin does not match the approved origin.");
+        err.secureCode = "origin_mismatch";
+        throw err;
+      }
+
+      if (!this.hasScripting()) {
+        throw new Error("Secure fill requires chrome.scripting and will not fall back to CDP.");
+      }
+
+      // Inject/execute ONLY in top frame (frameIds: [0]) so secret payloads never cross into
+      // cross-origin iframes. The isolated-world driver traverses same-origin iframes directly.
+      const { frames } = await this.execDriver(
+        tab.id,
+        "secureFill",
+        {
+          origin: approvedOrigin,
+          fields,
+          submit: Boolean(args?.submit),
+        },
+        { frameIds: [0] },
+      );
+
+      const res = frames[0]?.result;
+      if (!res) {
+        throw new Error("Secure fill could not run on the target tab.");
+      }
+      if (res.ok !== true) {
+        const err = new Error(
+          res.code === "origin_mismatch"
+            ? "Refused secure fill: tab origin does not match the approved origin."
+            : res.code === "password_type_mismatch"
+              ? "Refused secure fill: a password value can only be filled into a password input."
+              : res.code === "type_mismatch"
+                ? "Refused secure fill: target element type does not match the requested field kind."
+                : "Secure fill failed on the target tab.",
+        );
+        if (res.code) err.secureCode = res.code;
+        throw err;
+      }
+
+      const filled = Array.isArray(res.filled) ? res.filled.filter((k) => allowedKeys.has(k)) : [];
+      const missing = Array.isArray(res.missing) ? res.missing.filter((k) => allowedKeys.has(k)) : [];
+      return { filled, missing };
+    } finally {
+      for (const f of fields) f.value = "";
+      fields.length = 0;
+      for (const item of rawFields) {
+        if (item && typeof item === "object") item.value = "";
+      }
+      if (Array.isArray(args?.fields)) args.fields.length = 0;
+    }
+  }
+
   async run(toolName, args = {}) {
     const settings = await this.getSettings();
     if (settings.enabled === false) {
@@ -1364,7 +1482,7 @@ export class BrowserController {
         if (settings.mode === "group") {
           await this.ensureTabInGroup(created.id, created.windowId);
         }
-        const settled = await this.waitForLoad(created.id, 8000);
+        const settled = await this.waitForLoad(created.id, 8000, url);
         return {
           tabId: created.id,
           windowId: created.windowId,

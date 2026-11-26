@@ -84,7 +84,7 @@ function browserForm(action, url, fields, values, token) {
   const inputs = new Map();
   for (const input of document.querySelectorAll("input")) {
     const key = input.name || input.id;
-    if (!/^[A-Za-z][A-Za-z0-9_-]{0,63}$/.test(key) || key in Object.prototype || input.disabled || input.readOnly ||
+    if (!/^[A-Za-z](?:[A-Za-z0-9_-]|\.(?=[A-Za-z0-9_-])){0,127}$/.test(key) || key in Object.prototype || input.disabled || input.readOnly ||
         !input.checkVisibility({ opacityProperty: true, visibilityProperty: true }) || !["text", "email", "password", "tel", "search", "number"].includes(input.type)) continue;
     inputs.set(key, inputs.has(key) ? null : input);
   }
