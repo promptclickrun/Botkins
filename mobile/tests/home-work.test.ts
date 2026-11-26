@@ -27,7 +27,8 @@ const { ServerLinkStatus } = phoneModule("../src/features/home/ServerLinkStatus"
 const Home = phoneModule("../src/features/home/Home", {
   "expo-router": { useScrollToTop() {} }, "lucide-react-native": {}, "react-native": native, "react-native-reanimated": animated,
   "react-native-safe-area-context": { useSafeAreaInsets: () => insets }, "react-native-worklets": {},
-  "@/features/chat/open": {}, "@/features/spaces/data": { useSpacesOn: () => true }, "@/features/spaces/HomePins": { HomePins: "Pins" },
+  "@/features/chat/navigate": {}, "@/features/chat/open": {},
+  "@/features/spaces/data": { useSpacesOn: () => true }, "@/features/spaces/HomePins": { HomePins: "Pins" },
   "@/features/today/Today": { makeSeenSignal: () => ({}) }, "@/state/link": {}, "@/state/hooks": hooks,
   "@/state/prefs": { usePrefs: (select) => select({ backdrop: "clean", computerOrder: [] }) },
   "@/state/profile": { useProfileHosts: () => [] }, "@/features/bots/agents": {}, "@/ui": ui,
