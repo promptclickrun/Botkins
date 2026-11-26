@@ -1391,6 +1391,12 @@ export class BrowserController {
       }
     }
 
+    if (args.submit) {
+      throw new Error(
+        "Auto-submit is disabled for extension_fill because Chrome MV3 cannot enforce submit destinations at the browser network boundary. Fill without submit, or use page_fill_submit in the host sign-in browser.",
+      );
+    }
+
     const rawFields = Array.isArray(args.fields) ? args.fields : [];
     if (!rawFields.length) throw new Error("No fields provided for secure fill.");
 
@@ -1413,17 +1419,6 @@ export class BrowserController {
       mappedFields.push({ ...f });
     }
 
-    let submitPayload = args.submit ?? false;
-    if (submitPayload && typeof submitPayload === "object" && submitPayload.ref) {
-      const mappedBtn = this.tabRefs.get(tab.id)?.get(submitPayload.ref);
-      if (mappedBtn) {
-        if (mappedBtn.frameId !== targetFrameId) {
-          throw new Error("Submit button must be in the same frame as the filled fields.");
-        }
-        submitPayload = { ...submitPayload, ref: mappedBtn.localRef };
-      }
-    }
-
     // Taint the tab before injecting secrets so subsequent browser_eval / browser_cdp calls
     // cannot read the filled secret back into model context.
     this.taintTab(tab.id, { origin: expectedOrigin, url: tabUrl });
@@ -1436,7 +1431,7 @@ export class BrowserController {
           expectedOrigin,
           allowLocalHttp: Boolean(args.allowLocalHttp),
           fields: mappedFields,
-          submit: submitPayload,
+          submit: false,
         },
         { frameIds: [targetFrameId] },
       );
@@ -1448,7 +1443,7 @@ export class BrowserController {
         filled: true,
         tabId: tab.id,
         filledCount: Number(res.filledCount || 0),
-        submitted: Boolean(res.submitted),
+        submitted: false,
         origin: res.origin || expectedOrigin,
       };
     } finally {

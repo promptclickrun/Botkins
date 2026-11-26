@@ -1374,6 +1374,88 @@ export function createDomDriver(win = globalThis) {
       );
     };
 
+    if (opts.submit) {
+      return {
+        ok: false,
+        reason: "auto-submit-disabled",
+        error: "Auto-submit is disabled for extension_fill because Chrome MV3 cannot enforce submit destinations at the browser network boundary. Fill without submit, or use page_fill_submit in the host sign-in browser.",
+      };
+    }
+
+    const allowLocalHttp = Boolean(opts.allowLocalHttp);
+    const getAttr = (el, name) => (el ? Element.prototype.getAttribute.call(el, name) : null);
+    const hasAttr = (el, name) => Boolean(el && Element.prototype.hasAttribute.call(el, name));
+    const tagOf = (el) => {
+      if (!el) return "";
+      const getter = Object.getOwnPropertyDescriptor(Element.prototype, "tagName")?.get;
+      return String(getter ? getter.call(el) : el.tagName || "").toLowerCase();
+    };
+    const isApprovedDest = (rawAttr, targetDoc, targetWin) => {
+      try {
+        const trimmed = rawAttr === null || rawAttr === undefined ? "" : String(rawAttr).trim();
+        const docUrl = targetDoc?.URL || targetWin?.location?.href || "";
+        // Per HTML spec, missing or empty action/formaction submits to document URL (not <base href>).
+        const resolved = trimmed
+          ? new URL(trimmed, targetDoc?.baseURI || docUrl)
+          : new URL(docUrl);
+        if (resolved.username || resolved.password) return false;
+        const isHttps = resolved.protocol === "https:";
+        const localOk = allowLocalHttp && resolved.protocol === "http:" && (resolved.hostname === "localhost" || resolved.hostname === "127.0.0.1" || resolved.hostname === "[::1]");
+        if (!isHttps && !localOk) return false;
+        return resolved.origin === expectedOrigin;
+      } catch {
+        return false;
+      }
+    };
+    const getForm = (el, targetDoc, targetWin) => {
+      if (!el) return null;
+      if (hasAttr(el, "form")) {
+        const formId = getAttr(el, "form");
+        if (!formId) return null;
+        const byId = targetDoc?.getElementById?.(formId);
+        return byId && tagOf(byId) === "form" ? byId : null;
+      }
+      const tag = tagOf(el);
+      const proto = tag === "input" ? targetWin?.HTMLInputElement?.prototype
+        : tag === "button" ? targetWin?.HTMLButtonElement?.prototype
+        : tag === "textarea" ? targetWin?.HTMLTextAreaElement?.prototype
+        : tag === "select" ? targetWin?.HTMLSelectElement?.prototype
+        : null;
+      const getter = proto ? Object.getOwnPropertyDescriptor(proto, "form")?.get : null;
+      if (getter) {
+        const own = getter.call(el);
+        if (own && tagOf(own) === "form") return own;
+      }
+      const closest = Element.prototype.closest.call(el, "form");
+      return closest && tagOf(closest) === "form" ? closest : null;
+    };
+    const isSubmitControl = (el) => {
+      const tag = tagOf(el);
+      if (tag === "button") {
+        const t = (getAttr(el, "type") || "").trim().toLowerCase();
+        return !t || (t !== "button" && t !== "reset");
+      }
+      if (tag === "input") {
+        const t = (getAttr(el, "type") || "").trim().toLowerCase();
+        return t === "submit" || t === "image";
+      }
+      return false;
+    };
+    const validateFormDestination = (form, targetDoc, targetWin) => {
+      if (!form) return isApprovedDest(null, targetDoc, targetWin);
+      if (!isApprovedDest(getAttr(form, "action"), targetDoc, targetWin)) return false;
+      const root = targetDoc || doc;
+      const candidates = root.querySelectorAll ? root.querySelectorAll("button, input") : [];
+      for (const el of candidates) {
+        if (!isSubmitControl(el)) continue;
+        if (getForm(el, root, targetWin) !== form) continue;
+        if (hasAttr(el, "formaction") && !isApprovedDest(getAttr(el, "formaction"), root, targetWin)) {
+          return false;
+        }
+      }
+      return true;
+    };
+
     const selected = [];
     for (const field of rawFields) {
       if (!field || typeof field.value !== "string") {
@@ -1383,19 +1465,20 @@ export function createDomDriver(win = globalThis) {
       if (!el) {
         return { ok: false, found: false, error: "Target credential input not found." };
       }
-      const tag = el.tagName?.toLowerCase() || "";
+      const tag = tagOf(el);
       if (tag !== "input" && tag !== "textarea") {
         return { ok: false, found: true, error: `Refused to fill non-input element <${tag}>.` };
       }
       if (isFileInput(el) || el.disabled || el.readOnly) {
         return { ok: false, found: true, error: "Target credential input is disabled, read-only, or a file input." };
       }
-      const inputType = tag === "input" ? (el.type || "text").toLowerCase() : "";
+      const inputType = tag === "input" ? (getAttr(el, "type") || "text").trim().toLowerCase() : "";
       if (inputType === "hidden") {
         return { ok: false, found: true, error: "Refused to fill hidden input element." };
       }
       // Verify the element's own document matches expectedOrigin (blocks inlined cross-origin targets).
       const elWin = getWin(el, win);
+      const elDoc = el.ownerDocument || doc;
       if (!elWin?.location || elWin.location.origin !== expectedOrigin) {
         return { ok: false, reason: "origin-mismatch", error: "Origin mismatch: element belongs to another origin." };
       }
@@ -1405,6 +1488,15 @@ export function createDomDriver(win = globalThis) {
       const isPasswordField = field.kind === "password";
       if (isPasswordField && (tag !== "input" || inputType !== "password")) {
         return { ok: false, found: true, error: "Refused to fill a password secret into a non-password input." };
+      }
+      // Fail closed BEFORE writing any value if the input's enclosing form or any associated submitter
+      // targets a destination outside the approved HTTPS origin.
+      if (hasAttr(el, "form") && !getForm(el, elDoc, elWin)) {
+        return { ok: false, reason: "origin-mismatch", error: "Refused to fill credentials: input references an invalid or missing form." };
+      }
+      const form = getForm(el, elDoc, elWin);
+      if (!validateFormDestination(form, elDoc, elWin)) {
+        return { ok: false, reason: "origin-mismatch", error: "Refused to fill credentials: effective submit destination is outside the approved HTTPS origin." };
       }
       const isSecret = field.secret !== false && field.kind !== "username";
       selected.push({ el, elWin, value: field.value, isSecret });
@@ -1442,53 +1534,10 @@ export function createDomDriver(win = globalThis) {
       el.dispatchEvent(new (elWin?.Event || Event)("change", { bubbles: true }));
     }
 
-    let submitted = false;
-    if (opts.submit) {
-      if (!checkOrigin()) {
-        return { ok: false, reason: "origin-mismatch", error: "Origin changed before submitting form." };
-      }
-      const sub = opts.submit === true ? {} : opts.submit;
-      const last = selected[selected.length - 1];
-      if (sub.ref || sub.selector || sub.buttonText || sub.text) {
-        const btn = resolveElement({
-          ref: sub.ref,
-          selector: sub.selector,
-          text: sub.buttonText || sub.text,
-          allowAllSameOrigin: false,
-        });
-        if (!btn || btn.disabled) {
-          return { ok: false, found: false, filledCount: selected.length, error: "Submit button not found or disabled." };
-        }
-        const btnWin = getWin(btn, win);
-        if (!btnWin?.location || btnWin.location.origin !== expectedOrigin) {
-          return { ok: false, reason: "origin-mismatch", error: "Origin mismatch: submit button belongs to another origin." };
-        }
-        dispatchPointerClickSequence(btn, win, null, false);
-        submitted = true;
-      } else if (sub.pressEnter && last) {
-        const enterInit = {
-          key: "Enter",
-          code: "Enter",
-          keyCode: 13,
-          which: 13,
-          bubbles: true,
-          cancelable: true,
-          composed: true,
-        };
-        const notPrevented = last.el.dispatchEvent(makeKeyboardEvent(last.elWin, "keydown", enterInit));
-        last.el.dispatchEvent(makeKeyboardEvent(last.elWin, "keypress", { ...enterInit, charCode: 13 }));
-        if (notPrevented) dispatchSubmitOnForm(last.el);
-        last.el.dispatchEvent(makeKeyboardEvent(last.elWin, "keyup", enterInit));
-        submitted = true;
-      } else if (last) {
-        submitted = Boolean(dispatchSubmitOnForm(last.el));
-      }
-    }
-
     return {
       ok: true,
       filledCount: selected.length,
-      submitted,
+      submitted: false,
       origin: expectedOrigin,
     };
   }

@@ -27,11 +27,13 @@ export function screenBrowserExecutable(dirs = systemDirs) {
 function connection(child) {
   const input = child.stdio[3], output = child.stdio[4];
   const pending = new Map();
+  const listeners = new Set();
   let seq = 0, buffer = "", ended = false;
   const end = () => {
     ended = true;
     for (const job of pending.values()) job.reject(unavailable());
     pending.clear();
+    listeners.clear();
   };
   for (const stream of [input, output]) stream.on("error", end);
   child.once("error", end);
@@ -44,15 +46,21 @@ function connection(child) {
       let message;
       try { message = JSON.parse(buffer.slice(0, boundary)); } catch { return child.kill(); }
       buffer = buffer.slice(boundary + 1);
-      const job = pending.get(message.id);
-      if (job) {
-        pending.delete(message.id);
-        if (message.error) job.reject(unavailable());
-        else job.resolve(message.result);
+      if (message.id !== undefined) {
+        const job = pending.get(message.id);
+        if (job) {
+          pending.delete(message.id);
+          if (message.error) job.reject(unavailable());
+          else job.resolve(message.result);
+        }
+      } else if (message.method) {
+        for (const listener of [...listeners]) {
+          try { listener(message.method, message.params ?? {}, message.sessionId); } catch {}
+        }
       }
     }
   });
-  return async (method, params = {}, sessionId) => {
+  const send = async (method, params = {}, sessionId) => {
     if (ended) throw unavailable();
     const id = ++seq;
     const job = Promise.withResolvers();
@@ -66,6 +74,15 @@ function connection(child) {
       pending.delete(id);
     }
   };
+  send.subscribe = (targetSessionId, fn) => {
+    const wrapped = (method, params, eventSessionId) => {
+      if (targetSessionId && eventSessionId && eventSessionId !== targetSessionId) return;
+      fn(method, params);
+    };
+    listeners.add(wrapped);
+    return () => listeners.delete(wrapped);
+  };
+  return send;
 }
 
 export class ScreenBrowser {
@@ -101,8 +118,17 @@ export class ScreenBrowser {
     if (!targetId) throw unavailable();
     const { sessionId } = await command("Target.attachToTarget", { targetId, flatten: true });
     session.send = (method, params) => command(method, params, sessionId);
+    session.subscribe = (fn) => command.subscribe(sessionId, fn);
+    session.boundaryGuard = null;
     await session.send("Page.bringToFront");
     return session;
+  }
+
+  async clearBoundaryGuard(session) {
+    const guard = session?.boundaryGuard;
+    if (!guard) return;
+    session.boundaryGuard = null;
+    try { await guard.detach(); } catch {}
   }
 
   async open(chatId, address) {
@@ -114,6 +140,7 @@ export class ScreenBrowser {
       if (this.stopped) throw closed();
       if (!url.startsWith("https:")) throw new Error("Open an HTTPS sign-in page.");
       const session = this.session ?? await this.launch(chatId);
+      await this.clearBoundaryGuard(session);
       const { errorText } = await session.send("Page.navigate", { url });
       if (errorText) throw new Error("The sign-in page could not be opened.");
       const end = Date.now() + 12000;
@@ -148,7 +175,13 @@ export class ScreenBrowser {
   }
   async fill(plan, values, signal) {
     if (!plan.document) throw closed();
-    await fillPageFields(this.page(plan.chatId), plan, values, signal);
+    const send = this.page(plan.chatId);
+    const session = this.session;
+    await this.clearBoundaryGuard(session);
+    await fillPageFields(send, plan, values, signal, {
+      subscribe: session.subscribe,
+      keepGuard: (guard) => { session.boundaryGuard = guard; },
+    });
   }
   stop() {
     this.stopped = true;
@@ -157,6 +190,7 @@ export class ScreenBrowser {
   async close(chatId) {
     const session = this.session;
     if (!session || (chatId && session.chatId !== chatId)) return;
+    await this.clearBoundaryGuard(session);
     session.child.kill();
     const kill = setTimeout(() => session.child.kill("SIGKILL"), 2000);
     try { await session.done; } finally { clearTimeout(kill); }

@@ -59,9 +59,12 @@ const GRANT_LABEL: Record<string, { label: string; tone: string }> = {
   ask: { label: "Ask every time", tone: "" },
 };
 const OUTCOME_TONE: Record<string, string> = {
+  allowed: "ok",
   used: "ok",
   denied: "warn",
+  cancelled: "warn",
   blocked: "bad",
+  origin_mismatch: "bad",
   rate_limited: "warn",
   locked: "warn",
   error: "bad",

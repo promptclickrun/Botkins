@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -17,9 +18,11 @@ import {
   SecureInputs,
   envExec,
   performSecureUse,
+  resolveTrustedExecutable,
   validateEnvExec,
   validateHttpsHeader,
 } from "../desktop/secure-input.mjs";
+import { fillPageFields } from "../desktop/webviewer.mjs";
 import { runAppFill } from "../desktop/secure-app-fill.mjs";
 
 const tmp = (t) => {
@@ -197,71 +200,197 @@ test("scrub redacts raw, URL-encoded, base64, and base64url variants of secrets"
 });
 
 // ---------------------------------------------------------------------------
-// 5. env_exec: argv/shell leak checks + worker_thread execution + scrubbing
+// ---------------------------------------------------------------------------
+// 5. env_exec: verified trusted executable identity, replacement reapproval, zero output leakage
 // ---------------------------------------------------------------------------
 
-test("env_exec: rejects shells/interpreters/git-c, isolates env, passes secret only in child env, and scrubs output", async (t) => {
-  // Reject shells, interpreters, network tools, git arbitrary-exec flags, and dangerous env vars
-  assert.throws(() => validateEnvExec({ command: "/bin/sh", args: ["-c", "env"], envVar: "MY_SECRET" }), /shell|interpreter/i);
-  assert.throws(() => validateEnvExec({ command: "bash", args: [], envVar: "MY_SECRET" }), /shell|interpreter/i);
-  assert.throws(() => validateEnvExec({ command: "node", args: ["-e", "1"], envVar: "MY_SECRET" }), /shell|interpreter/i);
-  assert.throws(() => validateEnvExec({ command: "python3", args: ["-c", "1"], envVar: "MY_SECRET" }), /shell|interpreter/i);
-  assert.throws(() => validateEnvExec({ command: "curl", args: ["https://evil.example"], envVar: "MY_SECRET" }), /shell|interpreter/i);
-  assert.throws(() => validateEnvExec({ command: "git", args: ["-c", "core.sshCommand=id", "status"], envVar: "MY_SECRET" }), /arbitrary-execution git flag/i);
-  assert.throws(() => validateEnvExec({ command: "gh", args: [], envVar: "LD_PRELOAD" }), /cannot be used|not allowed/i);
-  assert.throws(() => validateEnvExec({ command: "gh", args: [], envVar: "NODE_OPTIONS" }), /cannot be used|not allowed/i);
-  assert.throws(() => validateEnvExec({ command: "gh", args: [], envVar: "PATH" }), /cannot be used|not allowed/i);
-  assert.throws(() => validateEnvExec({ command: "gh", args: [], envVar: "1BAD" }), /environment variable/i);
-
-  // Create a custom non-interpreter CLI executable in a temp dir.
+test("env_exec: binds to verified trusted executable identity, blocks PATH/untrusted/symlinks/replacement, and suppresses all child output", async (t) => {
   const dir = tmp(t);
-  const cliPath = join(dir, "fake-deploy-cli");
-  writeFileSync(
-    cliPath,
-    `#!${process.execPath}
+  const trustedBin = join(dir, "trusted-bin");
+  const untrustedBin = join(dir, "untrusted-bin");
+  mkdirSync(trustedBin, { mode: 0o755 });
+  mkdirSync(untrustedBin, { mode: 0o755 });
+  chmodSync(trustedBin, 0o755);
+  chmodSync(untrustedBin, 0o755);
+
+  const receiptPath = join(dir, "receipt.json");
+  const cliPath = join(trustedBin, "fake-deploy-cli");
+  const cliScriptV1 = `#!${process.execPath}
+const fs = require("fs");
 const c = require("crypto");
 const v = process.env.API_TOKEN || "";
-console.log(JSON.stringify({
-  sha: c.createHash("sha256").update(v).digest("hex"),
-  argvHasSecret: process.argv.some((a) => a.includes(v)),
-  leakedParentSecret: Boolean(process.env.BOTKINS_HOST_PRIVATE_CANARY),
-  echo: v,
-}));
-`,
-    { mode: 0o755 },
+const reversed = v.split("").reverse().join("");
+const hex = Buffer.from(v, "utf8").toString("hex");
+const outPath = process.argv[2];
+if (outPath) {
+  fs.writeFileSync(outPath, JSON.stringify({
+    version: 1,
+    sha: c.createHash("sha256").update(v).digest("hex"),
+    argvHasSecret: process.argv.some((a) => a.includes(v)),
+    leakedParentSecret: Boolean(process.env.BOTKINS_HOST_PRIVATE_CANARY),
+  }));
+}
+// Intentionally emit raw and transformed dummy values on stdout & stderr to verify output suppression.
+process.stdout.write("RAW=" + v + " REV=" + reversed + " HEX=" + hex + "\\n");
+process.stderr.write("ERR_REV=" + reversed + " ERR_HEX=" + hex + "\\n");
+if (process.argv.includes("--fail")) process.exit(7);
+`;
+  writeFileSync(cliPath, cliScriptV1, { mode: 0o755 });
+  chmodSync(cliPath, 0o755);
+
+  // Reject bare names (PATH lookup), relative paths, shells, interpreters, untrusted dirs, symlinks escaping trusted roots
+  assert.throws(() => validateEnvExec({ command: "bash", args: [], envVar: "MY_SECRET" }), /absolute path|shell|interpreter/i);
+  assert.throws(() => validateEnvExec({ command: "gh", args: [], envVar: "MY_SECRET" }), /absolute path/i);
+  assert.throws(() => validateEnvExec({ command: "./fake-deploy-cli", args: [], envVar: "MY_SECRET" }), /absolute path/i);
+  assert.throws(() => validateEnvExec({ command: "/bin/sh", args: ["-c", "env"], envVar: "MY_SECRET" }), /shell|interpreter/i);
+  assert.throws(() => validateEnvExec({ command: cliPath, args: [], envVar: "MY_SECRET" }), /outside trusted executable directories/i);
+
+  // Reject untrusted sibling dir even when trustedBin is allowed
+  const untrustedCli = join(untrustedBin, "other-cli");
+  writeFileSync(untrustedCli, cliScriptV1, { mode: 0o755 });
+  chmodSync(untrustedCli, 0o755);
+  assert.throws(
+    () => validateEnvExec({ command: untrustedCli, args: [], envVar: "API_TOKEN" }, { trustedDirs: [trustedBin] }),
+    /outside trusted executable directories/i,
   );
 
-  // Defense-in-depth: refuse if the secret value itself appears in argv
-  const canary = "CANARY_ENV_SECRET_42_XYZ";
+  // Reject symlink inside trustedBin that points outside trustedBin
+  const escapeLink = join(trustedBin, "escape-link");
+  symlinkSync(untrustedCli, escapeLink);
+  assert.throws(
+    () => validateEnvExec({ command: escapeLink, args: [], envVar: "API_TOKEN" }, { trustedDirs: [trustedBin] }),
+    /outside trusted executable directories/i,
+  );
+
+  // Reject symlink inside trustedBin pointing to a blocked shell
+  const shellLink = join(trustedBin, "innocent-name");
+  symlinkSync("/bin/sh", shellLink);
+  assert.throws(
+    () => validateEnvExec({ command: shellLink, args: [], envVar: "API_TOKEN" }, { trustedDirs: [trustedBin] }),
+    /shell|interpreter/i,
+  );
+
+  // Reject group/world-writable executable inside trustedBin
+  const writableCli = join(trustedBin, "writable-cli");
+  writeFileSync(writableCli, cliScriptV1, { mode: 0o777 });
+  chmodSync(writableCli, 0o777);
+  assert.throws(
+    () => validateEnvExec({ command: writableCli, args: [], envVar: "API_TOKEN" }, { trustedDirs: [trustedBin] }),
+    /writable/i,
+  );
+
+  // Reject git arbitrary-execution flags & dangerous env vars against trusted executable
+  const fakeGit = join(trustedBin, "git");
+  writeFileSync(fakeGit, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+  chmodSync(fakeGit, 0o755);
+  assert.throws(
+    () => validateEnvExec({ command: fakeGit, args: ["-c", "core.sshCommand=id", "status"], envVar: "API_TOKEN" }, { trustedDirs: [trustedBin] }),
+    /arbitrary-execution git flag/i,
+  );
+  assert.throws(
+    () => validateEnvExec({ command: cliPath, args: [], envVar: "LD_PRELOAD" }, { trustedDirs: [trustedBin] }),
+    /cannot be used/i,
+  );
+  assert.throws(
+    () => validateEnvExec({ command: cliPath, args: [], envVar: "NODE_OPTIONS" }, { trustedDirs: [trustedBin] }),
+    /cannot be used/i,
+  );
+  assert.throws(
+    () => validateEnvExec({ command: cliPath, args: [], envVar: "PATH" }, { trustedDirs: [trustedBin] }),
+    /cannot be used/i,
+  );
+  assert.throws(
+    () => validateEnvExec({ command: cliPath, args: [], envVar: "1BAD" }, { trustedDirs: [trustedBin] }),
+    /environment variable/i,
+  );
+
+  // Valid trusted executable resolves canonical path and SHA-256 digest
+  const verifiedV1 = resolveTrustedExecutable(cliPath, { trustedDirs: [trustedBin] });
+  const expectedFileSha = createHash("sha256").update(cliScriptV1).digest("hex");
+  assert.equal(verifiedV1.exeSha256, expectedFileSha);
+
+  // normalizeDestination requires verified executable identity (rejects bare lookup text)
+  assert.throws(() => normalizeDestination("env_exec", "gh"), /verified executable identity/i);
+  assert.throws(() => normalizeDestination("env_exec", { command: "gh", args: ["status"] }), /canonical absolute executable path/i);
+  const d1 = normalizeDestination("env_exec", { resolvedPath: verifiedV1.resolvedPath, exeSha256: verifiedV1.exeSha256, args: ["deploy", "--env=staging"], envVar: "API_TOKEN", cwd: "/srv/a" });
+  const d2 = normalizeDestination("env_exec", { resolvedPath: verifiedV1.resolvedPath, exeSha256: verifiedV1.exeSha256, args: ["deploy", "--env=prod"], envVar: "API_TOKEN", cwd: "/srv/a" });
+  const d3 = normalizeDestination("env_exec", { resolvedPath: verifiedV1.resolvedPath, exeSha256: "b".repeat(64), args: ["deploy", "--env=staging"], envVar: "API_TOKEN", cwd: "/srv/a" });
+  assert.notEqual(d1.key, d2.key);
+  assert.notEqual(d1.key, d3.key);
+  assert.match(d1.key, /@sha256:[a-f0-9]{16}:[a-f0-9]{16}$/);
+
+  // CredentialGrants refuses unverified env_exec grants
+  const grantsCheck = new CredentialGrants({ file: join(dir, "grants-check.json") });
+  assert.throws(
+    () => grantsCheck.set({ botId: "alfie", credentialId: "c1", destination: "exec:gh:0123456789abcdef", operation: "env_exec", level: "always" }),
+    /verified executable path and SHA-256/i,
+  );
+
+  // Defense-in-depth: refuse if the dummy secret value itself appears in argv
+  const dummySecret = "DUMMY_ENV_SECRET_42_XYZ";
+  const dummyReversed = dummySecret.split("").reverse().join("");
+  const dummyHex = Buffer.from(dummySecret, "utf8").toString("hex");
   await assert.rejects(
-    () => envExec({ command: cliPath, args: ["--token", canary], envVar: "API_TOKEN" }, { secret: canary }),
+    () => envExec({ command: cliPath, args: ["--token", dummySecret], envVar: "API_TOKEN" }, { secret: dummySecret }, undefined, { trustedDirs: [trustedBin] }),
     /cannot be passed in command arguments/i,
   );
 
-  // Verify env_exec destination pinning includes args + envVar + cwd (never collapses to "[object Object]").
-  const d1 = normalizeDestination("env_exec", { command: cliPath, args: ["deploy", "--env=staging"], envVar: "API_TOKEN", cwd: "/srv/a" });
-  const d2 = normalizeDestination("env_exec", { command: cliPath, args: ["deploy", "--env=prod"], envVar: "API_TOKEN", cwd: "/srv/a" });
-  const d3 = normalizeDestination("env_exec", { command: cliPath, args: ["deploy", "--env=staging"], envVar: "OTHER_TOKEN", cwd: "/srv/a" });
-  assert.notEqual(d1.key, d2.key);
-  assert.notEqual(d1.key, d3.key);
-  assert.ok(!d1.key.includes("[object Object]"));
-
-  // Run the CLI cleanly: secret is in child process.env.API_TOKEN, NOT in argv, parent env is NOT inherited, and any echo is scrubbed!
+  // Run the CLI cleanly: secret is ONLY in child env, parent env is NOT inherited, and ALL stdout/stderr are suppressed
   const prevCanary = process.env.BOTKINS_HOST_PRIVATE_CANARY;
-  process.env.BOTKINS_HOST_PRIVATE_CANARY = "MUST_NOT_LEAK_INTO_CHILD";
+  process.env.BOTKINS_HOST_PRIVATE_CANARY = "DUMMY_PARENT_ENV_VALUE";
   try {
-    const expectedSha = (await import("node:crypto")).createHash("sha256").update(canary).digest("hex");
     const result = await envExec(
-      { command: cliPath, args: ["status"], envVar: "API_TOKEN" },
-      { secret: canary },
+      { command: cliPath, args: [receiptPath], envVar: "API_TOKEN" },
+      { secret: dummySecret },
+      undefined,
+      { trustedDirs: [trustedBin] },
     );
     assert.equal(result.ok, true);
     assert.equal(result.exitCode, 0);
-    assert.ok(result.stdout.includes(`"sha":"${expectedSha}"`));
-    assert.ok(result.stdout.includes('"argvHasSecret":false'));
-    assert.ok(result.stdout.includes('"leakedParentSecret":false'), "parent process.env secrets must not leak to child");
-    assert.ok(!result.stdout.includes(canary), "echoed secret must be scrubbed from stdout");
-    assert.ok(result.stdout.includes("•••") || result.stdout.includes("[redacted]"));
+    assert.equal(result.outputSuppressed, true);
+    assert.equal(result.exeSha256, expectedFileSha);
+    assert.equal("stdout" in result, false, "env_exec must never return child stdout to model context");
+    assert.equal("stderr" in result, false, "env_exec must never return child stderr to model context");
+    const serialized = JSON.stringify(result);
+    assert.ok(!serialized.includes(dummySecret));
+    assert.ok(!serialized.includes(dummyReversed));
+    assert.ok(!serialized.includes(dummyHex));
+
+    // Side-effect receipt confirms child received dummy secret in env only and did not inherit parent env
+    const receipt = JSON.parse(readFileSync(receiptPath, "utf8"));
+    assert.equal(receipt.sha, createHash("sha256").update(dummySecret).digest("hex"));
+    assert.equal(receipt.argvHasSecret, false);
+    assert.equal(receipt.leakedParentSecret, false);
+
+    // Non-zero exit also leaks zero stdout/stderr into thrown error
+    await assert.rejects(
+      () => envExec({ command: cliPath, args: [receiptPath, "--fail"], envVar: "API_TOKEN" }, { secret: dummySecret }, undefined, { trustedDirs: [trustedBin] }),
+      (err) => {
+        const msg = String(err?.message ?? "");
+        assert.match(msg, /exited with code 7/i);
+        assert.ok(!msg.includes(dummySecret));
+        assert.ok(!msg.includes(dummyReversed));
+        assert.ok(!msg.includes(dummyHex));
+        assert.equal("stdout" in (err.execResult || {}), false);
+        assert.equal("stderr" in (err.execResult || {}), false);
+        return true;
+      },
+    );
+
+    // Pre-exec binary replacement (TOCTOU): replace file at cliPath while supplying v1's exeSha256 -> fails closed without running!
+    const receiptV2Path = join(dir, "receipt-v2.json");
+    writeFileSync(cliPath, cliScriptV1.replace("version: 1", "version: 2"), { mode: 0o755 });
+    chmodSync(cliPath, 0o755);
+    await assert.rejects(
+      () => envExec(
+        { command: cliPath, resolvedPath: verifiedV1.resolvedPath, exeSha256: verifiedV1.exeSha256, args: [receiptV2Path], envVar: "API_TOKEN" },
+        { secret: dummySecret },
+        undefined,
+        { trustedDirs: [trustedBin] },
+      ),
+      /identity changed|re-approval required/i,
+    );
+    assert.throws(() => readFileSync(receiptV2Path, "utf8"), "Replaced executable must not run under stale SHA-256");
   } finally {
     if (prevCanary === undefined) delete process.env.BOTKINS_HOST_PRIVATE_CANARY;
     else process.env.BOTKINS_HOST_PRIVATE_CANARY = prevCanary;
@@ -376,18 +505,33 @@ test("use_credential: approval flow, Always allow, Always deny, origin pinning, 
   assert.equal(hits[0].hasTotp, true);
   assert.ok(!JSON.stringify(hits).includes(secretValue));
 
-  // 2) use_credential under default Ask -> raises card -> Approve -> fills and scrubs echoed secret
+  // 1b) extension_fill auto-submit fails closed (Chrome MV3 cannot enforce submit destinations at browser network boundary)
+  await assert.rejects(
+    () => tools.get("use_credential")({
+      credentialId: credId,
+      operation: "extension_fill",
+      destination: "https://scissorsscotch.com/login",
+      fields: [{ selector: "#password" }],
+      submit: true,
+    }),
+    /auto-submit is disabled/i,
+  );
+  assert.equal(cards.length, 0, "auto-submit rejection must fail closed before prompting");
+  assert.equal(fillCalls.length, 0);
+
+  // 2) use_credential under default Ask -> raises card -> Approve -> fill-only and scrubs echoed secret
   nextCardAction = "approve";
   const res1 = JSON.parse(await tools.get("use_credential")({
     credentialId: credId,
     operation: "extension_fill",
     destination: "https://scissorsscotch.com/login",
     fields: [{ selector: "#password" }],
-    submit: true,
   }));
   assert.equal(cards.length, 1);
   assert.equal(res1.applied, true);
+  assert.equal(res1.submitted, false);
   assert.equal(fillCalls.length, 1);
+  assert.equal(fillCalls[0].submit, false);
   assert.equal(fillCalls[0].expectedOrigin, "https://scissorsscotch.com");
   assert.equal(fillCalls[0].fields[0].matchedSecret, true);
   assert.ok(!JSON.stringify(res1).includes(secretValue), "secret value must never appear in tool result");
@@ -628,4 +772,159 @@ exit 1
   assert.equal(copiedEntry.copied, true);
   assert.equal(copiedEntry.copiedFrom, "protonpass");
   assert.equal(await creds.read(copiedId), passSecret);
+});
+
+// ---------------------------------------------------------------------------
+// 9. use_credential (env_exec): standing grant pinned to SHA-256 + replacement reapproval + zero output
+// ---------------------------------------------------------------------------
+
+test("use_credential (env_exec): standing grant requires reapproval after binary replacement and suppresses output", async (t) => {
+  const dir = tmp(t);
+  const trustedBin = join(dir, "trusted-bin");
+  mkdirSync(trustedBin, { mode: 0o755 });
+  chmodSync(trustedBin, 0o755);
+
+  const cliPath = join(trustedBin, "deploy-tool");
+  const receiptPath = join(dir, "exec-receipt.json");
+  const writeTool = (version) => {
+    writeFileSync(
+      cliPath,
+      `#!${process.execPath}
+const fs = require("fs");
+const v = process.env.DEPLOY_TOKEN || "";
+fs.writeFileSync(${JSON.stringify(receiptPath)}, JSON.stringify({ version: ${version}, len: v.length }));
+process.stdout.write("LEAK_V${version}=" + v + " HEX=" + Buffer.from(v).toString("hex") + "\\n");
+process.stderr.write("ERR_V${version}=" + v.split("").reverse().join("") + "\\n");
+`,
+      { mode: 0o755 },
+    );
+    chmodSync(cliPath, 0o755);
+  };
+  writeTool(1);
+
+  const creds = new Credentials({ dir: join(dir, "vault"), ...plainVault() });
+  const grants = new CredentialGrants({ file: join(dir, "grants.json") });
+  const dummyToken = "DUMMY_DEPLOY_KEY_9090";
+  const credId = await creds.save({
+    name: "Dummy Deploy Key",
+    kind: "api-key",
+    value: dummyToken,
+  });
+
+  const cards = [];
+  let nextAction = "remember";
+  const chat = { id: "chat-exec" };
+  const bot = { id: "alfie", name: "Alfie" };
+  const run = { id: "run-exec" };
+  const task = { id: "task-exec", stopped: false, ended: false };
+  const fakeWs = {
+    closing: false,
+    active: new Map([[chat.id, task]]),
+    accessForTurn: () => ({ member: false }),
+    peopleOf: () => ({ invited: [] }),
+    interactions: {
+      request: async (_chat, _task, card) => {
+        cards.push(card);
+        assert.ok(!JSON.stringify(card).includes(dummyToken));
+        return { action: nextAction };
+      },
+    },
+  };
+
+  const secureInputs = new SecureInputs(fakeWs, performSecureUse, {
+    credentials: () => creds,
+    credentialGrants: grants,
+    trustedExecDirs: [trustedBin],
+  });
+  const useCredential = new Map(secureInputs.tools(bot, chat, run, task).map((x) => [x.name, x.handler])).get("use_credential");
+
+  // 1) First call -> prompts with executable path + SHA-256 -> owner clicks Remember
+  const r1 = JSON.parse(await useCredential({
+    credentialId: credId,
+    operation: "env_exec",
+    destination: cliPath,
+    args: ["push"],
+    envVar: "DEPLOY_TOKEN",
+  }));
+  assert.equal(cards.length, 1);
+  assert.match(cards[0].detail, /SHA-256:/);
+  assert.match(cards[0].detail, /Output: suppressed/i);
+  assert.equal(r1.applied, true);
+  assert.equal(r1.outputSuppressed, true);
+  assert.equal("stdout" in r1, false);
+  assert.equal("stderr" in r1, false);
+  assert.ok(!JSON.stringify(r1).includes("LEAK_V1"));
+  assert.ok(!JSON.stringify(r1).includes(dummyToken));
+  assert.equal(JSON.parse(readFileSync(receiptPath, "utf8")).version, 1);
+
+  // 2) Second call with unchanged binary -> standing grant executes with ZERO new approval card
+  const r2 = JSON.parse(await useCredential({
+    credentialId: credId,
+    operation: "env_exec",
+    destination: cliPath,
+    args: ["push"],
+    envVar: "DEPLOY_TOKEN",
+  }));
+  assert.equal(cards.length, 1, "Unchanged executable reuses SHA-256-bound standing grant");
+  assert.equal(r2.applied, true);
+  assert.equal(r2.grantLevel, "always");
+
+  // 3) Replace binary at the SAME path -> standing grant MUST NOT apply; re-approval card raised with warning!
+  writeTool(2);
+  nextAction = "deny";
+  const r3 = JSON.parse(await useCredential({
+    credentialId: credId,
+    operation: "env_exec",
+    destination: cliPath,
+    args: ["push"],
+    envVar: "DEPLOY_TOKEN",
+  }));
+  assert.equal(cards.length, 2, "Replaced executable MUST require re-approval");
+  assert.match(cards[1].detail, /executable changed on disk.*re-approval is required/i);
+  assert.equal(r3.applied, false);
+  assert.equal(r3.denied, true);
+  assert.equal(JSON.parse(readFileSync(receiptPath, "utf8")).version, 1, "Denied replacement must NOT execute");
+
+  // 4) Re-approving the replaced binary runs v2 and still suppresses all stdout/stderr
+  nextAction = "approve";
+  const r4 = JSON.parse(await useCredential({
+    credentialId: credId,
+    operation: "env_exec",
+    destination: cliPath,
+    args: ["push"],
+    envVar: "DEPLOY_TOKEN",
+  }));
+  assert.equal(cards.length, 3);
+  assert.equal(r4.applied, true);
+  assert.equal(r4.outputSuppressed, true);
+  assert.equal("stdout" in r4, false);
+  assert.equal("stderr" in r4, false);
+  assert.ok(!JSON.stringify(r4).includes("LEAK_V2"));
+  assert.equal(JSON.parse(readFileSync(receiptPath, "utf8")).version, 2);
+});
+
+// ---------------------------------------------------------------------------
+// 10. fillPageFields: auto-submit fails closed if browser-boundary enforcement is absent
+// ---------------------------------------------------------------------------
+
+test("fillPageFields: fails closed on auto-submit when CDP browser-boundary enforcement (subscribe) is unavailable", async () => {
+  let cdpCalls = 0;
+  await assert.rejects(
+    () =>
+      fillPageFields(
+        async () => {
+          cdpCalls++;
+          return {};
+        },
+        {
+          url: "https://example.test/login",
+          origin: "https://example.test",
+          fields: [{ key: "password", kind: "password" }],
+          submit: {},
+        },
+        { password: "dummy-pw-value" },
+      ),
+    /browser-boundary destination enforcement is unavailable/i,
+  );
+  assert.equal(cdpCalls, 0, "Must fail closed before issuing any CDP command when boundary guard is absent");
 });

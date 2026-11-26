@@ -769,6 +769,7 @@ export type CredentialGrant = {
   credentialId: string;
   credentialName?: string;
   destination: string;
+  destinationLabel?: string;
   operation: string;
   level: CredentialGrantLevel;
   createdAt: number;

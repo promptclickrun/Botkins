@@ -9,6 +9,9 @@ import { pinOrigin, parseWebUrl } from "./link/domain-match.mjs";
 import { generateTotp } from "./link/totp.mjs";
 import { normalizeDestination, OPERATION_LABELS } from "./credential-grants.mjs";
 import { runAppFill, isAppFillEnabled } from "./secure-app-fill.mjs";
+import { BLOCKED_SHELLS, resolveTrustedExecutable } from "./trusted-executable.mjs";
+
+export { BLOCKED_SHELLS, resolveTrustedExecutable };
 
 const ttl = 5 * 60_000;
 const operations = {
@@ -32,20 +35,8 @@ const CREDENTIAL_OPS = [
   "app_fill",
 ];
 
-// Shells, script interpreters, network exfiltration utilities, and env-dump binaries are blocked
-// from env_exec so a command cannot trivially interpolate, transform, or exfiltrate the secret
-// environment variable.
-export const BLOCKED_SHELLS = new Set([
-  "sh", "bash", "zsh", "dash", "ash", "ksh", "csh", "tcsh", "fish", "rc", "nu", "nushell",
-  "cmd", "command", "powershell", "pwsh", "osascript", "wscript", "cscript",
-  "env", "printenv", "set", "export",
-  "node", "nodejs", "python", "python2", "python3", "perl", "ruby", "php",
-  "awk", "gawk", "mawk", "nawk", "lua", "luajit", "deno", "bun", "tclsh", "wish",
-  "rscript", "julia", "expect",
-  "curl", "wget", "nc", "ncat", "netcat", "socat", "telnet", "ftp", "sftp", "scp", "rsync",
-  "xargs", "find", "exec", "eval", "sudo", "su", "doas", "nohup", "screen", "tmux",
-  "dd", "base64", "xxd", "od", "hexdump", "strings", "cat", "echo", "printf",
-]);
+const EXTENSION_AUTO_SUBMIT_ERROR =
+  "Auto-submit is disabled for extension_fill because Chrome MV3 extensions cannot enforce submit destinations at the browser network boundary. Fill without submit and let the person submit, or use page_fill_submit in the host screen browser.";
 
 const SAFE_CHILD_ENV_KEYS = [
   "PATH", "HOME", "USER", "LOGNAME", "LANG", "LC_ALL", "LC_CTYPE", "TERM",
@@ -119,15 +110,20 @@ function cleanSubmit(submit) {
   return out;
 }
 
-export function validateEnvExec({ command, args = [], envVar, cwd, timeoutMs } = {}) {
+export function validateEnvExec({ command, args = [], envVar, cwd, timeoutMs, resolvedPath, exeSha256 } = {}, { trustedDirs } = {}) {
   const cmd = typeof command === "string" ? command.trim() : "";
   if (!cmd || cmd.length > 512 || /[\s\0\p{Cc}]/u.test(cmd)) {
-    throw new Error("Provide a single executable name or path without spaces or shell operators.");
+    throw new Error("Provide a single absolute path to a trusted executable without spaces or shell operators.");
   }
-  const base = basename(cmd).toLowerCase().replace(/\.exe$/i, "");
-  if (!base || BLOCKED_SHELLS.has(base)) {
-    throw new Error(`Refused to run shell, interpreter, or utility "${base || cmd}" with a secret.`);
+  const resolved = resolveTrustedExecutable(cmd, { trustedDirs });
+  if (resolvedPath && resolvedPath !== resolved.resolvedPath) {
+    throw new Error("Executable canonical path does not match the approved executable.");
   }
+  if (exeSha256 && String(exeSha256).toLowerCase() !== resolved.exeSha256.toLowerCase()) {
+    throw new Error("Executable identity changed since approval; re-approval required.");
+  }
+  const reqBase = basename(cmd).toLowerCase().replace(/\.exe$/i, "");
+  const realBase = basename(resolved.resolvedPath).toLowerCase().replace(/\.exe$/i, "");
   if (!Array.isArray(args) || args.length > 64) {
     throw new Error("env_exec args must be an array of up to 64 strings.");
   }
@@ -137,7 +133,7 @@ export function validateEnvExec({ command, args = [], envVar, cwd, timeoutMs } =
     }
     return arg;
   });
-  if (base === "git") {
+  if (reqBase === "git" || realBase === "git") {
     for (const arg of cleanArgs) {
       if (
         arg === "-c" ||
@@ -164,7 +160,15 @@ export function validateEnvExec({ command, args = [], envVar, cwd, timeoutMs } =
     throw new Error("Invalid working directory.");
   }
   const cleanTimeout = timeoutMs === undefined ? 30_000 : Math.min(Math.max(Number(timeoutMs) || 30_000, 1000), 120_000);
-  return { command: cmd, args: cleanArgs, envVar: envName, cwd: cleanCwd, timeoutMs: cleanTimeout };
+  return {
+    command: resolved.resolvedPath,
+    resolvedPath: resolved.resolvedPath,
+    exeSha256: resolved.exeSha256,
+    args: cleanArgs,
+    envVar: envName,
+    cwd: cleanCwd,
+    timeoutMs: cleanTimeout,
+  };
 }
 
 export function validateHttpsHeader({ header = "Authorization", prefix = "", method = "GET", body, extraHeaders } = {}) {
@@ -262,7 +266,8 @@ function describe({ operation, url, title, fields, submit, header, prefix, metho
   if (operation === "page_fill_submit") {
     plan.submit = cleanSubmit(submit ?? true);
   } else if (operation === "extension_fill") {
-    plan.submit = cleanSubmit(submit);
+    if (cleanSubmit(submit)) throw new Error(EXTENSION_AUTO_SUBMIT_ERROR);
+    plan.submit = null;
     if (typeof browser === "string" && browser.trim()) plan.browser = browser.trim().slice(0, 120);
     if (typeof tabId === "number" && Number.isInteger(tabId)) plan.tabId = tabId;
     if (allowLocalHttp) plan.allowLocalHttp = true;
@@ -323,12 +328,18 @@ async function gitRead(url, token, signal) {
 }
 
 /**
- * Run an approved command in a worker thread with the secret placed ONLY in the child's
- * environment (never argv, never shell). Output and errors are scrubbed for every secret.
+ * Run a verified trusted executable in a worker thread with the secret placed ONLY in the
+ * child's environment (never argv, never shell). Re-verifies canonical path + SHA-256 identity
+ * right before spawn, and discards child stdout/stderr (`stdio: "ignore"`) so credential-bearing
+ * output never enters model context.
  */
-export async function envExec(plan, values, signal = AbortSignal.timeout(30_000)) {
+export async function envExec(plan, values, signal = AbortSignal.timeout(30_000), { trustedDirs } = {}) {
   signal.throwIfAborted();
-  const { command, args, envVar, cwd, timeoutMs } = validateEnvExec(plan.exec ?? plan);
+  const rawExec = plan.exec ?? plan;
+  const effectiveTrustedDirs = trustedDirs ?? plan.trustedExecDirs ?? null;
+  const { resolvedPath, exeSha256, args, envVar, cwd, timeoutMs } = validateEnvExec(rawExec, {
+    trustedDirs: effectiveTrustedDirs,
+  });
   const secretEntries = Object.entries(values ?? {}).filter(([, v]) => typeof v === "string" && v.length > 0);
   if (!secretEntries.length) throw new Error("No secret value provided for env_exec.");
   const secretValues = secretEntries.map(([, v]) => v);
@@ -351,14 +362,22 @@ export async function envExec(plan, values, signal = AbortSignal.timeout(30_000)
   } else {
     for (const [k, v] of secretEntries) {
       const targetVar = k === "value" || k === "secret" || k === "token" ? envVar : k;
-      validateEnvExec({ command, args: [], envVar: targetVar });
+      validateEnvExec({ command: resolvedPath, args: [], envVar: targetVar }, { trustedDirs: effectiveTrustedDirs });
       childEnv[targetVar] = v;
       secretKeys.push(targetVar);
     }
   }
 
   const worker = new Worker(new URL("./secure-env-exec.mjs", import.meta.url), {
-    workerData: { command, args, cwd, timeoutMs, secretKeys },
+    workerData: {
+      resolvedPath,
+      expectedSha256: exeSha256,
+      args,
+      cwd,
+      timeoutMs,
+      secretKeys,
+      trustedDirs: effectiveTrustedDirs,
+    },
     env: childEnv,
     execArgv: [],
     stdout: true,
@@ -380,22 +399,25 @@ export async function envExec(plan, values, signal = AbortSignal.timeout(30_000)
     const res = await new Promise((resolve, reject) => {
       worker.once("message", resolve);
       worker.once("error", reject);
-      worker.once("exit", (code) => resolve({ ok: false, exitCode: code || 1, stdout: "", stderr: "", error: "Worker exited unexpectedly." }));
+      worker.once("exit", (code) =>
+        resolve({ ok: false, exitCode: code || 1, timedOut: false, outputSuppressed: true, error: "Worker exited unexpectedly." }),
+      );
     });
     if (signal.aborted) throw new Error("Command cancelled.");
-    const scrubbed = {
+    const summary = {
       ok: Boolean(res?.ok),
       exitCode: Number(res?.exitCode ?? (res?.ok ? 0 : 1)),
-      stdout: scrub(String(res?.stdout ?? ""), secretValues),
-      stderr: scrub(String(res?.stderr ?? ""), secretValues),
+      timedOut: Boolean(res?.timedOut),
+      outputSuppressed: true,
+      exeSha256,
     };
-    if (!scrubbed.ok) {
-      const errMsg = scrub(String(res?.error || scrubbed.stderr || "Command failed."), secretValues);
+    if (!summary.ok) {
+      const errMsg = String(res?.error || `Command exited with code ${summary.exitCode}.`);
       const err = new Error(errMsg);
-      err.execResult = scrubbed;
+      err.execResult = summary;
       throw err;
     }
-    return scrubbed;
+    return summary;
   } finally {
     signal.removeEventListener("abort", stop);
     await worker.terminate();
@@ -426,6 +448,9 @@ export async function performSecureUse(plan, values, adapters = {}) {
     if (!adapters.extensionFill) {
       throw new Error("No connected Chromium browser extension is available for extension_fill.");
     }
+    if (plan.submit) {
+      throw new Error(EXTENSION_AUTO_SUBMIT_ERROR);
+    }
     const expectedOrigin = pinOrigin(plan.origin ?? plan.url, { allowLocalHttp: Boolean(plan.allowLocalHttp) });
     if (!expectedOrigin) throw new Error("Invalid origin for extension_fill.");
     const mappedFields = (plan.fields ?? [])
@@ -449,7 +474,7 @@ export async function performSecureUse(plan, values, adapters = {}) {
         expectedOrigin,
         allowLocalHttp: Boolean(plan.allowLocalHttp),
         fields: mappedFields,
-        submit: plan.submit ?? false,
+        submit: false,
         ...(plan.browser && { browser: plan.browser }),
         ...(plan.tabId !== undefined && { tabId: plan.tabId }),
       },
@@ -458,13 +483,13 @@ export async function performSecureUse(plan, values, adapters = {}) {
     return {
       filled: true,
       filledCount: Number(res?.filledCount ?? mappedFields.length),
-      submitted: Boolean(res?.submitted),
+      submitted: false,
       origin: res?.origin || expectedOrigin,
     };
   }
 
   if (plan.operation === "env_exec") {
-    return envExec(plan, values, signal);
+    return envExec(plan, values, signal, { trustedDirs: adapters.trustedExecDirs ?? plan.trustedExecDirs ?? null });
   }
 
   if (plan.operation === "app_fill") {
@@ -554,6 +579,7 @@ export class SecureInputs {
       extensionFill,
       appFill,
       allowLocalHttp = false,
+      trustedExecDirs = null,
       settings,
     } = {},
   ) {
@@ -566,6 +592,7 @@ export class SecureInputs {
       extensionFill,
       appFill,
       allowLocalHttp,
+      trustedExecDirs,
       settings,
     });
     this.ws = ws;
@@ -844,7 +871,7 @@ export class SecureInputs {
         tools.push(
           defineTool("use_credential", {
             description:
-              "Use a saved credential by ID for an origin-pinned browser fill (page_fill, page_fill_submit, extension_fill), HTTPS request (https_form, bearer_get, https_header), approved CLI env_exec, or TOTP code without exposing values. Runs immediately under an owner standing grant; otherwise raises an owner approval card first.",
+              "Use a saved credential by ID for an origin-pinned browser fill (page_fill, page_fill_submit with browser-boundary origin enforcement, or fill-only extension_fill), HTTPS request (https_form, bearer_get, https_header), verified trusted-executable CLI env_exec (absolute path, output suppressed), or TOTP code without exposing values. Runs immediately under an owner standing grant; otherwise raises an owner approval card first.",
             parameters: {
               type: "object",
               additionalProperties: false,
@@ -982,7 +1009,10 @@ export class SecureInputs {
                   }
                   if (operation === "page_fill_submit") submitSpec = cleanSubmit(rawArgs.submit ?? true);
                 } else if (operation === "extension_fill") {
-                  submitSpec = cleanSubmit(rawArgs.submit);
+                  if (cleanSubmit(rawArgs.submit)) {
+                    throw new Error(EXTENSION_AUTO_SUBMIT_ERROR);
+                  }
+                  submitSpec = null;
                 } else if (operation === "https_header") {
                   httpSpec = validateHttpsHeader({
                     header: rawArgs.header,
@@ -993,13 +1023,16 @@ export class SecureInputs {
                   });
                 }
               } else if (operation === "env_exec") {
-                execSpec = validateEnvExec({
-                  command: destination,
-                  args: rawArgs.args ?? [],
-                  envVar: rawArgs.envVar,
-                  cwd: rawArgs.cwd,
-                  timeoutMs: rawArgs.timeoutMs,
-                });
+                execSpec = validateEnvExec(
+                  {
+                    command: destination,
+                    args: rawArgs.args ?? [],
+                    envVar: rawArgs.envVar,
+                    cwd: rawArgs.cwd,
+                    timeoutMs: rawArgs.timeoutMs,
+                  },
+                  { trustedDirs: this.trustedExecDirs },
+                );
                 const destNorm = normalizeDestination("env_exec", execSpec);
                 pinnedDest = destNorm.key;
                 pinnedDestLabel = destNorm.label;
@@ -1089,10 +1122,22 @@ export class SecureInputs {
                   `Destination: ${pinnedDestLabel || pinnedDest}`,
                 ];
                 if (operation === "env_exec" && execSpec) {
-                  detailLines.push(`Command: ${execSpec.command}`);
+                  detailLines.push(`Executable: ${execSpec.resolvedPath}`);
+                  detailLines.push(`SHA-256: ${execSpec.exeSha256}`);
                   detailLines.push(`Arguments: ${execSpec.args.length ? JSON.stringify(execSpec.args) : "(none)"}`);
                   detailLines.push(`Env var: ${execSpec.envVar}`);
                   if (execSpec.cwd) detailLines.push(`Working dir: ${execSpec.cwd}`);
+                  detailLines.push("Output: suppressed (child stdout/stderr are not returned to the model)");
+                  if (
+                    grants?.hasPriorExecGrantWithDifferentHash?.({
+                      botId: bot.id,
+                      credentialId: entry.id,
+                      resolvedPath: execSpec.resolvedPath,
+                      exeSha256: execSpec.exeSha256,
+                    })
+                  ) {
+                    detailLines.push("Warning: executable changed on disk since a previous approval — re-approval is required.");
+                  }
                 }
                 const answer = await this.ws.interactions.request(chat, task, {
                   kind: "permission",
@@ -1249,6 +1294,7 @@ export class SecureInputs {
                   signal: AbortSignal.any([controller.signal, AbortSignal.timeout(execSpec?.timeoutMs ?? 30_000)]),
                   extensionFill: this.extensionFill,
                   appFill: this.appFill,
+                  trustedExecDirs: this.trustedExecDirs,
                   settings: typeof this.settings === "function" ? this.settings() : this.settings,
                 });
 
