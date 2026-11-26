@@ -1091,7 +1091,7 @@ export function RunCards({
             <strong>{artifact.title}</strong>
             <small>
               {artifact.action === "update" ? "Updated Claude artifact" : "Claude artifact"}
-              {" · Private on claude.ai"}
+              {artifact.private ? " · Private on claude.ai" : " · On claude.ai"}
             </small>
           </span>
           <button className="secondary" onClick={() => void window.botkins.openLink(artifact.url)}>

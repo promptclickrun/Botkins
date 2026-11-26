@@ -130,7 +130,8 @@ function Cards({ run, latest, rich, onSend, onDraft }: { run: Run; latest: boole
           {artifact.title}
         </T>
         <T variant="footnote" color="muted" numberOfLines={1}>
-          {(artifact.action === "update" ? "Updated Claude artifact" : "Claude artifact") + " · Private on claude.ai"}
+          {(artifact.action === "update" ? "Updated Claude artifact" : "Claude artifact") +
+            (artifact.private ? " · Private on claude.ai" : " · On claude.ai")}
         </T>
       </View>
       <Button title="Open" icon={ExternalLink} variant="secondary" size="sm" onPress={() => openLink(artifact.url)} accessibilityLabel={"Open " + artifact.title + " on claude.ai"} />

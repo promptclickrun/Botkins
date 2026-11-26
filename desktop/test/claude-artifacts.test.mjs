@@ -17,12 +17,15 @@ import {
   buildArtifactEnv,
   buildCliArgs,
   buildFixedPrompt,
+  detectOutboundSecrets,
   detectSecrets,
   extractAnchors,
   isClaudeSubscriptionStatus,
   parseArtifactList,
   parseArtifactReadHtml,
   parseArtifactUrl,
+  parsePublishVisibilityResult,
+  parseUpdateVisibilityPrompt,
   runClaudeArtifactCommand,
 } from "../desktop/claude-artifacts.mjs";
 
@@ -228,6 +231,103 @@ test("secret refusal: blocks vault secrets and common token patterns before appr
   );
   assert.equal(approvalAsked, false, "must refuse before asking approval");
   assert.equal(runnerCalled, false, "must refuse before invoking claude");
+});
+
+test("metadata secret refusal: blocks secrets in title, filename-derived title, and icon before approval, subprocess, or record", async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "botkins-meta-secret-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+
+  // Fake CLI that writes a marker file if spawned — must NEVER be executed on refusal.
+  const spawnMarker = join(dir, "spawned.txt");
+  const fakeBin = join(dir, "claude");
+  writeFileSync(
+    fakeBin,
+    `#!/usr/bin/env node
+const fs = require("node:fs");
+const args = process.argv.slice(2);
+if (args[0] === "--version") { console.log("2.1.325 (Claude Code)"); process.exit(0); }
+if (args[0] === "auth" && args[1] === "status") {
+  console.log(JSON.stringify({ loggedIn: true, authMethod: "claude.ai", apiProvider: "firstParty", email: "dummy@example.com", subscriptionType: "pro" }));
+  process.exit(0);
+}
+fs.writeFileSync(${JSON.stringify(spawnMarker)}, "SPAWNED");
+process.exit(1);
+`,
+    { mode: 0o755 },
+  );
+  chmodSync(fakeBin, 0o755);
+
+  const claude = new ClaudeProvider({ dataDir: join(dir, "ws-data"), binary: fakeBin });
+  claude.locate = async () => fakeBin;
+  const { ws } = makeWorkspace(t, { claudeProvider: claude });
+  await ws.claudeArtifacts.primeAvailability();
+
+  const dummyVaultValue = "dummy-vault-secret-abcdef1234";
+  const dummyPatternToken = "ghp_dummyTokenValue1234567890abcd";
+  ws.vault.put(dummyVaultValue, { label: "Dummy key", kind: "key", owner: "test" });
+
+  const chatId = ws.createChat("pip");
+  const chat = ws.chat(chatId);
+  const bot = ws.bot("pip");
+  const run = { id: "run-meta-secret", chatId, botId: bot.id };
+  const task = { stopped: false, run };
+  ws.active.set(chatId, task);
+  t.after(() => ws.active.delete(chatId));
+
+  let approvalAsked = false;
+  ws.events.on("request", () => {
+    approvalAsked = true;
+  });
+
+  const cleanHtml = "<!doctype html><html><body><p>Clean body</p></body></html>";
+
+  // 1. Secret in explicit title on publish
+  await assert.rejects(
+    ws.claudeArtifacts.call(
+      { action: "publish", title: `Report ${dummyVaultValue}`, html: cleanHtml },
+      { bot, chat, run, task },
+    ),
+    /Refused to publish.*secret/i,
+  );
+
+  // 2. Secret in explicit title on update (pattern match)
+  await assert.rejects(
+    ws.claudeArtifacts.call(
+      { action: "update", url: "https://claude.ai/artifact/MetaTest1234567890", title: `Deck ${dummyPatternToken}`, html: cleanHtml },
+      { bot, chat, run, task },
+    ),
+    /Refused to update.*secret/i,
+  );
+
+  // 3. Secret in filename-derived title (path with no explicit title and no <title> tag)
+  const leakyFile = join(dir, `notes-${dummyVaultValue}.html`);
+  writeFileSync(leakyFile, cleanHtml);
+  await assert.rejects(
+    ws.claudeArtifacts.call(
+      { action: "publish", path: leakyFile },
+      { bot, chat, run, task },
+    ),
+    /Refused to publish.*secret/i,
+  );
+
+  // 4. Secret in icon on publish (both raw and sanitized lowercase match)
+  await assert.rejects(
+    ws.claudeArtifacts.call(
+      { action: "publish", title: "Clean title", icon: dummyVaultValue, html: cleanHtml },
+      { bot, chat, run, task },
+    ),
+    /Refused to publish.*secret/i,
+  );
+
+  // 5. Direct unit check on detectOutboundSecrets
+  const hit = detectOutboundSecrets({ html: cleanHtml, title: "ok", icon: dummyPatternToken }, []);
+  assert.equal(hit.hasSecret, true);
+  assert.deepEqual(hit.fields, ["icon"]);
+
+  assert.equal(approvalAsked, false, "must refuse metadata secrets before approval card");
+  assert.equal(existsSync(spawnMarker), false, "must not spawn subprocess on metadata refusal");
+  assert.equal(run.claudeArtifacts, undefined, "must not add chat link card on refusal");
+  assert.equal(ws.artifacts.list({ botId: bot.id, chatId }).items.length, 0, "must not record artifact on refusal");
 });
 
 test("fixed-template prompt: bot text cannot alter system instructions or inject prompt directives", () => {
@@ -548,10 +648,177 @@ test("update, list, read, and persistence of standing grants across workspace re
   const updated = await ws.claudeArtifacts.call({ action: "update", url: "https://claude.ai/artifact/DeckArt1234567890", path: readBack.path, title: "Launch Deck v2" }, { bot, chat, run, task });
   assert.equal(updated.url, "https://claude.ai/artifact/DeckArt1234567890");
   assert.equal(updated.action, "update");
+  // Runner did not confirm visibility -> must not mislabel unknown visibility as private.
+  assert.equal(updated.visibility, "unknown");
+  assert.equal(run.claudeArtifacts[0].private, undefined);
 
   // Reload workspace from disk and verify grant + model persisted.
   const ws2 = new Workspace(join(dir, "data"), ws.providers, () => {});
   assert.equal(ws2.claudeArtifacts.hasStandingGrant(bot.id), true);
   assert.equal(ws2.claudeArtifacts.model(), "sonnet");
   assert.equal(step, 3);
+});
+
+test("private-only updates: verifies visibility before upload via fake CLI, refuses shared/unconfirmed, never mislabels unknown", async (t) => {
+  // Pure prompt + result parser checks
+  assert.equal(
+    parseUpdateVisibilityPrompt({
+      decision_reason: 'Update artifact "Deck" on claude.ai. It stays private to you until you share it.',
+    }),
+    "private",
+  );
+  assert.equal(
+    parseUpdateVisibilityPrompt({
+      decision_reason: 'Update artifact "Deck" on claude.ai. It\'s shared with your organization, and viewers see updates immediately.',
+    }),
+    "shared",
+  );
+  assert.equal(
+    parseUpdateVisibilityPrompt({
+      decision_reason: 'Update artifact "Deck" on claude.ai. Its share status couldn\'t be confirmed.',
+    }),
+    "unknown",
+  );
+  assert.equal(parseUpdateVisibilityPrompt({}), "unknown");
+  assert.equal(
+    parsePublishVisibilityResult(["Published at https://claude.ai/artifact/Abc123456789 (Version 2). This artifact is private: only its owner can open the link."]),
+    "private",
+  );
+  assert.equal(
+    parsePublishVisibilityResult(["Published at https://claude.ai/artifact/Abc123456789 (Version 2). This artifact is shared with your organization."]),
+    "shared",
+  );
+  assert.equal(
+    parsePublishVisibilityResult(["Published at https://claude.ai/artifact/Abc123456789 (Version 2)"]),
+    "unknown",
+  );
+
+  // CLI args omit --allowedTools Artifact for update so can_use_tool preflight always runs.
+  const updateArgs = buildCliArgs({ model: "haiku", allowRead: true, requirePublishPrompt: true });
+  assert.equal(updateArgs.includes("--allowedTools"), false);
+  assert.equal(updateArgs.includes("--permission-prompt-tool"), true);
+
+  // Real-spawn fake `claude` binary exercising read -> can_use_tool(publish with decision_reason) -> upload/deny.
+  const dir = mkdtempSync(join(tmpdir(), "botkins-fake-update-vis-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+
+  const modeFile = join(dir, "mode.txt");
+  const uploadedFile = join(dir, "uploaded.txt");
+  const fakeBin = join(dir, "claude");
+  const targetUrl = "https://claude.ai/artifact/UpdateVis1234567890";
+
+  writeFileSync(
+    fakeBin,
+    `#!/usr/bin/env node
+const fs = require("node:fs");
+const readline = require("node:readline");
+
+const args = process.argv.slice(2);
+if (args[0] === "--version") { console.log("2.1.325 (Claude Code)"); process.exit(0); }
+if (args[0] === "auth" && args[1] === "status") {
+  console.log(JSON.stringify({ loggedIn: true, authMethod: "claude.ai", apiProvider: "firstParty", email: "fake@example.com", subscriptionType: "pro" }));
+  process.exit(0);
+}
+
+const mode = fs.readFileSync(${JSON.stringify(modeFile)}, "utf8").trim();
+const rl = readline.createInterface({ input: process.stdin });
+rl.on("line", (line) => {
+  const msg = JSON.parse(line);
+  if (msg.type === "user") {
+    // Step 1: read permission check
+    console.log(JSON.stringify({
+      type: "control_request",
+      request_id: "req-read",
+      request: { subtype: "can_use_tool", tool_name: "Artifact", input: { action: "read", url: ${JSON.stringify(targetUrl)}, page: true } }
+    }));
+  } else if (msg.type === "control_response" && msg.response?.request_id === "req-read") {
+    if (msg.response?.response?.behavior !== "allow") process.exit(2);
+    const reasonByMode = {
+      private: 'Update artifact "Deck" on claude.ai. It stays private to you until you share it.',
+      shared: 'Update artifact "Deck" on claude.ai. It\\'s shared with your organization, and viewers see updates immediately.',
+      unknown: 'Update artifact "Deck" on claude.ai. Its share status couldn\\'t be confirmed.',
+    };
+    // Step 2: publish permission check carrying live share-status probe result
+    console.log(JSON.stringify({
+      type: "control_request",
+      request_id: "req-publish",
+      request: {
+        subtype: "can_use_tool",
+        tool_name: "Artifact",
+        input: { action: "publish", url: ${JSON.stringify(targetUrl)}, file_path: "artifact.html" },
+        decision_reason: reasonByMode[mode] || "",
+      }
+    }));
+  } else if (msg.type === "control_response" && msg.response?.request_id === "req-publish") {
+    const allow = msg.response?.response?.behavior === "allow";
+    if (allow) {
+      fs.writeFileSync(${JSON.stringify(uploadedFile)}, "UPLOADED");
+      console.log(JSON.stringify({
+        type: "user",
+        message: { role: "user", content: [{ type: "tool_result", content: "Published artifact.html at " + ${JSON.stringify(targetUrl)} + " (Version 2)\\nThis artifact is private: only its owner can open the link." }] }
+      }));
+      console.log(JSON.stringify({ type: "result", subtype: "success", is_error: false, result: ${JSON.stringify(targetUrl)} }));
+    } else {
+      console.log(JSON.stringify({
+        type: "result",
+        subtype: "success",
+        is_error: false,
+        result: msg.response?.response?.message || "Denied"
+      }));
+    }
+    process.exit(0);
+  }
+});
+`,
+    { mode: 0o755 },
+  );
+  chmodSync(fakeBin, 0o755);
+
+  const claude = new ClaudeProvider({ dataDir: join(dir, "ws-data"), binary: fakeBin });
+  claude.locate = async () => fakeBin;
+  const { ws } = makeWorkspace(t, { claudeProvider: claude });
+  await ws.claudeArtifacts.primeAvailability();
+  const bot = ws.bot("pip");
+  ws.claudeArtifacts.setGrant(bot.id, true);
+  const chatId = ws.createChat("pip");
+  const chat = ws.chat(chatId);
+  const run = { id: "run-vis", chatId, botId: bot.id };
+  const task = { stopped: false, run };
+  ws.active.set(chatId, task);
+  t.after(() => ws.active.delete(chatId));
+
+  // 1. Shared target -> refused BEFORE upload, no record created.
+  writeFileSync(modeFile, "shared");
+  await assert.rejects(
+    ws.claudeArtifacts.call(
+      { action: "update", url: targetUrl, title: "Deck v2", html: "<!doctype html><h1>v2</h1>" },
+      { bot, chat, run, task },
+    ),
+    /Refused to update.*shared/i,
+  );
+  assert.equal(existsSync(uploadedFile), false, "must deny shared target before upload");
+  assert.equal(run.claudeArtifacts, undefined, "must not record refused shared update");
+
+  // 2. Unconfirmed/unknown target -> refused BEFORE upload, no record created.
+  writeFileSync(modeFile, "unknown");
+  await assert.rejects(
+    ws.claudeArtifacts.call(
+      { action: "update", url: targetUrl, title: "Deck v2", html: "<!doctype html><h1>v2</h1>" },
+      { bot, chat, run, task },
+    ),
+    /Refused to update.*confirm.*private/i,
+  );
+  assert.equal(existsSync(uploadedFile), false, "must deny unconfirmed target before upload");
+  assert.equal(run.claudeArtifacts, undefined, "must not record refused unconfirmed update");
+
+  // 3. Confirmed private target -> allowed, uploaded, and labeled private.
+  writeFileSync(modeFile, "private");
+  const ok = await ws.claudeArtifacts.call(
+    { action: "update", url: targetUrl, title: "Deck v2", html: "<!doctype html><h1>v2</h1>" },
+    { bot, chat, run, task },
+  );
+  assert.equal(existsSync(uploadedFile), true, "confirmed private target should upload");
+  assert.equal(ok.visibility, "private");
+  assert.equal(run.claudeArtifacts.length, 1);
+  assert.equal(run.claudeArtifacts[0].private, true);
 });

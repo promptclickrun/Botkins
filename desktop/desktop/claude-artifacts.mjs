@@ -12,8 +12,10 @@
 //   CLAUDE_CODE_ARTIFACT_AUTO_OPEN=0, no CLAUDE_CODE_DISABLE_ARTIFACT, and DROPPED env vars cleared.
 // - Never passes bot-authored freeform instructions to Claude Code: fixed system + prompt template
 //   only, with sanitized single-line metadata and the HTML kept strictly as file content.
-// - Private only from the tool (sharing happens in the claude.ai header).
-// - Scans HTML for vault secrets + common secret patterns and refuses to publish/update on a hit.
+// - Private only from the tool: new publishes start private; updates verify private visibility
+//   before upload and refuse shared or unconfirmed targets (sharing happens in the claude.ai header).
+// - Scans all outbound content and metadata fields (HTML, title, filename-derived title, icon) for
+//   vault secrets + common secret patterns before any approval, subprocess, or record.
 // - Requires approval on first publish/update per chat (with "Always allow" per bot); routines and
 //   unattended runs require a standing per-bot grant.
 // - Bounded concurrency (default 2), per-call timeout, and unconditional temp-dir cleanup.
@@ -287,20 +289,98 @@ export function parseArtifactReadHtml(toolResults, fallbackText = "") {
 }
 
 /**
- * Checks whether HTML contains any known vault secret (via the existing `scrub` redactor)
+ * Checks whether text contains any known vault secret (via the existing `scrub` redactor)
  * or common secret patterns. Returns `{ hasSecret, reasons }` without leaking secret values.
  */
-export function detectSecrets(html, vaultSecrets = []) {
-  if (typeof html !== "string" || !html) return { hasSecret: false, reasons: [] };
+export function detectSecrets(text, vaultSecrets = []) {
+  if (typeof text !== "string" || !text) return { hasSecret: false, reasons: [] };
   const reasons = [];
   if (Array.isArray(vaultSecrets) && vaultSecrets.length) {
-    const scrubbed = scrub(html, vaultSecrets);
-    if (scrubbed !== html) reasons.push("saved vault credential");
+    const scrubbed = scrub(text, vaultSecrets);
+    if (scrubbed !== text) reasons.push("saved vault credential");
   }
   for (const { label, re } of SECRET_PATTERNS) {
-    if (re.test(html)) reasons.push(label);
+    if (re.test(text)) reasons.push(label);
   }
   return { hasSecret: reasons.length > 0, reasons: [...new Set(reasons)] };
+}
+
+/**
+ * Scans every outbound content and metadata field (HTML, raw/sanitized title, filename-derived title,
+ * raw/sanitized icon) before any approval card, subprocess, or record is created.
+ * Returns `{ hasSecret, fields, reasons }` without leaking secret values.
+ */
+export function detectOutboundSecrets(fields = {}, vaultSecrets = []) {
+  const reasons = [];
+  const hitFields = [];
+  for (const [field, value] of Object.entries(fields)) {
+    if (typeof value !== "string" || !value) continue;
+    const check = detectSecrets(value, vaultSecrets);
+    if (check.hasSecret) {
+      hitFields.push(field);
+      reasons.push(...check.reasons);
+    }
+  }
+  return {
+    hasSecret: hitFields.length > 0,
+    fields: [...new Set(hitFields)],
+    reasons: [...new Set(reasons)],
+  };
+}
+
+/**
+ * Evaluates Claude Code's `can_use_tool` permission prompt for an `Artifact` `publish` update
+ * against an existing URL. Claude Code probes live share status before emitting the prompt and
+ * encodes the result in `decision_reason` / `description`.
+ * Returns `"private"`, `"shared"`, or `"unknown"`.
+ */
+export function parseUpdateVisibilityPrompt(request) {
+  const text = [request?.decision_reason, request?.description]
+    .filter((s) => typeof s === "string" && s.trim())
+    .join("\n");
+  if (!text) return "unknown";
+  // Any shared, outside-audience, or unconfirmed-status indicator immediately disqualifies private.
+  if (
+    /\bIt['’]s shared with\b/i.test(text) ||
+    /\bshared with\b/i.test(text) ||
+    /\[shared:\s*(?!owner\b)[^\]]+\]/i.test(text) ||
+    /\boutside your organization\b/i.test(text) ||
+    /\bshare status couldn['’]t be confirmed\b/i.test(text) ||
+    /\bshare status unconfirmed\b/i.test(text) ||
+    /\bsomeone else['’]s artifact\b/i.test(text) ||
+    /\[ownership:\s*(?:someone else's|unconfirmed)\]/i.test(text)
+  ) {
+    if (/\bshare status couldn['’]t be confirmed\b|\bshare status unconfirmed\b|\[shared:\s*unknown\]|\[ownership:\s*unconfirmed\]/i.test(text)) {
+      return "unknown";
+    }
+    return "shared";
+  }
+  if (/\bIt stays private to you until you share it\./i.test(text)) {
+    return "private";
+  }
+  return "unknown";
+}
+
+/**
+ * Parses visibility from Claude Code's `Artifact` `publish` tool result text.
+ * Returns `"private"`, `"shared"`, or `"unknown"`.
+ */
+export function parsePublishVisibilityResult(toolResults, fallbackText = "") {
+  const combined = [...(Array.isArray(toolResults) ? toolResults : []), fallbackText]
+    .filter((s) => typeof s === "string")
+    .join("\n");
+  if (!combined) return "unknown";
+  if (
+    /\bThis artifact is shared\b/i.test(combined) ||
+    /\bThis artifact belongs to an agent rather than a person\b/i.test(combined) ||
+    /\boutside your organization\b/i.test(combined)
+  ) {
+    return "shared";
+  }
+  if (/\bThis artifact is private\b/i.test(combined)) {
+    return "private";
+  }
+  return "unknown";
 }
 
 /** Extracts HTML heading/id anchors when the caller asks for them. */
@@ -341,7 +421,7 @@ export function isClaudeSubscriptionStatus(status, provider) {
 }
 
 /** Builds the CLI argument vector for a headless Claude Code artifact sub-run. */
-export function buildCliArgs({ model, allowRead = false }) {
+export function buildCliArgs({ model, allowRead = false, requirePublishPrompt = false }) {
   return [
     "-p",
     "--output-format", "stream-json",
@@ -349,7 +429,7 @@ export function buildCliArgs({ model, allowRead = false }) {
     "--verbose",
     "--model", model,
     "--tools", allowRead ? "Artifact,Read" : "Artifact",
-    "--allowedTools", "Artifact",
+    ...(requirePublishPrompt ? [] : ["--allowedTools", "Artifact"]),
     "--strict-mcp-config",
     "--disable-slash-commands",
     "--setting-sources", "",
@@ -372,6 +452,8 @@ export async function runClaudeArtifactCommand({
   prompt,
   timeoutMs = DEFAULT_TIMEOUT_MS,
   spawnFn = spawn,
+  requirePrivateUpdate = false,
+  expectedUpdateUrl = null,
 }) {
   return new Promise((resolvePromise, rejectPromise) => {
     const child = spawnFn(binary, args, {
@@ -385,6 +467,9 @@ export async function runClaudeArtifactCommand({
     const events = [];
     const toolResults = [];
     let finalResult = null;
+    let updateVisibility = null;
+    let visibilityRefusal = null;
+    let sawUpdatePublishPrompt = false;
     const resolvedCwd = resolve(cwd);
 
     const finish = (err, value) => {
@@ -429,10 +514,34 @@ export async function runClaudeArtifactCommand({
         const toolName = ev.request.tool_name;
         const input = ev.request.input ?? {};
         let allow = false;
+        let denyMessage = "Only Artifact operations on the staged file are permitted.";
         if (toolName === "Artifact") {
           // Never allow delete/open/pin via this host tool; only publish, read, list.
           const action = input.action ?? "publish";
-          allow = action === "publish" || action === "read" || action === "list";
+          if (action === "publish" && requirePrivateUpdate) {
+            sawUpdatePublishPrompt = true;
+            // Updates must target the requested existing artifact URL and confirm private visibility before upload.
+            if (expectedUpdateUrl && input.url !== expectedUpdateUrl) {
+              allow = false;
+              denyMessage = "Refused to update: target URL did not match the requested artifact.";
+              visibilityRefusal = denyMessage;
+            } else {
+              const visibility = parseUpdateVisibilityPrompt(ev.request);
+              updateVisibility = visibility;
+              if (visibility === "private") {
+                allow = true;
+              } else {
+                allow = false;
+                denyMessage =
+                  visibility === "shared"
+                    ? "Refused to update: this Claude artifact is shared. Private-only updates cannot overwrite shared artifacts."
+                    : "Refused to update: could not confirm this Claude artifact is private before uploading.";
+                visibilityRefusal = denyMessage;
+              }
+            }
+          } else {
+            allow = action === "publish" || action === "read" || action === "list";
+          }
         } else if (toolName === "Read" && typeof input.file_path === "string") {
           const target = resolve(resolvedCwd, input.file_path);
           allow = target === join(resolvedCwd, "artifact.html");
@@ -444,7 +553,7 @@ export async function runClaudeArtifactCommand({
             request_id: ev.request_id,
             response: allow
               ? { behavior: "allow", updatedInput: input }
-              : { behavior: "deny", message: "Only Artifact operations on the staged file are permitted." },
+              : { behavior: "deny", message: denyMessage },
           },
         });
       } else if (ev.type === "user" && Array.isArray(ev.message?.content)) {
@@ -462,13 +571,28 @@ export async function runClaudeArtifactCommand({
     child.on("close", (code) => {
       rl.close();
       if (settled) return;
+      if (requirePrivateUpdate && !visibilityRefusal && !sawUpdatePublishPrompt) {
+        const resultVis = parsePublishVisibilityResult(toolResults, finalResult?.result);
+        if (resultVis !== "private") {
+          updateVisibility = resultVis;
+          visibilityRefusal =
+            resultVis === "shared"
+              ? "Refused to update: this Claude artifact is shared. Private-only updates cannot overwrite shared artifacts."
+              : "Refused to update: could not confirm this Claude artifact is private before uploading.";
+        } else {
+          updateVisibility = "private";
+        }
+      }
       if (finalResult) {
-        finish(null, { code, events, toolResults, finalResult, stderr });
+        finish(null, { code, events, toolResults, finalResult, stderr, updateVisibility, visibilityRefusal });
+      } else if (visibilityRefusal) {
+        // Denied update before upload; preserve the refusal even if the CLI exits non-zero without a result frame.
+        finish(null, { code, events, toolResults, finalResult: null, stderr, updateVisibility, visibilityRefusal });
       } else if (code !== 0) {
         const tail = stderr.trim().split("\n").filter(Boolean).at(-1) || `Claude Code exited with code ${code}.`;
         finish(new Error(tail));
       } else {
-        finish(null, { code, events, toolResults, finalResult: null, stderr });
+        finish(null, { code, events, toolResults, finalResult: null, stderr, updateVisibility, visibilityRefusal });
       }
     });
 
@@ -748,10 +872,16 @@ export class ClaudeArtifacts {
 
     const verb = action === "update" ? "Update" : "Publish";
     const sizeText = formatBytes(bytes);
+    const visibilityLabel =
+      action === "update"
+        ? "Private on claude.ai (verified before upload)"
+        : "Private on claude.ai";
     const detailLines = [
       `Title: ${title}`,
       `Size: ${sizeText}`,
-      "Visibility: Private on claude.ai (only you can open it unless you share it from claude.ai)",
+      action === "update"
+        ? "Visibility: Private on claude.ai (target visibility is verified before upload; shared or unconfirmed artifacts are refused)"
+        : "Visibility: Private on claude.ai (only you can open it unless you share it from claude.ai)",
       ...(url ? [`Target: ${url}`] : []),
       "Content leaves this computer to your claude.ai account.",
     ];
@@ -759,7 +889,7 @@ export class ClaudeArtifacts {
       kind: "permission",
       artifactGrant: true,
       title: `${verb} Claude artifact “${title}”`,
-      label: `${sizeText} · Private on claude.ai`,
+      label: `${sizeText} · ${visibilityLabel}`,
       detail: detailLines.join("\n"),
       remember: `Claude artifacts for ${bot.name}`,
       rememberScope: "bot",
@@ -780,7 +910,7 @@ export class ClaudeArtifacts {
   }
 
   /** Persists a local copy of the published HTML and records it in workspace Artifacts + chat run card. */
-  recordPublished({ url, title, html, bytes, bot, chat, run, action }) {
+  recordPublished({ url, title, html, bytes, bot, chat, run, action, visibility = "unknown" }) {
     const base = join(this.ws.dir, "claude-artifacts");
     mkdirSync(base, { recursive: true, mode: 0o700 });
     const slug = safeName(title || "claude-artifact").replace(/\.[^.]+$/, "") || "claude-artifact";
@@ -808,6 +938,7 @@ export class ClaudeArtifacts {
       }
     }
     // Add a link card onto the turn so desktop + phone show a clickable chip/card in chat.
+    // Never label unknown or non-private visibility as private.
     const card = {
       id: randomUUID(),
       title,
@@ -815,7 +946,7 @@ export class ClaudeArtifacts {
       size: bytes,
       action,
       time,
-      private: true,
+      ...(visibility === "private" && { private: true }),
     };
     (run.claudeArtifacts ??= []).push(card);
     this.ws.save();
@@ -835,7 +966,8 @@ export class ClaudeArtifacts {
     const binary = avail.binary || (provider?.locate ? await provider.locate() : null) || "claude";
     const model = this.model();
     const allowRead = action === "publish" || action === "update";
-    const args = buildCliArgs({ model, allowRead });
+    const requirePrivateUpdate = action === "update";
+    const args = buildCliArgs({ model, allowRead, requirePublishPrompt: requirePrivateUpdate });
     const prompt = buildFixedPrompt(action, { title, icon, url, limit });
 
     return this.withSlot(async () => {
@@ -851,6 +983,8 @@ export class ClaudeArtifacts {
           cwd: stageDir,
           prompt,
           timeoutMs: this.timeoutMs,
+          requirePrivateUpdate,
+          ...(requirePrivateUpdate && url ? { expectedUpdateUrl: url } : {}),
         });
       } finally {
         rmSync(stageDir, { recursive: true, force: true });
@@ -909,20 +1043,38 @@ export class ClaudeArtifacts {
     const targetUrl = action === "update" ? validateArtifactUrl(args?.url) : undefined;
     const { content: html, bytes } = this.resolveHtml({ html: args?.html, path: args?.path }, chat, bot);
     const titleMatch = /<title[^>]*>([^<]+)<\/title>/i.exec(html);
-    const title = sanitizeMeta(args?.title || titleMatch?.[1] || (args?.path ? basename(args.path).replace(/\.[^.]+$/, "") : "") || "Untitled artifact", 120);
-    const icon = action === "publish" ? sanitizeIcon(args?.icon) : "";
+    const rawArgTitle = typeof args?.title === "string" ? args.title : "";
+    const filenameTitle = typeof args?.path === "string" ? basename(args.path).replace(/\.[^.]+$/, "") : "";
+    const rawTitleSource = rawArgTitle || titleMatch?.[1] || filenameTitle || "Untitled artifact";
+    const title = sanitizeMeta(rawTitleSource, 120) || "Untitled artifact";
+    const rawIcon = typeof args?.icon === "string" ? args.icon : "";
+    const icon = action === "publish" ? sanitizeIcon(rawIcon) : "";
 
-    // Refuse before approval or upload if any secret is detected in the HTML.
-    const secretCheck = detectSecrets(html, this.vaultSecrets());
+    // Refuse before any approval, subprocess, or record if any secret is detected in HTML or metadata.
+    const secretCheck = detectOutboundSecrets(
+      {
+        html,
+        title: rawTitleSource,
+        sanitizedTitle: title,
+        ...(filenameTitle && { filename: filenameTitle }),
+        ...(action === "publish" && rawIcon ? { icon: rawIcon, sanitizedIcon: icon } : {}),
+      },
+      this.vaultSecrets(),
+    );
     if (secretCheck.hasSecret) {
+      const verb = action === "update" ? "update" : "publish";
+      const where = secretCheck.fields.includes("html") && secretCheck.fields.length === 1 ? "the HTML" : "the artifact content or metadata";
       throw new Error(
-        `Refused to publish: the HTML appears to contain a secret (${secretCheck.reasons.join(", ")}). Remove secrets before publishing to claude.ai.`,
+        `Refused to ${verb}: ${where} appears to contain a secret (${secretCheck.reasons.join(", ")}). Remove secrets before publishing to claude.ai.`,
       );
     }
 
     await this.ensureApproved({ action, title, bytes, url: targetUrl, bot, chat, run, task });
 
     const res = await this.executeSubRun({ action, html, title, icon, url: targetUrl });
+    if (action === "update" && res.visibilityRefusal) {
+      throw new Error(res.visibilityRefusal);
+    }
     const publishedUrl = parseArtifactUrl(res.toolResults) || parseArtifactUrl(res.finalResult) || parseArtifactUrl(res.events);
     if (!publishedUrl) {
       const hint = res.toolResults.join(" ") || res.finalResult?.result || res.stderr || "";
@@ -932,15 +1084,44 @@ export class ClaudeArtifacts {
       throw new Error("Artifacts aren't enabled for this Claude login (no claude.ai artifact URL was returned).");
     }
 
-    const { recorded } = this.recordPublished({ url: publishedUrl, title, html, bytes, bot, chat, run, action });
+    // Determine actual visibility without mislabeling unknown visibility as private.
+    const resultVisibility = parsePublishVisibilityResult(res.toolResults, res.finalResult?.result);
+    let visibility;
+    if (action === "publish") {
+      // New artifacts start private on claude.ai unless Claude reports otherwise.
+      visibility = resultVisibility === "shared" ? "shared" : "private";
+    } else {
+      // Updates require confirmed private visibility; if preflight wasn't observed or didn't
+      // confirm private, never label unknown visibility as private.
+      const preflightVisibility = res.updateVisibility ?? null;
+      if (preflightVisibility === "shared" || resultVisibility === "shared") {
+        visibility = "shared";
+      } else if (preflightVisibility === "private") {
+        visibility = "private";
+      } else if (preflightVisibility === null && resultVisibility === "private") {
+        visibility = "private";
+      } else {
+        visibility = "unknown";
+      }
+    }
+
+    const { recorded } = this.recordPublished({ url: publishedUrl, title, html, bytes, bot, chat, run, action, visibility });
     const anchors = args?.anchors ? extractAnchors(html) : undefined;
+    const note =
+      visibility === "private"
+        ? action === "update"
+          ? "Verified private on claude.ai. The person can share it from the page header on claude.ai."
+          : "Private on claude.ai by default. The person can share it from the page header on claude.ai."
+        : visibility === "shared"
+          ? "Shared on claude.ai. Sharing is managed in the page header on claude.ai."
+          : "Visibility on claude.ai could not be confirmed. Check sharing in the page header on claude.ai.";
     return {
       action,
       url: publishedUrl,
       title,
       bytes,
-      visibility: "private",
-      note: "Private on claude.ai by default. The person can share it from the page header on claude.ai.",
+      visibility,
+      note,
       ...(recorded && { artifactId: recorded.id }),
       ...(anchors && { anchors }),
     };
