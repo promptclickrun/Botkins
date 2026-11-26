@@ -97,6 +97,7 @@ import { SidePane } from "./sidepane.mjs";
 import { Artifacts } from "./artifacts.mjs";
 import { ArtifactEvents } from "./artifact-events.mjs";
 import { Tasks } from "./tasks.mjs";
+import { taskLimits } from "./task-limits.mjs";
 import { Proactive } from "./proactive.mjs";
 import { Reminders } from "./reminders.mjs";
 import { proposalsFrom } from "./proactive-learning.mjs";
@@ -471,6 +472,8 @@ export class Workspace {
       chats: this.state.chats.map(visibleChat),
       // The harness that runs turns: the default gives way while its program isn't here and nobody chose.
       settings: { ...this.state.settings, harness: this.harness.effective() },
+      // The Task Board's limits in force, and each one's value without the person's setting (desktop/task-limits.mjs).
+      taskLimits: taskLimits(this.state.settings),
       // Node host role, advertised folders, pause state, last completed job and active grants.
       nodeHost: this.nodeHost.view(),
       // Each space with what it holds, for the link to make each person's own list from
