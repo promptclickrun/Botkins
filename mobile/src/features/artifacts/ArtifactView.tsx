@@ -9,6 +9,7 @@ import { CircleAlert, Download, FolderPlus, ImageDown, MessageCircle, Package, S
 import { useEffect, useState } from "react";
 import { Alert, ScrollView, Text, View } from "react-native";
 import { WebView } from "react-native-webview";
+import { openChat as openChatRoute } from "@/features/chat/navigate";
 import type { Artifact } from "@/link/types";
 import { shareLocalFile } from "@/state/files";
 import { useCapability, useOnline, usePart } from "@/state/hooks";
@@ -55,7 +56,7 @@ async function saveArtifact(artifact: Artifact) {
 function openChat(artifact: Artifact) {
   if (!artifact.chatId) return;
   // `at` lands on the message that made it, when the computer knows which.
-  router.push({ pathname: "/chat/[id]", params: { id: artifact.chatId, ...(artifact.messageIndex !== undefined && { at: String(artifact.messageIndex) }) } });
+  openChatRoute(artifact.chatId, artifact.messageIndex !== undefined ? { at: String(artifact.messageIndex) } : undefined);
 }
 
 /** "Add to a project…" in the bar ("project-artifacts-v1"): a menu of the projects; one that has it is checked. */

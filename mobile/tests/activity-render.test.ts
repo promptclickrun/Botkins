@@ -13,7 +13,8 @@ test("one run changing draws one Activity row and hidden working rows stop pulsi
   const useVisibility = create(() => ({ shown: true, active: true }));
   let draws = 0;
   const { ActivityList } = phoneModule("../src/features/work/Activity", {
-    "expo-router": {}, "react-native": { View: "View" }, "./bits": { RunIcon: "RunIcon" },
+    "react-native": { View: "View" }, "./bits": { RunIcon: "RunIcon" },
+    "@/features/chat/navigate": {},
     "@/features/chat/ActivityWidgets": { ShimmerLabel: "Pulse", IconStack: "Icons" },
     "@/state/hooks": {
       useBots: () => [], useChats: () => [], useSettings: () => undefined,

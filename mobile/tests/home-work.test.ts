@@ -24,15 +24,45 @@ const native = { ScrollView: "ScrollView", View: "View", useWindowDimensions: ()
 const { ServerLinkStatus } = phoneModule("../src/features/home/ServerLinkStatus", {
   "lucide-react-native": {}, "react-native": native, "react-native-reanimated": animated, "@/state/link": {}, "@/ui": ui,
 });
+const pushed: unknown[] = [];
+const openedChats: string[] = [];
 const Home = phoneModule("../src/features/home/Home", {
-  "expo-router": { useScrollToTop() {} }, "lucide-react-native": {}, "react-native": native, "react-native-reanimated": animated,
+  "expo-router": { useScrollToTop() {}, router: { push: (target: unknown) => pushed.push(target) } },
+  "lucide-react-native": {}, "react-native": native, "react-native-reanimated": animated,
   "react-native-safe-area-context": { useSafeAreaInsets: () => insets }, "react-native-worklets": {},
-  "@/features/chat/open": {}, "@/features/spaces/data": { useSpacesOn: () => true }, "@/features/spaces/HomePins": { HomePins: "Pins" },
+  "@/features/chat/navigate": { openChat: (id: string) => openedChats.push(id) }, "@/features/chat/open": {},
+  "@/features/spaces/data": { useSpacesOn: () => true }, "@/features/spaces/HomePins": { HomePins: "Pins" },
   "@/features/today/Today": { makeSeenSignal: () => ({}) }, "@/state/link": {}, "@/state/hooks": hooks,
   "@/state/prefs": { usePrefs: (select) => select({ backdrop: "clean", computerOrder: [] }) },
   "@/state/profile": { useProfileHosts: () => [] }, "@/features/bots/agents": {}, "@/ui": ui,
   "./BotBoard": { BotBoard: "Board", BotMenu: "Menu" }, "./computers": {}, "./ServerLinkStatus": { ServerLinkStatus },
 }).default;
+
+test("Home opens a pending chat through openChat and a node job through the approval sheet", async (t) => {
+  const previous = useApp.getState();
+  useApp.setState({
+    link: "online",
+    synced: false,
+    parts: {
+      live: { requests: [
+        { id: "chat-request", chatId: "chat-1", botId: "bot", kind: "permission", title: "Chat approval" },
+        { id: "node-request", chatId: "node-job-1", botId: "bot", kind: "permission", title: "Node approval", nodeJob: true,
+          sourceBotName: "Alfie", sourceHostName: "Studio" },
+      ] },
+    },
+  });
+  const screen = await mount(el(Home));
+  t.after(async () => {
+    await screen.unmount();
+    useApp.setState(previous);
+  });
+  const [chat, node] = screen.root.root.findAllByType("Row");
+  assert.equal(node.props.subtitle, "Alfie on Studio needs approval");
+  chat.props.onPress();
+  node.props.onPress();
+  assert.deepEqual(openedChats, ["chat-1"]);
+  assert.deepEqual(pushed, [{ pathname: "/node-approval", params: { request: "node-request", chat: "node-job-1" } }]);
+});
 
 for (const busy of [false, true]) {
   test("Home with three pinned bots " + (busy ? "working in other chats" : "at rest"), async (t) => {
