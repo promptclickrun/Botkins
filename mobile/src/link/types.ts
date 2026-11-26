@@ -2021,6 +2021,8 @@ export type Calls = {
   addSection(name: string): string;
   renameSection(id: string, name: string): void;
   deleteSection(id: string): void;
+  /** Puts the bot sections on Home in this order. */
+  orderSections(ids: string[]): void;
   renameTemplate(id: string, name: string): void;
   /** Changes a chat's project or mode. Moving a started chat carries its transcript into the next session. */
   setChatProject(chatId: string, projectId: string | null, mode?: ChatMode, folder?: string | null): void;

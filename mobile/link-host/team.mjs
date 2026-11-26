@@ -54,6 +54,7 @@ const POLICY = {
   addSection: ["agents", "manage"],
   renameSection: ["agents", "manage"],
   deleteSection: ["agents", "manage"],
+  orderSections: ["agents", "manage"],
   saveTemplate: "owner",
   renameTemplate: "owner",
   deleteTemplate: "owner",

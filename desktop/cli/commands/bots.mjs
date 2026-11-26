@@ -329,6 +329,14 @@ export const botsCommands = {
               context.print(await call(context, "bots.sections.rename", context.args[0], context.args[1]), (done) => "Renamed it to " + named(done.name) + ".");
             },
           },
+          move: {
+            summary: "Move a section to a place on Home (1 is the top)",
+            usage: "botkins bots sections move <section> <place>",
+            async run(context) {
+              if (context.args.length !== 2) throw usage("Name the section (its name or id), then its place (1 is the top).");
+              context.print(await call(context, "bots.sections.move", context.args[0], context.args[1]), (list) => list.map((entry, at) => at + 1 + ". " + named(entry.name)).join("\n"));
+            },
+          },
           remove: {
             summary: "Remove a section. Its bots stay, in no section",
             usage: "botkins bots sections remove <section> [--yes]",

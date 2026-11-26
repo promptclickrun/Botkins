@@ -1241,6 +1241,7 @@ declare global {
       addSection(name: string): Promise<string>;
       renameSection(id: string, name: string): Promise<void>;
       deleteSection(id: string): Promise<void>;
+      orderSections(ids: string[]): Promise<void>;
       setChatFlags(
         id: string,
         patch: Partial<Pick<Chat, "pinned" | "archived" | "unread">>,
