@@ -1,6 +1,7 @@
 // A call from a paired device, on its way to the app's handlers: the link backend's `call`.
 // LinkHost passes only names in REMOTE_METHODS, and has already checked what the caller may do.
 import { deviceArgs } from "./folders.mjs";
+import { bundleCreateRefusal, roleOfMember } from "./link/team.mjs";
 
 /**
  * Makes the link backend's `call(name, args, context)`.
@@ -57,6 +58,14 @@ export function deviceCall({ workspace, handlers, folders }) {
       const names = name === "removeSkill" || name === "setSkillEnabled" ? [checked[0]] : name === "skills.upload" ? checked[0]?.replace : name === "skillsCatalog.install" ? checked[1] : [];
       const scripts = workspace.state.skills?.scripts ?? {};
       if (Array.isArray(names) && names.some((skill) => typeof skill === "string" && Object.hasOwn(scripts, skill))) throw new Error("Only the owner can remove, turn off or replace a script command.");
+    }
+    // A separate link container can have an older version or an earlier snapshot of these routines.
+    if (member && (name === "addBot" || name === "duplicateBot")) {
+      const bundle = name === "addBot" ? checked[0]?.bundle : workspace.bundleForBot(workspace.bot(checked[0]), member.memberId);
+      if (bundle) {
+        const refusal = bundleCreateRefusal(roleOfMember(workspace.teamOf(), member.memberId)?.perms, bundle);
+        if (refusal) throw new Error(refusal);
+      }
     }
     // A member's menu lists the script commands only when their role may use skills ("script-commands-v1").
     if (member && name === "catalog") return handlers.catalog(checked[0], checked[1], checked[2], member.memberId);

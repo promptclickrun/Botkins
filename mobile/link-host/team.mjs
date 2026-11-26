@@ -449,6 +449,13 @@ export function defaultTeam() {
 
 export const hasAction = (perms, scope, action) => Array.isArray(perms?.[scope]) && perms[scope].includes(action);
 
+/** The same create permissions apply on the link and on the workspace that installs the bundle. */
+export function bundleCreateRefusal(perms, bundle) {
+  if (bundle?.skills?.length && !hasAction(perms, "skills", "create")) return "Your team role cannot create bundled skills.";
+  if (bundle?.routines?.length && !hasAction(perms, "today", "create")) return "Your team role cannot create bundled routines.";
+  return "";
+}
+
 const SELF_METHODS = new Set([
   "link.push.register",
   "link.push.prefs",
@@ -1065,8 +1072,8 @@ export function authorize(principal, team, method, args = [], lookups = {}) {
   }
   // Creating or copying a bundled bot also creates its private skills and routines.
   const bundle = method === "addBot" ? args[0]?.bundle : method === "duplicateBot" ? lookup("botBundle", args[0], lookups) : undefined;
-  if (bundle?.skills?.length && !hasAction(role.perms, "skills", "create")) return "Your team role cannot create bundled skills.";
-  if (bundle?.routines?.length && !hasAction(role.perms, "today", "create")) return "Your team role cannot create bundled routines.";
+  const bundleRefusal = bundleCreateRefusal(role.perms, bundle);
+  if (bundleRefusal) return bundleRefusal;
   const request = method === "respond" ? lookup("request", args[0], lookups) : null;
   // An approval can hold what a member is not sent (a plugin's whole description: each command and written value), so only the
   // owner answers one. The app's own test holds this line and the cut in filterParts (desktop/test/plugin-card-member.test.mjs).
