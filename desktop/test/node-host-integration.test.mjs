@@ -384,6 +384,35 @@ test("lost job.submit reply retries with the exact same request ID so the job ne
   assert.deepEqual(submitted[0], submitted[1]);
 });
 
+test("node calls have no per-reply cap: 20 listings in one reply all run", async (t) => {
+  let submits = 0;
+  const { client } = fakeClient(async (_id, _options, session) => {
+    for (let i = 0; i < 20; i++) await session.tool("list_node_files", { host: "host-b", project: "proj-1", path: "d" + i });
+    return { data: { content: "done" } };
+  });
+  const ws = new StarterWorkspace(join(tempDir(t), "data"), client, () => {});
+  ws.teamworkPeers = {
+    available: () => true,
+    hosts: async (withPin) => [{ serverId: "host-b", name: "Studio", ...(withPin && { pin: "peer-pin" }) }],
+    call: (_id, op) => {
+      if (op === "capabilities")
+        return { version: 1, role: "node", name: "Studio", online: true, paused: false, bots: [], operations: [{ id: "project.list_files", version: 1, readOnly: true }], projects: [{ id: "proj-1", name: "Assets" }] };
+      if (op === "job.submit") {
+        submits++;
+        return { status: "completed", result: { projectId: "proj-1", projectName: "Assets", path: "", entries: [], truncated: false, totalEntries: 0 } };
+      }
+      throw new Error("Unexpected op: " + op);
+    },
+  };
+  const chat = ws.createChat("pip");
+  await ws.send(chat, "List them all");
+  assert.equal(ws.chat(chat).messages.at(-1).text, "done");
+  assert.equal(submits, 20);
+  const run = ws.state.runs.find((r) => r.chatId === chat);
+  assert.equal(run.teamwork.length, 20);
+  assert.ok(run.teamwork.every((a) => a.status === "answered"));
+});
+
 test("full conversion of a 3-bot host (move 1, keep 1, delete 1) over real Teamwork, remote node control, and one-click undo", async (t) => {
   const directory = [];
   const sourceDir = tempDir(t);

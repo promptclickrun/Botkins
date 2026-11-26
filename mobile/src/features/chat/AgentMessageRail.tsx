@@ -10,6 +10,8 @@ import {
   buildOutgoingRail,
   buildTaskHandoffRail,
   foldPreview,
+  groupRailAsks,
+  type NodeCallGroupModel,
   type AgentRailStatus,
   type AgentRailTone,
 } from "./agentRailModel";
@@ -353,6 +355,54 @@ const OutgoingAskCard = memo(function OutgoingAskCard({ ask, bots }: { ask: Team
   );
 });
 
+/** Back-to-back node calls folded into one card; tap to see each call's own card. */
+const NodeCallGroupCard = memo(function NodeCallGroupCard({ group, bots }: { group: NodeCallGroupModel; bots: Map<string, Bot> }) {
+  const { colors } = useTheme();
+  const [open, setOpen] = useState(false);
+  const status = group.live ? group.running + " running" : group.failed ? group.failed + " failed" : "Done";
+  const accent = group.failed ? colors.danger : group.live ? colors.accentText : colors.success;
+  return (
+    <View
+      accessible={false}
+      style={[styles.card, { backgroundColor: colors.surface, borderColor: colors.line, borderLeftColor: accent }]}
+    >
+      <Tap
+        onPress={() => setOpen((v) => !v)}
+        feel="select"
+        accessibilityRole="button"
+        accessibilityState={{ expanded: open }}
+        accessibilityLabel={group.ariaLabel + (open ? ", collapse" : ", expand")}
+        style={styles.head}
+      >
+        {open ? (
+          <ChevronDown size={14} color={colors.muted} strokeWidth={2.2} />
+        ) : (
+          <ChevronRight size={14} color={colors.muted} strokeWidth={2.2} />
+        )}
+        <RailFace remote />
+        <View style={styles.identity}>
+          <T variant="footnote" weight="700" color="ink" numberOfLines={1}>
+            {group.title}
+          </T>
+          <StatusPill label={status} tone={group.statusTone} live={group.live} />
+        </View>
+      </Tap>
+      {!open && (
+        <T variant="caption" color="muted" numberOfLines={1}>
+          {group.summary.replace(/\s+/g, " ").trim()}
+        </T>
+      )}
+      {open && (
+        <View style={{ gap: space.sm }}>
+          {group.asks.map((ask) => (
+            <OutgoingAskCard key={ask.id} ask={ask} bots={bots} />
+          ))}
+        </View>
+      )}
+    </View>
+  );
+});
+
 const TaskHandoffCard = memo(function TaskHandoffCard({
   handoff,
   bots,
@@ -495,9 +545,13 @@ export const AgentMessageRail = memo(function AgentMessageRail({
 
   return (
     <View style={{ gap: space.sm }} accessibilityLabel="Agent messages">
-      {asks.map((ask) => (
-        <OutgoingAskCard key={ask.id} ask={ask} bots={bots} />
-      ))}
+      {groupRailAsks(asks).map((item) =>
+        item.kind === "ask" ? (
+          <OutgoingAskCard key={item.ask.id} ask={item.ask} bots={bots} />
+        ) : (
+          <NodeCallGroupCard key={item.id} group={item} bots={bots} />
+        ),
+      )}
       {handoffs.map((handoff) => (
         <TaskHandoffCard key={handoff.id} handoff={handoff} bots={bots} tasks={tasks} onOpenChat={onOpenChat} />
       ))}

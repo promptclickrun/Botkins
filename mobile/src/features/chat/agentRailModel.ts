@@ -268,3 +268,77 @@ export function buildTaskHandoffRail(
     ariaLabel: "Task handed to " + targetName + ": " + title + ", " + info.label,
   };
 }
+
+/** True for a rail entry made by a node_* tool (list_node_files, node_exec, ...), not a teammate ask. */
+export function isNodeAsk(ask: Pick<TeamAsk, "botId">): boolean {
+  return typeof ask.botId === "string" && ask.botId.startsWith("node:");
+}
+
+export type NodeCallGroupModel = {
+  kind: "node-group";
+  id: string;
+  asks: TeamAsk[];
+  hostLabel: string;
+  count: number;
+  running: number;
+  failed: number;
+  live: boolean;
+  title: string;
+  summary: string;
+  statusTone: AgentRailTone;
+  ariaLabel: string;
+};
+
+export type RailAskItem = { kind: "ask"; ask: TeamAsk } | NodeCallGroupModel;
+
+/** Summary for a run of node calls folded into one card. */
+export function nodeCallGroup(asks: TeamAsk[]): NodeCallGroupModel {
+  const hosts = [...new Set(asks.map((a) => a.remote?.hostName).filter((h): h is string => !!h))];
+  const hostLabel = hosts.length === 1 ? hosts[0] : hosts.length ? hosts.length + " hosts" : "a node";
+  const running = asks.filter((a) => a.status === "waiting" || a.status === "working").length;
+  const failed = asks.filter((a) => a.status === "failed").length;
+  const stopped = asks.filter((a) => a.status === "stopped").length;
+  const count = asks.length;
+  const title = count + " node " + (count === 1 ? "call" : "calls") + " on " + hostLabel;
+  const parts: string[] = [];
+  if (running) parts.push(running + " running");
+  if (failed) parts.push(failed + " failed");
+  if (stopped) parts.push(stopped + " stopped");
+  const current = [...asks].reverse().find((a) => a.status === "working" || a.status === "waiting");
+  const summary = current ? current.message : parts.length ? parts.join(" · ") : "All done";
+  const statusTone: AgentRailTone = failed ? "danger" : running ? "accent" : stopped ? "neutral" : "success";
+  return {
+    kind: "node-group",
+    id: "nodes-" + asks[0].id,
+    asks,
+    hostLabel,
+    count,
+    running,
+    failed,
+    live: running > 0,
+    title,
+    summary,
+    statusTone,
+    ariaLabel: title + (parts.length ? ", " + parts.join(", ") : ", all done"),
+  };
+}
+
+/** Folds back-to-back node calls into one group so a burst of node_exec doesn't fill the chat. */
+export function groupRailAsks(asks: ReadonlyArray<TeamAsk>): RailAskItem[] {
+  const items: RailAskItem[] = [];
+  let run: TeamAsk[] = [];
+  const flush = () => {
+    if (run.length === 1) items.push({ kind: "ask", ask: run[0] });
+    else if (run.length > 1) items.push(nodeCallGroup(run));
+    run = [];
+  };
+  for (const ask of asks) {
+    if (isNodeAsk(ask)) run.push(ask);
+    else {
+      flush();
+      items.push({ kind: "ask", ask });
+    }
+  }
+  flush();
+  return items;
+}

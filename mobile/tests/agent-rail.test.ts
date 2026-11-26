@@ -11,6 +11,7 @@ import {
   buildIncomingRail,
   buildOutgoingRail,
   buildTaskHandoffRail,
+  groupRailAsks,
   isAgentMessage,
 } from "../src/features/chat/agentRailModel";
 import { formatFeedWork, isStepCoveredByRail } from "../src/features/chat/activityModel";
@@ -337,4 +338,40 @@ test("mobile AgentMessageRail renders outgoing ask and task handoff cards with f
     (n) => n.props?.accessibilityRole === "button" && n.props?.accessibilityState?.expanded === false,
   );
   assert.ok(replyToggle, "reply starts folded with accessibilityState.expanded = false");
+});
+
+const nodeAsk = (id: string, status: "working" | "answered" | "failed", host = "Mac Studio") => ({
+  id,
+  botId: "node:system.run",
+  fromBotId: "alfie",
+  remote: { hostId: "mac", hostName: host, botName: "system.run" },
+  message: "system.run: ls " + id,
+  status,
+  started: T0,
+});
+
+test("back-to-back node calls fold into one group; teammate asks and lone node calls stay as cards", async (t) => {
+  const teammate = { id: "ask-g", botId: "glory", fromBotId: "alfie", message: "Review", status: "answered" as const, started: T0 };
+  const items = groupRailAsks([nodeAsk("a", "answered"), nodeAsk("b", "failed"), nodeAsk("c", "working"), teammate, nodeAsk("d", "answered")]);
+  assert.deepEqual(items.map((i) => i.kind), ["node-group", "ask", "ask"]);
+  const group = items[0];
+  assert.equal(group.kind, "node-group");
+  if (group.kind !== "node-group") return;
+  assert.equal(group.title, "3 node calls on Mac Studio");
+  assert.equal(group.running, 1);
+  assert.equal(group.failed, 1);
+  assert.equal(group.live, true);
+  assert.equal(group.summary, "system.run: ls c");
+  assert.equal(group.statusTone, "danger");
+  const spread = groupRailAsks([nodeAsk("x", "answered", "Mac"), nodeAsk("y", "answered", "VPS")]);
+  assert.equal(spread[0].kind === "node-group" && spread[0].title, "2 node calls on 2 hosts");
+  assert.equal(spread[0].kind === "node-group" && spread[0].summary, "All done");
+
+  const { AgentMessageRail } = loadMobileRail();
+  const run: Run = { id: "r9", chatId: "c1", title: "Node", time: T0, status: "Working", teamwork: Array.from({ length: 12 }, (_, i) => nodeAsk("n" + i, "answered")) };
+  const screen = await mount(el(AgentMessageRail, { run, bots: botMap }));
+  t.after(screen.unmount);
+  const toggle = screen.root.root.find((n) => n.props?.accessibilityLabel === "12 node calls on Mac Studio, all done, expand");
+  assert.ok(toggle, "one folded group card instead of 12 cards");
+  assert.equal(screen.root.root.findAll((n) => n.props?.accessibilityLabel === "Message to system.run on Mac Studio, Answered" && n.props?.accessible).length, 0);
 });
