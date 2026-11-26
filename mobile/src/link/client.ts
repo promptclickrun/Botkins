@@ -1197,7 +1197,7 @@ export class LinkClient {
           }
           this.options.onSync?.();
         };
-        const args = { epoch: this.epoch, have: this.have, watch: watching, ...(restricted && text !== "whole" && { textWatch: this.replyChats }), ...(this.keptPage && { keepPage: this.keptPage }), ...appends, ...(requestReasoning && { reasoningWatch, ...(this.options.separateThinking && { separateThinking: true }) }), ...(text !== "live" && { text: text === "chunks" ? "chunks" : false }), ...(this.options.lightSteps && { steps: "light" }), ...(requestStepDeltas && { runSteps: "delta" }), ...(requestSummaryDeltas && { runSummaries: "delta" }), ...(!push && { wait: quick ? 0 : 25_000 }) };
+        const args = { epoch: this.epoch, have: this.have, watch: watching, templateVersion: 2, ...(restricted && text !== "whole" && { textWatch: this.replyChats }), ...(this.keptPage && { keepPage: this.keptPage }), ...appends, ...(requestReasoning && { reasoningWatch, ...(this.options.separateThinking && { separateThinking: true }) }), ...(text !== "live" && { text: text === "chunks" ? "chunks" : false }), ...(this.options.lightSteps && { steps: "light" }), ...(requestStepDeltas && { runSteps: "delta" }), ...(requestSummaryDeltas && { runSummaries: "delta" }), ...(!push && { wait: quick ? 0 : 25_000 }) };
         if (push) this.pushSession = session;
         const pollLedger = trackResource("poll", "LinkClient:sync", push ? "link.follow" : "link.sync", this.pairing.serverId);
         let news: SyncNews;

@@ -5,6 +5,7 @@ import type { Href } from "expo-router";
 import type { MarketAgent, MarketAgentCategory } from "@/link/types";
 
 export const AGENTS_CAPABILITY = "agent-templates-v1";
+export const AGENT_TEMPLATE_BUNDLES = "agent-template-bundles-v1";
 
 export type AgentChip = { key: string; label: string; category?: string; name?: string };
 

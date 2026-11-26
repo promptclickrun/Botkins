@@ -91,3 +91,11 @@
   -webkit-box-orient: vertical;
   -webkit-line-clamp: var(--lines, 4);
 }
+
+.template-bundle summary {
+  cursor: pointer;
+  color: var(--ink-2);
+  overflow-wrap: anywhere;
+}
+.template-bundle summary strong { color: var(--ink); }
+.template-bundle details[open] summary { margin-bottom: 6px; }

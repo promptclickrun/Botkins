@@ -1,6 +1,6 @@
 # Agent templates in the Marketplace
 
-A marketplace can offer agent templates: a bot's name, role, about line, instructions and look, ready to become a bot. A person browses them in Marketplace › Agents, on the phone and in the app on the computer. Install opens Create a bot, filled in from the template. The person changes what they like, the look too, and saves. Nothing is installed before that: the new bot is the only thing that is made.
+A marketplace can offer agent templates: a bot's name, role, about line, instructions and look, ready to become a bot. A person browses them in Marketplace › Agents, on the phone and in the app on the computer. Install opens Create a bot, filled in from the template. The person changes what they like, the look too, and saves. Saving also installs the template’s bundled skills and routines for the new bot. Canceling leaves the workspace as it was.
 
 Capability: `agent-templates-v1`, named by the computer's app (`backend.capabilities`). Without it the phone says "Update the app on your computer".
 
@@ -24,11 +24,29 @@ A marketplace's catalog file (`.github/plugin/marketplace.json`, the file that l
 ```
 
 - `name`: one word in lowercase letters, digits and dashes, unique in the marketplace. The template's id is `name@marketplace`, as a plugin's is. Ids are opaque to a client.
-- `source`: a path in the same repository or folder, ending in `.json`, that does not climb out with `..`. The file is a Botkins bot template, the file "Export template…" writes: `{ "format": "botkins.bot-template", "version": 1, "name", "role", "summary", "instructions", "look" }`. Its fields are checked the same way as an imported template (`templateFields` in the desktop app's `desktop/templates.mjs`). The template's `name` is the bot's name and the title shown. Its `summary` is the description shown.
+- `source`: a path in the same repository or folder, ending in `.json`, that does not climb out with `..`. The file is a Botkins bot template, the file "Export template…" writes: `{ "format": "botkins.bot-template", "version": 1, "name", "role", "summary", "instructions", "look" }`. Version 2 adds the bundle described below. Its fields are checked the same way as an imported template (`templateFields` in the desktop app's `desktop/templates.mjs`). The template's `name` is the bot's name and the title shown. Its `summary` is the description shown.
 - `category`: optional. One of `writing`, `research`, `productivity`, `work`, `dev`, `learning`, `health`, `finance`, `home`, `media`, `life`, `other`. Another word is shown as Other.
 - `version`, `keywords` (at most 12) and `author` (`{ name, url? }` or a string) are optional, and are shown as they are given.
 
 The computer reads the template files when someone browses templates, at most once an hour for each marketplace (with the catalog itself). A file it can't read, or that isn't a template, is left out. At most 200 templates are read from one marketplace, and a file is at most 256 KB.
+
+## Template bundles
+
+Hosts that advertise `agent-template-bundles-v1` accept template file version 2. A bundled template carries a `bundle` alongside the profile fields. Each included skill is an instruction skill available to the new bot. Each included routine is a separate paused routine for that bot, with its own chat and no notifications on installation. Previewing a template creates nothing. Two bots made from the same template get independent copies.
+
+```ts
+type TemplateBundle = {
+  skills?: { name: string; description: string; instructions: string }[];
+  routines?: {
+    name: string;
+    instructions: string;
+    cadence: { kind: "daily" | "weekdays"; time: string } |
+             { kind: "weekly"; time: string; days: number[] };
+  }[];
+};
+```
+
+Include at least one kind with at least one item. Use lowercase skill names with letters, digits and dashes, and 24-hour times such as `09:00`. Weekly days run from Sunday (0) through Saturday (6). The host supplies the bot ID and local time zone when it creates a routine. The bundle format carries text and schedules. Script commands, executable files, credentials and delivery targets have no fields in it. Templates with only a profile continue to use version 1.
 
 ## Botkins' own templates
 
@@ -59,12 +77,12 @@ type MarketAgent = {
   keywords?: string[];
 };
 type MarketAgentCategory = { id: string; name: string; count: number };
-type MarketAgentTemplate = MarketAgent & { instructions: string };
+type MarketAgentTemplate = MarketAgent & { instructions: string; bundle?: TemplateBundle };
 ```
 
 - `query` (at most 200 characters) matches the name, role, summary, category and keywords. `category` and `marketplace` narrow the list. `categories` counts the templates the other filters leave, so a client can show its chips with counts.
 - The order is the catalog's own (the built-in Botkins marketplace first), so a catalog puts its best templates first.
-- `agents.template` answers with the template's instructions, for Create a bot. It is refused with a sentence when the template is gone.
+- `agents.template` answers with the instructions and any bundle for review in Create a bot. It is refused with a sentence when the template is gone.
 
 ## What a client shows
 

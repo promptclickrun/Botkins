@@ -2749,6 +2749,15 @@ export class LinkHost extends EventEmitter {
     const slot = light ? "compactLight" : "compact";
     return (part[slot] ??= JSON.stringify(compactWorkingRun(JSON.parse(part.json), light)));
   }
+  /** Older clients make bots from the template fields they know. Only send them plain templates. */
+  plainTemplates(part) {
+    if (!part.plainTemplates) {
+      const all = JSON.parse(part.json);
+      const plain = all.filter((template) => !template.bundle);
+      part.plainTemplates = plain.length === all.length ? { json: part.json, v: part.v } : { json: JSON.stringify(plain), v: ++this.version };
+    }
+    return part.plainTemplates;
+  }
   /** Missing parts as JSON, null when caught up, or milliseconds until the next eligible flush. */
   news(known, watching, cursors, session, throttle, interval = 0, advance, runBases) {
     const partWatching = [...new Set([...watching, ...(session.reasoningWatch ?? [])])];
@@ -2779,8 +2788,9 @@ export class LinkHost extends EventEmitter {
     const deliveredReasoning = [];
     const deliveredText = [];
     for (const name of values.names ?? this.names(partWatching)) {
-      const part = values.get(quiet && name === "live" ? "quietLive" : name);
+      let part = values.get(quiet && name === "live" ? "quietLive" : name);
       if (!part) continue;
+      if (name === "templates" && session.templateVersion !== 2) part = this.plainTemplates(part);
       versions[name] = part.v;
       if (known[name] === part.v) continue;
       const legacyTextOnly = name === "live" && !quiet && known.live > (values.get("quietLive")?.v ?? Infinity);
@@ -2957,6 +2967,7 @@ export class LinkHost extends EventEmitter {
       this.dirty = true;
     }
     // One form for a session: a client names it on every sync, and the versions it holds are for that form.
+    session.templateVersion = request.templateVersion;
     session.light = steps === "light";
     if (!forMinimal && session.light && request.runSteps === "delta") {
       session.runStepBases ??= new Map();

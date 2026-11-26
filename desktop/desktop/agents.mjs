@@ -187,10 +187,7 @@ export class Agents {
     // A copy belongs to whoever copied it: the mark of who made the first one is not carried over.
     delete copy.createdBy;
     if (person !== "owner") copy.createdBy = person;
-    this.state.chats.push(makeMainChat(copy.id, person));
-    this.state.bots.splice(this.state.bots.indexOf(source) + 1, 0, copy);
-    this.ws.save();
-    return copy.id;
+    return this.ws.installBot(copy, source.bundle, this.state.bots.indexOf(source) + 1);
   }
   async deleteBot(id) {
     const bot = this.ws.bot(id);
@@ -241,6 +238,7 @@ export class Agents {
     this.state.bots[0].hidden = false;
     this.ws.clearCatalogs();
     this.ws.save();
+    if (bot.bundle?.skills) this.ws.integrations.removeBotSkills(bot);
     await this.deleteSessions(chats, memberSessions);
   }
   addSection(name) {

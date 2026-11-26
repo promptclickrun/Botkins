@@ -412,20 +412,26 @@ export class Routines {
    */
   create(data, now = Date.now(), createdBy, opts = {}) {
     this.ws.bot(data.botId);
+    const chat = this.buildChat(data, now, createdBy, opts);
+    this.ws.state.chats.unshift(chat);
+    this.ws.save();
+    return chat.id;
+  }
+  /** Prepare a routine with its private chat before either becomes visible to the scheduler. */
+  buildChat(data, now, createdBy, opts) {
     // A script runs on this computer, so only its owner writes one.
     if (createdBy && data.script != null) throw new Error("Only the computer's owner can add a script to a routine.");
     const fields = this.fields(data, now);
     const deliver = deliveryField(data.deliver, this.ws, data.botId, personOf(createdBy));
     const notifyChange = this.notifyChange(data.botId, data, personOf(createdBy), opts);
-    const chatId = this.ws.createChat(data.botId, "Routine · " + fields.name, undefined, createdBy);
-    const chat = this.ws.chat(chatId);
-    const id = (chat.lastScheduleId ?? 0) + 1;
-    chat.lastScheduleId = id;
+    const chat = this.ws.buildChat(data.botId, "Routine · " + fields.name, undefined, createdBy);
+    chat.lastScheduleId = 1;
     chat.schedules = [
       {
-        id,
+        id: 1,
         routine: true,
-        enabled: true,
+        enabled: !opts.fromTemplate,
+        ...(opts.fromTemplate && { fromTemplate: true }),
         createdAt: now,
         ...fields,
         ...(createdBy && { createdBy }),
@@ -434,8 +440,7 @@ export class Routines {
         ...(notifyChange.notifyTargets && { notifyTargets: notifyChange.notifyTargets }),
       },
     ];
-    this.ws.save();
-    return chatId;
+    return chat;
   }
   update(chatId, data, now = Date.now(), actor = "owner", opts = {}) {
     const { chat, entry } = this.find(chatId);
@@ -685,9 +690,12 @@ export class Routines {
     // Panel refreshes stay limited to their panel.
     if (run?.panelId) return [];
     const ws = this.ws;
-    const owned = (id) => {
+    const people = ws.turnPeople(chat, task);
+    const owns = (entry) => people.people.every((id) => id === "owner" || id === personOf(entry.createdBy));
+    const owned = (id, action = "manage") => {
       const found = this.find(String(id ?? ""));
-      if (found.chat.botId !== bot.id) throw new Error("Unknown routine for this bot");
+      if (found.chat.botId !== bot.id || !owns(found.entry)) throw new Error("Unknown routine for this bot");
+      people.needs(action);
       return found;
     };
     const tool = (name, description, properties, required, handler) =>
@@ -762,7 +770,7 @@ export class Routines {
     const id = { id: { type: "string", description: "Routine id from routine_list" } };
     const tools = [
       tool("routine_list", "List your routines: scheduled tasks that run your instructions in their own chat.", {}, [], () =>
-        this.list(bot.id).map(({ chat, entry }) => this.view(chat, entry)),
+        people.sees() ? this.list(bot.id).filter(({ entry }) => owns(entry)).map(({ chat, entry }) => this.view(chat, entry)) : [],
       ),
       tool(
         "routine_notify_targets",
@@ -877,7 +885,7 @@ export class Routines {
         return this.view(ws.chat(a.id), this.setEnabled(a.id, null, true));
       }),
       tool("routine_delete", "Delete one of your routines and its run history, when the person asks.", id, ["id"], async (a) => {
-        const { entry } = owned(a.id);
+        const { entry } = owned(a.id, "delete");
         await this.remove(a.id);
         return { deleted: entry.name };
       }),

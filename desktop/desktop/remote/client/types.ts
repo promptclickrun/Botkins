@@ -197,6 +197,7 @@ export type Bot = {
   name: string;
   role: string;
   instructions: string;
+  bundle?: AgentTemplateBundle;
   clarificationInstructions?: string;
   face: string;
   model?: ModelChoice;
@@ -215,7 +216,7 @@ export type Bot = {
   access?: BotAccessGrant;
   origin?: { provider: string; agent: string; file?: string };
 };
-export type BotInput = Pick<Bot, "name" | "role" | "instructions" | "face"> & Partial<Pick<Bot, "avatar" | "summary">>;
+export type BotInput = Pick<Bot, "name" | "role" | "instructions" | "face"> & Partial<Pick<Bot, "avatar" | "summary" | "bundle">>;
 /** An agent the person already has in a provider's own tool (a Copilot or Codex agent), which can become a bot. */
 export type ImportableAgent = {
   key: string;
@@ -245,7 +246,14 @@ export type ProjectChanges = { repo: false; files: [] } | { repo: true; root: st
 /** The computer's app, for About. */
 export type AppInfo = { version: string; electron: string; chrome: string; platform: string };
 export type Section = { id: string; name: string };
+/** Content copied to the new bot by a computer with agent-template-bundles-v1. */
+export type AgentTemplateBundle = {
+  skills?: { name: string; description: string; instructions: string }[];
+  routines?: { name: string; instructions: string; cadence: Extract<Cadence, { kind: "daily" | "weekdays" | "weekly" }> }[];
+};
+
 export type BotTemplate = {
+  bundle?: AgentTemplateBundle;
   id: string;
   name: string;
   role: string;
@@ -1274,7 +1282,7 @@ export type MarketAgent = {
 /** A category's chip: how many templates the other filters leave in it. */
 export type MarketAgentCategory = { id: string; name: string; count: number };
 /** A template with what Create a bot is filled in with. */
-export type MarketAgentTemplate = MarketAgent & { instructions: string };
+export type MarketAgentTemplate = MarketAgent & { instructions: string; bundle?: AgentTemplateBundle };
 
 /** A plugin in a catalog. `id` is opaque: never read anything out of it; show `name` and `marketplace`. */
 export type PluginListing = {
@@ -1864,7 +1872,7 @@ export type Calls = {
   "piPackages.setEnabled"(name: string, version: string, enabled: boolean): InstalledPiPackage;
   "agents.browse"(query?: { query?: string; category?: string; marketplace?: string }): { agents: MarketAgent[]; categories: MarketAgentCategory[] };
   /** Refused with a sentence when the template is gone. */
-  "agents.template"(id: string): MarketAgentTemplate;
+  "agents.template"(id: string, version?: 2): MarketAgentTemplate;
   // ---- A chat's Connect card (the computer's desktop/connects.mjs): the computer's own Composio account, so its owner only
   /** Connect: starts or joins the app's sign-in. `url` is the page to open while it waits. */
   "composio.cardOpen"(chatId: string, cardId: string): ConnectCardState & { url?: string };

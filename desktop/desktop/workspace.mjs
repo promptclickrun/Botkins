@@ -100,6 +100,7 @@ import { Proactive } from "./proactive.mjs";
 import { Reminders } from "./reminders.mjs";
 import { proposalsFrom } from "./proactive-learning.mjs";
 import { Templates } from "./templates.mjs";
+import { templateBundle } from "./link/template-bundle.mjs";
 import { readWorkspace, WorkspaceWriter } from "./workspace-file.mjs";
 import { Access } from "./access.mjs";
 import { SessionSearch } from "./session-search.mjs";
@@ -774,9 +775,30 @@ export class Workspace {
     const voice = data.voice === undefined ? null : botVoiceField(data.voice);
     if (voice) bot.voice = voice;
     if (person !== "owner") bot.createdBy = person;
-    this.state.bots.push(bot);
-    this.state.chats.push(makeMainChat(bot.id, person));
-    this.save();
+    return this.installBot(bot, data.bundle);
+  }
+  /** Publish the bot, its Main chat and all its paused routines in one workspace write. */
+  installBot(bot, input, index = this.state.bots.length) {
+    const bundle = templateBundle(input);
+    if (bundle) bot.bundle = bundle;
+    const chats = [makeMainChat(bot.id, bot.createdBy)];
+    for (const { name, instructions, cadence } of bundle?.routines ?? []) {
+      chats.push(this.panels.routines.buildChat(
+        { botId: bot.id, name, prompt: instructions, cadence, notify: false },
+        Date.now(), bot.createdBy, { fromTemplate: true },
+      ));
+    }
+    if (bundle?.skills) this.integrations.installBotSkills(bot);
+    this.state.bots.splice(index, 0, bot);
+    this.state.chats.push(...chats);
+    try {
+      this.save();
+    } catch (error) {
+      this.state.bots.splice(index, 1);
+      this.state.chats.splice(-chats.length);
+      if (bundle?.skills) this.integrations.removeBotSkills(bot);
+      throw error;
+    }
     return bot.id;
   }
   updateBot(id, data) {
@@ -815,9 +837,14 @@ export class Workspace {
     return chat.id;
   }
   createChat(botId, title = "New chat", panelId, createdBy) {
-    if (!this.state.bots.some((b) => b.id === botId))
-      throw new Error("Unknown bot");
-    const chat = {
+    this.bot(botId);
+    const chat = this.buildChat(botId, title, panelId, createdBy);
+    this.state.chats.unshift(chat);
+    this.save();
+    return chat.id;
+  }
+  buildChat(botId, title, panelId, createdBy) {
+    return {
       id: randomUUID(),
       botId,
       ...(createdBy && { createdBy }),
@@ -827,9 +854,6 @@ export class Workspace {
       messages: [],
       established: false,
     };
-    this.state.chats.unshift(chat);
-    this.save();
-    return chat.id;
   }
   /** A chat with 2 to 6 bots. Returns its id (desktop/groups.mjs). */
   createGroupChat(botIds, title) {
@@ -2061,7 +2085,10 @@ export class Workspace {
     const chat = chatId ? this.state.chats.find((c) => c.id === chatId) : null;
     if (!Array.isArray(data?.choices)) return data;
     const team = this.teamOf();
-    if (![person, chat?.createdBy].every((id) => !id || id === "owner" || turnAccess({ memberId: id }, team).skills)) return data;
+    if (![person, chat?.createdBy].every((id) => !id || id === "owner" || turnAccess({ memberId: id }, team).skills)) {
+      // The provider's cached menu may have been built for the owner.
+      return { ...data, choices: data.choices.filter((entry) => entry.kind !== "Skill") };
+    }
     const taken = commandNames(data.choices);
     const scripts = this.integrations.scriptCommands().filter((c) => c.enabled && !c.unavailable && !taken.has(c.name)).map(scriptChoice);
     return scripts.length ? { ...data, choices: [...data.choices, ...scripts] } : data;
@@ -2624,6 +2651,8 @@ export class Workspace {
   async assertScriptName(name, original) {
     const id = String(name ?? "").trim().replace(/^\//, "").toLowerCase();
     if (!id || id === original) return;
+    if (this.state.bots.some(bot => bot.bundle?.skills?.some(skill => skill.name === id)))
+      throw new Error("/" + id + " is a skill of a bot on this computer. Choose another name.");
     const menus = await Promise.allSettled(this.state.bots.map((bot) => this.inventory(bot.id)));
     menus.forEach((menu, at) => {
       if (menu.status === "fulfilled" && commandNames(menu.value.choices).has(id)) throw new Error("/" + id + " is a command of " + this.state.bots[at].name + "'s model provider, which wins over a script command. Choose another name.");

@@ -1,14 +1,16 @@
 import { type Href, router, useLocalSearchParams } from "expo-router";
 import { Bot as BotIcon, FileUp, LayoutTemplate, Palette, Shuffle } from "lucide-react-native";
-import { type ReactNode, useEffect, useState } from "react";
+import { type ReactNode, useEffect, useRef, useState } from "react";
 import { ScrollView, View } from "react-native";
 import Animated, { FadeIn } from "react-native-reanimated";
 import { type BotkinLook, cleanLook, lookForHost, lookOf, randomLook } from "@/data/botLook";
 import { MarketTemplates } from "./MarketTemplates";
-import { fromLine } from "@/features/market/agents/logic";
+import { TemplateBundle } from "./TemplateBundle";
+import { AGENT_TEMPLATE_BUNDLES, fromLine } from "@/features/market/agents/logic";
 import type { BotInput, BotTemplate, ImportableAgent, MarketAgentTemplate } from "@/link/types";
 import { pickTextFile, shareFrom } from "@/state/files";
 import { useCan, useCapability, usePart } from "@/state/hooks";
+import { readAgentTemplate } from "@/features/market/agents/calls";
 import { api, attempt } from "@/state/link";
 import { showToast, useApp } from "@/state/store";
 import { BotAvatar, Button, Chip, EmptyState, Field, Group, HoldMenu, Label, Row, Sheet, space, T, type TextPromptOptions, useTextPrompt } from "@/ui";
@@ -19,7 +21,7 @@ import { counter, LIMITS } from "./limits";
 import { type Starter, starterById, STARTERS } from "../../../link-host/starters.mjs";
 import { PROACTIVE_TEAM } from "./proactive";
 
-type Start = { key: string; name: string; role: string; instructions: string; summary?: string; look?: BotkinLook; avatar?: BotInput["avatar"]; /** An agent the person already has: the bot is made from it. */ agent?: ImportableAgent; /** One of the three starters (link-host/starters.mjs). */ starter?: string };
+type Start = { key: string; name: string; role: string; instructions: string; summary?: string; look?: BotkinLook; avatar?: BotInput["avatar"]; bundle?: BotInput["bundle"]; note?: string; /** An agent the person already has: the bot is made from it. */ agent?: ImportableAgent; /** One of the three starters (link-host/starters.mjs). */ starter?: string };
 
 /** One of the starters, the same three the computer offers. */
 const starterStart = (starter: Starter): Start => ({
@@ -40,10 +42,14 @@ const savedStart = (template: BotTemplate): Start => ({
   summary: template.summary || undefined,
   look: lookOf(template),
   avatar: template.avatar,
+  bundle: template.bundle,
+  note: template.source === "imported" ? "Imported from a file. Someone else wrote these instructions: read them first." : undefined,
 });
 /** A template from Marketplace › Agents (docs/agent-templates.md). */
 const marketStart = (template: MarketAgentTemplate): Start => ({
   key: "market:" + template.id,
+  bundle: template.bundle,
+  note: fromLine(template),
   name: template.name,
   role: template.role,
   instructions: template.instructions,
@@ -85,6 +91,7 @@ export default function NewBot() {
 function NewBotEditor() {
   const canManage = useCan("agents", "manage");
   const teams = useCapability(PROACTIVE_TEAM);
+  const bundlesSupported = useCapability(AGENT_TEMPLATE_BUNDLES);
   const saved = usePart("templates");
   const [picker, setPicker] = useState<"templates" | "import">();
   const options = useLookOptions();
@@ -105,27 +112,27 @@ function NewBotEditor() {
   const providers = [...new Set(agents.map((agent) => agent.providerName))];
   // Install on a template in Marketplace › Agents opens this sheet with its id. Until it arrives, the fields stay as they are.
   const { template, starter } = useLocalSearchParams<{ template?: string; /** A starter's id, from Home's first-run list. */ starter?: string }>();
-  const [market, setMarket] = useState<MarketAgentTemplate>();
+  const selection = useRef(0);
   useEffect(() => {
     if (!template) return;
     let live = true;
-    void attempt(api["agents.template"](template)).then((found) => {
-      if (!live || !found) return;
-      setMarket(found);
+    const initial = selection.current;
+    void attempt(readAgentTemplate(template, bundlesSupported)).then((found) => {
+      if (!live || !found || selection.current !== initial) return;
       pick(marketStart(found));
     });
     return () => {
       live = false;
     };
-  }, [template]);
+  }, [template, bundlesSupported]);
   useEffect(() => {
     const chosen = starterById(starter);
     if (chosen) pick(starterStart(chosen));
   }, [starter]);
-  const marketNote = market && start?.key === "market:" + market.id ? fromLine(market) : undefined;
 
   const pick = (next: Start) => {
     if (next.agent?.problem) return showToast(next.agent.problem, "error");
+    selection.current++;
     // A name the person typed stays; one the last template filled in follows the new one. An agent brings its own.
     if (next.agent || !name.trim() || name === start?.name) setName(next.name);
     setRole(next.role);
@@ -150,7 +157,7 @@ function NewBotEditor() {
     }
   };
 
-  const ready = !!name.trim() && !busy;
+  const ready = !!name.trim() && !busy && (!start?.bundle || bundlesSupported);
   const create = async () => {
     if (!ready) return;
     setBusy(true);
@@ -167,7 +174,16 @@ function NewBotEditor() {
       if (fields.instructions !== agent.instructions.trim()) patch.instructions = fields.instructions;
       if (id && canManage && Object.keys(patch).length) await attempt(api.updateBot(id, patch));
     } else {
-      const bot: BotInput = { name: fields.name, role: fields.role, instructions: fields.instructions, face: "idle", ...(start?.avatar && { avatar: start.avatar }), ...(fields.summary && { summary: fields.summary }), ...(start?.starter && { starter: start.starter }) };
+      const bot: BotInput = {
+        name: fields.name,
+        role: fields.role,
+        instructions: fields.instructions,
+        face: "idle",
+        ...(fields.summary && { summary: fields.summary }),
+        ...(start?.avatar && { avatar: start.avatar }),
+        ...(start?.starter && { starter: start.starter }),
+        ...(start?.bundle && { bundle: start.bundle }),
+      };
       id = await attempt(api.addBot(bot));
     }
     if (id) {
@@ -193,10 +209,7 @@ function NewBotEditor() {
       </View>
       <View>
         <Label>Marketplace</Label>
-        <MarketTemplates pick={(template) => {
-          setMarket(template);
-          pick(marketStart(template));
-        }} />
+        <MarketTemplates pick={(template) => pick(marketStart(template))} />
       </View>
       <View>
         <Label>Your templates</Label>
@@ -269,9 +282,9 @@ function NewBotEditor() {
         <Button title="Import" icon={FileUp} variant="secondary" size="sm" onPress={() => setPicker("import")} />
       </View>
 
-      {!!marketNote && (
+      {!!start?.note && (
         <T variant="footnote" color="muted">
-          {marketNote}
+          {start.note}
         </T>
       )}
 
@@ -287,6 +300,7 @@ function NewBotEditor() {
         <Field label="About" placeholder="A line about what this bot is for" value={summary} onChangeText={setSummary} maxLength={LIMITS.summary} hint="Optional" />
         <Field label="Instructions" placeholder="What should it do, and how?" value={instructions} onChangeText={setInstructions} maxLength={LIMITS.instructions} area hint={counter(instructions, LIMITS.instructions)} style={{ minHeight: 140 }} />
       </View>
+      <TemplateBundle bundle={start?.bundle} supported={bundlesSupported} />
     </Sheet>
   );
 }
