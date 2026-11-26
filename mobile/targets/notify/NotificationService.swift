@@ -22,6 +22,8 @@ final class NotificationService: UNNotificationServiceExtension {
   override func didReceive(_ request: UNNotificationRequest, withContentHandler contentHandler: @escaping (UNNotificationContent) -> Void) {
     deliver = contentHandler
     let content = (request.content.mutableCopy() as? UNMutableNotificationContent) ?? UNMutableNotificationContent()
+    // Keep every Botkins alert in one app-wide notification stack, including alerts from older hosts.
+    content.threadIdentifier = ""
     best = content
     if let sealed = request.content.userInfo["b"] as? String, let (opened, host) = open(sealed) {
       if let title = opened["t"] as? String, !title.isEmpty { content.title = title }

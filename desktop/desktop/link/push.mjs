@@ -559,10 +559,7 @@ export class Push {
       // A routine that sends its result to a chat is opened there, where the person reads it.
       // When an explicit routine target cannot access either chat, omit `c` rather than leaking it.
       const payload = { t: title.slice(0, 80), m: text, ...(openChatId && { c: openChatId }), k: kind === "routines" ? "routine" : "reply", ...offered };
-      const alert = this.alert(device.id, record, payload, {
-        expiration: 900,
-        ...(!openChatId && { group: "routine:" + (run.scheduleId ?? run.id) }),
-      });
+      const alert = this.alert(device.id, record, payload, { expiration: 900 });
       if (!canSeeChat || !this.hold(device.id, record, run.chatId, alert, "finish")) sends.push(alert);
     }
   }
@@ -646,23 +643,22 @@ export class Push {
     return Buffer.concat([nonce, seal(key, nonce, Buffer.from(JSON.stringify(content), "utf8"), aad)]).toString("base64");
   }
 
-  alert(deviceId, record, content, { urgent = false, expiration = 900, group } = {}) {
-    // A chat's alerts share a banner and a thread; `group` gives others one of their own.
-    const thread = group ?? content.c ?? "botkins";
+  alert(deviceId, record, content, { urgent = false, expiration = 900, collapse } = {}) {
+    // No thread-id and no default collapse id: iOS folds all Botkins alerts into one app-wide
+    // stack instead of splitting per chat or replacing unread banners. Callers pass `collapse`
+    // only when a newer notice should replace an unread earlier one (such as app updates).
     return {
       token: record.token,
       env: record.env,
       type: "alert",
       priority: 10,
       expiration,
-      // One banner per chat: a newer one replaces an older one that was not read.
-      collapse: b64u(hkdf(Buffer.from(thread, "utf8"), Buffer.from(deviceId, "utf8"), "botkins/push/collapse/v1", 24)),
+      ...(collapse && { collapse: b64u(hkdf(Buffer.from(collapse, "utf8"), Buffer.from(deviceId, "utf8"), "botkins/push/collapse/v1", 24)) }),
       payload: {
         aps: {
           alert: { title: "Botkins", body: content.k === "request" || content.k === "reminder" ? "A bot needs you" : content.k === "update" ? "An update is available" : content.k === "space" ? "A space changed" : "New message" },
           sound: "default",
           "mutable-content": 1,
-          "thread-id": b64u(hkdf(Buffer.from(thread, "utf8"), Buffer.from(deviceId, "utf8"), "botkins/push/thread/v1", 12)),
           "interruption-level": urgent ? "time-sensitive" : "active",
           category: content.k === "request" ? "botkins_request" : content.k === "team" ? "botkins_team" : "botkins_message",
         },
@@ -948,7 +944,7 @@ export class Push {
       const record = this.store.push(device.id);
       const sending = device.id + " " + named;
       if (!record || record.updateSeen === named || this.updating.has(sending)) continue;
-      const item = this.alert(device.id, record, content, { expiration: 24 * 60 * 60, group: "update" });
+      const item = this.alert(device.id, record, content, { expiration: 24 * 60 * 60, collapse: "update" });
       // Without a sealed body nothing is sent (see `send`), so it isn't counted.
       if (!item.payload.b) continue;
       this.updating.add(sending);

@@ -191,6 +191,8 @@ test("a newer Botkins is told to the owner's phone once per version, sealed, und
     const [alert] = sent;
     // What Apple and the relay see: a generic line. What the phone shows: the computer's name and the version.
     assert.deepEqual(alert.payload.aps.alert, { title: "Botkins", body: "An update is available" });
+    assert.equal(alert.payload.aps["thread-id"], undefined);
+    assert.equal(typeof alert.collapse, "string");
     assert.deepEqual(unseal(paired, alert.payload.b), { t: "Studio server", m: "Botkins 0.16.5 is available.", k: "update" });
     // Once per version, also after the phone registers again; a newer one is told; a non-version never.
     assert.equal(link.push.updateAvailable("0.16.5"), 0);
