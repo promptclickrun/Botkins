@@ -6,13 +6,14 @@ import Animated, { useAnimatedStyle, useSharedValue, withSpring } from "react-na
 import { usePrefs } from "@/state/prefs";
 import { Button } from "./Button";
 import { Glass, hasGlass } from "./Glass";
-import { Tap } from "./Tap";
+import { Tap, type TapProps } from "./Tap";
 import { T } from "./Text";
 import { type Colors, radius, slopFor, space, useTheme } from "./theme";
 
 /** A pill a person picks: a filter, a choice. */
-export function Chip({ label, selected, onPress, icon: Icon, leading, accessibilityLabel }: { label: string; selected?: boolean; onPress?: () => void; icon?: LucideIcon; leading?: ReactNode; /** What VoiceOver reads in place of the label, when the chip says more than its words (a dot). */ accessibilityLabel?: string }) {
+export function Chip({ label, selected, onPress, icon: Icon, leading, accessibilityLabel, accessibilityActions, onAccessibilityAction }: { label: string; selected?: boolean; onPress?: () => void; icon?: LucideIcon; leading?: ReactNode; /** What VoiceOver reads in place of the label, when the chip says more than its words (a dot). */ accessibilityLabel?: string } & Pick<TapProps, "accessibilityActions" | "onAccessibilityAction">) {
   const { colors, dark, control } = useTheme();
+  const actions = accessibilityActions?.length ? { accessibilityActions, onAccessibilityAction } : {};
   const hasBackdrop = usePrefs((prefs) => prefs.backdrop !== "clean");
   const fg = selected ? colors.onPrimary : colors.ink;
   const body = (
@@ -32,6 +33,7 @@ export function Chip({ label, selected, onPress, icon: Icon, leading, accessibil
         feel="select"
         accessibilityState={{ selected: false }}
         {...(accessibilityLabel && { accessibilityLabel })}
+        {...actions}
         hitSlop={slopFor(control.chip)}
       >
         <Glass
@@ -58,6 +60,7 @@ export function Chip({ label, selected, onPress, icon: Icon, leading, accessibil
       feel="select"
       accessibilityState={{ selected: !!selected }}
       {...(accessibilityLabel && { accessibilityLabel })}
+      {...actions}
       hitSlop={slopFor(control.chip)}
       style={{
         minHeight: control.chip,
