@@ -214,3 +214,148 @@ test("a phone's install arguments are cut to their shape", () => {
   assert.deepEqual(remoteArgs("market.catalog", [1, 2]), []);
   assert.ok(existsSync);
 });
+
+test("pack install refuses mismatched installed plugin revisions without expanding scope or leaving partial installs, and succeeds when revisions match", async (t) => {
+  const { ws, root, id, v2 } = await setup(t);
+  const pluginId = "timer@" + id;
+  const revA = (await ws.plugins.preview(pluginId)).revision;
+  await ws.plugins.install(pluginId, { revision: revA, bots: ["pip"] });
+
+  // Catalog plugin changes to a new revision while the old revision remains installed.
+  writeFileSync(join(root, "plugins", "timer", "plugin.json"), JSON.stringify({ name: "timer", version: "1.0.0", description: "A timer (updated)" }));
+  await reread(ws, id);
+  const revB = (await ws.plugins.preview(pluginId)).revision;
+  assert.notEqual(revB, revA);
+
+  const review = await v2.packPreview("presentation-studio@" + id);
+  assert.equal(review.plugins[0].revision, revB);
+  assert.deepEqual(review.plugins[0].installed, { bots: ["pip"], enabled: true, revision: revA, matchesRevision: false });
+
+  // Bot-scoped pack install must be refused before skills are installed or plugin scope widens.
+  await assert.rejects(
+    v2.packInstall(review.token, { bots: ["scout"], commit: review.commit }),
+    /already installed at revision .* not the reviewed revision .*Marketplace › Plugins/,
+  );
+  assert.deepEqual(ws.plugins.records.find((r) => r.preview.id === pluginId).bots, ["pip"], "plugin scope was not widened");
+  assert.equal(ws.bot("scout").catalogSkills?.length ?? 0, 0, "no skills were partially installed for scout");
+
+  // Shared pack install ("all") is also refused with no partial shared skills.
+  await assert.rejects(
+    v2.packInstall(review.token, { bots: "all", commit: review.commit }),
+    /already installed at revision/,
+  );
+  assert.deepEqual(ws.plugins.records.find((r) => r.preview.id === pluginId).bots, ["pip"]);
+  assert.equal(ws.integrations.skills().some((s) => s.name === "visual-presentation" || s.name === "speaker-notes"), false, "no shared skills were partially installed");
+
+  // Even when the installed plugin is already shared with "all", a mismatched revision is still refused.
+  await ws.plugins.setBots(pluginId, "all", { revision: revA });
+  await assert.rejects(
+    v2.packInstall(review.token, { bots: ["scout"], commit: review.commit }),
+    /already installed at revision/,
+  );
+  assert.equal(ws.bot("scout").catalogSkills?.length ?? 0, 0);
+
+  // Explicit update/review path brings the installed plugin to revB; matching revision now succeeds and widens scope.
+  await ws.plugins.setBots(pluginId, ["pip"], { revision: revA });
+  await ws.plugins.update(pluginId, { revision: revB });
+  const matched = await v2.packPreview("presentation-studio@" + id);
+  assert.deepEqual(matched.plugins[0].installed, { bots: ["pip"], enabled: true, revision: revB, matchesRevision: true });
+
+  const seenSetBots = [];
+  const realSetBots = ws.plugins.setBots.bind(ws.plugins);
+  ws.plugins.setBots = (pid, bots, options) => {
+    seenSetBots.push({ pid, bots, options });
+    return realSetBots(pid, bots, options);
+  };
+  const result = await v2.packInstall(matched.token, { bots: ["scout"], commit: matched.commit });
+  assert.deepEqual(result.added, ["visual-presentation", "speaker-notes"]);
+  assert.deepEqual(result.plugins, [pluginId]);
+  assert.deepEqual(ws.bot("scout").catalogSkills.map((s) => s.name), ["visual-presentation", "speaker-notes"]);
+  assert.deepEqual(ws.plugins.records.find((r) => r.preview.id === pluginId).bots, ["pip", "scout"]);
+  assert.deepEqual(seenSetBots, [{ pid: pluginId, bots: ["pip", "scout"], options: { revision: revB } }], "widening verifies the reviewed revision");
+});
+
+test("version 3 template install refuses mismatched installed plugin revisions without creating a bot or widening scope, and succeeds when revisions match", async (t) => {
+  const { ws, root, id, v2 } = await setup(t, { requires: { skills: ["visual-presentation@^1.0.0"], packs: ["presentation-studio@^1.0.0"] } });
+  const pluginId = "timer@" + id;
+  const revA = (await ws.plugins.preview(pluginId)).revision;
+  await ws.plugins.install(pluginId, { revision: revA, bots: ["pip"] });
+
+  writeFileSync(join(root, "plugins", "timer", "plugin.json"), JSON.stringify({ name: "timer", version: "1.0.0", description: "A timer (rev B)" }));
+  await reread(ws, id);
+  const revB = (await ws.plugins.preview(pluginId)).revision;
+  assert.notEqual(revB, revA);
+
+  const review = await v2.templatePreview("deckhand@" + id);
+  assert.equal(review.plugins[0].revision, revB);
+  assert.equal(review.plugins[0].installed.matchesRevision, false);
+
+  const botsBefore = ws.state.bots.map((b) => b.id);
+  const routinesBefore = ws.panels.routines.list().length;
+  await assert.rejects(
+    v2.templateInstall(review.token, { commit: review.commit }),
+    /already installed at revision .* not the reviewed revision/,
+  );
+  assert.deepEqual(ws.state.bots.map((b) => b.id), botsBefore, "no bot was created");
+  assert.equal(ws.panels.routines.list().length, routinesBefore, "no routines were created");
+  assert.deepEqual(ws.plugins.records.find((r) => r.preview.id === pluginId).bots, ["pip"], "plugin scope was not widened");
+
+  // Update the plugin through the explicit review/update path, then install the template.
+  await ws.plugins.update(pluginId, { revision: revB });
+  const matched = await v2.templatePreview("deckhand@" + id);
+  assert.equal(matched.plugins[0].installed.matchesRevision, true);
+  const made = await v2.templateInstall(matched.token, { commit: matched.commit });
+  assert.ok(ws.bot(made.botId));
+  assert.deepEqual(ws.bot(made.botId).catalogSkills.map((s) => s.name), ["visual-presentation", "speaker-notes"]);
+  assert.deepEqual(ws.plugins.records.find((r) => r.preview.id === pluginId).bots, ["pip", made.botId]);
+  assert.equal(ws.plugins.records.find((r) => r.preview.id === pluginId).revision, revB);
+});
+
+test("post-preview plugin drift, tampered copies, and mid-install failures never widen scope or leave partial plugins", async (t) => {
+  const { ws, root, id, v2 } = await setup(t, { requires: { skills: ["visual-presentation@^1.0.0"], packs: ["presentation-studio@^1.0.0"] } });
+  const pluginId = "timer@" + id;
+  const revA = (await ws.plugins.preview(pluginId)).revision;
+  await ws.plugins.install(pluginId, { revision: revA, bots: ["pip"] });
+
+  // Preview while installed revision matches, then update the installed plugin to revB before installing.
+  const packReview = await v2.packPreview("presentation-studio@" + id);
+  const tmplReview = await v2.templatePreview("deckhand@" + id);
+  assert.equal(packReview.plugins[0].installed.matchesRevision, true);
+  writeFileSync(join(root, "plugins", "timer", "plugin.json"), JSON.stringify({ name: "timer", version: "1.0.0", description: "Drifted" }));
+  await reread(ws, id);
+  const revB = (await ws.plugins.preview(pluginId)).revision;
+  await ws.plugins.update(pluginId, { revision: revB });
+
+  await assert.rejects(v2.packInstall(packReview.token, { bots: ["scout"], commit: packReview.commit }), /already installed at revision/);
+  assert.deepEqual(ws.plugins.records.find((r) => r.preview.id === pluginId).bots, ["pip"]);
+  assert.equal(ws.bot("scout").catalogSkills?.length ?? 0, 0);
+
+  const botsBefore = ws.state.bots.map((b) => b.id);
+  await assert.rejects(v2.templateInstall(tmplReview.token, { commit: tmplReview.commit }), /already installed at revision/);
+  assert.deepEqual(ws.state.bots.map((b) => b.id), botsBefore);
+  assert.deepEqual(ws.plugins.records.find((r) => r.preview.id === pluginId).bots, ["pip"]);
+
+  // A tampered installed snapshot is refused even when the recorded revision matches.
+  const freshReview = await v2.packPreview("presentation-studio@" + id);
+  const row = ws.plugins.records.find((r) => r.preview.id === pluginId);
+  chmodSync(join(row.folder, "plugin.json"), 0o644);
+  writeFileSync(join(row.folder, "plugin.json"), JSON.stringify({ name: "timer", version: "1.0.0", description: "Tampered on disk" }));
+  await assert.rejects(v2.packInstall(freshReview.token, { bots: ["scout"], commit: freshReview.commit }), /not the files that were reviewed/);
+  assert.deepEqual(ws.plugins.records.find((r) => r.preview.id === pluginId).bots, ["pip"]);
+  assert.equal(ws.bot("scout").catalogSkills?.length ?? 0, 0);
+
+  // If a later plugin fails during givePlugins, earlier widened or newly installed plugins are rolled back.
+  await ws.plugins.update(pluginId, { revision: revB });
+  await assert.rejects(
+    v2.givePlugins([{ id: pluginId, revision: revB }, { id: "missing@" + id, revision: "0".repeat(64) }], ["scout"]),
+    /Unknown plugin/,
+  );
+  assert.deepEqual(ws.plugins.records.find((r) => r.preview.id === pluginId).bots, ["pip"], "earlier plugin scope widening was rolled back");
+
+  await ws.plugins.uninstall(pluginId);
+  await assert.rejects(
+    v2.givePlugins([{ id: pluginId, revision: revB }, { id: "missing@" + id, revision: "0".repeat(64) }], ["scout"]),
+    /Unknown plugin/,
+  );
+  assert.equal(ws.plugins.records.find((r) => r.preview.id === pluginId), undefined, "earlier newly installed plugin was rolled back");
+});

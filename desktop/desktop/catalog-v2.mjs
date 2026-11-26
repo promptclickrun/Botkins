@@ -9,7 +9,7 @@
 // the catalog has moved on since the review. Installing never runs anything.
 import { randomUUID } from "node:crypto";
 import { existsSync, statSync } from "node:fs";
-import { delimiter, join } from "node:path";
+import { basename, delimiter, join } from "node:path";
 import { AGENT_CATEGORIES } from "./plugin-catalog.mjs";
 import { REFERENCE, storedBundle } from "./link/template-bundle.mjs";
 import { MARKET_V2_METHODS } from "./link/methods.mjs";
@@ -20,9 +20,18 @@ export const SKILL_TOOLS = ["shell", "node", "python", "browser", "network"];
 const NAME = /^[a-z0-9][a-z0-9-]{0,63}$/;
 export const SEMVER = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
 const SPDX = /^[A-Za-z0-9.+-]+(?: (?:AND|OR|WITH) [A-Za-z0-9.+-]+)*$/;
+const SHA256 = /^[a-f0-9]{64}$/;
 const MAX_LISTINGS = 200;
 const MAX_IMAGE = 1024 * 1024;
 const REVIEW_TTL = 10 * 60_000;
+
+const installedRevision = (row) => row.revision ?? (row.folder ? basename(row.folder) : "");
+function revisionMismatch(row, id, installed, reviewed) {
+  const name = row.preview?.name ?? id;
+  return new Error(
+    `Plugin "${name}" (${id}) is already installed at revision ${installed.slice(0, 12)}, not the reviewed revision ${reviewed.slice(0, 12)}. Update or review it in Marketplace › Plugins first, then try again.`,
+  );
+}
 
 const parts = (version) => version.split(".").map(Number);
 /** Negative, zero or positive as `a` is below, equal to or above `b` (both MAJOR.MINOR.PATCH). */
@@ -327,7 +336,18 @@ export class MarketV2 {
       const id = name + "@" + record.id;
       const preview = await this.plugins.preview(id);
       const row = this.plugins.records.find((r) => r.preview.id === id);
-      out.push({ id, name: preview.name ?? name, ...(preview.version && { version: preview.version }), ...(preview.description && { description: preview.description }), revision: preview.revision, contents: preview.contents, config: preview.config, ...(preview.warnings && { warnings: preview.warnings }), ...(row && { installed: { bots: row.bots, enabled: row.enabled } }) });
+      const current = row ? installedRevision(row) : undefined;
+      out.push({
+        id,
+        name: preview.name ?? name,
+        ...(preview.version && { version: preview.version }),
+        ...(preview.description && { description: preview.description }),
+        revision: preview.revision,
+        contents: preview.contents,
+        config: preview.config,
+        ...(preview.warnings && { warnings: preview.warnings }),
+        ...(row && { installed: { bots: row.bots, enabled: row.enabled, revision: current, matchesRevision: current === preview.revision } }),
+      });
     }
     return out;
   }
@@ -343,16 +363,64 @@ export class MarketV2 {
     const token = this.remember({ kind: "pack", id, commit: record._v2.commit, skills: skills.map((s) => s.token), plugins: plugins.map(({ id: pid, revision }) => ({ id: pid, revision })) });
     return { id, name: pack.name, version: pack.version, summary: pack.summary, marketplace: record.id, marketplaceName: record.name, commit: record._v2.commit, token, skills: skills.map(({ pins: _p, ...s }) => s), plugins };
   }
-  /** Gives plugins, at the revisions reviewed, to `bots`: installs one that isn't installed, and widens the bots of one that is. */
+  /**
+   * Checks every plugin dependency against installed plugins before modifying skills or creating a
+   * bot: any already-installed plugin must be intact on disk and at the exact reviewed revision.
+   */
+  async preflightPlugins(plugins) {
+    if (!plugins.length) return;
+    const run = typeof this.plugins.serialize === "function" ? (fn) => this.plugins.serialize(fn) : (fn) => Promise.resolve().then(fn);
+    await run(() => {
+      for (const { id, revision } of plugins) {
+        if (typeof revision !== "string" || !SHA256.test(revision))
+          throw new Error("Open the review again before installing.");
+        const row = this.plugins.records.find((r) => r.preview.id === id);
+        if (!row) continue;
+        const current = installedRevision(row);
+        if (current !== revision) throw revisionMismatch(row, id, current, revision);
+        this.plugins.assertIntact?.(row);
+      }
+    });
+  }
+  /**
+   * Gives plugins, at the revisions reviewed, to `bots`: installs one that isn't installed, and
+   * widens the bots of one that is only after verifying its installed copy is intact and still at
+   * the reviewed revision. Rolls back earlier plugin changes if a later one fails.
+   */
   async givePlugins(plugins, bots) {
     const done = [];
-    for (const { id, revision } of plugins) {
-      const row = this.plugins.records.find((r) => r.preview.id === id);
-      if (!row) await this.plugins.install(id, { revision, bots });
-      else if (row.bots !== "all") await this.plugins.setBots(id, bots === "all" ? "all" : [...new Set([...row.bots, ...bots])]);
-      done.push(id);
+    const rollback = [];
+    const run = typeof this.plugins.serialize === "function" ? (fn) => this.plugins.serialize(fn) : (fn) => Promise.resolve().then(fn);
+    try {
+      for (const { id, revision } of plugins) {
+        if (typeof revision !== "string" || !SHA256.test(revision))
+          throw new Error("Open the review again before installing.");
+        const step = await run(() => {
+          const row = this.plugins.records.find((r) => r.preview.id === id);
+          if (!row) return { action: "install" };
+          const current = installedRevision(row);
+          if (current !== revision) throw revisionMismatch(row, id, current, revision);
+          this.plugins.assertIntact?.(row);
+          if (row.bots === "all") return { action: "noop" };
+          const previous = [...row.bots];
+          const next = bots === "all" ? "all" : [...new Set([...row.bots, ...bots])];
+          const unchanged = Array.isArray(next) && next.length === previous.length && next.every((b) => previous.includes(b));
+          return unchanged ? { action: "noop" } : { action: "widen", previous, next };
+        });
+        if (step.action === "install") {
+          await this.plugins.install(id, { revision, bots });
+          rollback.push(() => this.plugins.uninstall(id));
+        } else if (step.action === "widen") {
+          await this.plugins.setBots(id, step.next, { revision });
+          rollback.push(() => this.plugins.setBots(id, step.previous, { revision }));
+        }
+        done.push(id);
+      }
+      return done;
+    } catch (error) {
+      for (const undo of rollback.reverse()) await undo().catch(() => {});
+      throw error;
     }
-    return done;
   }
   /** Installs every skill and plugin of a reviewed pack for `bots` ("all" or bot ids). Shared skills that would replace one need `replace`. */
   async packInstall(token, options = {}) {
@@ -361,6 +429,7 @@ export class MarketV2 {
     if (options.commit !== undefined && options.commit !== review.commit) throw new Error("The catalog changed after this review. Open it again.");
     const bots = this.botScope(options.bots);
     const replace = options.replace ?? [];
+    await this.preflightPlugins(review.plugins);
     const added = [];
     for (const skill of review.skills) {
       const result = await this.skills.install(skill, replace, { bots });
@@ -420,6 +489,7 @@ export class MarketV2 {
       ...(template.summary && { summary: template.summary }), ...(template.look && { look: template.look }),
       ...((bundle?.skills || bundle?.routines) && { bundle }),
     };
+    await this.preflightPlugins(review.plugins);
     const botId = this.ws.addBot(data, person, { activeRoutines: kept.filter((r) => r.active === true).map((r) => r.name) });
     try {
       const added = [];
