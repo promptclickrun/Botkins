@@ -158,41 +158,81 @@ async function launchChromium(chromeBin) {
       "--no-sandbox",
       "--disable-gpu",
       "--disable-dev-shm-usage",
+      "--no-first-run",
+      "--no-default-browser-check",
+      "--disable-background-networking",
+      "--disable-extensions",
+      "--disable-sync",
+      "--disable-crash-reporter",
       "--ignore-certificate-errors",
       "--remote-debugging-port=0",
       `--user-data-dir=${userDataDir}`,
       "--window-size=1280,900",
       "about:blank",
     ],
-    { stdio: ["ignore", "pipe", "pipe"] },
+    { stdio: ["ignore", "ignore", "pipe"] },
   );
 
-  let stderrBuf = "";
-  const wsBrowserUrl = await new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error(`Chromium timed out. stderr:\n${stderrBuf}`)), 15000);
-    proc.stderr.on("data", (chunk) => {
-      stderrBuf += chunk.toString();
-      const match = stderrBuf.match(/DevTools listening on (ws:\/\/[^\s]+)/);
-      if (match) {
+  let cdp = null;
+  async function cleanupProcess() {
+    cdp?.close();
+    try {
+      proc.stderr?.destroy();
+    } catch {}
+    if (proc.exitCode === null && proc.signalCode === null) {
+      try {
+        proc.kill("SIGTERM");
+      } catch {}
+      await new Promise((resolve) => {
+        const t = setTimeout(() => {
+          try {
+            proc.kill("SIGKILL");
+          } catch {}
+          resolve();
+        }, 3000);
+        proc.once("exit", () => {
+          clearTimeout(t);
+          resolve();
+        });
+      });
+    }
+    try {
+      rmSync(userDataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    } catch {}
+  }
+
+  let wsBrowserUrl;
+  try {
+    let stderrBuf = "";
+    wsBrowserUrl = await new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error(`Chromium timed out. stderr:\n${stderrBuf}`)), 45000);
+      proc.stderr.on("data", (chunk) => {
+        stderrBuf += chunk.toString();
+        const match = stderrBuf.match(/DevTools listening on (ws:\/\/[^\s]+)/);
+        if (match) {
+          clearTimeout(timer);
+          resolve(match[1]);
+        }
+      });
+      proc.once("exit", (code) => {
         clearTimeout(timer);
-        resolve(match[1]);
-      }
+        reject(new Error(`Chromium exited early (${code}). stderr:\n${stderrBuf}`));
+      });
     });
-    proc.once("exit", (code) => {
-      clearTimeout(timer);
-      reject(new Error(`Chromium exited early (${code}). stderr:\n${stderrBuf}`));
-    });
-  });
 
-  const baseHttp = wsBrowserUrl.replace(/^ws:/, "http:").replace(/\/devtools\/browser\/.*$/, "");
-  const targets = await fetch(`${baseHttp}/json/list`).then((r) => r.json());
-  const pageTarget = targets.find((t) => t.type === "page") || targets[0];
-  assert.ok(pageTarget?.webSocketDebuggerUrl, "Expected a Chromium page target");
+    const baseHttp = wsBrowserUrl.replace(/^ws:/, "http:").replace(/\/devtools\/browser\/.*$/, "");
+    const targets = await fetch(`${baseHttp}/json/list`).then((r) => r.json());
+    const pageTarget = targets.find((t) => t.type === "page") || targets[0];
+    assert.ok(pageTarget?.webSocketDebuggerUrl, "Expected a Chromium page target");
 
-  const cdp = new CdpClient(pageTarget.webSocketDebuggerUrl);
-  await cdp.connect();
-  await cdp.send("Page.enable");
-  await cdp.send("Runtime.enable");
+    cdp = new CdpClient(pageTarget.webSocketDebuggerUrl);
+    await cdp.connect();
+    await cdp.send("Page.enable");
+    await cdp.send("Runtime.enable");
+  } catch (err) {
+    await cleanupProcess();
+    throw err;
+  }
 
   let currentUrl = "about:blank";
   async function navigate(url) {
@@ -208,23 +248,7 @@ async function launchChromium(chromeBin) {
   }
 
   async function close() {
-    cdp.close();
-    proc.kill("SIGTERM");
-    await new Promise((resolve) => {
-      const t = setTimeout(() => {
-        try {
-          proc.kill("SIGKILL");
-        } catch {}
-        resolve();
-      }, 3000);
-      proc.once("exit", () => {
-        clearTimeout(t);
-        resolve();
-      });
-    });
-    try {
-      rmSync(userDataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
-    } catch {}
+    await cleanupProcess();
   }
 
   return {
