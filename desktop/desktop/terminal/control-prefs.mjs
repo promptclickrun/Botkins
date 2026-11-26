@@ -48,6 +48,7 @@ export const PREFERENCES = {
   onboarded: switches("The welcome is done"),
   linkPreviews: switches("Show a preview of a linked page (this computer fetches the page)"),
   readAloud: switches("Read replies aloud"),
+  showRoutineChats: switches("Show routine-owned chats in the chat list"),
   teamwork: switches("Bots may ask each other for help from a chat"),
   longPromptCache: switches("Keep a chat's prompt cache for about an hour where the provider supports it"),
   autoSummarize: { type: "turns", about: "Turns between a chat's summaries into a new title, on the Default routines model: off, or 5 to 30" },

@@ -2,16 +2,27 @@
 // is the list's order, the same as on the phone: Pinned, then each section in the person's order,
 // then the chats in no section by day. The link keeps the sections; this only arranges them.
 import type { Chat, Section, State } from "./types";
+import { isRoutineChat } from "../desktop/link/routine-chat.mjs";
 /**
  * Chats that count as unread on the Chats page (matches the Unread filter, count, and "Mark all as read").
  * Unlike the side menu, the Chats page lists panel chats too, so its Unread count and bulk clear include them.
  */
-export function isChatsPageUnread(chat: Pick<Chat, "archived" | "unread">): boolean {
-  return !chat.archived && Boolean(chat.unread);
+export function isChatsPageUnread(chat: Pick<Chat, "archived" | "unread" | "schedules">): boolean {
+  return !chat.archived && !isRoutineChat(chat) && Boolean(chat.unread);
 }
 
-export function chatsPageUnreadChats<T extends Pick<Chat, "archived" | "unread">>(chats: readonly T[]): T[] {
+export function chatsPageUnreadChats<T extends Pick<Chat, "archived" | "unread" | "schedules">>(chats: readonly T[]): T[] {
   return chats.filter(isChatsPageUnread);
+}
+
+/** Whether a chat is visible in the chat list given the person's "Show routine chats" setting and any currently open chat. */
+export function isVisibleInChatList(
+  chat: Pick<Chat, "id" | "schedules">,
+  { showRoutineChats = false, selectedChatId, query = "" }: { showRoutineChats?: boolean; selectedChatId?: string; query?: string } = {},
+): boolean {
+  if (showRoutineChats || !isRoutineChat(chat)) return true;
+  if (selectedChatId && chat.id === selectedChatId) return true;
+  return query.trim().length > 0;
 }
 
 export type ChatFilter = "All" | "Unread" | "Archived";
@@ -55,13 +66,17 @@ export function chatGroups(input: {
   sections?: Section[];
   query?: string;
   filter?: ChatFilter;
+  /** Whether routine-owned chats are shown in the list (default false). */
+  showRoutineChats?: boolean;
+  /** Currently open chat id: stays visible in the list even if it is a hidden routine chat. */
+  selectedChatId?: string;
   /** A chat's bot's name, which a search also matches. */
   botName?: (chat: Chat) => string | undefined;
   /** The start of today; the default is now's. */
   today?: number;
 }): ChatGroup[] {
-  const { sections, filter = "All", botName = () => undefined } = input;
-  const q = (input.query ?? "").toLowerCase();
+  const { sections, filter = "All", showRoutineChats = false, selectedChatId, botName = () => undefined } = input;
+  const q = (input.query ?? "").trim().toLowerCase();
   let today = input.today;
   if (today === undefined) {
     const start = new Date();
@@ -72,6 +87,7 @@ export function chatGroups(input: {
     .sort((a, b) => b.time - a.time)
     .filter(
       (chat) =>
+        isVisibleInChatList(chat, { showRoutineChats, selectedChatId, query: q }) &&
         (filter === "Archived" ? chat.archived : filter === "Unread" ? isChatsPageUnread(chat) : !chat.archived) &&
         (!q || (chat.title + " " + (botName(chat) ?? "")).toLowerCase().includes(q) || saysIt(chat, q)),
     );

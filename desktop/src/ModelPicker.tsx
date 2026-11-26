@@ -7,6 +7,7 @@ import ProviderIcon from "./ProviderIcon";
 import { effortLabel, findModel, modelFacts, modelName, plainError, PROVIDER_NAMES, useModelCatalog, useProviders, useProviderUsage } from "./providers";
 import { pickerLine, useNow } from "./ProviderLimits";
 import { moreAccessibilityLabel, moreLabel, PAGE_SIZE, pageGroups, pageMatches } from "./modelPages";
+import { isRoutineChat } from "../desktop/link/routine-chat.mjs";
 import "./models.css";
 
 /** A model choice as plain text: "Claude Opus 5.5 · High". Pass the catalog for friendly names. */
@@ -17,7 +18,7 @@ export function modelLabel(choice: ModelChoice, models?: ModelInfo[], defaultPro
 }
 
 /** Whether a chat is a routine's own chat (desktop/routines.mjs). */
-export const isRoutineChat = (chat?: Chat) => !!chat?.schedules?.some((entry) => entry.routine);
+export { isRoutineChat };
 
 /**
  * What a chat runs on when it has no model of its own: for a routine's chat the Default routines

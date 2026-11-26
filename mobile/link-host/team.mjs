@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { random } from "./crypto.mjs";
 import { SILENT } from "./silent-reply.mjs";
+import { isRoutineChat } from "./routine-chat.mjs";
 
 export const SCOPE_ACTIONS = Object.freeze({
   agents: Object.freeze(["view", "chat", "create", "manage", "delete"]),
@@ -20,7 +21,7 @@ export const BUILTIN_ROLES = Object.freeze([
 ]);
 export const EVERYONE_GROUP = Object.freeze({ id: "g_everyone", name: "Everyone", roleId: "r_guest" });
 
-export const MEMBER_PREFERENCE_FIELDS = Object.freeze(["appearance", "foldTools", "showThinking", "linkPreviews", "readAloud"]);
+export const MEMBER_PREFERENCE_FIELDS = Object.freeze(["appearance", "foldTools", "showThinking", "linkPreviews", "readAloud", "showRoutineChats"]);
 
 const POLICY = {
   setPreferences: ["settings", "manage"],
@@ -506,7 +507,7 @@ export const MAX_CHAT_PEOPLE = 20;
  */
 export function viewOf(team, memberId) {
   const view = team?.views?.[memberId];
-  return { bots: view?.bots ?? {}, order: Array.isArray(view?.order) ? view.order : [], chats: view?.chats ?? {}, ...(view?.spaces && { spaces: view.spaces }), ...(view?.chatSections && { chatSections: view.chatSections }) };
+  return { bots: view?.bots ?? {}, order: Array.isArray(view?.order) ? view.order : [], chats: view?.chats ?? {}, ...(view?.spaces && { spaces: view.spaces }), ...(view?.chatSections && { chatSections: view.chatSections }), ...(typeof view?.showRoutineChats === "boolean" && { showRoutineChats: view.showRoutineChats }) };
 }
 
 // ── Sections on the Chats screen ("chat-sections-v1") ───────────────────────────────────────
@@ -961,6 +962,11 @@ function isMarkReadOnly(patch) {
   const keys = Object.keys(patch);
   return keys.length === 1 && keys[0] === "unread" && patch.unread === false;
 }
+function isShowRoutineChatsOnly(patch) {
+  if (!patch || typeof patch !== "object" || Array.isArray(patch)) return false;
+  const keys = Object.keys(patch);
+  return keys.length === 1 && keys[0] === "showRoutineChats" && typeof patch.showRoutineChats === "boolean";
+}
 function botIdOf(method, args) {
   if (BOT_METHODS.has(method)) {
     if (method === "exportTemplateText") return args[0]?.botId;
@@ -1044,6 +1050,10 @@ export function authorize(principal, team, method, args = [], lookups = {}) {
   else if (method === "routine" && args[1]?.action === "remove") action = "delete";
   else if (method === "saveSkill" && args[0]?.original) action = "manage";
   else if (method === "setChatFlags" && isMarkReadOnly(args[1])) action = "view";
+  else if (method === "setPreferences" && isShowRoutineChatsOnly(args[0])) {
+    scope = "agents";
+    action = "view";
+  }
   if (!hasAction(role.perms, scope, action)) return "Your team role can't do that.";
   // A script command runs on the owner's computer, so only the owner removes, switches off, replaces or edits one ("script-commands-v1"),
   // whatever a role may do with other skills. `scriptCommand` names the ones Botkins keeps. (The app checks again, by name, for any call
@@ -1306,7 +1316,7 @@ export function filterParts(parts, principal, team, extra = {}) {
     const { pinned: _pinned, archived: _archived, folder: _folder, unread, ...rest } = chat;
     const own = view.chats[chat.id];
     const mine = chat.createdBy === me;
-    const fresh = own?.unread === true || (own?.seen !== undefined ? chat.time > own.seen : mine ? !!unread : chat.count > 0);
+    const fresh = !isRoutineChat(chat) && (own?.unread === true || (own?.seen !== undefined ? chat.time > own.seen : mine ? !!unread : chat.count > 0));
     const people = chatPeople(team, chat);
     return { ...rest, ...(own?.pinned && { pinned: true }), ...(own?.archived && { archived: true }), ...(fresh && { unread: true }), ...(people.invited.length && { invited: people.invited }) };
   });
@@ -1359,6 +1369,9 @@ export function filterParts(parts, principal, team, extra = {}) {
   out.mcp = can("mcp") ? scrub(parts.mcp ?? []) : [];
   out.plugins = can("plugins") ? scrub(parts.plugins ?? []) : [];
   out.settings = can("settings") ? Object.fromEntries(Object.entries(parts.settings ?? {}).filter(([name]) => MEMBER_PREFERENCE_FIELDS.includes(name))) : {};
+  if ((can("agents") || can("settings")) && (typeof view.showRoutineChats === "boolean" || Object.hasOwn(parts.settings ?? {}, "showRoutineChats"))) {
+    out.settings.showRoutineChats = view.showRoutineChats === true;
+  }
   if (mayManage && parts.settings?.fastMode) out.settings.fastMode = parts.settings.fastMode;
   out.revs = {};
   // The owner's name as a person comes with the owner's own team part; else the computer's name stands in.

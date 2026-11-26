@@ -81,7 +81,7 @@ A paired phone can do what the person can do in the app, so pairing is a full-tr
 
 Invite-based member devices are persisted beside owner devices but are not full trust. `LinkHost.team()` returns the owner view; `saveRole`, `deleteRole`, `saveGroup`, `deleteGroup`, `createInvite`, `revokeInvite`, `approve`, `deny`, `moveMember`, `removeMember`, `renameMember` and `renameTeam` manage it. The `"joinRequest"` event contains `{ id, name, platform, kind, at, inviteId }`; `"status"` follows every team change. Roles are enforced before `backend.call`, which receives `{ principal }` as its third argument so the app can stamp `createdBy` and message authors. Member parts are filtered independently, including change versions, so an update for one principal cannot send another principal's data.
 
-`MEMBER_PREFERENCE_FIELDS` is deliberately limited to `appearance`, `foldTools`, `showThinking`, `linkPreviews` and `readAloud`; no approval, access, teamwork, link, provider or voice setting is member-writable.
+`MEMBER_PREFERENCE_FIELDS` is deliberately limited to `appearance`, `foldTools`, `showThinking`, `linkPreviews`, `readAloud` and `showRoutineChats`; no approval, access, teamwork, link, provider or voice setting is member-writable. (`showRoutineChats` is stored per member in `team.views`.)
 
 `createInvite` returns the invite and a join link. Its public invite card is published only when the relay is on; a failed publication is reported as `published: false` and does not cancel the invite. The demo host prints both an owner pairing code and a seven-day team invite.
 

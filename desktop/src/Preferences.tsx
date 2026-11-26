@@ -409,6 +409,12 @@ export function ChatDisplaySettings({ settings, change, chatMode, fail }: Pick<P
         checked={settings.showUpdates !== false}
         onChange={(on) => void change({ showUpdates: on }).catch(fail)}
       />
+      <SwitchRow
+        label="Show routine chats"
+        help="Include chats created and owned by routines in the chat list."
+        checked={!!settings.showRoutineChats}
+        onChange={(on) => void change({ showRoutineChats: on }).catch(fail)}
+      />
       <Row label="Position after response completes">
         {(id) => <select className="completion-position" id={id} value={settings.completionPosition ?? "latest"} onChange={e => saveChatDisplay({ completionPosition: e.target.value === "beginning" ? "beginning" : "latest" })}>
           <option value="latest">Keep at latest content</option>

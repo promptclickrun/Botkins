@@ -2,6 +2,7 @@
 // How a bot looks is in desktop/looks.mjs.
 import { randomUUID } from "node:crypto";
 import { conversations, makeMainChat } from "./link/main-chat.mjs";
+import { isRoutineChat } from "./link/routine-chat.mjs";
 import { textField } from "./panels.mjs";
 import { nextLook } from "./looks.mjs";
 import { holderSessions } from "./providers/sessions.mjs";
@@ -266,6 +267,7 @@ export class Agents {
       next[key] = value;
     }
     if (chat.main && next.archived) throw new Error("Main chat stays in your chats.");
+    if (isRoutineChat(chat) && next.unread) next.unread = false;
     Object.assign(chat, next);
     this.ws.save();
   }

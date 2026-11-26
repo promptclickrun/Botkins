@@ -9,6 +9,7 @@
 // and the app's calls for them are `link.chats.*` (desktop/chat-sections-ipc.mjs). They are read from the
 // window's snapshot, which holds the list and the section of each chat.
 import { ControlError } from "./socket.mjs";
+import { isRoutineChat } from "../link/routine-chat.mjs";
 
 const MODES = ["default", "plan", "yolo"];
 const FLAGS = ["pinned", "archived", "unread"];
@@ -207,9 +208,9 @@ export function chatsApi({ workspace, handlers, bot }) {
         ids = [...new Set(list.map((ref) => chat(ref).id))];
       } else if (botRef !== undefined) {
         const who = bot(botRef);
-        ids = state().chats.filter((entry) => !entry.archived && !entry.panelId && entry.unread && entry.botId === who.id).map((entry) => entry.id);
+        ids = state().chats.filter((entry) => !entry.archived && !entry.panelId && !isRoutineChat(entry) && entry.unread && entry.botId === who.id).map((entry) => entry.id);
       } else {
-        ids = state().chats.filter((entry) => !entry.archived && entry.unread).map((entry) => entry.id);
+        ids = state().chats.filter((entry) => !entry.archived && !isRoutineChat(entry) && entry.unread).map((entry) => entry.id);
       }
       if (ids.length) await handlers.markChatsRead(ids);
       return { ids, count: ids.length };

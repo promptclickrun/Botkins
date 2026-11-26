@@ -5,6 +5,7 @@
 import { interned } from "./json-cache.mjs";
 import { isBackgroundStep } from "./activity-steps.mjs";
 import { formatFeedWork } from "./activityModel.mjs";
+import { isRoutineChat } from "./routine-chat.mjs";
 
 const PREVIEW = 160;
 const STEP_TEXT = 4000;
@@ -27,7 +28,7 @@ function chatSummary(chat) {
     time: chat.time,
     ...(chat.pinned && { pinned: true }),
     ...(chat.archived && { archived: true }),
-    ...(chat.unread && { unread: true }),
+    ...(chat.unread && !isRoutineChat(chat) && { unread: true }),
     ...(chat.projectId && { projectId: chat.projectId }),
     ...(chat.folder && { folder: chat.folder }),
     ...(chat.mode && { mode: chat.mode }),
