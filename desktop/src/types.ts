@@ -559,6 +559,7 @@ export type State = {
   streams: Record<string, string>;
   intents: Record<string, string>;
   settings: Preferences;
+  taskLimits?: TaskLimits;
   requests: AgentRequest[];
   sections: Section[];
   /** The person's own sections on the Chats page, in their order ("chat-sections-v1"). Left out when the computer in use has none. */
@@ -789,8 +790,11 @@ declare global {
         fastMode?: FastMode | null,
       ): Promise<void>;
       setPreferences(
-        patch: Partial<Omit<Preferences, "model" | "appearance" | "proactive">> & {
+        patch: Partial<Omit<Preferences, "model" | "appearance" | "proactive" | "tasksMax" | "tasksPerBot">> & {
           appearance?: Partial<Appearance>;
+          /** null clears the setting: the limit is then the environment's, else the default. */
+          tasksMax?: number | null;
+          tasksPerBot?: number | null;
           /** Only what changes: the computer lays it over what it has (desktop/proactive-settings.mjs). */
           proactive?: Partial<ProactiveSettings>;
         },
@@ -2124,7 +2128,13 @@ export type Preferences = {
   autoSummarize?: number;
   /** Settings › Experimental › Proactive agent: the computer's switch (desktop/proactive.mjs). Each bot's own is `State.proactive`. Missing on an older computer. */
   proactive?: ProactiveSettings;
+  /** Task Board tasks that run at once on the computer, 1 to 16, when the person set it (desktop/task-limits.mjs). */
+  tasksMax?: number;
+  /** Task Board tasks that one bot runs at once, 1 to 8, when the person set it. */
+  tasksPerBot?: number;
 };
+/** The Task Board's limits in force, and each one's value without the person's setting (the environment's, else the default). Missing on an older computer. */
+export type TaskLimits = { tasksMax: number; tasksPerBot: number; defaults: { tasksMax: number; tasksPerBot: number } };
 export type ProactiveWatch = "runs" | "tasks" | "requests" | "context";
 /** The computer's switch for the Proactive agent. Off pauses every bot's agent without forgetting its settings. */
 export type ProactiveSettings = { enabled: boolean };
