@@ -461,7 +461,8 @@ export class Routines {
       {
         id: 1,
         routine: true,
-        enabled: !opts.fromTemplate,
+        // A template's routine starts paused, unless the template marks it active and the person left it on.
+        enabled: !opts.fromTemplate || opts.active === true,
         ...(opts.fromTemplate && { fromTemplate: true }),
         createdAt: now,
         ...fields,

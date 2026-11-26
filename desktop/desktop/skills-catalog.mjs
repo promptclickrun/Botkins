@@ -1,6 +1,7 @@
 // Preview the manifest and pin every companion file by its immutable Git blob ID.
-import { randomUUID } from "node:crypto";
-import { basename, dirname } from "node:path";
+import { createHash, randomUUID } from "node:crypto";
+import { lstatSync, readdirSync, readFileSync, realpathSync } from "node:fs";
+import { basename, dirname, join } from "node:path";
 import { checkPath, importFiles, MAX_ENTRIES, MAX_UNPACKED } from "./link/skill-import.mjs";
 import { parseSkill, slug } from "./link/skill-format.mjs";
 import { FEATURED_SKILLS, featuredSkill } from "./skills-featured.mjs";
@@ -35,6 +36,48 @@ function filesUnder(tree, prefix) {
     entries.push(entry);
   }
   return entries;
+}
+/** A file's Git blob id: what a folder catalog's files are pinned by, as a repository's are. */
+export const blobId = (bytes) => createHash("sha1").update("blob " + bytes.length + "\0").update(bytes).digest("hex");
+/**
+ * A skill folder in a catalog folder on this computer, as a Git tree lists one: every regular
+ * file with its mode, size and blob id. A link anywhere below the catalog's folder is refused.
+ */
+export function localTree(root, path) {
+  const realRoot = realpathSync(root);
+  let folder = realRoot;
+  for (const part of path.split("/")) {
+    checkPath(part);
+    folder = join(folder, part);
+    const info = lstatSync(folder, { throwIfNoEntry: false });
+    if (!info) throw new Error("The skill's folder is not in the catalog.");
+    if (info.isSymbolicLink()) throw new Error("This catalog skill contains a symbolic link, so it isn't installed.");
+  }
+  const tree = [];
+  const blobs = new Map();
+  let total = 0;
+  const visit = (dir, prefix) => {
+    for (const name of readdirSync(dir).sort()) {
+      if (name === ".git") continue;
+      const full = join(dir, name);
+      const rel = prefix + "/" + name;
+      const info = lstatSync(full);
+      if (info.isSymbolicLink()) throw new Error("This catalog skill contains a symbolic link, so it isn't installed.");
+      if (info.isDirectory()) {
+        visit(full, rel);
+        continue;
+      }
+      if (!info.isFile()) throw new Error("This skill contains an unsupported file.");
+      total += info.size;
+      if (total > MAX_UNPACKED || tree.length >= MAX_ENTRIES) throw new Error("This catalog skill is too large.");
+      const bytes = readFileSync(full);
+      const sha = blobId(bytes);
+      blobs.set(sha, bytes);
+      tree.push({ path: rel, type: "blob", mode: info.mode & 0o111 ? "100755" : "100644", size: bytes.length, sha });
+    }
+  };
+  visit(folder, path);
+  return { tree, blobs };
 }
 /** Where a featured skill comes from, as a listing and a preview show it. */
 const sourceOf = (item) => ({ author: item.author, license: item.license, repo: item.repo, commit: item.commit, path: item.path, url: item.url, ...(item.pack && { pack: item.pack }) });
@@ -86,7 +129,64 @@ export function skillsCatalog(getIntegrations, request = fetch) {
     cache(previews, token, { id: item.id, base, entries, bytes, skillId: item.name }, PREVIEW_TTL);
     return { name, description, text, token, installed: installed(item.id), source: sourceOf(item), files: entries.map((e) => e.path) };
   }
+  /**
+   * A marketplace's own skill listing (desktop/catalog-v2.mjs): its folder at the catalog's commit,
+   * from the catalog's GitHub repository or its folder on this computer. Every file is pinned by its
+   * blob id; `pins` ({ path: blob }) is what an update is compared with.
+   */
+  async function listingPreview(item) {
+    const signal = AbortSignal.timeout(20000);
+    let tree;
+    let base;
+    let local;
+    if (item.source.type === "github") {
+      const [owner, repo] = item.source.repo.split("/");
+      base = "https://api.github.com/repos/" + owner + "/" + repo + "/git/";
+      const answer = await json(base + "trees/" + item.commit + "?recursive=1", 16 * 1024 * 1024, signal);
+      if (answer.truncated || !Array.isArray(answer.tree)) throw new Error("The repository file list is incomplete.");
+      tree = answer.tree;
+    } else {
+      local = localTree(item.source.root, item.path);
+      tree = local.tree;
+    }
+    const prefix = item.path + "/";
+    // A link anywhere in the skill's folder refuses the whole skill: nothing is installed from it.
+    if (tree.some((f) => f.path.startsWith(prefix) && (f.type === "symlink" || f.mode === "120000" || f.type === "commit")))
+      throw new Error("This catalog skill contains a symbolic link or a submodule, so it isn't installed.");
+    const manifest = tree.find((f) => f.path === prefix + "SKILL.md");
+    if (!manifest) throw new Error(item.name + " is not at " + item.catalogName + "@" + item.commit.slice(0, 7) + ".");
+    const entries = filesUnder(tree, prefix);
+    const bytes = local ? local.blobs.get(manifest.sha) : await readBlob(base, manifest, signal);
+    if (blobId(bytes) !== manifest.sha) throw new Error("A file of this skill isn't the one the catalog lists.");
+    const text = bytes.toString("utf8");
+    const { name, description } = parseSkill(text, item.name);
+    if (slug(name) !== item.name) throw new Error("This skill's SKILL.md names " + name + ", not " + item.name + ".");
+    const token = randomUUID();
+    cache(previews, token, { id: item.id, listing: item, base, local: item.source.type === "local" ? item.source.root : undefined, entries, bytes, skillId: item.name }, PREVIEW_TTL);
+    const executable = entries.filter((e) => e.executable).map((e) => e.path);
+    return {
+      name, description, text, token,
+      source: { author: item.author ?? item.catalogName, license: item.license, repo: item.source.repo ?? item.catalogName, commit: item.commit, path: item.path, catalog: item.catalog, version: item.version, ...(item.source.repo && { url: "https://github.com/" + item.source.repo + "/tree/" + item.commit + "/" + item.path }) },
+      files: entries.map((e) => e.path),
+      executable,
+      size: entries.reduce((n, e) => n + e.size, 0),
+      pins: Object.fromEntries(entries.map((e) => [e.path, e.sha])),
+    };
+  }
+  /** The bytes of every pinned file of a preview, each checked against its blob id. */
+  async function pinnedFiles(preview, signal) {
+    const files = new Map();
+    const local = preview.local ? localTree(preview.local, preview.listing.path) : undefined;
+    for (const { path, sha, size } of preview.entries) {
+      const bytes = path === "SKILL.md" ? preview.bytes : local ? local.blobs.get(sha) : await fetchBytes(preview.base + "blobs/" + sha, size, signal, true);
+      // A folder catalog can change after its review: a file that isn't the reviewed one refuses the install.
+      if (!bytes || (preview.listing && blobId(bytes) !== sha)) throw new Error("A file of this skill changed after the review. Open it again.");
+      files.set(path, bytes);
+    }
+    return files;
+  }
   return {
+    listingPreview,
     /** The featured shelf: pinned upstream skills, readable with no search. */
     featured() {
       return FEATURED_SKILLS.map((item) => ({ id: item.id, name: item.name, summary: item.summary, group: item.group, ...sourceOf(item), installed: installed(item.id) }));
@@ -155,15 +255,33 @@ export function skillsCatalog(getIntegrations, request = fetch) {
       cache(previews, token, { id, base, entries, bytes, skillId }, PREVIEW_TTL);
       return { name, description, text, token, installed: installed(id) };
     },
-    async install(token, replace = []) {
+    /**
+     * Installs a previewed skill. A marketplace listing can go to chosen bots only
+     * (`{ bots: [ids] }`), into each bot's own skills; otherwise it joins the shared skills.
+     */
+    async install(token, replace = [], { bots = "all" } = {}) {
       const preview = cached(previews, token);
       if (!preview) throw new Error("Open the preview again before installing.");
       const signal = AbortSignal.timeout(40000);
-      const files = new Map();
-      for (const { path, sha, size } of preview.entries) {
-        files.set(path, path === "SKILL.md" ? preview.bytes : await fetchBytes(preview.base + "blobs/" + sha, size, signal, true));
-      }
+      const files = await pinnedFiles(preview, signal);
       const integrations = getIntegrations();
+      const executable = new Set(preview.entries.filter((f) => f.executable).map((f) => f.path));
+      if (preview.listing) {
+        const meta = { catalog: preview.listing.catalog, name: preview.listing.name, version: preview.listing.version, commit: preview.listing.commit, files: Object.fromEntries(preview.entries.map((e) => [e.path, e.sha])) };
+        if (bots !== "all") {
+          for (const id of bots) integrations.installBotCatalogSkill(integrations.ws.bot(id), files, executable, meta);
+          return { added: [meta.name], conflicts: [], bots };
+        }
+        // The same listing installed again is its update: it replaces its own folder without asking.
+        const own = integrations.skillState.listings?.[meta.name];
+        const again = own?.catalog === meta.catalog ? [meta.name] : [];
+        const result = importFiles(integrations, files, preview.skillId, [...new Set([...replace, ...again])], executable);
+        if (result.added.length) {
+          (integrations.skillState.listings ??= {})[result.added[0]] = meta;
+          integrations.changed();
+        }
+        return result;
+      }
       const result = importFiles(
         integrations,
         files,

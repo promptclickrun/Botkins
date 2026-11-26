@@ -763,7 +763,8 @@ export class Workspace {
     if (!bot) throw new Error("Unknown bot");
     return bot;
   }
-  addBot(data, person = "owner") {
+  /** `opts.activeRoutines`: names of bundle routines that start on (a version 3 template's `active`, left on in its review). */
+  addBot(data, person = "owner", opts = {}) {
     const bot = {
       id: randomUUID(),
       name: textField(data.name, 48, "name"),
@@ -786,13 +787,13 @@ export class Workspace {
     const voice = data.voice === undefined ? null : botVoiceField(data.voice);
     if (voice) bot.voice = voice;
     if (person !== "owner") bot.createdBy = person;
-    return this.installBot(bot, data.bundle);
+    return this.installBot(bot, data.bundle, undefined, opts);
   }
   bundleForBot(bot, person = "owner") {
     return currentBotBundle(bot, this.state.chats, person);
   }
   /** Publish the bot, its Main chat and all its paused routines in one workspace write. */
-  installBot(bot, input, index = this.state.bots.length) {
+  installBot(bot, input, index = this.state.bots.length, { activeRoutines = [] } = {}) {
     const bundle = templateBundle(input);
     if (bundle) bot.bundle = bundle;
     else delete bot.bundle;
@@ -800,7 +801,7 @@ export class Workspace {
     for (const { name, instructions, cadence } of bundle?.routines ?? []) {
       chats.push(this.panels.routines.buildChat(
         { botId: bot.id, name, prompt: instructions, cadence, notify: false },
-        Date.now(), bot.createdBy, { fromTemplate: true },
+        Date.now(), bot.createdBy, { fromTemplate: true, active: Array.isArray(activeRoutines) && activeRoutines.includes(name) },
       ));
     }
     if (bundle?.skills) this.integrations.installBotSkills(bot);

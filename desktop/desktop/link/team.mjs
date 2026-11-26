@@ -177,6 +177,16 @@ const POLICY = {
   "skillsCatalog.preview": ["skills", "read"],
   "skillsCatalog.install": ["skills", "create"],
   "skillsCatalog.featured": ["skills", "read"],
+  // Marketplace format version 2: anyone who may read skills sees the listings and their reviews. An
+  // install can give skills and plugins to bots and make a bot with routines, so it is the owner's.
+  "market.catalog": ["skills", "read"],
+  "market.skillImage": ["skills", "read"],
+  "market.skillPreview": ["skills", "read"],
+  "market.packPreview": ["skills", "read"],
+  "market.templatePreview": ["agents", "create"],
+  "market.skillInstall": "owner",
+  "market.packInstall": "owner",
+  "market.templateInstall": "owner",
   // The direct apps catalog: anyone who sees tools may read it. Adding one can start a program on
   // the computer and stores keys in its vault, so it is the owner's, as a sign-in is.
   "mcpCatalog.list": ["mcp", "view"],

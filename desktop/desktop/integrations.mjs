@@ -265,6 +265,8 @@ export class Integrations {
     state.skills = {
       ...(Array.isArray(state.skills?.standalone) && {standalone: state.skills.standalone}),
       ...(state.skills?.catalog && {catalog: state.skills.catalog}),
+      // Shared skills installed from a marketplace listing: name → { catalog, name, version, commit, files } (desktop/catalog-v2.mjs).
+      ...(state.skills?.listings && typeof state.skills.listings === "object" && {listings: state.skills.listings}),
       folders: Array.isArray(state.skills?.folders) ? state.skills.folders : [],
       plugins: Array.isArray(state.skills?.plugins) ? state.skills.plugins : [],
       disabled: Array.isArray(state.skills?.disabled) ? state.skills.disabled : [],
@@ -689,6 +691,61 @@ export class Integrations {
   removeBotSkills(bot) {
     rmSync(this.botSkillDirectory(bot), { recursive: true, force: true });
   }
+  /** Where one bot's own marketplace skills are (desktop/catalog-v2.mjs): beside its private skills, apart from the shared ones. */
+  botCatalogDirectory(bot) {
+    const root = join(this.ws.dir, ".agent-catalog-skills");
+    if (lstatSync(root, { throwIfNoEntry: false })?.isSymbolicLink())
+      throw new Error("The agent skills folder cannot be a symbolic link.");
+    return join(root, createHash("sha256").update(bot.id).digest("hex"));
+  }
+  /**
+   * Installs a marketplace skill's pinned files for one bot only. The same listing installed again
+   * (an update) replaces that bot's copy. `meta` is { catalog, name, version, commit, files } and is
+   * kept on the bot as `catalogSkills`.
+   */
+  installBotCatalogSkill(bot, files, executable, meta) {
+    if (!SKILL_NAME.test(meta.name) || meta.name === COMMAND_SKILL || Object.hasOwn(this.skillState.scripts ?? {}, meta.name) || bot.bundle?.skills?.some((s) => s.name === meta.name))
+      throw new Error("This bot already has a skill or command named " + meta.name + ".");
+    const other = bot.catalogSkills?.find((s) => s.name === meta.name && s.catalog !== meta.catalog);
+    if (other) throw new Error("This bot already has " + meta.name + " from " + other.catalog + ".");
+    const root = this.botCatalogDirectory(bot);
+    mkdirSync(root, { recursive: true, mode: 0o700 });
+    const stage = mkdtempSync(join(root, ".install-"));
+    try {
+      let size = 0;
+      if (files.size > 512) throw new Error("Too many files in this skill.");
+      for (const [path, data] of files) {
+        size += data.length;
+        if (size > 12 * 1024 * 1024) throw new Error("This skill is larger than 12 MiB.");
+        // The same portable paths as every skill import; a path that leaves the folder is refused.
+        if (path.split("/").some((part) => !part || part === "." || part === ".." || /[\\:<>"|?*\x00-\x1f]/.test(part))) throw new Error("Unsafe skill file path.");
+        const target = join(stage, path);
+        mkdirSync(dirname(target), { recursive: true });
+        writeFileSync(target, data, { flag: "wx", mode: executable.has(path) ? 0o755 : 0o644 });
+      }
+      const dest = join(root, meta.name);
+      const old = join(stage, ".old");
+      if (existsSync(dest)) renameSync(dest, old);
+      renameSync(stage, dest);
+      rmSync(join(dest, ".old"), { recursive: true, force: true });
+    } catch (error) {
+      rmSync(stage, { recursive: true, force: true });
+      throw error;
+    }
+    bot.catalogSkills = [...(bot.catalogSkills ?? []).filter((s) => s.name !== meta.name), meta];
+    if (bot.skillsOff) bot.skillsOff = bot.skillsOff.filter((n) => n !== meta.name);
+    this.changed();
+  }
+  removeBotCatalogSkill(bot, name) {
+    if (!bot.catalogSkills?.some((s) => s.name === name)) throw new Error("This bot has no marketplace skill named " + name + ".");
+    rmSync(join(this.botCatalogDirectory(bot), name), { recursive: true, force: true });
+    bot.catalogSkills = bot.catalogSkills.filter((s) => s.name !== name);
+    if (!bot.catalogSkills.length) delete bot.catalogSkills;
+    this.changed();
+  }
+  removeBotCatalogSkills(bot) {
+    rmSync(this.botCatalogDirectory(bot), { recursive: true, force: true });
+  }
   /** Every skill Botkins can see, with where it comes from and whether it is on. */
   skills() {
     const disabled = new Set(this.skillState.disabled);
@@ -935,6 +992,8 @@ export class Integrations {
       if (!Object.keys(this.skillState.scripts).length) delete this.skillState.scripts;
     }
     for (const [id, name] of Object.entries(this.skillState.catalog ?? {})) if (added.includes(name) || plans.some(plan => plan.existing?.name === name)) delete this.skillState.catalog[id];
+    // A skill imported over a marketplace one is no longer that listing; the listing's own install sets it again.
+    for (const name of [...added, ...plans.map((plan) => plan.existing?.name)]) if (name && this.skillState.listings) delete this.skillState.listings[name];
     if (enable) this.skillState.disabled = this.skillState.disabled.filter((name) => !added.includes(name));
     this.changed();
     return { added, conflicts: [] };
@@ -948,6 +1007,7 @@ export class Integrations {
     }
     if (this.skillState.standalone) this.skillState.standalone = this.skillState.standalone.filter(entry => entry !== basename(dir));
     for (const [id, skill] of Object.entries(this.skillState.catalog ?? {})) if (skill === name) delete this.skillState.catalog[id];
+    if (this.skillState.listings) delete this.skillState.listings[name];
     this.skillState.disabled = this.skillState.disabled.filter((n) => n !== name);
     for (const bot of this.ws.state.bots) {
       if (bot.skillsOff && !bot.bundle?.skills?.some((skill) => skill.name === name))
@@ -990,6 +1050,11 @@ export class Integrations {
       const overrides = skillsIn(bundledSkills).some(s => existsSync(join(this.skillsDir, slug(s.name), "SKILL.md")));
       if (overrides) base.unshift(this.skillsDir);
       else base.push(this.skillsDir);
+    }
+    // A bot's own marketplace skills (desktop/catalog-v2.mjs) come before the shared ones, in this bot's sessions only.
+    if (bot?.catalogSkills?.length) {
+      const dir = this.botCatalogDirectory(bot);
+      if (lstatSync(dir, { throwIfNoEntry: false })?.isDirectory()) base.unshift(dir);
     }
     if (privateNames.size) {
       const dir = this.botSkillDirectory(bot);

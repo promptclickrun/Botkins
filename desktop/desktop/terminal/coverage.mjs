@@ -142,6 +142,15 @@ export const WORKSPACE = {
   "skillsCatalog.install": cmd("skills install"),
   // The featured shelf: upstream skills pinned to a commit, installed with `skills preview` and `skills install`.
   "skillsCatalog.featured": cmd("skills featured"),
+  // ── Marketplace format version 2 (desktop/catalog-v2.mjs): catalog skills, packs and version 3 templates ──
+  "market.catalog": cmd("marketplace list"),
+  "market.skillImage": no("window's own"),
+  "market.skillPreview": cmd("marketplace show"),
+  "market.skillInstall": cmd("marketplace install"),
+  "market.packPreview": cmd("marketplace show"),
+  "market.packInstall": cmd("marketplace install"),
+  "market.templatePreview": cmd("marketplace show"),
+  "market.templateInstall": cmd("marketplace install"),
   // ── The direct apps catalog (desktop/mcp-catalog.mjs) ──
   "mcpCatalog.list": cmd("tools catalog"),
   // A key comes from a hidden question or --secrets; a program's line is shown and needs a yes.
@@ -465,6 +474,9 @@ export const CHANGES = {
   "plugins.removeMarketplace": 0,
   "skills.upload": (_, result) => result?.added?.join(", "),
   "skillsCatalog.install": (_, result) => result?.added?.[0],
+  "market.skillInstall": (_, result) => result?.added?.[0],
+  "market.packInstall": (_, result) => result?.added?.join(", "),
+  "market.templateInstall": (_, result) => result?.botId,
   // By the catalog entry's id, never a key.
   "mcpCatalog.add": 0,
   "piPackages.install": 0,
@@ -725,7 +737,7 @@ export const CHANGES = {
   "node.remote.control": (args, value) => levelOf(value?.hostName ?? args?.[0], args?.[1]),
 };
 /** The service's own calls that only read, wait or talk in a chat: no line. Every call is in this list, in CHANGES or in LOGS_ITSELF. */
-export const READS = ["interactions.list", "skills.review", "chat.scriptCommand", "skillsCatalog.search", "skillsCatalog.preview", "skillsCatalog.featured", "mcpCatalog.list", "piPackages.browse", "piPackages.preview", "piPackages.list", "status", "logs.read", "doctor", "events.wait", "pair.status", "devices.list", "bots.list", "bots.get", "providers.list", "providers.services", "providers.login.read", "providers.login.input", "providers.login.cancel", "models", "chat.open", "chat.list", "chat.send", "chat.read", "chat.stop", "runs.list", "routines.list", "plugins.list", "plugins.marketplaces", "plugins.refresh", "plugins.browse", "plugins.preview", "config.get", "config.describe", "relay.status", "update.status", "update.check", "methods", "plugins.get", "tools.list", "tools.get", "tools.import.preview", "tools.signIn.read", "tools.signIn.input", "tools.signIn.cancel", "skills.list", "skills.get", "bots.tools", "bots.access", "bots.menu", "folders.list", "gadgets.get", "profile.status", "profile.home"];
+export const READS = ["interactions.list", "skills.review", "chat.scriptCommand", "skillsCatalog.search", "skillsCatalog.preview", "skillsCatalog.featured", "market.catalog", "market.skillImage", "market.skillPreview", "market.packPreview", "market.templatePreview", "mcpCatalog.list", "piPackages.browse", "piPackages.preview", "piPackages.list", "status", "logs.read", "doctor", "events.wait", "pair.status", "devices.list", "bots.list", "bots.get", "providers.list", "providers.services", "providers.login.read", "providers.login.input", "providers.login.cancel", "models", "chat.open", "chat.list", "chat.send", "chat.read", "chat.stop", "runs.list", "routines.list", "plugins.list", "plugins.marketplaces", "plugins.refresh", "plugins.browse", "plugins.preview", "config.get", "config.describe", "relay.status", "update.status", "update.check", "methods", "plugins.get", "tools.list", "tools.get", "tools.import.preview", "tools.signIn.read", "tools.signIn.input", "tools.signIn.cancel", "skills.list", "skills.get", "bots.tools", "bots.access", "bots.menu", "folders.list", "gadgets.get", "profile.status", "profile.home"];
 // The reads of the rest of the workspace, one line for each area (each area's builder writes only its own line).
 export const MORE_READS = {
   bots: ["bots.flags", "bots.proactive", "bots.memory", "bots.sections", "bots.sections.get", "bots.importable", "bots.import.preview", "templates.list", "templates.get", "templates.import.preview", "templates.browse", "templates.market"],

@@ -1,6 +1,7 @@
 // Bot and chat management: primary bot, pins, hiding, sections, duplication and deletion.
 // How a bot looks is in desktop/looks.mjs.
 import { randomUUID } from "node:crypto";
+import { cpSync, existsSync, lstatSync } from "node:fs";
 import { conversations, makeMainChat } from "./link/main-chat.mjs";
 import { isRoutineChat } from "./link/routine-chat.mjs";
 import { textField } from "./panels.mjs";
@@ -188,7 +189,12 @@ export class Agents {
     // A copy belongs to whoever copied it: the mark of who made the first one is not carried over.
     delete copy.createdBy;
     if (person !== "owner") copy.createdBy = person;
-    return this.ws.installBot(copy, this.ws.bundleForBot(source, person), this.state.bots.indexOf(source) + 1);
+    // The copy gets its own copy of the source's marketplace skills.
+    const from = source.catalogSkills?.length ? this.ws.integrations.botCatalogDirectory(source) : null;
+    if (!from || !existsSync(from)) delete copy.catalogSkills;
+    const copyId = this.ws.installBot(copy, this.ws.bundleForBot(source, person), this.state.bots.indexOf(source) + 1);
+    if (copy.catalogSkills) cpSync(from, this.ws.integrations.botCatalogDirectory(copy), { recursive: true, filter: (path) => !lstatSync(path).isSymbolicLink() });
+    return copyId;
   }
   async deleteBot(id) {
     const bot = this.ws.bot(id);
@@ -240,6 +246,7 @@ export class Agents {
     this.ws.clearCatalogs();
     this.ws.save();
     if (bot.bundle?.skills) this.ws.integrations.removeBotSkills(bot);
+    if (bot.catalogSkills) this.ws.integrations.removeBotCatalogSkills(bot);
     await this.deleteSessions(chats, memberSessions);
   }
   addSection(name) {

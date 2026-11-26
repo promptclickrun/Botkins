@@ -30,6 +30,7 @@ import {
 import { dirname, isAbsolute, join, normalize, relative, resolve, sep } from "node:path";
 import { configFile, declaredPath, dependencyFolder, describeStarts, filesReader, handedOn, lspNames, pluginStarts, startWarnings, STARTS } from "./plugin-reading.mjs";
 import { parseTemplateFile, templateFields } from "./templates.mjs";
+import { v2Entries } from "./catalog-v2.mjs";
 import { bundledTemplates, contractOf, FIRST_PARTY_MARKETPLACE } from "./agent-templates-first-party.mjs";
 
 /** The templates that come with the app (desktop/agent-templates-first-party.mjs), checked as an imported template is. */
@@ -856,7 +857,7 @@ export class PluginCatalog {
         const saved = JSON.parse(readFileSync(this.statePath, "utf8"));
         for (const item of Array.isArray(saved.marketplaces) ? saved.marketplaces : []) {
           if (!item || typeof item.id !== "string") continue;
-          const kept = { _entries: item.entries, _agentEntries: item.agentEntries, _agents: item.agents, _agentsAt: item.agentsAt };
+          const kept = { _entries: item.entries, _agentEntries: item.agentEntries, _agents: item.agents, _agentsAt: item.agentsAt, ...(item.v2 && { _v2: item.v2 }) };
           if (item.builtIn && this.marketplacesById.has(item.id)) this.marketplacesById.set(item.id, { ...this.marketplacesById.get(item.id), ...item, builtIn: true, ...kept });
           else if (!item.builtIn) this.marketplacesById.set(item.id, { ...item, ...kept });
         }
@@ -884,6 +885,7 @@ export class PluginCatalog {
         ...(item._entries ? { entries: item._entries } : {}),
         ...(item._agentEntries?.length ? { agentEntries: item._agentEntries } : {}),
         ...(item._agents?.length ? { agents: item._agents, agentsAt: item._agentsAt } : {}),
+        ...(item._v2 ? { v2: item._v2 } : {}),
       })),
       folders: [...this.folderPlugins.values()],
     };
@@ -929,13 +931,17 @@ export class PluginCatalog {
 
   async _readMarketplace(record, sourceInfo) {
     let value;
+    let catalogPath;
+    let bytes;
     if (sourceInfo.type === "local") {
       const file = readLocalFile(sourceInfo.root, sourceInfo.path);
+      bytes = file.bytes;
       value = json(file.bytes, sourceInfo.path);
     } else if (sourceInfo.type === "github") {
       for (const path of sourceInfo.path ? [sourceInfo.path] : MARKETPLACE_PATHS) {
         try {
           value = await fetchJson(githubRawUrl(sourceInfo.repo, sourceInfo.ref, path));
+          catalogPath = path;
           break;
         } catch (error) {
           if (error.status !== 404) throw error;
@@ -943,6 +949,25 @@ export class PluginCatalog {
       }
       if (!value) fail("This repository has no marketplace.json.");
     } else value = await fetchJson(sourceInfo.url);
+    // Format version 2 (desktop/catalog-v2.mjs): the listing is read again at one commit, so each
+    // skill folder and template file is read from the same commit as the listing that names it.
+    let v2;
+    let v2Error;
+    if (v2Entries(value)) {
+      try {
+        if (sourceInfo.type === "github") {
+          const pinned = await githubPinned({ repo: sourceInfo.repo, ref: sourceInfo.ref });
+          const atCommit = pinned.ref === sourceInfo.ref ? value : await fetchJson(githubRawUrl(sourceInfo.repo, pinned.ref, catalogPath));
+          value = atCommit;
+          v2 = { commit: pinned.ref, ...v2Entries(atCommit) };
+        } else if (sourceInfo.type === "local") {
+          // A folder has no commit: the hash of its catalog file stands for one.
+          v2 = { commit: sha256(bytes).slice(0, 40), ...v2Entries(value) };
+        } else v2Error = "Skills, packs and templates are read only from a GitHub repository or a folder.";
+      } catch (error) {
+        v2Error = error.message;
+      }
+    }
     const entries = catalogEntries(value);
     const marketplace = {
       id: typeof value?.name === "string" && value.name.trim() ? value.name.trim() : record.id,
@@ -956,6 +981,8 @@ export class PluginCatalog {
       _entries: entries,
       _agentEntries: agentEntries(value),
       _sourceInfo: sourceInfo,
+      _v2: v2,
+      _v2Error: v2Error,
     };
     return marketplace;
   }
@@ -1040,6 +1067,8 @@ export class PluginCatalog {
       _entries: loaded._entries,
       _agentEntries: loaded._agentEntries,
       _sourceInfo: sourceInfo,
+      _v2: loaded._v2,
+      _v2Error: loaded._v2Error,
     };
     delete record._agents;
     delete record._agentsAt;
@@ -1076,7 +1105,73 @@ export class PluginCatalog {
       bytes = await fetchBytes(base.toString(), { limit: MAX_AGENT_FILE });
     }
     if (bytes.length > MAX_AGENT_FILE) fail("That template file is too large.");
-    return parseTemplateFile(bytes.toString("utf8"));
+    // `agents` stays format versions 1 and 2: version 3 is listed under `templates` (FORMAT.md).
+    return parseTemplateFile(bytes.toString("utf8"), [1, 2]);
+  }
+
+  // ── Format version 2 (desktop/catalog-v2.mjs): skills, packs and templates at the catalog's commit ──
+
+  /** Every marketplace, read as `marketplaces()` reads them, the built-in Botkins one first. */
+  async v2Records() {
+    await this._init();
+    const out = [];
+    for (const record of this.marketplacesById.values()) out.push(await this._ensureMarketplace(record));
+    return out;
+  }
+  async v2Record(id) {
+    await this._init();
+    const record = typeof id === "string" ? this.marketplacesById.get(id) : undefined;
+    if (!record) fail("That marketplace can't be found.");
+    return this._ensureMarketplace(record);
+  }
+  /** One file of a version 2 catalog at the commit its listing was read at. */
+  async v2File(record, path, limit = MAX_AGENT_FILE) {
+    const info = record._sourceInfo || await this._marketplaceSource(record.source);
+    const safe = safeRelativePath(path, "catalog path");
+    let bytes;
+    if (info.type === "local") bytes = readLocalFile(info.root, safe).bytes;
+    else if (info.type === "github") bytes = await fetchBytes(githubRawUrl(info.repo, record._v2.commit, safe), { limit });
+    else fail("This marketplace's files can't be read.");
+    if (bytes.length > limit) fail("That catalog file is too large.");
+    return bytes;
+  }
+  /** The catalog's plugins by name, for a pack's or a template's `name@range`. */
+  pluginIndex(record) {
+    const index = new Map();
+    for (const entry of record._entries || []) {
+      const name = pluginName(entry?.name);
+      if (name && !index.has(name)) index.set(name, { name, ...(typeof entry.version === "string" && { version: entry.version }) });
+    }
+    return index;
+  }
+  /** One `templates` file: a format version 3 template, checked as an imported template is. */
+  async v2TemplateFile(record, entry) {
+    const bytes = await this.v2File(record, entry.source, MAX_AGENT_FILE);
+    const template = parseTemplateFile(bytes.toString("utf8"), [3]);
+    return template;
+  }
+  /** A marketplace's `templates` as the Bots list shows them, read once for each commit. A file that can't be read is left out. */
+  async v2Templates(record) {
+    if (!record._v2?.templates?.length) return [];
+    if (record._v2Templates?.commit === record._v2.commit) return record._v2Templates.list;
+    const list = [];
+    for (const entry of record._v2.templates) {
+      try {
+        const template = await this.v2TemplateFile(record, entry);
+        list.push({
+          ...agentListing({ ...entry, template }, record),
+          kind: "template",
+          format: 3,
+          commit: record._v2.commit,
+          ...(template.requires && { requires: template.requires }),
+          ...(template.bundle?.routines && { routines: template.bundle.routines.length }),
+        });
+      } catch {
+        // A template that can't be read is not listed; the next read of the catalog tries it again.
+      }
+    }
+    record._v2Templates = { commit: record._v2.commit, list };
+    return list;
   }
 
   /**
