@@ -102,3 +102,92 @@ test("Watch WebRTC reports the Watch audio recovery error when resuming fails", 
   assert.deepEqual(errors, [problem]);
   assert.equal(transport.status, "ended");
 });
+
+test("startWatchVoice acquires watch hold and syncs a sleeping/offline link before starting live voice", async () => {
+  const Module = (await import("node:module")).default;
+  const { createRequire } = await import("node:module");
+  const load = createRequire(__filename);
+  load.extensions[".webp"] = (mod: any, file: string) => { mod.exports = file; };
+  const standIn = (path: string, exports: unknown) => {
+    const id = load.resolve(path);
+    const replacement = new Module(id);
+    replacement.exports = exports;
+    replacement.loaded = true;
+    load.cache[id] = replacement;
+  };
+
+  const events: string[] = [];
+  const bot = { id: "bot-1", name: "Gordie", role: "Assistant", look: { head: "sprig", palette: "original" } };
+  const chat = { id: "chat-1", botId: "bot-1", title: "Chat", count: 0, time: 1 };
+  const { useApp } = load("../src/state/store");
+  useApp.setState({
+    booted: true,
+    pairing: { serverId: "host-1", name: "Mac" },
+    link: "connecting",
+    parts: { bots: [], chats: [] },
+  });
+
+  standIn("../src/state/link", {
+    holdBackgroundLink: (reason: string) => {
+      events.push(`hold:${reason}`);
+      return () => { events.push(`release:${reason}`); };
+    },
+    syncForPush: async () => {
+      events.push("syncForPush");
+      useApp.setState({ link: "online", parts: { bots: [bot], chats: [chat] } });
+      return true;
+    },
+    api: {},
+  });
+  standIn("../src/features/open/opening", {
+    lastOrNewChat: async (botId: string) => {
+      events.push(`lastOrNewChat:${botId}`);
+      return chat.id;
+    },
+  });
+  standIn("../src/features/voice/liveCall", {
+    useLiveCall: {
+      subscribe: () => () => {},
+      getState: () => ({ call: null }),
+    },
+  });
+  standIn("../src/features/watch/audio", {
+    WatchAudioEndpoint: class {
+      rtc = null;
+      constructor(readonly sessionId: string) {}
+    },
+  });
+  standIn("../src/features/voice/live/session", {
+    companionLiveKit: (duplex: unknown, watchRtc: unknown) => ({ webrtc: null, duplex, watchRtc }),
+    selectedLiveProvider: (botId: string) => {
+      events.push(`selectedLiveProvider:${botId}`);
+      return "gemini";
+    },
+    LiveSessionController: class {
+      current = { status: "listening", muted: false, input: "vad", level: 0, problem: null };
+      private listeners = new Set<(state: any) => void>();
+      subscribe(fn: (state: any) => void) { this.listeners.add(fn); }
+      async start() {
+        events.push("controller.start");
+        for (const fn of this.listeners) fn(this.current);
+      }
+      end() {
+        events.push("controller.end");
+      }
+    },
+  });
+
+  delete load.cache[load.resolve("../src/features/watch/voice")];
+  const { startWatchVoice, endWatchVoice, watchVoiceState } = load("../src/features/watch/voice");
+  await startWatchVoice();
+  assert.equal(watchVoiceState().status, "listening");
+  assert.deepEqual(events, [
+    "hold:watch",
+    "syncForPush",
+    "selectedLiveProvider:bot-1",
+    "lastOrNewChat:bot-1",
+    "controller.start",
+    "release:watch",
+  ]);
+  endWatchVoice();
+});

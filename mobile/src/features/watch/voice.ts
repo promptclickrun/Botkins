@@ -5,6 +5,7 @@ import { lastOrNewChat } from "@/features/open/opening";
 import { LiveSessionController, type LiveSessionState, companionLiveKit, selectedLiveProvider } from "@/features/voice/live/session";
 import { useLiveCall } from "@/features/voice/liveCall";
 import type { WatchVoice } from "./model";
+import { holdBackgroundLink, syncForPush } from "@/state/link";
 import { useApp } from "@/state/store";
 
 type Listener = (voice: WatchVoice) => void;
@@ -41,16 +42,29 @@ export async function startWatchVoice() {
   if (current.status === "connecting" || controller) return;
   const attempt = ++generation;
   update({ status: "connecting", sessionId: undefined, chatId: undefined, problem: undefined });
+  const releaseHold = holdBackgroundLink("watch");
   try {
     await connect(attempt);
   } catch (error) {
     if (attempt === generation) endWatchVoice(error instanceof Error ? error.message : "The Watch call could not start.");
+  } finally {
+    // LiveSessionController acquires its own "watch" hold in start() before connect() returns,
+    // so releasing this startup hold keeps the link held for active calls and releases on failure.
+    releaseHold();
   }
 }
 
 async function connect(attempt: number) {
   if (useLiveCall.getState().call) throw new Error("A live voice call is already open on iPhone. End it there before starting from Watch.");
-  const state = useApp.getState();
+  // When the phone was backgrounded/locked or cold-woken by WatchConnectivity, the relay socket may
+  // have been put to sleep or the initial sync may not have landed yet. Wake and sync before
+  // checking bots/voice settings or making RPCs.
+  let state = useApp.getState();
+  if (!state.booted || !state.pairing || !state.parts.bots?.length || state.link !== "online") {
+    await syncForPush(12_000);
+    if (generation !== attempt) return;
+    state = useApp.getState();
+  }
   const computer = state.pairing?.serverId;
   const bot = state.parts.bots?.find((item) => !item.hidden);
   if (!computer || !bot) throw new Error("Pair Botkins with a computer and add a Botkin first.");

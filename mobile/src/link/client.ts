@@ -926,12 +926,21 @@ export class LinkClient {
   async callWithSignal<T>(method: string, signal: AbortSignal | undefined, ...args: unknown[]): Promise<T> {
     const lifetime = this.lifetime;
     for (let attempt = 0; ; attempt++) {
+      const before = this.session;
       try {
         if (signal?.aborted) throw new Error("The request was cancelled");
         // Pi waits for npm to finish installing dependencies on the computer.
         return await this.request<T>(method, args, method === "cloneProjectRepository" ? 300_000 : method === "piPackages.install" ? 150_000 : 60_000, signal);
       } catch (error) {
-        if (!signal?.aborted && this.lifetime === lifetime && error instanceof Retry && attempt < 2) continue;
+        if (!signal?.aborted && this.lifetime === lifetime && attempt < 2) {
+          if (error instanceof Retry) continue;
+          // A cached session may have gone stale while sleeping (e.g. LAN -> cellular or restarted host);
+          // drop it once and retry so openSession() can fail over to another direct address or the relay.
+          if (before && !(error instanceof LinkError) && this.session === before) {
+            this.useSession(null);
+            continue;
+          }
+        }
         if (error instanceof LinkError) throw error;
         throw new LinkError("offline", "Your computer can't be reached right now.");
       }
