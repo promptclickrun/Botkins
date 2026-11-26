@@ -171,11 +171,32 @@ export const chatsCommands = {
         },
       },
       approve: {
-        summary: "Review and answer a pending permission on this computer",
-        usage: "botkins chats approve <chat-id>",
+        summary: "Approve or deny a pending request by chat id, node-job id or request id",
+        usage: "botkins chats approve <id>",
         async run(context) {
-          const { request } = await context.client.call("chat.read", one(context, "Give the chat id from botkins chats list."));
-          if (request?.kind !== "permission") throw usage("This chat has no pending approval.");
+          const target = one(context, "Give the chat id, node-job id or request id.");
+          let pending;
+          try {
+            pending = await context.client.call("interactions.list");
+          } catch {
+            pending = undefined;
+          }
+          let request = Array.isArray(pending)
+            ? pending.find(
+                (entry) =>
+                  entry.id === target ||
+                  entry.chatId === target ||
+                  (entry.nodeJob && entry.chatId === "node-job-" + target),
+              )
+            : undefined;
+          if (!request && !target.startsWith("node-job-")) {
+            try {
+              ({ request } = await context.client.call("chat.read", target));
+            } catch (error) {
+              if (!Array.isArray(pending)) throw error;
+            }
+          }
+          if (request?.kind !== "permission") throw usage("There is no pending approval for " + safe(target) + ".");
           const action = await approvalAction(context, request);
           const result = await context.client.call("chat.respond", request.id, { action }, ...(action === "deny" ? [] : [{ agreed: true, ...(request.review && { reviewed: true }) }]));
           context.print(result, "Decision recorded.");

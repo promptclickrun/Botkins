@@ -118,6 +118,7 @@ export default function RootLayout() {
               <Stack.Screen name="open/panel" options={{ headerShown: false, animation: "none" }} />
               <Stack.Screen name="chat/new" options={tall} />
               <Stack.Screen name="chat/model" options={tall} />
+              <Stack.Screen name="node-approval" options={tall} />
               <Stack.Screen name="chat/activity" options={tall} />
               <Stack.Screen name="chat/helper" options={tall} />
               <Stack.Screen name="chat/command" options={tall} />

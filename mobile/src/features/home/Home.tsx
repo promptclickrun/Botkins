@@ -20,6 +20,7 @@ import type { AgentRequest, Bot, ChatSummary } from "@/link/types";
 import { activityLabel, isConversation, useBotActivity, useBots, useCan, useChats, usePart, useCanArrange } from "@/state/hooks";
 import { api, attempt } from "@/state/link";
 import { setPrefs, usePrefs } from "@/state/prefs";
+import { isNodeJobRequest, routeForPendingRequest } from "@/state/pushRouting";
 import { useApp } from "@/state/store";
 import { useProfileHosts } from "@/state/profile";
 import { BackdropLayer, badgeColors, BotAvatar, Button, Chip, Dot, EmptyState, Group, HoldMenu, IconButton, IconTile, LinkBanner, Mascot, Row, space, T, Tap, useShape, useTheme } from "@/ui";
@@ -54,14 +55,20 @@ function TopBot({ bot, size, width }: { bot: Bot; size: number; width?: `${numbe
 }
 
 function NeedsYou({ request, bot }: { request: AgentRequest; bot?: Bot }) {
+  const isNode = isNodeJobRequest(request);
+  const subtitle = isNode
+    ? (request.sourceBotName && request.sourceHostName
+        ? `${request.sourceBotName} on ${request.sourceHostName}`
+        : request.sourceBotName || "Node host") + " needs approval"
+    : (bot?.name ?? "A bot") + " needs you";
   return (
     <Row
       leading={bot ? <BotAvatar bot={bot} state="waiting" size={40} /> : undefined}
       title={request.title}
-      subtitle={(bot?.name ?? "A bot") + " needs you"}
+      subtitle={subtitle}
       trailing={<Dot tone="warning" />}
       chevron
-      onPress={() => router.push({ pathname: "/chat/[id]", params: { id: request.chatId } })}
+      onPress={() => router.push(routeForPendingRequest(request) as unknown as Href)}
     />
   );
 }

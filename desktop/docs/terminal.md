@@ -681,11 +681,18 @@ The terminal host must have secure key storage for a profile session or profile-
 
 ## Run as a Node Host
 
-A computer can run as a Node Host so bots on your other computers (bound to the same owner profile) can talk to its shared bots or list files in project folders you choose to share. A node host needs no model sign-in or bots when it only shares project folders.
+A computer can run as a Node Host so bots on your other computers (bound to the same owner profile) can talk to its shared bots, work with files, run shell commands, drive its screen, or show notifications. Policy and grants are stored and enforced on the node itself. A node host needs no model sign-in or bots when it only serves node operations.
 
 ```sh
 botkins node setup --name "Studio Mac"
 botkins node status
+botkins node approvals
+botkins node approve <request-id>
+botkins node policy ask
+botkins node allowlist --add uname --bot <bot-id>
+botkins node allowlist --remove <rule-id>
+botkins node whole-computer off
+botkins node audit --limit 25
 botkins node share Website
 botkins node unshare Website
 botkins node rename "Render Box"
@@ -697,12 +704,18 @@ botkins node disconnect --yes
 ```
 
 - **`botkins node setup --name <name>`** turns on Node Host mode and saves the node's name. If the host is linked to your profile, it publishes as a node even with no bots or chats.
-- **`botkins node status`** shows **Online** or **Paused**, the last completed request, shared project folders, and saved job grants. The same summary appears in `botkins status` and the dashboard Overview.
-- **`botkins node share <project>`** and **`unshare <project>`** control which workspace project folders this node advertises for read-only file listing (`project.list_files`). A project is named by its id or name.
-- **`botkins node pause`** and **`resume`** stop or resume accepting new cross-host node jobs without disconnecting the node or removing grants.
-- **`botkins node revoke <grant-id>`** (or **`--all`**) revokes saved file-listing grants so the next request from that source host and bot asks for approval again. Conversation grants for cross-host Teamwork are separate (`botkins tools forget-approvals`).
-- **`botkins node disconnect`** turns off Node Host mode, cancels pending job requests, and stops advertising node capabilities. `revoke` and `disconnect` ask at a terminal and require `--yes` without a terminal.
-- All commands support `--json`. State changes leave a line in the log (`node.setup`, `node.rename`, `node.pause`, `node.share`, `node.revoke`, `node.disconnect`).
+- **`botkins node status`** shows **Online** or **Paused**, exec policy mode and allowlist count, whole-computer file scope, pending approvals, shared project folders, saved grants, the last completed request, and the recent audit log. The same summary appears in `botkins status` and the dashboard Overview.
+- **`botkins node approvals`** lists pending node host permission requests (backed by the `node.approvals` / `interactions.list` control RPCs).
+- **`botkins node approve <request-id>`** shows the request's details and asks at an interactive terminal (**Allow this time**, **Allow for today**, **Always allow**, or **Deny**). It refuses without a TTY, and `chat.respond` still enforces `{ "agreed": true }` (`NEEDS_YES`) for any approving action. `botkins chats approve <id>` also accepts a request id or `node-job-<id>`.
+- **`botkins node policy <deny|allowlist|ask|full>`** sets this node's shell execution policy (`ask` by default). In `allowlist` mode, only commands matching a rule run without prompting; unmatched commands are denied. Every non-`full` approval binds the exact argv, cwd, env, resolved executable path, and pinned script hash, and denies unpinned interpreter invocations or dangerous env overrides.
+- **`botkins node allowlist`** lists shell allowlist rules; `--add <pattern> [--bot <bot-id>]` adds a per-bot or wildcard (`*`) rule, and `--remove <rule-id>` removes one.
+- **`botkins node whole-computer <on|off>`** toggles opt-in whole-computer file scope (off by default, limiting file operations to explicitly shared project folders).
+- **`botkins node audit [--limit <count>]`** shows the persisted audit log of node operations, caller identity, arguments, status, and exit codes.
+- **`botkins node share <project>`** and **`unshare <project>`** control which workspace project folders this node advertises for file operations. A project is named by its id or name.
+- **`botkins node pause`** and **`resume`** act as a kill switch: pausing immediately stops accepting new requests, cancels pending approvals, and terminates any running child processes.
+- **`botkins node revoke <grant-id>`** (or **`--all`**) revokes saved per-operation grants so the next request from that source host and bot asks for approval again. Conversation grants for cross-host Teamwork are separate (`botkins tools forget-approvals`).
+- **`botkins node disconnect`** turns off Node Host mode, cancels pending and running jobs, and stops advertising node capabilities. `revoke` and `disconnect` ask at a terminal and require `--yes` without a terminal.
+- All commands support `--json`. State changes leave a line in the log (`node.setup`, `node.rename`, `node.pause`, `node.share`, `node.wholeComputer`, `node.execMode`, `node.allowlist.add`, `node.allowlist.remove`, `node.revoke`, `node.disconnect`).
 
 ## Pair a phone
 

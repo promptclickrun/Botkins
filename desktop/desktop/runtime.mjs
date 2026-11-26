@@ -1102,6 +1102,23 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
       ...workspace.nodeHost.setPaused(paused === true),
       listening: link?.status?.().listening === true,
     }),
+    nodeSetWholeComputer: (enabled) => ({
+      ...workspace.nodeHost.setWholeComputer(enabled === true),
+      listening: link?.status?.().listening === true,
+    }),
+    nodeSetExecMode: (mode) => ({
+      ...workspace.nodeHost.setExecMode(String(mode ?? "")),
+      listening: link?.status?.().listening === true,
+    }),
+    nodeAddAllowlistRule: (rule) => ({
+      ...workspace.nodeHost.addAllowlistRule(rule ?? {}),
+      listening: link?.status?.().listening === true,
+    }),
+    nodeRemoveAllowlistRule: (ruleId) => ({
+      ...workspace.nodeHost.removeAllowlistRule(ruleId ? String(ruleId) : undefined),
+      listening: link?.status?.().listening === true,
+    }),
+    nodeAuditLog: (limit) => workspace.nodeHost.getAuditLog(limit),
     nodeShareProject: (projectId, shared = true) => ({
       ...workspace.nodeHost.shareProject(String(projectId), shared !== false),
       listening: link?.status?.().listening === true,
@@ -1301,6 +1318,23 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
     const name = link.status().devices.find((d) => d.id === device)?.name ?? "A phone";
     notifier.show({ title: name + " is viewing this screen", body: "Stop it in Settings › Phone." });
   });
+  workspace.nodeAdapters = {
+    screen: {
+      displays: () => link.screen.displays(),
+      capture: async (opts) => {
+        const source = link.screen.source();
+        if (!source || typeof source.capture !== "function") {
+          throw new Error("Screen capture is unavailable on this node host.");
+        }
+        return source.capture(opts);
+      },
+      permissions: async () => {
+        const source = link.screen.source();
+        return source?.permissions ? source.permissions() : {};
+      },
+    },
+    notify: ({ title, body }) => notifier.show({ title, body }),
+  };
   link.on("joinRequest", (request) => notifier.consider({ type: "joinRequest", request }));
   // A newer Botkins is out: the owner's phones are told, once for each version (the link keeps
   // count for each phone, and a phone that switched these off hears nothing).
