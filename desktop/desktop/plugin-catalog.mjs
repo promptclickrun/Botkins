@@ -1153,7 +1153,7 @@ export class PluginCatalog {
     return { agents: category ? found.filter((listing) => (listing.category ?? "other") === category) : found, categories };
   }
 
-  /** One template with its instructions, for Create a bot. */
+  /** One template with the instructions and any skill and routine definitions Create a bot shows. */
   async agentTemplate(id) {
     await this._init();
     assertString(id, "Template id");
@@ -1161,13 +1161,13 @@ export class PluginCatalog {
     if (id.slice(at + 1) === FIRST_PARTY_MARKETPLACE.id) {
       const entry = BUNDLED.find((item) => item.name === id.slice(0, at));
       if (!entry) fail("That template is no longer in Botkins.");
-      return { ...bundledListing(entry), instructions: entry.template.instructions };
+      return { ...bundledListing(entry), instructions: entry.template.instructions, ...(entry.template.bundle && { bundle: clone(entry.template.bundle) }) };
     }
     const record = at > 0 ? this.marketplacesById.get(id.slice(at + 1)) : undefined;
     if (!record) fail("That template can't be found.");
     const agent = (await this._ensureAgents(record)).find((item) => item.name === id.slice(0, at));
     if (!agent) fail("That template is no longer in " + record.name + ".");
-    return { ...agentListing(agent, record), instructions: agent.template.instructions };
+    return { ...agentListing(agent, record), instructions: agent.template.instructions, ...(agent.template.bundle && { bundle: clone(agent.template.bundle) }) };
   }
 
   _folderListing(record) {

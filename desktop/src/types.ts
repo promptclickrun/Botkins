@@ -61,6 +61,7 @@ export type Bot = {
   name: string;
   role: string;
   instructions: string;
+  bundle?: AgentTemplateBundle;
   clarificationInstructions?: string;
   /** The Botkin this bot is drawn as (src/botkins.ts). Every bot has one; phones show the same. */
   look?: BotLook;
@@ -803,7 +804,7 @@ declare global {
       subscribeHot(fn: (message: HotMessage) => void): () => void;
       addBot(
         bot: Pick<Bot, "name" | "role" | "instructions"> &
-          Partial<Pick<Bot, "look" | "summary">> & {
+          Partial<Pick<Bot, "look" | "summary" | "bundle">> & {
             /** The key of the existing agent the form started from. */
             agent?: string;
             /** The starter the form started from (desktop/starters.mjs). */
@@ -1075,7 +1076,7 @@ declare global {
       "piPackages.setEnabled"(name: string, version: string, enabled: boolean): Promise<InstalledPiPackage>;
       "piPackages.remove"(name: string, version: string): Promise<void>;
       "agents.browse"(query?: { query?: string; category?: string; marketplace?: string }): Promise<{ agents: MarketAgent[]; categories: MarketAgentCategory[] }>;
-      "agents.template"(id: string): Promise<MarketAgentTemplate>;
+      "agents.template"(id: string, version?: 2): Promise<MarketAgentTemplate>;
       // Marketplace › Apps: the person's Composio apps, through the computer's Composio tool and its sign-in
       /** `fresh`: asks the catalog's server now (a person asked for the list again); a failure is thrown. */
       "composio.catalog"(options?: { fresh?: boolean }): Promise<ComposioCatalog>;
@@ -1578,7 +1579,7 @@ export type MarketAgent = {
   starter?: boolean;
 };
 export type MarketAgentCategory = { id: string; name: string; count: number };
-export type MarketAgentTemplate = MarketAgent & { instructions: string };
+export type MarketAgentTemplate = MarketAgent & { instructions: string; bundle?: AgentTemplateBundle };
 
 /** The public list of apps Composio connects, as the computer read it. */
 export type ComposioToolkit = { slug: string; name: string; description: string; logo: string | null; categories: string[]; noAuth: boolean };
@@ -2356,7 +2357,14 @@ export type TaskInput = { id?: string; title: string; body?: string; botId?: str
 
 export type LinkPreview = { url: string; title: string; description: string; site: string; image?: string };
 
+/** Content copied to the new bot by a computer with agent-template-bundles-v1. */
+export type AgentTemplateBundle = {
+  skills?: { name: string; description: string; instructions: string }[];
+  routines?: { name: string; instructions: string; cadence: Extract<Cadence, { kind: "daily" | "weekdays" | "weekly" }> }[];
+};
+
 export type BotTemplate = {
+  bundle?: AgentTemplateBundle;
   id: string;
   name: string;
   role: string;

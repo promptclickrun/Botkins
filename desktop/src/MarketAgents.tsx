@@ -4,6 +4,7 @@ import { SearchField } from "glisse";
 import { BotAvatar } from "./Avatar";
 import { colorsOf, lookOf } from "./botkins";
 import { asksFirst, botChips, botSections, deliverableLine, jobLine, tooLong } from "./marketLogic";
+import { supportsTemplateBundles, TemplateBundle } from "./TemplateBundle";
 import { Group, errorText } from "./SettingsRows";
 import { teamCan } from "./teamAccess";
 import type { MarketAgent, MarketAgentTemplate, State } from "./types";
@@ -18,6 +19,10 @@ export const AGENT_TEMPLATES = "agent-templates-v1";
 export function supportsAgentTemplates(remote: State["remote"]) {
   const using = remote?.using;
   return (!using || using.capabilities.includes(AGENT_TEMPLATES)) && typeof api["agents.browse"] === "function";
+}
+
+export function readAgentTemplate(id: string, bundlesSupported: boolean) {
+  return bundlesSupported ? api["agents.template"](id, 2) : api["agents.template"](id);
 }
 
 /** "Productivity · Botkins · v1.0.0 · Botkins": what is known about where a template is from. */
@@ -43,7 +48,8 @@ export default function MarketAgents({ state, createBot, refreshed = 0 }: { stat
   const [error, setError] = useState("");
   const [revision, setRevision] = useState(0);
   const [openId, setOpenId] = useState<string>();
-  const install = useInstall(createBot);
+  const bundlesSupported = supportsTemplateBundles(state.remote);
+  const install = useInstall(bundlesSupported, createBot);
 
   // One read of every template; the search and the chips narrow it here, as on the phone.
   useEffect(() => {
@@ -64,7 +70,7 @@ export default function MarketAgents({ state, createBot, refreshed = 0 }: { stat
   if (!supported)
     return <Empty icon={<ShieldAlert size={20} />} title="Bots need an update" text="Update the app on your computer to see bots here." />;
   if (!allowed) return <Empty icon={<ShieldAlert size={20} />} title="Your team role can't create bots" text="Ask the person who runs this computer." />;
-  if (openId) return <AgentPage id={openId} back={() => setOpenId(undefined)} install={createBot} />;
+  if (openId) return <AgentPage id={openId} bundlesSupported={bundlesSupported} back={() => setOpenId(undefined)} install={createBot} />;
 
   return (
     <>
@@ -136,14 +142,14 @@ export default function MarketAgents({ state, createBot, refreshed = 0 }: { stat
 }
 
 /** Reads a template and opens Create a bot with it. */
-export function useInstall(install?: (template: MarketAgentTemplate) => void) {
+export function useInstall(bundlesSupported: boolean, install?: (template: MarketAgentTemplate) => void) {
   const [busy, setBusy] = useState<string>();
   const [error, setError] = useState("");
   const add = (id: string) => {
     if (!install || busy) return;
     setBusy(id);
     setError("");
-    api["agents.template"](id)
+    readAgentTemplate(id, bundlesSupported)
       .then((template) => install(template))
       .catch((e) => setError(errorText(e)))
       .finally(() => setBusy(undefined));
@@ -191,7 +197,7 @@ export function BotCard({ agent, starter, open, add, disabled }: { agent: Market
 }
 
 /** One template: its Botkin on a band, what it is for, its instructions as they will be given, and Add. */
-export function AgentPage({ id, back, install }: { id: string; back: () => void; install?: (template: MarketAgentTemplate) => void }) {
+export function AgentPage({ id, back, install, bundlesSupported }: { id: string; bundlesSupported: boolean; back: () => void; install?: (template: MarketAgentTemplate) => void }) {
   const [template, setTemplate] = useState<MarketAgentTemplate>();
   const [error, setError] = useState("");
   const [revision, setRevision] = useState(0);
@@ -199,13 +205,13 @@ export function AgentPage({ id, back, install }: { id: string; back: () => void;
   useEffect(() => {
     let live = true;
     setError("");
-    api["agents.template"](id)
+    readAgentTemplate(id, bundlesSupported)
       .then((value) => live && setTemplate(value))
       .catch((e) => live && setError(errorText(e)));
     return () => {
       live = false;
     };
-  }, [id, revision]);
+  }, [id, revision, bundlesSupported]);
   const backLink = (
     <button type="button" className="set-link plugin-back" onClick={back}>
       <ArrowLeft size={14} /> Back to bots
@@ -266,6 +272,7 @@ export function AgentPage({ id, back, install }: { id: string; back: () => void;
           )}
         </Group>
       )}
+      <TemplateBundle bundle={template.bundle} supported={bundlesSupported} />
       <Group title="Instructions" footer={template.builtIn ? undefined : "Someone else wrote these instructions: read them first."}>
         <div className="set-row agent-instructions">
           <p className={long && !all ? "collapsed" : ""} style={{ "--lines": INSTRUCTION_LINES } as React.CSSProperties}>

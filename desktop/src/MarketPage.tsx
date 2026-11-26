@@ -3,6 +3,7 @@ import { ChevronRight, Package, Sparkles, Wrench } from "lucide-react";
 import type { Bot, FeaturedSkill, MarketAgent, MarketAgentTemplate, State } from "./types";
 import PluginsSettings, { type MarketView } from "./PluginsSettings";
 import { AgentPage, BotArt, BotCard, supportsAgentTemplates, useInstall } from "./MarketAgents";
+import { supportsTemplateBundles } from "./TemplateBundle";
 import { CatalogEntryPage, FeaturedCard, AppCard, useMcpCatalog } from "./McpCatalog";
 import { appsBlocks, botSections, jobLine } from "./marketLogic";
 import { teamCan } from "./teamAccess";
@@ -69,7 +70,8 @@ function Discover({
   const [error, setError] = useState("");
   const [agentId, setAgentId] = useState<string>();
   const [appId, setAppId] = useState<string>();
-  const install = useInstall(createBot);
+  const bundlesSupported = supportsTemplateBundles(state.remote);
+  const install = useInstall(bundlesSupported, createBot);
   const apps = useMcpCatalog(state);
 
   useEffect(() => {
@@ -105,7 +107,7 @@ function Discover({
     return (featured ?? blocks[0])?.entries.slice(0, APPS) ?? [];
   }, [apps.catalog]);
 
-  if (agentId) return <AgentPage id={agentId} back={() => setAgentId(undefined)} install={createBot} />;
+  if (agentId) return <AgentPage id={agentId} bundlesSupported={bundlesSupported} back={() => setAgentId(undefined)} install={createBot} />;
   if (appId) return <CatalogEntryPage state={state} catalog={apps.catalog} id={appId} back={() => setAppId(undefined)} backLabel="Back to Discover" reload={apps.reload} />;
 
   const hero = popular[0];

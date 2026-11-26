@@ -1,12 +1,14 @@
 import { useEffect, useEffectEvent, useState } from "react";
 import type { MarketAgent, MarketAgentTemplate } from "@/link/types";
 import { useCapability, useOnline } from "@/state/hooks";
+import { readAgentTemplate } from "@/features/market/agents/calls";
 import { api } from "@/state/link";
 import { BotAvatar, EmptyState, Group, Loading, Row } from "@/ui";
-import { AGENTS_CAPABILITY, templateAvailability } from "@/features/market/agents/logic";
+import { AGENT_TEMPLATE_BUNDLES, AGENTS_CAPABILITY, templateAvailability } from "@/features/market/agents/logic";
 
 export function MarketTemplates({ pick }: { pick: (template: MarketAgentTemplate) => void }) {
   const unavailable = templateAvailability(useCapability(AGENTS_CAPABILITY), useOnline());
+  const bundlesSupported = useCapability(AGENT_TEMPLATE_BUNDLES);
   const [agents, setAgents] = useState<MarketAgent[]>();
   const [id, setId] = useState("");
   const [error, setError] = useState("");
@@ -18,11 +20,11 @@ export function MarketTemplates({ pick }: { pick: (template: MarketAgentTemplate
     let live = true;
     setError("");
     const read = id
-      ? api["agents.template"](id).then((template) => live && apply(template))
+      ? readAgentTemplate(id, bundlesSupported).then((template) => live && apply(template))
       : api["agents.browse"]({}).then((page) => live && setAgents(page.agents));
     read.catch((e: unknown) => live && setError(e instanceof Error ? e.message : "Couldn't read the marketplace."));
     return () => { live = false; };
-  }, [unavailable, id, tries]);
+  }, [unavailable, id, tries, bundlesSupported]);
 
   if (unavailable) return <EmptyState title={unavailable} />;
   if (error) return <EmptyState title="Couldn't read the marketplace" text={error} action="Try again" onAction={() => setTries(tries + 1)} />;

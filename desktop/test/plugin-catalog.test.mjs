@@ -230,8 +230,9 @@ test("a marketplace's agent templates are read, checked and kept, and a bad one 
   const market = join(root, "market");
   await mkdir(join(market, ".github", "plugin"), { recursive: true });
   await mkdir(join(market, "agents"), { recursive: true });
-  const template = (name) => JSON.stringify({ format: "botkins.bot-template", version: 1, name, role: "Inbox helper", summary: "Sorts " + name + "'s mail.", instructions: "Sort the mail.", look: { head: "pip", palette: "fern" } });
-  await writeFile(join(market, "agents", "sorter.json"), template("Sorter"));
+  const bundle = { skills: [{ name: "sort-mail", description: "Sort messages.", instructions: "Group messages by topic." }] };
+  const template = (name, additions) => JSON.stringify({ format: "botkins.bot-template", version: 1, name, role: "Inbox helper", summary: "Sorts " + name + "'s mail.", instructions: "Sort the mail.", look: { head: "pip", palette: "fern" }, ...additions });
+  await writeFile(join(market, "agents", "sorter.json"), template("Sorter", { version: 2, bundle }));
   await writeFile(join(market, "agents", "scout.json"), template("Scout"));
   await writeFile(join(market, "agents", "broken.json"), "{ not json");
   await writeFile(join(market, ".github", "plugin", "marketplace.json"), JSON.stringify({ name: "agent-market", plugins: [], agents: [
@@ -246,10 +247,12 @@ test("a marketplace's agent templates are read, checked and kept, and a bad one 
   assert.deepEqual(agents.map((agent) => [agent.id, agent.name, agent.category, agent.builtIn]), [["sorter@agent-market", "Sorter", "productivity", false], ["scout@agent-market", "Scout", "other", false]]);
   assert.deepEqual(categories.map((c) => [c.id, c.count]), [["other", 1], ["productivity", 1]]);
   assert.equal("instructions" in agents[0], false);
+  assert.equal("bundle" in agents[0], false);
   assert.deepEqual((await catalog.agents({ marketplace: "agent-market", query: "EMAIL" })).agents.map((agent) => agent.id), ["sorter@agent-market"]);
   assert.deepEqual((await catalog.agents({ marketplace: "agent-market", category: "productivity" })).agents.map((agent) => agent.id), ["sorter@agent-market"]);
   const sorter = await catalog.agentTemplate("sorter@agent-market");
   assert.equal(sorter.instructions, "Sort the mail.");
+  assert.deepEqual(sorter.bundle, bundle);
   assert.deepEqual(sorter.look, { head: "pip", palette: "fern" });
   await assert.rejects(catalog.agentTemplate("broken@agent-market"), /no longer in agent-market/);
   // Kept with the catalog: a fresh start shows them without reading the files again.
