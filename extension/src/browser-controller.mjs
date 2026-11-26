@@ -638,7 +638,11 @@ export class BrowserController {
         );
       }
       const currentUrl = currentTab.url || currentTab.pendingUrl || "";
-      if (currentUrl !== expectedUrl || urlOrigin(currentUrl) !== expectedOrigin) {
+      const pendingMismatch =
+        typeof currentTab.pendingUrl === "string" &&
+        currentTab.pendingUrl.length > 0 &&
+        currentTab.pendingUrl !== expectedUrl;
+      if (pendingMismatch || currentUrl !== expectedUrl || urlOrigin(currentUrl) !== expectedOrigin) {
         throw screenshotAbortedError(
           `Screenshot discarded: target tab ${targetTabId} URL or origin changed ${phase}.`,
         );
@@ -656,6 +660,7 @@ export class BrowserController {
       b64 = shot?.data || null;
     } else if (typeof chrome.tabs?.captureVisibleTab === "function") {
       let prevActiveId = null;
+      let sawInterference = false;
       try {
         let preTab;
         try {
@@ -666,8 +671,13 @@ export class BrowserController {
           );
         }
         const preUrl = preTab.url || preTab.pendingUrl || "";
+        const prePendingMismatch =
+          typeof preTab.pendingUrl === "string" &&
+          preTab.pendingUrl.length > 0 &&
+          preTab.pendingUrl !== expectedUrl;
         if (
           preTab.windowId !== targetWindowId ||
+          prePendingMismatch ||
           preUrl !== expectedUrl ||
           urlOrigin(preUrl) !== expectedOrigin
         ) {
@@ -676,36 +686,170 @@ export class BrowserController {
           );
         }
 
+        let latestPreTab = preTab;
         const [activeBefore] = await chrome.tabs.query({ active: true, windowId: targetWindowId });
         if (!activeBefore || activeBefore.id !== targetTabId) {
           if (activeBefore && activeBefore.id !== targetTabId) prevActiveId = activeBefore.id;
           await chrome.tabs.update(targetTabId, { active: true });
           await sleep(80);
-          await assertTargetTabStable("before capture");
+          latestPreTab = await assertTargetTabStable("before capture");
         }
 
-        let dataUrl = await chrome.tabs.captureVisibleTab(targetWindowId, { format: "jpeg", quality });
-        try {
-          verifiedTab = await assertTargetTabStable("during capture");
-        } catch (verifyErr) {
-          // Explicitly discard the captured image data if verification fails.
-          dataUrl = null;
-          throw verifyErr;
+        const initialStatus = latestPreTab.status;
+        const MAX_CAPTURE_ATTEMPTS = 2;
+        const addListener = (event, fn) => {
+          if (typeof event?.addListener === "function") event.addListener(fn);
+        };
+        const removeListener = (event, fn) => {
+          if (typeof event?.removeListener === "function") event.removeListener(fn);
+        };
+
+        for (let attempt = 0; attempt < MAX_CAPTURE_ATTEMPTS; attempt++) {
+          let generation = 0;
+          const startGeneration = generation;
+          let dirtyReason = null;
+          let canRetry = true;
+          let targetWindowFocused = null;
+
+          const markDirty = (reason, retryable = true) => {
+            generation += 1;
+            if (!dirtyReason || (!retryable && canRetry)) {
+              dirtyReason = reason;
+            }
+            if (!retryable) canRetry = false;
+          };
+
+          const onActivated = (activeInfo) => {
+            if (!activeInfo || activeInfo.windowId === targetWindowId || activeInfo.tabId === targetTabId) {
+              markDirty(`active tab in window ${targetWindowId} changed during capture`, true);
+            }
+          };
+
+          const onFocusChanged = (windowId) => {
+            const focusedNow = windowId === targetWindowId;
+            if (targetWindowFocused === null || targetWindowFocused || focusedNow) {
+              markDirty(`window ${targetWindowId} focus changed during capture`, true);
+            }
+            targetWindowFocused = focusedNow;
+          };
+
+          const onUpdated = (tabId, changeInfo, updatedTab) => {
+            if (tabId !== targetTabId) return;
+            if (updatedTab?.windowId !== undefined && updatedTab.windowId !== targetWindowId) {
+              markDirty(`target tab ${targetTabId} moved out of window ${targetWindowId} during capture`, false);
+              return;
+            }
+            if (typeof changeInfo?.url === "string") {
+              markDirty(`target tab ${targetTabId} URL changed during capture`, false);
+              return;
+            }
+            if (changeInfo?.status === "loading") {
+              markDirty(`target tab ${targetTabId} started navigating during capture`, false);
+              return;
+            }
+            if (changeInfo?.status === "complete") {
+              markDirty(
+                `target tab ${targetTabId} finished navigating during capture`,
+                initialStatus !== "complete",
+              );
+            }
+          };
+
+          const onDetached = (tabId) => {
+            if (tabId === targetTabId) {
+              markDirty(`target tab ${targetTabId} was detached from window ${targetWindowId} during capture`, false);
+            }
+          };
+
+          const onRemoved = (tabId) => {
+            if (tabId === targetTabId) {
+              markDirty(`target tab ${targetTabId} was closed during capture`, false);
+            }
+          };
+
+          addListener(chrome.tabs?.onActivated, onActivated);
+          addListener(chrome.windows?.onFocusChanged, onFocusChanged);
+          addListener(chrome.tabs?.onUpdated, onUpdated);
+          addListener(chrome.tabs?.onDetached, onDetached);
+          addListener(chrome.tabs?.onRemoved, onRemoved);
+
+          let dataUrl = null;
+          try {
+            if (typeof chrome.windows?.get === "function") {
+              try {
+                const win = await chrome.windows.get(targetWindowId);
+                if (generation === startGeneration && typeof win?.focused === "boolean") {
+                  targetWindowFocused = win.focused;
+                }
+              } catch {}
+            }
+
+            await assertTargetTabStable("before capture");
+            if (generation !== startGeneration) {
+              sawInterference = true;
+              if (canRetry && attempt + 1 < MAX_CAPTURE_ATTEMPTS) continue;
+              throw screenshotAbortedError(
+                `Screenshot discarded: ${dirtyReason || `active tab in window ${targetWindowId} changed during capture`}.`,
+              );
+            }
+
+            try {
+              dataUrl = await chrome.tabs.captureVisibleTab(targetWindowId, { format: "jpeg", quality });
+            } catch (capErr) {
+              if (generation !== startGeneration) {
+                sawInterference = true;
+                if (canRetry && attempt + 1 < MAX_CAPTURE_ATTEMPTS) continue;
+                throw screenshotAbortedError(
+                  `Screenshot discarded: ${dirtyReason || `active tab in window ${targetWindowId} changed during capture`}.`,
+                );
+              }
+              throw capErr;
+            }
+
+            if (generation !== startGeneration) {
+              // Explicitly discard captured image data whenever a tab/window/navigation event arrived.
+              dataUrl = null;
+              sawInterference = true;
+              if (canRetry && attempt + 1 < MAX_CAPTURE_ATTEMPTS) continue;
+              throw screenshotAbortedError(
+                `Screenshot discarded: ${dirtyReason || `active tab in window ${targetWindowId} changed during capture`}.`,
+              );
+            }
+
+            try {
+              verifiedTab = await assertTargetTabStable("during capture");
+            } catch (verifyErr) {
+              dataUrl = null;
+              throw verifyErr;
+            }
+
+            if (generation !== startGeneration) {
+              dataUrl = null;
+              sawInterference = true;
+              if (canRetry && attempt + 1 < MAX_CAPTURE_ATTEMPTS) continue;
+              throw screenshotAbortedError(
+                `Screenshot discarded: ${dirtyReason || `active tab in window ${targetWindowId} changed during capture`}.`,
+              );
+            }
+
+            b64 = stripDataUrlPrefix(dataUrl);
+            break;
+          } finally {
+            removeListener(chrome.tabs?.onActivated, onActivated);
+            removeListener(chrome.windows?.onFocusChanged, onFocusChanged);
+            removeListener(chrome.tabs?.onUpdated, onUpdated);
+            removeListener(chrome.tabs?.onDetached, onDetached);
+            removeListener(chrome.tabs?.onRemoved, onRemoved);
+          }
         }
-        b64 = stripDataUrlPrefix(dataUrl);
       } catch (err) {
         if (err?.__botkinsScreenshotAborted) throw err;
-        const [activeNow] = await chrome.tabs.query({ active: true, windowId: targetWindowId }).catch(() => []);
-        if (!activeNow || activeNow.id !== targetTabId) {
-          throw screenshotAbortedError(
-            `Screenshot discarded: active tab in window ${targetWindowId} changed away from target tab ${targetTabId} during capture.`,
-          );
-        }
-        // Fall back to ephemeral CDP viewport capture only if captureVisibleTab fails while target tab is still active.
+        await assertTargetTabStable("during capture");
+        // Fall back to ephemeral CDP viewport capture only if captureVisibleTab fails while target tab is still active and unchanged.
         const shot = await this.cdp(targetTabId, "Page.captureScreenshot", { format: "jpeg", quality }, "viewport screenshot fallback");
         b64 = shot?.data || null;
       } finally {
-        if (prevActiveId != null) {
+        if (prevActiveId != null && !sawInterference) {
           const [activeNow] = await chrome.tabs.query({ active: true, windowId: targetWindowId }).catch(() => []);
           if (!activeNow || activeNow.id === targetTabId) {
             await chrome.tabs.update(prevActiveId, { active: true }).catch(() => {});

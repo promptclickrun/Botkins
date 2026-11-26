@@ -97,8 +97,21 @@ test("browser/platform detection and storage helpers", async () => {
   assert.equal(reloaded.settings.profileLabel, "Personal");
 });
 
+function createMockEvent() {
+  const listeners = new Set();
+  return {
+    addListener: (fn) => listeners.add(fn),
+    removeListener: (fn) => listeners.delete(fn),
+    emit: (...args) => {
+      for (const fn of [...listeners]) fn(...args);
+    },
+    size: () => listeners.size,
+  };
+}
+
 function createMockChrome({
   tabs,
+  windows,
   onDriverCall,
   onMainWorldEval,
   onCdpCommand,
@@ -111,8 +124,22 @@ function createMockChrome({
   const captureCalls = [];
   const installedFrames = new Set();
 
+  const onActivated = createMockEvent();
+  const onUpdated = createMockEvent();
+  const onDetached = createMockEvent();
+  const onRemoved = createMockEvent();
+  const onFocusChanged = createMockEvent();
+  const events = { onActivated, onUpdated, onDetached, onRemoved, onFocusChanged };
+  const windowMap = new Map(
+    (windows || [{ id: 1, focused: true }]).map((w) => [w.id, { ...w }]),
+  );
+
   const chromeMock = {
     tabs: {
+      onActivated,
+      onUpdated,
+      onDetached,
+      onRemoved,
       query: async (q = {}) =>
         tabs.filter((t) => {
           if (q.active !== undefined && Boolean(t.active) !== Boolean(q.active)) return false;
@@ -141,20 +168,28 @@ function createMockChrome({
           for (const t of tabs) if (t.windowId === next.windowId) t.active = false;
         }
         tabs.push(next);
+        if (next.active) onActivated.emit({ tabId: next.id, windowId: next.windowId });
         return next;
       },
       update: async (id, patch) => {
         const t = tabs.find((x) => x.id === id);
         if (!t) throw new Error("No tab");
+        const wasActive = Boolean(t.active);
         if (patch.active) {
           for (const other of tabs) if (other.windowId === t.windowId) other.active = false;
         }
         Object.assign(t, patch);
+        if (patch.active && !wasActive) {
+          onActivated.emit({ tabId: t.id, windowId: t.windowId });
+        }
         return t;
       },
       remove: async (id) => {
         const idx = tabs.findIndex((x) => x.id === id);
-        if (idx >= 0) tabs.splice(idx, 1);
+        if (idx >= 0) {
+          tabs.splice(idx, 1);
+          onRemoved.emit(id);
+        }
       },
       group: async ({ groupId, tabIds }) => {
         const gid = groupId ?? 55;
@@ -166,11 +201,14 @@ function createMockChrome({
       },
       captureVisibleTab: async (windowId, opts) => {
         captureCalls.push({ windowId, opts });
-        if (onCaptureVisibleTab) return await onCaptureVisibleTab(windowId, opts);
+        if (onCaptureVisibleTab) return await onCaptureVisibleTab(windowId, opts, events);
         return "data:image/jpeg;base64,Vk1JR0U=";
       },
     },
     windows: {
+      WINDOW_ID_NONE: -1,
+      onFocusChanged,
+      get: async (id) => windowMap.get(id) || { id, focused: true },
       update: async () => ({}),
     },
     tabGroups: {
@@ -229,7 +267,7 @@ function createMockChrome({
     },
   };
 
-  return { chromeMock, attached, cdpCalls, scriptingCalls, captureCalls };
+  return { chromeMock, attached, cdpCalls, scriptingCalls, captureCalls, events };
 }
 
 test("BrowserController runs DOM-first without attaching debugger and keeps multi-frame refs", async () => {
@@ -488,4 +526,181 @@ test("BrowserController discards viewport screenshot when active tab or URL/orig
   assert.equal(uploaded.length, 0);
   assert.equal(cdpCalls.length, 0);
 });
+
+test("BrowserController discards screenshot when user switches to tab B and back to A during capture", async () => {
+  const tabs = [
+    { id: 1, windowId: 1, title: "Tab A", url: "https://example.com/a", active: true, pinned: false, groupId: -1, incognito: false, status: "complete" },
+    { id: 2, windowId: 1, title: "Tab B Private", url: "https://private.example/b", active: false, pinned: false, groupId: -1, incognito: false, status: "complete" },
+  ];
+
+  const uploaded = [];
+  let mode = "always-bounce";
+  let attemptCount = 0;
+
+  const { chromeMock, cdpCalls, captureCalls, events } = createMockChrome({
+    tabs,
+    onCaptureVisibleTab: async (_windowId, _opts, ev) => {
+      attemptCount += 1;
+      if (mode === "always-bounce" || (mode === "bounce-once" && attemptCount === 1)) {
+        // User switches from Tab A -> Tab B -> back to Tab A while captureVisibleTab is in flight.
+        // Both pre-check and post-check see Tab A active, yet the captured image could be Tab B.
+        tabs[0].active = false;
+        tabs[1].active = true;
+        ev.onActivated.emit({ tabId: 2, windowId: 1 });
+        tabs[1].active = false;
+        tabs[0].active = true;
+        ev.onActivated.emit({ tabId: 1, windowId: 1 });
+        return "data:image/jpeg;base64,U0VDUkVUX1RBQl9CX0lNQUdF";
+      }
+      return "data:image/jpeg;base64,Q0xFQU5fVEFCX0FfSU1BR0U=";
+    },
+  });
+  globalThis.chrome = chromeMock;
+
+  const ctrl = new BrowserController({
+    getSettings: async () => ({ enabled: true, mode: "all", groupName: "Botkins", groupColor: "orange", pausedTabIds: [] }),
+    uploadScreenshot: async (b64, name) => {
+      uploaded.push({ b64, name });
+      return `up_${name}`;
+    },
+  });
+
+  // Case 1: Switching B -> A happens during both initial capture and single retry -> no image returned/uploaded.
+  await assert.rejects(
+    () => ctrl.run("browser_screenshot", { tabId: 1 }),
+    (err) => {
+      assert.match(err.message, /discarded/i);
+      assert.match(err.message, /active tab/i);
+      assert.doesNotMatch(err.message, /Tab B Private|private\.example/i);
+      return true;
+    },
+  );
+  assert.equal(captureCalls.length, 2, "should discard and retry once before erroring");
+  assert.equal(uploaded.length, 0, "tainted B->A image must never be uploaded or returned");
+  assert.equal(cdpCalls.length, 0, "tab-switch abort must not fall back to CDP");
+  assert.equal(events.onActivated.size(), 0, "onActivated listener must be cleaned up");
+  assert.equal(events.onFocusChanged.size(), 0, "onFocusChanged listener must be cleaned up");
+  assert.equal(events.onUpdated.size(), 0, "onUpdated listener must be cleaned up");
+
+  // Case 2: Switching B -> A happens on first attempt only -> first image discarded, retry returns clean Tab A image.
+  mode = "bounce-once";
+  attemptCount = 0;
+  captureCalls.length = 0;
+  const cleanShot = await ctrl.run("browser_screenshot", { tabId: 1 });
+  assert.equal(captureCalls.length, 2);
+  assert.equal(uploaded.length, 1);
+  assert.equal(uploaded[0].b64, "Q0xFQU5fVEFCX0FfSU1BR0U=", "only the clean retry image may be uploaded");
+  assert.equal(cleanShot.path, "up_browser-tab-1.jpg");
+  assert.equal(events.onActivated.size(), 0);
+  assert.equal(events.onFocusChanged.size(), 0);
+  assert.equal(events.onUpdated.size(), 0);
+});
+
+test("BrowserController discards screenshot on window focus change or tabs.onUpdated navigation during capture", async () => {
+  const tabs = [
+    { id: 1, windowId: 1, title: "Target", url: "https://example.com/app", active: true, pinned: false, groupId: -1, incognito: false, status: "complete" },
+    { id: 3, windowId: 2, title: "Other Window Tab", url: "https://other.example/", active: true, pinned: false, groupId: -1, incognito: false, status: "complete" },
+  ];
+
+  const uploaded = [];
+  let scenario = "focus-bounce";
+
+  const { chromeMock, cdpCalls, captureCalls, events } = createMockChrome({
+    tabs,
+    windows: [
+      { id: 1, focused: true },
+      { id: 2, focused: false },
+    ],
+    onCaptureVisibleTab: async (_windowId, _opts, ev) => {
+      if (scenario === "focus-bounce") {
+        ev.onFocusChanged.emit(2);
+        ev.onFocusChanged.emit(1);
+        return "data:image/jpeg;base64,V1JPTkdfV0lORE9X";
+      }
+      if (scenario === "url-bounce") {
+        // URL changes and reverts during capture: post-check sees expectedUrl, but onUpdated catches it.
+        ev.onUpdated.emit(1, { url: "https://private.example/redirect" }, { ...tabs[0], url: "https://private.example/redirect" });
+        ev.onUpdated.emit(1, { url: "https://example.com/app" }, { ...tabs[0] });
+        return "data:image/jpeg;base64,UkVESVJFQ1RfRlJBTUU=";
+      }
+      if (scenario === "nav-loading") {
+        ev.onUpdated.emit(1, { status: "loading" }, { ...tabs[0], status: "loading" });
+        return "data:image/jpeg;base64,TE9BRElOR19GUkFNRQ==";
+      }
+      if (scenario === "benign-and-other-window") {
+        // Benign title/favicon update on target tab and activation in a different window must NOT abort capture.
+        ev.onUpdated.emit(1, { title: "Target (1)" }, { ...tabs[0], title: "Target (1)" });
+        ev.onActivated.emit({ tabId: 3, windowId: 2 });
+        return "data:image/jpeg;base64,Q0xFQU5fSU1BR0U=";
+      }
+      return "data:image/jpeg;base64,Q0xFQU5fSU1BR0U=";
+    },
+  });
+  globalThis.chrome = chromeMock;
+
+  const ctrl = new BrowserController({
+    getSettings: async () => ({ enabled: true, mode: "all", groupName: "Botkins", groupColor: "orange", pausedTabIds: [] }),
+    uploadScreenshot: async (b64, name) => {
+      uploaded.push({ b64, name });
+      return `up_${name}`;
+    },
+  });
+
+  // 1. Repeated window focus changes discard and error after single retry.
+  await assert.rejects(
+    () => ctrl.run("browser_screenshot", { tabId: 1 }),
+    (err) => {
+      assert.match(err.message, /discarded/i);
+      assert.match(err.message, /focus changed/i);
+      return true;
+    },
+  );
+  assert.equal(captureCalls.length, 2);
+  assert.equal(uploaded.length, 0);
+  assert.equal(cdpCalls.length, 0);
+
+  // 2. tabs.onUpdated URL change discards immediately without retry or upload.
+  scenario = "url-bounce";
+  captureCalls.length = 0;
+  await assert.rejects(
+    () => ctrl.run("browser_screenshot", { tabId: 1 }),
+    (err) => {
+      assert.match(err.message, /discarded/i);
+      assert.match(err.message, /URL changed/i);
+      assert.doesNotMatch(err.message, /private\.example/i);
+      return true;
+    },
+  );
+  assert.equal(captureCalls.length, 1);
+  assert.equal(uploaded.length, 0);
+  assert.equal(cdpCalls.length, 0);
+
+  // 3. tabs.onUpdated navigation start (status: "loading") discards immediately.
+  scenario = "nav-loading";
+  captureCalls.length = 0;
+  await assert.rejects(
+    () => ctrl.run("browser_screenshot", { tabId: 1 }),
+    (err) => {
+      assert.match(err.message, /discarded/i);
+      assert.match(err.message, /navigating/i);
+      return true;
+    },
+  );
+  assert.equal(captureCalls.length, 1);
+  assert.equal(uploaded.length, 0);
+  assert.equal(cdpCalls.length, 0);
+
+  // 4. Benign title update on target tab and tab activation in another window succeed normally.
+  scenario = "benign-and-other-window";
+  captureCalls.length = 0;
+  const okShot = await ctrl.run("browser_screenshot", { tabId: 1 });
+  assert.equal(captureCalls.length, 1);
+  assert.equal(uploaded.length, 1);
+  assert.equal(uploaded[0].b64, "Q0xFQU5fSU1BR0U=");
+  assert.equal(okShot.path, "up_browser-tab-1.jpg");
+  assert.equal(events.onActivated.size(), 0);
+  assert.equal(events.onFocusChanged.size(), 0);
+  assert.equal(events.onUpdated.size(), 0);
+});
+
 
