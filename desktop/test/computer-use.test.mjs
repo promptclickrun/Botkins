@@ -96,6 +96,8 @@ test("computerUse defaults to false and tools are exposed only in owner chats wh
 test("curated tools observe without screenshots by default, default actions to background, gate approvals, pass effect/escalation verbatim, and emit Screen frames", async (t) => {
   const screenHost = new Screen({
     mode: () => "view",
+    platform: "linux",
+    dirs: [],
     adapter: () => ({
       displays: async () => [{ id: "main", label: "Main", width: 1440, height: 900, primary: true }],
       capture: async () => ({ jpeg: TINY_JPEG, width: 1, height: 1 }),
@@ -201,7 +203,7 @@ test("computer_act refuses type_text into secure/password fields before approval
 
 test("desktop and mobile link-host/screen.mjs both expose CUA bot activity markers", async () => {
   const { Screen: MobileScreen } = await import("../../mobile/link-host/screen.mjs");
-  const m = new MobileScreen({ mode: () => "view" });
+  const m = new MobileScreen({ mode: () => "view", platform: "linux", dirs: [] });
   const marked = m.noteBotActivity(
     { botName: "Glory", action: "click", app: "Safari", deliveryMode: "background", pointerUntouched: true },
     { jpeg: TINY_JPEG, width: 1, height: 1 },
