@@ -1078,12 +1078,15 @@ export class NodeHost {
       if (jobOp === "computer.act" && typeof cu.preflightAct === "function") {
         await cu.preflightAct(cuParams);
       }
+      // Typing and hotkeys are approved one at a time: a remembered computer.act grant never covers them.
+      const oneOff = jobOp === "computer.act" && ["type_text", "set_value", "hotkey"].includes(cuParams.action);
       return {
         grantOperation: jobOp,
         resourceId: COMPUTER_RESOURCE,
         resourceName: "Computer use",
         params: cuParams,
-        scope: digest(["node-job", ...identity, sourceBotId, jobOp, COMPUTER_RESOURCE]),
+        ...(oneOff && { noGrant: true }),
+        scope: digest(["node-job", ...identity, sourceBotId, jobOp, COMPUTER_RESOURCE, ...(oneOff ? ["one-off", randomUUID()] : [])]),
       };
     }
 
@@ -1175,6 +1178,7 @@ export class NodeHost {
           ...(planned.execBinding && { execBinding: planned.execBinding }),
           ...(planned.execDecision && { execDecision: planned.execDecision }),
           ...(planned.timeoutMs && { timeoutMs: planned.timeoutMs }),
+          ...(planned.noGrant && { noGrant: true }),
           sourceBotId,
           sourceBotName,
           sourceHostName: peer.name,
@@ -1321,7 +1325,7 @@ export class NodeHost {
       }
 
       // Persist grant if owner chose Allow for today / Always allow.
-      if (!policyAutoAllow && !task.grantsCleared && (action === "remember" || (action === "today" && until > Date.now()))) {
+      if (!policyAutoAllow && !row.noGrant && !task.grantsCleared && (action === "remember" || (action === "today" && until > Date.now()))) {
         this.grants = this.grants.filter((grant) => grant.until === null || grant.until > Date.now());
         const existing = this.grants.find((grant) => grant.scope === row.scope);
         if (!existing) {

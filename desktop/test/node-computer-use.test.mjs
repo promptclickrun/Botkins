@@ -164,6 +164,30 @@ test("node host advertises computer.* only when computerUse is enabled and relay
   assert.equal(typeStatus.status, "denied");
 });
 
+test("Always allow on a node covers clicks but never typing: each type_text asks again", async (t) => {
+  const { ws, peer, readLog } = makeNodeWorkspace(t, { computerUse: true });
+  await runRelayedJob(ws, peer, { operation: "computer.observe", params: { pid: 4242 } });
+  const click = await runRelayedJob(ws, peer, { operation: "computer.act", params: { action: "click", pid: 4242, element_token: "tok-submit" }, answer: "remember" });
+  assert.equal(click.status, "completed");
+  const grantsAfterClick = ws.nodeHost.grants.length;
+  assert.ok(grantsAfterClick >= 1, "remember stores a grant for clicks");
+  const typed = await runRelayedJob(ws, peer, { operation: "computer.act", params: { action: "type_text", pid: 4242, element_token: "tok-search", text: "one" }, answer: "remember" });
+  assert.equal(typed.status, "completed");
+  assert.equal(ws.nodeHost.grants.length, grantsAfterClick, "remember on type_text stores no grant");
+  const id = randomUUID();
+  let status = await ws.nodeHost.receive(peer, "job.submit", {
+    id, sourceBotId: "pip", sourceBotName: "Pip", operation: "computer.act",
+    params: { action: "type_text", pid: 4242, element_token: "tok-search", text: "two" }, createdAt: Date.now(), relayApproval: true,
+  });
+  for (let i = 0; i < 40 && !status.ask && status.status === "pending"; i++) {
+    await new Promise((r) => setTimeout(r, 15));
+    status = await ws.nodeHost.receive(peer, "job.status", { id });
+  }
+  assert.ok(status.ask, "a second type_text still asks even after Always allow");
+  await ws.nodeHost.receive(peer, "job.answer", { id, askId: status.ask.id, action: "deny" });
+  assert.equal(readLog().filter((c) => c.name === "type_text").length, 1);
+});
+
 test("teamwork exposes node_computer_apps, node_computer_observe, and node_computer_act tools", (t) => {
   const { ws } = makeNodeWorkspace(t, { computerUse: true });
   const chatId = ws.createChat("pip");
