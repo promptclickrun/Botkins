@@ -27,6 +27,7 @@
   "build": {
     "appId": "app.botkins.desktop",
     "asar": false,
+    "afterPack": "scripts/after-pack.mjs",
     "files": [
       "dist/**",
       "desktop/**",

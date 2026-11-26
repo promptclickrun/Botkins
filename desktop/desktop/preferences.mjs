@@ -155,6 +155,9 @@ export const defaultSettings = {
   access: { allBots: true },
   // Bots may ask each other for help from a chat (desktop/teamwork.mjs).
   teamwork: true,
+  // Off by default: native desktop computer use via bundled cua-driver (desktop/computer-use.mjs).
+  // Owner chats only; turns on curated computer_apps / computer_observe / computer_act / computer_desktop tools.
+  computerUse: false,
   // Opt-in migration: hand existing bot-created tasks in Review to their creator bot.
   tasksCreatorReviewExisting: false,
   // Ask providers that support it to keep a chat's prompt cache for about an hour, not five minutes (Pi and OMP: PI_CACHE_RETENTION=long).
@@ -273,6 +276,7 @@ export function changeSettings(settings, patch) {
       case "readAloud":
       case "showRoutineChats":
       case "teamwork":
+      case "computerUse":
       case "longPromptCache":
         if (typeof value !== "boolean") throw new Error("Choose on or off");
         next[key] = value;

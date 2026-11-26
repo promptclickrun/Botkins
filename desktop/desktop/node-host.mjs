@@ -29,6 +29,7 @@ import {
   verifyExecBinding,
 } from "./node-exec.mjs";
 import { nodeScreenCapture, nodeScreenInfo, nodeScreenInput } from "./node-screen.mjs";
+import { formatVisibleText } from "./computer-use.mjs";
 
 export const CAPABILITIES_VERSION = 1;
 export const LIST_FILES_OPERATION = "project.list_files";
@@ -59,6 +60,9 @@ export const NODE_OPERATIONS = Object.freeze([
   "screen.info",
   "screen.capture",
   "screen.input",
+  "computer.apps",
+  "computer.observe",
+  "computer.act",
   "node.notify",
 ]);
 
@@ -72,10 +76,12 @@ const FILE_OPERATIONS = new Set([
   "fs.search",
 ]);
 const SCREEN_OPERATIONS = new Set(["screen.info", "screen.capture", "screen.input"]);
+const COMPUTER_OPERATIONS = new Set(["computer.apps", "computer.observe", "computer.act"]);
 const SYSTEM_OPERATIONS = new Set(["system.run", "system.which"]);
 const ALL_OPERATIONS = new Set(NODE_OPERATIONS);
 const SYSTEM_RESOURCE = "@system";
 const SCREEN_RESOURCE = "@screen";
+const COMPUTER_RESOURCE = "@computer-use";
 const NOTIFY_RESOURCE = "@notify";
 
 const WEEK = 7 * 24 * 60 * 60 * 1000;
@@ -303,6 +309,22 @@ function summarizeArgs(operation, params = {}, extra = {}) {
   if (operation === "screen.info") return "displays";
   if (operation === "screen.capture") return `display=${params.display || "primary"}`;
   if (operation === "screen.input") return `display=${params.display || "primary"} events=${Array.isArray(params.events) ? params.events.length : 0}`;
+  if (operation === "computer.apps") return params.include_background ? "include_background=true" : "apps";
+  if (operation === "computer.observe") return `pid=${params.pid ?? "?"}${params.window_id ? ` window=${params.window_id}` : ""}`;
+  if (operation === "computer.act") {
+    const target = params.element_token ? `token=${params.element_token}` : params.x != null && params.y != null ? `(${params.x},${params.y})` : "";
+    const base = `${params.action || "act"} pid=${params.pid ?? "?"}${target ? ` ${target}` : ""} (${params.delivery_mode || "background"})`;
+    if ((params.action === "type_text" || params.action === "set_value") && typeof params.text === "string") {
+      return `${base} text="${formatVisibleText(params.text, 200)}"`;
+    }
+    if (params.action === "hotkey" && Array.isArray(params.keys) && params.keys.length) {
+      return `${base} keys=${params.keys.join("+")}`;
+    }
+    if (params.action === "press_key" && typeof params.key === "string") {
+      return `${base} key=${params.key}`;
+    }
+    return base;
+  }
   if (operation === "node.notify") return safeText(params.title || "", 120);
   return "";
 }
@@ -375,6 +397,21 @@ function describeApproval(row, nodeLabel) {
         : row.operation === "screen.capture"
           ? "take a screenshot"
           : "send mouse/keyboard input";
+    const summary = summarizeArgs(row.operation, row.params);
+    return {
+      title: `${who} wants to ${verb} on ${nodeLabel}`,
+      preview: summary || undefined,
+      detail: `Operation: ${row.operation}\nDetails: ${summary}`,
+      label: `Allow for today and Always allow apply only to ${row.operation} for this source bot on these two computers.`,
+    };
+  }
+  if (COMPUTER_OPERATIONS.has(row.operation)) {
+    const verb =
+      row.operation === "computer.apps"
+        ? "list running apps"
+        : row.operation === "computer.observe"
+          ? "inspect an app window"
+          : "perform a native app action";
     const summary = summarizeArgs(row.operation, row.params);
     return {
       title: `${who} wants to ${verb} on ${nodeLabel}`,
@@ -597,6 +634,12 @@ export class NodeHost {
     };
   }
 
+  computerUseAdapter() {
+    if (this.adapters().computerUse) return this.adapters().computerUse;
+    if (this.ws.computerUse?.enabled?.()) return this.ws.computerUse;
+    return null;
+  }
+
   /** Versioned capability document advertised to other same-owner hosts over Link/teamwork-peers. */
   capabilities() {
     const bots = this.ws.hostDispatch.roster().map(({ id, name, role }) => ({ id, name, role }));
@@ -630,6 +673,13 @@ export class NodeHost {
           { id: "screen.info", version: 1, readOnly: true },
           { id: "screen.capture", version: 1, readOnly: true },
           { id: "screen.input", version: 1, readOnly: false },
+        );
+      }
+      if (this.computerUseAdapter()) {
+        operations.push(
+          { id: "computer.apps", version: 1, readOnly: true },
+          { id: "computer.observe", version: 1, readOnly: true },
+          { id: "computer.act", version: 1, readOnly: false },
         );
       }
       operations.push({ id: "node.notify", version: 1, readOnly: false });
@@ -884,7 +934,7 @@ export class NodeHost {
   }
 
   /** Prepares operation metadata, validates inputs, and computes grant scope on submit. */
-  planOperation(identity, peer, { sourceBotId, sourceBotName, jobOp, resourceId, path, params }) {
+  async planOperation(identity, peer, { sourceBotId, sourceBotName, jobOp, resourceId, path, params }) {
     if (!ALL_OPERATIONS.has(jobOp)) {
       throw new Error("This node host does not support that operation.");
     }
@@ -1019,6 +1069,27 @@ export class NodeHost {
       };
     }
 
+    if (COMPUTER_OPERATIONS.has(jobOp)) {
+      const cu = this.computerUseAdapter();
+      if (!cu) {
+        throw new Error("Native computer use is off on this node. Turn it on in Settings › Access.");
+      }
+      const cuParams = params && typeof params === "object" ? params : {};
+      if (jobOp === "computer.act" && typeof cu.preflightAct === "function") {
+        await cu.preflightAct(cuParams);
+      }
+      // Typing and hotkeys are approved one at a time: a remembered computer.act grant never covers them.
+      const oneOff = jobOp === "computer.act" && ["type_text", "set_value", "hotkey"].includes(cuParams.action);
+      return {
+        grantOperation: jobOp,
+        resourceId: COMPUTER_RESOURCE,
+        resourceName: "Computer use",
+        params: cuParams,
+        ...(oneOff && { noGrant: true }),
+        scope: digest(["node-job", ...identity, sourceBotId, jobOp, COMPUTER_RESOURCE, ...(oneOff ? ["one-off", randomUUID()] : [])]),
+      };
+    }
+
     if (jobOp === "node.notify") {
       const notifyParams = params && typeof params === "object" ? params : {};
       if (!validName(notifyParams.title)) throw new Error("Notification title is required.");
@@ -1084,7 +1155,7 @@ export class NodeHost {
         const now = Date.now();
         if (createdAt < now - WEEK || createdAt > now + 300_000)
           throw new Error("Job timestamp is outside the retry window.");
-        const planned = this.planOperation(identity, peer, {
+        const planned = await this.planOperation(identity, peer, {
           sourceBotId,
           sourceBotName,
           jobOp,
@@ -1107,6 +1178,7 @@ export class NodeHost {
           ...(planned.execBinding && { execBinding: planned.execBinding }),
           ...(planned.execDecision && { execDecision: planned.execDecision }),
           ...(planned.timeoutMs && { timeoutMs: planned.timeoutMs }),
+          ...(planned.noGrant && { noGrant: true }),
           sourceBotId,
           sourceBotName,
           sourceHostName: peer.name,
@@ -1253,7 +1325,7 @@ export class NodeHost {
       }
 
       // Persist grant if owner chose Allow for today / Always allow.
-      if (!policyAutoAllow && !task.grantsCleared && (action === "remember" || (action === "today" && until > Date.now()))) {
+      if (!policyAutoAllow && !row.noGrant && !task.grantsCleared && (action === "remember" || (action === "today" && until > Date.now()))) {
         this.grants = this.grants.filter((grant) => grant.until === null || grant.until > Date.now());
         const existing = this.grants.find((grant) => grant.scope === row.scope);
         if (!existing) {
@@ -1354,6 +1426,17 @@ export class NodeHost {
         row.result = await nodeScreenCapture(this.adapters().screen, row.params);
       } else if (row.operation === "screen.input") {
         row.result = await nodeScreenInput(this.adapters(), row.params);
+      } else if (COMPUTER_OPERATIONS.has(row.operation)) {
+        const cu = this.computerUseAdapter();
+        if (!cu) throw new Error("Native computer use is off on this node.");
+        const actor = { botId: row.sourceBotId, botName: row.sourceBotName };
+        if (row.operation === "computer.apps") {
+          row.result = await cu.apps(row.params ?? {}, actor);
+        } else if (row.operation === "computer.observe") {
+          row.result = await cu.observe(row.params ?? {}, actor);
+        } else if (row.operation === "computer.act") {
+          row.result = await cu.act(row.params ?? {}, actor);
+        }
       } else if (row.operation === "node.notify") {
         const notify = this.adapters().notify;
         if (typeof notify === "function") {

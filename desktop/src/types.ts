@@ -1644,6 +1644,10 @@ declare global {
       resetPhoneRelay(): Promise<PhoneLink>;
       /** Asks macOS for a permission the screen needs, and opens the page of System Settings where it is switched on. */
       requestScreenPermission(kind: "screenRecording" | "accessibility"): Promise<PhoneLink>;
+      /** Bundled CUA Driver availability and OS permission status for native computer use on this computer. */
+      computerUseStatus(): Promise<ComputerUseStatus>;
+      /** Asks macOS for Accessibility or Screen Recording for native computer use and opens System Settings. */
+      requestComputerUsePermission(kind: "accessibility" | "screenRecording"): Promise<ComputerUseStatus>;
       /** Opens the page of System Settings where macOS lets Botkins use the local network. */
       allowLocalNetwork(): Promise<PhoneLink>;
       // iMessage and Mail tools for bots (Settings › MCP servers › On this Mac). Only this window can make these calls.
@@ -2448,6 +2452,25 @@ export type MacToolsStatus = {
   permissions: { fullDisk?: boolean; messagesAutomation?: boolean; mailAutomation?: boolean };
 };
 
+export type ComputerUseStatus = {
+  enabled: boolean;
+  bundled: boolean;
+  binarySource: string | null;
+  version: string;
+  license: string;
+  platform: string;
+  supported: boolean;
+  session: string;
+  limited?: boolean;
+  ready: boolean;
+  checkedWith?: string;
+  permissions: {
+    accessibility: boolean;
+    screenRecording: boolean;
+  };
+  notes: string[];
+};
+
 export type Preferences = {
   fastMode?: FastMode;
   model: ModelChoice;
@@ -2482,6 +2505,8 @@ export type Preferences = {
   notifications: NotificationSettings;
   /** On (the default): every bot can use every project. Off: each bot's grant applies. */
   access?: { allBots: boolean };
+  /** Off by default: allows owner-chat bots (and approved node jobs) to inspect and act on native apps via bundled CUA Driver. */
+  computerUse?: boolean;
   /** iMessage and Mail as bot tools, on a Mac. Only the app's own window changes it (setMacTool); a phone can read it to say "set up on your Mac". */
   macTools?: MacToolLevels;
   /**

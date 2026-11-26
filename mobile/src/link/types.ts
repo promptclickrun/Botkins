@@ -465,8 +465,22 @@ export type ScreenInfo = {
   /** The host's explanation when viewing or input is unavailable. */
   problem?: string;
 };
+/** Live bot action marker piggybacked on ScreenFrame while native computer use runs. */
+export type ScreenBotActivity = {
+  at: number;
+  botId?: string;
+  botName?: string;
+  action: string;
+  app?: string;
+  windowTitle?: string;
+  elementToken?: string;
+  deliveryMode?: "background" | "foreground";
+  pointerUntouched?: boolean;
+  effect?: unknown;
+  escalation?: unknown;
+};
 /** One picture of a display. `jpeg` (base64) is left out when nothing changed since frame `after`. */
-export type ScreenFrame = { seq: number; display: string; width: number; height: number; jpeg?: string };
+export type ScreenFrame = { seq: number; display: string; width: number; height: number; jpeg?: string; activity?: ScreenBotActivity };
 /** Positions are fractions (0 to 1) of the display, so the picture's size doesn't matter. */
 export type ScreenInput =
   | { type: "move" | "down" | "up" | "click" | "doubleClick" | "rightClick"; x: number; y: number }
@@ -1090,6 +1104,8 @@ export type Preferences = {
   /** The Default routines model ("routine-models-v1"): routines without their own use it before their bot's. */
   routineModel?: ModelChoice;
   appearance: Appearance;
+  /** Off by default: lets bots in owner chats inspect and click native apps on this computer via CUA driver. */
+  computerUse?: boolean;
   foldTools: boolean;
   showThinking: boolean;
   foldThinking?: boolean;

@@ -10,6 +10,7 @@ const operations = {
   https_form: "POST these fields as a form to",
   bearer_get: "Send this value as an Authorization bearer token in a GET request to",
   page_fill: "Fill the named inputs on the open browser page at",
+  native_fill: "Fill the secure field in the native desktop app",
   git_read: "Check read access to this Git repository using its HTTPS refs endpoint and a bearer token at",
 };
 const text = { type: "string" };
@@ -21,6 +22,11 @@ const targetSchema = {
   properties: {
     browser: text,
     tabId: { type: "integer", minimum: 1 },
+    pid: { type: "integer", minimum: 1 },
+    window_id: text,
+    element_token: text,
+    app: text,
+    window_title: text,
   },
 };
 
@@ -56,8 +62,22 @@ function pickBrowser(browsers, selector) {
   return null;
 }
 function parseTarget(target, operation) {
+  if (operation === "native_fill") {
+    if (!target || typeof target !== "object" || Array.isArray(target)) {
+      throw new Error("native_fill requires target: { pid, element_token, window_id?, app?, window_title? }.");
+    }
+    if (!Number.isInteger(target.pid) || target.pid < 1) {
+      throw new Error("target.pid must be a positive integer for native_fill.");
+    }
+    const elementToken = label(target.element_token, 120);
+    const out = { pid: target.pid, element_token: elementToken };
+    if (target.window_id !== undefined) out.window_id = label(String(target.window_id), 120);
+    if (target.app !== undefined) out.app = label(target.app, 120);
+    if (target.window_title !== undefined) out.window_title = label(target.window_title, 160);
+    return out;
+  }
   if (target === undefined) return null;
-  if (operation !== "page_fill") throw new Error("target is only supported for page_fill.");
+  if (operation !== "page_fill") throw new Error("target is only supported for page_fill and native_fill.");
   if (!target || typeof target !== "object" || Array.isArray(target)) throw new Error("target must be an object with browser and/or tabId.");
   const out = {};
   if (target.browser !== undefined) {
@@ -72,12 +92,20 @@ function parseTarget(target, operation) {
 }
 function describe({ operation, url, title, fields }) {
   if (!Object.hasOwn(operations, operation)) throw new Error("Choose a supported secure operation.");
-  let address;
-  try { address = new URL(url); } catch { throw new Error("Provide the full HTTPS destination."); }
-  if (address.protocol !== "https:" || address.username || address.password || address.search || address.hash || address.href.length > 2048)
-    throw new Error("Use an HTTPS address without credentials, a query or a fragment.");
-  if (!Array.isArray(fields) || !fields.length || fields.length > 8 || (["bearer_get", "git_read"].includes(operation) && fields.length !== 1))
-    throw new Error("Request one token for this operation, or one to eight fields for a form.");
+  let address = null;
+  if (operation === "native_fill") {
+    if (url !== undefined && url !== "") {
+      try { address = new URL(url); } catch { throw new Error("Provide a valid HTTPS destination or omit url for native_fill."); }
+      if (address.protocol !== "https:" || address.username || address.password || address.search || address.hash || address.href.length > 2048)
+        throw new Error("Use an HTTPS address without credentials, a query or a fragment.");
+    }
+  } else {
+    try { address = new URL(url); } catch { throw new Error("Provide the full HTTPS destination."); }
+    if (address.protocol !== "https:" || address.username || address.password || address.search || address.hash || address.href.length > 2048)
+      throw new Error("Use an HTTPS address without credentials, a query or a fragment.");
+  }
+  if (!Array.isArray(fields) || !fields.length || fields.length > 8 || (["bearer_get", "git_read", "native_fill"].includes(operation) && fields.length !== 1))
+    throw new Error("Request one token or field for this operation, or one to eight fields for a form.");
   const keys = new Set();
   const clean = fields.map(f => {
     if (!f || typeof f.key !== "string" || !FIELD_KEY_RE.test(f.key) || f.key in Object.prototype || keys.has(f.key) || !fieldSchema.properties.kind.enum.includes(f.kind))
@@ -85,7 +113,12 @@ function describe({ operation, url, title, fields }) {
     keys.add(f.key);
     return { key: f.key, label: label(f.label, 100), kind: f.kind, ...(f.hint && { hint: label(f.hint, 200) }), ...(f.optional === true && { optional: true }) };
   });
-  return { title: label(title, 150), operation, url: address.href, origin: address.origin, fields: clean };
+  return {
+    title: label(title, 150),
+    operation,
+    ...(address ? { url: address.href, origin: address.origin } : {}),
+    fields: clean,
+  };
 }
 
 export function secureAnswer(view, answer) {
@@ -129,6 +162,10 @@ async function gitRead(url, token, signal) {
 
 export async function performSecureUse(plan, values, adapters = {}) {
   const signal = adapters.signal ?? AbortSignal.timeout(30_000);
+  if (plan.operation === "native_fill") {
+    if (!adapters.fillNative) throw new Error("Native computer use is not enabled on this computer.");
+    return adapters.fillNative(plan, values, signal);
+  }
   if (plan.operation === "page_fill") {
     if (plan.extension && adapters.fillExtension) {
       return adapters.fillExtension(plan, values, signal);
@@ -287,13 +324,20 @@ export class SecureInputs {
       if (!privateChat()) throw new Error("Use a private owner chat for this operation.");
     };
     const request = defineTool("request_secure_input", {
-      description: "Ask the person to pick a saved credential from the Botkins vault or enter a private value for this HTTPS destination. For page_fill, targets an open tab in a connected Botkins browser extension (pass optional target: { browser, tabId }, or omit target when no screen browser is open and exactly one connected extension tab matches the origin), a screen browser opened with browser_form, or the desktop chat’s side_pane_web viewer. Use the visible HTML input name (or id fallback), including dotted names. https_form posts keyed fields. bearer_get and git_read take one bearer token. You receive one-time handles. Never request secrets in chat.",
-      parameters: { type: "object", additionalProperties: false, required: ["title", "operation", "url", "fields"],
+      description: "Ask the person to pick a saved credential from the Botkins vault or enter a private value for this HTTPS destination or native desktop field. For page_fill, targets an open tab in a connected Botkins browser extension (pass optional target: { browser, tabId }, or omit target when no screen browser is open and exactly one connected extension tab matches the origin), a screen browser opened with browser_form, or the desktop chat’s side_pane_web viewer. For native_fill, pass target: { pid, element_token, window_id?, app?, window_title? } from computer_observe (url optional) to fill one native secure/password field through the vault without exposing the secret. https_form posts keyed fields. bearer_get and git_read take one bearer token. You receive one-time handles. Never request secrets in chat.",
+      parameters: { type: "object", additionalProperties: false, required: ["title", "operation", "fields"],
         properties: { title: text, operation: { type: "string", enum: Object.keys(operations) }, url: text, fields: { type: "array", minItems: 1, maxItems: 8, items: fieldSchema }, target: targetSchema } },
       handler: async args => {
         active();
         const plan = describe(args);
         const target = parseTarget(args.target, plan.operation);
+        if (plan.operation === "native_fill") {
+          checkPrivate();
+          if (typeof this.ws.computerUse?.resolveCachedSecureTarget !== "function") {
+            throw new Error("Native secure fill is unavailable on this computer.");
+          }
+          plan.native = this.ws.computerUse.resolveCachedSecureTarget(target);
+        }
         if (plan.operation === "page_fill") {
           if (target) {
             checkPrivate();
@@ -325,7 +369,14 @@ export class SecureInputs {
             }
           }
         }
-        const detail = plan.extension
+        const detail = plan.native
+          ? [
+              `${operations.native_fill}${cleanLine(plan.native.app, 120) ? ` (${cleanLine(plan.native.app, 120)})` : ""}`,
+              ...(cleanLine(plan.native.window_title, 160) ? [`Window: ${cleanLine(plan.native.window_title, 160)}`] : []),
+              `PID: ${plan.native.pid} · Element: ${plan.native.element_token}`,
+              ...plan.fields.map(f => `${f.label} → ${f.key}`),
+            ].join("\n")
+          : plan.extension
           ? [
               `${operations.page_fill} ${plan.origin}`,
               `Browser: ${plan.extension.browserLabel}`,
@@ -369,6 +420,7 @@ export class SecureInputs {
           throw new Error("These handles are incomplete, expired or unavailable for this turn.");
         if (grant.plan.document && !privateChat()) throw new Error("Open the screen browser in a private owner chat.");
         if (grant.plan.extension && !privateChat()) throw new Error("Use a private owner chat to fill a connected browser tab.");
+        if (grant.plan.native && !privateChat()) throw new Error("Use a private owner chat to fill a native desktop field.");
         this.#forget(grant); // Reserve before awaiting. An ambiguous network failure must never replay a submission.
         const controller = new AbortController();
         this.#inFlight.set(controller, chat.id);
@@ -387,11 +439,24 @@ export class SecureInputs {
               }, { signal });
             }
           : undefined;
+        const fillNative = grant.plan.native && typeof this.ws.computerUse?.secureSetValue === "function"
+          ? (p, vals, signal) => {
+              const value = Object.values(vals)[0];
+              return this.ws.computerUse.secureSetValue(
+                { ...p.native, value },
+                { botId: bot.id, botName: bot.name, signal },
+              );
+            }
+          : undefined;
         try {
           const outcome = await this.use(execPlan, grant.values, {
             signal: AbortSignal.any([controller.signal, AbortSignal.timeout(30_000)]),
             ...(fillExtension && { fillExtension }),
+            ...(fillNative && { fillNative }),
           });
+          if (grant.plan.native) {
+            return JSON.stringify({ applied: true, ...(outcome?.effect !== undefined && { effect: outcome.effect }) });
+          }
           if (grant.plan.extension) {
             const allowed = new Set(Object.keys(grant.handles));
             const filled = Array.isArray(outcome?.filled) ? outcome.filled.filter((k) => typeof k === "string" && allowed.has(k)) : [];
@@ -408,6 +473,9 @@ export class SecureInputs {
           }
           if (err?.secureCode === "type_mismatch") {
             throw new Error("Refused secure fill: the target input type does not match the requested field kind. Nothing was filled.");
+          }
+          if (err?.secureCode === "native_target_mismatch") {
+            throw new Error("Refused secure fill: the native target field is no longer a secure/password field in the approved window. Nothing was filled.");
           }
           throw new Error("Botkins could not apply the secure input. Check the destination and request fresh input to retry.");
         } finally {
