@@ -8,7 +8,10 @@ import { api, attempt } from "@/state/link";
 import { BOT_TAPS } from "@/features/chat/habits";
 import { islandOn } from "@/features/chat/islandModel";
 import { type ChatPrefs, setChatPrefs, useChatPrefs } from "@/state/chatPrefs";
-import { Group, Label, Page, Row, space, T, useTheme } from "@/ui";
+import { type Href, router } from "expo-router";
+import { ShieldCheck } from "lucide-react-native";
+import { brand, Group, IconTile, Label, Page, Row, space, T, useTheme } from "@/ui";
+import { APPROVAL_SHORT } from "./Settings";
 
 // Open is the island (src/features/chat/islandModel.ts): one live window per running turn. The setting is "Steps", never "Tools".
 const STEPS: { value: ChatPrefs["steps"]; label: string; subtitle: string }[] = [
@@ -55,11 +58,18 @@ export function ChoiceMenu<V extends string>({ title, subtitle, value, options, 
 export default function Chat() {
   const prefs = useChatPrefs();
   const settings = useSettings();
+  const owner = usePart("meta")?.you?.kind !== "member";
   const chatMode = usePart("proactive")?.chatMode;
   const online = useOnline();
   const canManage = useCan("settings", "manage");
   return (
     <Page title="Chat">
+      {/* Approvals live here as on the computer, whose Chat settings say when bots ask first. */}
+      {owner && (
+        <Group>
+          <Row leading={<IconTile icon={ShieldCheck} color={brand.fern} />} title="Approvals" subtitle="When bots ask you first" value={settings ? APPROVAL_SHORT[settings.approval] : undefined} chevron onPress={() => router.push("/settings/approvals" as Href)} />
+        </Group>
+      )}
       <View>
         <Label>What a reply shows</Label>
         <Group>
