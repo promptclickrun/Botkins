@@ -9,6 +9,7 @@ import { Ellipsis, Pin, PinOff, StickyNote } from "lucide-react-native";
 import { useEffect } from "react";
 import { Alert, ScrollView, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { openChat } from "@/features/chat/navigate";
 import { myself } from "@/features/chat/people";
 import { cronLabel } from "@/features/work/cron";
 import type { PanelView, SpaceSummary } from "@/link/types";
@@ -64,8 +65,8 @@ function PanelMenu({ panel, space, first, last }: { panel: PanelView; space: Spa
         else if (action.startsWith("size:")) void attempt(api.changePanel(panel.id, action.slice(5) as PanelView["size"]));
         else if (action === "earlier" || action === "later") void attempt(api.changePanel(panel.id, action));
         else if (action === "hide") void attempt(api.changePanel(panel.id, panel.hidden ? "show" : "hide"), panel.hidden ? "Shown" : "Hidden");
-        else if (action === "chat" && panel.chatId) router.push({ pathname: "/chat/[id]", params: { id: panel.chatId } });
-        else if (action === "history" && panel.refreshChatId) router.push({ pathname: "/chat/[id]", params: { id: panel.refreshChatId } });
+        else if (action === "chat" && panel.chatId) openChat(panel.chatId);
+        else if (action === "history" && panel.refreshChatId) openChat(panel.refreshChatId);
         else if (action === "delete") remove();
       }}
     >

@@ -35,6 +35,7 @@ import { archivesWhenLeft } from "./habits";
 import { formatTypingLabel, myPlace, myself } from "./people";
 import { ChatPeopleLook } from "./ChatPeopleLook";
 import { continuingKeys } from "./chatSides";
+import { openChat as openChatRoute } from "./navigate";
 import { regenerateTitle, regenerateTitleAction, useCanRegenerateTitle } from "./titleActions";
 import { Composer, type ModelPill, type SendOptions } from "./Composer";
 import { ChangesView } from "./Changes";
@@ -652,7 +653,7 @@ function ChatScreenScreen({ pane: paneId, onLeave: leavePane, onList }: { pane?:
   const { draft, board, at } = paneId ? { draft: undefined, board: undefined, at: undefined } : params;
   const shape = useShape();
   const leave = () => (leavePane ? leavePane() : router.back());
-  const openChat = (id: string) => (paneId ? useChatSplit.setState({ id }) : router.push({ pathname: "/chat/[id]", params: { id } }));
+  const openChat = (id: string) => (paneId ? useChatSplit.setState({ id }) : openChatRoute(id));
   const insets = useSafeAreaInsets();
   const { height: screenHeight } = useWindowDimensions();
   // A bot's request leaves room for the bar above it and the composer below it, also over the keyboard.
@@ -710,6 +711,14 @@ function ChatScreenScreen({ pane: paneId, onLeave: leavePane, onList }: { pane?:
     keepDraft(chatId, { text });
   }, [chatId, text]);
   const [pinnedId, setPinnedId] = useState(board);
+  useEffect(() => {
+    if (!draft) return;
+    setText(draft);
+    router.setParams({ draft: undefined });
+  }, [draft]);
+  useEffect(() => {
+    if (board) setPinnedId(board);
+  }, [board]);
   const pinned = usePart("board")?.find((item) => item.id === pinnedId);
   const meta = usePart("meta");
   const liveTyping = useApp((state) => (chatId ? state.parts.live?.typing?.[chatId] : undefined));

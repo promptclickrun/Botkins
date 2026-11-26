@@ -10,7 +10,8 @@
 // (src/state/device.ts) and sends answers given on a card or a notification (src/state/answers.ts).
 import * as Application from "expo-application";
 import { type Href, router } from "expo-router";
-import { spaceRoute } from "@/features/spaces/logic";
+import { createResponseDeduper } from "@/features/chat/chatNavigation";
+import { openChat } from "@/features/chat/navigate";
 import { keep, readKept } from "@/state/keep";
 import { AppState, Platform } from "react-native";
 import { create } from "zustand";
@@ -251,8 +252,7 @@ function alertOf(response: import("expo-notifications").NotificationResponse): {
 function takeAlert(alert: { bot: string; run: string }, serverId?: string) {
   const send = async () => {
     const answer = await attempt(api.proactiveAct(alert.bot, alert.run, "take"));
-    if (answer?.chatId && serverId === useApp.getState().pairing?.serverId && chatOnScreen() !== answer.chatId)
-      router.push({ pathname: "/chat/[id]", params: { id: answer.chatId } });
+    if (answer?.chatId && serverId === useApp.getState().pairing?.serverId) openChat(answer.chatId);
   };
   const ready = (state: ReturnType<typeof useApp.getState>) => state.link === "online" && state.pairing?.serverId === serverId;
   if (ready(useApp.getState())) return void send();
@@ -278,9 +278,9 @@ function nodeJobOf(response: import("expo-notifications").NotificationResponse):
 }
 /** A notification's actions that answer a bot where they are (the native side queues them; src/state/answers.ts sends them). */
 const ANSWERED_THERE = /^(approve|remember|deny|reply|choice\.\d)$/;
+const handledResponses = createResponseDeduper();
 function openFrom(response: import("expo-notifications").NotificationResponse | null) {
-  if (!response || !native) return;
-  // Reopen the link immediately on notification tap (even before AppState flips to "active").
+  if (!response || !native || !handledResponses.claim(response)) return;
   wakeForNotification();
   const chatId = chatOf(response);
   const requestId = requestIdOf(response);
@@ -312,7 +312,10 @@ function openFrom(response: import("expo-notifications").NotificationResponse | 
       const offered = alertOf(response);
       if (offered) takeAlert(offered, decision.switchHost ?? state.pairing?.serverId);
     }
-    if (decision.route) router.push(decision.route as unknown as Href);
+    const { route } = decision;
+    if (!route) return;
+    if (typeof route === "object" && route.pathname === "/chat/[id]") openChat(route.params.id);
+    else router.push(route as unknown as Href);
   };
   if (useApp.getState().booted && useApp.getState().pairing) go();
   else {

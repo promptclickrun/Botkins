@@ -1,7 +1,7 @@
 // The Chats tab with room for two panes (iPhone Duo opened, an iPad): the list on one side and the
 // chosen chat beside it, the Mail pattern. Closed again, the chosen chat is pushed on its own, so
 // folding never drops a person back on the list; and its draft goes with it (`drafts`).
-import { router } from "expo-router";
+import { openChat } from "./navigate";
 import { create } from "zustand";
 import type { DraftMention } from "./compose";
 import type { Attachment } from "./uploads";
@@ -25,7 +25,7 @@ export function openFromList(id: string) {
   if (useChatSplit.getState().active) useChatSplit.setState((split) => ({ id, taps: (split.taps ?? 0) + 1 }));
   else {
     useChatSplit.setState({ pushed: id });
-    router.push({ pathname: "/chat/[id]", params: { id } });
+    openChat(id);
   }
 }
 

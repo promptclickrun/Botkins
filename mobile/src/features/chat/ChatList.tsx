@@ -12,6 +12,7 @@ import { useApp } from "@/state/store";
 import { BackdropLayer, Chip, EmptyState, foldGap, Glass, IconButton, LinkBanner, listWidth, Mascot, radius, space, T, Tap, tint, useShape, useTextPrompt, useTheme } from "@/ui";
 import { ChatBoard } from "./ChatBoard";
 import { ChatPane } from "./ChatScreen";
+import { openChat } from "./navigate";
 import { markChatsPageRead } from "./open";
 import { useChatSplit } from "./split";
 import { newSection } from "./sectionMenus";
@@ -216,7 +217,7 @@ function ChatListScreen() {
     before.current = split;
     if (was && !split && picked && focused) {
       useChatSplit.setState({ id: null, pushed: picked });
-      router.push({ pathname: "/chat/[id]", params: { id: picked } });
+      openChat(picked);
     }
   }, [split, picked, focused]);
 

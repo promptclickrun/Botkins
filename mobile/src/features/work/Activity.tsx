@@ -1,6 +1,6 @@
 // What the bots ran lately: Work's Activity page (the icon left of the plus), and the whole of Work
 // for a team member whose role has no routines.
-import { router } from "expo-router";
+import { openChat } from "@/features/chat/navigate";
 import { memo, useMemo } from "react";
 import { View } from "react-native";
 import type { Bot, RunSummary } from "@/link/types";
@@ -25,7 +25,7 @@ const RunRow = memo(function RunRow({ run, name, when, chip, pulse }: RunRowProp
   const work = formatFeedWork(run);
   return (
     <Tap
-      onPress={() => router.push({ pathname: "/chat/[id]", params: { id: run.chatId } })}
+      onPress={() => openChat(run.chatId)}
       sink={1}
       feel="select"
       hitSlop={0}
