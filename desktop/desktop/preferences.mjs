@@ -3,6 +3,7 @@ import { backgroundField } from "./startup.mjs";
 import { DEFAULT_HARNESS, HARNESSES } from "./harness/index.mjs";
 import { AUTO_SUMMARIZE_DEFAULT, autoSummarizeField } from "./summaries.mjs";
 import { defaultProactive, proactiveField } from "./proactive-settings.mjs";
+import { taskLimitField } from "./task-limits.mjs";
 
 // The app's themes, each in light and dark, and the fonts a person can read it in
 // (desktop/themes.json, written by scripts/build-themes.mjs; the same as the phone app's). The
@@ -333,6 +334,12 @@ export function changeSettings(settings, patch) {
         break;
       case "autoSummarize":
         next.autoSummarize = autoSummarizeField(value);
+        break;
+      case "tasksMax":
+      case "tasksPerBot":
+        // null clears the setting: the limit is then the environment's, else the default (desktop/task-limits.mjs).
+        if (taskLimitField(key, value) === null) delete next[key];
+        else next[key] = value;
         break;
       case "harness":
         if (!HARNESSES.includes(value)) throw new Error("Choose a harness");

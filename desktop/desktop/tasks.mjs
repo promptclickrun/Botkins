@@ -5,10 +5,10 @@ import { defineTool } from "./providers/provider.mjs";
 import { textField } from "./panels.mjs";
 import { askToSchedule, scriptInvocation } from "./script-commands.mjs";
 import { shownText } from "./shown-text.mjs";
+import { taskLimits } from "./task-limits.mjs";
 
 export const LANES = ["later", "ready", "working", "review", "blocked", "done"];
 export const PRIORITIES = ["low", "normal", "high", "urgent"];
-const MAX_RUNNING = 2; // tasks that may run at once across all bots
 const PER_TURN = 10; // tasks a bot may create in one turn
 const MAX_OPEN = 200; // unfinished tasks on the board
 
@@ -64,6 +64,7 @@ export class Tasks {
     };
     this.all.unshift(task);
     this.ws.save();
+    this.ws.events?.emit("task.created", { task, from: null, to: task.status });
     return task.id;
   }
   /** Moves a task between lanes. Only the dispatcher puts a task in Working. */
@@ -72,10 +73,12 @@ export class Tasks {
     if (!LANES.includes(status) && status !== "archived") throw new Error("Unknown lane");
     if (status === "working") throw new Error("Tasks start working on their own once they're Ready with a bot.");
     if (task.status === "working") throw new Error("Stop the task's chat before moving it.");
+    const from = task.status;
     task.status = status;
     if (status === "ready" || status === "later") delete task.problem;
     task.updatedAt = Date.now();
     this.ws.save();
+    if (from !== status) this.ws.events?.emit("task.status", { task, from, to: status });
   }
   remove(id) {
     const task = this.get(id);
@@ -118,12 +121,14 @@ export class Tasks {
     const reuse = task.chatId && this.ws.state.chats.some((c) => c.id === task.chatId && c.botId === task.botId) && !this.ws.active.has(task.chatId);
     const chatId = reuse ? task.chatId : this.ws.createChat(task.botId, "Task · " + task.title.slice(0, 80));
     let turn;
+    const from = task.status;
     try {
       const invoked = this.invocation(task);
       turn = this.ws.send(chatId, invoked?.text ?? this.prompt(task), { taskId: task.id, title: "Task · " + task.title.slice(0, 90), ...(invoked && { allowScript: true }) });
     } catch (error) {
       Object.assign(task, { chatId, status: "blocked", problem: error.message, updatedAt: Date.now() });
       this.ws.save();
+      if (from !== "blocked") this.ws.events?.emit("task.status", { task, from, to: "blocked" });
       throw error;
     }
     Object.assign(task, { chatId, status: "working", updatedAt: Date.now() });
@@ -131,30 +136,51 @@ export class Tasks {
     this.ws.chat(chatId).title = "Task · " + task.title.slice(0, 80);
     task.runId = this.ws.state.runs.find((r) => r.chatId === chatId)?.id;
     this.ws.save();
+    if (from !== "working") this.ws.events?.emit("task.status", { task, from, to: "working" });
     turn.catch((error) => console.error("Task:", error.message));
   }
   finished(run) {
     const task = this.all.find((t) => t.id === run.taskId);
     if (!task || task.status !== "working") return;
+    const from = task.status;
     const chat = this.ws.state.chats.find((c) => c.id === run.chatId);
     const reply = chat?.messages.findLast((m) => m.runId === run.id && m.role === "assistant" && !m.interim)?.text;
+    const nextStatus = run.status === "Completed" ? "review" : "blocked";
     if (run.status === "Completed") Object.assign(task, { status: "review", result: (reply ?? "").slice(0, 4000) });
     else Object.assign(task, { status: "blocked", problem: run.detail || run.status });
     task.updatedAt = Date.now();
     this.ws.save();
+    if (from !== nextStatus) this.ws.events?.emit("task.status", { task, from, to: nextStatus });
   }
-  /** Starts the most urgent Ready task whose bot is free, up to MAX_RUNNING at once. */
+  /**
+   * Starts the most urgent Ready tasks, as many as the limits allow (desktop/task-limits.mjs): Tasks at once on the
+   * whole computer, and Tasks at once per bot. Each task runs in its own chat, so one bot's tasks run side by side.
+   */
   tick() {
     if (this.ws.closing) return;
+    const { tasksMax, tasksPerBot } = taskLimits(this.ws.state.settings);
     const running = this.all.filter((t) => t.status === "working");
-    if (running.length >= MAX_RUNNING) return;
-    const busy = new Set(running.map((t) => t.botId));
+    const perBot = new Map();
+    for (const t of running) perBot.set(t.botId, (perBot.get(t.botId) ?? 0) + 1);
     // Most urgent first; among equals, the oldest (new tasks are added at the front of the list).
     const rank = (t) => PRIORITIES.indexOf(t.priority);
-    const next = this.all
-      .filter((t) => t.status === "ready" && t.botId && !busy.has(t.botId) && !(t.chatId && this.ws.active.has(t.chatId)))
-      .sort((a, b) => rank(b) - rank(a) || this.all.indexOf(b) - this.all.indexOf(a))[0];
-    if (next) this.start(next.id);
+    const ready = this.all
+      .filter((t) => t.status === "ready" && t.botId && !(t.chatId && this.ws.active.has(t.chatId)))
+      .sort((a, b) => rank(b) - rank(a) || this.all.indexOf(b) - this.all.indexOf(a));
+    let count = running.length;
+    for (const next of ready) {
+      if (count >= tasksMax || this.ws.closing) break;
+      if ((perBot.get(next.botId) ?? 0) >= tasksPerBot) continue;
+      try {
+        this.start(next.id);
+      } catch (error) {
+        console.error("Task:", error.message);
+        continue;
+      }
+      if (next.status !== "working") continue;
+      perBot.set(next.botId, (perBot.get(next.botId) ?? 0) + 1);
+      count++;
+    }
   }
   tools(bot, chat, run, task) {
     const string = { type: "string" };
@@ -195,7 +221,7 @@ export class Tasks {
     return [
       tool(
         "task_create",
-        "Create a Task Board job (not an in-chat update_plan checklist); status \"ready\" with a bot automatically starts background work when that bot is free, while \"later\" queues it for the person. Give it to a bot by name (yourself or another bot) or leave it for anyone. Use this when the person asks you to track, queue or delegate work. Tasks added during a routine or another task always wait in Later for the person.",
+        "Create a Task Board job (not an in-chat update_plan checklist); status \"ready\" with a bot automatically starts background work in its own chat once that bot has room (each bot runs a set number of tasks at once, one unless the person raised it), while \"later\" queues it for the person. Give it to a bot by name (yourself or another bot) or leave it for anyone. Use this when the person asks you to track, queue or delegate work. Tasks added during a routine or another task always wait in Later for the person.",
         { title: string, details: string, bot: string, priority: { type: "string", enum: PRIORITIES }, status: { type: "string", enum: ["later", "ready"] } },
         ["title"],
         async ({ title, details, bot: name, priority, status }) => {
