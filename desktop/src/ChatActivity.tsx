@@ -42,6 +42,7 @@ import {
   formatWorkingDuration,
   groupForOpenMode,
   isCodingKind,
+  isStepCoveredByRail,
   parseStepInput,
   partitionForFoldMode,
   stepHeadline,
@@ -842,7 +843,7 @@ export function ToolTrail({
   }, [live, fold]);
   const now = useNow(live && fold);
 
-  const rawSteps = run.steps ?? [];
+  const rawSteps = (run.steps ?? []).filter((step) => !isStepCoveredByRail(step, run));
   const shownSteps = visibleSteps(rawSteps);
   const count = shownSteps.length || run.usedTools?.length || 0;
   if (!count) return null;

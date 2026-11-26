@@ -319,6 +319,16 @@ export type Mention =
   | { kind: "project"; id: string; label: string }
   | { kind: "file" | "wiki"; path: string; label: string }
   | { kind: "board"; id: string; label: string; board?: BoardItem["kind"]; body?: string; links?: { url: string; title?: string }[] };
+/** Structured sender metadata for bot-to-bot messages (teamwork, task handoffs, remote dispatches). */
+export type MessageFrom = {
+  kind: "bot";
+  botId: string;
+  name: string;
+  hostId?: string;
+  hostName?: string;
+  chatId?: string;
+  via: "teamwork" | "task" | "remote";
+};
 export type Message = {
   reactions?: { actor: string; emoji: string }[];
   clientMessageId?: string;
@@ -338,6 +348,8 @@ export type Message = {
   botId?: string;
   /** The team member who sent this user message. Missing on the owner's messages. */
   author?: { memberId: string; name: string };
+  /** Structured sender metadata when another bot sent this message. */
+  from?: MessageFrom;
   /** A person's message delivered into a turn that was under way (a steer): that turn's run. The desktop app records it today. */
   steeredRunId?: string;
   /** A proactive alert the bot sent on its own: the run that made it (a 👍 or 👎 on it teaches the bot). */
@@ -602,8 +614,10 @@ export type TeamAsk = {
   id: string;
   botId: string;
   fromBotId: string;
+  from?: MessageFrom;
   remote?: { hostId: string; hostName: string; botName: string };
   message: string;
+  expecting?: string;
   status: "waiting" | "working" | "answered" | "failed" | "stopped";
   started: number;
   finished?: number;
@@ -611,6 +625,19 @@ export type TeamAsk = {
   error?: string;
   intent?: string;
   steps?: Step[];
+};
+export type TaskHandoff = {
+  id: string;
+  taskId: string;
+  botId: string;
+  fromBotId: string;
+  from?: MessageFrom;
+  title: string;
+  details?: string;
+  priority?: TaskPriority;
+  status: TaskStatus | "archived";
+  chatId?: string;
+  started: number;
 };
 export type PanelBlock =
   | { type: "markdown"; text: string }
@@ -685,6 +712,7 @@ export type Run = RunSummary & {
   speakers?: string[];
   failures?: { botId: string; detail: string }[];
   teamwork?: TeamAsk[];
+  taskHandoffs?: TaskHandoff[];
   /** How a turn ended without finishing ("turn-timeline-v1"). Missing: the phone reads it from `status` and `detail`. */
   ending?: "failed" | "timed-out" | "interrupted" | "stopped";
   /** The turn's plan when it ended: how many steps are open, of how many. Older computers send none. */
@@ -928,6 +956,7 @@ export type BotTask = {
   priority: TaskPriority;
   status: TaskStatus | "archived";
   createdBy: string;
+  fromChatId?: string;
   createdAt: number;
   updatedAt: number;
   chatId?: string;

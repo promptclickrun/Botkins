@@ -10,7 +10,7 @@ import { memo, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from
 import { Brain, Check, ChevronRight, ChevronUp, Hand, MessageSquareText, X } from "lucide-react";
 import { StepDetailBody, stepIcon, useNow } from "./ChatActivity";
 import { Shimmer } from "./Shimmer";
-import { classifyStep, stepHeadline } from "./activityModel";
+import { classifyStep, isStepCoveredByRail, stepHeadline } from "./activityModel";
 import { type IslandLine, type IslandUpdate, islandLabel, islandLines, islandMeta, islandWindow, reasoningTail, receiptLabel } from "./island";
 import type { Run, Step } from "./types";
 import "./island.css";
@@ -19,7 +19,7 @@ type WaitLine = { kind: "wait"; key: string; text: string };
 
 /** The chat shows a step: a tool's quiet bookkeeping (report_intent, think) stays out, unless it
  * failed. A helper's own steps and a background command are the crew card's (ActivityInspector.tsx). */
-const shown = (step: Step) => !step.agentId && !step.background && !!classifyStep(step);
+const shownFor = (run: Run) => (step: Step) => !step.agentId && !step.background && !!classifyStep(step) && !isStepCoveredByRail(step, run);
 
 function stepSeconds(step: Step) {
   return step.finished ? Math.max(1, Math.round((step.finished - step.started) / 1000)) + "s" : "";
@@ -159,7 +159,7 @@ export type IslandProps = {
 export const ActivityIsland = memo(function ActivityIsland({ run, who, avatar, waiting, waitingFor, steps, thinking, thoughts, onToggle, onOpen }: IslandProps) {
   const [open, setOpen] = useState(false);
   // Every line in order (the thoughts too, unless Thinking is Hidden), for the label and the full list.
-  const all = useMemo(() => islandLines(run, { thoughts, keep: shown }), [run.steps, run.reasoning, thoughts]);
+  const all = useMemo(() => islandLines(run, { thoughts, keep: shownFor(run) }), [run.steps, run.reasoning, run.teamwork, run.taskHandoffs, thoughts]);
   const stepCount = useMemo(() => all.filter((line) => line.kind === "step").length, [all]);
   const view = useMemo(() => {
     if (!steps) return null;
@@ -210,7 +210,7 @@ export const ActivityIsland = memo(function ActivityIsland({ run, who, avatar, w
 export const IslandReceipt = memo(function IslandReceipt({ run, thoughts, updates, onToggle, onOpen }: { run: Run; thoughts: boolean; /** What the bot wrote before it moved on: it folds in here with the thinking. */ updates?: IslandUpdate[]; onToggle?: () => void; onOpen?: (key?: string) => void }) {
   const [open, setOpen] = useState(false);
   const card = useRef<HTMLElement>(null);
-  const all = useMemo(() => islandLines(run, { thoughts, keep: shown, updates }), [run.steps, run.reasoning, thoughts, updates]);
+  const all = useMemo(() => islandLines(run, { thoughts, keep: shownFor(run), updates }), [run.steps, run.reasoning, run.teamwork, run.taskHandoffs, thoughts, updates]);
   useLayoutEffect(() => {
     if (open) reveal(card.current);
   }, [open]);

@@ -38,7 +38,7 @@ export class Tasks {
     if (!task) throw new Error("This task no longer exists.");
     return task;
   }
-  save({ id, title, body: details, botId, priority = "normal", status }, createdBy = "person") {
+  save({ id, title, body: details, botId, priority = "normal", status, fromChatId }, createdBy = "person") {
     if (botId != null) this.ws.bot(botId);
     if (!PRIORITIES.includes(priority)) throw new Error("Use low, normal, high or urgent.");
     const now = Date.now();
@@ -59,6 +59,7 @@ export class Tasks {
       priority,
       status: status ?? "later",
       createdBy,
+      ...(fromChatId && { fromChatId }),
       createdAt: now,
       updatedAt: now,
     };
@@ -124,7 +125,11 @@ export class Tasks {
     const from = task.status;
     try {
       const invoked = this.invocation(task);
-      turn = this.ws.send(chatId, invoked?.text ?? this.prompt(task), { taskId: task.id, title: "Task · " + task.title.slice(0, 90), ...(invoked && { allowScript: true }) });
+      const creator = task.createdBy && task.createdBy !== "person" ? this.ws.state.bots.find((b) => b.id === task.createdBy) : null;
+      const from = task.createdBy && task.createdBy !== "person"
+        ? { kind: "bot", botId: task.createdBy, name: creator?.name ?? "a bot", ...(task.fromChatId && { chatId: task.fromChatId }), via: "task" }
+        : undefined;
+      turn = this.ws.send(chatId, invoked?.text ?? this.prompt(task), { taskId: task.id, title: "Task · " + task.title.slice(0, 90), ...(from && { from }), ...(invoked && { allowScript: true }) });
     } catch (error) {
       Object.assign(task, { chatId, status: "blocked", problem: error.message, updatedAt: Date.now() });
       this.ws.save();
@@ -135,6 +140,11 @@ export class Tasks {
     delete task.problem;
     this.ws.chat(chatId).title = "Task · " + task.title.slice(0, 80);
     task.runId = this.ws.state.runs.find((r) => r.chatId === chatId)?.id;
+    // Sync any creating run's task handoff card with the task's live status and chat link.
+    for (const r of this.ws.state.runs) {
+      const handoff = r.taskHandoffs?.find((h) => h.taskId === task.id);
+      if (handoff) { handoff.status = task.status; handoff.chatId = chatId; }
+    }
     this.ws.save();
     if (from !== "working") this.ws.events?.emit("task.status", { task, from, to: "working" });
     turn.catch((error) => console.error("Task:", error.message));
@@ -149,6 +159,10 @@ export class Tasks {
     if (run.status === "Completed") Object.assign(task, { status: "review", result: (reply ?? "").slice(0, 4000) });
     else Object.assign(task, { status: "blocked", problem: run.detail || run.status });
     task.updatedAt = Date.now();
+    for (const r of this.ws.state.runs) {
+      const handoff = r.taskHandoffs?.find((h) => h.taskId === task.id);
+      if (handoff) { handoff.status = nextStatus; handoff.chatId = task.chatId; }
+    }
     this.ws.save();
     if (from !== nextStatus) this.ws.events?.emit("task.status", { task, from, to: nextStatus });
   }
@@ -235,9 +249,28 @@ export class Tasks {
           // A task that runs a script command waits for the person's yes, so work nobody watches can't make one, even in Later.
           if (invocation && unattended) throw new Error("A task that runs a script command can only be made with the person there. Ask them to.");
           if (invocation && !(await approved(invocation, ["Task: " + shownText(title), "Status: " + (status ?? "later") + (name ? ", for " + shownText(name) : ""), ...(status === "ready" && name ? ["It starts by itself when " + shownText(name) + " is free."] : [])]))) return "The person declined.";
-          const id = this.save({ title, body: details, botId: botByName(name), priority, status: unattended ? "later" : status }, bot.id);
+          const assignedBotId = botByName(name);
+          const id = this.save({ title, body: details, botId: assignedBotId, priority, status: unattended ? "later" : status, fromChatId: chat.id }, bot.id);
+          const createdTask = this.get(id);
+          // Record bot-to-bot task handoffs on the creating run so the chat shows a rail card with live task status.
+          if (assignedBotId && assignedBotId !== bot.id) {
+            const handoffs = (run.taskHandoffs ??= []);
+            handoffs.push({
+              id: createdTask.id,
+              taskId: createdTask.id,
+              botId: assignedBotId,
+              fromBotId: bot.id,
+              from: { kind: "bot", botId: bot.id, name: bot.name, chatId: chat.id, via: "task" },
+              title: createdTask.title,
+              ...(createdTask.body && { details: createdTask.body }),
+              priority: createdTask.priority,
+              status: createdTask.status,
+              started: createdTask.createdAt,
+            });
+            this.ws.notify();
+          }
           created++;
-          return view(this.get(id));
+          return view(createdTask);
         },
       ),
       tool(
