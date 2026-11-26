@@ -39,6 +39,7 @@ import { AGENT_TEMPLATES, MARKET_REFRESH } from "./plugin-catalog.mjs";
 import { COMPOSIO_APPS, composioHandlers } from "./composio.mjs";
 import { MCP_APPS, mcpAppHandlers } from "./mcp-apps.mjs";
 import { performSecureUse } from "./secure-input.mjs";
+import { CredentialGrants } from "./credential-grants.mjs";
 import { releasePage } from "./updates.mjs";
 import { Workspace } from "./workspace.mjs";
 import { liveContextFor } from "./live-context.mjs";
@@ -304,6 +305,7 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
   const heldTeam = splitHost ? new HeldCut() : null;
   const loginLookups = splitHost ? new LoginLookups() : null;
   const spaceEvents = splitHost ? spaceEventQueue() : null;
+  const credentialGrants = new CredentialGrants({ dir: dataDir, onChange: () => notify() });
   const told = heldTeam && teamFromCut(heldTeam, (chatId) => workspace.state.chats.find((chat) => chat.id === chatId));
   workspace = new Workspace(dataDir, providers, notify, {
     updates,
@@ -330,10 +332,21 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
         }
       : () => link?.notifyTargetsContext?.(),
     formBrowser,
-    savedLogins: (chatId, origin) => loginLookups ? loginLookups.find(chatId, origin) : link.loginNames(chatId, origin),
+    savedLogins: (chatId, origin, options) => loginLookups ? loginLookups.find(chatId, origin) : link.loginNames(chatId, origin, options),
+    credentials: () => link?.credentials ?? null,
+    credentialGrants,
+    extensionFill: (args, ctx) => {
+      if (!link?.browser) throw new Error("Browser extension bridge is not ready.");
+      return link.browser.secureFill(args, ctx);
+    },
+    settings: () => workspace?.state?.settings ?? {},
     ...(host.headless && !formBrowser && { pageUnavailable: "Browser form filling needs the desktop viewer or a Linux host with Chromium and an X11 display. See A screen without Docker in the terminal guide." }),
-    secureUse: (plan, values, { signal }) => performSecureUse(plan, values, {
-      signal, fillPage: () => formBrowser ? formBrowser.fill(plan, values, signal) : host.window.fillSecurePage(plan, values, signal),
+    secureUse: (plan, values, { signal, extensionFill, appFill, settings } = {}) => performSecureUse(plan, values, {
+      signal,
+      fillPage: () => formBrowser ? formBrowser.fill(plan, values, signal) : host.window.fillSecurePage(plan, values, signal),
+      extensionFill: extensionFill ?? ((args, ctx) => link.browser.secureFill(args, ctx)),
+      appFill,
+      settings: settings ?? workspace?.state?.settings ?? {},
     }),
     ...(keys && {
       vaultKey: keys,
@@ -390,7 +403,7 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
   };
   const routines = workspace.panels.routines;
   const zone = () => Intl.DateTimeFormat().resolvedOptions().timeZone;
-  const savedCredentials = new SavedCredentials({ get: () => link?.credentials ?? null });
+  const savedCredentials = new SavedCredentials({ get: () => link?.credentials ?? null, grants: credentialGrants });
   // A folder a person adds for its skills. A plugin folder goes the plugins' way instead, which
   // copies it and shows what it starts: a plugin has no other way in. It arrives switched on, as
   // an installed plugin does (the owner's rule in desktop/plugins.mjs, NOTES).
@@ -635,6 +648,11 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
     passwordManagerItems: (manager, vaultId, query) => savedCredentials.items(manager, vaultId, query),
     passwordManagerItem: (manager, vaultId, itemId) => savedCredentials.item(manager, vaultId, itemId),
     linkPasswordManagerField: (input) => savedCredentials.link(input),
+    copyPasswordManagerField: (input) => savedCredentials.copy(input),
+    credentialGrants: (filter) => savedCredentials.listGrants(filter),
+    setCredentialGrant: (input) => savedCredentials.setGrant(input),
+    revokeCredentialGrant: (id) => savedCredentials.revokeGrant(id),
+    credentialAudit: (options) => savedCredentials.audit(options),
     importMcpServers: (json) => workspace.integrations.importServers(String(json ?? "").slice(0, 1_000_000)),
     importMcpServerFile: async () => {
       const paths = await host.dialogs.open({
@@ -1271,6 +1289,7 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
   const linkPort = validPort(linkOptions.port, 0) ? linkOptions.port : validPort(Number(env("LINK_PORT")), 1) ? Number(env("LINK_PORT")) : undefined;
   link = new LinkHost({
     dir: join(dataDir, "link"),
+    credentialGrants,
     // A trial run finds the password managers' tools only in the folders BOTKINS_TOOL_PATH names
     // (a test's stand-ins), and none without it, so it never starts the person's own.
     ...(trial && { managerSearchPath: trialToolDirs(env("TOOL_PATH")) }),

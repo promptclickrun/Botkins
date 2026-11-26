@@ -3,7 +3,7 @@
 // containing other extensions' iframes (Proton Pass, 1Password, Bitwarden, Grammarly, etc.)
 // work normally.
 
-export const DRIVER_VERSION = "0.2.0";
+export const DRIVER_VERSION = "0.3.0";
 
 const BLOCKED_IFRAME_SCHEMES = [
   "chrome-extension:",
@@ -292,14 +292,16 @@ function cssPathWithinRoot(el) {
   return parts.join(" > ");
 }
 
+const secretFilledElements = new WeakSet();
+
 function getValueState(el) {
   const tag = el.tagName.toLowerCase();
   const state = {};
 
   if (tag === "input") {
     const t = (el.type || "text").toLowerCase();
-    if (t === "password") {
-      // Never expose password values in snapshots.
+    if (t === "password" || secretFilledElements.has(el)) {
+      // Never expose password or vault-filled secret values in snapshots.
       const filled = Boolean(el.value && el.value.length > 0);
       state.hasValue = filled;
       state.valueState = filled ? "filled" : "empty";
@@ -313,7 +315,13 @@ function getValueState(el) {
       state.value = String(el.value ?? "").slice(0, 200);
     }
   } else if (tag === "textarea") {
-    state.value = String(el.value ?? "").slice(0, 200);
+    if (secretFilledElements.has(el)) {
+      const filled = Boolean(el.value && el.value.length > 0);
+      state.hasValue = filled;
+      state.valueState = filled ? "filled" : "empty";
+    } else {
+      state.value = String(el.value ?? "").slice(0, 200);
+    }
   } else if (tag === "select") {
     state.value = String(el.value ?? "");
     const opts = [...(el.options || [])];
@@ -1307,6 +1315,184 @@ export function createDomDriver(win = globalThis) {
     return { ok: true, found: Boolean(el) };
   }
 
+  /**
+   * Origin-pinned credential fill for Botkins vault autofill (`extension_fill`).
+   * Verifies BOTH the current frame's origin AND top-level frame origin against `expectedOrigin`
+   * before touching any DOM element and again before optional submit. Uses native prototype
+   * value setters + React `_valueTracker` reset + input/change events. Never returns any value.
+   */
+  function secureFill(opts = {}) {
+    const doc = win.document;
+    const expectedOrigin = typeof opts.expectedOrigin === "string" ? opts.expectedOrigin.trim() : "";
+    if (!expectedOrigin) {
+      return { ok: false, reason: "origin-mismatch", error: "Missing expectedOrigin for secure fill." };
+    }
+    const checkOrigin = () => {
+      const loc = win.location;
+      if (!loc || loc.origin !== expectedOrigin) return false;
+      if (loc.protocol !== "https:") {
+        const localOk = Boolean(opts.allowLocalHttp) && (loc.hostname === "localhost" || loc.hostname === "127.0.0.1" || loc.hostname === "[::1]");
+        if (!localOk) return false;
+      }
+      if (loc.username || loc.password) return false;
+      if (win !== win.top) {
+        try {
+          if (win.top.location.origin !== expectedOrigin) return false;
+        } catch {
+          return false;
+        }
+      }
+      return true;
+    };
+
+    if (!checkOrigin()) {
+      return {
+        ok: false,
+        reason: "origin-mismatch",
+        error: "Origin mismatch: refused to fill credentials on this frame.",
+      };
+    }
+
+    const rawFields = Array.isArray(opts.fields) ? opts.fields : [];
+    if (!rawFields.length || rawFields.length > 16) {
+      return { ok: false, error: "Provide between 1 and 16 fields to fill." };
+    }
+
+    const resolveFieldEl = (field) => {
+      if (field.ref || field.selector) {
+        return resolveElement({ ref: field.ref, selector: field.selector, allowAllSameOrigin: false });
+      }
+      const key = typeof field.name === "string" ? field.name.trim() : "";
+      if (!key) return null;
+      const escaped = typeof CSS !== "undefined" && typeof CSS.escape === "function"
+        ? CSS.escape(key)
+        : key.replace(/["\\]/g, "\\$&");
+      return (
+        querySelectorDeep(doc, `input[name="${escaped}"], textarea[name="${escaped}"]`, { allowAllSameOrigin: false }) ||
+        querySelectorDeep(doc, `input[id="${escaped}"], textarea[id="${escaped}"]`, { allowAllSameOrigin: false }) ||
+        resolveElement({ text: key, allowAllSameOrigin: false })
+      );
+    };
+
+    const selected = [];
+    for (const field of rawFields) {
+      if (!field || typeof field.value !== "string") {
+        return { ok: false, error: "Invalid field payload." };
+      }
+      const el = resolveFieldEl(field);
+      if (!el) {
+        return { ok: false, found: false, error: "Target credential input not found." };
+      }
+      const tag = el.tagName?.toLowerCase() || "";
+      if (tag !== "input" && tag !== "textarea") {
+        return { ok: false, found: true, error: `Refused to fill non-input element <${tag}>.` };
+      }
+      if (isFileInput(el) || el.disabled || el.readOnly) {
+        return { ok: false, found: true, error: "Target credential input is disabled, read-only, or a file input." };
+      }
+      const inputType = tag === "input" ? (el.type || "text").toLowerCase() : "";
+      if (inputType === "hidden") {
+        return { ok: false, found: true, error: "Refused to fill hidden input element." };
+      }
+      // Verify the element's own document matches expectedOrigin (blocks inlined cross-origin targets).
+      const elWin = getWin(el, win);
+      if (!elWin?.location || elWin.location.origin !== expectedOrigin) {
+        return { ok: false, reason: "origin-mismatch", error: "Origin mismatch: element belongs to another origin." };
+      }
+      if (!isElementVisible(el, elWin)) {
+        return { ok: false, found: true, error: "Refused to fill invisible or off-screen input element." };
+      }
+      const isPasswordField = field.kind === "password";
+      if (isPasswordField && (tag !== "input" || inputType !== "password")) {
+        return { ok: false, found: true, error: "Refused to fill a password secret into a non-password input." };
+      }
+      const isSecret = field.secret !== false && field.kind !== "username";
+      selected.push({ el, elWin, value: field.value, isSecret });
+    }
+
+    // Re-check origin immediately before writing values.
+    if (!checkOrigin()) {
+      return { ok: false, reason: "origin-mismatch", error: "Origin changed before filling credentials." };
+    }
+
+    for (const item of selected) {
+      const { el, elWin, value, isSecret } = item;
+      if (isSecret) {
+        secretFilledElements.add(el);
+      }
+      if (typeof el.scrollIntoView === "function") {
+        try {
+          el.scrollIntoView({ block: "center", inline: "center", behavior: "instant" });
+        } catch {
+          el.scrollIntoView();
+        }
+      }
+      try {
+        el.focus?.({ preventScroll: true });
+      } catch {}
+      setNativeValue(el, value, elWin);
+      // Do not echo the secret in InputEvent.data.
+      el.dispatchEvent(
+        makeInputEvent(elWin, "input", {
+          bubbles: true,
+          composed: true,
+          inputType: "insertReplacementText",
+        }),
+      );
+      el.dispatchEvent(new (elWin?.Event || Event)("change", { bubbles: true }));
+    }
+
+    let submitted = false;
+    if (opts.submit) {
+      if (!checkOrigin()) {
+        return { ok: false, reason: "origin-mismatch", error: "Origin changed before submitting form." };
+      }
+      const sub = opts.submit === true ? {} : opts.submit;
+      const last = selected[selected.length - 1];
+      if (sub.ref || sub.selector || sub.buttonText || sub.text) {
+        const btn = resolveElement({
+          ref: sub.ref,
+          selector: sub.selector,
+          text: sub.buttonText || sub.text,
+          allowAllSameOrigin: false,
+        });
+        if (!btn || btn.disabled) {
+          return { ok: false, found: false, filledCount: selected.length, error: "Submit button not found or disabled." };
+        }
+        const btnWin = getWin(btn, win);
+        if (!btnWin?.location || btnWin.location.origin !== expectedOrigin) {
+          return { ok: false, reason: "origin-mismatch", error: "Origin mismatch: submit button belongs to another origin." };
+        }
+        dispatchPointerClickSequence(btn, win, null, false);
+        submitted = true;
+      } else if (sub.pressEnter && last) {
+        const enterInit = {
+          key: "Enter",
+          code: "Enter",
+          keyCode: 13,
+          which: 13,
+          bubbles: true,
+          cancelable: true,
+          composed: true,
+        };
+        const notPrevented = last.el.dispatchEvent(makeKeyboardEvent(last.elWin, "keydown", enterInit));
+        last.el.dispatchEvent(makeKeyboardEvent(last.elWin, "keypress", { ...enterInit, charCode: 13 }));
+        if (notPrevented) dispatchSubmitOnForm(last.el);
+        last.el.dispatchEvent(makeKeyboardEvent(last.elWin, "keyup", enterInit));
+        submitted = true;
+      } else if (last) {
+        submitted = Boolean(dispatchSubmitOnForm(last.el));
+      }
+    }
+
+    return {
+      ok: true,
+      filledCount: selected.length,
+      submitted,
+      origin: expectedOrigin,
+    };
+  }
+
   function dispatch(action, payload = {}) {
     switch (action) {
       case "snapshot":
@@ -1325,6 +1511,8 @@ export function createDomDriver(win = globalThis) {
         return checkWait(payload);
       case "probe":
         return probe(payload);
+      case "secureFill":
+        return secureFill(payload);
       default:
         return { ok: false, error: `Unknown DOM driver action: ${action}` };
     }
@@ -1341,6 +1529,7 @@ export function createDomDriver(win = globalThis) {
     scroll,
     checkWait,
     probe,
+    secureFill,
     dispatch,
   };
 }

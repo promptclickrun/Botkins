@@ -377,6 +377,78 @@ export class BrowserTools {
     });
   }
 
+  /**
+   * Host-only secure credential fill sent over the sealed Link channel to a paired extension.
+   * Deliberately NOT in BROWSER_TOOLS so bots/LLMs can never invoke it directly with raw text.
+   * Plaintext values are wiped from the pending ask payload as soon as the extension responds.
+   */
+  secureFill(args = {}, { botId, chatId, signal } = {}) {
+    if (args === null || typeof args !== "object" || Array.isArray(args)) {
+      return Promise.reject(new Error("The arguments must be an object."));
+    }
+    let device;
+    try {
+      device = this.pickDevice(args.browser);
+    } catch (error) {
+      return Promise.reject(error);
+    }
+    if (this.pending.size >= MAX_ASKS) return Promise.reject(new Error("Too many browser tool calls are waiting. Try again in a moment."));
+    if (signal?.aborted) return Promise.reject(new Error("Stopped."));
+
+    const { browser: _browser, ...toolArgs } = args;
+    const clonedArgs = {
+      ...toolArgs,
+      fields: Array.isArray(toolArgs.fields) ? toolArgs.fields.map((f) => ({ ...f })) : [],
+    };
+    const id = randomBytes(9).toString("base64url");
+    const ask = {
+      id,
+      deviceId: device.id,
+      tool: "browser_secure_fill",
+      args: clonedArgs,
+      at: this.now(),
+      ...(botId && { botId }),
+      ...(chatId && { chatId }),
+    };
+
+    const wipeArgs = () => {
+      if (Array.isArray(ask.args?.fields)) {
+        for (const f of ask.args.fields) f.value = "";
+        ask.args.fields.length = 0;
+      }
+    };
+
+    return new Promise((resolve, reject) => {
+      const done = (settle, value) => {
+        const entry = this.pending.get(id);
+        if (!entry) return;
+        this.pending.delete(id);
+        wipeArgs();
+        for (const timer of entry.timers) clearTimeout(timer);
+        signal?.removeEventListener("abort", onAbort);
+        this.changed();
+        settle(value);
+      };
+      const onAbort = () => done(reject, new Error("Stopped."));
+      const timers = [
+        setTimeout(
+          () => done(reject, new Error(`Browser "${device.name}" didn't answer in time. Check that Chrome/Edge is open and the Botkins extension is connected.`)),
+          CALL_MS,
+        ),
+      ];
+      for (const timer of timers) timer.unref?.();
+      signal?.addEventListener("abort", onAbort, { once: true });
+      this.pending.set(id, {
+        ask,
+        tool: { name: "browser_secure_fill", file: false },
+        timers,
+        resolve: (value) => done(resolve, value),
+        reject: (error) => done(reject, error),
+      });
+      this.changed();
+    });
+  }
+
   /** Extension answer to one of its asks. */
   answer(deviceId, id, answer) {
     const entry = this.pending.get(String(id));

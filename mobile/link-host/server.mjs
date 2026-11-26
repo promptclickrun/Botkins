@@ -260,9 +260,9 @@ export class LinkHost extends EventEmitter {
    *   that address is this server's own and the only way phones reach it: a headless host then keeps a phone's
    *   presence key from a pairing through it and takes the screen grant calls through it (grant.mjs).
    */
-  constructor({ dir, backend, port, protect, reveal, extraHosts = [], searchPath, managerSearchPath, screenInput, relay, fetch, profileFetch, botkins, demoSpaceLinks = false, spaceLinkTiming, chunkTiming, log = () => {} }) {
+  constructor({ dir, backend, port, protect, reveal, extraHosts = [], searchPath, managerSearchPath, screenInput, relay, fetch, profileFetch, botkins, demoSpaceLinks = false, spaceLinkTiming, chunkTiming, credentialGrants = null, log = () => {} }) {
     super();
-    Object.assign(this, { backend, log, portOverride: port, extraHosts, fetch: fetch ?? globalThis.fetch, profileFetch: profileFetch ?? fetch ?? globalThis.fetch });
+    Object.assign(this, { backend, log, portOverride: port, extraHosts, credentialGrants, fetch: fetch ?? globalThis.fetch, profileFetch: profileFetch ?? fetch ?? globalThis.fetch });
     this.botkins = botkins === undefined ? botkinRenderer() : botkins;
     // How often a phone that asked for text in chunks gets thinking and sentences (`every`) and the reply's own text (`live`), and how long text may wait for a sentence's end (tests set shorter ones).
     this.chunkTiming = { every: CHUNK_MS, live: CHUNK_LIVE_MS, holdMax: CHUNK_HOLD_MAX_MS, ...chunkTiming };
@@ -383,7 +383,10 @@ export class LinkHost extends EventEmitter {
       "link.pullRequestDiff": (_session, a) => this.prs.panel(a[0], true),
       "link.pullRequests": (_session, a) => this.prs.lookup(a[0], a[1]),
       "link.credentials.save": (_session, a) => this.credentials.save(a[0]),
-      "link.credentials.remove": async (_session, a) => this.credentials.remove(a[0]),
+      "link.credentials.remove": async (_session, a) => {
+        await this.credentials.remove(a[0]);
+        this.credentialGrants?.revokeForCredential?.(a[0]);
+      },
       "link.credentials.check": (_session, a) => this.credentials.check(a[0]),
       "link.credentials.managers": (_session, a) => this.credentials.managers(a[0] === true),
       "link.credentials.unlock": (_session, a) => this.credentials.unlock(a[0], a[1]),
@@ -392,6 +395,17 @@ export class LinkHost extends EventEmitter {
       "link.credentials.items": (_session, a) => this.credentials.items(a[0], a[1], a[2]),
       "link.credentials.item": (_session, a) => this.credentials.item(a[0], a[1], a[2]),
       "link.credentials.link": (_session, a) => this.credentials.link(a[0]),
+      "link.credentials.copy": (_session, a) => this.credentials.copyFromManager(a[0]),
+      "link.credentials.grants": (_session, a) => (this.credentialGrants ? this.credentialGrants.list(a[0] ?? {}) : []),
+      "link.credentials.setGrant": (_session, a) => {
+        if (!this.credentialGrants) throw new Failure("Credential grants are not available on this host.");
+        return this.credentialGrants.set({ ...(a[0] ?? {}), isOwnerPrivateChat: true });
+      },
+      "link.credentials.revokeGrant": (_session, a) => {
+        if (!this.credentialGrants) throw new Failure("Credential grants are not available on this host.");
+        return this.credentialGrants.revoke(a[0]);
+      },
+      "link.credentials.audit": (_session, a) => (this.credentialGrants ? this.credentialGrants.audit(a[0] ?? {}) : []),
       "link.credentials.protonPassInstallPlan": () => this.protonPass("protonPassInstallPlan"),
       "link.credentials.protonPassInstall": (_session, a) => this.protonPass("protonPassInstall", a[0]),
       "link.credentials.protonPassSignInStart": (_session, a) => this.protonPass("protonPassSignInStart", a[0]),
@@ -1783,19 +1797,20 @@ export class LinkHost extends EventEmitter {
   chatOf(chatId) {
     return (this.backend.snapshot().chats ?? []).find((chat) => chat.id === chatId);
   }
-  /** Only an existing private owner chat may discover entry labels for one exact HTTPS origin. */
-  loginNames(chatId, origin) {
+  /** Only an existing private owner chat may discover credential metadata matching a site or query. */
+  async loginNames(chatId, origin, options = {}) {
     const chat = this.chatOf(chatId);
     if (!chat) return [];
     const { createdBy, invited } = chatPeople(this.store.data.team, chat);
-    if (createdBy !== OWNER || invited.length || typeof origin !== "string" || !origin.startsWith("https://")) return [];
-    return this.credentials.list().filter(entry => {
-      if (!entry.website) return false;
-      try {
-        const site = new URL(entry.website.includes("://") ? entry.website : "https://" + entry.website);
-        return site.origin === origin;
-      } catch { return false; }
-    }).map(({ name, kind }) => ({ name, kind }));
+    if (createdBy !== OWNER || invited.length) return [];
+    const url = options.url ?? (typeof origin === "string" && origin.startsWith("https://") ? origin : undefined);
+    const query = typeof options.query === "string" ? options.query : undefined;
+    if (!url && !query) return [];
+    return this.credentials.findForSite({
+      url,
+      query,
+      includeManagers: options.includeManagers !== false,
+    });
   }
   /** Who started a chat and who was invited. An unknown chat is the owner's, with nobody invited. */
   chatPeople(chatId) {

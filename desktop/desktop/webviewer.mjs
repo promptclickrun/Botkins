@@ -69,7 +69,7 @@ export function guardViewerSession(session) {
 
 // This function runs in Chromium's isolated world in the guest's current main document.
 // The debugger passes values as structured arguments. The script source contains no secrets.
-function browserForm(action, url, fields, values, token) {
+function browserForm(action, url, fields, values, token, submit) {
   if (document.visibilityState !== "visible" || location.protocol !== "https:" || location.username || location.password) return false;
   const address = location.origin + location.pathname;
   if (action === "bind") {
@@ -79,16 +79,46 @@ function browserForm(action, url, fields, values, token) {
     globalThis.botkinsFormDocument ??= crypto.randomUUID();
     return { url: location.href, token: globalThis.botkinsFormDocument };
   }
-  if (action === "fill" && (location.href !== url || (token && globalThis.botkinsFormDocument !== token))) return false;
+  if ((action === "fill" || action === "fill_submit") && (location.href !== url || (token && globalThis.botkinsFormDocument !== token))) return false;
+
+  const setNative = (input, val) => {
+    const prev = input.value;
+    const proto = input.tagName === "TEXTAREA" ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+    const desc = Object.getOwnPropertyDescriptor(proto, "value");
+    if (desc && typeof desc.set === "function") desc.set.call(input, val);
+    else input.value = val;
+    if (input._valueTracker && typeof input._valueTracker.setValue === "function") {
+      try {
+        input._valueTracker.setValue(prev);
+      } catch {}
+    }
+  };
 
   const inputs = new Map();
-  for (const input of document.querySelectorAll("input")) {
+  for (const input of document.querySelectorAll("input, textarea")) {
     const key = input.name || input.id;
+    const isTextarea = input.tagName === "TEXTAREA";
     if (!/^[A-Za-z][A-Za-z0-9_-]{0,63}$/.test(key) || key in Object.prototype || input.disabled || input.readOnly ||
-        !input.checkVisibility({ opacityProperty: true, visibilityProperty: true }) || !["text", "email", "password", "tel", "search", "number"].includes(input.type)) continue;
+        !input.checkVisibility({ opacityProperty: true, visibilityProperty: true }) ||
+        (!isTextarea && !["text", "email", "password", "tel", "search", "number"].includes(input.type))) continue;
     inputs.set(key, inputs.has(key) ? null : input);
   }
-  if (action === "inspect") return { url: address, fields: [...inputs].filter(([, input]) => input).slice(0, 64).map(([key, input]) => ({ key, type: input.type })) };
+  if (action === "inspect") {
+    const buttons = [];
+    for (const btn of document.querySelectorAll('button, input[type="submit"], input[type="button"], [role="button"]')) {
+      if (btn.disabled || !btn.checkVisibility({ opacityProperty: true, visibilityProperty: true })) continue;
+      const label = String(btn.innerText || btn.value || btn.getAttribute("aria-label") || "").replace(/\s+/g, " ").trim().slice(0, 80);
+      if (!label) continue;
+      const selector = btn.id ? "#" + CSS.escape(btn.id) : btn.name ? `${btn.tagName.toLowerCase()}[name="${CSS.escape(btn.name)}"]` : undefined;
+      buttons.push({ text: label, ...(selector && { selector }), type: (btn.type || btn.getAttribute("role") || "button").toLowerCase() });
+      if (buttons.length >= 32) break;
+    }
+    return {
+      url: address,
+      fields: [...inputs].filter(([, input]) => input).slice(0, 64).map(([key, input]) => ({ key, type: input.tagName === "TEXTAREA" ? "textarea" : input.type })),
+      ...(buttons.length > 0 && { buttons }),
+    };
+  }
   const selected = [];
   for (const field of fields) {
     if (!Object.hasOwn(values, field.key)) continue;
@@ -96,10 +126,58 @@ function browserForm(action, url, fields, values, token) {
     if (!input) return false;
     selected.push([input, values[field.key]]);
   }
-  for (const [input, value] of selected) input.value = value;
+  for (const [input, value] of selected) setNative(input, value);
   for (const [input] of selected) {
     input.dispatchEvent(new Event("input", { bubbles: true }));
     input.dispatchEvent(new Event("change", { bubbles: true }));
+  }
+
+  if (action === "fill_submit" || submit) {
+    // Re-verify document origin/token immediately before submitting.
+    if (location.href !== url || (token && globalThis.botkinsFormDocument !== token)) return false;
+    const sub = submit && typeof submit === "object" ? submit : {};
+    let clicked = false;
+    if (typeof sub.selector === "string" && sub.selector.trim()) {
+      let target = null;
+      try {
+        target = document.querySelector(sub.selector);
+      } catch {}
+      if (!target || target.disabled) return false;
+      target.click();
+      clicked = true;
+    } else if (typeof sub.buttonText === "string" && sub.buttonText.trim()) {
+      const needle = sub.buttonText.replace(/\s+/g, " ").trim().toLowerCase();
+      let exact = null;
+      let partial = null;
+      for (const btn of document.querySelectorAll('button, input[type="submit"], input[type="button"], [role="button"], a')) {
+        if (btn.disabled || !btn.checkVisibility({ opacityProperty: true, visibilityProperty: true })) continue;
+        const label = String(btn.innerText || btn.value || btn.getAttribute("aria-label") || "").replace(/\s+/g, " ").trim().toLowerCase();
+        if (!label) continue;
+        if (label === needle) {
+          exact = btn;
+          break;
+        }
+        if (!partial && label.includes(needle)) partial = btn;
+      }
+      const target = exact || partial;
+      if (!target) return false;
+      target.click();
+      clicked = true;
+    }
+    if (!clicked && selected.length > 0) {
+      const last = selected[selected.length - 1][0];
+      const form = last.form || last.closest("form");
+      if (form) {
+        if (typeof form.requestSubmit === "function") form.requestSubmit();
+        else {
+          const btn = form.querySelector('button[type="submit"], input[type="submit"], button:not([type])');
+          if (btn) btn.click();
+          else form.submit();
+        }
+        clicked = true;
+      }
+    }
+    if (!clicked) return false;
   }
   return true;
 }
@@ -128,8 +206,9 @@ export function bindForm(send, url) {
 }
 
 export async function fillPageFields(send, plan, values, signal) {
-  const filled = await callInPage(send, browserForm, ["fill", plan.document?.url ?? plan.url, plan.fields, values, plan.document?.token ?? null], signal);
-  if (filled !== true) throw new Error("The requested fields are unavailable.");
+  const action = plan.submit ? "fill_submit" : "fill";
+  const filled = await callInPage(send, browserForm, [action, plan.document?.url ?? plan.url, plan.fields, values, plan.document?.token ?? null, plan.submit ?? null], signal);
+  if (filled !== true) throw new Error(plan.submit ? "The requested fields or submit button are unavailable." : "The requested fields are unavailable.");
 }
 
 export async function fillSecurePage(guest, plan, values, signal) {

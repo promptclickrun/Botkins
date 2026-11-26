@@ -258,6 +258,13 @@ export class BrowserController {
     this.attached = new Set(); // active ephemeral debugger sessions
     this.cdpQueues = new Map(); // tabId -> Promise chain
     this.tabRefs = new Map(); // tabId -> Map<globalRef, { frameId, localRef, tag, type, role }>
+    this.taintedTabs = new Map(); // tabId -> { origin, url } tabs that received a vault credential
+    this._onTaintedTabUpdated = (tabId, changeInfo) => {
+      if (this.taintedTabs.has(tabId) && (changeInfo?.status === "loading" || typeof changeInfo?.url === "string")) {
+        this.untaintTab(tabId);
+      }
+    };
+    this._watchingTaintedUpdates = false;
 
     if (typeof chrome !== "undefined" && chrome.debugger?.onDetach) {
       chrome.debugger.onDetach.addListener((source) => {
@@ -270,8 +277,39 @@ export class BrowserController {
       chrome.tabs.onRemoved.addListener((tabId) => {
         this.tabRefs.delete(tabId);
         this.attached.delete(tabId);
+        this.untaintTab(tabId);
       });
     }
+  }
+
+  taintTab(tabId, info) {
+    this.taintedTabs.set(tabId, info);
+    if (!this._watchingTaintedUpdates && typeof chrome !== "undefined" && chrome.tabs?.onUpdated?.addListener) {
+      chrome.tabs.onUpdated.addListener(this._onTaintedTabUpdated);
+      this._watchingTaintedUpdates = true;
+    }
+  }
+
+  untaintTab(tabId) {
+    this.taintedTabs.delete(tabId);
+    if (this._watchingTaintedUpdates && this.taintedTabs.size === 0 && typeof chrome !== "undefined" && chrome.tabs?.onUpdated?.removeListener) {
+      chrome.tabs.onUpdated.removeListener(this._onTaintedTabUpdated);
+      this._watchingTaintedUpdates = false;
+    }
+  }
+
+  assertNotTainted(tab, action) {
+    const taint = this.taintedTabs.get(tab.id);
+    if (!taint) return;
+    const currentUrl = tab.url || tab.pendingUrl || "";
+    const currentOrigin = urlOrigin(currentUrl);
+    if (currentOrigin && currentOrigin !== taint.origin) {
+      this.untaintTab(tab.id);
+      return;
+    }
+    throw new Error(
+      `Blocked: tab ${tab.id} received a vault credential and cannot run ${action} until it navigates to a new page.`,
+    );
   }
 
   async findBotkinsGroup(windowId) {
@@ -1281,6 +1319,7 @@ export class BrowserController {
   }
 
   async runEval(tab, args) {
+    this.assertNotTainted(tab, "browser_eval");
     const expression = String(args.expression || "");
     const awaitPromise = args.awaitPromise !== false;
 
@@ -1332,6 +1371,95 @@ export class BrowserController {
     return { tabId: tab.id, result: value ?? null };
   }
 
+  async runSecureFill(tab, args) {
+    if (!this.hasScripting()) {
+      throw new Error("Secure credential fill requires Chrome scripting API support.");
+    }
+    const expectedOrigin = urlOrigin(args.expectedOrigin || "");
+    if (!expectedOrigin) {
+      throw new Error("Secure credential fill requires a valid expectedOrigin.");
+    }
+    const tabUrl = tab.url || tab.pendingUrl || "";
+    const currentOrigin = urlOrigin(tabUrl);
+    if (!currentOrigin || currentOrigin !== expectedOrigin) {
+      throw new Error(`Origin mismatch: active tab is on ${currentOrigin || "an unknown origin"}, not ${expectedOrigin}.`);
+    }
+    if (!tabUrl.startsWith("https://")) {
+      const localOk = Boolean(args.allowLocalHttp) && /^http:\/\/(localhost|127\.0\.0\.1|\[::1\])(?::\d+)?\//i.test(tabUrl);
+      if (!localOk) {
+        throw new Error("Secure credential fill requires an HTTPS page.");
+      }
+    }
+
+    const rawFields = Array.isArray(args.fields) ? args.fields : [];
+    if (!rawFields.length) throw new Error("No fields provided for secure fill.");
+
+    // Determine target frame: if refs map to a single frame, target it; otherwise top frame (0).
+    // Cross-origin frames are always rejected inside dom-driver's secureFill origin check.
+    let targetFrameId = 0;
+    const mappedFields = [];
+    for (const f of rawFields) {
+      if (f?.ref) {
+        const mapped = this.tabRefs.get(tab.id)?.get(f.ref);
+        if (mapped) {
+          if (targetFrameId !== 0 && targetFrameId !== mapped.frameId) {
+            throw new Error("All fields in one secure fill must belong to the same frame.");
+          }
+          targetFrameId = mapped.frameId;
+          mappedFields.push({ ...f, ref: mapped.localRef });
+          continue;
+        }
+      }
+      mappedFields.push({ ...f });
+    }
+
+    let submitPayload = args.submit ?? false;
+    if (submitPayload && typeof submitPayload === "object" && submitPayload.ref) {
+      const mappedBtn = this.tabRefs.get(tab.id)?.get(submitPayload.ref);
+      if (mappedBtn) {
+        if (mappedBtn.frameId !== targetFrameId) {
+          throw new Error("Submit button must be in the same frame as the filled fields.");
+        }
+        submitPayload = { ...submitPayload, ref: mappedBtn.localRef };
+      }
+    }
+
+    // Taint the tab before injecting secrets so subsequent browser_eval / browser_cdp calls
+    // cannot read the filled secret back into model context.
+    this.taintTab(tab.id, { origin: expectedOrigin, url: tabUrl });
+
+    try {
+      const { frames } = await this.execDriver(
+        tab.id,
+        "secureFill",
+        {
+          expectedOrigin,
+          allowLocalHttp: Boolean(args.allowLocalHttp),
+          fields: mappedFields,
+          submit: submitPayload,
+        },
+        { frameIds: [targetFrameId] },
+      );
+      const res = frames[0]?.result;
+      if (!res?.ok) {
+        throw new Error(res?.error || "Secure credential fill failed.");
+      }
+      return {
+        filled: true,
+        tabId: tab.id,
+        filledCount: Number(res.filledCount || 0),
+        submitted: Boolean(res.submitted),
+        origin: res.origin || expectedOrigin,
+      };
+    } finally {
+      // Drop references to plaintext values immediately after injection.
+      for (const f of mappedFields) f.value = "";
+      for (const f of rawFields) {
+        if (f && typeof f === "object") f.value = "";
+      }
+    }
+  }
+
   async run(toolName, args = {}) {
     const settings = await this.getSettings();
     if (settings.enabled === false) {
@@ -1376,6 +1504,7 @@ export class BrowserController {
       case "browser_navigate": {
         const tab = await this.resolveTab(args.tabId);
         this.tabRefs.delete(tab.id);
+        this.untaintTab(tab.id);
         const action = args.action || (args.url ? "goto" : "reload");
         if (action === "goto") {
           const url = String(args.url || "").trim();
@@ -1395,6 +1524,7 @@ export class BrowserController {
       case "browser_close_tab": {
         const tab = await this.resolveTab(args.tabId);
         this.tabRefs.delete(tab.id);
+        this.untaintTab(tab.id);
         await this.detach(tab.id);
         await chrome.tabs.remove(tab.id);
         return { closed: true, tabId: tab.id };
@@ -1418,6 +1548,11 @@ export class BrowserController {
       case "browser_type": {
         const tab = await this.resolveTab(args.tabId);
         return await this.runType(tab, args);
+      }
+
+      case "browser_secure_fill": {
+        const tab = await this.resolveTab(args.tabId);
+        return await this.runSecureFill(tab, args);
       }
 
       case "browser_select": {
@@ -1447,6 +1582,7 @@ export class BrowserController {
 
       case "browser_cdp": {
         const tab = await this.resolveTab(args.tabId);
+        this.assertNotTainted(tab, "browser_cdp");
         const method = String(args.method || "").trim();
         if (!method) throw new Error("CDP `method` is required.");
         const result = await this.cdp(

@@ -1,11 +1,12 @@
 // The Credentials Manager: what is saved on the computer, what is read from a password manager,
 // the password managers themselves, and the keys tools use. Values never reach the phone.
 import { router } from "expo-router";
-import { Plus, Wrench } from "lucide-react-native";
+import { History, Plus, ShieldCheck, Wrench } from "lucide-react-native";
 import { useEffect, useState } from "react";
 import { Alert, View } from "react-native";
+import type { CredentialAuditEntry, CredentialGrant } from "@/link/types";
 import { usePart } from "@/state/hooks";
-import { attempt } from "@/state/link";
+import { api, attempt } from "@/state/link";
 import { Dot, Group, IconTile, Label, Loading, Page, Row, space, T, Tap, useTheme } from "@/ui";
 import { byName, CredentialMark, credentialLine, desktopVault, GateView, KeptNote, loadManagers, ManagerMark, managerBadge, type ToolCredential, useComputerName, useGate, useManagers, useProtonSupport } from "./shared";
 
@@ -29,10 +30,22 @@ function Body() {
   const proton = useProtonSupport();
   const mcp = usePart("mcp");
   const [toolKeys, setToolKeys] = useState<ToolCredential[] | undefined>(undefined);
+  const [grants, setGrants] = useState<CredentialGrant[] | undefined>(undefined);
+  const [audit, setAudit] = useState<CredentialAuditEntry[] | undefined>(undefined);
   const [refreshing, setRefreshing] = useState(false);
+
+  const loadGrantsAndAudit = async () => {
+    const [g, a] = await Promise.all([
+      attempt(api["link.credentials.grants"]()),
+      attempt(api["link.credentials.audit"]({ limit: 20 })),
+    ]);
+    if (g) setGrants(g);
+    if (a) setAudit(a);
+  };
 
   useEffect(() => {
     void loadManagers();
+    void loadGrantsAndAudit();
   }, []);
   // The tools' keys change when a tool does.
   useEffect(() => {
@@ -46,9 +59,26 @@ function Body() {
   const reload = async () => {
     setRefreshing(true);
     const keys = attempt(desktopVault.credentials()).then((vault) => vault && setToolKeys(vault.entries));
-    await Promise.all([loadManagers(true), keys]);
+    await Promise.all([loadManagers(true), keys, loadGrantsAndAudit()]);
     setRefreshing(false);
   };
+
+  const revokeGrant = (grant: CredentialGrant) =>
+    Alert.alert(
+      "Revoke access?",
+      `${grant.botName || grant.botId} will ask again before using ${grant.credentialName || grant.credentialId} on ${grant.destination}.`,
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Revoke",
+          style: "destructive",
+          onPress: async () => {
+            const done = await attempt(api["link.credentials.revokeGrant"](grant.id), "Revoked");
+            if (done) setGrants((held) => held?.filter((item) => item.id !== grant.id));
+          },
+        },
+      ],
+    );
 
   const removeToolKey = (entry: ToolCredential) =>
     Alert.alert("Remove " + entry.label + "?", entry.usedBy ? "Used by " + entry.usedBy : undefined, [
@@ -130,6 +160,45 @@ function Body() {
           </Group>
         )}
       </View>
+
+      {!!grants?.length && (
+        <View>
+          <Label>Standing bot grants</Label>
+          <Group>
+            {grants.map((grant) => (
+              <Row
+                key={grant.id}
+                leading={<IconTile icon={ShieldCheck} color={colors.accent} size={36} />}
+                title={`${grant.botName || grant.botId} · ${grant.credentialName || grant.credentialId}`}
+                subtitle={`${grant.level} · ${grant.destination} · ${grant.operation}`}
+                trailing={
+                  <Tap onPress={() => revokeGrant(grant)} feel="select" accessibilityLabel={`Revoke ${grant.botName || grant.botId} grant`} style={{ minHeight: 44, justifyContent: "center", paddingHorizontal: space.sm, marginRight: -space.sm }}>
+                    <T variant="subhead" weight="600" color="danger">
+                      Revoke
+                    </T>
+                  </Tap>
+                }
+              />
+            ))}
+          </Group>
+        </View>
+      )}
+
+      {!!audit?.length && (
+        <View>
+          <Label>Credential audit log</Label>
+          <Group>
+            {audit.slice(0, 10).map((entry) => (
+              <Row
+                key={entry.id}
+                leading={<IconTile icon={History} color={colors.ink2} size={36} />}
+                title={`${entry.botName || entry.botId} · ${entry.credentialName || entry.credentialId || "Credential"}`}
+                subtitle={`${entry.outcome} · ${entry.destination || "—"} · ${entry.operation}`}
+              />
+            ))}
+          </Group>
+        </View>
+      )}
 
       {!!toolKeys?.length && (
         <View>

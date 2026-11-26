@@ -296,7 +296,7 @@ export function headlessBackend(rawRequest, version, { team = () => null, log = 
         if (loginNames && Array.isArray(next.loginLookups))
           await Promise.allSettled(next.loginLookups.slice(0, 8).map(async ({ id, chatId, origin }) => {
             if (typeof id === "string" && typeof chatId === "string")
-              await rawRequest("loginNames", [id, loginNames(chatId, origin)]);
+              await rawRequest("loginNames", [id, await loginNames(chatId, origin)]);
           }));
       } catch {
         // The workspace may come back from an older image. A name that is a promise about the

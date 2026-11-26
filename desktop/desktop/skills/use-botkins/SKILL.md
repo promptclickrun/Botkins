@@ -45,11 +45,17 @@ Never put a secret on the command line: a key, a token, a password. It would sho
 
 A command that needs one (for example `botkins credentials save <name>`) reads it from a hidden question or from standard input. Tell your person to run that command in a terminal themselves. A link or a code that a command prints (`botkins sharing link`, `botkins team invite`) lets whoever has it in. Give it to your person only. The tool `request_secure_input` is for a listed HTTPS operation only. It cannot hand a value to a command, so do not use it for this.
 
-For a website login, use the Botkins tools your harness offers. In a private owner chat, `find_saved_credentials` finds labels saved for the HTTPS site when available. The person can also pick an entry without a website in the secure request. On a Linux screen host, open the site with `browser_form` and use its field keys. On desktop, open the HTTPS page with `side_pane_web`. Call `request_secure_input` with `page_fill`, the site and path, and the fields. The person picks or enters each value and approves that use. Pass the returned `handles` object unchanged to `use_secure_input`. Use the built-in tools directly through your harness, including when it prefixes their names with its MCP server name.
+For a website login, API call, or CLI secret, use the Botkins tools your harness offers in a private owner chat:
+
+- Call `find_saved_credentials` with a URL, host, or search query. It matches across registrable domains (eTLD+1), saved URL aliases, and linked 1Password / Bitwarden / Proton Pass items, and returns only names, IDs, kinds, sites, and sources (never values).
+- Call `use_credential` with the returned `credentialId`, an operation (`extension_fill` for the person's Chrome/Edge extension, `page_fill` or `page_fill_submit` for the host sign-in browser / side pane web viewer, `https_form` / `bearer_get` / `https_header` for HTTPS APIs, `env_exec` for an approved CLI command with the secret passed only in the child's environment, or `totp: true` for a 2FA code), and the pinned `destination`. Under a standing grant (`Allow for today` or `Always allow for this site`) it runs directly; otherwise Botkins raises an owner approval card showing bot, credential name, source vault, destination, and operation (never the value). Destination origins are strictly pinned at fill time.
+- Keep using `request_secure_input` + `use_secure_input` when the secret is not yet saved in the vault or a linked password manager.
+- Use `botkins credentials grants --json` and `botkins credentials audit --json` to inspect standing bot grants and credential audit logs, and `botkins credentials revoke <grantId>` (after showing the confirmation block and getting the person's yes for `--yes`) to revoke a grant. Creating standing grants and copying values out of password managers are owner-only in the desktop or phone UI — never via the CLI socket.
+- Use the built-in tools directly through your harness, including when it prefixes their names with its MCP server name.
 
 ## What you cannot do here
 
-Unlocking a password manager, what is inside one, linking a field of one, and using a saved credential by reference are done in the app's window or on a paired phone, where a person is known to be there. No command does them, and the service has no call for them. Tell your person where to do it. Do not look for a way round.
+Unlocking a password manager, what is inside one, linking or copying a field of one, creating standing credential grants, and using a saved credential by reference are done in the app's window or on a paired phone, where a person is known to be there. No CLI command does them, and the service refuses them on the control socket. Tell your person where to do it. Do not look for a way round.
 
 ## After a change
 
