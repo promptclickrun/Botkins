@@ -31,7 +31,8 @@ export function nodeApi({ workspace, handlers }) {
     "node.approvals": () =>
       workspace.interactions
         .snapshot()
-        .filter((entry) => entry.nodeJob === true)
+        // A node's own approvals, and the ones nodes handed back to this computer's chats (nodeAsk).
+        .filter((entry) => entry.nodeJob === true || typeof entry.nodeAsk === "string")
         .map((entry) => ({
           id: entry.id,
           kind: entry.kind,

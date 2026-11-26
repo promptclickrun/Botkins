@@ -209,6 +209,7 @@ export function listProjectFiles(rootDir, relPath = "", { maxEntries = MAX_LISTI
 function jobResult(row) {
   return {
     status: row.status,
+    ...(row.status === "pending" && row.ask && { ask: row.ask }),
     ...(row.status === "working" && row.output && { output: row.output }),
     ...(row.result && { result: row.result }),
     ...(row.error && { error: row.error }),
@@ -450,6 +451,8 @@ export class NodeHost {
         row.status = "failed";
         row.error = "The node host closed during this request.";
       }
+      // An approval handed to the asking computer belonged to a wait that is gone; the job asks again.
+      delete row.ask;
     }
     for (const job of this.conversionJobs) {
       if (job.status === "running") {
@@ -809,6 +812,8 @@ export class NodeHost {
         }
       }
       task.sourceReady?.resolve();
+      task.answer?.resolve({ action: "cancel" });
+      delete row.ask;
       this.ws.interactions.cancel("node-job-" + row.id);
     }
     if (wasActive && row.operation) {
@@ -1045,7 +1050,7 @@ export class NodeHost {
       return this.receiveControl(peer, identity, operation, payload);
     }
 
-    if (!["job.submit", "job.status", "job.cancel"].includes(operation) || typeof payload?.id !== "string" || !UUID.test(payload.id))
+    if (!["job.submit", "job.status", "job.cancel", "job.answer"].includes(operation) || typeof payload?.id !== "string" || !UUID.test(payload.id))
       throw new Error("Invalid node job request.");
 
     const host = digest(identity);
@@ -1060,7 +1065,7 @@ export class NodeHost {
 
     if (operation === "job.submit") {
       if (row?.status === "cancelled" && !row.fingerprint) return jobResult(row);
-      const { sourceBotId, sourceBotName, operation: jobOp, resourceId = "", path: relPath = "", params, createdAt } = payload;
+      const { sourceBotId, sourceBotName, operation: jobOp, resourceId = "", path: relPath = "", params, createdAt, relayApproval } = payload;
       if (
         ![sourceBotId, sourceBotName, jobOp].every(validName) ||
         typeof resourceId !== "string" ||
@@ -1105,6 +1110,9 @@ export class NodeHost {
           sourceBotId,
           sourceBotName,
           sourceHostName: peer.name,
+          // The asking computer shows the approval in the chat the owner is in (it says so by sending
+          // relayApproval). An older one doesn't, and the approval shows on this node as before.
+          ...(relayApproval === true && { askSource: true }),
           createdAt,
           status: "pending",
         };
@@ -1115,6 +1123,7 @@ export class NodeHost {
     }
 
     if (!row) throw new Error("Unknown node job request.");
+    if (operation === "job.answer") this.answerSource(row, payload);
     if (operation === "job.cancel" && active(row)) this.cancel(row, "Cancelled by caller.");
     if (operation === "job.status" || operation === "job.submit") this.live.get(row)?.sourceReady?.resolve();
     if (row.status === "pending" && !this.live.has(row)) {
@@ -1123,6 +1132,37 @@ export class NodeHost {
       void this.process(row, task, peer).catch((error) => console.error("Could not finish node job:", error.message));
     }
     return jobResult(row);
+  }
+
+  /**
+   * Hands an approval to the computer whose bot asked, so the owner answers it where they are (the
+   * chat, their phone) and not on this node. The node still decides: the answer comes back through
+   * job.answer for this exact ask, and grants, policy and the exec binding are kept and checked here.
+   */
+  askSource(row, task, view) {
+    task.answer = Promise.withResolvers();
+    row.ask = {
+      id: randomUUID(),
+      title: view.title,
+      ...(view.preview && { preview: view.preview }),
+      detail: view.detail,
+      label: view.label,
+      operation: view.operation,
+      resourceName: view.resourceName,
+      targetHostName: view.targetHostName,
+    };
+    this.ws.save();
+    return task.answer.promise;
+  }
+
+  /** The owner's answer to an approval asked on the source computer (job.answer). */
+  answerSource(row, payload) {
+    const task = this.live.get(row);
+    if (!row.ask || !task?.answer || payload?.askId !== row.ask.id) throw new Error("This approval has already closed.");
+    if (!["approve", "today", "remember", "deny"].includes(payload.action)) throw new Error("Unknown approval response");
+    delete row.ask;
+    this.ws.save();
+    task.answer.resolve({ action: payload.action });
   }
 
   async process(row, task, peer) {
@@ -1162,7 +1202,7 @@ export class NodeHost {
       if (!policyAutoAllow && !hasGrant()) {
         const copy = describeApproval(row, nodeLabel);
         const syntheticChat = { id: "node-job-" + row.id };
-        ({ action } = await this.ws.interactions.request(syntheticChat, task, {
+        const view = {
           kind: "permission",
           dispatch: true,
           nodeJob: true,
@@ -1177,7 +1217,8 @@ export class NodeHost {
           resourceId: row.resourceId,
           resourceName: row.resourceName,
           label: copy.label,
-        }));
+        };
+        ({ action } = row.askSource ? await this.askSource(row, task, view) : await this.ws.interactions.request(syntheticChat, task, view));
         if (task.stopped) return;
         if (action === "deny" || action === "cancel") {
           row.status = action === "deny" ? "denied" : "cancelled";
