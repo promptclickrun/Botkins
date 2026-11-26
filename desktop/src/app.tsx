@@ -891,7 +891,7 @@ function App() {
     go: workPage,
     activity: () => nav("Activity"),
     usage: () => nav("Usage"),
-    waiting: (state.tasks ?? []).filter((t) => t.status === "review" || t.status === "blocked").length,
+    waiting: (state.tasks ?? []).filter((t) => t.status === "blocked" || (t.status === "review" && !t.reviewerBotId)).length,
   };
   const openWork = () => workPage(work.tabs.includes(workTab) ? workTab : work.tabs[0]);
   // Collapses the side menu to icons: beside Settings when open, at the top of the strip when collapsed.

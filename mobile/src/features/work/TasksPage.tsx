@@ -16,11 +16,12 @@ import { openTask, TaskChips, TaskRow } from "./Work";
 
 let lastView: TaskView = "active";
 
-/** A task that waits on the person: who and why, what the bot said, and the two answers. */
-function NeedCard({ task, bot }: { task: BotTask; bot?: Bot }) {
+/** A task that waits on the person (or is under review by its creator bot): who and why, what the bot said, and actions. */
+function NeedCard({ task, bot, reviewer }: { task: BotTask; bot?: Bot; reviewer?: Bot }) {
   const { colors } = useTheme();
   const [busy, setBusy] = useState<string | null>(null);
   const review = task.status === "review";
+  const creatorReview = review && Boolean(task.reviewerBotId);
   const said = review ? task.result : task.problem;
   const move = async (to: "done" | "ready", done: string) => {
     if (busy) return;
@@ -30,14 +31,21 @@ function NeedCard({ task, bot }: { task: BotTask; bot?: Bot }) {
   };
   return (
     <View style={{ padding: space.lg, gap: space.md }}>
-      <Tap onPress={() => openTask(task.id)} feel="select" sink={0.99} hitSlop={0} accessibilityLabel={task.title + ", " + (review ? "ready for review" : "blocked")} style={{ flexDirection: "row", alignItems: "center", gap: space.md }}>
+      <Tap
+        onPress={() => openTask(task.id)}
+        feel="select"
+        sink={0.99}
+        hitSlop={0}
+        accessibilityLabel={task.title + ", " + (creatorReview ? "reviewing by " + (reviewer?.name ?? "creator") : review ? "ready for review" : "blocked")}
+        style={{ flexDirection: "row", alignItems: "center", gap: space.md }}
+      >
         {bot ? <BotAvatar bot={bot} size={40} state="waiting" /> : <IconTile icon={CircleDashed} color={colors.warning} size={40} />}
         <View style={{ flex: 1, minWidth: 0, gap: 1 }}>
           <T variant="callout" weight="600" numberOfLines={1}>
             {task.title}
           </T>
-          <T variant="footnote" weight={review ? "400" : "600"} color={review ? "muted" : "warning"} numberOfLines={1}>
-            {(bot?.name ?? "No bot") + (review ? " · ready for review" : " · blocked")}
+          <T variant="footnote" weight={review ? "400" : "600"} color={creatorReview ? "accent" : review ? "muted" : "warning"} numberOfLines={1}>
+            {(bot?.name ?? "No bot") + (creatorReview ? " · Reviewing: " + (reviewer?.name ?? "Creator") : review ? " · ready for review" : " · blocked")}
           </T>
         </View>
       </Tap>
@@ -51,13 +59,13 @@ function NeedCard({ task, bot }: { task: BotTask; bot?: Bot }) {
       <View style={{ flexDirection: "row", justifyContent: "flex-end", gap: space.sm }}>
         {review ? (
           <>
-            <Button title="Try again" variant="secondary" size="sm" loading={busy === "ready"} disabled={!!busy} onPress={() => void move("ready", "Sent back")} />
+            <Button title="Request changes" variant="secondary" size="sm" disabled={!!busy} onPress={() => openTask(task.id)} />
             <Button title="Approve" size="sm" loading={busy === "done"} disabled={!!busy} onPress={() => void move("done", "Approved")} />
           </>
         ) : (
           <>
             {!!task.chatId && <Button title="Open chat" variant="secondary" size="sm" disabled={!!busy} onPress={() => openChat(task.chatId!)} />}
-            <Button title="Try again" size="sm" loading={busy === "ready"} disabled={!!busy} onPress={() => void move("ready", "Sent back")} />
+            <Button title="Retry" size="sm" loading={busy === "ready"} disabled={!!busy} onPress={() => void move("ready", "Sent back")} />
           </>
         )}
       </View>
@@ -106,10 +114,10 @@ export default function TasksPage() {
               groups.map((group) => (
                 <View key={group.title}>
                   <Label>{group.title + " · " + group.tasks.length}</Label>
-                  <Group inset={group.title === "Needs you" ? 0 : space.lg + 40 + space.md}>
-                    {group.title === "Needs you"
-                      ? group.tasks.map((task) => <NeedCard key={task.id} task={task} bot={botOf(task)} />)
-                      : group.tasks.map((task) => <TaskRow key={task.id} task={task} bot={botOf(task)} />)}
+                  <Group inset={group.title === "Needs you" || group.title === "Reviewing" ? 0 : space.lg + 40 + space.md}>
+                    {group.title === "Needs you" || group.title === "Reviewing"
+                      ? group.tasks.map((task) => <NeedCard key={task.id} task={task} bot={botOf(task)} reviewer={task.reviewerBotId ? bots.get(task.reviewerBotId) : undefined} />)
+                      : group.tasks.map((task) => <TaskRow key={task.id} task={task} bot={botOf(task)} reviewer={task.reviewerBotId ? bots.get(task.reviewerBotId) : undefined} />)}
                   </Group>
                 </View>
               ))
@@ -121,7 +129,7 @@ export default function TasksPage() {
           ) : (
             <Group inset={space.lg + 40 + space.md}>
               {list.map((task) => (
-                <TaskRow key={task.id} task={task} bot={botOf(task)} />
+                <TaskRow key={task.id} task={task} bot={botOf(task)} reviewer={task.reviewerBotId ? bots.get(task.reviewerBotId) : undefined} />
               ))}
             </Group>
           )}

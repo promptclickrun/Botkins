@@ -169,9 +169,9 @@ export function ProjectArtifacts({ state, project, openChat }: { state: State; p
               {items.map((item) => (
                 <li key={item.id}>
                   <ArtifactLine state={state} item={item} />
-                  {!remote && (
-                    <button type="button" className="secondary" aria-label={"Open " + item.name} onClick={() => act(api.openChatPath(item.path, "open"))}>
-                      Open
+                  {(!remote || item.url) && (
+                    <button type="button" className="secondary" aria-label={"Open " + item.name} onClick={() => act(item.url ? api.openLink(item.url) : api.openChatPath(item.path, "open"))}>
+                      {item.url ? "Open on claude.ai" : "Open"}
                     </button>
                   )}
                   {item.chatId && state.chats.some((c) => c.id === item.chatId) && (

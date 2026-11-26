@@ -457,9 +457,20 @@ export function TaskSettings({ settings, limits, change, fail }: Props & { limit
     </Row>
   );
   return (
-    <Group title="Tasks" footer="Each running task uses its bot's model and plan.">
+    <Group title="Tasks" footer="Each running task uses its bot's model and plan. Existing bot-created tasks in Review stay yours unless you turn on creator review below.">
       {pick("tasksMax", 16, "Tasks at once")}
       {pick("tasksPerBot", 8, "Tasks at once per bot")}
+      <Row label="Route existing bot-created Review tasks to creator">
+        {(id) => (
+          <input
+            id={id}
+            type="checkbox"
+            role="switch"
+            checked={settings.tasksCreatorReviewExisting === true}
+            onChange={(e) => void change({ tasksCreatorReviewExisting: e.target.checked }).catch(fail)}
+          />
+        )}
+      </Row>
     </Group>
   );
 }

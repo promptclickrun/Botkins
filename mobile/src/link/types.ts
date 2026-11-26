@@ -505,6 +505,8 @@ export type ChatSchedule = {
   script?: string;
   /** On a script routine: after the script, the bot follows `prompt` with the script's output. */
   followUp?: boolean;
+  /** Owner-approved opt-in: lets this routine create Ready tasks assigned to a bot. */
+  allowReadyTasks?: boolean;
 };
 /** Explicit routine notification targets ("routine-notify-targets-v1"). Absent means everyone allowed. */
 export type RoutineNotifyTargets = { people?: string[]; devices?: string[] };
@@ -534,6 +536,8 @@ export type RoutineInput = {
   script?: string | null;
   followUp?: boolean;
   /** The routine's own model, kept on its chat ("routine-models-v1"). null on an edit goes back to the Default routines model. */
+  /** Owner-approved opt-in: lets this routine create Ready tasks assigned to a bot. */
+  allowReadyTasks?: boolean;
   model?: ModelChoice | null;
 };
 export type ChatContext = { current: number; limit: number; system?: number; tools?: number; conversation?: number; messages?: number; updatedAt?: number };
@@ -703,6 +707,8 @@ export type Run = RunSummary & {
   connects?: ConnectCard[];
   /** Tools with an MCP App view that ran in this turn. */
   mcpApps?: McpAppCard[];
+  /** Private Claude artifacts published or updated in this turn. */
+  claudeArtifacts?: { id: string; title: string; url: string; size?: number; action?: "publish" | "update"; time: number; private?: boolean }[];
   options?: { label: string; prompt: string; description?: string }[];
   /** The active run has reasoning available when its detail is opened. */
   hasReasoning?: boolean;
@@ -791,6 +797,9 @@ export type RequestAnswer = {
 };
 export type AgentRequest = {
   dispatch?: true;
+  artifactGrant?: true;
+  rememberScope?: "bot";
+  botName?: string;
   /** Raised by this computer's node host for an incoming remote node operation (not backed by a chat). */
   nodeJob?: true;
   operation?: string;
@@ -948,6 +957,15 @@ export type BoardItem = {
 };
 export type TaskStatus = "later" | "ready" | "working" | "review" | "blocked" | "done";
 export type TaskPriority = "low" | "normal" | "high" | "urgent";
+export type TaskReviewMode = "person" | "creator" | "auto";
+export type TaskHistoryEntry = {
+  at: number;
+  by: string;
+  byName?: string;
+  from: TaskStatus | "archived";
+  to: TaskStatus | "archived";
+  note?: string;
+};
 export type BotTask = {
   id: string;
   title: string;
@@ -956,15 +974,19 @@ export type BotTask = {
   priority: TaskPriority;
   status: TaskStatus | "archived";
   createdBy: string;
-  fromChatId?: string;
+  createdChatId?: string;
+  review?: TaskReviewMode;
+  reviewerBotId?: string;
   createdAt: number;
   updatedAt: number;
   chatId?: string;
   runId?: string;
   result?: string;
   problem?: string;
+  pendingNote?: { text: string; by: string; byName?: string; from: TaskStatus | "archived"; at: number };
+  history?: TaskHistoryEntry[];
 };
-export type TaskInput = { id?: string; title: string; body?: string; botId?: string | null; priority?: TaskPriority; status?: "later" | "ready" };
+export type TaskInput = { id?: string; title: string; body?: string; botId?: string | null; priority?: TaskPriority; status?: "later" | "ready"; review?: TaskReviewMode };
 export type ProjectTodo = { id: string; text: string; done: boolean; createdAt: number; doneAt?: number };
 export type ProjectColor = "coral" | "amber" | "green" | "teal" | "blue" | "violet" | "pink" | "gray";
 export type Project = {
@@ -1101,6 +1123,8 @@ export type Preferences = {
   longPromptCache?: boolean;
   /** Tools that run in Botkins on a Mac, switched there only: iMessage and Mail. Missing on an older computer or one that isn't a Mac. */
   macTools?: { imessage?: DeviceLevel; mail?: DeviceLevel };
+  /** Model used by headless Claude Code artifact sub-runs. */
+  claudeArtifactModel?: "haiku" | "sonnet" | "opus";
 };
 /**
  * One limit of a provider's plan, as the provider reports it. `percentRemaining` is 0 to 100 and is
@@ -1172,7 +1196,8 @@ export type Artifact = {
   mime: string;
   size: number | null;
   time: number;
-  source: "tool" | "media" | "upload" | "export";
+  source: "tool" | "media" | "upload" | "export" | "claude";
+  url?: string;
   messageIndex?: number;
 };
 /** A page of artifacts, newest first. `nextCursor` asks for the page after it; null at the end. */
@@ -1883,6 +1908,10 @@ export type Calls = {
   providers(refresh?: boolean): ProviderStatus[];
   /** The program harnesses (Pi and OMP): installed, version, and how to install. Unknown on an older computer. */
   harnesses(): HarnessStatus[];
+  "claudeArtifacts.status"(refresh?: boolean): { available: boolean; installed: boolean; signedIn: boolean; subscription: boolean; version?: string; account?: string; plan?: string; reason?: string; model: "haiku" | "sonnet" | "opus"; models: ("haiku" | "sonnet" | "opus")[]; grants: { botId: string; botName: string; grantedAt: number }[] };
+  "claudeArtifacts.setModel"(model: "haiku" | "sonnet" | "opus"): { available: boolean; installed: boolean; signedIn: boolean; subscription: boolean; version?: string; account?: string; plan?: string; reason?: string; model: "haiku" | "sonnet" | "opus"; models: ("haiku" | "sonnet" | "opus")[]; grants: { botId: string; botName: string; grantedAt: number }[] };
+  "claudeArtifacts.setBotApproval"(botId: string, allowed: boolean): { available: boolean; installed: boolean; signedIn: boolean; subscription: boolean; version?: string; account?: string; plan?: string; reason?: string; model: "haiku" | "sonnet" | "opus"; models: ("haiku" | "sonnet" | "opus")[]; grants: { botId: string; botName: string; grantedAt: number }[] };
+  "claudeArtifacts.revokeBotApproval"(botId: string): { available: boolean; installed: boolean; signedIn: boolean; subscription: boolean; version?: string; account?: string; plan?: string; reason?: string; model: "haiku" | "sonnet" | "opus"; models: ("haiku" | "sonnet" | "opus")[]; grants: { botId: string; botName: string; grantedAt: number }[] };
   setProviderEnabled(id: string, enabled: boolean): void;
   signIn(providerId?: string): void;
   cancelSignIn(providerId?: string): void;
@@ -1924,7 +1953,7 @@ export type Calls = {
   duplicateRoutine(id: string, botId: string): string;
   previewCadence(cadence: Cadence, timezone?: string): { nextAt: number | null; summary: string; timezone: string };
   saveTask(task: TaskInput): string;
-  moveTask(id: string, status: TaskStatus | "archived"): void;
+  moveTask(id: string, status: TaskStatus | "archived", options?: { note?: string }): void;
   startTask(id: string): void;
   deleteTask(id: string): void;
   workflowsList(): { workflows: Workflow[]; runs: WorkflowRun[] };

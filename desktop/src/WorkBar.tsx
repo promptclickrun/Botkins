@@ -130,8 +130,9 @@ export function Folded({ rows, limit = 6 }: { rows: ReactNode[]; limit?: number 
   );
 }
 
-/** Tasks that wait for the person: done and waiting for review, or stuck. */
-export const waitingTasks = (state: State) => (state.tasks ?? []).filter((t) => t.status === "review" || t.status === "blocked");
+/** Tasks that wait for the person: waiting for person review (not a creator bot), or stuck. */
+export const waitingTasks = (state: State) =>
+  (state.tasks ?? []).filter((t) => t.status === "blocked" || (t.status === "review" && !t.reviewerBotId));
 
 /**
  * "Needs you": the requests bots are waiting on and the tasks that wait for review or are stuck,
@@ -141,12 +142,15 @@ export function WorkNeeds({
   state,
   openChat,
   openTask,
+  requestChanges,
   fail,
 }: {
   state: State;
   openChat: (chatId: string) => void;
   /** Opens a task: its dialog on Tasks, or the Tasks tab from elsewhere. */
   openTask: (task: BotTask) => void;
+  /** Opens the request-changes note prompt for a Review task. */
+  requestChanges?: (task: BotTask) => void;
   fail: (e: unknown) => void;
 }) {
   const tasks = waitingTasks(state);
@@ -186,14 +190,24 @@ export function WorkNeeds({
             </span>
           </button>
           {t.status === "review" ? (
-            <button
-              type="button"
-              className="btn soft small"
-              aria-label={"Approve " + t.title}
-              onClick={() => void window.botkins.moveTask(t.id, "done").catch(fail)}
-            >
-              Approve
-            </button>
+            <div className="work-needs-actions">
+              <button
+                type="button"
+                className="btn soft small"
+                aria-label={"Request changes for " + t.title}
+                onClick={() => (requestChanges ? requestChanges(t) : openTask(t))}
+              >
+                Request changes
+              </button>
+              <button
+                type="button"
+                className="btn primary small"
+                aria-label={"Approve " + t.title}
+                onClick={() => void window.botkins.moveTask(t.id, "done").catch(fail)}
+              >
+                Approve
+              </button>
+            </div>
           ) : (
             <button type="button" className="btn soft small" aria-label={"Open " + t.title} onClick={() => openTask(t)}>
               Open

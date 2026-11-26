@@ -58,8 +58,11 @@ function Editor({ task }: { task?: BotTask }) {
   return (
     <Sheet title={task ? "Task" : "New task"} action={working ? undefined : task ? "Save" : "Add"} onAction={() => void save()} actionDisabled={!ready} actionLoading={saving}>
       {task && (
-        <View style={{ flexDirection: "row", alignItems: "center", gap: space.sm }}>
-          <Badge label={STATUS_LABEL[task.status]} tone={STATUS_TONE[task.status]} />
+        <View style={{ flexDirection: "row", alignItems: "center", gap: space.sm, flexWrap: "wrap" }}>
+          <Badge
+            label={task.status === "review" && task.reviewerBotId ? "Reviewing: " + (bots.find((b) => b.id === task.reviewerBotId)?.name ?? "Creator") : STATUS_LABEL[task.status]}
+            tone={task.status === "review" && task.reviewerBotId ? "accent" : STATUS_TONE[task.status]}
+          />
           {working && <ActivityIndicator size="small" color={colors.accent} />}
           <T variant="footnote" color="muted" style={{ flex: 1 }} numberOfLines={1}>
             {working ? "Working on it" : "Updated " + ago(task.updatedAt)}
@@ -116,6 +119,20 @@ function Editor({ task }: { task?: BotTask }) {
         </View>
       )}
 
+      {!!task?.history?.length && (
+        <View style={{ gap: space.xs }}>
+          <Label>History</Label>
+          <Group>
+            {task.history.slice(-8).reverse().map((h, idx) => (
+              <Row
+                key={h.at + "-" + idx}
+                title={(h.byName ?? h.by) + " · " + h.from + " → " + h.to}
+                subtitle={h.note}
+              />
+            ))}
+          </Group>
+        </View>
+      )}
       {task && <TaskRows task={task} />}
     </Sheet>
   );
@@ -123,15 +140,45 @@ function Editor({ task }: { task?: BotTask }) {
 
 /** What the person can do next, for the task's state. */
 function StatusActions({ task }: { task: BotTask }) {
-  const move = (status: "done" | "ready", done: string) => void attempt(api.moveTask(task.id, status), done);
+  const [askingNote, setAskingNote] = useState(false);
+  const [note, setNote] = useState("");
+  const move = (status: "done" | "ready" | "later", done: string, options?: { note?: string }) =>
+    void attempt(api.moveTask(task.id, status, options), done);
   if (task.status === "review")
     return (
-      <View style={{ flexDirection: "row", gap: space.md }}>
-        <Button title="Approve" onPress={() => move("done", "Approved")} style={{ flex: 1 }} />
-        <Button title="Try again" variant="secondary" onPress={() => move("ready", "Sent back")} style={{ flex: 1 }} />
+      <View style={{ gap: space.sm }}>
+        <View style={{ flexDirection: "row", gap: space.md }}>
+          <Button title="Approve" onPress={() => move("done", "Approved")} style={{ flex: 1 }} />
+          <Button title="Request changes" variant="secondary" onPress={() => setAskingNote((v) => !v)} style={{ flex: 1 }} />
+        </View>
+        {askingNote && (
+          <View style={{ gap: space.sm }}>
+            <Field
+              label="Changes requested"
+              placeholder="Tell the bot what to change in this chat"
+              value={note}
+              onChangeText={setNote}
+              area
+            />
+            <View style={{ flexDirection: "row", gap: space.sm }}>
+              <Button title="Move to Later" variant="secondary" onPress={() => move("later", "Moved to Later", note.trim() ? { note: note.trim() } : undefined)} style={{ flex: 1 }} />
+              <Button
+                title="Send back"
+                disabled={!note.trim()}
+                onPress={() => {
+                  move("ready", "Sent back", { note: note.trim() });
+                  setAskingNote(false);
+                  setNote("");
+                }}
+                style={{ flex: 1 }}
+              />
+            </View>
+          </View>
+        )}
       </View>
     );
-  if (task.status === "blocked") return <Button title="Try again" wide onPress={() => move("ready", "Sent back")} />;
+  if (task.status === "done") return <Button title="Reopen" variant="secondary" wide onPress={() => move("ready", "Reopened")} />;
+  if (task.status === "blocked") return <Button title="Retry" wide onPress={() => move("ready", "Sent back")} />;
   if ((task.status === "later" || task.status === "ready") && task.botId) return <Button title="Start now" wide onPress={() => void attempt(api.startTask(task.id), "Started")} />;
   return null;
 }

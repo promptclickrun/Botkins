@@ -94,7 +94,7 @@ test("task_create by a bot for another bot stamps run.taskHandoffs and incoming 
 
   // Starting the task stamps `from` on the task chat's opening user message with originating chatId.
   const task = tasks.get(created.id);
-  assert.equal(task.fromChatId, sourceChatId);
+  assert.equal(task.createdChatId, sourceChatId);
   tasks.start(created.id);
   await Promise.all([...ws.locks.values()].map((p) => p.catch(() => {})));
 

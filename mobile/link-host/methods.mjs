@@ -60,7 +60,8 @@ export const COMPOSIO_METHODS = ["composio.catalog", "composio.connected", "comp
  * it makes to the server its card came from. Each names a chat and a card first.
  */
 export const MCP_APP_METHODS = ["mcpApps.view", "mcpApps.callTool", "mcpApps.readResource"];
-
+/** Claude artifacts ("claude-artifacts-v1", desktop/claude-artifacts.mjs): availability, model, and per-bot standing approvals. */
+export const CLAUDE_ARTIFACT_METHODS = ["claudeArtifacts.status", "claudeArtifacts.setModel", "claudeArtifacts.setBotApproval", "claudeArtifacts.revokeBotApproval"];
 /** The app's space calls ("spaces-v1"), by their wire names. A rename is a change here and in spaceArgs. */
 export const SPACE_METHODS = [
   "spaces.read", "spaces.create", "spaces.rename", "spaces.remove", "spaces.setProject", "spaces.setPanelProject",
@@ -139,6 +140,8 @@ export const REMOTE_METHODS = new Set([
   ...COMPOSIO_METHODS,
   // The views of MCP Apps in chats ("mcp-apps-v1")
   ...MCP_APP_METHODS,
+  // Claude artifacts ("claude-artifacts-v1")
+  ...CLAUDE_ARTIFACT_METHODS,
 ]);
 
 const MAX_ATTACHMENTS = 10;
@@ -531,7 +534,27 @@ export function remoteArgs(method, args, { deviceId, uploads } = {}) {
     next[at] = { ...data, voice: botVoiceField(data.voice) };
     return next;
   }
-  return fileArgs(method, args) ?? pluginArgs(method, args) ?? marketArgs(method, args) ?? catalogArgs(method, args) ?? mcpAppArgs(method, args) ?? providerArgs(method, args) ?? appUpdateArgs(method, args) ?? projectArtifactArgs(method, args) ?? spaceArgs(method, args) ?? args;
+  return fileArgs(method, args) ?? pluginArgs(method, args) ?? marketArgs(method, args) ?? catalogArgs(method, args) ?? mcpAppArgs(method, args) ?? claudeArtifactArgs(method, args) ?? providerArgs(method, args) ?? appUpdateArgs(method, args) ?? projectArtifactArgs(method, args) ?? spaceArgs(method, args) ?? args;
+}
+
+/** Claude artifact calls ("claude-artifacts-v1"), validated to their exact shapes. */
+function claudeArtifactArgs(method, args) {
+  if (!CLAUDE_ARTIFACT_METHODS.includes(method)) return null;
+  switch (method) {
+    case "claudeArtifacts.status":
+      return args[0] === true ? [true] : [];
+    case "claudeArtifacts.setModel":
+      if (typeof args[0] !== "string" || !["haiku", "sonnet", "opus"].includes(args[0])) refuse("Choose haiku, sonnet, or opus.");
+      return [args[0]];
+    case "claudeArtifacts.setBotApproval":
+      if (!clean(args[0]) || typeof args[1] !== "boolean") refuse("Choose a bot and on or off.");
+      return [args[0], args[1]];
+    case "claudeArtifacts.revokeBotApproval":
+      if (!clean(args[0])) refuse("Choose a bot.");
+      return [args[0]];
+    default:
+      return null;
+  }
 }
 
 /**

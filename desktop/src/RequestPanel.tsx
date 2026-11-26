@@ -238,8 +238,9 @@ export default function RequestPanel({
           )}
           {req.remember && !req.dispatch && (
             <small>
-              Remembering this approval allows {req.remember} for this
-              conversation.
+              {req.artifactGrant
+                ? `Always allow saves a standing grant for ${req.botName || "this bot"} (including routines). Manage grants in Settings › General › Claude artifacts.`
+                : `Remembering this approval allows ${req.remember} for this conversation.`}
             </small>
           )}
           {req.kind === "question" && (
@@ -375,10 +376,14 @@ export default function RequestPanel({
                 <button
                   type="button"
                   disabled={busy}
-                  title={req.dispatch ? undefined : "Remember for " + req.remember}
+                  title={req.dispatch || req.artifactGrant ? undefined : "Remember for " + req.remember}
                   onClick={() => reply({ action: "remember" })}
                 >
-                  {req.dispatch ? "Always allow" : "Allow for this chat"}
+                  {req.dispatch
+                    ? "Always allow"
+                    : req.artifactGrant
+                      ? `Always allow${req.botName ? " for " + req.botName : ""}`
+                      : "Allow for this chat"}
                 </button>
               )}
               <button
@@ -387,7 +392,7 @@ export default function RequestPanel({
                 disabled={busy}
                 onClick={() => reply({ action: "approve" })}
               >
-                {req.dispatch ? "Allow this time" : "Allow once"}
+                {req.dispatch ? "Allow this time" : req.artifactGrant ? "Allow for this chat" : "Allow once"}
               </button>
             </>
           ) : (

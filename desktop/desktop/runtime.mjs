@@ -39,6 +39,7 @@ import { templateForReader } from "./link/template-bundle.mjs";
 import { AGENT_TEMPLATES, MARKET_REFRESH } from "./plugin-catalog.mjs";
 import { COMPOSIO_APPS, composioHandlers } from "./composio.mjs";
 import { MCP_APPS, mcpAppHandlers } from "./mcp-apps.mjs";
+import { CLAUDE_ARTIFACTS_CAPABILITY, CLAUDE_ARTIFACT_METHODS } from "./claude-artifacts.mjs";
 import { performSecureUse } from "./secure-input.mjs";
 import { releasePage } from "./updates.mjs";
 import { Workspace } from "./workspace.mjs";
@@ -134,13 +135,13 @@ const MARK_CHATS_READ = "mark-chats-read-v1";
 const STOP_HELPER = "stop-helper-v1";
 /** Event-based Workflows in the Routines area (`workflows-v1`). */
 export const WORKFLOWS = "workflows-v1";
-export const CAPABILITIES = ["main-chat-v1", "message-reactions-v1", "client-message-id-v1", "voice-turns-v1", "voice-history-v1", "quiet-replies-v1", "models-v2", "fast-mode-v1", LOOKS_CAPABILITY, ...headCapabilities, BOT_VOICE, ROUTINE_DELIVERY, "routine-no-output-v1", ROUTINE_OWNER, ROUTINE_SCRIPTS, ROUTINE_MODELS, ROUTINE_SILENT, ROUTINE_NOTIFY_TARGETS, WORKFLOWS, PROACTIVE, PROACTIVE_LEARNING, PROACTIVE_TEAM, BOARD_MENTIONS, PROVIDER_USAGE, SIDE_PANE, REMOTE_HOSTS, FILES, FOLDERS, ARTIFACTS, PROJECT_ARTIFACTS, "project-folders-v1", "project-mode-v1", "project-clone-v1", "secure-input-v1", "turn-timeline-v1", PLUGINS, PLUGIN_STARTS, PROVIDER_SIGNIN, SPACES, AGENT_TEMPLATES, "agent-template-bundles-v1", COMPOSIO_APPS, MARKET_REFRESH, MCP_APPS, "pi-packages-v1", "pi-packages-remove-v1", "skill-upload-v1", "skills-catalog-v1", "skills-featured-v1", SCRIPT_COMMANDS_CAPABILITY, MCP_CATALOG_CAPABILITY, CHAT_TITLE_REGENERATION, MARK_CHATS_READ, STOP_HELPER, KEYED_PROVIDERS];
+export const CAPABILITIES = ["main-chat-v1", "message-reactions-v1", "client-message-id-v1", "voice-turns-v1", "voice-history-v1", "quiet-replies-v1", "models-v2", "fast-mode-v1", LOOKS_CAPABILITY, ...headCapabilities, BOT_VOICE, ROUTINE_DELIVERY, "routine-no-output-v1", ROUTINE_OWNER, ROUTINE_SCRIPTS, ROUTINE_MODELS, ROUTINE_SILENT, ROUTINE_NOTIFY_TARGETS, WORKFLOWS, PROACTIVE, PROACTIVE_LEARNING, PROACTIVE_TEAM, BOARD_MENTIONS, PROVIDER_USAGE, SIDE_PANE, REMOTE_HOSTS, FILES, FOLDERS, ARTIFACTS, PROJECT_ARTIFACTS, "project-folders-v1", "project-mode-v1", "project-clone-v1", "secure-input-v1", "turn-timeline-v1", PLUGINS, PLUGIN_STARTS, PROVIDER_SIGNIN, SPACES, AGENT_TEMPLATES, "agent-template-bundles-v1", COMPOSIO_APPS, MARKET_REFRESH, MCP_APPS, "pi-packages-v1", "pi-packages-remove-v1", "skill-upload-v1", "skills-catalog-v1", "skills-featured-v1", SCRIPT_COMMANDS_CAPABILITY, MCP_CATALOG_CAPABILITY, CHAT_TITLE_REGENERATION, MARK_CHATS_READ, STOP_HELPER, KEYED_PROVIDERS, CLAUDE_ARTIFACTS_CAPABILITY];
 /**
  * What a paired device is told this app supports. A feature whose calls the link does not carry
  * (desktop/link/methods.mjs) is left out, so a device never asks for what it cannot reach.
  */
 export const linkCapabilities = (methods = REMOTE_METHODS) =>
-  CAPABILITIES.filter((name) => (name !== "agent-template-bundles-v1" || (methods.has("addBot") && methods.has("agents.template"))) && (name !== "message-reactions-v1" || methods.has("reactToMessage")) && (!["voice-history-v1", "voice-turns-v1"].includes(name) || methods.has("recordVoiceLine")) && (name !== "project-folders-v1" || (methods.has("editProjectFolder") && methods.has("setChatFolder") && methods.has("chatProjectFolder"))) && (name !== "project-clone-v1" || methods.has("cloneProjectRepository")) && (name !== "project-mode-v1" || methods.has("updateProject")) && (name !== PROJECT_ARTIFACTS || PROJECT_ARTIFACT_CALLS.every((call) => methods.has(call))) && (name !== SPACES || SPACE_CALLS.every((call) => methods.has(call))) && (name !== MARKET_REFRESH || methods.has("plugins.refresh")) && (name !== "pi-packages-v1" || PI_PACKAGE_METHODS.every((call) => methods.has(call))) && (name !== "pi-packages-remove-v1" || methods.has("piPackages.remove")) && (name !== "skill-upload-v1" || methods.has("skills.upload")) && (name !== "skills-catalog-v1" || ["search", "preview", "install"].every(key => methods.has("skillsCatalog." + key))) && (name !== "skills-featured-v1" || methods.has("skillsCatalog.featured")) && (name !== SCRIPT_COMMANDS_CAPABILITY || ["skills.saveScript", "skills.readScript"].every((call) => methods.has(call))) && (name !== MCP_CATALOG_CAPABILITY || MCP_CATALOG_METHODS.every((call) => methods.has(call))) && (name !== MCP_APPS || MCP_APP_METHODS.every((call) => methods.has(call))) && (name !== CHAT_TITLE_REGENERATION || methods.has("regenerateChatTitle")) && (name !== MARK_CHATS_READ || methods.has("markChatsRead")) && (name !== STOP_HELPER || methods.has("stopHelper")) && (name !== WORKFLOWS || WORKFLOW_METHODS.every((call) => methods.has(call))));
+  CAPABILITIES.filter((name) => (name !== "agent-template-bundles-v1" || (methods.has("addBot") && methods.has("agents.template"))) && (name !== "message-reactions-v1" || methods.has("reactToMessage")) && (!["voice-history-v1", "voice-turns-v1"].includes(name) || methods.has("recordVoiceLine")) && (name !== "project-folders-v1" || (methods.has("editProjectFolder") && methods.has("setChatFolder") && methods.has("chatProjectFolder"))) && (name !== "project-clone-v1" || methods.has("cloneProjectRepository")) && (name !== "project-mode-v1" || methods.has("updateProject")) && (name !== PROJECT_ARTIFACTS || PROJECT_ARTIFACT_CALLS.every((call) => methods.has(call))) && (name !== SPACES || SPACE_CALLS.every((call) => methods.has(call))) && (name !== MARKET_REFRESH || methods.has("plugins.refresh")) && (name !== "pi-packages-v1" || PI_PACKAGE_METHODS.every((call) => methods.has(call))) && (name !== "pi-packages-remove-v1" || methods.has("piPackages.remove")) && (name !== "skill-upload-v1" || methods.has("skills.upload")) && (name !== "skills-catalog-v1" || ["search", "preview", "install"].every(key => methods.has("skillsCatalog." + key))) && (name !== "skills-featured-v1" || methods.has("skillsCatalog.featured")) && (name !== SCRIPT_COMMANDS_CAPABILITY || ["skills.saveScript", "skills.readScript"].every((call) => methods.has(call))) && (name !== MCP_CATALOG_CAPABILITY || MCP_CATALOG_METHODS.every((call) => methods.has(call))) && (name !== MCP_APPS || MCP_APP_METHODS.every((call) => methods.has(call))) && (name !== CLAUDE_ARTIFACTS_CAPABILITY || CLAUDE_ARTIFACT_METHODS.every((call) => methods.has(call))) && (name !== CHAT_TITLE_REGENERATION || methods.has("regenerateChatTitle")) && (name !== MARK_CHATS_READ || methods.has("markChatsRead")) && (name !== STOP_HELPER || methods.has("stopHelper")) && (name !== WORKFLOWS || WORKFLOW_METHODS.every((call) => methods.has(call))));
 /** The calls of spaces (docs/spaces.md). The capability is named to a device only when the link carries them all. */
 export const SPACE_CALLS = ["read", "create", "rename", "remove", "setProject", "setPanelProject", "newPanel", "ask", "movePanel", "patchState", "note", "removeNote"].map((name) => "spaces." + name);
 
@@ -793,7 +794,7 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
     linkPreview: (url) => (workspace.state.settings.linkPreviews ? linkPreviews.preview(String(url)) : null),
     // Tasks board (desktop/tasks.mjs)
     saveTask: (data) => workspace.tasks.save(data),
-    moveTask: (id, status) => workspace.tasks.move(id, status),
+    moveTask: (id, status, options) => workspace.tasks.move(id, status, options),
     startTask: (id) => workspace.tasks.start(id),
     deleteTask: (id) => workspace.tasks.remove(id),
     // Event-based Workflows (desktop/workflows.mjs)
@@ -1030,7 +1031,14 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
     },
     // The harnesses that are programs of their own (Pi and OMP), and whether each is installed, for Settings › Harness.
     harnesses: () => providers.harnessStatuses(),
-    // Signing in and installing from a phone ("provider-signin-v1"). The phone names the provider;
+    // Claude artifacts (desktop/claude-artifacts.mjs): availability, model, and per-bot standing grants.
+    "claudeArtifacts.status": (refresh) => workspace.claudeArtifacts.status({ refresh: refresh === true }),
+    "claudeArtifacts.setModel": async (model) => {
+      workspace.claudeArtifacts.setModel(model);
+      return workspace.claudeArtifacts.status();
+    },
+    "claudeArtifacts.setBotApproval": (botId, allowed) => workspace.claudeArtifacts.setGrant(String(botId), allowed === true),
+    "claudeArtifacts.revokeBotApproval": (botId) => workspace.claudeArtifacts.revokeGrant(String(botId)),
     // the sign-in or the install command is this computer's own (desktop/terminal/signin.mjs).
     providerSignInStart: (id, options) =>
       signIns.start(String(id), { service: typeof options?.service === "string" ? options.service : undefined, method: typeof options?.method === "string" ? options.method : undefined, abandonedMs: PHONE_PATIENCE_MS }),

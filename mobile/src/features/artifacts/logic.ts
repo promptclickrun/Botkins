@@ -98,7 +98,7 @@ export function sizeWords(bytes: number | null | undefined): string {
  * How an artifact came to be, in one word, as both apps say it. The same file can be listed twice
  * (a bot wrote it, and later sent it): the word tells the rows apart.
  */
-export const SOURCE_WORDS: Record<Artifact["source"], string> = { tool: "Written", media: "Sent", upload: "Uploaded", export: "Exported" };
+export const SOURCE_WORDS: Record<Artifact["source"], string> = { tool: "Written", media: "Sent", upload: "Uploaded", export: "Exported", claude: "Claude artifact" };
 export const sourceWord = (source: Artifact["source"] | undefined): string => (source && Object.hasOwn(SOURCE_WORDS, source) ? SOURCE_WORDS[source] : "");
 
 /**

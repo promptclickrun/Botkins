@@ -99,4 +99,5 @@ Another computer signed in to the **same owner profile** can inspect and manage 
 - Dedicated QR/short-code node enrollment flow directly inside the **Set Up as Node Host** wizard (today a node enrolls through the existing profile / phone-link pairing flow).
 - Offering OS startup / background service installation directly inside the desktop Node Host setup step.
 - Encrypted cross-host vault secret migration (currently vault entries stay encrypted on the original computer with a clear note).
+- Cross-host Task Board creation & creator-bot identity: today's `teamwork-peers` RPC supports `ask_teammate` conversations and `node_*` operations, not remote `task_create`. When a task is dispatched onto a remote host via local CLI/SSH, the local board records `createdBy: "person"` rather than the remote orchestrator bot ID; carrying cross-host creator bot identity (`{ hostId, botId }`) awaits a dedicated cross-host task RPC.
 
