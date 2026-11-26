@@ -391,8 +391,9 @@ export class McpOAuth {
               } catch {}
             if (!url) throw new Error("That is not a web address. Copy the whole address from the browser's address bar.");
             // Only the address this sign-in told the server to send the browser back to: the same place, to the letter.
+            // (The scheme and host are compared too: an app's own address, "botkins://…", has no origin.)
             const back = new URL(redirect);
-            if (url.origin !== back.origin || url.pathname !== back.pathname) throw new Error("That is not the address this sign-in sends the browser back to. That address starts with " + redirect + ".");
+            if (url.protocol !== back.protocol || url.host !== back.host || url.origin !== back.origin || url.pathname !== back.pathname) throw new Error("That is not the address this sign-in sends the browser back to. That address starts with " + redirect + ".");
             const verdict = judge(url.searchParams);
             if (verdict.fail) return void settle.fail(verdict.fail);
             if (!verdict.done) throw new Error(verdict.said);
@@ -456,7 +457,7 @@ export class McpOAuth {
    * A cancel (`cancel()`) ends the sign-in in any state: before the page, while it waits, after
    * the address was taken and while the token request is out. Nothing is written after it.
    */
-  async signIn(server, { client, scope, hint, open = this.open, patience, finished, followed = () => true } = {}) {
+  async signIn(server, { client, scope, hint, open = this.open, patience, finished, followed = () => true, redirect: appRedirect } = {}) {
     if (this.flows.has(server.id)) throw new Error("A sign-in for " + server.name + " is already open in your browser.");
     const flow = {
       id: server.id,
@@ -490,10 +491,16 @@ export class McpOAuth {
       const port = approved ? Number(approved.callback.port || 80) : this.port;
       const missingClient = () => new Error("Ask your administrator or the server operator to configure an approved OAuth client for " + server.name + ". You can also enter a client ID in this server's advanced sign-in settings.");
       if (!approved && !client && !meta.registration_endpoint && !saved.registered) throw missingClient();
+      // A phone's browser is sent back to the phone's own address, so only a client Botkins registers itself can be used.
+      if (appRedirect && (approved || client))
+        throw new Error(server.name + " signs in with a fixed return address on this computer. Sign in from the Botkins app on a computer, or with `botkins tools sign-in`.");
+      if (appRedirect && !meta.registration_endpoint && !(saved.registered && saved.redirectUri === appRedirect)) throw missingClient();
       // The answer comes back to one port. When another sign-in of this app holds it, a tool that can use another port does.
       // A tool that cannot (its return address is fixed) ends a holder that nobody follows, and is refused while somebody does.
       const canMove = !approved && !client && !!meta.registration_endpoint;
-      const holder = () => (port ? [...this.flows.values()].find((other) => other !== flow && other.port === port) : null);
+      // (A phone's sign-in needs no port here: its answer comes back through `answer`. A free one is taken, so it holds none.)
+      if (appRedirect) listener = await this.listen(0, undefined, patience);
+      const holder = () => (port && !appRedirect ? [...this.flows.values()].find((other) => other !== flow && other.port === port) : null);
       const held = (other) => new Error("Another sign-in (to " + other.name + ") is open on this computer and holds the port. Finish it or cancel it, then try again.");
       if (holder() && !canMove) {
         const other = holder();
@@ -503,7 +510,7 @@ export class McpOAuth {
         for (let waited = 0; holder() && waited < PORT_FREE_MS; waited += 10) await new Promise((resolve) => setTimeout(resolve, 10));
         if (holder()) throw held(holder());
       }
-      if (!holder()) {
+      if (!listener && !holder()) {
         flow.port = port || null;
         try {
           listener = await this.listen(port, approved?.callback, patience);
@@ -527,10 +534,10 @@ export class McpOAuth {
         }
         listener ??= await this.listen(0, undefined, patience);
       }
-      flow.port = listener.port;
+      flow.port = appRedirect ? null : listener.port;
       flow.cancel = listener.cancel;
       if (flow.cancelled) throw new Error("Sign-in was cancelled.");
-      const redirect = approved?.redirectUri ?? redirectUri(listener.port);
+      const redirect = appRedirect ?? approved?.redirectUri ?? redirectUri(listener.port);
       let app = client ?? approved;
       // A secret the person entered was for one sign-in server. It is never sent to another one the
       // server names later; entering it again accepts the new one.

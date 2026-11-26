@@ -11,6 +11,7 @@ import { accountOf, challengeParam, REDIRECT_PORT, scheme } from "../desktop/oau
 import { serversWithTokens } from "../desktop/providers/sessions.mjs";
 import { fakeClient, tempDir, tick } from "./fake-copilot.mjs";
 import { oauthMcpServer } from "./oauth-server.mjs";
+import { PHONE_REDIRECT, phoneSignIns } from "../desktop/phone-signin.mjs";
 
 async function setup(t, serverOptions, workspaceOptions = {}) {
   const remote = await oauthMcpServer(serverOptions);
@@ -658,6 +659,33 @@ test("an address that says access was denied ends the sign-in as cancelled, and 
   assert.equal(third.open(), true);
   third.ws.integrations.cancelSignIn(third.id);
   await assert.rejects(third.done, /Sign-in was cancelled/);
+});
+
+test("a phone's browser can do a tool's sign-in for a computer with none: it comes back to the app's address, and the computer trades it", async (t) => {
+  const { remote, ws, id, view, opened } = await setup(t);
+  const phone = phoneSignIns(() => ws.integrations);
+  const { url, redirect } = await phone.start(id);
+  assert.equal(redirect, PHONE_REDIRECT);
+  assert.equal(opened.length, 0, "nothing opens on the computer");
+  assert.equal(new URL(url).searchParams.get("redirect_uri"), PHONE_REDIRECT, "the sign-in server sends the browser back to the phone app");
+  const registered = remote.state.log.find((r) => r.path === "/register");
+  assert.deepEqual(JSON.parse(registered.body).redirect_uris, [PHONE_REDIRECT]);
+  const back = (await fetch(url, { redirect: "manual" })).headers.get("location");
+  assert.ok(back.startsWith(PHONE_REDIRECT + "?"));
+  // Another app's address, or the computer's own, is not this sign-in's answer.
+  await assert.rejects(phone.finish(id, back.replace("botkins://", "evil://")), /not the address this sign-in sends the browser back to/);
+  await assert.rejects(phone.finish(id, back.replace(PHONE_REDIRECT, "http://127.0.0.1:47823/callback")), /not the address this sign-in sends the browser back to/);
+  const auth = await phone.finish(id, back);
+  assert.equal(auth.signedIn, true);
+  assert.equal(view().auth.signedIn, true);
+  const exchange = new URLSearchParams(remote.state.log.find((r) => r.path === "/token").body);
+  assert.equal(exchange.get("redirect_uri"), PHONE_REDIRECT);
+  await assert.rejects(phone.finish(id, back), /No sign-in is waiting/);
+  // A sign-in the phone closed is cancelled on the computer.
+  await phone.start(id);
+  phone.cancel(id);
+  await tick();
+  assert.equal(ws.integrations.oauth.flows.has(id), false);
 });
 
 test("the sign-in server's name in a pasted address is checked as in the browser's own answer", async (t) => {

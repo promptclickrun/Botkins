@@ -84,6 +84,7 @@ import { CodexVoice } from "./codexvoice.mjs";
 import { SavedCredentials, trialToolDirs } from "./savedcredentials.mjs";
 import { forgetChatPeople, teamHandlers } from "./team-ipc.mjs";
 import { chatSectionHandlers, withOwnerChatSections } from "./chat-sections-ipc.mjs";
+import { phoneSignIns } from "./phone-signin.mjs";
 
 /**
  * How a trial run's Copilot runtime signs in to GitHub without the keychain: with the token in
@@ -398,6 +399,7 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
   });
   // Tokens kept from an earlier start go where the tools read them.
   signIns.restore();
+  const phoneSignIn = phoneSignIns((id) => (id.startsWith("plugin-") ? workspace.plugins : workspace.integrations));
   const openSignIn = (url) => {
     if (new URL(url).protocol !== "https:") throw new Error("That sign-in page can't be opened.");
     return host.shell.openExternal(url);
@@ -1396,7 +1398,12 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
       release: (memberId) => workspace.spaces.memberRemoved(memberId),
     },
     // A phone that signed in to an MCP server hands the computer its sign-in (reached as "link.adoptMcpSignIn").
-    extras: { adoptMcpSignIn: (serverId, grant) => workspace.integrations.adoptSignIn(serverId, grant) },
+    // A tool's sign-in in the phone's own browser, for a computer with no browser to open (desktop/phone-signin.mjs).
+    extras: {
+      adoptMcpSignIn: (serverId, grant) => workspace.integrations.adoptSignIn(serverId, grant),
+      startMcpSignIn: (serverId) => phoneSignIn.start(serverId),
+      finishMcpSignIn: (serverId, address) => phoneSignIn.finish(serverId, String(address ?? "")),
+    },
     screen: screens,
     // The app's own speech helpers for voice.mjs (desktop/link/VOICE.md). No local engine yet.
     voice: { ...(codexVoice && { codex: codexVoice }) },
