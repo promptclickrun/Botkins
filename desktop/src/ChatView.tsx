@@ -60,7 +60,9 @@ import { ChapterSummary, CrewCard, canStopHelpers, crewCardProps } from "./Activ
 import { crewOf, storyChapters, storySteps, type StoryUpdate } from "./activityStory";
 import { QuoteContext } from "./Composer";
 import { MentionChips } from "./MentionMenu";
-import { TeamRail } from "./TeamRail";
+import { AgentMessageRail, IncomingAgentRail } from "./AgentMessageRail";
+import { isAgentMessage } from "./agentRailModel";
+import { isStepCoveredByRail } from "./activityModel";
 import RequestPanel from "./RequestPanel";
 import { LinkPreviewCard, useReadAloud } from "./Extras";
 import { liveTurnDisplay, updateInChat } from "./liveDisplay";
@@ -554,7 +556,7 @@ function ChatViewBody({
   useLayoutEffect(() => {
     follow();
     // A turn that ends, and a teammate row that appears, add rows below the last message too.
-  }, [follow, chat.messages.length, hasText, liveStream, liveThinking, liveSteps, requests.length, side?.answer, latest?.status, latest?.teamwork?.length]);
+  }, [follow, chat.messages.length, hasText, liveStream, liveThinking, liveSteps, requests.length, side?.answer, latest?.status, latest?.teamwork?.length, latest?.taskHandoffs?.length]);
   // Rows also change size without any of the above changing: a card loads, a row or the task
   // list is opened. While the view follows the latest, growth is followed too, except just after
   // the person opened something: that stays where it is, and Scroll to latest message shows if the end
@@ -796,7 +798,19 @@ function ChatViewBody({
     e.preventDefault();
     setMenu({ message, index, x: e.clientX, y: e.clientY });
   }
-  const timelineMessage = (m: Message, index: number) => (
+  const accessibleChatIds = useMemo(() => new Set(state.chats.map((c) => c.id)), [state.chats]);
+  const timelineMessage = (m: Message, index: number) =>
+    isAgentMessage(m) ? (
+      <IncomingAgentRail
+        key={`timeline-message-${index}`}
+        id={`message-${chat.id}-${loadedFrom + index}`}
+        message={m}
+        bots={state.bots}
+        accessibleChatIds={accessibleChatIds}
+        openChat={openChat}
+        files={files}
+      />
+    ) : (
     <article
       id={`message-${chat.id}-${loadedFrom + index}`}
       className={messageClass(m, chat.messages, index)}
@@ -840,7 +854,7 @@ function ChatViewBody({
     // The bot is on its work now: the turn runs and nothing waits for the person. Its live line
     // shimmers (T3 Code's look): the running step, or the lead while no step runs in view.
     const onIt = run.status === "Working" && !turnWaits;
-    const showStep = (step: NonNullable<typeof run.steps>[number]) => (stepsMode === "open" && !islandMode) || (stepsMode === "failed" && step.status === "Failed");
+    const showStep = (step: NonNullable<typeof run.steps>[number]) => !isStepCoveredByRail(step, run) && ((stepsMode === "open" && !islandMode) || (stepsMode === "failed" && step.status === "Failed"));
     type Event = { kind: RunTimelineEvent["kind"] | "crew"; at: number; order: number; key: string; body: ReactNode; fold: ReactNode; details: ReactNode };
     const events: Event[] = [];
     // The turn's updates for the island's receipt, where they fold with the thinking once it ended.
@@ -869,6 +883,7 @@ function ChatViewBody({
         const marker = <div className="timeline-person">↳ {event.value.answer?.title ? event.value.answer.title + ": " : ""}{event.value.text}</div>;
         events.push({ kind: event.kind, at: event.at, order: event.order, key: event.key, body: timelineMessage(event.value, event.index), fold: marker, details: marker });
       } else {
+        if (isStepCoveredByRail(event.value, run)) continue;
         const body = <WorkSteps steps={[event.value]} live={onIt} onOpen={(step) => routeNow.current(run.id, "step-" + step.id)} />;
         events.push({ kind: event.kind, at: event.at, order: event.order, key: event.key, body: showStep(event.value) ? body : null, fold: body, details: body });
       }
@@ -904,7 +919,7 @@ function ChatViewBody({
       .map((event) => <Fragment key={event.key}>{event.body}</Fragment>);
     const elapsed = run.finished === undefined ? run.usage?.durationMs : run.finished - run.time;
     // The bot's own steps, as the island's receipt and the Activity tab count them: a helper's steps are the crew card's.
-    const count = storySteps(allSteps).length;
+    const count = storySteps(allSteps, run).length;
     const endingLabel = run.ending === "timed-out" ? "Timed out" : run.ending === "interrupted" ? "Interrupted" : run.ending === "stopped" ? "Stopped" : run.ending === "failed" ? "Needs you" : "";
     const countLabel = count ? count + (count === 1 ? " step" : " steps") : undefined;
     const folded = foldFinishedSteps;
@@ -984,7 +999,7 @@ function ChatViewBody({
           />
         ) : (live || group) && (live || folded || hasActivity) && fold}
         {group && !live && crewCard}
-        <TeamRail run={run} bots={state.bots} />
+        <AgentMessageRail run={run} bots={state.bots} tasks={state.tasks} openChat={openChat} />
         <RunCards run={run} prefill={prefill} pickModel={canManageAgents ? pickModel : undefined} />
         {!live && (failed.includes(run.status) || !!groupFailure) && (
           <div className="error run-error"><span>{groupFailure || (run.ending === "timed-out" ? "Timed out" : run.status) + " · " + (run.detail || "Reply stopped.")}</span>{!groupFailure && run.id === lastUserRun && !busy && <button className="secondary" onClick={() => void window.botkins.retry(run.id).catch((e) => setNotice(e.message))}><RotateCcw size={13} />Try again</button>}</div>
@@ -1226,12 +1241,24 @@ function ChatViewBody({
           )}
           {historic && historic.messages.map((message, i) => historic.from + i < loadedFrom && !isSilentMessage(message) &&
             (!message.interim || (thinkingMode === "open" && (!foldFinishedSteps || !message.runId || !runs.has(message.runId) || runs.get(message.runId)?.status === "Working"))) && (
+            isAgentMessage(message) ? (
+              <IncomingAgentRail
+                key={historic.from + i}
+                id={`message-${chat.id}-${historic.from + i}`}
+                message={message}
+                bots={state.bots}
+                accessibleChatIds={accessibleChatIds}
+                openChat={openChat}
+                files={files}
+              />
+            ) : (
             <article key={historic.from + i} id={`message-${chat.id}-${historic.from + i}`} className={messageClass(message, historic.messages, i)} onContextMenu={e => messageMenu(e, message, historic.from + i)}>
               {message.role === "user" && personLabel(message, historic.messages, i)}
               <RichText text={message.text} files={files} mentions={mentions} />
               <Attachments list={message.attachments} />
               <Reactions state={state} message={message} botId={chat.botId} />
             </article>
+            )
           ))}
           {chat.messages.map((m, i) => {
             const timelineOwner = m.runId ?? m.steeredRunId ?? m.answer?.runId;
@@ -1245,6 +1272,16 @@ function ChatViewBody({
             return (
               <Fragment key={i}>
                 {(m.text || m.role !== "assistant") && (
+                  isAgentMessage(m) ? (
+                    <IncomingAgentRail
+                      id={`message-${chat.id}-${loadedFrom + i}`}
+                      message={m}
+                      bots={state.bots}
+                      accessibleChatIds={accessibleChatIds}
+                      openChat={openChat}
+                      files={files}
+                    />
+                  ) : (
                   <article
                     id={`message-${chat.id}-${loadedFrom + i}`}
                     className={messageClass(m, chat.messages, i)}
@@ -1299,6 +1336,7 @@ function ChatViewBody({
                       {actions(m, i)}
                     </>}
                   </article>
+                  )
                 )}
               </Fragment>
             );

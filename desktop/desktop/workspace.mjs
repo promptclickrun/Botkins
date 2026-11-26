@@ -894,7 +894,7 @@ export class Workspace {
   }
   send(chatId, text, options = {}) {
     if (this.closing) throw new Error("Botkins is closing");
-    const { attachments: files, quote: rawQuote, mentions: rawMentions, voiceId, clientMessageId, author, also: rawAlso, proactiveCheck, merged: rawMerged, allowScript, ...context } = options;
+    const { attachments: files, quote: rawQuote, mentions: rawMentions, voiceId, clientMessageId, author, from, also: rawAlso, proactiveCheck, merged: rawMerged, allowScript, ...context } = options;
     // People whose limits apply to this turn beside the chat's maker and the message's writer:
     // someone else wrote text that runs in it (a routine's prompt on a panel that another person
     // refreshes). Members only: the owner narrows nothing.
@@ -966,6 +966,7 @@ export class Workspace {
       runId: run.id,
       time: chat.time,
       ...(author && { author }),
+      ...(from && { from }),
       ...(also.length && { also }),
       ...(attachments.length && { attachments }),
       ...(quote && { quote }),

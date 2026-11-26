@@ -72,7 +72,7 @@ export class HostDispatch {
         const scope = digest([...identity, sourceBotId, targetBotId]);
         const chatId = randomUUID();
         const chat = { id: chatId, botId: bot.id, hostDispatch: true, helper: true, dispatchScope: scope, title: "Request from " + sourceBotName + " on " + peer.name, time: now, messages: [] };
-        row = { id: payload.id, host, scope, fingerprint, chatId, sourceBotName, targetBotId, message, createdAt, status: "pending" };
+        row = { id: payload.id, host, scope, fingerprint, chatId, sourceBotId, sourceBotName, sourceHostId: peer.serverId, sourceHostName: peer.name, targetBotId, message, createdAt, status: "pending" };
         this.records = this.records.filter(item => active(item) || item.createdAt >= now - WEEK);
         this.records.push(row);
         this.ws.state.chats.unshift(chat);
@@ -180,7 +180,15 @@ export class HostDispatch {
         else if (action === "remember") previous.until = null;
         else if (previous.until !== null) previous.until = Math.max(previous.until, until);
       }
-      chat.messages.push({ role: "user", text: row.message, time: Date.now() });
+      const from = {
+        kind: "bot",
+        botId: row.sourceBotId ?? row.sourceBotName,
+        name: row.sourceBotName,
+        hostId: row.sourceHostId ?? peer.serverId,
+        hostName: row.sourceHostName ?? peer.name,
+        via: "remote",
+      };
+      chat.messages.push({ role: "user", text: row.message, time: Date.now(), from });
       this.ws.save();
       const { text } = await task.session.send({ prompt: row.message });
       if (task.stopped || this.ws.closing) return;

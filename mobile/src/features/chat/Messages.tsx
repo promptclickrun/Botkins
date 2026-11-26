@@ -22,6 +22,8 @@ import { boardKindLabel, splitBoardQuote } from "./compose";
 import { AlertActions } from "@/features/bots/AlertActions";
 import { ConnectCard } from "./ConnectCard";
 import { McpAppCard } from "./McpAppCard";
+import { IncomingAgentRail } from "./AgentMessageRail";
+import { isAgentMessage } from "./agentRailModel";
 import { useChatPeople } from "./ChatPeopleLook";
 import { authorOf, personTag, sideOf } from "./chatSides";
 import { myself } from "./people";
@@ -395,7 +397,7 @@ function Reply({ message, index, id, botId, markdown, actions, paths, parts }: {
   );
 }
 
-export const MessageRow = memo(function MessageRow({ item, chatId, group, bots, onSend, onDraft, actions, replyRef, continues = false }: { replyRef?: RefObject<ComponentRef<typeof View> | null>; item: Extract<Item, { kind: "message" }>; chatId: string; group: boolean; bots: Map<string, Bot>; /** It follows a message by the same person: no name or badge again. */ continues?: boolean; onSend: (text: string) => void; /** Text a custom view hands over, for the message box. */ onDraft?: (text: string) => void; actions?: MessageActions }) {
+export const MessageRow = memo(function MessageRow({ item, chatId, group, bots, onSend, onDraft, onOpenChat, actions, replyRef, continues = false }: { replyRef?: RefObject<ComponentRef<typeof View> | null>; item: Extract<Item, { kind: "message" }>; chatId: string; group: boolean; bots: Map<string, Bot>; /** It follows a message by the same person: no name or badge again. */ continues?: boolean; onSend: (text: string) => void; /** Text a custom view hands over, for the message box. */ onDraft?: (text: string) => void; onOpenChat?: (chatId: string) => void; actions?: MessageActions }) {
   const rich = useChatPrefs((prefs) => prefs.richCards);
   const markdown = useChatPrefs((prefs) => prefs.markdown);
   const timestamps = useChatPrefs((prefs) => prefs.timestamps);
@@ -412,6 +414,9 @@ export const MessageRow = memo(function MessageRow({ item, chatId, group, bots, 
   // being written is left alone until it ends, so half a path is never asked about.
   const links = useMessageLinks(chatId, message.text ?? "", message.role !== "command" && !(latest && run?.status === "Working"));
   if (message.role === "user") {
+    if (isAgentMessage(message)) {
+      return <IncomingAgentRail message={message} bots={bots} onOpenChat={onOpenChat} />;
+    }
     const side = sideOf(message, me);
     const author = authorOf(message);
     const person = side === "left" ? (people.get(author) ?? { id: author, name: personTag(message, undefined, me, people) }) : undefined;

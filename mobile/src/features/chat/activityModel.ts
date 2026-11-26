@@ -72,6 +72,22 @@ const KIND_PATTERNS: [RegExp, StepKind][] = [
 ];
 
 const QUIET_TOOL = /^(report_intent|think|thinking|task_complete|read_agent|list_agents)$/;
+/** Tools whose bot-to-bot interaction renders as a dedicated agent-message rail card when backed by run.teamwork or run.taskHandoffs. */
+export const RAIL_COVERED_TEAMWORK_TOOL = /^(ask_teammate|list_node_files|node_read_file|node_write_file|node_mkdir|node_move_file|node_delete_file|node_stat_file|node_search_files|node_exec|node_which|node_screen_info|node_screen_capture|node_screen_input|node_notify)$/i;
+export const RAIL_COVERED_TASK_TOOL = /^task_create$/i;
+
+/** True when a tool step is already represented by a sender-side agent-message rail card on this run, so it should not also appear as a tool row. */
+export function isStepCoveredByRail(
+  step: Pick<Step, "name" | "status" | "source"> | null | undefined,
+  run?: { teamwork?: readonly unknown[]; taskHandoffs?: readonly unknown[] } | null,
+): boolean {
+  if (!step || !run || step.source || step.status === "Failed") return false;
+  const name = String(step.name || "").trim();
+  if (!name) return false;
+  if (run.teamwork?.length && RAIL_COVERED_TEAMWORK_TOOL.test(name)) return true;
+  if (run.taskHandoffs?.length && RAIL_COVERED_TASK_TOOL.test(name)) return true;
+  return false;
+}
 
 const SUMMARY_WORDS: Record<StepKind, [string, string]> = {
   command: ["Ran a command", "Ran %d commands"],
