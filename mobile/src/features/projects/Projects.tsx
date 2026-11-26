@@ -1,4 +1,4 @@
-import { type Href, router, Stack } from "expo-router";
+import { type Href, router, Stack, useLocalSearchParams } from "expo-router";
 import { FolderClosed, FolderPlus, Plus, X } from "lucide-react-native";
 import { useMemo, useState } from "react";
 import { View } from "react-native";
@@ -86,11 +86,12 @@ export function ProjectList({ adding, setAdding }: { adding: boolean; setAdding:
   );
 }
 
-/** The projects on a page of their own (the route `/projects`); they live in Work's Projects tab. */
+/** Every project on a page of its own (the route `/projects`, "See all" on Work). `new=1` opens with a new project's field ready. */
 export default function Projects() {
   const theme = useTheme();
   const synced = useApp((state) => state.synced);
-  const [adding, setAdding] = useState(false);
+  const { new: fresh } = useLocalSearchParams<{ new?: string }>();
+  const [adding, setAdding] = useState(fresh === "1");
   return (
     <Page title="Projects" keyboard>
       <Stack.Screen

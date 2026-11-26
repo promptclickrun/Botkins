@@ -62,7 +62,8 @@ try {
   assert.equal(JSON.stringify(file).includes(dir), false, "no local paths in the shared file");
 
   // Someone else edits it and shares it back; import it in Create a bot and make a bot from it.
-  writeFileSync(shared, JSON.stringify({ ...file, name: "Fact Finder", role: "Checks claims", summary: "Finds the source", instructions: "Check every claim against a primary source." }));
+  const bundle = { skills: [{ name: "check-source", description: "Check a citation.", instructions: "Read the source before trusting the claim." }] };
+  writeFileSync(shared, JSON.stringify({ ...file, version: 2, bundle, name: "Fact Finder", role: "Checks claims", summary: "Finds the source", instructions: "Check every claim against a primary source." }));
   await page.getByRole("navigation").getByRole("button", { name: "Home", exact: true }).click();
   await page.getByRole("button", { name: "Add bot", exact: true }).click();
   await stubTemplate(app);
@@ -81,16 +82,22 @@ try {
   await expect(dialog.getByLabel("Name", { exact: true })).toHaveValue("Fact Finder");
   await expect(dialog.getByLabel("Role", { exact: true })).toHaveValue("Checks claims");
   await expect(dialog.getByRole("textbox", { name: "Instructions", exact: true })).toHaveValue("Check every claim against a primary source.");
+  await expect(dialog.locator(".template-bundle")).toContainText("check-source");
   await shoot("create-bot-templates");
   await dialog.getByRole("button", { name: "Create bot", exact: true }).click();
   await expect.poll(async () => (await snapshot()).bots.find((b) => b.name === "Fact Finder")?.summary).toBe("Finds the source");
+  assert.deepEqual((await snapshot()).bots.find((b) => b.name === "Fact Finder").bundle, bundle);
   const imported = (await snapshot()).templates.find((t) => t.name === "Fact Finder");
   assert.deepEqual([imported.source, imported.from], ["imported", "From a friend.json"]);
 
   // A marketplace template fills the form, and a saved template can be deleted.
   await page.getByRole("button", { name: "Add bot", exact: true }).click();
   await dialog.getByRole("button", { name: "Start from template", exact: true }).click();
+  await dialog.getByRole("group", { name: "Your templates" }).getByRole("button", { name: "Fact Finder", exact: true }).click();
+  await expect(dialog.locator(".template-bundle")).toContainText("check-source");
+  await dialog.getByRole("button", { name: "Start from template", exact: true }).click();
   await dialog.getByRole("button", { name: /Archive Guide/ }).click();
+  await expect(dialog.locator(".template-bundle")).toHaveCount(0);
   await expect(dialog.getByLabel("Role", { exact: true })).toHaveValue("Research assistant");
   await dialog.getByRole("button", { name: "Start from template", exact: true }).click();
   await dialog.getByRole("button", { name: "Options for template Scout", exact: true }).click();

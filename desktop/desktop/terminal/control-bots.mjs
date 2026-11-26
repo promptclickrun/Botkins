@@ -11,6 +11,8 @@
 // A bot's memory, an agent's instructions and a template's text are words that steer a bot. They
 // come out and go in as they are (the command line shows them before a change that brings in
 // words from elsewhere). No call here answers a secret: none of these things holds one.
+import { isDeepStrictEqual } from "node:util";
+import { templateForReader } from "../link/template-bundle.mjs";
 import { parseTemplateFile } from "../../desktop/templates.mjs";
 import { defaultBotProactive } from "../proactive-settings.mjs";
 import { personName } from "../team-turn.mjs";
@@ -110,7 +112,7 @@ export function botsApi({ workspace, handlers, bot }) {
     createdAt: time(entry.createdAt),
   });
   /** A template whole: its instructions too. */
-  const templateWhole = (entry) => ({ ...templateView(entry), instructions: entry.instructions, ...(entry.look && { look: true }) });
+  const templateWhole = (entry) => ({ ...templateView(entry), instructions: entry.instructions, ...(entry.bundle && { bundle: entry.bundle }), ...(entry.look && { look: true }) });
 
   /** The agents a provider has, as the app offers them (desktop/agents.mjs `importable`). */
   const agentView = (entry) => ({
@@ -315,12 +317,16 @@ export function botsApi({ workspace, handlers, bot }) {
     /** The templates the marketplaces offer: { agents, categories }, as Marketplace › Agents shows them. */
     "templates.browse": ([query]) => handlers["agents.browse"](query ?? {}),
     /** One marketplace template with its instructions (its id is name@marketplace). */
-    "templates.market": ([id]) => handlers["agents.template"](id),
-    /** Makes a bot from a marketplace template, as Install and then Create a bot do: its name (or the one given), role, about, instructions and look. */
-    async "templates.use"([id, name]) {
-      const found = await handlers["agents.template"](id);
+    "templates.market": ([id, version]) => handlers["agents.template"](id, version),
+    /** Create from the template the person reviewed. Older clients can use any plain marketplace template. */
+    async "templates.use"([id, name, review]) {
+      const found = review?.saved === true ? workspace.templates.get(id) : await handlers["agents.template"](id, review?.version);
+      templateForReader(found, review?.version);
+      if (review?.version === 2 && !isDeepStrictEqual(review.template, review.saved ? templateWhole(found) : found)) {
+        throw new ControlError("This template changed. Review it again before creating the bot.", "BAD_ARGUMENT");
+      }
       if (name !== undefined && name !== null) text(name, 48, "the bot a name");
-      const botId = await handlers.addBot({ name: name ?? found.name, role: found.role, instructions: found.instructions, ...(found.summary && { summary: found.summary }), ...(found.look && { look: found.look }) });
+      const botId = await handlers.addBot({ name: name ?? found.name, role: found.role, instructions: found.instructions, ...(found.summary && { summary: found.summary }), ...(found.look && { look: found.look }), ...(found.bundle && { bundle: found.bundle }) });
       const made = bot(botId);
       return { id: made.id, name: made.name, role: made.role, template: found.id };
     },

@@ -101,6 +101,7 @@ import { Proactive } from "./proactive.mjs";
 import { Reminders } from "./reminders.mjs";
 import { proposalsFrom } from "./proactive-learning.mjs";
 import { Templates } from "./templates.mjs";
+import { currentBotBundle, templateBundle } from "./link/template-bundle.mjs";
 import { readWorkspace, WorkspaceWriter } from "./workspace-file.mjs";
 import { Access } from "./access.mjs";
 import { SessionSearch } from "./session-search.mjs";
@@ -443,7 +444,7 @@ export class Workspace {
   flushSave() {
     if (this.saveTimer || this.writer.written.size) this.save();
   }
-  save() {
+  save(announce = true) {
     if (this.batchingSave) return;
     this.fullSavePending = false;
     if (this.saveTimer) {
@@ -462,7 +463,7 @@ export class Workspace {
     // The host's cross-host dispatches, its node jobs and grants, and the requests it sent are kept with the rest.
     const outgoing = this.teamwork?.outgoing.pending;
     this.writer.save({ ...persisted, ...this.hostDispatch?.persisted(), ...this.nodeHost?.persisted(), ...(outgoing?.size && { outgoingDispatches: [...outgoing.values()] }) }, this.active);
-    this.notify();
+    if (announce) this.notify();
   }
   snapshot() {
     return {
@@ -778,9 +779,35 @@ export class Workspace {
     const voice = data.voice === undefined ? null : botVoiceField(data.voice);
     if (voice) bot.voice = voice;
     if (person !== "owner") bot.createdBy = person;
-    this.state.bots.push(bot);
-    this.state.chats.push(makeMainChat(bot.id, person));
-    this.save();
+    return this.installBot(bot, data.bundle);
+  }
+  bundleForBot(bot, person = "owner") {
+    return currentBotBundle(bot, this.state.chats, person);
+  }
+  /** Publish the bot, its Main chat and all its paused routines in one workspace write. */
+  installBot(bot, input, index = this.state.bots.length) {
+    const bundle = templateBundle(input);
+    if (bundle) bot.bundle = bundle;
+    else delete bot.bundle;
+    const chats = [makeMainChat(bot.id, bot.createdBy)];
+    for (const { name, instructions, cadence } of bundle?.routines ?? []) {
+      chats.push(this.panels.routines.buildChat(
+        { botId: bot.id, name, prompt: instructions, cadence, notify: false },
+        Date.now(), bot.createdBy, { fromTemplate: true },
+      ));
+    }
+    if (bundle?.skills) this.integrations.installBotSkills(bot);
+    this.state.bots.splice(index, 0, bot);
+    this.state.chats.push(...chats);
+    try {
+      this.save(false);
+    } catch (error) {
+      this.state.bots.splice(index, 1);
+      this.state.chats.splice(-chats.length);
+      if (bundle?.skills) this.integrations.removeBotSkills(bot);
+      throw error;
+    }
+    if (!this.batchingSave) this.notify();
     return bot.id;
   }
   updateBot(id, data) {
@@ -819,9 +846,14 @@ export class Workspace {
     return chat.id;
   }
   createChat(botId, title = "New chat", panelId, createdBy) {
-    if (!this.state.bots.some((b) => b.id === botId))
-      throw new Error("Unknown bot");
-    const chat = {
+    this.bot(botId);
+    const chat = this.buildChat(botId, title, panelId, createdBy);
+    this.state.chats.unshift(chat);
+    this.save();
+    return chat.id;
+  }
+  buildChat(botId, title, panelId, createdBy) {
+    return {
       id: randomUUID(),
       botId,
       ...(createdBy && { createdBy }),
@@ -831,9 +863,6 @@ export class Workspace {
       messages: [],
       established: false,
     };
-    this.state.chats.unshift(chat);
-    this.save();
-    return chat.id;
   }
   /** A chat with 2 to 6 bots. Returns its id (desktop/groups.mjs). */
   createGroupChat(botIds, title) {
@@ -2075,7 +2104,10 @@ export class Workspace {
     const chat = chatId ? this.state.chats.find((c) => c.id === chatId) : null;
     if (!Array.isArray(data?.choices)) return data;
     const team = this.teamOf();
-    if (![person, chat?.createdBy].every((id) => !id || id === "owner" || turnAccess({ memberId: id }, team).skills)) return data;
+    if (![person, chat?.createdBy].every((id) => !id || id === "owner" || turnAccess({ memberId: id }, team).skills)) {
+      // The provider's cached menu may have been built for the owner.
+      return { ...data, choices: data.choices.filter((entry) => entry.kind !== "Skill") };
+    }
     const taken = commandNames(data.choices);
     const scripts = this.integrations.scriptCommands().filter((c) => c.enabled && !c.unavailable && !taken.has(c.name)).map(scriptChoice);
     return scripts.length ? { ...data, choices: [...data.choices, ...scripts] } : data;

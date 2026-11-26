@@ -1057,7 +1057,7 @@ export class LinkClient {
           }
           this.options.onSync?.();
         };
-        const args = { epoch: this.epoch, have: this.have, watch: watching, ...appends, ...(requestReasoning && { reasoningWatch }), ...(text !== "live" && { text: text === "chunks" ? "chunks" : false }), ...(this.options.lightSteps && { steps: "light" }), ...(!push && { wait: quick ? 0 : 25_000 }) };
+        const args = { epoch: this.epoch, have: this.have, watch: watching, templateVersion: 2, ...appends, ...(requestReasoning && { reasoningWatch }), ...(text !== "live" && { text: text === "chunks" ? "chunks" : false }), ...(this.options.lightSteps && { steps: "light" }), ...(!push && { wait: quick ? 0 : 25_000 }) };
         if (push) this.pushSession = session;
         const news = await this.request<SyncNews>(push ? "link.follow" : "link.sync", [args],
           quick ? (this.options.wakeMs ?? 4000) : 40_000, poll.signal, session, push ? accept : undefined);

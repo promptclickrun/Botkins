@@ -794,7 +794,7 @@ export const botTools = {
       const ref = one(context, "Name the bot (its name or id).");
       const { on, off } = context.options;
       const now = on?.length || off?.length ? await context.client.call("bots.tools.set", ref, { ...(on && { skillsOn: on }), ...(off && { skillsOff: off }) }) : await context.client.call("bots.tools", ref);
-      context.print(now, (bot) => (bot.skills.length ? table(["SKILL", "FOR " + bot.name.toUpperCase(), "FOR EVERY BOT"], bot.skills.map((skill) => [skill.name, skill.on ? "on" : "off", skill.enabled ? "on" : "off"])) : "No skills yet. Add one with `botkins skills add`."));
+      context.print(now, (bot) => (bot.skills.length ? table(["SKILL", "FOR " + bot.name.toUpperCase(), "WORKSPACE"], bot.skills.map((skill) => [skill.name, skill.on ? "on" : "off", skill.bundled ? "bot template" : skill.enabled ? "on" : "off"])) : "No skills yet. Add one with `botkins skills add`."));
     },
   },
   access: {

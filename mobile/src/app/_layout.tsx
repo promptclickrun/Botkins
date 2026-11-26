@@ -163,6 +163,8 @@ export default function RootLayout() {
               <Stack.Screen name="models/signin" options={{ ...sheet, sheetAllowedDetents: [0.75, 1] }} />
               <Stack.Screen name="projects/index" />
               <Stack.Screen name="work/activity" />
+              <Stack.Screen name="work/tasks" />
+              <Stack.Screen name="work/routines" />
               <Stack.Screen name="projects/[id]" />
               <Stack.Screen name="projects/add-chats" options={tall} />
               <Stack.Screen name="projects/attach" options={tall} />
@@ -188,6 +190,8 @@ export default function RootLayout() {
               <Stack.Screen name="settings/appearance" />
               <Stack.Screen name="settings/approvals" />
               <Stack.Screen name="settings/harness" />
+              <Stack.Screen name="settings/general" />
+              <Stack.Screen name="settings/teamwork" />
               <Stack.Screen name="settings/usage" />
               <Stack.Screen name="settings/about" />
               <Stack.Screen name="settings/feedback" />

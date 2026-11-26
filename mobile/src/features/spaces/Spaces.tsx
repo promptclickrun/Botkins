@@ -1,27 +1,51 @@
-// The Spaces tab: every space this person can open, with who can open each. Those on Home first
-// (the pinned ones), then the others, and for an owner with Admin mode on what members made; last,
-// the single panels pinned to Home. Hold a space, then move, to put it in order, pin it to Home
-// (drop it under On Home) or take it off (under More); a still hold opens its menu, which has the
-// same moves, as VoiceOver's actions do.
+// The Spaces tab: every space this person can open, as tiles two to a row, with who can open each.
+// Those on Home first (the pinned ones), as larger tiles that say what their first panel says; then
+// the others, and for an owner with Admin mode on what members made; last, the single panels pinned
+// to Home. A hold on a space opens its menu: pin it to Home or take it off, move it up or down
+// (VoiceOver has the same actions), and share it.
 import { useScrollToTop } from "expo-router";
 import { MailOpen, Plus } from "lucide-react-native";
 import { type ReactNode, useEffect, useMemo, useState } from "react";
-import { StyleSheet, useWindowDimensions, View } from "react-native";
+import { useWindowDimensions, View } from "react-native";
 import Animated, { useAnimatedRef, useAnimatedScrollHandler, useSharedValue } from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { changedSpaces } from "@/features/chat/unread";
 import type { BoardScroll } from "@/features/home/BotBoard";
 import type { SpaceSummary } from "@/link/types";
-import { useBots, useCan } from "@/state/hooks";
+import { useCan } from "@/state/hooks";
 import { api, attempt } from "@/state/link";
 import { type PanelPin, usePrefs } from "@/state/prefs";
 import { panelHeadline } from "@/state/widgetData";
 import { useApp } from "@/state/store";
-import { BackdropLayer, BotAvatar, Dot, EmptyState, HoldMenu, IconButton, IconTile, Label, LinkBanner, Loading, Page, space as gap, T, Tap, type TextPromptOptions, useShape, useTextPrompt, useTheme } from "@/ui";
+import { BackdropLayer, Dot, EmptyState, Glass, HoldMenu, IconButton, IconTile, Label, LinkBanner, Loading, Page, radius, space as gap, T, Tap, type TextPromptOptions, tint, useShape, useTextPrompt, useTheme } from "@/ui";
 import { markSpacesRead, openPanel, openShare, openSpace, setPanelPinned, setPinned, useArranging, useSpaceContent, useSpaces, useSpacesOn } from "./data";
 import { spaceIcon } from "./icons";
-import { panelPinsHere, rowLine, spaceDropPlan, spaceItems, spaceTitle, type SpaceZone, withMove } from "./logic";
-import { SortArea, SortCell, SortHandle, useSorter } from "./sortable";
+import { panelPinsHere, rowLine, spaceSections, spaceTitle, withMove } from "./logic";
+
+/** A tile's ground: glass over a backdrop, the surface color without one (as `Group` does). */
+function Tile({ children, height, style }: { children: ReactNode; height: number; style?: object }) {
+  const { colors, dark } = useTheme();
+  const hasBackdrop = usePrefs((prefs) => prefs.backdrop !== "clean");
+  const frame = { minHeight: height, borderRadius: radius.lg, padding: gap.md + 2, overflow: "hidden" as const, ...style };
+  if (hasBackdrop) return <Glass tintColor={tint(colors.surface, dark ? 0.3 : 0.42)} style={frame}>{children}</Glass>;
+  return <View style={[frame, { backgroundColor: colors.surface }]}>{children}</View>;
+}
+
+/** What a pinned space's first panel says, for its tile: "Inbox · 4 need a reply". */
+function FirstLine({ space }: { space: SpaceSummary }) {
+  const { content } = useSpaceContent(space.id);
+  const panel = content?.panels.find((one) => !one.hidden);
+  const value = panel && panelHeadline(panel).value;
+  if (!panel || !value) return null;
+  return (
+    <T variant="footnote" color="ink2" numberOfLines={2}>
+      <T variant="footnote" weight="600" color="ink2">
+        {panel.title}
+      </T>
+      {" · " + value}
+    </T>
+  );
+}
 
 function newSpace(ask: (options: TextPromptOptions) => void) {
   ask({
@@ -31,8 +55,7 @@ function newSpace(ask: (options: TextPromptOptions) => void) {
   });
 }
 
-function SpaceRow({ space, spaces }: { space: SpaceSummary; spaces: SpaceSummary[] }) {
-  const { colors, control } = useTheme();
+function SpaceTile({ space, spaces, big }: { space: SpaceSummary; spaces: SpaceSummary[]; /** On Home: taller, with what its first panel says. */ big?: boolean }) {
   const up = withMove(spaces, space.id, -1);
   const down = withMove(spaces, space.id, 1);
   const title = spaceTitle(space);
@@ -72,25 +95,28 @@ function SpaceRow({ space, spaces }: { space: SpaceSummary; spaces: SpaceSummary
         accessibilityActions={actions}
         onAccessibilityAction={(event) => run(event.nativeEvent.actionName)}
       >
-        <View style={{ minHeight: control.row + 8, paddingHorizontal: gap.lg, paddingVertical: 10, flexDirection: "row", alignItems: "center", gap: gap.md }}>
-          <IconTile icon={spaceIcon(space)} color={colors.ink2} />
-          <View style={{ flex: 1, minWidth: 0, gap: 1 }}>
-            <T variant="callout" weight="500" numberOfLines={1}>
-              {title}
-            </T>
-            <T variant="footnote" color="muted" numberOfLines={1}>
-              {rowLine(space)}
-            </T>
+        <Tile height={big ? 168 : 112}>
+          <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: gap.sm }}>
+            <IconTile icon={spaceIcon(space)} />
+            {space.changed > 0 && <Dot size={8} />}
           </View>
-          {space.changed > 0 && <Dot size={8} />}
-        </View>
+          <T variant={big ? "title3" : "headline"} numberOfLines={1}>
+            {title}
+          </T>
+          <T variant="footnote" color="muted" numberOfLines={big ? 1 : 2}>
+            {rowLine(space)}
+          </T>
+          {big && (
+            <View style={{ flex: 1, justifyContent: "flex-end", paddingTop: gap.sm }}>
+              <FirstLine space={space} />
+            </View>
+          )}
+        </Tile>
       </Tap>
     </HoldMenu>
   );
 }
 
-const ZONE_TITLES: Record<SpaceZone, string> = { pinned: "On Home", more: "More" };
-const INSET = gap.lg + 40 + gap.md;
 
 /**
  * Page's frame for a tab's root, with a scroll view the list can scroll itself: a dragged space
@@ -153,11 +179,9 @@ function SpacesFrame({ children, scroll, scrollEnabled, actions }: { children: R
   );
 }
 
-/** One panel pinned to Home: its title, its space and what it says. A tap opens it; a hold takes it off Home. */
-function PinnedPanelRow({ pin, space }: { pin: PanelPin; space: SpaceSummary }) {
-  const { control } = useTheme();
+/** One panel pinned to Home, as a small tile: its title and space, and what it says. A tap opens it; a hold takes it off Home. */
+function PinnedPanelTile({ pin, space }: { pin: PanelPin; space: SpaceSummary }) {
   const { content } = useSpaceContent(pin.spaceId);
-  const bots = useBots();
   const panel = content?.panels.find((one) => one.id === pin.panelId);
   if (!panel) return null;
   const line = ["Panel in " + spaceTitle(space), panelHeadline(panel).value].filter(Boolean).join(" · ");
@@ -174,19 +198,14 @@ function PinnedPanelRow({ pin, space }: { pin: PanelPin; space: SpaceSummary }) 
         accessibilityActions={[{ name: "unpin", label: "Take off Home" }]}
         onAccessibilityAction={unpin}
       >
-        <View style={{ minHeight: control.row + 8, paddingHorizontal: gap.lg, paddingVertical: 10, flexDirection: "row", alignItems: "center", gap: gap.md }}>
-          <View style={{ width: 40, alignItems: "center" }}>
-            <BotAvatar bot={bots.find((bot) => bot.id === panel.botId)} size={36} badge={false} />
-          </View>
-          <View style={{ flex: 1, minWidth: 0, gap: 1 }}>
-            <T variant="callout" weight="500" numberOfLines={1}>
-              {panel.title}
-            </T>
-            <T variant="footnote" color="muted" numberOfLines={1}>
-              {line}
-            </T>
-          </View>
-        </View>
+        <Tile height={64} style={{ justifyContent: "center", paddingVertical: gap.sm }}>
+          <T variant="caption" color="muted" weight="400" numberOfLines={1}>
+            {panel.title + " · " + spaceTitle(space)}
+          </T>
+          <T variant="headline" numberOfLines={1}>
+            {panelHeadline(panel).value ?? "Open"}
+          </T>
+        </Tile>
       </Tap>
     </HoldMenu>
   );
@@ -198,55 +217,56 @@ function PinnedPanels({ spaces }: { spaces: SpaceSummary[] }) {
   const pins = useMemo(() => panelPinsHere(saved, spaces), [saved, spaces]);
   if (!pins.length) return null;
   return (
-    <View style={{ marginHorizontal: -gap.lg }}>
-      <View style={{ paddingHorizontal: gap.lg, paddingBottom: gap.xs }}>
-        <Label>Panels on Home</Label>
-      </View>
-      {pins.map((pin) => {
-        const space = spaces.find((one) => one.id === pin.spaceId);
-        return space ? <PinnedPanelRow key={pin.spaceId + ":" + pin.panelId} pin={pin} space={space} /> : null;
-      })}
+    <View>
+      <Label>Panels on Home</Label>
+      <TwoUp>
+        {pins.map((pin) => {
+          const space = spaces.find((one) => one.id === pin.spaceId);
+          return space ? <PinnedPanelTile key={pin.spaceId + ":" + pin.panelId} pin={pin} space={space} /> : null;
+        })}
+      </TwoUp>
     </View>
   );
 }
 
-/** The list, with the drag. A drop is shown at once; the computer's own order follows. */
-function SpaceList({ spaces, scroll, onDragging }: { spaces: SpaceSummary[]; scroll: BoardScroll; onDragging: (on: boolean) => void }) {
+/** Children two to a row, each half the width less the gap; a last one alone keeps a half. */
+function TwoUp({ children }: { children: ReactNode }) {
+  return <View style={{ flexDirection: "row", flexWrap: "wrap", gap: gap.md }}>{children}</View>;
+}
+const HALF = { width: "48.2%" } as const;
+
+const SECTION_TITLES = { Pinned: "On Home", More: "More", "From members": "From members" } as const;
+
+/** Every space, in its section, as tiles. A move from a tile's menu is shown at once; the computer's own order follows. */
+function SpaceGrid({ spaces, onNew }: { spaces: SpaceSummary[]; onNew?: () => void }) {
   const { colors } = useTheme();
   const you = useApp((state) => state.parts.meta?.you);
   const viewer = { owner: you?.kind !== "member", admin: you?.kind === "owner" && you.admin === true };
-  const hold = useArranging(spaces);
-  const shown = hold.shown;
-  const { sorter, items } = useSorter({
-    build: (dragging) => spaceItems(shown, viewer, dragging),
-    scroll,
-    onDrop: (key, zone, index) => hold.arrange(spaceDropPlan(shown, viewer, key.slice("space:".length), zone as SpaceZone, index)),
-    onDragging,
-  });
-  const byId = new Map(shown.map((space) => [space.id, space]));
+  const shown = useArranging(spaces).shown;
+  const sections = spaceSections(shown, viewer);
   return (
-    <SortArea sorter={sorter}>
-      <View style={{ marginHorizontal: -gap.xl }}>
-        {items.map((item, at) => {
-          const previous = items[at - 1];
-          const space = "id" in item && item.id ? byId.get(item.id) : undefined;
-          if (!space)
-            return (
-              <SortCell key={item.key} item={item} style={{ paddingHorizontal: gap.xl, paddingTop: at ? gap.xl : 0, paddingBottom: gap.xs }}>
-                <Label>{item.kind === "head" ? ZONE_TITLES[item.zone] : item.kind === "fixed" ? (item.title ?? "") : ""}</Label>
-              </SortCell>
-            );
-          return (
-            <SortCell key={item.key} item={item} style={{ paddingHorizontal: gap.xl - gap.lg }}>
-              {!!previous && "id" in previous && !!previous.id && <View style={{ height: StyleSheet.hairlineWidth, backgroundColor: colors.line, marginLeft: INSET }} />}
-              <SortHandle itemKey={item.key} disabled={item.kind !== "row"}>
-                <SpaceRow space={space} spaces={shown} />
-              </SortHandle>
-            </SortCell>
-          );
-        })}
-      </View>
-    </SortArea>
+    <View style={{ gap: gap.xl }}>
+      {sections.map((section) => (
+        <View key={section.title}>
+          <Label>{SECTION_TITLES[section.title]}</Label>
+          <TwoUp>
+            {section.spaces.map((space) => (
+              <View key={space.id} style={HALF}>
+                <SpaceTile space={space} spaces={shown} big={section.title === "Pinned"} />
+              </View>
+            ))}
+            {section.title === "More" && onNew && (
+              <Tap onPress={onNew} feel="select" accessibilityLabel="New space" style={{ width: "100%", height: 52, borderRadius: radius.lg, borderWidth: 1.5, borderStyle: "dashed", borderColor: colors.lineStrong, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: gap.sm }}>
+                <Plus size={18} color={colors.ink2} strokeWidth={2.2} />
+                <T variant="subhead" weight="600" color="ink2">
+                  New space
+                </T>
+              </Tap>
+            )}
+          </TwoUp>
+        </View>
+      ))}
+    </View>
   );
 }
 
@@ -279,13 +299,13 @@ export default function Spaces() {
           onPress={() => void markSpacesRead(unreadSpaces.map((space) => space.id))}
         />
       )}
-      {canCreate && <IconButton icon={Plus} label="New space" variant="soft" size={44} onPress={ask} />}
+      {canCreate && <IconButton icon={Plus} label="New space" variant="accent" size={44} onPress={ask} />}
     </>
   ) : undefined;
   return (
     <SpacesFrame scroll={scroll} scrollEnabled={!dragging} actions={headerActions}>
       {prompt.node}
-      {!synced ? <Loading /> : !spaces.length ? <EmptyState title="No spaces yet" action={canCreate ? "New space" : undefined} onAction={canCreate ? ask : undefined} /> : <SpaceList spaces={spaces} scroll={scroll} onDragging={setDragging} />}
+      {!synced ? <Loading /> : !spaces.length ? <EmptyState title="No spaces yet" action={canCreate ? "New space" : undefined} onAction={canCreate ? ask : undefined} /> : <SpaceGrid spaces={spaces} onNew={canCreate ? ask : undefined} />}
       {synced && <PinnedPanels spaces={spaces} />}
     </SpacesFrame>
   );
