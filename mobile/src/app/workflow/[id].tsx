@@ -4,7 +4,7 @@ import { useState } from "react";
 import { Switch, View } from "react-native";
 import { useCan, useWorkflowRuns, useWorkflows } from "@/state/hooks";
 import { api, attempt } from "@/state/link";
-import { Button, Dot, EmptyState, Group, haptic, IconTile, Label, Page, Row, space, switchColors, T, useTheme } from "@/ui";
+import { Button, Dot, EmptyState, Group, haptic, IconTile, Label, Row, Sheet, space, switchColors, T, useTheme } from "@/ui";
 
 function durLabel(start?: number | null, end?: number | null) {
   if (!start) return "";
@@ -35,9 +35,9 @@ export default function WorkflowDetailScreen() {
 
   if (!workflow) {
     return (
-      <Page title="Workflow">
+      <Sheet title="Workflow">
         <EmptyState title="Workflow not found" action="Back" onAction={() => router.back()} />
-      </Page>
+      </Sheet>
     );
   }
 
@@ -58,7 +58,7 @@ export default function WorkflowDetailScreen() {
   };
 
   return (
-    <Page title={workflow.name}>
+    <Sheet title={workflow.name}>
       <View style={{ gap: space.lg }}>
         <Group>
           <Row
@@ -171,6 +171,6 @@ export default function WorkflowDetailScreen() {
           )}
         </View>
       </View>
-    </Page>
+    </Sheet>
   );
 }
