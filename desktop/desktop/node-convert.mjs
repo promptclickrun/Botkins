@@ -1001,7 +1001,14 @@ export async function receiveMigration(ws, peer, operation, payload = {}) {
       throw new Error("Migration payload exceeds maximum size.");
     }
     const existingStage = staging.get(transferId);
-    if (existingStage && existingStage.peerServerId === peer.serverId && existingStage.totalChunks === totalChunks) {
+    if (
+      existingStage &&
+      existingStage.peerServerId === peer.serverId &&
+      existingStage.totalChunks === totalChunks &&
+      existingStage.totalBytes === totalBytes &&
+      existingStage.manifest?.contentSha256 === (payload.manifest?.contentSha256 ?? null) &&
+      (!payload.payloadSha256 || existingStage.payloadSha256 === payload.payloadSha256)
+    ) {
       return {
         status: "ready",
         alreadyImported: false,
@@ -1013,6 +1020,7 @@ export async function receiveMigration(ws, peer, operation, payload = {}) {
       jobId: safeText(payload.jobId, 120),
       peerServerId: peer.serverId,
       manifest: payload.manifest ?? null,
+      payloadSha256: typeof payload.payloadSha256 === "string" ? payload.payloadSha256 : null,
       totalChunks,
       totalBytes,
       chunks: new Map(),
@@ -1501,6 +1509,7 @@ async function transferBotToTarget(ws, peers, item, { serverId, name }, pin, { r
       jobId: item.jobId,
       botId: item.botId,
       manifest,
+      payloadSha256: sha256(serialized),
       totalChunks: chunks.length,
       totalBytes: serialized.length,
       ...(replaceSha256 && { replaceSha256 }),
@@ -1509,9 +1518,14 @@ async function transferBotToTarget(ws, peers, item, { serverId, name }, pin, { r
   );
 
   if (beginRes?.alreadyImported) {
+    if (replaceSha256) {
+      throw new Error(
+        `Could not refresh ${item.botName} on ${item.targetHostName || "the destination host"} because the destination copy is already active or changed.`,
+      );
+    }
     const check = verifyTransferReceipt(manifest, beginRes.verification);
     // A stale, not-yet-activated copy from an earlier attempt: replace it with the current source state.
-    if (!check.ok && !replaceSha256 && beginRes.verification?.contentSha256) {
+    if (!check.ok && beginRes.verification?.contentSha256) {
       return transferBotToTarget(ws, peers, item, { serverId, name }, pin, {
         replaceSha256: item.verification?.contentSha256 ?? beginRes.verification.contentSha256,
       });
@@ -1669,15 +1683,22 @@ export async function runConversion(ws, input = {}, { peers, link, announce, onP
       const file = join(job.snapshotPath, "manifest.json");
       const cur = JSON.parse(readFileSync(file, "utf8"));
       const transfers = Array.isArray(cur.transfers) ? cur.transfers : [];
-      if (!transfers.some((t) => t.transferId === item.transferId)) {
-        transfers.push({
-          transferId: item.transferId,
-          botId: item.botId,
-          botName: item.botName,
-          targetHostId: item.targetHostId,
-          targetHostName: item.targetHostName,
-          targetBotId: item.targetBotId,
-        });
+      const idx = transfers.findIndex((t) => t.transferId === item.transferId);
+      const entry = {
+        transferId: item.transferId,
+        botId: item.botId,
+        botName: item.botName,
+        targetHostId: item.targetHostId,
+        targetHostName: item.targetHostName,
+        targetBotId: item.targetBotId,
+      };
+      if (idx >= 0) {
+        if (transfers[idx].targetBotId !== item.targetBotId) {
+          transfers[idx] = entry;
+          updateSnapshotManifest(job.snapshotPath, { transfers });
+        }
+      } else {
+        transfers.push(entry);
         updateSnapshotManifest(job.snapshotPath, { transfers });
       }
     } catch {}
@@ -1761,10 +1782,12 @@ export async function runConversion(ws, input = {}, { peers, link, announce, onP
             item,
             sourceHostMeta,
             pin,
+            { replaceSha256: item.needsReplaceSha256 ?? null },
           );
           item.targetBotId = targetBotId;
           item.verification = verification;
           item.sourceFingerprint = sourceFingerprint;
+          item.needsReplaceSha256 = null;
           item.stage = "verified";
           recordSnapshotTransfer(item);
           emit();
@@ -1780,20 +1803,36 @@ export async function runConversion(ws, input = {}, { peers, link, announce, onP
           // Replies, edits or routine runs since verification would be lost by deleting now:
           // refresh the destination copy and re-verify until the source matches what was verified.
           for (let attempt = 0; ; attempt++) {
-            if (sourceBotFingerprint(ws, item.botId, sourceHostMeta, item.priorRoutines) === item.sourceFingerprint) break;
+            if (
+              item.sourceFingerprint &&
+              sourceBotFingerprint(ws, item.botId, sourceHostMeta, item.priorRoutines) === item.sourceFingerprint
+            ) {
+              break;
+            }
             if (attempt >= 3) {
               throw new Error(`${item.botName} keeps changing on this computer. Let its chats finish, then resume.`);
             }
+            const replaceSha256 = item.needsReplaceSha256 ?? item.verification?.contentSha256 ?? null;
+            // Invalidate the prior verified checkpoint before replacing the target copy so an offline
+            // interruption after target drops the stale copy can never resume straight into local deletion.
+            item.stage = "transferring";
+            item.sourceFingerprint = null;
+            item.needsReplaceSha256 = replaceSha256;
+            emit();
             const { targetBotId, verification, sourceFingerprint } = await transferBotToTarget(
               ws,
               effectivePeers,
               item,
               sourceHostMeta,
               pin,
+              { replaceSha256 },
             );
             item.targetBotId = targetBotId;
             item.verification = verification;
             item.sourceFingerprint = sourceFingerprint;
+            item.needsReplaceSha256 = null;
+            item.stage = "verified";
+            recordSnapshotTransfer(item);
             emit();
           }
           // No await between the fingerprint check and removal, so nothing can change in between.
