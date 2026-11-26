@@ -100,7 +100,7 @@ import { Proactive } from "./proactive.mjs";
 import { Reminders } from "./reminders.mjs";
 import { proposalsFrom } from "./proactive-learning.mjs";
 import { Templates } from "./templates.mjs";
-import { templateBundle } from "./link/template-bundle.mjs";
+import { currentBotBundle, templateBundle } from "./link/template-bundle.mjs";
 import { readWorkspace, WorkspaceWriter } from "./workspace-file.mjs";
 import { Access } from "./access.mjs";
 import { SessionSearch } from "./session-search.mjs";
@@ -442,7 +442,7 @@ export class Workspace {
   flushSave() {
     if (this.saveTimer || this.writer.written.size) this.save();
   }
-  save() {
+  save(announce = true) {
     if (this.batchingSave) return;
     this.fullSavePending = false;
     if (this.saveTimer) {
@@ -461,7 +461,7 @@ export class Workspace {
     // The host's cross-host dispatches, its node jobs and grants, and the requests it sent are kept with the rest.
     const outgoing = this.teamwork?.outgoing.pending;
     this.writer.save({ ...persisted, ...this.hostDispatch?.persisted(), ...this.nodeHost?.persisted(), ...(outgoing?.size && { outgoingDispatches: [...outgoing.values()] }) }, this.active);
-    this.notify();
+    if (announce) this.notify();
   }
   snapshot() {
     return {
@@ -777,10 +777,14 @@ export class Workspace {
     if (person !== "owner") bot.createdBy = person;
     return this.installBot(bot, data.bundle);
   }
+  bundleForBot(bot, person = "owner") {
+    return currentBotBundle(bot, this.state.chats, person);
+  }
   /** Publish the bot, its Main chat and all its paused routines in one workspace write. */
   installBot(bot, input, index = this.state.bots.length) {
     const bundle = templateBundle(input);
     if (bundle) bot.bundle = bundle;
+    else delete bot.bundle;
     const chats = [makeMainChat(bot.id, bot.createdBy)];
     for (const { name, instructions, cadence } of bundle?.routines ?? []) {
       chats.push(this.panels.routines.buildChat(
@@ -792,13 +796,14 @@ export class Workspace {
     this.state.bots.splice(index, 0, bot);
     this.state.chats.push(...chats);
     try {
-      this.save();
+      this.save(false);
     } catch (error) {
       this.state.bots.splice(index, 1);
       this.state.chats.splice(-chats.length);
       if (bundle?.skills) this.integrations.removeBotSkills(bot);
       throw error;
     }
+    if (!this.batchingSave) this.notify();
     return bot.id;
   }
   updateBot(id, data) {
@@ -2651,8 +2656,6 @@ export class Workspace {
   async assertScriptName(name, original) {
     const id = String(name ?? "").trim().replace(/^\//, "").toLowerCase();
     if (!id || id === original) return;
-    if (this.state.bots.some(bot => bot.bundle?.skills?.some(skill => skill.name === id)))
-      throw new Error("/" + id + " is a skill of a bot on this computer. Choose another name.");
     const menus = await Promise.allSettled(this.state.bots.map((bot) => this.inventory(bot.id)));
     menus.forEach((menu, at) => {
       if (menu.status === "fulfilled" && commandNames(menu.value.choices).has(id)) throw new Error("/" + id + " is a command of " + this.state.bots[at].name + "'s model provider, which wins over a script command. Choose another name.");

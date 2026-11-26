@@ -27,7 +27,7 @@ export function TemplateBundle({ bundle, supported }: { bundle?: AgentTemplateBu
 
 function BundleItem({ name, detail, instructions }: { name: string; detail: string; instructions: string }) {
   return (
-    <details className="set-row agent-instructions">
+    <details className="set-row bundle-item">
       <summary><strong>{name}</strong> · {detail}</summary>
       <p>{instructions}</p>
     </details>

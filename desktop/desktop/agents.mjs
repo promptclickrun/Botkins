@@ -187,7 +187,7 @@ export class Agents {
     // A copy belongs to whoever copied it: the mark of who made the first one is not carried over.
     delete copy.createdBy;
     if (person !== "owner") copy.createdBy = person;
-    return this.ws.installBot(copy, source.bundle, this.state.bots.indexOf(source) + 1);
+    return this.ws.installBot(copy, this.ws.bundleForBot(source, person), this.state.bots.indexOf(source) + 1);
   }
   async deleteBot(id) {
     const bot = this.ws.bot(id);

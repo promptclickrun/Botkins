@@ -59,7 +59,7 @@ Both are reads. A team member needs `agents` › `create` (a template is only go
 ```ts
 "agents.browse"(query?: { query?: string; category?: string; marketplace?: string }):
   Promise<{ agents: MarketAgent[]; categories: MarketAgentCategory[] }>
-"agents.template"(id: string): Promise<MarketAgentTemplate>
+"agents.template"(id: string, readerVersion?: 2): Promise<MarketAgentTemplate>
 
 type MarketAgent = {
   id: string;              // name@marketplace
@@ -82,11 +82,11 @@ type MarketAgentTemplate = MarketAgent & { instructions: string; bundle?: Templa
 
 - `query` (at most 200 characters) matches the name, role, summary, category and keywords. `category` and `marketplace` narrow the list. `categories` counts the templates the other filters leave, so a client can show its chips with counts.
 - The order is the catalog's own (the built-in Botkins marketplace first), so a catalog puts its best templates first.
-- `agents.template` answers with the instructions and any bundle for review in Create a bot. It is refused with a sentence when the template is gone.
+- A bundle-aware client passes `2` to `agents.template` on a host advertising `agent-template-bundles-v1`. Readers using the original call can still open plain templates. Opening a bundled template with an older reader returns an update message. The detail response supplies the instructions and any bundle for review in Create a bot. It is refused with a sentence when the template is gone.
 
 ## What a client shows
 
 - The list: each template's Botkin (`look`), its name, its summary, and its category and marketplace on one line. Search, and the categories as chips.
-- A template's page: the Botkin, the name, the role, the summary, category · marketplace · version · author, the instructions as they will be given, and one main action, Install.
+- A template's page: the Botkin, the name, the role, the summary, category · marketplace · version · author, the instructions as they will be given, any bundled skill instructions and routine schedules and prompts, and one main action, Install.
 - Install opens Create a bot filled in from `agents.template`: name, role, about, instructions and look. When the marketplace is not built in, Create a bot says one line under the form's start: "From <marketplace>. Someone else wrote these instructions: read them first."
 - The bot is made with `addBot` as any other. A template is not saved as one of the person's own templates.

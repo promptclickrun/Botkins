@@ -76,11 +76,13 @@ export class Templates {
     this.ws.save();
     return template.id;
   }
+  fieldsFromBot(botId, name) {
+    const bot = this.ws.bot(botId);
+    return templateFields({ ...bot, name: name?.trim() || bot.name, bundle: this.ws.bundleForBot(bot) });
+  }
   /** Saves a bot's setup as a template. */
   saveFromBot(botId, name) {
-    const bot = this.ws.bot(botId);
-    const fields = templateFields({ ...bot, name: name?.trim() || bot.name });
-    return this.add(fields, "saved");
+    return this.add(this.fieldsFromBot(botId, name), "saved");
   }
   rename(id, name) {
     this.get(id).name = textField(name, 48, "template name");
@@ -96,7 +98,7 @@ export class Templates {
    * { name, text }. For a window that can't show a save dialog (a phone, another computer).
    */
   exportText({ templateId, botId } = {}) {
-    const fields = templateId ? this.get(templateId) : templateFields(this.ws.bot(botId));
+    const fields = templateId ? this.get(templateId) : this.fieldsFromBot(botId);
     return { name: (fields.name.replace(/[\\/:*?"<>|\0-\x1f]+/g, " ").replace(/\s+/g, " ").trim() || "Bot template") + ".json", text: JSON.stringify(templateFile(fields), null, 2) + "\n" };
   }
   /** Writes a template, or a bot as a template, to a file the person chose. */

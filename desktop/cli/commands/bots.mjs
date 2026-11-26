@@ -419,7 +419,7 @@ export const botsCommands = {
           const found = await readTemplate(context, ref);
           show(context, ["This template's words steer the bot that is made from it:", "", found.marketplace ? marketText(found) : templateText(found)].join("\n"));
           if (!(await confirm(context, "Make a bot from it?"))) return EXIT.failed;
-          context.print(await call(context, "templates.use", found.id, context.options.name, { version: 2, saved: !found.marketplace, bundle: found.bundle }), (made) => "Added " + named(made.name) + " (" + named(made.role) + "). Talk to it with `botkins chat " + shellWord(made.name, "<the bot>") + "`.");
+          context.print(await call(context, "templates.use", found.id, context.options.name, { version: 2, saved: !found.marketplace, template: found }), (made) => "Added " + named(made.name) + " (" + named(made.role) + "). Talk to it with `botkins chat " + shellWord(made.name, "<the bot>") + "`.");
         },
       },
       save: {

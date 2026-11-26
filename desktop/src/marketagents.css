@@ -73,6 +73,7 @@
 .bot-hero-copy p.agent-detail-role { color: var(--ink); font-weight: 600; }
 .bot-hero-copy small { color: var(--muted); font-size: calc(12px * var(--text-scale)); }
 .bot-hero-copy .plugin-detail-actions { margin-top: 8px; }
+.bundle-item p,
 .set-row.agent-instructions p {
   margin: 0;
   white-space: pre-wrap;
@@ -92,6 +93,7 @@
   -webkit-line-clamp: var(--lines, 4);
 }
 
+.set-row.bundle-item { display: block; }
 .template-bundle summary {
   cursor: pointer;
   color: var(--ink-2);

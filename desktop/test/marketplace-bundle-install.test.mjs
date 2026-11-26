@@ -4,6 +4,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { skillSupport } from "../desktop/providers/skills.mjs";
 import { tickChatSchedules } from "../desktop/schedules.mjs";
+import { toolsApi } from "../desktop/terminal/control-tools.mjs";
 import { fakeClient, tempDir } from "./fake-copilot.mjs";
 import { Workspace } from "./starter.mjs";
 
@@ -97,4 +98,28 @@ test("an invalid bundled routine leaves no bot, chat, routine or workspace skill
     assert.equal(runtimeSkills(observed, "pip").list.some((s) => s.name === skill.name), false);
     assert.equal(observed.integrations.skills().some((s) => s.name === skill.name), false);
   }
+});
+
+test("the per-bot skills command toggles a bundled skill independently of a shared skill with the same name", async (t) => {
+  const ws = open(tempDir(t));
+  const owner = await ws.agents.create(template);
+  const calls = toolsApi({
+    workspace: ws, bot: (id) => ws.bot(id),
+    handlers: { skills: () => ({ skills: ws.integrations.skills() }), setBotIntegrations: (...args) => ws.integrations.setBotIntegrations(...args) },
+  });
+  const row = (id) => calls["bots.tools"]([id]).skills.find((s) => s.name === skill.name);
+  assert.equal(row(owner)?.bundled, true);
+  assert.equal(row("pip"), undefined);
+  await assert.rejects(calls["bots.tools.set"](["pip", { skillsOn: [skill.name] }]), /no skill/i);
+  ws.integrations.saveSkill({ ...skill, instructions: "Workspace instructions." });
+  ws.integrations.setSkillEnabled(skill.name, false);
+  assert.equal(row("pip").enabled, false);
+  assert.equal(row(owner).enabled, true);
+  await calls["bots.tools.set"]([owner, { skillsOff: [skill.name] }]);
+  assert.equal(row(owner).on, false);
+  assert.equal(runtimeSkills(ws, owner).list.some((s) => s.name === skill.name), false);
+  await calls["bots.tools.set"]([owner, { skillsOn: [skill.name] }]);
+  assert.equal(row(owner).on, true);
+  checkInstall(ws, owner);
+  assert.equal(runtimeSkills(ws, "pip").list.some((s) => s.name === skill.name), false);
 });

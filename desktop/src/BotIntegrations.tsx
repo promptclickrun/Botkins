@@ -4,6 +4,7 @@ import type { Bot, State } from "./types";
 import { Group, SwitchRow, errorText } from "./SettingsRows";
 import { skillOrigin, useSkills } from "./SkillsSettings";
 import { serverSummary } from "./McpSettings";
+import { botSkillRows } from "../desktop/link/bot-skills.mjs";
 import "./integrations.css";
 
 const api = window.botkins;
@@ -27,8 +28,7 @@ export default function BotIntegrations({
   const [error, setError] = useState("");
   const skillsOff = bot.skillsOff ?? [];
   const mcpOff = bot.mcpOff ?? [];
-  // A script command is typed by the person; it is no skill that a bot has or leaves out.
-  const named = (list?.skills ?? []).filter((s) => !s.command);
+  const named = botSkillRows(list?.skills ?? [], bot);
   const skills = named.filter((s) => s.enabled);
   const servers = (state.mcpServers ?? []).filter((s) => s.enabled);
   const hidden = named.length - skills.length + (state.mcpServers ?? []).length - servers.length;
@@ -58,7 +58,7 @@ export default function BotIntegrations({
         <div className="set-card">
           <div className="set-row int-intro">
             <small>
-              Every bot uses the skills and MCP servers from Settings. Turn off what {bot.name} shouldn't use.
+              Choose which skills and MCP servers {bot.name} can use.
             </small>
             {skills.length + servers.length > 8 && (
               <label className="int-filter compact">
@@ -82,7 +82,7 @@ export default function BotIntegrations({
                 <div className="set-label">
                   <span className="int-title">
                     <span className="set-name">{s.name}</span>
-                    <span className="int-origin">{skillOrigin(s, list)}</span>
+                    <span className="int-origin">{s.shared ? skillOrigin(s.shared, list) : "Bot template"}</span>
                   </span>
                   {s.description && <small className="int-line" title={s.description}>{s.description}</small>}
                 </div>

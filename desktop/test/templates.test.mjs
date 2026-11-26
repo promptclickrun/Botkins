@@ -66,11 +66,15 @@ test("version 2 round-trips only the portable definitions, from an imported temp
   assert.deepEqual(templateForReader(templates.get(id), 2).bundle, canonical);
   assert.throws(() => templateForReader(templates.get(id)), /Update Botkins/);
   assert.equal(templateForReader(bot), bot);
-  bot.bundle = bundle;
-  const saved = templates.get(templates.saveFromBot(bot.id));
+  const created = ws.addBot(templates.get(id));
+  const saved = templates.get(templates.saveFromBot(created));
   assert.deepEqual(saved.bundle, canonical);
-  assert.deepEqual(JSON.parse(templates.exportText({ botId: bot.id }).text), { ...published, bundle: canonical });
-  assert.notEqual(saved.bundle.skills[0], bot.bundle.skills[0]);
+  assert.deepEqual(JSON.parse(templates.exportText({ botId: created }).text), { ...published, bundle: canonical });
+  assert.notEqual(saved.bundle.skills[0], ws.bot(created).bundle.skills[0]);
+  const [{ chat }] = ws.panels.routines.list(created);
+  ws.panels.routines.update(chat.id, { name: "Monday notes" });
+  assert.equal(JSON.parse(templates.exportText({ botId: created }).text).bundle.routines[0].name, "Monday notes");
+  assert.equal(saved.bundle.routines[0].name, "Friday notes");
   for (const invalid of [
     { ...published, version: 1 },
     { ...published, bundle: undefined },

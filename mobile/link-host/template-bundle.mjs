@@ -72,8 +72,39 @@ export function templateBundle(input) {
   return bundle;
 }
 
+/** Only the portable setup of a template's own routines travels with a copy of the bot. */
+export function currentBotBundle(bot, chats, person = "owner") {
+  if (!bot?.bundle) return undefined;
+  const routines = [];
+  for (const chat of chats) {
+    if (chat.botId !== bot.id) continue;
+    for (const entry of chat.schedules ?? []) {
+      if (!entry.fromTemplate || !entry.routine || entry.script) continue;
+      if (person !== "owner" && (entry.createdBy ?? chat.createdBy) !== person) continue;
+      try {
+        routines.push(routine({ name: entry.name, instructions: entry.prompt, cadence: entry.cadence }));
+      } catch {
+        // An edited routine may now use a local command, a one-time date or another nonportable field.
+      }
+    }
+  }
+  const skills = bot.bundle.skills;
+  if (!skills?.length && !routines.length) return undefined;
+  return templateBundle({ ...(skills?.length && { skills }), ...(routines.length && { routines }) });
+}
+
 /** Older clients would silently create a plain bot from this detail. */
 export function templateForReader(template, version) {
   if (template.bundle && version !== 2) throw new Error("Update Botkins on this device to use templates with bundled skills or routines.");
   return template;
+}
+
+/** Reads the bundle from an imported template file after the caller recognizes its format. */
+export function templateFileBundle(data) {
+  if (data.version !== 1 && data.version !== 2) throw new Error("This template was made by a newer Botkins. Update Botkins to import it.");
+  if (Object.hasOwn(data, "bundle") !== (data.version === 2)) throw new Error("A bot template with a bundle must use version 2, and version 2 requires a bundle.");
+  if (data.version === 1) return undefined;
+  if (Object.keys(data).some((key) => !["format", "version", "name", "role", "summary", "instructions", "look", "bundle"].includes(key)))
+    throw new Error("That version 2 template contains an unknown field.");
+  return templateBundle(data.bundle);
 }

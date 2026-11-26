@@ -776,6 +776,8 @@ export class Integrations {
   saveScriptCommand({ name, description, script, original }) {
     const fields = cleanScriptCommand({ name, description, script });
     const id = fields.name;
+    if (this.ws.state.bots.some(bot => bot.bundle?.skills?.some(skill => skill.name === id)))
+      throw new Error("/" + id + " is a skill of a bot on this computer. Choose another name.");
     const current = original ? this.ownSkillDir(original) : null;
     if (original && !this.scriptCommands().some((s) => s.name === original)) throw new Error("This isn't a script command. Change it as a skill.");
     if (id !== original && this.skills().some((s) => s.name === id)) throw new Error("A skill named " + id + " already exists.");
@@ -947,7 +949,10 @@ export class Integrations {
     if (this.skillState.standalone) this.skillState.standalone = this.skillState.standalone.filter(entry => entry !== basename(dir));
     for (const [id, skill] of Object.entries(this.skillState.catalog ?? {})) if (skill === name) delete this.skillState.catalog[id];
     this.skillState.disabled = this.skillState.disabled.filter((n) => n !== name);
-    for (const bot of this.ws.state.bots) if (bot.skillsOff) bot.skillsOff = bot.skillsOff.filter((n) => n !== name);
+    for (const bot of this.ws.state.bots) {
+      if (bot.skillsOff && !bot.bundle?.skills?.some((skill) => skill.name === name))
+        bot.skillsOff = bot.skillsOff.filter((n) => n !== name);
+    }
     this.changed();
   }
   removeFolder(id) {

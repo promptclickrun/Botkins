@@ -1064,7 +1064,7 @@ export function authorize(principal, team, method, args = [], lookups = {}) {
     }
   }
   // Creating or copying a bundled bot also creates its private skills and routines.
-  const bundle = method === "addBot" ? args[0]?.bundle : method === "duplicateBot" ? lookup("bot", args[0], lookups)?.bundle : undefined;
+  const bundle = method === "addBot" ? args[0]?.bundle : method === "duplicateBot" ? lookup("botBundle", args[0], lookups) : undefined;
   if (bundle?.skills?.length && !hasAction(role.perms, "skills", "create")) return "Your team role cannot create bundled skills.";
   if (bundle?.routines?.length && !hasAction(role.perms, "today", "create")) return "Your team role cannot create bundled routines.";
   const request = method === "respond" ? lookup("request", args[0], lookups) : null;
@@ -1275,10 +1275,12 @@ export function filterParts(parts, principal, team, extra = {}) {
   if (sharedVoice) out.voice = sharedVoice;
   const seen = (bot) => {
     // What the owner wrote for the bot (both of its prompts) is for a role that manages bots; where it came from is the owner's alone.
-    const { hidden: _hidden, pinned: _pinned, sectionId: _section, origin: _origin, bundle: _bundle, instructions, clarificationInstructions, ...rest } = bot;
+    const { hidden: _hidden, pinned: _pinned, sectionId: _section, origin: _origin, bundle, skillsOff, instructions, clarificationInstructions, ...rest } = bot;
     const own = view.bots[bot.id] ?? {};
+    const privateNames = new Set(bundle?.skills?.map(skill => skill.name));
     return {
       ...rest,
+      ...(skillsOff && { skillsOff: skillsOff.filter(name => !privateNames.has(name)) }),
       ...(mayManage && instructions !== undefined && { instructions }),
       ...(mayManage && clarificationInstructions !== undefined && { clarificationInstructions }),
       ...(own.hidden && { hidden: true }),

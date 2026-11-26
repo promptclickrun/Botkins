@@ -17,7 +17,7 @@ import { DEMO_FEATURED, demoCatalogAdd, demoCatalogList } from "./mock-catalog.m
 import { uploadSkill } from "./skill-import.mjs";
 import { parseSkill } from "./skill-format.mjs";
 import { botVoiceField } from "./voice.mjs";
-import { templateBundle, templateForReader } from "./template-bundle.mjs";
+import { currentBotBundle, templateBundle, templateFileBundle, templateForReader } from "./template-bundle.mjs";
 import { hasAction, roleOfMember } from "./team.mjs";
 import { proactiveChats, proactivePatch, proactiveSees, proactiveStart } from "./proactive-rules.mjs";
 import { findMainChat, makeMainChat, migrateMainChats, changeMainContext, visibleChat } from "./main-chat.mjs";
@@ -1495,7 +1495,7 @@ export class MockBackend {
     // What this stand-in app supports itself, beyond the link's own list.
     // "files-v1": a file out and in as text, without a dialog. "folders-v1": the folder browser.
     // "artifacts-v1": what the bots made or were given, from an index the app keeps (here: made up).
-    this.capabilities = ["main-chat-v1", "message-reactions-v1", "client-message-id-v1", "voice-turns-v1", "voice-history-v1", "quiet-replies-v1", "routine-delivery-v1", ...(process.env.BOTKINS_DEV_NO_OUTPUT === "off" ? [] : ["routine-no-output-v1"]), "routine-scripts-v1", "routine-models-v1", "routine-silent-v1", "routine-notify-targets-v1", "proactive-agent-v2", "proactive-learning-v1", "proactive-team-v1", "models-v2", "fast-mode-v1", "side-pane-v1", "files-v1", "folders-v1", "project-artifacts-v1", "artifacts-v1", "secure-input-v1", "chat-title-regeneration-v1", ...(process.env.BOTKINS_DEV_USAGE === "off" ? [] : ["provider-usage-v1"])];
+    this.capabilities = ["main-chat-v1", "message-reactions-v1", "client-message-id-v1", "voice-turns-v1", "voice-history-v1", "quiet-replies-v1", "routine-delivery-v1", "routine-owner-v1", ...(process.env.BOTKINS_DEV_NO_OUTPUT === "off" ? [] : ["routine-no-output-v1"]), "routine-scripts-v1", "routine-models-v1", "routine-silent-v1", "routine-notify-targets-v1", "proactive-agent-v2", "proactive-learning-v1", "proactive-team-v1", "models-v2", "fast-mode-v1", "side-pane-v1", "files-v1", "folders-v1", "project-artifacts-v1", "artifacts-v1", "secure-input-v1", "chat-title-regeneration-v1", ...(process.env.BOTKINS_DEV_USAGE === "off" ? [] : ["provider-usage-v1"])];
     this.capabilities.push("project-folders-v1", "project-mode-v1", "project-clone-v1", "mark-chats-read-v1", "stop-helper-v1");
     if (this.timeline) this.capabilities.push("turn-timeline-v1");
     // "bot-voice-v1": a bot may have a voice of its own. BOTKINS_DEV_BOT_VOICE=off is an older computer.
@@ -1768,14 +1768,16 @@ export class MockBackend {
   }
   finishBot(bot, input) {
     const bundle = templateBundle(input);
+    if (bundle && !this.capabilities.includes("agent-template-bundles-v1")) throw new Error("Update the app on your computer to install a template bundle.");
     const who = this.caller?.id ?? "owner";
     if (who === "owner") delete bot.createdBy;
     else bot.createdBy = who;
     if (bundle) bot.bundle = bundle;
     this.state.bots.push(bot);
     this.mainChat(bot.id, who);
-    for (const routine of bundle?.routines ?? []) {
-      this.handlers.createRoutine.call(this, { botId: bot.id, name: routine.name, prompt: routine.instructions, cadence: routine.cadence, notify: false }, true);
+    for (const routine of [...(bundle?.routines ?? [])].reverse()) {
+      const chatId = this.handlers.createRoutine.call(this, { botId: bot.id, name: routine.name, prompt: routine.instructions, cadence: routine.cadence, notify: false });
+      Object.assign(this.chat(chatId).schedules[0], { enabled: false, fromTemplate: true });
     }
     return bot.id;
   }
@@ -2493,9 +2495,10 @@ export class MockBackend {
       this.state.chats = this.state.chats.filter((c) => c.botId !== id);
     },
     duplicateBot(id) {
-      const { id: _id, pinned: _pinned, bundle, ...copy } = this.bot(id);
+      const source = this.bot(id);
+      const { id: _id, pinned: _pinned, bundle: _original, ...copy } = source;
       const bot = { ...structuredClone(copy), id: "bot-" + randomUUID().slice(0, 8), name: copy.name + " copy" };
-      return this.finishBot(bot, bundle);
+      return this.finishBot(bot, currentBotBundle(source, this.state.chats, this.caller?.id));
     },
     // Made-up agents in the person's GitHub Copilot setup. A bot made from one is marked `added`.
     importableAgents() {
@@ -2612,7 +2615,8 @@ export class MockBackend {
     },
     saveTemplate(botId, name) {
       const bot = this.bot(botId);
-      const template = { id: randomUUID(), name: name || bot.name, role: bot.role, summary: bot.summary ?? "", instructions: bot.instructions, avatar: bot.avatar, ...(bot.look && { look: structuredClone(bot.look) }), ...(bot.bundle && { bundle: templateBundle(bot.bundle) }), source: "saved", createdAt: now() };
+      const bundle = currentBotBundle(bot, this.state.chats);
+      const template = { id: randomUUID(), name: name || bot.name, role: bot.role, summary: bot.summary ?? "", instructions: bot.instructions, avatar: bot.avatar, ...(bot.look && { look: structuredClone(bot.look) }), ...(bundle && { bundle }), source: "saved", createdAt: now() };
       this.state.templates.push(template);
       return template.id;
     },
@@ -2627,11 +2631,12 @@ export class MockBackend {
       const source = target?.templateId ? this.state.templates.find((t) => t.id === target.templateId) : this.bot(target?.botId);
       if (!source) throw new Error("This template no longer exists.");
       const { name, role, summary = "", instructions = "", look } = source;
-      const bundle = templateBundle(source.bundle);
+      const bundle = target?.templateId ? templateBundle(source.bundle) : currentBotBundle(source, this.state.chats);
       return { name: fileName(name, "Bot template") + ".json", text: JSON.stringify({ format: "botkins.bot-template", version: bundle ? 2 : 1, name, role, summary, instructions, ...(look && { look }), ...(bundle && { bundle }) }, null, 2) + "\n" };
     },
     // A template from the text of a file someone shared ("Import…" without an open dialog).
     importTemplateText(file) {
+      if (typeof file?.text !== "string" || Buffer.byteLength(file.text, "utf8") > 256 * 1024) throw new Error("That file is too large to be a bot template.");
       let data;
       try {
         data = JSON.parse(file?.text);
@@ -2639,7 +2644,12 @@ export class MockBackend {
         data = null;
       }
       if (!data || typeof data !== "object" || typeof data.name !== "string" || !data.name.trim()) throw new Error("That file isn't a bot template.");
-      const template = { id: randomUUID(), name: data.name.trim().slice(0, 48), role: String(data.role ?? ""), summary: String(data.summary ?? ""), instructions: String(data.instructions ?? ""), avatar: data.avatar, source: "imported", createdAt: now() };
+      // Older demo exports had only botkinsTemplate and loose bot fields.
+      const legacy = data.format === undefined && data.version === undefined && !Object.hasOwn(data, "bundle");
+      if (!legacy && !["botkins.bot-template", "commander.bot-template"].includes(data.format)) throw new Error("That file isn't a Botkins bot template.");
+      const bundle = legacy ? undefined : templateFileBundle(data);
+      if (bundle && !this.capabilities.includes("agent-template-bundles-v1")) throw new Error("Update the app on your computer to import a template bundle.");
+      const template = { id: randomUUID(), ...(bundle && { bundle }), ...(data.look && { look: structuredClone(data.look) }), name: data.name.trim().slice(0, 48), role: String(data.role ?? ""), summary: String(data.summary ?? ""), instructions: String(data.instructions ?? ""), avatar: data.avatar, source: "imported", createdAt: now() };
       this.state.templates.push(template);
       return template.id;
     },
@@ -2874,12 +2884,13 @@ export class MockBackend {
     catalog(botId) {
       const who = this.caller?.id ?? "owner";
       const canUse = who === "owner" || hasAction(roleOfMember(this.teamOf?.(), who)?.perms, "skills", "use");
-      const bundled = canUse && this.state.bots.find((bot) => bot.id === botId)?.bundle?.skills;
+      const bot = this.state.bots.find((bot) => bot.id === botId);
+      const bundled = canUse ? bot?.bundle?.skills?.filter((skill) => !bot.skillsOff?.includes(skill.name)) ?? [] : [];
       return {
       choices: [
         { name: "weekly-review", kind: "Skill", command: "/weekly-review", source: "Botkins", description: "Run a weekly review: wins, misses and next steps." },
         { name: "meeting-notes", kind: "Skill", command: "/meeting-notes", source: "Botkins", description: "Turn a transcript into decisions and action items." },
-        ...(bundled || []).map(({ name, description }) => ({ name, description, kind: "Skill", command: "/" + name, source: "Botkins" })),
+        ...bundled.map(({ name, description }) => ({ name, description, kind: "Skill", command: "/" + name, source: "Botkins" })),
         { name: "compact", kind: "Command", command: "/compact", source: "Botkins", description: "Summarize this chat so far to free up room." },
         { name: "btw", kind: "Command", aliases: ["ask"], command: "/btw", hint: "<question>", duringTurn: true, source: "Botkins", description: "Ask a side question about this chat without adding it to the conversation." },
         { name: "model", kind: "Command", command: "/model", source: "Botkins", description: "Choose the model for this chat.", hint: "[name]", options: [{ name: "auto", description: "Let the app choose" }, { name: "gpt-5.5", description: "GPT-5.5" }] },
@@ -3119,7 +3130,7 @@ export class MockBackend {
       (this.servicesOn ??= new Set(["opencode-zen"])).delete(serviceId);
     },
     // Routines
-    createRoutine(data, fromTemplate = false) {
+    createRoutine(data) {
       this.bot(data.botId);
       const chatId = this.handlers.createChat.call(this, data.botId);
       const chat = this.chat(chatId);
@@ -3130,7 +3141,7 @@ export class MockBackend {
       const prompt = script && !data.followUp ? String(data.prompt ?? "").trim() : text(data.prompt, 4000, "prompt");
       const creator = this.caller?.id;
       if (creator && creator !== "owner") chat.createdBy = creator;
-      chat.schedules = [{ id: 1, routine: true, enabled: !fromTemplate, ...(fromTemplate && { fromTemplate: true }), ...(chat.createdBy && { createdBy: chat.createdBy }), name: data.name, prompt, cadence: data.cadence, timezone: data.timezone || "America/Chicago", recurring: data.cadence.kind !== "once", nextAt: now() + 20 * HOUR, createdAt: now(), ...(data.deliver && { deliver: delivery(data.deliver) }), ...(data.notify === false && { notify: false }), ...(data.notifyTargets && { notifyTargets: data.notifyTargets }), ...(script && { script, followUp: data.followUp === true }) }];
+      chat.schedules = [{ id: 1, routine: true, enabled: true, ...(chat.createdBy && { createdBy: chat.createdBy }), name: data.name, prompt, cadence: data.cadence, timezone: data.timezone || "America/Chicago", recurring: data.cadence.kind !== "once", nextAt: now() + 20 * HOUR, createdAt: now(), ...(data.deliver && { deliver: delivery(data.deliver) }), ...(data.notify === false && { notify: false }), ...(data.notifyTargets && { notifyTargets: data.notifyTargets }), ...(script && { script, followUp: data.followUp === true }) }];
       if (data.model) chat.model = data.model;
       return chatId;
     },

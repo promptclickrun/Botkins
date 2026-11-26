@@ -322,7 +322,9 @@ export function botsApi({ workspace, handlers, bot }) {
     async "templates.use"([id, name, review]) {
       const found = review?.saved === true ? workspace.templates.get(id) : await handlers["agents.template"](id, review?.version);
       templateForReader(found, review?.version);
-      if (!isDeepStrictEqual(review?.bundle, found.bundle)) throw new ControlError("This template changed. Review it again before creating the bot.", "BAD_ARGUMENT");
+      if (review?.version === 2 && !isDeepStrictEqual(review.template, review.saved ? templateWhole(found) : found)) {
+        throw new ControlError("This template changed. Review it again before creating the bot.", "BAD_ARGUMENT");
+      }
       if (name !== undefined && name !== null) text(name, 48, "the bot a name");
       const botId = await handlers.addBot({ name: name ?? found.name, role: found.role, instructions: found.instructions, ...(found.summary && { summary: found.summary }), ...(found.look && { look: found.look }), ...(found.bundle && { bundle: found.bundle }) });
       const made = bot(botId);
