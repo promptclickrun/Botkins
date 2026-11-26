@@ -79,6 +79,14 @@ test("pins, hiding, primary bot, order and sections", (t) => {
   assert.equal(ws.state.sections[0].name, "Deep research");
   assert.throws(() => ws.agents.setBotFlags(pip, { sectionId: "nope" }), /Unknown section/);
   assert.throws(() => ws.agents.setBotFlags(pip, { color: "red" }), /Unknown bot flag/);
+  const work = ws.agents.addSection("Work");
+  const home = ws.agents.addSection("Home");
+  ws.agents.orderSections([home, section]);
+  assert.deepEqual(ws.state.sections.map((s) => s.id), [home, section, work], "named sections first, the rest after in their order");
+  assert.throws(() => ws.agents.orderSections([home, "nope"]), /Unknown section/);
+  assert.deepEqual(ws.state.sections.map((s) => s.id), [home, section, work], "a bad order changes nothing");
+  ws.agents.deleteSection(work);
+  ws.agents.deleteSection(home);
   ws.agents.deleteSection(section);
   assert.equal(ws.bot(pip).sectionId, null, "deleting a section keeps its bots");
   assert.equal(ws.state.sections.length, 0);

@@ -2616,6 +2616,10 @@ export class MockBackend {
     deleteSection(id) {
       this.state.sections = this.state.sections.filter((s) => s.id !== id);
     },
+    orderSections(ids) {
+      const named = ids.map((id) => this.state.sections.find((s) => s.id === id)).filter(Boolean);
+      this.state.sections = [...named, ...this.state.sections.filter((s) => !named.includes(s))];
+    },
     saveTemplate(botId, name) {
       const bot = this.bot(botId);
       const bundle = currentBotBundle(bot, this.state.chats);

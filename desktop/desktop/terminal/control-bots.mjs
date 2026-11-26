@@ -255,6 +255,16 @@ export function botsApi({ workspace, handlers, bot }) {
       await handlers.renameSection(found.id, name);
       return sectionView(section(found.id));
     },
+    /** Moves one section to a place (1 is the top); the others keep their order around it. */
+    async "bots.sections.move"([ref, place]) {
+      const found = section(ref);
+      const at = Number(place);
+      const list = sections().filter((item) => item.id !== found.id);
+      if (!Number.isInteger(at) || at < 1 || at > list.length + 1) throw new ControlError("Give a place from 1 to " + (list.length + 1) + ".", "BAD_ARGUMENT");
+      list.splice(at - 1, 0, found);
+      await handlers.orderSections(list.map((item) => item.id));
+      return sections().map(sectionView);
+    },
     /** Removes a section. Its bots stay and are in no section. */
     async "bots.sections.remove"([ref]) {
       const found = section(ref, true);

@@ -259,6 +259,13 @@ export class Agents {
     this.section(id).name = textField(name, 40, "section name");
     this.ws.save();
   }
+  /** Puts the sections in the order of `ids`. Sections it doesn't name keep their order after the named ones. */
+  orderSections(ids) {
+    if (!Array.isArray(ids)) throw new Error("Give the section ids in their new order.");
+    const named = [...new Set(ids)].map((id) => this.section(id));
+    this.state.sections = [...named, ...this.state.sections.filter((section) => !named.includes(section))];
+    this.ws.save();
+  }
   deleteSection(id) {
     this.section(id);
     this.state.sections = this.state.sections.filter((s) => s.id !== id);

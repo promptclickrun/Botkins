@@ -745,6 +745,7 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
     addSection: (name) => workspace.agents.addSection(name),
     renameSection: (id, name) => workspace.agents.renameSection(id, name),
     deleteSection: (id) => workspace.agents.deleteSection(id),
+    orderSections: (ids) => workspace.agents.orderSections(ids),
     setChatFlags: (id, patch) => workspace.agents.setChatFlags(id, patch),
     markChatsRead: (ids) => workspace.agents.markChatsRead(ids),
     renameChat: (id, title) => workspace.agents.renameChat(id, title),

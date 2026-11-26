@@ -473,7 +473,12 @@ export async function deleteBot(b: Bot, ask: AskFn) {
   return !!ok;
 }
 
-function sectionMenuItems(section: Section, actions: PageActions, ask: AskFn): MenuItem[] {
+function sectionMenuItems(sections: Section[], section: Section, actions: PageActions, ask: AskFn): MenuItem[] {
+  const order = (by: -1 | 1) => movedSection(sections, section.id, by);
+  const move = (by: -1 | 1) => {
+    const ids = order(by);
+    if (ids) run(actions, api().orderSections(ids));
+  };
   return [
     {
       label: "Rename…",
@@ -491,6 +496,9 @@ function sectionMenuItems(section: Section, actions: PageActions, ask: AskFn): M
           })(),
         ),
     },
+    { label: "Move up", icon: ArrowUp, disabled: !order(-1), run: () => move(-1) },
+    { label: "Move down", icon: ArrowDown, disabled: !order(1), run: () => move(1) },
+    "separator",
     {
       label: "Delete section…",
       icon: Trash2,
@@ -671,7 +679,7 @@ export function BotCards({
         {sections.map(({ section, bots }) => {
           const open = !collapsed.includes(section.id);
           const sectionMenu = (e: ReactMouseEvent<HTMLElement>) =>
-            menu.show(e, section.name, sectionMenuItems(section, actions, dialogs.ask));
+            menu.show(e, section.name, sectionMenuItems(state.sections, section, actions, dialogs.ask));
           return (
             <div {...drag.place({ pinned: false, sectionId: section.id })} className="botgroup" key={section.id} onContextMenu={sectionMenu}>
               <div className="botgroup-head group-label">

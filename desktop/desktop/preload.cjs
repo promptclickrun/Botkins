@@ -191,6 +191,7 @@ for (const name of [
   "addSection",
   "renameSection",
   "deleteSection",
+  "orderSections",
   "setChatFlags",
   "markChatsRead",
   "renameChat",
