@@ -456,10 +456,7 @@
   .side-pane .chat-side {
     display: flex;
   }
-  /* The header button is there in a narrow window once the chat has panels. */
-  .chathead-details.has-panels {
-    display: inline-flex;
-  }
+  /* The header button is always there: Details holds the chat's model, context and people too. */
 }
 @media (prefers-reduced-motion: reduce) {
   .side-pane,

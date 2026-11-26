@@ -97,7 +97,7 @@ function CardAction({ entry, open }: { entry: McpCatalogEntry; open: (id: string
   );
 }
 
-function AppCard({ entry, open }: { entry: McpCatalogEntry; open: (id: string) => void }) {
+export function AppCard({ entry, open }: { entry: McpCatalogEntry; open: (id: string) => void }) {
   const badge = appBadge(entry);
   return (
     <div className="app-card" style={{ "--card-width": CARD_WIDTH + "px" } as React.CSSProperties}>
@@ -111,7 +111,7 @@ function AppCard({ entry, open }: { entry: McpCatalogEntry; open: (id: string) =
   );
 }
 
-function FeaturedCard({ entry, open }: { entry: McpCatalogEntry; open: (id: string) => void }) {
+export function FeaturedCard({ entry, open }: { entry: McpCatalogEntry; open: (id: string) => void }) {
   const badge = appBadge(entry);
   const style = { "--card-width": FEATURED_WIDTH + "px", "--brand": brandColor(entry.id, entry.name) } as React.CSSProperties;
   return (

@@ -3,8 +3,8 @@
 // that computer can't be reached, the pairing and team join forms (also used by the first-run
 // steps, src/SetupChoice.tsx) and Settings › Computers and teams.
 import { useEffect, useRef, useState } from "react";
-import type { RefObject } from "react";
-import { Check, Monitor, MonitorSmartphone, MoreHorizontal, Pencil, Plus, Trash2, UserPlus, Users } from "lucide-react";
+import type { ReactNode, RefObject } from "react";
+import { Check, ChevronsUpDown, Monitor, MonitorSmartphone, MoreHorizontal, Pencil, Plus, ShieldCheck, Trash2, UserPlus, Users } from "lucide-react";
 import type { ProfileHost, RemoteHost, State, TeamJoinState, TeamJoinTarget } from "./types";
 import { Group, errorText } from "./SettingsRows";
 import "./remotehosts.css";
@@ -38,11 +38,28 @@ function useDismiss(open: boolean, close: () => void, box: RefObject<HTMLElement
   }, [open]);
 }
 
+/** The model providers as the side menu's computer row shows them: its quiet line and a row of its menu. */
+export type HostModels = { label: string; line: string; on: boolean; icons: ReactNode; open: () => void };
+
 /**
- * The side menu's switcher: which computer's bots the window shows, and a menu to change it.
- * Shown once a computer is paired (or when the person asks to connect one from Settings).
+ * The side menu's one bottom row: which computer's bots the window shows, with the model providers
+ * on its quiet line. Its menu switches computers, connects another, and opens the model providers
+ * and (while it is on) Admin mode. Shown always, so the computer in use is never a guess.
  */
-export function HostSwitcher({ state, collapsed, connect }: { state: State; collapsed: boolean; connect: () => void }) {
+export function HostSwitcher({
+  state,
+  collapsed,
+  connect,
+  admin,
+  models,
+}: {
+  state: State;
+  collapsed: boolean;
+  connect: () => void;
+  /** Opens Settings › Team, from the Admin mode row. */
+  admin: () => void;
+  models: HostModels;
+}) {
   const [open, setOpen] = useState(false);
   const [error, setError] = useState("");
   // Where the menu goes: above the button, measured when it opens, so a narrow side menu doesn't cut it off.
@@ -51,7 +68,7 @@ export function HostSwitcher({ state, collapsed, connect }: { state: State; coll
   const remote = state.remote;
   const using = remote?.using ?? null;
   useDismiss(open, () => setOpen(false), box);
-  if (!remote?.hosts.length) return null;
+  const hosts = remote?.hosts ?? [];
   const use = (id: string | null) => {
     setOpen(false);
     setError("");
@@ -74,15 +91,18 @@ export function HostSwitcher({ state, collapsed, connect }: { state: State; coll
         }}
       >
         <span className="host-glyph" aria-hidden="true">
-          {using ? <MonitorSmartphone size={17} /> : <Monitor size={17} />}
-          {using && <i className="host-dot" data-state={using.state} />}
+          {using ? <MonitorSmartphone size={16} /> : <Monitor size={16} />}
+          <i className="host-dot" data-state={using ? using.state : models.on ? "online" : "offline"} />
         </span>
         <span className="nav-label">
-          {name}
-          {/* While Admin mode is on, the computer's name says so. */}
-          {state.adminMode && <span className="admin-tag">Admin mode</span>}
-          {using && <small>{using.member ? memberLabel(using.team) : hostLine(using)}</small>}
+          <span className="host-name">
+            {name}
+            {/* While Admin mode is on, the computer's name says so. */}
+            {state.adminMode && <span className="admin-tag">Admin</span>}
+          </span>
+          <small>{using ? (using.member ? memberLabel(using.team) : hostLine(using)) : models.line}</small>
         </span>
+        <ChevronsUpDown size={14} className="host-chevron" aria-hidden="true" />
       </button>
       {error && (
         <small className="host-error" role="alert">
@@ -96,7 +116,7 @@ export function HostSwitcher({ state, collapsed, connect }: { state: State; coll
             <span>This computer</span>
             {!using && <Check size={14} aria-hidden="true" />}
           </button>
-          {remote.hosts.map((host) => (
+          {hosts.map((host) => (
             <button type="button" role="menuitemradio" aria-checked={host.current} key={host.id} onClick={() => use(host.id)}>
               <MonitorSmartphone size={15} aria-hidden="true" />
               <span>
@@ -118,6 +138,41 @@ export function HostSwitcher({ state, collapsed, connect }: { state: State; coll
             <Plus size={15} aria-hidden="true" />
             <span>Connect to another computer…</span>
           </button>
+          <hr />
+          {/* The model providers of the computer in use: the row that stood under this one before. */}
+          <button
+            type="button"
+            role="menuitem"
+            aria-label={models.label}
+            onClick={() => {
+              setOpen(false);
+              models.open();
+            }}
+          >
+            <span className="host-menu-icons" aria-hidden="true">
+              {models.icons}
+            </span>
+            <span>
+              Model providers
+              <small>{models.line}</small>
+            </span>
+          </button>
+          {state.adminMode && (
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => {
+                setOpen(false);
+                admin();
+              }}
+            >
+              <ShieldCheck size={15} aria-hidden="true" />
+              <span>
+                Admin mode
+                <small>On: you see every member's spaces, bots and chats</small>
+              </span>
+            </button>
+          )}
         </div>
       )}
     </div>
@@ -128,7 +183,9 @@ export function HostSwitcher({ state, collapsed, connect }: { state: State; coll
 export function HostBanner({ state, pairAgain }: { state: State; pairAgain: () => void }) {
   const using = state.remote?.using;
   const [busy, setBusy] = useState(false);
-  if (!using) return null;
+  // While the other computer answers, the side menu's computer row already says whose bots these
+  // are, and its menu has "This computer". The line across the top is for trouble only.
+  if (!using || using.state === "online") return null;
   const back = () => {
     setBusy(true);
     void api.useRemoteHost(null).finally(() => setBusy(false));

@@ -43,12 +43,26 @@ final class WatchSession: NSObject, ObservableObject, WCSessionDelegate {
 
   func startVoice() {
     issue = nil
-    Task {
+    Task { [weak self] in
       guard await AVAudioApplication.requestRecordPermission() else {
-        issue = "Allow microphone access to talk on your Watch."
+        self?.issue = "Allow microphone access to talk on your Watch."
         return
       }
-      send(["command": "startVoice"])
+      guard let self else { return }
+      self.localVoice = WatchVoice(
+        status: "connecting",
+        sessionId: nil,
+        chatId: self.snapshot.chat?.id,
+        muted: false,
+        push: self.snapshot.voice.push,
+        problem: nil,
+        level: 0
+      )
+      self.send(["command": "startVoice"], onFailure: { [weak self] in
+        if self?.activeSessionId == nil, self?.localVoice?.status == "connecting" {
+          self?.localVoice = nil
+        }
+      })
     }
   }
 
@@ -75,16 +89,22 @@ final class WatchSession: NSObject, ObservableObject, WCSessionDelegate {
     stopAudio(nil)
   }
 
-  private func send(_ message: [String: Any]) {
+  private func send(_ message: [String: Any], onFailure: (() -> Void)? = nil) {
     guard reachable else {
       issue = "Phone unavailable"
+      onFailure?()
       return
     }
     var envelope = message
     envelope["revision"] = snapshot.revision
     if let activeSessionId { envelope["sessionId"] = activeSessionId }
-    WCSession.default.sendMessage(envelope, replyHandler: nil) { [weak self] _ in
-      Task { @MainActor in self?.issue = "Phone unavailable" }
+    // Passing a replyHandler makes WatchConnectivity wake a suspended iPhone companion app
+    // reliably and hold the delivery until the iPhone's WCSessionDelegate processes the message.
+    WCSession.default.sendMessage(envelope, replyHandler: { _ in }) { [weak self] _ in
+      Task { @MainActor in
+        self?.issue = "Phone unavailable"
+        onFailure?()
+      }
     }
   }
 
@@ -101,8 +121,11 @@ final class WatchSession: NSObject, ObservableObject, WCSessionDelegate {
     if !next.voice.active, activeSessionId != nil {
       stopAudio(next.voice.problem)
     }
-    if activeSessionId == next.voice.sessionId {
+    if activeSessionId != nil, activeSessionId == next.voice.sessionId {
       localVoice = next.voice
+    } else if next.voice.status == "idle" && localVoice?.status == "connecting" && next.voice.problem == nil {
+      // Keep optimistic connecting state while the phone finishes waking and syncing before
+      // startWatchVoice() publishes its own connecting/active state.
     } else if !next.voice.active || activeSessionId != next.voice.sessionId {
       localVoice = nil
     }

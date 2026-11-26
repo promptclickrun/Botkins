@@ -44,8 +44,8 @@ export function Modal({
 
 function FolderSelect({ folders, value, change, label }: { folders: string[]; value: string; change: (v: string) => void; label: string }) {
   return (
-    <label>
-      {label}
+    <label className="group-row wiki-form-row">
+      <span className="wiki-form-name">{label}</span>
       <select value={value} onChange={(e) => change(e.target.value)}>
         {folders.map((f) => (
           <option key={f} value={f}>
@@ -92,28 +92,31 @@ export function NewPageDialog({
       >
         <h2>New page</h2>
         <p>The page starts from its section's outline. You can change everything.</p>
-        <label>
-          Title
-          <input
-            autoFocus
-            required
-            maxLength={120}
-            value={title}
-            placeholder="Such as Contoso or Q3 renewal"
-            onChange={(e) => setTitle(e.target.value)}
-          />
-        </label>
-        <FolderSelect label="Section" folders={["", ...folders]} value={where} change={setWhere} />
+        {/* The fields are rows of one card, as in Settings. */}
+        <div className="group wiki-form-group">
+          <label className="group-row wiki-form-row">
+            <span className="wiki-form-name">Title</span>
+            <input
+              autoFocus
+              required
+              maxLength={120}
+              value={title}
+              placeholder="Such as Contoso or Q3 renewal"
+              onChange={(e) => setTitle(e.target.value)}
+            />
+          </label>
+          <FolderSelect label="Section" folders={["", ...folders]} value={where} change={setWhere} />
+        </div>
         {error && (
           <p role="alert" className="wiki-form-error">
             {error}
           </p>
         )}
         <div className="ask-actions">
-          <button type="button" className="secondary" onClick={close}>
+          <button type="button" className="btn" onClick={close}>
             Cancel
           </button>
-          <button className="primary" disabled={!title.trim() || busy}>
+          <button className="btn primary" disabled={!title.trim() || busy}>
             {busy ? "Creating…" : "Create page"}
           </button>
         </div>
@@ -162,24 +165,26 @@ export function MoveDialog({
       >
         <h2>Move or rename</h2>
         <p>Links to “{title}” follow it. Its title is its first heading.</p>
-        <FolderSelect label="Section" folders={["", ...folders]} value={where} change={setWhere} />
-        <label>
-          File name
-          <input required maxLength={64} value={name} onChange={(e) => setName(e.target.value)} aria-describedby="wiki-move-hint" />
-          <small id="wiki-move-hint" className="wiki-hint">
-            {file ? "Saved as " + target : "Use letters or numbers."}
-          </small>
-        </label>
+        <div className="group wiki-form-group">
+          <FolderSelect label="Section" folders={["", ...folders]} value={where} change={setWhere} />
+          <label className="group-row wiki-form-row">
+            <span className="wiki-form-name">File name</span>
+            <input required maxLength={64} value={name} onChange={(e) => setName(e.target.value)} aria-describedby="wiki-move-hint" />
+          </label>
+        </div>
+        <small id="wiki-move-hint" className="group-foot wiki-hint">
+          {file ? "Saved as " + target : "Use letters or numbers."}
+        </small>
         {error && (
           <p role="alert" className="wiki-form-error">
             {error}
           </p>
         )}
         <div className="ask-actions">
-          <button type="button" className="secondary" onClick={close}>
+          <button type="button" className="btn" onClick={close}>
             Cancel
           </button>
-          <button className="primary" disabled={!file || busy}>
+          <button className="btn primary" disabled={!file || busy}>
             {busy ? "Moving…" : "Move page"}
           </button>
         </div>
@@ -221,7 +226,7 @@ export function HistoryDialog({ path, title, close, restored }: { path: string; 
     <Modal title={"History of “" + title + "”"} className="wiki-history" close={close}>
       <div className="wiki-dialog-head">
         <h2>History</h2>
-        <button type="button" className="wiki-icon-button" aria-label="Close" onClick={close}>
+        <button type="button" className="icon-btn" aria-label="Close" onClick={close}>
           <X size={17} />
         </button>
       </div>
@@ -256,13 +261,13 @@ export function HistoryDialog({ path, title, close, restored }: { path: string; 
         </div>
       )}
       <div className="ask-actions">
-        <button type="button" className="secondary" onClick={close}>
+        <button type="button" className="btn" onClick={close}>
           Close
         </button>
         {!!versions?.length && (
           <button
             type="button"
-            className="primary"
+            className="btn primary"
             disabled={!selected || busy || text === undefined}
             onClick={() => {
               setBusy(true);

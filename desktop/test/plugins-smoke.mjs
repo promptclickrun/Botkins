@@ -53,7 +53,7 @@ delete env.ELECTRON_RUN_AS_NODE;
 const app = await _electron.launch({ args: binary ? [] : ["."], executablePath: binary, env });
 let page;
 const errors = [];
-const settings = () => page.locator("dialog.settings-window");
+const settings = () => page.getByRole("dialog", { name: "Settings" });
 async function openMarketplace() {
   await page.getByRole("button", { name: "Settings", exact: true }).click();
   const dialog = settings();

@@ -2,8 +2,8 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Button } from "glisse";
 import {
   ArrowDown,
-  ArrowLeft,
   ArrowUp,
+  ChevronLeft,
   ChevronRight,
   FolderGit2,
   FolderKanban,
@@ -22,14 +22,14 @@ import {
 } from "lucide-react";
 import { BotAvatar } from "./Avatar";
 import { Block } from "./Today";
-import { ChatRow, useAsk, type PageActions } from "./Pages";
+import { ChatRow, dateLabel, useAsk, type PageActions } from "./Pages";
 import ProjectChanges, { modeLabels } from "./ProjectChanges";
 import { accessVia, canUseProject, globalAccess, grantOf } from "./access";
 import type { Bot, ChatMode, Project, ProjectColor, ProjectTodo, State } from "./types";
 import "./records.css";
 import "./workspaces.css";
 
-import { WorkBar, type WorkNav } from "./WorkBar";
+import { WorkBar, WorkNeeds, type WorkNav } from "./WorkBar";
 import { AddChatDialog, ProjectArtifacts, chatsToAdd, hasProjectArtifacts } from "./ProjectExtras";
 import { CloneFields, FolderChoice, projectCapability } from "./ProjectFolders";
 import { FolderBrowserSheet } from "./PluginsSettings";
@@ -75,7 +75,7 @@ export default function Projects({
   const project = state.projects?.find((p) => p.id === selected);
   const projects = sortedProjects(state);
   return (
-    <div className="projects-page">
+    <div className={"page work-page " + (project ? "project-page-wrap" : "projects-page")}>
       {project ? (
         <ProjectPage
           key={project.id}
@@ -91,8 +91,13 @@ export default function Projects({
         />
       ) : (
         <>
-          <WorkBar work={work} tab="Projects" add={{ label: "New project", run: () => setCreating(true) }} />
-          <p className="muted page-lede">Chats, panels and a to-do list for each piece of work.</p>
+          <WorkBar
+            work={work}
+            tab="Projects"
+            add={{ label: "New project", run: () => setCreating(true) }}
+            lede="Chats, panels and a to-do list for each piece of work."
+          />
+          <WorkNeeds state={state} openChat={openChat} openTask={() => work.go("Tasks")} fail={fail} />
           {!projects.length ? (
             <div className="empty-detail projects-empty">
               <FolderKanban size={30} />
@@ -103,8 +108,9 @@ export default function Projects({
               </Button>
             </div>
           ) : (
-            <section className="project-group" aria-label="Projects">
-              <ul className="edit-list project-list">
+            <section className="page-section project-group" aria-label="Projects">
+              <h2 className="group-label">Projects · {projects.length}</h2>
+              <ul className="edit-list project-list group">
                 {projects.map((p) => (
                   <li key={p.id} className="link-row">
                     <ProjectRow state={state} project={p} open={() => setSelected(p.id)} />
@@ -136,16 +142,23 @@ function ProjectRow({ state, project: p, open }: { state: State; project: Projec
   const panels = state.panels.filter((x) => x.projectId === p.id).length;
   return (
     <button className="record-row" onClick={open}>
-      {p.folder ? <FolderGit2 size={18} className={"project-color " + (p.color ?? "")} /> : <FolderKanban size={18} className={"project-color " + (p.color ?? "")} />}
-      <span className="rowtext">
-        <strong>{p.name}</strong>
-        <small>
-          {[plural(chats, "chat"), plural(todo, "open to-do"), panels ? plural(panels, "panel") : "", p.folder ? p.folder.split(/[\\/]/).pop() : ""]
+      <span className={"project-tile project-color " + (p.color ?? "")} aria-hidden="true">
+        {p.folder ? <FolderGit2 size={16} /> : <FolderKanban size={16} />}
+      </span>
+      <span className="row-main">
+        <span className="row-title">{p.name}</span>
+        <span className="row-sub">
+          {[p.folder ? p.folder.split(/[\\/]/).pop() : p.description?.split("\n")[0], plural(chats, "chat"), plural(todo, "open to-do"), panels ? plural(panels, "panel") : ""]
             .filter(Boolean)
             .join(" · ")}
-        </small>
+        </span>
       </span>
-      <ChevronRight size={15} />
+      {p.lastUsed > 0 && (
+        <time className="row-value" title="Last used">
+          {dateLabel(p.lastUsed)}
+        </time>
+      )}
+      <ChevronRight size={15} className="row-chevron" aria-hidden="true" />
     </button>
   );
 }
@@ -279,24 +292,27 @@ function ProjectPage({
     ...(repo ? ([["changes", "Changes", GitCompareArrows, ""]] as [Section, string, typeof Info, string][]) : []),
   ];
   return (
-    <div className="project-page">
-      <button className="textbutton profile-back" onClick={back}>
-        <ArrowLeft size={15} />
-        All projects
-      </button>
-      <div className="record-head project-head">
-        <span className={"record-monogram project-mark " + (project.color ?? "")} aria-hidden="true">
-          {project.folder ? <FolderGit2 size={21} /> : <FolderKanban size={21} />}
+    <div className="project-page page-section">
+      <div className="work-back">
+        <button type="button" className="link-button" onClick={back}>
+          <ChevronLeft size={16} aria-hidden="true" />
+          All projects
+        </button>
+      </div>
+      <header className="page-head project-head">
+        <span className={"project-tile large project-color " + (project.color ?? "")} aria-hidden="true">
+          {project.folder ? <FolderGit2 size={24} /> : <FolderKanban size={24} />}
         </span>
-        <div>
-          <h1>{project.name}</h1>
+        <div className="page-heading">
+          <h1 className="page-title">{project.name}</h1>
           {project.folder && (
             <small className="project-meta">
               <span title={project.folder}>{project.folder}</span>
             </small>
           )}
+          {project.description && <p className="page-sub project-desc">{project.description.split("\n")[0]}</p>}
         </div>
-      </div>
+      </header>
       <div className="project-layout">
         <nav className="project-menu" aria-label="Project sections">
           {menu.map(([id, label, Icon, count]) => (
@@ -333,18 +349,36 @@ function ProjectPage({
   );
 }
 
-function Card({ title, note, action, children, label }: { title: string; note?: ReactNode; action?: ReactNode; children?: ReactNode; label?: string }) {
+/**
+ * A section of a project's page as the phone draws it: an uppercase label with its action at the
+ * right, a card, and a quiet note under it. `rows` makes the card's lists run edge to edge.
+ */
+function Card({
+  title,
+  note,
+  action,
+  children,
+  label,
+  rows,
+}: {
+  title: string;
+  note?: ReactNode;
+  action?: ReactNode;
+  children?: ReactNode;
+  label?: string;
+  rows?: boolean;
+}) {
   const id = "card-" + (label ?? title).replace(/\W+/g, "-").toLowerCase();
   return (
-    <section className="form-card" aria-labelledby={id}>
-      <div className="form-card-head">
-        <div>
-          <h3 id={id}>{title}</h3>
-          {note && <small>{note}</small>}
-        </div>
-        {action}
+    <section className="page-section" aria-labelledby={id}>
+      <div className="group-label">
+        <h3 id={id} className="card-title">
+          {title}
+        </h3>
+        {action && <span className="card-action">{action}</span>}
       </div>
-      {children}
+      {children && <div className={"group " + (rows ? "rows" : "padded")}>{children}</div>}
+      {note && <p className="group-foot">{note}</p>}
     </section>
   );
 }
@@ -539,6 +573,7 @@ function ProjectChats({
     <div className="record-detail">
       <Card
         title="Chats"
+        rows
         note={chats.length ? plural(chats.length, "chat") : "No chats in this project yet"}
         action={
           <button type="button" className="secondary" disabled={!chatsToAdd(state, project).length} onClick={() => setAdding(true)}>
@@ -556,6 +591,7 @@ function ProjectChats({
       </Card>
       <Card
         title="New chat"
+        rows
         note="The bot gets the project as context, and can keep the to-do list."
         action={
           project.folder && (
@@ -773,6 +809,7 @@ function ProjectAccess({ state, project, botPage, fail }: { state: State; projec
     <div className="record-detail">
       <Card
         title="Access"
+        rows
         note={
           everyone
             ? "All bots can use every project. Choose per bot in Settings › Access."

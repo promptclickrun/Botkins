@@ -789,8 +789,14 @@ export type AgentRequest = {
   credentialName?: string;
   credentialSource?: string;
   destination?: string;
+  /** Raised by this computer's node host for an incoming remote node operation (not backed by a chat). */
+  nodeJob?: true;
   operation?: string;
+  resourceId?: string;
+  resourceName?: string;
   sourceBotName?: string;
+  sourceHostName?: string;
+  targetHostName?: string;
   /** Its words (a script command's whole script) are read in the app: never answered from a notification, a card or a gadget. */
   review?: true;
   id: string;

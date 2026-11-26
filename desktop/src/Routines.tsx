@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import {
-  ArrowLeft,
+  ChevronLeft,
+  ChevronRight,
   CalendarClock,
   CircleAlert,
   CircleCheck,
@@ -14,14 +15,13 @@ import {
   Trash2,
   Zap,
 } from "lucide-react";
-import { Button } from "glisse";
 import { GlassSegmented } from "./GlisseUI";
 import { BotAvatar } from "./Avatar";
 import { useAsk, type PageActions } from "./Pages";
 import { Choices } from "./Preferences";
 import { categories as goalCategories } from "./Board";
 import type { Bot, Cadence, Chat, ChatSchedule, ModelChoice, PhoneLink, Run, RoutineDelivery, State } from "./types";
-import { WorkBar, type WorkNav } from "./WorkBar";
+import { BotChips, Folded, WorkBar, WorkNeeds, type WorkNav } from "./WorkBar";
 import ModelPicker, { ModelBadge } from "./ModelPicker";
 import {
   activeTargetsOnly,
@@ -415,25 +415,22 @@ export default function RoutinesPage({
   );
   const owners = state.bots.filter((b) => items.some((i) => i.chat.botId === b.id) || b.id === botFilter);
   const act = (p: Promise<unknown>) => void p.catch(actions.fail);
+  const hasAny = shown.length > 0 || panels.length > 0 || schedules.length > 0;
   return (
-    <div className="routines">
-      <WorkBar work={work} tab="Routines" add={{ label: "New routine", run: () => setView({ mode: "edit", botId: botFilter || undefined }) }} />
-      <p className="muted routines-lede">Work your bots do on a schedule, each in its own chat.</p>
-      {owners.length > 1 || botFilter ? (
-        <div className="filters chips" role="group" aria-label="Filter by bot">
-          <button aria-pressed={!botFilter} onClick={() => setBotFilter("")}>
-            All bots
-          </button>
-          {owners.map((b) => (
-            <button key={b.id} aria-pressed={botFilter === b.id} onClick={() => setBotFilter(b.id)}>
-              {b.name}
-            </button>
-          ))}
-        </div>
-      ) : null}
+    <div className="page work-page routines">
+      <WorkBar
+        work={work}
+        tab="Routines"
+        add={{ label: "New routine", run: () => setView({ mode: "edit", botId: botFilter || undefined }) }}
+        filters={owners.length > 1 || botFilter ? <BotChips bots={owners} value={botFilter} change={setBotFilter} /> : null}
+        lede="Work your bots do on a schedule, each in its own chat."
+      />
+      <WorkNeeds state={state} openChat={actions.open} openTask={() => work.go("Tasks")} fail={actions.fail} />
       {!shown.length && (
-        <div className="empty routines-empty">
-          <CalendarClock />
+        <div className={"work-empty" + (hasAny ? " inline" : "")}>
+          <span className="icon-tile">
+            <CalendarClock size={16} aria-hidden="true" />
+          </span>
           <div>
             <strong>{botFilter ? "No routines for this bot" : "No routines yet"}</strong>
             <small>Or ask a bot: “remind me every weekday at 9”.</small>
@@ -443,127 +440,138 @@ export default function RoutinesPage({
       {groups.map(
         (g) =>
           g.rows.length > 0 && (
-            <section key={g.name} className="routine-group" aria-label={g.name}>
-              <h2>
-                {g.name} <small>{g.rows.length}</small>
+            <section key={g.name} className="page-section routine-group" aria-label={g.name}>
+              <h2 className="group-label">
+                {g.name} · {g.rows.length}
               </h2>
-              {g.rows.map((i) => {
-                const notifyNote =
-                  i.entry.deliver?.to !== "none" && (i.entry.notify === false || i.entry.notifyTargets)
-                    ? routineNotifyLabel(i.entry, buildNotifyTargetView(state, i.chat.botId, phoneLink))
-                    : null;
-                return (
-                <div className="routine-row" key={i.chat.id}>
-                  <button className="routine-open" onClick={() => setView({ mode: "detail", id: i.chat.id })}>
-                    {i.bot && <BotAvatar bot={i.bot} size={38} />}
-                    <span className="rowtext">
-                      <strong>{i.entry.name}</strong>
-                      <small>
-                        {cadenceSummary(i.entry.cadence)} · {i.bot?.name}
-                        {deliveryLabel(i.entry.deliver) && " · " + deliveryLabel(i.entry.deliver)}
-                        {notifyNote && " · " + notifyNote}
-                      </small>
-                    </span>
-                    <span className="routine-when">
-                      <small className={g.name === "Paused" ? "paused" : undefined}>
-                        {g.name === "Up next" ? "Next" : g.name === "Paused" ? "Paused" : "Ran"}
-                      </small>
-                      <time>
-                        {g.name === "Up next"
-                          ? whenLabel(i.entry.nextAt!)
-                          : g.name === "Finished"
-                            ? whenLabel(i.entry.finishedAt ?? i.last?.time ?? i.entry.createdAt ?? Date.now())
-                            : "—"}
-                      </time>
-                    </span>
-                    <RunChip run={i.last} running={i.running} />
-                  </button>
-                  <Switch
-                    checked={i.entry.enabled !== false}
-                    disabled={i.entry.nextAt == null}
-                    label={"Enable " + i.entry.name}
-                    onChange={(v) => act(api.setRoutineEnabled(i.chat.id, v))}
-                  />
-                </div>
-                );
-              })}
+              <div className="group work-avatars">
+                <Folded
+                  rows={g.rows.map((i) => {
+                    const notifyNote =
+                      i.entry.deliver?.to !== "none" && (i.entry.notify === false || i.entry.notifyTargets)
+                        ? routineNotifyLabel(i.entry, buildNotifyTargetView(state, i.chat.botId, phoneLink))
+                        : null;
+                    const paused = g.name === "Paused";
+                    return (
+                      <div className={"group-row routine-row" + (paused ? " paused" : "")} key={i.chat.id}>
+                        <button className="routine-open" onClick={() => setView({ mode: "detail", id: i.chat.id })}>
+                          {i.bot && <BotAvatar bot={i.bot} size={36} state={i.running ? "thinking" : "idle"} />}
+                          <span className="row-main">
+                            <span className="row-title">{i.entry.name}</span>
+                            <span className="row-sub">
+                              {cadenceSummary(i.entry.cadence)} · {i.bot?.name}
+                              {deliveryLabel(i.entry.deliver) && " · " + deliveryLabel(i.entry.deliver)}
+                              {notifyNote && " · " + notifyNote}
+                            </span>
+                          </span>
+                          <span className="routine-when">
+                            <time className={paused ? "paused" : undefined} title={g.name === "Up next" ? "Next run" : g.name === "Finished" ? "Ran" : undefined}>
+                              {g.name === "Up next"
+                                ? whenLabel(i.entry.nextAt!)
+                                : g.name === "Finished"
+                                  ? "Ran " + whenLabel(i.entry.finishedAt ?? i.last?.time ?? i.entry.createdAt ?? Date.now())
+                                  : "Paused"}
+                            </time>
+                            <RunChip run={i.last} running={i.running} />
+                          </span>
+                        </button>
+                        <Switch
+                          checked={i.entry.enabled !== false}
+                          disabled={i.entry.nextAt == null}
+                          label={"Enable " + i.entry.name}
+                          onChange={(v) => act(api.setRoutineEnabled(i.chat.id, v))}
+                        />
+                      </div>
+                    );
+                  })}
+                />
+              </div>
             </section>
           ),
       )}
       {panels.length > 0 && (
-        <section className="routine-group" aria-label="Today panels">
-          <h2>
-            Today panels <small>{panels.length}</small>
-          </h2>
-          <p className="muted">Change these from each panel on Today.</p>
-          {panels.map((p) => {
-            const bot = state.bots.find((b) => b.id === p.botId);
-            const r = p.routine!;
-            return (
-              <div className="routine-row" key={p.id}>
-                <button className="routine-open" onClick={openToday}>
-                  {bot && <BotAvatar bot={bot} size={38} />}
-                  <span className="rowtext">
-                    <strong>{p.title}</strong>
-                    <small>
-                      {scheduleSummary({ id: 0, prompt: "", nextAt: r.nextAt, recurring: true, cron: r.cron })} · {r.timezone} · {bot?.name}
-                    </small>
-                  </span>
-                  <span className="routine-when">
-                    <small className={r.enabled ? undefined : "paused"}>{r.enabled ? "Next" : "Paused"}</small>
-                    <time>{r.enabled && r.nextAt ? whenLabel(r.nextAt) : "—"}</time>
-                  </span>
-                  <span className="run-chip">Open Today</span>
-                </button>
-              </div>
-            );
-          })}
+        <section className="page-section routine-group" aria-label="Today panels">
+          <h2 className="group-label">Today panels · {panels.length}</h2>
+          <div className="group work-avatars">
+            <Folded
+              rows={panels.map((p) => {
+                const bot = state.bots.find((b) => b.id === p.botId);
+                const r = p.routine!;
+                return (
+                  <div className={"group-row routine-row" + (r.enabled ? "" : " paused")} key={p.id}>
+                    <button className="routine-open" onClick={openToday}>
+                      {bot && <BotAvatar bot={bot} size={36} />}
+                      <span className="row-main">
+                        <span className="row-title">{p.title}</span>
+                        <span className="row-sub">
+                          {scheduleSummary({ id: 0, prompt: "", nextAt: r.nextAt, recurring: true, cron: r.cron })} · {r.timezone} · {bot?.name}
+                        </span>
+                      </span>
+                      <span className="routine-when">
+                        <time className={r.enabled ? undefined : "paused"} title={r.enabled ? "Next run" : undefined}>
+                          {r.enabled ? (r.nextAt ? whenLabel(r.nextAt) : "—") : "Paused"}
+                        </time>
+                        <span className="run-chip">Open Today</span>
+                      </span>
+                    </button>
+                  </div>
+                );
+              })}
+            />
+          </div>
+          <p className="group-foot">Change these from each panel on Today.</p>
         </section>
       )}
       {schedules.length > 0 && (
-        <section className="routine-group" aria-label="Chat schedules">
-          <h2>
-            Chat schedules <small>{schedules.length}</small>
-          </h2>
-          <p className="muted">Prompts scheduled in a chat with /every or /after.</p>
-          {schedules.map(({ chat, entry }) => {
-            const bot = state.bots.find((b) => b.id === chat.botId);
-            const paused = entry.enabled === false;
-            return (
-              <div className="routine-row" key={chat.id + entry.id}>
-                <button className="routine-open" onClick={() => actions.open(chat.id)}>
-                  {bot && <BotAvatar bot={bot} size={38} />}
-                  <span className="rowtext">
-                    <strong>{entry.prompt}</strong>
-                    <small>
-                      {scheduleSummary(entry)} · {chat.title}
-                    </small>
-                  </span>
-                  <span className="routine-when">
-                    <small className={paused ? "paused" : undefined}>{paused ? "Paused" : "Next"}</small>
-                    <time>{!paused && entry.nextAt != null ? whenLabel(entry.nextAt) : "—"}</time>
-                  </span>
-                </button>
-                <span className="routine-row-actions">
-                  <button
-                    className="secondary"
-                    aria-label={(paused ? "Resume " : "Pause ") + entry.prompt}
-                    onClick={() => act(api.changeSchedule(chat.id, entry.id, paused ? "resume" : "pause"))}
-                  >
-                    {paused ? <Play size={13} /> : <Pause size={13} />}
-                    {paused ? "Resume" : "Pause"}
-                  </button>
-                  <button
-                    className="secondary danger"
-                    aria-label={"Delete " + entry.prompt}
-                    onClick={() => act(api.changeSchedule(chat.id, entry.id, "delete"))}
-                  >
-                    <Trash2 size={13} />
-                  </button>
-                </span>
-              </div>
-            );
-          })}
+        <section className="page-section routine-group" aria-label="Chat schedules">
+          <h2 className="group-label">Chat schedules · {schedules.length}</h2>
+          <div className="group work-avatars">
+            <Folded
+              rows={schedules.map(({ chat, entry }) => {
+                const bot = state.bots.find((b) => b.id === chat.botId);
+                const paused = entry.enabled === false;
+                return (
+                  <div className={"group-row routine-row" + (paused ? " paused" : "")} key={chat.id + entry.id}>
+                    <button className="routine-open" onClick={() => actions.open(chat.id)}>
+                      {bot && <BotAvatar bot={bot} size={36} />}
+                      <span className="row-main">
+                        <span className="row-title">{entry.prompt}</span>
+                        <span className="row-sub">
+                          {scheduleSummary(entry)} · {chat.title}
+                        </span>
+                      </span>
+                      <span className="routine-when">
+                        <time className={paused ? "paused" : undefined} title={paused ? undefined : "Next run"}>
+                          {paused ? "Paused" : entry.nextAt != null ? whenLabel(entry.nextAt) : "—"}
+                        </time>
+                      </span>
+                    </button>
+                    <span className="routine-row-actions">
+                      <button
+                        type="button"
+                        className="btn soft small"
+                        aria-label={(paused ? "Resume " : "Pause ") + entry.prompt}
+                        onClick={() => act(api.changeSchedule(chat.id, entry.id, paused ? "resume" : "pause"))}
+                      >
+                        {paused ? <Play size={13} /> : <Pause size={13} />}
+                        {paused ? "Resume" : "Pause"}
+                      </button>
+                      <button
+                        type="button"
+                        className="icon-btn danger"
+                        title="Delete"
+                        aria-label={"Delete " + entry.prompt}
+                        onClick={() => act(api.changeSchedule(chat.id, entry.id, "delete"))}
+                      >
+                        <Trash2 size={15} />
+                      </button>
+                    </span>
+                  </div>
+                );
+              })}
+            />
+          </div>
+          <p className="group-foot">Prompts scheduled in a chat with /every or /after.</p>
         </section>
       )}
     </div>
@@ -612,147 +620,211 @@ function RoutineDetail({
       setBusy(false);
     }
   }
+  const model = chat.model ?? state.settings.routineModel ?? bot?.model ?? state.settings.model;
   return (
-    <div className="routines routine-detail">
-      <button className="textbutton profile-back" onClick={back}>
-        <ArrowLeft size={15} />
-        All routines
-      </button>
-      <section className="routine-hero">
-        {bot && <BotAvatar bot={bot} state={item.running ? "thinking" : "idle"} size={64} />}
-        <div>
-          <span className="routine-state">
-            <span className={paused ? "paused" : undefined}>{paused ? "Paused" : finished ? "Finished" : "Active"}</span> · {bot?.name}
-          </span>
-          <h1>{entry.name}</h1>
-          <p className="muted">
-            {cadenceSummary(entry.cadence)} · {entry.timezone}
-            {deliveryLabel(entry.deliver) && " · " + deliveryLabel(entry.deliver)}
-            {notifyNote && " · " + notifyNote}
-          </p>
-          <p className="routine-next">
-            {item.running
-              ? "Running now"
-              : paused
-                ? "Paused. Resume to schedule the next run."
-                : finished
-                  ? "This one-time routine has run. Edit it to schedule it again."
-                  : "Next run " + whenLabel(entry.nextAt!)}
-          </p>
-        </div>
-      </section>
-      <div className="actionrow routine-actions">
-        <Button variant="filled" className="lg-compact" icon={<Zap size={15} />} disabled={busy || item.running} onClick={() => act(() => api.runRoutine(chat.id))}>
-          Run now
-        </Button>
-        <Button variant="glass" className="lg-compact" icon={paused ? <Play size={15} /> : <Pause size={15} />} disabled={busy || finished} onClick={() => act(() => api.setRoutineEnabled(chat.id, paused))}>
-          {paused ? "Resume" : "Pause"}
-        </Button>
-        <Button variant="glass" className="lg-compact" icon={<Pencil size={15} />} disabled={busy} onClick={edit}>
-          Edit
-        </Button>
-        <Button variant="glass" className="lg-compact" icon={<Copy size={15} />} disabled={busy || !others.length} aria-expanded={copyTo !== null} onClick={() => setCopyTo(copyTo === null ? others[0]?.id ?? "" : null)}>
-          Duplicate for…
-        </Button>
-        <Button variant="glass" className="lg-compact" icon={<MessageCircle size={15} />} onClick={() => actions.open(chat.id)}>
-          Open chat
-        </Button>
-        <button
-          className="danger"
-          disabled={busy || item.running}
-          onClick={() =>
-            act(async () => {
-              const ok = await dialogs.ask({
-                title: "Delete " + entry.name + "?",
-                body:
-                  "This stops the routine and deletes its chat" +
-                  (runs.length ? " and " + runs.length + (runs.length === 1 ? " run" : " runs") : "") +
-                  ". You can't undo this.",
-                confirm: "Delete routine",
-                danger: true,
-              });
-              if (ok) {
-                await api.deleteRoutine(chat.id);
-                back();
-              }
-            })
-          }
-        >
-          <Trash2 size={15} />
-          Delete…
+    <div className="page narrow work-page routines routine-detail">
+      <div className="work-back">
+        <button type="button" className="link-button" onClick={back}>
+          <ChevronLeft size={16} aria-hidden="true" />
+          All routines
         </button>
       </div>
-      {copyTo !== null && (
-        <form
-          className="routine-copy"
-          onSubmit={(e) => {
-            e.preventDefault();
-            void act(async () => show(await api.duplicateRoutine(chat.id, copyTo)));
-          }}
-        >
-          <label>
-            Duplicate for
-            <select value={copyTo} onChange={(e) => setCopyTo(e.target.value)}>
-              {others.map((b) => (
-                <option key={b.id} value={b.id}>
-                  {b.name}
-                </option>
-              ))}
-            </select>
-          </label>
-          <button className="primary" disabled={busy}>
-            Duplicate
+      <header className="page-head routine-head">
+        {bot && <BotAvatar bot={bot} state={item.running ? "thinking" : "idle"} size={56} />}
+        <div className="page-heading">
+          <h1 className="page-title">{entry.name}</h1>
+          <p className="page-sub">
+            <span className={"routine-state" + (paused ? " paused" : finished ? "" : " active")}>{paused ? "Paused" : finished ? "Finished" : "Active"}</span> · {bot?.name}
+          </p>
+        </div>
+        <div className="page-actions">
+          <button type="button" className="btn" onClick={() => actions.open(chat.id)}>
+            <MessageCircle size={15} aria-hidden="true" />
+            Open chat
           </button>
-          <button type="button" className="secondary" onClick={() => setCopyTo(null)}>
-            Cancel
+          <button type="button" className="btn" disabled={busy} onClick={edit}>
+            <Pencil size={15} aria-hidden="true" />
+            Edit
           </button>
-        </form>
-      )}
+          <button type="button" className="btn primary" disabled={busy || item.running} onClick={() => act(() => api.runRoutine(chat.id))}>
+            <Zap size={15} aria-hidden="true" />
+            Run now
+          </button>
+        </div>
+      </header>
+      <section className="page-section" aria-label="Schedule">
+        <h2 className="group-label">Schedule</h2>
+        <div className="group">
+          <div className="group-row">
+            <span className="icon-tile">
+              <CalendarClock size={16} aria-hidden="true" />
+            </span>
+            <span className="row-main">
+              <span className="row-title wrap">
+                {cadenceSummary(entry.cadence)} · {entry.timezone}
+              </span>
+              <span className="row-sub wrap">
+                {[deliveryLabel(entry.deliver) || "Result stays in the routine chat", notifyNote].filter(Boolean).join(" · ")}
+              </span>
+            </span>
+          </div>
+          <div className="group-row">
+            <span className="icon-tile">
+              {item.running ? <LoaderCircle size={16} className="spin" aria-hidden="true" /> : <Zap size={16} aria-hidden="true" />}
+            </span>
+            <span className="row-main">
+              <span className="row-title wrap routine-next">
+                {item.running
+                  ? "Running now"
+                  : paused
+                    ? "Paused. Resume to schedule the next run."
+                    : finished
+                      ? "This one-time routine has run. Edit it to schedule it again."
+                      : "Next run " + whenLabel(entry.nextAt!)}
+              </span>
+            </span>
+            <button type="button" className="btn soft small" disabled={busy || finished} onClick={() => act(() => api.setRoutineEnabled(chat.id, paused))}>
+              {paused ? <Play size={14} aria-hidden="true" /> : <Pause size={14} aria-hidden="true" />}
+              {paused ? "Resume" : "Pause"}
+            </button>
+          </div>
+        </div>
+      </section>
       {entry.script && (
-        <section className="profile-card routine-instructions">
-          <h2>Script</h2>
-          <pre className="routine-script-text">{entry.script}</pre>
+        <section className="page-section routine-instructions" aria-label="Script">
+          <h2 className="group-label">Script</h2>
+          <div className="group padded">
+            <pre className="routine-script-text">{entry.script}</pre>
+          </div>
         </section>
       )}
       {(!entry.script || entry.followUp) && (
-        <section className="profile-card routine-instructions">
-          <h2>{entry.script ? "Follow-up action" : "Instructions"}</h2>
-          <p>{entry.prompt}</p>
-          <p className="muted routine-model-line">
-            Model: <ModelBadge choice={chat.model ?? state.settings.routineModel ?? bot?.model ?? state.settings.model} size={13} />
-            {!chat.model && <span>· the routines default</span>}
-          </p>
+        <section className="page-section routine-instructions" aria-labelledby="routine-instructions-label">
+          <h2 className="group-label" id="routine-instructions-label">{entry.script ? "Follow-up action" : "Instructions"}</h2>
+          <div className="group">
+            <div className="group-row">
+              <p className="routine-prompt">{entry.prompt}</p>
+            </div>
+            <div className="group-row routine-model-line">
+              <span className="row-main">
+                <span className="row-title">Model</span>
+                {!chat.model && <span className="row-sub">The routines default</span>}
+              </span>
+              <ModelBadge choice={model} size={13} />
+            </div>
+          </div>
         </section>
       )}
-      <section className="routine-group" aria-label="Runs">
-        <h2>
-          Runs <small>{runs.length}</small>
-        </h2>
-        {runs.length ? (
-          runs.map((r) => {
-            const Icon = r.status === "Working" ? LoaderCircle : r.status === "Completed" ? CircleCheck : CircleAlert;
-            const notifyChip = runNotifyChip(r, targetView);
-            return (
-              <button className="row" key={r.id} onClick={() => actions.open(chat.id)}>
-                <Icon size={19} className={r.status === "Needs you" || r.status === "Interrupted" ? "danger" : undefined} />
-                <span className="rowtext">
-                  <strong>{whenLabel(r.time)}</strong>
-                  <small>
-                    {r.status === "Needs you" ? "Failed" : r.status}
-                    {r.trigger === "manual" ? " · Run now" : " · Scheduled"}
-                    {notifyChip ? " · " + notifyChip : ""}
-                    {r.detail ? " · " + r.detail : ""}
-                  </small>
-                </span>
+      <section className="page-section routine-group" aria-label="Runs">
+        <h2 className="group-label">Runs · {runs.length}</h2>
+        <div className="group">
+          {runs.length ? (
+            <Folded
+              limit={8}
+              rows={runs.map((r) => {
+                const Icon = r.status === "Working" ? LoaderCircle : r.status === "Completed" ? CircleCheck : CircleAlert;
+                const tone = r.status === "Working" ? "working" : r.status === "Completed" ? "ok" : "failed";
+                const notifyChip = runNotifyChip(r, targetView);
+                return (
+                  <button className="group-row routine-run" key={r.id} onClick={() => actions.open(chat.id)}>
+                    <Icon size={18} className={"run-icon " + tone} aria-hidden="true" />
+                    <span className="row-main">
+                      <span className="row-title">{whenLabel(r.time)}</span>
+                      <span className="row-sub">
+                        {r.status === "Needs you" ? "Failed" : r.status}
+                        {r.trigger === "manual" ? " · Run now" : " · Scheduled"}
+                        {notifyChip ? " · " + notifyChip : ""}
+                        {r.detail ? " · " + r.detail : ""}
+                      </span>
+                    </span>
+                    <ChevronRight size={15} className="row-chevron" aria-hidden="true" />
+                  </button>
+                );
+              })}
+            />
+          ) : (
+            <div className="group-row">
+              <span className="icon-tile">
+                <CalendarClock size={16} aria-hidden="true" />
+              </span>
+              <span className="row-sub">No runs yet. Use Run now to try it.</span>
+            </div>
+          )}
+        </div>
+      </section>
+      <section className="page-section" aria-label="More">
+        <div className="group">
+          <button
+            type="button"
+            className="group-row"
+            disabled={busy || !others.length}
+            aria-expanded={copyTo !== null}
+            onClick={() => setCopyTo(copyTo === null ? others[0]?.id ?? "" : null)}
+          >
+            <span className="icon-tile">
+              <Copy size={16} aria-hidden="true" />
+            </span>
+            <span className="row-main">
+              <span className="row-title">Duplicate for…</span>
+              <span className="row-sub">{others.length ? "Run the same routine with another bot" : "There's no other bot to run it"}</span>
+            </span>
+          </button>
+          {copyTo !== null && (
+            <form
+              className="group-row routine-copy"
+              onSubmit={(e) => {
+                e.preventDefault();
+                void act(async () => show(await api.duplicateRoutine(chat.id, copyTo)));
+              }}
+            >
+              <label>
+                Duplicate for
+                <select value={copyTo} onChange={(e) => setCopyTo(e.target.value)}>
+                  {others.map((b) => (
+                    <option key={b.id} value={b.id}>
+                      {b.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <button className="btn primary small" disabled={busy}>
+                Duplicate
               </button>
-            );
-          })
-        ) : (
-          <div className="empty">
-            <CalendarClock />
-            <small>No runs yet. Use Run now to try it.</small>
-          </div>
-        )}
+              <button type="button" className="btn small" onClick={() => setCopyTo(null)}>
+                Cancel
+              </button>
+            </form>
+          )}
+          <button
+            type="button"
+            className="group-row routine-delete"
+            disabled={busy || item.running}
+            onClick={() =>
+              act(async () => {
+                const ok = await dialogs.ask({
+                  title: "Delete " + entry.name + "?",
+                  body:
+                    "This stops the routine and deletes its chat" +
+                    (runs.length ? " and " + runs.length + (runs.length === 1 ? " run" : " runs") : "") +
+                    ". You can't undo this.",
+                  confirm: "Delete routine",
+                  danger: true,
+                });
+                if (ok) {
+                  await api.deleteRoutine(chat.id);
+                  back();
+                }
+              })
+            }
+          >
+            <span className="icon-tile danger-tile">
+              <Trash2 size={16} aria-hidden="true" />
+            </span>
+            <span className="row-main">
+              <span className="row-title">Delete…</span>
+            </span>
+          </button>
+        </div>
       </section>
       {dialogs.node}
     </div>
@@ -835,7 +907,7 @@ function RoutineEditor({
   }, [key]);
   return (
     <form
-      className="routines routine-editor"
+      className="page narrow work-page routines routine-editor"
       onSubmit={async (e) => {
         e.preventDefault();
         if (specificEmpty) return;
@@ -870,214 +942,239 @@ function RoutineEditor({
         }
       }}
     >
-      <button type="button" className="textbutton profile-back" onClick={() => done()}>
-        <ArrowLeft size={15} />
-        {item ? "Back to routine" : "All routines"}
-      </button>
-      <h1>{item ? "Edit routine" : "New routine"}</h1>
-      <div className="profile-card routine-form">
-        <label>
-          Bot
-          <select value={bot} disabled={!!item} onChange={(e) => setBot(e.target.value)}>
-            {state.bots.map((b) => (
-              <option key={b.id} value={b.id}>
-                {b.name}
-              </option>
-            ))}
-          </select>
-          {item && <small>To run it with another bot, use Duplicate for….</small>}
-        </label>
-        <label>
-          Name
-          <input required maxLength={80} value={name} placeholder="Morning inbox check" onChange={(e) => setName(e.target.value)} />
-        </label>
-        {(scriptsAllowed || scripted) && (
-          <fieldset className="cadence routine-runs">
-            <legend>What runs</legend>
-            <Choices
-              label="What runs"
-              value={runs}
-              options={[
-                { id: "instructions", name: "Instructions" },
-                { id: "script", name: "Script" },
-              ]}
-              onChange={setRuns}
-            />
-            <small className="muted">
-              {scripted
-                ? "A script runs on this computer with no model. Turn on a follow-up action to have " + botName + " act on its output."
-                : botName + " follows your instructions in a model turn."}
-            </small>
-          </fieldset>
-        )}
-        {scripted ? (
-          <>
-            <label>
-              Script
-              <textarea
-                className="routine-script"
-                required
-                rows={6}
-                maxLength={20000}
-                spellCheck={false}
-                autoCapitalize="off"
-                autoCorrect="off"
-                value={script}
-                placeholder={"df -h /\nls ~/Downloads | wc -l"}
-                onChange={(e) => setScript(e.target.value)}
+      <div className="work-back">
+        <button type="button" className="link-button" onClick={() => done()}>
+          <ChevronLeft size={16} aria-hidden="true" />
+          {item ? "Back to routine" : "All routines"}
+        </button>
+      </div>
+      <header className="page-head">
+        <div className="page-heading">
+          <h1 className="page-title">{item ? "Edit routine" : "New routine"}</h1>
+        </div>
+      </header>
+      {/* The fields in the phone's groups: what it is, what it does, when, and where the result goes. */}
+      <section className="page-section" aria-label="Routine">
+        <h2 className="group-label">Routine</h2>
+        <div className="group padded routine-form">
+          <label>
+            Bot
+            <select value={bot} disabled={!!item} onChange={(e) => setBot(e.target.value)}>
+              {state.bots.map((b) => (
+                <option key={b.id} value={b.id}>
+                  {b.name}
+                </option>
+              ))}
+            </select>
+            {item && <small>To run it with another bot, use Duplicate for….</small>}
+          </label>
+          <label>
+            Name
+            <input required maxLength={80} value={name} placeholder="Morning inbox check" onChange={(e) => setName(e.target.value)} />
+          </label>
+          {(scriptsAllowed || scripted) && (
+            <fieldset className="cadence routine-runs">
+              <legend>What runs</legend>
+              <Choices
+                label="What runs"
+                value={runs}
+                options={[
+                  { id: "instructions", name: "Instructions" },
+                  { id: "script", name: "Script" },
+                ]}
+                onChange={setRuns}
               />
-              <small className="muted">Runs with your shell in {botName}'s folder. Stops after 10 minutes. The output is kept with the run.</small>
-            </label>
-            <div className="routine-followup">
-              <label className="routine-notify">
-                <input type="checkbox" role="switch" checked={followUp} onChange={(e) => setFollowUp(e.target.checked)} />
-                <span>
-                  Follow-up action
-                  <small className="muted">After the script, {botName} gets its output and exit code, then follows these instructions.</small>
-                </span>
+              <small className="muted">
+                {scripted
+                  ? "A script runs on this computer with no model. Turn on a follow-up action to have " + botName + " act on its output."
+                  : botName + " follows your instructions in a model turn."}
+              </small>
+            </fieldset>
+          )}
+        </div>
+      </section>
+      <section className="page-section">
+        <h2 className="group-label">{scripted ? "Script" : "Instructions"}</h2>
+        <div className="group padded routine-form">
+          {scripted ? (
+            <>
+              <label>
+                Script
+                <textarea
+                  className="routine-script"
+                  required
+                  rows={6}
+                  maxLength={20000}
+                  spellCheck={false}
+                  autoCapitalize="off"
+                  autoCorrect="off"
+                  value={script}
+                  placeholder={"df -h /\nls ~/Downloads | wc -l"}
+                  onChange={(e) => setScript(e.target.value)}
+                />
+                <small className="muted">Runs with your shell in {botName}'s folder. Stops after 10 minutes. The output is kept with the run.</small>
               </label>
-              {followUp && (
-                <>
-                  <label>
-                    Instructions
-                    <textarea
-                      required
-                      rows={4}
-                      maxLength={4000}
-                      value={prompt}
-                      placeholder={'If the disk is over 90% full, tell me what to clean up. Otherwise reply "All good".'}
-                      onChange={(e) => setPrompt(e.target.value)}
-                    />
-                  </label>
-                  <small className="counter" aria-live="off">
-                    {prompt.length.toLocaleString()} / 4,000
-                  </small>
-                  {modelsAllowed && <RoutineModel key={bot} value={model} inherited={routinesDefault} change={setModel} />}
-                </>
-              )}
-            </div>
-          </>
-        ) : (
-          <>
-            <label>
-              Instructions
-              <textarea
-                required
-                rows={5}
-                maxLength={4000}
-                value={prompt}
-                placeholder="Summarize anything new in my inbox and remind me of today's deadlines."
-                onChange={(e) => setPrompt(e.target.value)}
-              />
-            </label>
-            <small className="counter" aria-live="off">
-              {prompt.length.toLocaleString()} / 4,000
-            </small>
-            {modelsAllowed && <RoutineModel key={bot} value={model} inherited={routinesDefault} change={setModel} />}
-          </>
-        )}
-        <CadencePicker value={cadence} onChange={setCadence} />
-        <ZoneInput value={zone} onChange={setZone} />
-        <fieldset className="cadence routine-deliver">
-          <legend>Send result to</legend>
-          <Choices label="Send result to" value={to} options={destinations} onChange={setTo} />
-          {to === "chat" && chats.length > 1 && (
-            <label className="routine-deliver-field">
-              Chat
-              <select value={picked} onChange={(e) => setChatId(e.target.value)}>
-                <option value="">Latest chat</option>
-                {chats.map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {c.title}
-                  </option>
-                ))}
-              </select>
-            </label>
+              <div className="routine-followup">
+                <label className="routine-notify">
+                  <input type="checkbox" role="switch" checked={followUp} onChange={(e) => setFollowUp(e.target.checked)} />
+                  <span>
+                    Follow-up action
+                    <small className="muted">After the script, {botName} gets its output and exit code, then follows these instructions.</small>
+                  </span>
+                </label>
+                {followUp && (
+                  <>
+                    <label>
+                      Instructions
+                      <textarea
+                        required
+                        rows={4}
+                        maxLength={4000}
+                        value={prompt}
+                        placeholder={'If the disk is over 90% full, tell me what to clean up. Otherwise reply "All good".'}
+                        onChange={(e) => setPrompt(e.target.value)}
+                      />
+                    </label>
+                    <small className="counter" aria-live="off">
+                      {prompt.length.toLocaleString()} / 4,000
+                    </small>
+                    {modelsAllowed && <RoutineModel key={bot} value={model} inherited={routinesDefault} change={setModel} />}
+                  </>
+                )}
+              </div>
+            </>
+          ) : (
+            <>
+              <label>
+                Instructions
+                <textarea
+                  required
+                  rows={5}
+                  maxLength={4000}
+                  value={prompt}
+                  placeholder="Summarize anything new in my inbox and remind me of today's deadlines."
+                  onChange={(e) => setPrompt(e.target.value)}
+                />
+              </label>
+              <small className="counter" aria-live="off">
+                {prompt.length.toLocaleString()} / 4,000
+              </small>
+              {modelsAllowed && <RoutineModel key={bot} value={model} inherited={routinesDefault} change={setModel} />}
+            </>
           )}
-          {to === "goal" && (
-            <label className="routine-deliver-field">
-              Category
-              <select value={category} onChange={(e) => setCategory(e.target.value)}>
-                {goalCategories.map((c) => (
-                  <option key={c} value={c}>
-                    {c[0].toUpperCase() + c.slice(1)}
-                  </option>
-                ))}
-              </select>
-            </label>
-          )}
-          <small className="muted">{destinations.find((d) => d.id === to)?.note}</small>
-        </fieldset>
-        {targetView.canTarget ? (
-          <fieldset className="cadence routine-notify-fieldset" disabled={to === "none"}>
-            <legend>Notifications</legend>
-            <Choices
-              label="Notifications"
-              value={effectiveNotifyMode}
-              options={[
-                { id: "everyone", name: "Everyone" },
-                { id: "specific", name: "Specific" },
-                { id: "quiet", name: "Quiet" },
-              ]}
-              onChange={(mode) => setNotifyMode(mode)}
-            />
-            <small className="muted">
-              {to === "none"
-                ? "No-output routines never publish or notify."
-                : effectiveNotifyMode === "everyone"
-                  ? "Alerts everyone who can see the routine, wherever notifications are on."
-                  : effectiveNotifyMode === "quiet"
-                    ? "This routine runs quietly. Its result still goes where you chose."
-                    : "Choose which people or individual devices receive alerts when a run finishes."}
-            </small>
-            {to !== "none" && effectiveNotifyMode === "specific" && (
-              <NotifyTargetPicker
-                people={targetView.people}
-                targets={targets}
-                removedCount={removedTargetCount}
-                empty={specificEmpty}
-                onTogglePerson={(person) => setTargets((prev) => togglePersonTarget(prev, person))}
-                onToggleDevice={(person, deviceId) => setTargets((prev) => toggleDeviceTarget(prev, person, deviceId))}
-              />
+        </div>
+      </section>
+      <section className="page-section" aria-label="Schedule">
+        <h2 className="group-label">Schedule</h2>
+        <div className="group padded routine-form">
+          <CadencePicker value={cadence} onChange={setCadence} />
+          <ZoneInput value={zone} onChange={setZone} />
+          <p className={"routine-preview" + (preview.error ? " danger" : "")} role="status">
+            <CalendarClock size={15} />
+            {cadenceSummary(cadence)}
+            {preview.text ? " · " + preview.text : ""}
+          </p>
+        </div>
+      </section>
+      <section className="page-section" aria-label="Result">
+        <h2 className="group-label">Result</h2>
+        <div className="group padded routine-form">
+          <fieldset className="cadence routine-deliver">
+            <legend>Send result to</legend>
+            <Choices label="Send result to" value={to} options={destinations} onChange={setTo} />
+            {to === "chat" && chats.length > 1 && (
+              <label className="routine-deliver-field">
+                Chat
+                <select value={picked} onChange={(e) => setChatId(e.target.value)}>
+                  <option value="">Latest chat</option>
+                  {chats.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.title}
+                    </option>
+                  ))}
+                </select>
+              </label>
             )}
+            {to === "goal" && (
+              <label className="routine-deliver-field">
+                Category
+                <select value={category} onChange={(e) => setCategory(e.target.value)}>
+                  {goalCategories.map((c) => (
+                    <option key={c} value={c}>
+                      {c[0].toUpperCase() + c.slice(1)}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
+            <small className="muted">{destinations.find((d) => d.id === to)?.note}</small>
           </fieldset>
-        ) : (
-          <label className="routine-notify">
-            <input
-              type="checkbox"
-              role="switch"
-              checked={effectiveNotifyMode !== "quiet"}
-              disabled={to === "none"}
-              onChange={(e) => setNotifyMode(e.target.checked ? "everyone" : "quiet")}
-            />
-            <span>
-              Notify me when a run finishes
+          {targetView.canTarget ? (
+            <fieldset className="cadence routine-notify-fieldset" disabled={to === "none"}>
+              <legend>Notifications</legend>
+              <Choices
+                label="Notifications"
+                value={effectiveNotifyMode}
+                options={[
+                  { id: "everyone", name: "Everyone" },
+                  { id: "specific", name: "Specific" },
+                  { id: "quiet", name: "Quiet" },
+                ]}
+                onChange={(mode) => setNotifyMode(mode)}
+              />
               <small className="muted">
                 {to === "none"
                   ? "No-output routines never publish or notify."
-                  : effectiveNotifyMode !== "quiet"
-                    ? "On this computer and on your phone, where notifications are on."
-                    : "This routine runs quietly. Its result still goes where you chose."}
+                  : effectiveNotifyMode === "everyone"
+                    ? "Alerts everyone who can see the routine, wherever notifications are on."
+                    : effectiveNotifyMode === "quiet"
+                      ? "This routine runs quietly. Its result still goes where you chose."
+                      : "Choose which people or individual devices receive alerts when a run finishes."}
               </small>
-            </span>
-          </label>
-        )}
-        <p className={"routine-preview" + (preview.error ? " danger" : "")} role="status">
-          <CalendarClock size={15} />
-          {cadenceSummary(cadence)}
-          {preview.text ? " · " + preview.text : ""}
-        </p>
-        <p className="muted">
+              {to !== "none" && effectiveNotifyMode === "specific" && (
+                <NotifyTargetPicker
+                  people={targetView.people}
+                  targets={targets}
+                  removedCount={removedTargetCount}
+                  empty={specificEmpty}
+                  onTogglePerson={(person) => setTargets((prev) => togglePersonTarget(prev, person))}
+                  onToggleDevice={(person, deviceId) => setTargets((prev) => toggleDeviceTarget(prev, person, deviceId))}
+                />
+              )}
+            </fieldset>
+          ) : (
+            <label className="routine-notify">
+              <input
+                type="checkbox"
+                role="switch"
+                checked={effectiveNotifyMode !== "quiet"}
+                disabled={to === "none"}
+                onChange={(e) => setNotifyMode(e.target.checked ? "everyone" : "quiet")}
+              />
+              <span>
+                Notify me when a run finishes
+                <small className="muted">
+                  {to === "none"
+                    ? "No-output routines never publish or notify."
+                    : effectiveNotifyMode !== "quiet"
+                      ? "On this computer and on your phone, where notifications are on."
+                      : "This routine runs quietly. Its result still goes where you chose."}
+                </small>
+              </span>
+            </label>
+          )}
+        </div>
+      </section>
+      <p className="group-foot routine-cost">
           {scripted ? (followUp ? "The script runs without a model. The follow-up uses one model turn." : "The script runs without a model.") : "Each run uses one model turn."} Botkins keeps running when you close its window.
         </p>
-        <div className="profile-save">
-          <button className="primary" disabled={saving || specificEmpty || !name.trim() || (needsPrompt && !prompt.trim()) || (scripted && !script.trim())}>
-            {saving ? "Saving…" : item ? "Save routine" : "Create routine"}
-          </button>
-          <button type="button" className="secondary" onClick={() => done()}>
-            Cancel
-          </button>
-        </div>
+      <div className="routine-save">
+        <button type="button" className="btn" onClick={() => done()}>
+          Cancel
+        </button>
+        <button className="btn primary" disabled={saving || specificEmpty || !name.trim() || (needsPrompt && !prompt.trim()) || (scripted && !script.trim())}>
+          {saving ? "Saving…" : item ? "Save routine" : "Create routine"}
+        </button>
       </div>
     </form>
   );

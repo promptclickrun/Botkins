@@ -486,15 +486,55 @@ export type NodeHostLastCompleted = {
   at: number;
   summary: string;
 };
+export type NodeHostAllowlistRule = {
+  id: string;
+  botId: string;
+  pattern: string;
+  createdAt: number;
+};
+export type NodeHostExecPolicy = {
+  mode: "deny" | "allowlist" | "ask" | "full";
+  allowlist: NodeHostAllowlistRule[];
+};
+export type NodeHostAuditEntry = {
+  id: string;
+  time: number;
+  sourceHostId: string;
+  sourceHostName: string;
+  sourceBotId: string;
+  sourceBotName: string;
+  operation: string;
+  resourceId: string;
+  resourceName: string;
+  argsSummary: string;
+  status: string;
+  exitCode?: number | null;
+  error?: string;
+  durationMs?: number;
+};
+export type NodeHostPendingApproval = {
+  id: string;
+  chatId: string;
+  title: string;
+  operation?: string;
+  sourceBotName?: string;
+  sourceHostName?: string;
+  resourceName?: string;
+  time?: number;
+};
 export type NodeHostState = {
   enabled: boolean;
   name: string;
   status: "off" | "online" | "paused";
   paused: boolean;
+  wholeComputer?: boolean;
+  execPolicy?: NodeHostExecPolicy;
   capabilitiesVersion: number;
   sharedProjects: NodeHostProject[];
   availableProjects: NodeHostProject[];
   grants: NodeHostGrant[];
+  pendingApprovals?: NodeHostPendingApproval[];
+  auditLog?: NodeHostAuditEntry[];
   lastCompleted: NodeHostLastCompleted | null;
 };
 export type State = {
@@ -1340,6 +1380,11 @@ declare global {
       nodeSetup(input?: { name?: string }): Promise<NodeHostState>;
       nodeRename(name: string): Promise<NodeHostState>;
       nodePause(paused: boolean): Promise<NodeHostState>;
+      nodeSetWholeComputer(enabled: boolean): Promise<NodeHostState>;
+      nodeSetExecMode(mode: "deny" | "allowlist" | "ask" | "full"): Promise<NodeHostState>;
+      nodeAddAllowlistRule(rule: { pattern: string; botId?: string }): Promise<NodeHostState>;
+      nodeRemoveAllowlistRule(ruleId?: string | null): Promise<NodeHostState>;
+      nodeAuditLog(limit?: number): Promise<NodeHostAuditEntry[]>;
       nodeShareProject(projectId: string, shared: boolean): Promise<NodeHostState>;
       nodeRevokeGrant(grantId?: string | null): Promise<NodeHostState>;
       nodeDisconnect(): Promise<NodeHostState>;

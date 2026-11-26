@@ -3,6 +3,7 @@
 // from an address, every navigation is refused, and it reaches the app only through the few
 // messages read below. The page comes from the computer (`link.frame.page`), which needs "frames-v1".
 import { router } from "expo-router";
+import { openChat } from "@/features/chat/navigate";
 import { AppWindow, Maximize2, RefreshCw, TriangleAlert } from "lucide-react-native";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ActivityIndicator, Alert, Linking, View } from "react-native";
@@ -75,7 +76,7 @@ function askToOpen(frame: string, url: string): Promise<boolean> {
 async function answerInItsChat(frame: string, text: string) {
   const { chatId } = await api["link.frame.chat"](frame);
   if (!chatId) throw new Error("This view's chat no longer exists.");
-  router.push({ pathname: "/chat/[id]", params: { id: chatId, draft: text } });
+  openChat(chatId, { draft: text });
 }
 
 export type HtmlFrameProps = {

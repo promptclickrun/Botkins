@@ -2,7 +2,7 @@
 // card, as on the computer (desktop/src/AlertActions.tsx). "Take care of it" starts a normal turn in the person's
 // chat with what the bot offered: its tools ask for approval as usual. "Not now" holds what it was about back for
 // a day. The 👍 and 👎 ratings stay where they were. Only the person the alert was for is sent it.
-import { router } from "expo-router";
+import { openChat } from "@/features/chat/navigate";
 import { useState } from "react";
 import { View } from "react-native";
 import type { ProactiveAlert } from "@/link/types";
@@ -27,7 +27,7 @@ export function AlertActions({ botId, alert, chatId }: { botId: string; alert?: 
     const answer = await attempt(api.proactiveAct(botId, alert.runId, action));
     // On success the buttons stay off until the alert comes back marked chosen, so a second tap can't take it twice.
     if (!answer) setBusy(false);
-    if (action === "take" && answer?.chatId && answer.chatId !== chatId) router.push({ pathname: "/chat/[id]", params: { id: answer.chatId } });
+    if (action === "take" && answer?.chatId && answer.chatId !== chatId) openChat(answer.chatId);
   };
   return (
     <View style={{ gap: space.sm }}>

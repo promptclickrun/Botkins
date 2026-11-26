@@ -149,13 +149,13 @@ test("the side menu's order and collapsed state are settings", async (t) => {
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const ws = new Workspace(dir, async () => ({}), () => {});
   // The usual menu shows icons only.
-  assert.deepEqual(ws.state.settings.sidebar, { order: ["Home", "Today", "Chats", "Work", "Wiki"], collapsed: true });
+  assert.deepEqual(ws.state.settings.sidebar, { order: ["Home", "Today", "Chats", "Work", "Wiki", "Market"], collapsed: true });
   // A new order names the places it cares about; the rest follow in their usual order. Unknown and repeated names are dropped.
   ws.setPreferences({ sidebar: { order: ["Wiki", "Chats", "Nope", "Wiki"] } });
-  assert.deepEqual(ws.state.settings.sidebar, { order: ["Wiki", "Chats", "Home", "Today", "Work"], collapsed: true }, "reordering is not a choice about icons");
+  assert.deepEqual(ws.state.settings.sidebar, { order: ["Wiki", "Chats", "Home", "Today", "Work", "Market"], collapsed: true }, "reordering is not a choice about icons");
   // Opening the menu is the person's choice, and is kept as one.
   ws.setPreferences({ sidebar: { collapsed: false } });
-  assert.deepEqual(ws.state.settings.sidebar, { order: ["Wiki", "Chats", "Home", "Today", "Work"], collapsed: false, picked: true }, "opening keeps the order");
+  assert.deepEqual(ws.state.settings.sidebar, { order: ["Wiki", "Chats", "Home", "Today", "Work", "Market"], collapsed: false, picked: true }, "opening keeps the order");
   ws.setPreferences({ sidebar: { order: [...SIDEBAR].reverse() } });
   assert.equal(ws.state.settings.sidebar.collapsed, false, "reordering keeps the open menu");
   for (const bad of ["Home", ["Home"], { order: "Home" }, { order: [1] }, { collapsed: "yes" }, { picked: "yes" }])
@@ -165,10 +165,10 @@ test("the side menu's order and collapsed state are settings", async (t) => {
   assert.deepEqual(again.state.settings.sidebar, { order: [...SIDEBAR].reverse(), collapsed: false, picked: true });
   again.setPreferences({ sidebar: { collapsed: true } });
   assert.deepEqual(new Workspace(dir, async () => ({}), () => {}).state.settings.sidebar, { order: [...SIDEBAR].reverse(), collapsed: true, picked: true }, "so does collapsing it again");
-  assert.deepEqual(sidebarField({ order: ["Chats", "Home"] }).order, ["Chats", "Home", "Today", "Work", "Wiki"]);
+  assert.deepEqual(sidebarField({ order: ["Chats", "Home"] }).order, ["Chats", "Home", "Today", "Work", "Wiki", "Market"]);
   // Places that no longer exist are dropped. The remaining places keep their order.
-  assert.deepEqual(sidebarField({ order: ["Wiki", "Old page", "Home", "Projects"], collapsed: true }).order, ["Wiki", "Home", "Today", "Chats", "Work"]);
-  assert.deepEqual(sidebarField({ order: ["Projects", "Work", "Wiki", "Home", "Today", "Chats"] }).order, ["Work", "Wiki", "Home", "Today", "Chats"]);
+  assert.deepEqual(sidebarField({ order: ["Wiki", "Old page", "Home", "Projects"], collapsed: true }).order, ["Wiki", "Home", "Today", "Chats", "Work", "Market"]);
+  assert.deepEqual(sidebarField({ order: ["Projects", "Work", "Wiki", "Home", "Today", "Chats"] }).order, ["Work", "Wiki", "Home", "Today", "Chats", "Market"]);
   const old = join(dir, "old");
   mkdirSync(old);
   writeFileSync(join(old, "workspace.json"), JSON.stringify({ bots: [], chats: [], runs: [], settings: { sidebar: { order: ["Work", "Home"], collapsed: "broken" } } }));
@@ -179,7 +179,7 @@ test("the side menu's order and collapsed state are settings", async (t) => {
   mkdirSync(earlier);
   writeFileSync(join(earlier, "workspace.json"), JSON.stringify({ bots: [], chats: [], runs: [], settings: { sidebar: { order: ["Work", "Home"], collapsed: false } } }));
   const moved = new Workspace(earlier, async () => ({}), () => {});
-  assert.deepEqual(moved.state.settings.sidebar, { order: ["Work", "Home", "Today", "Chats", "Wiki"], collapsed: true });
+  assert.deepEqual(moved.state.settings.sidebar, { order: ["Work", "Home", "Today", "Chats", "Wiki", "Market"], collapsed: true });
   assert.deepEqual(sidebarField({ order: SIDEBAR, collapsed: true }), { order: [...SIDEBAR], collapsed: true });
   // Once opened by the person, it stays open across restarts.
   moved.setPreferences({ sidebar: { collapsed: false } });

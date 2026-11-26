@@ -3,6 +3,7 @@
 import { router, useLocalSearchParams } from "expo-router";
 import { useMemo, useState } from "react";
 import { View } from "react-native";
+import { openChat } from "@/features/chat/navigate";
 import { useBots, useCan } from "@/state/hooks";
 import { api, attempt } from "@/state/link";
 import { EmptyState, Field, Label, Sheet, space, T } from "@/ui";
@@ -35,7 +36,7 @@ function CreatePanel() {
     setAsking(false);
     if (!id) return;
     router.back();
-    router.push({ pathname: "/chat/[id]", params: { id } });
+    openChat(id);
   };
 
   return (

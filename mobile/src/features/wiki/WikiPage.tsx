@@ -4,6 +4,7 @@ import * as WebBrowser from "expo-web-browser";
 import { Ellipsis } from "lucide-react-native";
 import { useEffect, useMemo, useState } from "react";
 import { Alert, Linking, Modal, View } from "react-native";
+import { openChat } from "@/features/chat/navigate";
 import type { WikiPage as Page_, WikiTree, WikiVersion } from "@/link/types";
 import { isConversation, useOnline } from "@/state/hooks";
 import { api, attempt } from "@/state/link";
@@ -224,7 +225,7 @@ async function askAbout(page: Page_) {
   const latest = (chats ?? []).filter((chat) => chat.botId === bot.id && !chat.botIds && isConversation(chat)).sort((a, b) => b.time - a.time)[0];
   const id = latest?.id ?? (await attempt(api.createChat(bot.id)));
   if (!id) return;
-  router.push({ pathname: "/chat/[id]", params: { id, draft: "About the wiki page “" + page.title + "” (" + page.path + "): " } });
+  openChat(id, { draft: "About the wiki page “" + page.title + "” (" + page.path + "): " });
 }
 
 /** A new title: the file is renamed to match, and the page's heading says it. */

@@ -1,0 +1,500 @@
+/*
+ * Home, the Chats page and the chat list column, built on the shared page parts (ui.css): a page
+ * header, uppercase group labels over cards of rows, chips. Theme tokens only.
+ */
+
+/* The pages sit in the shell's scrolling `.content`, which already pads the sides; the page keeps its
+   own column width and vertical rhythm. */
+
+/* The page's gaps space its sections; the old rule that put 31px above each section is left out. */
+:is(.home-page, .chats-page, .bot-profile, .chatlist-column) section {
+  margin-top: 0;
+}
+
+/* ------------------------------------------------------------------- Home */
+.home-page .page-title {
+  font-size: calc(30px * var(--text-scale));
+  line-height: 1.2;
+}
+/* The message box for the primary bot, as a card. */
+.home-composer {
+  position: relative;
+  z-index: 3;
+}
+.home-composer .composer {
+  min-height: 60px;
+  padding: 9px 9px 9px 12px;
+  border-radius: 22px;
+  background: var(--card);
+}
+:root:not([data-backdrop="clean"]) .home-composer .composer {
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
+}
+.need-row .bot-avatar {
+  flex: none;
+}
+.need-row .btn {
+  flex: none;
+}
+.home-side {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+/* A board's heading: a 17px title, its chips, then its tools at the right. */
+.board-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  min-height: 32px;
+}
+.board-head > .spacer {
+  flex: 1 1 auto;
+}
+.board-title {
+  margin: 0 10px 0 4px;
+  font-size: calc(17px * var(--text-scale));
+  line-height: 1.3;
+  font-weight: 700;
+  color: var(--ink);
+}
+.group-label > h2 {
+  margin: 0;
+  font: inherit;
+  letter-spacing: inherit;
+  color: inherit;
+}
+.bots-search.lg-input.lg-search-compact {
+  width: 100%;
+  height: 34px;
+}
+.group-row.today-item {
+  flex-direction: column;
+  text-align: left;
+  align-items: stretch;
+  gap: 3px;
+  padding-top: 12px;
+  padding-bottom: 12px;
+}
+.today-item .row-title {
+  margin: 0;
+  white-space: normal;
+}
+.today-item .row-sub {
+  margin: 0;
+  white-space: normal;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+.today-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  font-size: calc(12.5px * var(--text-scale));
+  color: var(--muted);
+}
+.today-meta strong {
+  font-weight: 600;
+  color: var(--ink-2);
+}
+.next-row .row-title {
+  font-weight: 500;
+}
+
+/* --------------------------------------------------------------- bot rows */
+/* A bot as a row of a card: the avatar, the name in the display face, a quiet line, the time and the
+   unread dot. The ⋯ shows on hover or focus. */
+.bots-section .group.bots {
+  display: block;
+}
+.botcard-wrap.group-row {
+  padding: 0 6px 0 0;
+  gap: 0;
+  --row-inset: 72px;
+}
+.botcard-wrap.group-row:hover {
+  background: var(--hover);
+}
+.botcard-wrap .botcard {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 12px;
+  padding: 10px 6px 10px 16px;
+  border-radius: 0;
+  text-align: left;
+}
+.botcard-wrap .botcard:hover {
+  background: none;
+}
+.botcard-wrap.is-hidden .botcard {
+  opacity: 0.6;
+}
+.botcard-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.botcard-top,
+.botcard-line {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+.botcard-line {
+  align-items: center;
+}
+.botcard-top strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-display);
+  font-size: calc(15px * var(--text-scale));
+  font-weight: 700;
+  color: var(--ink);
+}
+.botcard-top .botbadge {
+  flex: none;
+}
+.botcard-flag {
+  flex: none;
+  align-self: center;
+  color: var(--muted);
+}
+.botcard-top time {
+  flex: none;
+  margin-left: auto;
+  font-size: calc(12.5px * var(--text-scale));
+  color: var(--muted);
+}
+.botcard-top time.unread {
+  font-weight: 600;
+  color: var(--accent-text);
+}
+.botcard-line small {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: calc(13px * var(--text-scale));
+  color: var(--muted);
+}
+.botcard-line .botcard-status {
+  font-weight: 500;
+  color: var(--success);
+}
+.botcard-line .botcard-status.waiting {
+  color: var(--warning);
+}
+.botcard-wrap > .menu-button,
+.chat-item > .menu-button {
+  opacity: 0;
+}
+.botcard-wrap:hover > .menu-button,
+.botcard-wrap:focus-within > .menu-button,
+.botcard-wrap > .menu-button[aria-expanded="true"],
+.chat-item:hover > .menu-button,
+.chat-item:focus-within > .menu-button,
+.chat-item > .menu-button[aria-expanded="true"] {
+  opacity: 1;
+}
+@media (hover: none) {
+  .botcard-wrap > .menu-button,
+  .chat-item > .menu-button {
+    opacity: 1;
+  }
+}
+
+/* A section's label: it folds the section, with its count, and has its ⋯ at the right. */
+.botgroup {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 6px;
+  border-radius: var(--card-radius);
+}
+.botgroup-head,
+.chatsection-head {
+  margin: 0;
+  min-height: 28px;
+}
+.botgroup-head.plain {
+  padding: 4px 4px 0;
+}
+.botgroup-toggle {
+  gap: 6px;
+  height: 28px;
+  margin-left: -6px;
+  padding: 0 6px;
+  border-radius: 8px;
+  font: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  color: inherit;
+}
+.group-label .botgroup-toggle {
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+}
+.botgroup-toggle small {
+  font: inherit;
+}
+.botgroup-chevron {
+  color: var(--muted);
+  transition: transform 0.15s;
+}
+.botgroup-toggle[aria-expanded="false"] .botgroup-chevron {
+  transform: rotate(-90deg);
+}
+.botgroup-head .menu-button,
+.chatsection-head .menu-button {
+  width: 28px;
+  height: 28px;
+  color: var(--faint);
+}
+.bots-none {
+  margin-top: 0;
+}
+
+/* ------------------------------------------------------------------ Chats */
+.chats-tools {
+  display: flex;
+  align-items: center;
+  gap: 10px 14px;
+  flex-wrap: wrap;
+}
+.chats-page .chats-search.lg-input.lg-search-compact {
+  width: min(320px, 100%);
+  height: 34px;
+}
+.chats-page .chatgroup + .chatgroup,
+.chats-page .chatgroups-loose > .chatgroup + .chatgroup {
+  margin-top: 4px;
+}
+.chatgroups-loose {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  border-radius: var(--card-radius);
+}
+.chatgroup-label {
+  margin-top: 0;
+  margin-bottom: 0;
+}
+.chats-empty {
+  padding: 4px;
+}
+
+/* A chat as a row of a card: the avatar or the group's faces, the title and time, then "Bot: preview"
+   and the unread dot. */
+.chat-item.rowwrap {
+  display: flex;
+  align-items: center;
+  padding: 0 6px 0 0;
+  gap: 0;
+  border-radius: 0;
+  --row-inset: 68px;
+}
+.chat-item.rowwrap:hover {
+  background: var(--hover);
+}
+.chat-item.selected,
+.chat-item.selected:hover {
+  background: var(--active);
+}
+.chat-item > .row.chatrow {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 6px 10px 16px;
+  border-radius: 0;
+  text-align: left;
+}
+.chat-item > .row.chatrow:hover {
+  background: none;
+}
+.chat-item .rowtext {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.chat-item .rowtop,
+.chat-item .rowline {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+.chat-item .rowline {
+  align-items: center;
+}
+.chat-item .rowtop strong {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: calc(14px * var(--text-scale));
+  font-weight: 600;
+  color: var(--ink);
+}
+.chat-item .row.unread .rowtop strong {
+  font-weight: 700;
+}
+.chat-item .rowtop time {
+  flex: none;
+  margin-left: auto;
+  font-size: calc(12px * var(--text-scale));
+  color: var(--muted);
+}
+.chat-item .row.unread .rowtop time {
+  font-weight: 600;
+  color: var(--accent-text);
+}
+.chat-item .rowline small {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: calc(13px * var(--text-scale));
+  color: var(--muted);
+}
+.chat-item .row.unread .rowline small {
+  color: var(--ink-2);
+}
+.chat-item .unread-dot {
+  width: 9px;
+  height: 9px;
+  background: var(--accent-text);
+}
+.chat-item .row-folder {
+  margin-top: 1px;
+}
+/* A group chat's first two members, one over the other's corner, in a 40px square. */
+.group-avatars.stack {
+  position: relative;
+  width: 40px;
+  height: 40px;
+}
+.group-avatars.stack > * {
+  position: absolute;
+  margin: 0;
+}
+.group-avatars.stack > :first-child {
+  left: 0;
+  top: 0;
+}
+.group-avatars.stack > :nth-child(2) {
+  right: 0;
+  bottom: 0;
+}
+.chatsection[data-drag-over="true"],
+.chatgroups-loose[data-drag-over="true"] {
+  border-radius: var(--card-radius);
+}
+
+/* --------------------------------------------------------- chat list column */
+/* The list beside an open chat: a small header, then the same groups with their own scroll. Rows
+   sit on the column itself, rounded, rather than in cards. */
+.chatlist-column {
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  width: 340px;
+  min-width: 0;
+  height: 100%;
+  min-height: 0;
+  border-right: 1px solid var(--line);
+}
+.chatlist-head {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px 14px 10px;
+}
+.chatlist-title {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 32px;
+}
+.chatlist-title h2 {
+  flex: 1 1 auto;
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: calc(20px * var(--text-scale));
+  line-height: 1.3;
+  font-weight: 700;
+  letter-spacing: -0.3px;
+}
+.chatlist-title .chatlist-new {
+  border-radius: 16px;
+  background: var(--accent);
+  color: var(--on-accent);
+}
+.chatlist-title .chatlist-new:hover {
+  background: color-mix(in srgb, var(--accent) 88%, var(--ink));
+  color: var(--on-accent);
+}
+.chatlist-column .chats-search.lg-input.lg-search-compact {
+  width: 100%;
+  height: 34px;
+}
+.chatlist-scroll {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 0 8px 16px;
+}
+.chatlist-scroll .chatgroup,
+.chatlist-scroll .chatgroups-loose {
+  gap: 4px;
+}
+.chatlist-scroll .chatgroups-loose {
+  gap: 10px;
+}
+.chatlist-scroll .group-label {
+  font-size: calc(11px * var(--text-scale));
+  margin: 0 6px;
+}
+.chatlist-scroll .group {
+  background: transparent;
+  border-radius: 0;
+  box-shadow: none;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+  overflow: visible;
+}
+.chatlist-scroll .group-row + .group-row::before {
+  display: none;
+}
+.chatlist-scroll .chat-item.rowwrap {
+  border-radius: 12px;
+  padding-right: 2px;
+}
+.chatlist-scroll .chat-item > .row.chatrow {
+  gap: 11px;
+  padding: 10px 4px 10px 10px;
+  border-radius: 12px;
+}
+.chatlist-scroll .chat-item .row-folder {
+  display: none;
+}

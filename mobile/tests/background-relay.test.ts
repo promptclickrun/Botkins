@@ -285,3 +285,89 @@ test("unit: fake timer grace period, hold counts, and idempotent release", () =>
   secondFn();
   assert.equal(sleeps, 2);
 });
+
+test("watch hold acquired after background sleep wakes relay immediately and re-sleeps on release", async (t) => {
+  const env = await setupEnv(t, { graceMs: 60 });
+  const logsBeforeBg = env.hostLogs.length;
+
+  // Background the phone and let the grace period put the link and relay socket to sleep.
+  env.appState.set("background");
+  await until(() => env.controller.sleeping && env.relay.phonesIn(env.room).length === 0, "relay socket asleep in background");
+  const syncsBeforeWatch = env.syncs();
+
+  // Watch voice starts while the iPhone is still backgrounded and asleep:
+  // the "watch" hold must wake the link immediately and reopen the relay socket.
+  const releaseWatch = env.controller.hold("watch");
+  assert.equal(env.controller.sleeping, false, "watch hold wakes a sleeping background controller");
+  assert.equal(env.controller.held, true);
+  await until(() => env.relay.phonesIn(env.room).length === 1 && env.syncs() > syncsBeforeWatch, "relay socket reopened and synced for watch hold");
+
+  // RPCs succeed over the woken relay.
+  const syncRes = await env.client.call("link.sync", { have: {} });
+  assert.ok(syncRes && typeof syncRes === "object", "link.sync succeeds during watch hold");
+
+  // When Watch voice ends while the iPhone is still backgrounded, release cleanly re-sleeps.
+  releaseWatch();
+  assert.equal(env.controller.held, false);
+  await until(() => env.controller.sleeping && env.relay.phonesIn(env.room).length === 0, "relay socket closes cleanly after watch hold releases");
+  assert.deepEqual(env.hostLogs.slice(logsBeforeBg), [], "no host errors during watch wake/sleep cycle");
+});
+
+test("background RPC recovers when a cached direct session dies during sleep and fails over to relay", async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "botkins-bg-failover-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const relay = new FakeRelay();
+  const server = new LinkHost({
+    dir,
+    backend: new MockBackend({ speed: 0.05 }),
+    port: 0,
+    extraHosts: ["127.0.0.1"],
+    searchPath: [],
+    relay: { url: "https://relay.test", WebSocket: relay.WebSocket },
+  });
+  await server.setEnabled(true);
+  server.setRelay({ enabled: true });
+  await until(() => server.status().relay.connected, "host connected to fake relay");
+
+  let directUp = true;
+  const baseFetch: typeof globalThis.fetch = (input, init) => {
+    if (!directUp) return Promise.reject(new TypeError("network unreachable"));
+    return globalThis.fetch(input, init);
+  };
+  const fetcher = relayFetch(baseFetch, {
+    WebSocket: relay.WebSocket as unknown as RelaySocketClass,
+    idleMs: 60_000,
+    pingMs: 60_000,
+  });
+
+  const code = parsePairingUrl(server.startPairing().url)!;
+  const directEntry = "127.0.0.1:" + server.port;
+  const relayEntry = server.hosts().find(isRelayHost)!;
+  const room = relayEntry.slice("relay!".length).split("@")[0]!;
+  const paired: Pairing = await pair(fetcher, { ...code, hosts: [directEntry, relayEntry] }, { name: "iPhone", platform: "ios" });
+  const dualPairing: Pairing = { ...paired, hosts: [directEntry, relayEntry] };
+
+  const client = new LinkClient(dualPairing, {
+    fetch: fetcher,
+    onParts() {},
+    onState() {},
+  });
+  t.after(() => {
+    client.stop();
+    fetcher.rest({ force: true });
+    server.stop();
+  });
+
+  await client.call("link.sync", { have: {} });
+  assert.equal(client.route, "direct");
+
+  // App enters background and sleeps, then leaves the LAN.
+  client.start({ resting: true });
+  directUp = false;
+
+  // A read can drop the dead direct session and fail over to relay after an ambiguous failure.
+  const syncRes = await client.call("link.sync", { have: {} });
+  assert.ok(syncRes && typeof syncRes === "object", "RPC failed over to relay after dead direct session");
+  assert.equal(client.route, "relay");
+  await until(() => relay.phonesIn(room).length === 1, "relay socket opened for failover");
+});
