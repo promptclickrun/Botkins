@@ -13,6 +13,7 @@
 // and, for the app's own page (Settings › Phone):
 //   granted()                                → { system, screenRecording, accessibility }: what macOS has allowed so far
 //   request("screenRecording" | "accessibility") → asks macOS, and opens the page of System Settings where it is switched on
+//   noteBotActivity(activity, frame?)        → forwards native computer-use frames/markers to the screen listener when wired
 
 import { Failure } from "./link/tools.mjs";
 

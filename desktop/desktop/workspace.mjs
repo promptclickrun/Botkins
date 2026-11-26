@@ -58,6 +58,7 @@ import { meterLimit } from "./modeldetails.mjs";
 import { ToolBridge } from "./providers/toolbridge.mjs";
 import { HostDispatch } from "./host-dispatch.mjs";
 import { NodeHost } from "./node-host.mjs";
+import { ComputerUse } from "./computer-use.mjs";
 import { Interactions } from "./interactions.mjs";
 import { MAX_CONTINUATIONS, mergedPrompt, nextMove, openSteps, takeBatch } from "./keep-moving.mjs";
 import { recordActivity } from "./activity.mjs";
@@ -337,6 +338,8 @@ export class Workspace {
     this.phone = new PhoneTools(this, options?.phoneTools);
     // Tools a bot runs on a paired Chromium browser extension (desktop/browsertools.mjs).
     this.browser = new BrowserExtensionTools(this, options?.browserTools);
+    // Native desktop computer-use layer powered by bundled MIT cua-driver (desktop/computer-use.mjs).
+    this.computerUse = new ComputerUse(this, options?.computerUse);
     this.agents = new Agents(this);
     this.board = new Board(this);
     // Pages of panels and cards, each a person's (desktop/spaces.mjs). Every panel and card is in one.
@@ -1534,6 +1537,8 @@ export class Workspace {
       ...this.phone.tools(bot, chat, run, task),
       // Paired Chromium browser extensions (Chrome / Edge), for driving the person's signed-in browser profile.
       ...(access.member ? [] : this.browser.tools(bot, chat, run, task)),
+      // Native desktop computer use (bundled MIT cua-driver), only when enabled in Settings and in owner chats.
+      ...(access.member ? [] : this.computerUse.tools(bot, chat, run, task)),
       // A panel refresh only updates its panel; other turns can post to Today's board, show apps and ask teammates.
       ...(run?.panelId
         ? []
@@ -3291,11 +3296,12 @@ export function mediaGuidance(folder) {
  */
 export const COMPUTER_USE_GUIDANCE =
   "\nTo use a website or a computer, pick the first of these that is offered and fits (your harness may prefix these tool names with its MCP server name, such as mcp__botkins__browser_click; they are the same tools):" +
-  "\n1. An API, a first-party tool or a Composio app for the service. No browser needed." +
+  "\n1. An API, a first-party tool or a Composio app for the service. No browser or desktop driver needed." +
   "\n2. The person's own browser through the browser extension (browser_* tools). Read the page with browser_snapshot, then act on its elements with browser_click and browser_type by ref or selector. Snapshot again after each page change. Use browser_screenshot only to check something you can't read from the snapshot, and browser_eval only when the structured tools can't do it." +
-  "\n3. Another of the person's computers through a node host (node_* tools): node_exec for commands, node_read_file and the other file tools for files, node_screen_input with node_screen_capture only for an app that has no other way in." +
-  "\n4. Clicking by screen coordinates is the last resort, after a capture shows exactly where." +
-  "\nFor passwords, codes and sign-in fields, always use request_secure_input then use_secure_input, never typing tools." +
+  "\n3. Native desktop apps on this computer through the CUA driver (computer_apps, computer_observe, computer_act, computer_desktop). Call computer_apps to find the app pid, call computer_observe (get_window_state) to read element_token handles, and act with computer_act by element_token using background delivery by default so the person's pointer stays untouched. Request include_screenshot: true only when you need to visually check layout." +
+  "\n4. Another of the person's computers through a node host (node_* tools): node_exec for commands, node_read_file and the other file tools for files, node_computer_apps / node_computer_observe / node_computer_act by element_token for native apps, and node_screen_input with node_screen_capture only for an app that has no other way in." +
+  "\n5. Clicking by raw screen coordinates (pixels) is the last resort, after a capture shows exactly where." +
+  "\nFor passwords, codes and sign-in fields, always use request_secure_input (page_fill for browser tabs, native_fill for native desktop fields) then use_secure_input, never typing tools." +
   "\nWhen the person would want to watch live browser or desktop work, open the screen card first with side_pane_show kind \"screen\".";
 const REACTION_GUIDANCE =
   "\nThe person can react to your messages with an emoji. Botkins then gives you a turn that says so; it is not a message from them. Use your judgment, as a thoughtful friend would: judge from what the reaction means in the conversation, not from the emoji alone. It may need nothing back, a reaction of your own (react), or a short, warm reply; don't echo their reaction back by habit. Answer with text only when it adds something they would want. When you send no text, reply with exactly [SILENT], which shows nothing. Never reply just because a reaction came in: each reply is a model turn on the person's plan.";

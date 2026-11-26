@@ -193,13 +193,28 @@ export function useLiveScreen(place: Place, { role, visible, playing = false }: 
 export function ScreenPicture({ screen }: { screen: LiveScreen }) {
   const { colors } = useTheme();
   const { feed, still, look } = screen;
+  const activity = feed.activity;
   if (!screen.front) return null;
+  const activityLine = activity
+    ? [activity.botName || "Bot", activity.action, activity.app].filter(Boolean).join(" · ")
+    : "";
+  const activityMeta = activity?.deliveryMode === "background" && activity.pointerUntouched
+    ? "Background · pointer untouched"
+    : activity?.deliveryMode === "foreground"
+      ? "Foreground"
+      : null;
   return (
     <View style={StyleSheet.absoluteFill} pointerEvents="none">
       <View style={[StyleSheet.absoluteFill, look.dim && styles.dim]}>
         {!!still && <Image source={{ uri: still.uri }} style={StyleSheet.absoluteFill} contentFit="contain" cachePolicy="none" transition={null} accessible={false} />}
         {screen.showingVideo ? screen.video : <PictureSlots pictures={feed.pictures} drawn={feed.drawn} />}
       </View>
+      {!!activityLine && !look.dim && (
+        <View style={[styles.activityPill, { backgroundColor: colors.surface, borderColor: colors.line }]}>
+          <T variant="caption" weight="600" numberOfLines={1}>{activityLine}</T>
+          {!!activityMeta && <T variant="caption" color="muted" numberOfLines={1}>{activityMeta}</T>}
+        </View>
+      )}
       {(look.busy || !!look.line) && (
         <View style={[StyleSheet.absoluteFill, styles.center, { padding: space.lg }]}>
           {look.busy ? (
@@ -251,4 +266,16 @@ export function gateHasAction(gate: Gate) {
 const styles = StyleSheet.create({
   center: { alignItems: "center", justifyContent: "center" },
   dim: { opacity: 0.35 },
+  activityPill: {
+    position: "absolute",
+    top: space.sm,
+    left: space.sm,
+    right: space.sm,
+    alignSelf: "flex-start",
+    paddingHorizontal: space.sm,
+    paddingVertical: space.xs,
+    borderRadius: radius.md,
+    borderWidth: StyleSheet.hairlineWidth,
+    opacity: 0.94,
+  },
 });

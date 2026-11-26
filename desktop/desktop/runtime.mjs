@@ -347,11 +347,16 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
     formBrowser,
     savedLogins: (chatId, origin) => loginLookups ? loginLookups.find(chatId, origin) : link.loginNames(chatId, origin),
     ...(host.headless && !formBrowser && { pageUnavailable: "Browser form filling needs a connected Botkins browser extension tab, the desktop viewer, or a Linux host with Chromium and an X11 display. See A screen without Docker in the terminal guide." }),
-    secureUse: (plan, values, { signal, fillExtension }) => performSecureUse(plan, values, {
+    secureUse: (plan, values, { signal, fillExtension, fillNative }) => performSecureUse(plan, values, {
       signal,
       fillExtension,
+      fillNative,
       fillPage: () => formBrowser ? formBrowser.fill(plan, values, signal) : host.window.fillSecurePage(plan, values, signal),
     }),
+    computerUse: {
+      onActivity: (activity, frame) => link?.screen?.noteBotActivity?.(activity, frame),
+      screenAdapter: () => host.screen,
+    },
     ...(keys && {
       vaultKey: keys,
       // Keys an earlier version encrypted into the workspace file are read once, to move them into the vault.
@@ -1265,6 +1270,8 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
     macToolsStatus: () => workspace.mac.status(),
     setMacTool: (tool, level) => workspace.mac.set(tool, level),
     grantMacTool: (permission) => workspace.mac.grant(permission),
+    computerUseStatus: () => workspace.computerUse.status(),
+    requestComputerUsePermission: (permission) => workspace.computerUse.requestPermission(permission),
     // Voice (Settings › Voice, desktop/voicedesk.mjs). Only this window may call these: none is in
     // REMOTE_METHODS (a phone reaches voice through the link's own calls). No key ever comes back.
     voiceSettings: () => voiceDesk.settings(),
@@ -1613,6 +1620,7 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
       workspace.reactionTurns?.close();
       workspace.hostDispatch.close();
       workspace.nodeHost.close();
+      workspace.computerUse?.close();
       updates?.stopAuto?.();
       // A routine's script stops with Botkins; its run is ended when Botkins opens again.
       routines.stopScripts();

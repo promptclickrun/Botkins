@@ -206,6 +206,19 @@ function Viewer({ active, name, computer, route, mode, meta, initialDisplay }: {
     clearTimeout(noteTimer.current);
     noteTimer.current = setTimeout(() => setNote(undefined), 3000);
   }
+  const lastActivityAt = useRef(0);
+  useEffect(() => {
+    const act = feed.activity;
+    if (!act || !act.at || act.at === lastActivityAt.current) return;
+    lastActivityAt.current = act.at;
+    const parts = [act.botName || "Bot", act.action, act.app].filter(Boolean);
+    const suffix = act.deliveryMode === "background" && act.pointerUntouched
+      ? " (background, pointer untouched)"
+      : act.deliveryMode === "foreground"
+        ? " (foreground)"
+        : "";
+    say(parts.join(" · ") + suffix);
+  }, [feed.activity]);
   function keyboardClosed() {
     setTyping(false);
     setModifiers([]);

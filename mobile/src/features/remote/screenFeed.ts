@@ -17,13 +17,14 @@ function wait(ms: number, signal: AbortSignal) {
   });
 }
 
-export async function runScreenFeed({ signal, once, gapMs, read, draw, report }: {
+export async function runScreenFeed({ signal, once, gapMs, read, draw, report, onActivity }: {
   signal: AbortSignal;
   once: boolean;
   gapMs: number;
   read: (after?: number) => Promise<ScreenFrame>;
   draw: (frame: ScreenFrame) => Promise<boolean>;
   report: (state: FeedState, error?: string) => void;
+  onActivity?: (activity: ScreenFrame["activity"] | null) => void;
 }) {
   let after: number | undefined;
   let failures = 0;
@@ -32,6 +33,7 @@ export async function runScreenFeed({ signal, once, gapMs, read, draw, report }:
     try {
       const frame = await read(after);
       if (signal.aborted) return;
+      if (onActivity) onActivity(frame.activity ?? null);
       if (frame.jpeg) {
         if (!await draw(frame)) throw new Error("Couldn't display the picture.");
       } else if (after === undefined || after !== frame.seq) {

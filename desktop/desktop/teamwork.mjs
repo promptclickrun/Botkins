@@ -51,7 +51,7 @@ export class Teamwork {
   brief(bot, chat) {
     const team = this.roster(bot, chat);
     const remote = remoteTeamworkAllowed(this.ws, bot, chat, this.ws.active.get(chat.id)?.run, this.ws.active.get(chat.id))
-      ? "\nUse list_host_teammates to find teammates on the owner’s other computers, and use list_node_hosts with node_* tools (list_node_files, node_read_file, node_write_file, node_mkdir, node_move_file, node_delete_file, node_stat_file, node_search_files, node_exec, node_which, node_screen_info, node_screen_capture, node_screen_input, node_notify) to work on the owner’s node hosts. The node enforces its own policy and approval." : "";
+      ? "\nUse list_host_teammates to find teammates on the owner’s other computers, and use list_node_hosts with node_* tools (list_node_files, node_read_file, node_write_file, node_mkdir, node_move_file, node_delete_file, node_stat_file, node_search_files, node_exec, node_which, node_computer_apps, node_computer_observe, node_computer_act, node_screen_info, node_screen_capture, node_screen_input, node_notify) to work on the owner’s node hosts. Prefer node_computer_* element tokens over raw node_screen_* pixels when available. The node enforces its own policy and approval." : "";
     if (!team.length) return remote;
     return (
       "\n\n## Your team\nYou're " + bot.name + ". Your teammates:\n" + team.map(line).join("\n") +
@@ -261,6 +261,63 @@ export class Teamwork {
           additionalProperties: false,
         },
         handler: (args, invocation) => this.runNodeOperation(chat, bot, run, task, "system.which", args ?? {}, invocation, "node_which"),
+      }),
+      defineTool("node_computer_apps", {
+        description: "List running desktop applications and PIDs on a node host using its native CUA driver.",
+        parameters: {
+          type: "object",
+          properties: {
+            host: { type: "string", description: "Node host ID from list_node_hosts." },
+            include_background: { type: "boolean", description: "Include background processes (default false)." },
+          },
+          required: ["host"],
+          additionalProperties: false,
+        },
+        handler: (args, invocation) => this.runNodeOperation(chat, bot, run, task, "computer.apps", args ?? {}, invocation, "node_computer_apps"),
+      }),
+      defineTool("node_computer_observe", {
+        description: "Inspect a native app window's accessibility tree (get_window_state) on a node host and return element_token handles. Omits screenshot by default unless include_screenshot: true.",
+        parameters: {
+          type: "object",
+          properties: {
+            host: { type: "string", description: "Node host ID from list_node_hosts." },
+            pid: { type: "integer", minimum: 1, description: "Process ID from node_computer_apps." },
+            window_id: { type: "string", description: "Optional window ID." },
+            include_screenshot: { type: "boolean", description: "Include base64 screenshot image (default false)." },
+            max_depth: { type: "integer", minimum: 1, maximum: 20 },
+            query: { type: "string" },
+          },
+          required: ["host", "pid"],
+          additionalProperties: false,
+        },
+        handler: (args, invocation) => this.runNodeOperation(chat, bot, run, task, "computer.observe", args ?? {}, invocation, "node_computer_observe"),
+      }),
+      defineTool("node_computer_act", {
+        description: "Perform a native desktop UI action on a node host by element_token (preferred) or x/y fallback, using background delivery by default. Refuses type_text on secure/password fields.",
+        parameters: {
+          type: "object",
+          properties: {
+            host: { type: "string", description: "Node host ID from list_node_hosts." },
+            action: { type: "string", enum: ["click", "double_click", "right_click", "type_text", "press_key", "hotkey", "scroll", "drag", "set_value"] },
+            pid: { type: "integer", minimum: 1 },
+            window_id: { type: "string" },
+            element_token: { type: "string" },
+            x: { type: "number" },
+            y: { type: "number" },
+            to_x: { type: "number" },
+            to_y: { type: "number" },
+            text: { type: "string" },
+            key: { type: "string" },
+            keys: { type: "array", items: { type: "string" }, minItems: 1, maxItems: 6 },
+            delta_x: { type: "number" },
+            delta_y: { type: "number" },
+            delivery_mode: { type: "string", enum: ["background", "foreground"] },
+            allow_fallback: { type: "boolean" },
+          },
+          required: ["host", "action", "pid"],
+          additionalProperties: false,
+        },
+        handler: (args, invocation) => this.runNodeOperation(chat, bot, run, task, "computer.act", args ?? {}, invocation, "node_computer_act"),
       }),
       defineTool("node_screen_info", {
         description: "Inspect available displays and screen/accessibility permission status on a node host.",

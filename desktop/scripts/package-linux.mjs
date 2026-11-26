@@ -39,6 +39,7 @@ for (const arch of ["x64", "arm64"]) {
       cpSync(join(root, item), join(stage, item), { recursive: true });
     const staged = structuredClone(pkg);
     staged.build.directories.output = out;
+    staged.build.afterPack = join(root, "scripts/after-pack.mjs");
     staged.build.npmRebuild = false;
     staged.build.linux = {
       icon: "assets/icon-mac.png",

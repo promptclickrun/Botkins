@@ -55,7 +55,18 @@ function verifyDesktopSignatures(files, version) {
     run("codesign", ["--verify", "--deep", "--strict", app]);
     run("spctl", ["--assess", "--type", "execute", app]);
     run("xcrun", ["stapler", "validate", app]);
-    run("unzip", ["-q", files.get("Botkins-" + version + "-win.zip"), "Botkins.exe", "-d", temp]);
+    const cuaApp = join(app, "Contents", "Resources", "cua-driver", "CuaDriver.app");
+    if (!existsSync(join(cuaApp, "Contents", "MacOS", "cua-driver"))) {
+      throw Error("Missing bundled cua-driver inside Botkins.app.");
+    }
+    if (existsSync(join(cuaApp, "Contents", "embedded.provisionprofile"))) {
+      throw Error("Unexpected upstream embedded.provisionprofile inside bundled CuaDriver.app.");
+    }
+    run("codesign", ["--verify", "--deep", "--strict", cuaApp]);
+    run("unzip", ["-q", files.get("Botkins-" + version + "-win.zip"), "Botkins.exe", "resources/cua-driver/cua-driver.exe", "-d", temp]);
+    if (!existsSync(join(temp, "resources", "cua-driver", "cua-driver.exe"))) {
+      throw Error("Missing bundled cua-driver.exe in Windows zip.");
+    }
     const ca = process.env.BOTKINS_WINDOWS_CA_FILE;
     run("osslsigncode", ["verify", ...(ca ? ["-CAfile", ca, "-TSA-CAfile", ca] : []), "-in", join(temp, "Botkins.exe")]);
   } finally {

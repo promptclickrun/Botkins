@@ -448,6 +448,8 @@ for (const name of [
   "macToolsStatus",
   "setMacTool",
   "grantMacTool",
+  "computerUseStatus",
+  "requestComputerUsePermission",
   "voiceSettings",
   "setVoice",
   "setVoiceKey",
