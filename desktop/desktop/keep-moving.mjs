@@ -146,7 +146,7 @@ const personOf = (item) => item.author?.memberId ?? "owner";
  * Whether a queued message may be read together with the ones beside it: a command (`/compact`) and a
  * spoken line each need a turn of their own.
  */
-export const mergeable = (item) => typeof item?.text === "string" && !item.text.startsWith("/") && !item.voiceId;
+export const mergeable = (item) => typeof item?.text === "string" && !item.text.startsWith("/") && !item.voiceId && !item.taskReviewId;
 
 /**
  * Takes the next turn's messages off the front of a chat's queue: the first one, and each message

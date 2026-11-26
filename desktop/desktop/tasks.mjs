@@ -152,12 +152,19 @@ export class Tasks {
     if (status === "ready" || status === "later") {
       delete task.problem;
       delete task.reviewerBotId;
+      this.clearPendingReviews(task.id);
     } else if (status === "done" || status === "archived") {
       delete task.reviewerBotId;
       delete task.pendingNote;
+      this.clearPendingReviews(task.id);
     } else if (status === "review") {
       // Explicit move to review waits for the person unless a bot reviewer was already assigned on review.
-      if (from !== "review") delete task.reviewerBotId;
+      if (from !== "review") {
+        delete task.reviewerBotId;
+        this.clearPendingReviews(task.id);
+      }
+    } else {
+      this.clearPendingReviews(task.id);
     }
     if (status === "ready" && (from === "review" || from === "done" || from === "blocked" || from === "archived")) {
       if (note) {
@@ -198,13 +205,17 @@ export class Tasks {
   remove(id) {
     const task = this.get(id);
     if (task.status === "working") throw new Error("Stop the task's chat before deleting it.");
+    this.clearPendingReviews(task.id);
     this.ws.state.tasks = this.all.filter((t) => t !== task);
     this.ws.save();
   }
   removeBot(botId) {
     for (const task of this.all) {
       if (task.botId === botId && task.status !== "working") task.botId = null;
-      if (task.reviewerBotId === botId) delete task.reviewerBotId;
+      if (task.reviewerBotId === botId) {
+        delete task.reviewerBotId;
+        this.clearPendingReviews(task.id);
+      }
     }
   }
   /** Builds the prompt for a fresh start or a follow-up resume after request-changes / reopen. */
@@ -284,12 +295,36 @@ export class Tasks {
     delete task.problem;
     delete task.pendingNote;
     delete task.reviewerBotId;
+    this.clearPendingReviews(task.id);
     this.ws.chat(chatId).title = "Task · " + task.title.slice(0, 80);
     task.runId = this.ws.state.runs.find((r) => r.chatId === chatId)?.id;
     this.recordHistory(task, from, "working", { by: "system" });
     this.ws.save();
     if (from !== "working") this.ws.events?.emit("task.status", { task, from, to: "working" });
     turn.catch((error) => console.error("Task:", error.message));
+  }
+  /** Whether a queued creator review is still waiting on this creator chat (not resolved, overridden, or deleted). */
+  needsCreatorReview(taskId, chat) {
+    const task = this.all.find((t) => t.id === taskId);
+    if (!task || task.status !== "review" || !task.reviewerBotId) return false;
+    if (!chat || chat.hostDispatch || chat.botId !== task.reviewerBotId) return false;
+    return this.isBotCreator(task.createdBy) && task.reviewerBotId === task.createdBy;
+  }
+  /** Emits the creator review notification when a queued review wakes and starts its turn. */
+  creatorReviewStarted(taskId, chatId) {
+    const task = this.all.find((t) => t.id === taskId);
+    if (task) this.ws.events?.emit("task.creatorNotified", { task, chatId, autoAccepted: false, mode: "turn" });
+  }
+  /** Drops any queued creator-review items for a task that is no longer waiting for creator review. */
+  clearPendingReviews(taskId) {
+    const queues = this.ws.queues;
+    if (!queues) return;
+    for (const [chatId, list] of queues) {
+      const next = list.filter((item) => item.taskReviewId !== taskId);
+      if (next.length === list.length) continue;
+      if (next.length) queues.set(chatId, next);
+      else queues.delete(chatId);
+    }
   }
   /**
    * Delivers a task completion notice into the creator bot's originating chat (or its main chat if gone)
@@ -335,11 +370,15 @@ export class Tasks {
       this.ws.events?.emit("task.creatorNotified", { task, chatId, autoAccepted: true });
       return { chatId, mode: "posted" };
     }
-    // Trigger a review turn in the creator's chat if free; otherwise queue via chat.posted & record the notice.
-    if (!this.ws.closing && !this.ws.active.has(chatId) && !chat.hostDispatch) {
+    // Drop any stale queued review for this task before delivering or queueing the current pass.
+    this.clearPendingReviews(task.id);
+    const reviewTitle = "Review · " + task.title.slice(0, 80);
+    // Trigger a review turn in the creator's chat if free; otherwise queue on the chat's durable queue
+    // so it wakes automatically when busy clears (and skips if resolved or overridden first).
+    if (!this.ws.closing && !this.ws.active.has(chatId) && !this.ws.queues?.get(chatId)?.length && !chat.hostDispatch) {
       try {
         const turn = this.ws.send(chatId, prompt, {
-          title: "Review · " + task.title.slice(0, 80),
+          title: reviewTitle,
           taskReviewId: task.id,
           notify: false,
         });
@@ -350,7 +389,23 @@ export class Tasks {
         console.error("Task review notify:", error.message);
       }
     }
-    // Chat is busy or unavailable for immediate send: record card and inject into the creator's next turn.
+    if (!chat.hostDispatch && this.ws.queues) {
+      const list = this.ws.queues.get(chatId) ?? [];
+      list.push({
+        id: randomUUID(),
+        steer: false,
+        notify: false,
+        title: reviewTitle,
+        taskReviewId: task.id,
+        text: prompt,
+        attachments: [],
+      });
+      this.ws.queues.set(chatId, list);
+      this.ws.save();
+      this.ws.events?.emit("task.creatorNotified", { task, chatId, autoAccepted: false, mode: "queued" });
+      return { chatId, mode: "queued" };
+    }
+    // Fallback for chats that cannot accept turns (hostDispatch): record card and inject into next turn.
     chat.messages.push(notice);
     chat.posted = [...(chat.posted ?? []), { from: "Task · " + task.title.slice(0, 60), text: prompt, time: now }].slice(-20);
     chat.time = now;
@@ -405,6 +460,10 @@ export class Tasks {
    */
   tick() {
     if (this.ws.closing) return;
+    // Drain any queued creator reviews whose creator chat is now idle (e.g. if a turn cleared outside drain).
+    for (const [chatId, list] of this.ws.queues ?? []) {
+      if (!this.ws.active.has(chatId) && list.some((item) => item.taskReviewId)) this.ws.drain(chatId);
+    }
     const { tasksMax, tasksPerBot } = taskLimits(this.ws.state.settings);
     const running = this.all.filter((t) => t.status === "working");
     const perBot = new Map();
