@@ -2,6 +2,7 @@ import { router, useLocalSearchParams } from "expo-router";
 import { Archive, CircleAlert, MessageCircle, Trash2 } from "lucide-react-native";
 import { useMemo, useState } from "react";
 import { ActivityIndicator, Alert, StyleSheet, View } from "react-native";
+import { openChat as openChatRoute } from "@/features/chat/navigate";
 import type { BotTask, TaskPriority } from "@/link/types";
 import { useBots, usePart } from "@/state/hooks";
 import { api, attempt } from "@/state/link";
@@ -157,7 +158,7 @@ function TaskRows({ task }: { task: BotTask }) {
   const openChat = () => {
     if (!chatId) return;
     router.back();
-    router.push({ pathname: "/chat/[id]", params: { id: chatId } });
+    openChatRoute(chatId);
   };
   return (
     <Group>

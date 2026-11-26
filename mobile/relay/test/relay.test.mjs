@@ -346,6 +346,84 @@ describe(NODE_RELAY ? "relay (node)" : "relay (wrangler dev)", { timeout: 300_00
     assert.deepEqual(await client.next(), bytes(0x03, u32(1)));
   });
 
+  it("schedules no recurring liveness alarm for an idle host+phone room and still reaps a silent host on phone send", { timeout: 70_000 }, async () => {
+    const room = newRoom();
+    const group = randomBytes(32).toString("base64url");
+    const h = await hostV3(room, group);
+    const p = await phone(room);
+    // Establish fast heartbeat via two nearby auto-response pings sampled during the opening probes.
+    h.send("ping");
+    assert.equal(await h.next(), "pong");
+    await sleep(8_000);
+    h.send("ping");
+    assert.equal(await h.next(), "pong");
+    await sleep(8_000); // Second opening probe at +14s records heartbeat="fast" and clears alarms.
+
+    // Keep the room idle with only auto-response pings for >20s (past V3_FAST_SILENCE=15s).
+    // Before the fix, scheduleAlarm() re-armed a liveness alarm every ~10-15s forever.
+    const wakesBeforeIdle = (output.match(/"event":"wake"/g) ?? []).length;
+    for (let i = 0; i < 4; i++) {
+      await sleep(5_000);
+      h.send("ping");
+      assert.equal(await h.next(), "pong");
+    }
+    if (!NODE_RELAY) assert.equal((output.match(/"event":"wake"/g) ?? []).length, wakesBeforeIdle, "no recurring liveness alarm wakes while idle with phone connected");
+
+    // Stop pinging past V3_FAST_SILENCE (15s). A phone request must still reap the silent host
+    // and enter recovery, then deliver [0x05] when the recovery window expires.
+    await sleep(16_000);
+    p.send(request(88, "after-silent-host"));
+    assert.deepEqual(await p.next(20_000), bytes(0x05));
+    p.send(request(89, "after-recovery-expired"));
+    assert.deepEqual(await p.next(), bytes(0x03, u32(89)));
+    assert.equal((await h.closed()).code, 4001);
+  });
+
+  it("does not re-drop a lingering server-closed host socket across hibernation or reseats", { timeout: 90_000 }, async () => {
+    const room = newRoom();
+    const group = randomBytes(32).toString("base64url");
+    const nextGroup = randomBytes(32).toString("base64url");
+    const h1 = await hostV3(room, group);
+    const h2 = await hostV3(room, group);
+    // Freeze h1 so it never acknowledges the server's 4001 close frame, leaving it attached in CLOSING.
+    h1.ws._socket.pause();
+    h1.ws._socket.removeAllListeners("data");
+    try {
+      const dropsBefore = (output.match(/"event":"drop"/g) ?? []).length;
+      const h3 = await hostV3(room, group);
+      // Let child stdout flush before inspecting logged drop counts.
+      await sleep(100);
+      assert.equal((output.match(/"event":"drop"/g) ?? []).length - dropsBefore, 1, "initial reseat drops h1 once");
+
+      // Establish fast heartbeat on h2 and h3 so opening probes finish by +14s, then hibernate.
+      h2.send("ping");
+      h3.send("ping");
+      await sleep(8_000);
+      h2.send("ping");
+      h3.send("ping");
+      await sleep(20_000); // Past opening probes + hibernation window (~10s).
+
+      // A fourth same-group socket must evict h2 (the oldest live socket), NOT re-drop h1,
+      // and must keep the room bounded to two live sockets (h3 + h4) plus the lingering h1.
+      const wakesBeforeReseat = (output.match(/"event":"wake"/g) ?? []).length;
+      const h4 = await hostV3(room, group);
+      await sleep(100);
+      if (!NODE_RELAY) assert.ok((output.match(/"event":"wake"/g) ?? []).length > wakesBeforeReseat, "room hibernated even with a lingering closing socket");
+      assert.equal((await h2.closed()).code, 4001, "reseat evicts live h2 instead of re-dropping closing h1");
+
+      // A new group takeover must only drop the two live seats (h3, h4), never re-drop h1.
+      const dropsBeforeTakeover = (output.match(/"event":"drop"/g) ?? []).length;
+      const replacement = await hostV3(room, nextGroup);
+      assert.equal((await h3.closed()).code, 4000);
+      assert.equal((await h4.closed()).code, 4000);
+      await sleep(100);
+      assert.equal((output.match(/"event":"drop"/g) ?? []).length - dropsBeforeTakeover, 2, "takeover drops only the 2 live seats, not the already-closing zombie");
+      replacement.close();
+    } finally {
+      h1.ws.terminate();
+    }
+  });
+
   it("delivers and acknowledges an answer whose request is absent from room memory", async () => {
     const room = newRoom();
     const host = await hostV3(room, randomBytes(32).toString("base64url"));

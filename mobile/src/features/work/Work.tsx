@@ -3,6 +3,7 @@ import { Activity as ActivityIcon, ChevronDown, ChevronUp, CircleDashed, Plus, T
 import { useMemo, useState } from "react";
 import { Alert, Switch, View } from "react-native";
 import Animated, { FadeIn } from "react-native-reanimated";
+import { openChat } from "@/features/chat/navigate";
 import type { Bot, BotTask, ChatSchedule, ChatSummary, Panel } from "@/link/types";
 import { type RoutineEntry, useBots, useCan, useChats, useMember, usePart, useRoutines } from "@/state/hooks";
 import { api, attempt } from "@/state/link";
@@ -24,7 +25,6 @@ const SEGMENTS: { value: Segment; label: string }[] = [
 // Work opens on the tab last looked at, while the app runs.
 let lastSegment: Segment = "routines";
 
-const openChat = (id: string) => router.push({ pathname: "/chat/[id]", params: { id } });
 const openTask = (id: string) => router.push({ pathname: "/task/[id]", params: { id } });
 const openRoutine = (id: string) => router.push({ pathname: "/routine/[id]", params: { id } });
 

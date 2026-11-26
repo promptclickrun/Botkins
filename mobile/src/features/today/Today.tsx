@@ -7,6 +7,7 @@ import { type ComponentRef, createContext, type ReactNode, type RefObject, useCo
 import { Alert, Dimensions, StyleSheet, View } from "react-native";
 import Animated, { FadeIn } from "react-native-reanimated";
 import { AlertActions } from "@/features/bots/AlertActions";
+import { openChat } from "@/features/chat/navigate";
 import { actOnIdea, discussBoardItem } from "@/features/chat/open";
 import type { BoardItem, Bot, Panel } from "@/link/types";
 import { cronLabel } from "@/features/work/cron";
@@ -41,12 +42,11 @@ const SIZES: { value: Panel["size"]; label: string }[] = [
 // These routes are new; their types are generated the next time Metro starts.
 const openNewPanel = () => router.push("/today/new" as Href);
 const openPanelRoutine = (id: string) => router.push({ pathname: "/today/routine", params: { id } } as unknown as Href);
-const openChat = (id: string) => router.push({ pathname: "/chat/[id]", params: { id } });
 
 /** Starts a chat with a bot with text waiting in its message box. */
 async function askBot(botId: string, text: string) {
   const id = await attempt(api.createChat(botId));
-  if (id) router.push({ pathname: "/chat/[id]", params: { id, draft: text } });
+  if (id) openChat(id, { draft: text });
 }
 const BODY_CLIP = 84; // About four lines of small Markdown.
 

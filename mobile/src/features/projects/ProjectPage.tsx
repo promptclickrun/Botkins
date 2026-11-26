@@ -3,6 +3,7 @@ import { MenuView } from "@react-native-menu/menu";
 import { Check, ChevronDown, ChevronUp, FolderMinus, FolderOpen, MessagesSquare, Paperclip, Plus, Trash2 } from "lucide-react-native";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Alert, ScrollView, TextInput, type TextInputInstance, View } from "react-native";
+import { openChat } from "@/features/chat/navigate";
 import { openSpace, useSpaces, useSpacesOn } from "@/features/spaces/data";
 import { rowLine as spaceRowLine, spaceTitle } from "@/features/spaces/logic";
 import { PanelCard as SpacePanelCard } from "@/features/spaces/SpaceView";
@@ -290,7 +291,7 @@ function Chats({ project }: { project: Project }) {
     setStarting(botId);
     const id = await attempt(api.startProjectChat([botId], project.id, project.folder ? mode : "default", project.folders?.includes(folder ?? "") ? folder : undefined));
     setStarting(null);
-    if (id) router.push({ pathname: "/chat/[id]", params: { id } });
+    if (id) openChat(id);
   };
   return (
     <View style={{ gap: space.md }}>
@@ -314,7 +315,7 @@ function Chats({ project }: { project: Project }) {
                     subtitle={[bot?.name, project.folders && (chat.folder ?? project.folder)].filter(Boolean).join(" · ")}
                     value={ago(chat.time)}
                     chevron
-                    onPress={() => router.push({ pathname: "/chat/[id]", params: { id: chat.id } })}
+                    onPress={() => openChat(chat.id)}
                   />
                 </HoldMenu>
               );
@@ -394,7 +395,7 @@ function Artifacts({ project }: { project: Project }) {
                   { id: "remove", title: "Remove from project", image: "minus.circle", attributes: { destructive: true } },
                 ]}
                 onPressAction={({ nativeEvent }) => {
-                  if (nativeEvent.event === "chat" && artifact.chatId) router.push({ pathname: "/chat/[id]", params: { id: artifact.chatId, ...(artifact.messageIndex !== undefined && { at: String(artifact.messageIndex) }) } });
+                  if (nativeEvent.event === "chat" && artifact.chatId) openChat(artifact.chatId, artifact.messageIndex !== undefined ? { at: String(artifact.messageIndex) } : undefined);
                   else if (nativeEvent.event === "remove") void attempt(api.removeProjectArtifact(project.id, artifact.id), "Removed from " + project.name);
                 }}
               >

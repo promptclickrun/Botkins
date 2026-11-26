@@ -424,6 +424,12 @@ const routeOf = (session: Session | null): LinkRoute | null => (session ? (isRel
 type SyncNews = { epoch: string; v: Record<string, number> | null; parts: Record<string, unknown> };
 class Retry extends Error {}
 
+// A dropped reply doesn't tell us whether the computer already acted. Only these reads can be
+// sent again after a transport failure. A new method needs an explicit entry to be replayed.
+const REPLAYABLE_READS = new Set([
+  "link.sync", "link.messages", "link.step", "link.devices.list", "link.team.get",
+]);
+
 // Same preview as the host. The portable client is bundled independently of the host modules.
 function reasoningPreview(items: ReasoningView["items"], botId?: string) {
   const tail = [];
@@ -868,8 +874,7 @@ export class LinkClient {
     }
   }
 
-  private async request<T>(method: string, args: unknown[], timeout: number, signal?: AbortSignal, active?: Session, onNews?: (news: SyncNews) => void): Promise<T> {
-    const session = active ?? await this.openSession();
+  private async request<T>(method: string, args: unknown[], timeout: number, signal: AbortSignal | undefined, session: Session, onNews?: (news: SyncNews) => void): Promise<T> {
     if (signal?.aborted) throw new Error("The request was cancelled");
     const seq = ++session.seq;
     const sealed = seal(session.toHost, seqNonce(seq), utf8(JSON.stringify({ m: method, a: args })), "rpc:" + session.id);
@@ -925,14 +930,31 @@ export class LinkClient {
 
   async callWithSignal<T>(method: string, signal: AbortSignal | undefined, ...args: unknown[]): Promise<T> {
     const lifetime = this.lifetime;
+    const replayable = REPLAYABLE_READS.has(method);
+    let retriedTransport = false;
     for (let attempt = 0; ; attempt++) {
+      let session: Session | undefined;
       try {
         if (signal?.aborted) throw new Error("The request was cancelled");
+        session = await this.openSession();
         // Pi waits for npm to finish installing dependencies on the computer.
-        return await this.request<T>(method, args, method === "cloneProjectRepository" ? 300_000 : method === "piPackages.install" ? 150_000 : 60_000, signal);
+        return await this.request<T>(method, args, method === "cloneProjectRepository" ? 300_000 : method === "piPackages.install" ? 150_000 : 60_000, signal, session);
       } catch (error) {
-        if (!signal?.aborted && this.lifetime === lifetime && error instanceof Retry && attempt < 2) continue;
         if (error instanceof LinkError) throw error;
+        if (!signal?.aborted) {
+          const canRetry = this.lifetime === lifetime && attempt < 2;
+          if (error instanceof Retry) {
+            // For these non-streaming calls, Retry means 401. The host refused the session before dispatch.
+            if (canRetry) continue;
+          } else if (session) {
+            if (this.session === session) this.useSession(null);
+            if (!replayable) throw new LinkError("offline", "The computer's reply was lost. Your action may have gone through.");
+            if (!retriedTransport && canRetry) {
+              retriedTransport = true;
+              continue;
+            }
+          }
+        }
         throw new LinkError("offline", "Your computer can't be reached right now.");
       }
     }

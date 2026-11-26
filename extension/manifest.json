@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Botkins Browser Control",
   "short_name": "Botkins",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Connect your signed-in Chrome or Edge profile to your Botkins hosts so your bots can browse and act for you even when you're away.",
   "minimum_chrome_version": "116",
   "icons": {
@@ -26,6 +26,7 @@
   },
   "options_page": "options/options.html",
   "permissions": [
+    "scripting",
     "debugger",
     "tabs",
     "tabGroups",

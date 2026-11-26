@@ -132,8 +132,11 @@ export function createBackgroundController(options: BackgroundPolicyOptions): Ba
     hold(reason: BackgroundReason) {
       const token = Symbol(reason);
       activeHolds.set(token, reason);
-      // A hold started during the grace window prevents the grace timer from closing the socket.
-      clearGrace();
+      // A hold started during the grace window prevents sleep; one started while already asleep
+      // wakes the link so background callers (Watch voice, push, uploads) get a live connection
+      // and release() cleanly returns to sleep afterwards.
+      if (sleeping) wakeNow();
+      else clearGrace();
       let released = false;
       return () => {
         if (released) return;

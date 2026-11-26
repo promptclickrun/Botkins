@@ -1,0 +1,911 @@
+/*
+ * Work: Routines, Projects, Tasks, Activity and Usage in the shared page look (src/ui.css): the
+ * large title with its actions, the tabs and bot chips, then uppercase labels over cards of rows.
+ * Older rules in style.css, routines.css, records.css and workspaces.css still match some of these
+ * elements, so the overrides here are scoped to `.work-page` (and `.usage-page`) and leave the
+ * Settings dialog and the bot page, which share those files, as they were.
+ */
+
+/* The page's own sections are spaced by its gap, not by the global `section + section` margin. */
+.work-page section,
+.work-page .page-section + .page-section,
+.usage-page section {
+  margin-top: 0;
+}
+.work-page h2.group-label {
+  font-family: inherit;
+  letter-spacing: 0.6px;
+}
+
+/* ---- Header: title and actions, tabs and chips, one quiet line --------------------------------- */
+.work-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.work-bar .page-head {
+  align-items: center;
+}
+.work-tool {
+  color: var(--ink-2);
+}
+.work-controls {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.work-filters {
+  margin-left: auto;
+  min-width: 0;
+}
+/* The tabs: a sunken track, the chosen one raised, as on the phone. */
+.work-tabs {
+  display: grid;
+  gap: 2px;
+  width: 330px;
+  max-width: 100%;
+  padding: 3px;
+  border-radius: 12px;
+  background: var(--sunken);
+}
+.work-tabs [role="tab"] {
+  height: 30px;
+  gap: 6px;
+  padding: 0 10px;
+  border-radius: 9px;
+  font-size: calc(13px * var(--text-scale));
+  font-weight: 600;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.work-tabs [role="tab"]:hover {
+  background: transparent;
+  color: var(--ink);
+}
+.work-tabs [role="tab"][aria-selected="true"] {
+  background: var(--raised);
+  color: var(--ink);
+  box-shadow: 0 1px 3px color-mix(in srgb, var(--ink) 14%, transparent);
+}
+.work-tabs .count-badge {
+  min-width: 17px;
+  height: 17px;
+  font-size: calc(10.5px * var(--text-scale));
+}
+.work-lede {
+  margin: 0 4px;
+  font-size: calc(13.5px * var(--text-scale));
+  line-height: 1.45;
+  color: var(--muted);
+}
+/* A bot chip carries the bot's face at its left. */
+.chip.with-face {
+  padding-left: 3px;
+  gap: 5px;
+}
+
+/* The way back to Work (or to the list) above a page Work opens. */
+.work-back {
+  margin: 0 0 -14px -8px;
+}
+.work-back .link-button {
+  gap: 2px;
+  padding-left: 4px;
+}
+
+/* ---- Rows with a bot's face ---------------------------------------------------------------- */
+/* The hairline between rows starts at the title, past the 36px face. */
+.work-page .group.work-avatars {
+  --row-inset: 66px;
+}
+.work-page .group-row {
+  gap: 14px;
+}
+.work-avatar-blank {
+  flex: none;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: var(--sunken);
+}
+.row-title.wrap,
+.row-sub.wrap {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+/* "Show n more": one more row in the card, in the accent's text color. */
+.group-row.work-more {
+  min-height: 44px;
+  gap: 8px;
+  font-size: calc(13.5px * var(--text-scale));
+  font-weight: 600;
+  color: var(--accent-text);
+}
+.group.work-avatars > .group-row.work-more::before {
+  left: 16px;
+}
+.work-more[aria-expanded="true"] svg {
+  transform: rotate(180deg);
+}
+
+/* Needs you: a request or a task, with its one action at the right. */
+.work-needs-open {
+  border: 0;
+  padding: 0;
+  background: transparent;
+  text-align: left;
+  align-items: stretch;
+  justify-content: flex-start;
+  gap: 1px;
+}
+.work-needs-open:hover {
+  background: transparent;
+}
+.work-needs-open:hover .row-title {
+  text-decoration: underline;
+  text-decoration-color: var(--line-strong);
+  text-underline-offset: 2px;
+}
+.row-sub.work-problem {
+  color: var(--danger);
+}
+.work-needs-row .btn {
+  flex: none;
+}
+
+/* An empty tab: one quiet line with a tile, on the canvas. */
+.work-empty {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 4px;
+}
+.work-empty > div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.work-empty strong {
+  font-size: calc(14px * var(--text-scale));
+  font-weight: 600;
+}
+.work-empty small {
+  font-size: calc(13px * var(--text-scale));
+}
+
+/* ---- Routines ------------------------------------------------------------------------------- */
+/* A row is a wide button plus the switch at its right, so the switch isn't nested in the button. */
+.work-page .routine-row {
+  padding: 0 10px 0 0;
+  gap: 6px;
+}
+.work-page .routine-row:hover {
+  background: var(--hover);
+}
+.work-page .routine-open {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: var(--row-height);
+  justify-content: flex-start;
+  gap: 14px;
+  padding: 10px 6px 10px 16px;
+  border-radius: 0;
+  text-align: left;
+}
+.work-page .routine-open:hover {
+  background: transparent;
+}
+.work-page .routine-row.paused .bot-avatar,
+.work-page .routine-row.paused .routine-open > :first-child {
+  opacity: 0.6;
+}
+.work-page .routine-row.paused .row-title {
+  color: var(--ink-2);
+}
+.work-page .routine-when {
+  flex: none;
+  width: 160px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 1px;
+  text-align: right;
+}
+.work-page .routine-when time {
+  font-size: calc(13px * var(--text-scale));
+  font-weight: 500;
+  color: var(--ink-2);
+}
+.work-page .routine-when time.paused {
+  color: var(--muted);
+}
+/* The last run as a quiet word in its status color; the spinner stays while one runs. */
+.work-page .routine-when .run-chip {
+  min-width: 0;
+  font-size: calc(12px * var(--text-scale));
+  font-weight: 500;
+  color: var(--faint);
+}
+.work-page .routine-when .run-chip.ok {
+  color: var(--success);
+}
+.work-page .routine-when .run-chip.failed {
+  color: var(--danger);
+}
+.work-page .routine-when .run-chip.working {
+  color: var(--info);
+}
+.work-page .routine-when .run-chip:not(.working) svg {
+  display: none;
+}
+.work-page .routine-row-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+}
+.work-page .icon-btn.danger {
+  color: var(--danger);
+}
+
+/* A routine's page. */
+.routine-head {
+  align-items: center;
+  gap: 16px;
+}
+.routine-head .page-sub .routine-state {
+  font-weight: 600;
+  color: var(--muted);
+}
+.routine-head .page-sub .routine-state.active {
+  color: var(--success);
+}
+.work-page .routine-next {
+  margin: 0;
+  font-weight: 600;
+}
+.routine-prompt {
+  margin: 0;
+  padding: 2px 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: calc(14px * var(--text-scale));
+  line-height: 1.5;
+}
+.work-page .routine-model-line {
+  flex-wrap: nowrap;
+}
+.work-page .routine-script-text {
+  margin: 0;
+  border: 0;
+  background: var(--sunken);
+}
+.run-icon {
+  flex: none;
+  color: var(--muted);
+}
+.run-icon.ok {
+  color: var(--success);
+}
+.run-icon.failed {
+  color: var(--danger);
+}
+.run-icon.working,
+.icon-tile .spin {
+  color: var(--info);
+  animation: routine-spin 1.1s linear infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .run-icon.working,
+  .icon-tile .spin {
+    animation: none;
+  }
+}
+.routine-delete .row-title {
+  color: var(--danger);
+}
+.icon-tile.danger-tile {
+  --tile: var(--danger);
+}
+:root[data-theme="ink"] .icon-tile.danger-tile {
+  --tile: var(--danger);
+}
+.group-row:disabled {
+  opacity: 0.5;
+}
+.group-row:disabled:hover {
+  background: transparent;
+}
+.work-page form.routine-copy {
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 8px;
+  margin: 0;
+  padding-left: 66px;
+}
+.work-page .routine-copy label {
+  flex: 1 1 200px;
+}
+
+/* The routine editor: its fields in cards, the buttons at the end. */
+.work-page .group.routine-form {
+  padding: 16px 18px 2px;
+}
+.work-page .routine-form .routine-preview {
+  margin: 0 0 16px;
+}
+.work-page .routine-form .routine-followup {
+  margin-bottom: 16px;
+  background: var(--sunken);
+  border: 0;
+}
+.work-page .routine-form .routine-target-picker {
+  background: var(--sunken);
+}
+.work-page .routine-form .counter {
+  display: block;
+}
+.routine-cost {
+  margin-top: -14px;
+}
+.routine-save {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+/* ---- Tasks ---------------------------------------------------------------------------------- */
+.work-page .task-lane {
+  display: flex;
+  min-height: 0;
+  padding: 0;
+  border-radius: 0;
+  transition: none;
+}
+.work-page .task-lane.drop > .group {
+  box-shadow: inset 0 0 0 2px var(--accent);
+}
+.work-page .task-card {
+  display: flex;
+  justify-items: initial;
+  width: 100%;
+  padding: 10px 16px;
+  border-radius: 0;
+  background: transparent;
+}
+.work-page .task-card:hover {
+  background: var(--hover);
+}
+.work-page .task-card .task-meta em {
+  font-style: normal;
+  font-weight: 600;
+  color: var(--muted);
+  text-transform: capitalize;
+}
+.work-page .task-card.priority-high .task-meta em {
+  color: var(--warning);
+}
+.work-page .task-card.priority-urgent .task-meta em {
+  color: var(--danger);
+}
+.work-page .lane-add {
+  gap: 14px;
+  min-height: 48px;
+  font-weight: 600;
+  color: var(--accent-text);
+  justify-self: auto;
+}
+.lane-add-icon {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: var(--sunken);
+}
+
+/* ---- Projects ------------------------------------------------------------------------------- */
+.work-page .project-list.group {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.work-page .project-list > li.link-row {
+  padding: 0;
+  margin: 0;
+  min-height: 0;
+  border-radius: 0;
+}
+/* The rows' hairlines, as `.group-row` draws them, on the list items. */
+.work-page .project-list > li + li {
+  position: relative;
+}
+.work-page .project-list > li + li::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 58px;
+  right: 0;
+  height: 1px;
+  background: var(--line);
+  pointer-events: none;
+}
+.work-page .project-list .record-row {
+  min-height: 60px;
+  gap: 14px;
+  padding: 10px 16px;
+  border-radius: 0;
+}
+.work-page .project-list .record-row:hover {
+  background: var(--hover);
+}
+.work-page .project-list .record-row .row-title {
+  font-family: inherit;
+}
+/* A project's tile: its icon on a soft fill of its own color. */
+.project-tile {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  color: var(--muted);
+  background: color-mix(in srgb, currentColor 14%, transparent);
+}
+:root[data-mode="dark"] .project-tile {
+  background: color-mix(in srgb, currentColor 24%, transparent);
+}
+.project-tile.large {
+  width: 52px;
+  height: 52px;
+  border-radius: 14px;
+}
+
+/* A project's page: header, the section chips, then the section's cards. */
+.project-page .project-head {
+  align-items: center;
+  gap: 16px;
+}
+.project-page .project-head .page-title {
+  overflow-wrap: anywhere;
+}
+.project-page .project-meta {
+  display: block !important;
+  margin: 4px 0 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-size: calc(12.5px * var(--text-scale));
+}
+.project-page .project-desc {
+  margin-top: 2px;
+}
+.project-page .project-layout {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  margin: 0;
+}
+.project-page .project-menu {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  border: 0;
+}
+.project-page .project-menu button {
+  height: 32px;
+  min-height: 0;
+  gap: 6px;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  box-shadow: none;
+  font-size: calc(13px * var(--text-scale));
+  font-weight: 600;
+  color: var(--ink-2);
+}
+.project-page .project-menu button:hover {
+  background: var(--hover);
+}
+.project-page .project-menu button svg {
+  color: var(--muted);
+}
+.project-page .project-menu button small {
+  font-size: calc(12px * var(--text-scale));
+  font-weight: 600;
+  color: var(--muted);
+}
+.project-page .project-menu button[aria-current="page"] {
+  border-color: transparent;
+  background: var(--accent);
+  color: var(--on-accent);
+  box-shadow: none;
+}
+.project-page .project-menu button[aria-current="page"] svg,
+.project-page .project-menu button[aria-current="page"] small {
+  color: var(--on-accent);
+}
+.project-page .record-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+/* A card's label carries its action at the right, as a quiet link. */
+.project-page .group-label .card-action {
+  margin-left: auto;
+  text-transform: none;
+  letter-spacing: 0;
+}
+.project-page .group-label .card-action .secondary,
+.project-page .group-label .card-action > button {
+  height: 26px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 8px;
+  font-size: calc(13px * var(--text-scale));
+  font-weight: 600;
+  color: var(--accent-text);
+  background: transparent;
+}
+.project-page .group-label .card-action > button:hover:not(:disabled) {
+  background: var(--hover);
+}
+.project-page .group-label .card-action > button:disabled {
+  color: var(--faint);
+}
+.project-page .group-label .field-inline.compact {
+  font-size: calc(12px * var(--text-scale));
+  color: var(--muted);
+}
+.project-page .group-label .field-inline.compact select {
+  height: 28px;
+  padding: 2px 8px;
+  font-size: calc(12.5px * var(--text-scale));
+  font-weight: 500;
+  color: var(--ink);
+  text-transform: none;
+}
+.project-page .group.padded {
+  padding: 16px 18px;
+}
+.project-page .group.padded > .edit-list:first-child {
+  margin-top: -6px;
+}
+/* Lists inside a card: rows split by inset hairlines, like `.group-row`. */
+.project-page .group .edit-list > li {
+  position: relative;
+  min-height: 48px;
+  padding: 6px 4px;
+  border-radius: 0;
+}
+.project-page .group .edit-list > li + li::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 4px;
+  right: -18px;
+  height: 1px;
+  background: var(--line);
+  pointer-events: none;
+}
+/* A bare card list (chats, bots, access) runs edge to edge, as rows do. */
+.project-page .group.rows {
+  padding: 4px 0;
+}
+.project-page .group.rows .edit-list > li {
+  padding: 6px 12px 6px 16px;
+}
+.project-page .group.rows .edit-list > li + li::before {
+  left: 16px;
+  right: 0;
+}
+.project-page .group.rows > .list-note {
+  margin: 8px 16px;
+}
+.project-page .bot-pick-list .grow strong,
+.project-page .access-list .grow strong {
+  font-family: inherit;
+  font-weight: 600;
+  font-size: calc(14px * var(--text-scale));
+}
+.project-page .bot-pick-list .grow small,
+.project-page .access-list .grow small {
+  display: block;
+  font-size: calc(12.5px * var(--text-scale));
+}
+.project-page .group .secondary {
+  border-color: transparent;
+  background: var(--sunken);
+  border-radius: 9px;
+  font-weight: 600;
+}
+.project-page .project-chats {
+  padding: 2px 0;
+}
+.project-page .project-chats .row {
+  padding: 10px 16px;
+  border-radius: 0;
+}
+.project-page .project-chats .row + .row {
+  box-shadow: inset 0 1px 0 var(--line);
+}
+.project-page .group.padded > button:not(.swatch),
+.project-page .group.padded > .actionrow > button {
+  margin-top: 10px;
+  margin-right: 6px;
+  height: 32px;
+  padding: 0 12px;
+  border-radius: 9px;
+  background: var(--sunken);
+  font-size: calc(13px * var(--text-scale));
+  font-weight: 600;
+}
+.project-page .group.padded > .actionrow {
+  margin: 0;
+}
+.project-page .group.padded > .actionrow > button {
+  margin-top: 0;
+}
+.project-page .group.padded > .actionrow > button.danger {
+  color: var(--danger);
+  background: var(--danger-soft);
+}
+.project-page .group.padded > .field {
+  margin-top: 12px;
+}
+.project-page .todo-add {
+  margin: 0 0 6px;
+}
+.project-page .todo-done-toggle {
+  margin: 10px 0 2px;
+  padding: 4px 6px;
+  border-radius: 8px;
+  color: var(--muted);
+}
+.project-page .project-section > .project-spaces,
+.project-page .project-section > .empty-detail {
+  border-radius: var(--card-radius);
+}
+.project-page .project-section > .empty-detail {
+  background: var(--card);
+}
+
+/* ---- Activity ------------------------------------------------------------------------------- */
+.work-page .work-row {
+  gap: 14px;
+}
+.work-page .work-row .work-dot {
+  margin: 0 4px 0 2px;
+}
+.work-page .work-row time {
+  flex: none;
+  font-size: calc(13px * var(--text-scale));
+  color: var(--muted);
+}
+.work-page .work-row .work-activity {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  font-size: calc(12px * var(--text-scale));
+  color: var(--muted);
+}
+.work-page .work-row .work-activity-summary {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.work-page .chip .count {
+  font-size: calc(11.5px * var(--text-scale));
+  font-weight: 600;
+  opacity: 0.7;
+  font-variant-numeric: tabular-nums;
+}
+.work-page .work-upcoming-icon {
+  flex: none;
+}
+
+/* ---- Usage: the page wrapper in app.tsx, then the report's cards ------------------------------ */
+.usage-page {
+  box-sizing: border-box;
+  width: 100%;
+  max-width: calc(var(--page-max) + 2 * var(--page-pad-x));
+  margin: 0 auto;
+  padding: 32px var(--page-pad-x) 56px;
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+.usage-page > h1 {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: calc(28px * var(--text-scale));
+  line-height: 1.22;
+  font-weight: 700;
+  letter-spacing: -0.4px;
+}
+.usage-page .usage {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  margin: 0;
+}
+.usage-page h1 + .usage {
+  margin-top: 0;
+}
+.usage-page .usage-top {
+  margin: 0;
+}
+.usage-page .usage-top .chip-row {
+  margin: 0;
+}
+.usage-page .usage-totals {
+  gap: 0;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  background: var(--card);
+  border-radius: var(--card-radius);
+  overflow: hidden;
+}
+:root:not([data-backdrop="clean"]) .usage-page .usage-totals,
+:root:not([data-backdrop="clean"]) .usage-page .usage-bars {
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
+  box-shadow: inset 0 0 0 1px var(--glass-edge);
+}
+.usage-page .usage-totals .metric {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 14px 16px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: inset 1px 0 0 var(--line);
+}
+.usage-page .usage-totals .metric strong {
+  font-family: var(--font-display);
+  font-size: calc(24px * var(--text-scale));
+}
+.usage-page .usage-totals .metric small:first-child {
+  font-size: calc(11.5px * var(--text-scale));
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+}
+.usage-page .usage h3 {
+  margin: 0 4px 8px;
+  font-family: inherit;
+  font-size: calc(12px * var(--text-scale));
+  line-height: 1.35;
+  font-weight: 700;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.usage-page .usage-bars {
+  height: 170px;
+  padding: 14px 16px;
+  background: var(--card);
+  border-radius: var(--card-radius);
+}
+.usage-page .usage-axis {
+  margin: 6px 4px 0;
+}
+.usage-page .usage-columns {
+  gap: 24px 28px;
+}
+.usage-page .usage-breakdown > .usage-lines {
+  background: var(--card);
+  border-radius: var(--card-radius);
+  overflow: hidden;
+}
+:root:not([data-backdrop="clean"]) .usage-page .usage-breakdown > .usage-lines {
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
+  box-shadow: inset 0 0 0 1px var(--glass-edge);
+}
+.usage-page .usage-line {
+  padding: 10px 16px;
+  border: 0;
+}
+.usage-page .usage-line + .usage-line {
+  background-image: linear-gradient(var(--line), var(--line));
+  background-size: calc(100% - 16px) 1px;
+  background-position: 16px 0;
+  background-repeat: no-repeat;
+}
+.usage-page .usage-lines > small {
+  display: block;
+  padding: 14px 16px;
+}
+
+/* ---- Narrow windows -------------------------------------------------------------------------- */
+@media (max-width: 900px) {
+  .work-page .routine-when {
+    width: auto;
+  }
+  .work-page .routine-when .run-chip {
+    display: none;
+  }
+  .work-filters {
+    margin-left: 0;
+    width: 100%;
+  }
+}
+@media (max-width: 640px) {
+  .work-page .routine-when {
+    display: none;
+  }
+}
+
+/* A section's title inside its label keeps the label's look. */
+.work-page .project-page {
+  gap: 24px;
+}
+.project-page .group .edit-list > li > button:not(.icon-button):not(.secondary) {
+  flex: none;
+  height: 30px;
+  padding: 0 10px;
+  border-radius: 9px;
+  font-size: calc(12.5px * var(--text-scale));
+  font-weight: 600;
+  color: var(--ink-2);
+}
+.project-page .group-label h3.card-title {
+  margin: 0;
+  font: inherit;
+  letter-spacing: inherit;
+  color: inherit;
+}
+.project-page .group.rows > .field-inline {
+  margin: 10px 16px 4px;
+}
+.project-page .project-section > .project-changes {
+  border-radius: var(--card-radius);
+}
+
+/* style.css draws every <header> as the old top bar (52px, right-aligned); these headers are the page's. */
+.work-page header {
+  height: auto;
+  padding: 0;
+  flex: none;
+}
+.work-page header.work-bar {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: flex-start;
+  gap: 14px;
+}
+.work-page header.page-head {
+  align-items: center;
+  justify-content: flex-start;
+  gap: 12px 16px;
+}
+/* routines.css sizes the old group headings; these are the shared uppercase labels. */
+.work-page .routine-group > h2.group-label {
+  display: flex;
+  align-items: center;
+  margin: 0 4px;
+  font-size: calc(12px * var(--text-scale));
+}
+.work-page .group-row.lane-add,
+.work-page .group-row.work-more {
+  justify-content: flex-start;
+  font-size: calc(13.5px * var(--text-scale));
+}
+.work-page .work-upcoming > h2.group-label {
+  display: flex;
+  margin: 0 4px;
+  font-size: calc(12px * var(--text-scale));
+}
+.content > .usage-page {
+  max-width: calc(var(--page-max) + 2 * var(--page-pad-x));
+}

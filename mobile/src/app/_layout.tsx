@@ -12,6 +12,7 @@ import { usePrefs } from "@/state/prefs";
 import { useApp } from "@/state/store";
 import { loadProfile, useProfile } from "@/state/profile";
 import { JOIN_ATTEMPT_KEY, resumeDecision } from "@/features/pair/joinLogic";
+import { chatRouteId } from "@/features/chat/chatNavigation";
 import { backdropBaseColor, ToastHost, useShape, useTheme } from "@/ui";
 
 void SplashScreen.preventAutoHideAsync();
@@ -109,7 +110,7 @@ export default function RootLayout() {
             </Stack.Protected>
             <Stack.Protected guard={paired} redirectTo="/welcome">
               <Stack.Screen name="(tabs)" options={{ headerShown: false, contentStyle: { backgroundColor: screenBg } }} />
-              <Stack.Screen name="chat/[id]" />
+              <Stack.Screen name="chat/[id]" dangerouslySingular={chatRouteId} />
               {/* Links from widgets, Live Activities and notifications (src/features/open): each hands over to a real screen at once. */}
               <Stack.Screen name="open/bot/[id]" options={{ headerShown: false, animation: "none" }} />
               <Stack.Screen name="open/chat/[id]" options={{ headerShown: false, animation: "none" }} />
@@ -118,6 +119,7 @@ export default function RootLayout() {
               <Stack.Screen name="open/panel" options={{ headerShown: false, animation: "none" }} />
               <Stack.Screen name="chat/new" options={tall} />
               <Stack.Screen name="chat/model" options={tall} />
+              <Stack.Screen name="node-approval" options={tall} />
               <Stack.Screen name="chat/activity" options={tall} />
               <Stack.Screen name="chat/helper" options={tall} />
               <Stack.Screen name="chat/command" options={tall} />

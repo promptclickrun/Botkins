@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Scotch Login Fixture</title>
+  <style>
+    body { margin: 16px; font-family: sans-serif; min-height: 2200px; }
+    .field { margin-bottom: 12px; position: relative; }
+    .hidden-btn { display: none; }
+    iframe.ext-overlay { width: 24px; height: 24px; border: 0; vertical-align: middle; }
+    iframe.same-origin { width: 320px; height: 90px; border: 1px solid #ccc; display: block; margin-top: 12px; }
+    #notes-ce { border: 1px solid #888; min-height: 28px; padding: 4px; width: 240px; }
+    #scroll-box { width: 260px; height: 80px; overflow: auto; border: 1px solid #999; margin-top: 12px; }
+    #scroll-box .inner { height: 600px; }
+  </style>
+</head>
+<body>
+  <h1>Member Sign In</h1>
+  <form id="login-form">
+    <div class="field">
+      <label for="email">Email address</label>
+      <input id="email" name="email" type="email" placeholder="you@example.com" required />
+    </div>
+
+    <div class="field">
+      <label for="password">Password</label>
+      <input id="password" name="password" type="password" value="SuperSecretPassword123!" required />
+      <!-- Simulates Proton Pass / 1Password / Bitwarden injecting a foreign extension iframe next to the password field -->
+      <iframe
+        id="proton-pass-iframe"
+        class="ext-overlay"
+        title="Proton Pass autofill"
+        src="chrome-extension://ghmbeldphafepmbegfdlkpapadhbakde/dropdown.html"
+      ></iframe>
+    </div>
+
+    <div class="field">
+      <label for="plan">Membership Plan</label>
+      <select id="plan" name="plan">
+        <option value="basic">Basic</option>
+        <option value="reserve">Reserve Club</option>
+        <option value="vip">VIP Locker</option>
+      </select>
+    </div>
+
+    <div class="field">
+      <label><input id="remember" type="checkbox" /> Remember this browser</label>
+    </div>
+
+    <div class="field">
+      <label for="bio">Delivery Notes</label>
+      <textarea id="bio" rows="2"></textarea>
+    </div>
+
+    <div class="field">
+      <div id="notes-ce" contenteditable="true" aria-label="Rich Note">Initial</div>
+    </div>
+
+    <button id="submit-btn" type="submit">Sign In</button>
+    <button id="hidden-btn" class="hidden-btn" type="button">Should Not Appear</button>
+  </form>
+
+  <div id="shadow-host"></div>
+
+  <iframe id="reachable-iframe" class="same-origin" src="/subframe.html" title="Verification Frame"></iframe>
+
+  <div id="scroll-box">
+    <div class="inner">Scrollable container content</div>
+  </div>
+
+  <div id="async-banner"></div>
+  <div id="bottom-marker" style="margin-top: 1600px;">Bottom Marker</div>
+
+  <script>
+    window.__events = [];
+    window.__submits = [];
+    window.__reactInputState = { email: "", password: "" };
+
+    // Simulate React's instance-level value tracker on #email so direct `el.value = ...`
+    // without calling the native prototype setter + resetting _valueTracker is detectable.
+    (function attachReactTracker(inputId, stateKey) {
+      const el = document.getElementById(inputId);
+      const protoDesc = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value");
+      let tracked = el.value;
+      el._valueTracker = {
+        getValue() {
+          return tracked;
+        },
+        setValue(val) {
+          tracked = String(val);
+        },
+      };
+      let nativeSetterUsed = false;
+      Object.defineProperty(el, "value", {
+        configurable: true,
+        get() {
+          return protoDesc.get.call(this);
+        },
+        set(v) {
+          // React overwrites instance .value so setting el.value directly also updates tracker
+          // (causing React's synthetic onChange to ignore the change). Calling protoDesc.set
+          // bypasses this override and leaves tracker stale so onChange detects the diff!
+          tracked = String(v);
+          return protoDesc.set.call(this, v);
+        },
+      });
+      el.addEventListener("input", () => {
+        const cur = protoDesc.get.call(el);
+        if (tracked !== cur) {
+          nativeSetterUsed = true;
+          tracked = cur;
+          window.__reactInputState[stateKey] = cur;
+        }
+        window.__events.push({ type: "input", target: inputId, nativeSetterDetected: nativeSetterUsed });
+      });
+      for (const evName of ["keydown", "beforeinput", "keyup", "change"]) {
+        el.addEventListener(evName, () => {
+          window.__events.push({ type: evName, target: inputId });
+        });
+      }
+    })("email", "email");
+
+    const submitBtn = document.getElementById("submit-btn");
+    for (const evName of ["pointerover", "pointerenter", "mouseover", "mouseenter", "pointerdown", "mousedown", "pointerup", "mouseup", "click", "dblclick"]) {
+      submitBtn.addEventListener(evName, () => {
+        window.__events.push({ type: evName, target: "submit-btn" });
+      });
+    }
+
+    const form = document.getElementById("login-form");
+    form.addEventListener("submit", (e) => {
+      e.preventDefault();
+      window.__submits.push({
+        submitterId: e.submitter ? e.submitter.id : null,
+        email: document.getElementById("email").value,
+        passwordLength: document.getElementById("password").value.length,
+        plan: document.getElementById("plan").value,
+        remember: document.getElementById("remember").checked,
+      });
+      document.getElementById("async-banner").textContent = "Signed in as " + document.getElementById("email").value;
+    });
+
+    // Attach open shadow DOM with interactive controls
+    const host = document.getElementById("shadow-host");
+    const shadow = host.attachShadow({ mode: "open" });
+    shadow.innerHTML = `
+      <style>
+        .shadow-wrap { margin-top: 12px; padding: 8px; border: 1px dashed #666; }
+      </style>
+      <div class="shadow-wrap">
+        <label for="shadow-input">Shadow Promo Code</label>
+        <input id="shadow-input" type="text" placeholder="PROMO" />
+        <button id="shadow-apply" type="button">Apply Shadow Promo</button>
+        <span id="shadow-status"></span>
+      </div>
+    `;
+    shadow.getElementById("shadow-apply").addEventListener("click", () => {
+      const val = shadow.getElementById("shadow-input").value;
+      shadow.getElementById("shadow-status").textContent = "Applied:" + val;
+      window.__shadowApplied = val;
+    });
+  </script>
+</body>
+</html>

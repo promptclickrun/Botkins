@@ -204,7 +204,8 @@ export default function BotForm({
           {agent.ownTools && " It sets its own tools there. This bot uses Botkins' Skills, MCP servers and approvals instead."}
         </p>
       )}
-      <div className="botform-top">
+      {/* The bot as the phone shows it: its Botkin beside its name and role, then what it is for. */}
+      <div className="botform-top group padded botform-card">
         <div className="botform-face">
           <button
             type="button"
@@ -243,31 +244,33 @@ export default function BotForm({
           </label>
         </div>
       </div>
-      <label>
-        <span>
-          About <span className="optional">Optional</span>
-        </span>
-        <Input
-          name="summary"
-          aria-label="About"
-          maxLength={240}
-          placeholder="A line about what this bot is for"
-          value={summary}
-          onValueChange={setSummary}
-        />
-      </label>
-      <label>
-        Instructions
-        <textarea
-          name="instructions"
-          placeholder="How should this bot help? What should it always or never do?"
-          rows={chosen || agent || market || starter ? 6 : 5}
-          required
-          maxLength={30000}
-          value={instructions}
-          onChange={(e) => setInstructions(e.target.value)}
-        />
-      </label>
+      <div className="group padded botform-card">
+        <label>
+          <span>
+            About <span className="optional">Optional</span>
+          </span>
+          <Input
+            name="summary"
+            aria-label="About"
+            maxLength={240}
+            placeholder="A line about what this bot is for"
+            value={summary}
+            onValueChange={setSummary}
+          />
+        </label>
+        <label>
+          Instructions
+          <textarea
+            name="instructions"
+            placeholder="How should this bot help? What should it always or never do?"
+            rows={chosen || agent || market || starter ? 6 : 5}
+            required
+            maxLength={30000}
+            value={instructions}
+            onChange={(e) => setInstructions(e.target.value)}
+          />
+        </label>
+      </div>
       <TemplateBundle bundle={bundle} supported={bundlesSupported} />
       <footer className="botform-foot">
         {cancel && (

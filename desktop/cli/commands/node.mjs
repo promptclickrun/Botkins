@@ -1,12 +1,42 @@
 // Node host commands: configure this computer as a remote Botkins node host, manage shared
-// project folders and per-operation grants, pause/resume, or disconnect.
+// project folders, exec policy, allowlist, whole-computer scope, pending approvals, audit log,
+// and per-operation grants.
 import { ago, EXIT, table, usage } from "../output.mjs";
 import { confirm } from "./input.mjs";
+import { approvalAction } from "./workspace.mjs";
 
 const safe = (value) => String(value ?? "").replace(/[\u0000-\u001f\u007f]/g, "").slice(0, 240);
 const show = (context, line) => {
   if (!context.json) context.stderr.write(line + "\n");
 };
+
+function formatApprovals(list) {
+  if (!Array.isArray(list) || !list.length) return "No pending node host approvals.";
+  return table(
+    ["REQUEST", "FROM", "OPERATION", "TITLE"],
+    list.map((item) => [
+      safe(item.id),
+      safe(item.sourceBotName && item.sourceHostName ? `${item.sourceBotName} on ${item.sourceHostName}` : item.sourceBotName || item.sourceHostName || "Remote"),
+      safe(item.operation || "node"),
+      safe(item.title),
+    ]),
+  );
+}
+
+function formatAudit(entries) {
+  if (!Array.isArray(entries) || !entries.length) return "No node audit log entries yet.";
+  return table(
+    ["TIME", "STATUS", "FROM", "OPERATION", "ARGS", "EXIT"],
+    entries.map((entry) => [
+      ago(entry.time),
+      safe(entry.status),
+      safe(entry.sourceBotName && entry.sourceHostName ? `${entry.sourceBotName}@${entry.sourceHostName}` : entry.sourceBotName || "Bot"),
+      safe(entry.operation),
+      safe(entry.argsSummary || entry.resourceName || "").slice(0, 60),
+      entry.exitCode !== undefined && entry.exitCode !== null ? String(entry.exitCode) : entry.error ? safe(entry.error).slice(0, 40) : "",
+    ]),
+  );
+}
 
 function formatStatus(status) {
   if (!status?.enabled) return "Node host is off. Run `botkins node setup --name <name>` to set this computer up as a node host.";
@@ -23,24 +53,33 @@ function formatStatus(status) {
       " (" +
       safe(status.lastCompleted.resourceName) +
       ") · " +
-      ago(status.lastCompleted.at)
+      ago(status.lastCompleted.finishedAt || status.lastCompleted.at)
     : "none yet";
+  const policyMode = safe(status.execPolicy?.mode || "ask");
+  const allowCount = status.execPolicy?.allowlist?.length ?? 0;
   const lines = [
     table(["", ""], [
       ["Node host", safe(status.name) + " · " + stateWord],
+      ["Exec policy", policyMode + (allowCount ? ` (${allowCount} allowlist ${allowCount === 1 ? "rule" : "rules"})` : "")],
+      ["Whole computer", status.wholeComputer ? "enabled" : "off (shared folders only)"],
       ["Shared folders", shared],
-      ["Last completed", last],
+      ["Pending approvals", String(status.pendingApprovals?.length ?? 0)],
       ["Grants", String(status.grants?.length ?? 0)],
+      ["Last completed", last],
     ])
       .split("\n")
       .slice(1)
       .join("\n"),
   ];
+  if (status.pendingApprovals?.length) {
+    lines.push("", "Pending approvals:", formatApprovals(status.pendingApprovals));
+  }
   if (status.grants?.length) {
     lines.push(
       "",
+      "Grants:",
       table(
-        ["GRANT", "BOT", "HOST", "OPERATION", "FOLDER", "SCOPE"],
+        ["GRANT", "BOT", "HOST", "OPERATION", "RESOURCE", "SCOPE"],
         status.grants.map((grant) => [
           safe(grant.id),
           safe(grant.sourceBotName),
@@ -52,18 +91,125 @@ function formatStatus(status) {
       ),
     );
   }
+  if (status.auditLog?.length) {
+    lines.push("", "Recent audit log:", formatAudit(status.auditLog.slice(0, 10)));
+  }
   return lines.join("\n");
 }
 
 const node = {
-  summary: "Run this computer as a Botkins node host and control its shared folders and grants",
-  details: "A node host runs Botkins on a remote or second computer and offers shared bots and read-only project folder listings to your other Botkins hosts. Grants are stored on this node per requesting host, bot, operation and folder.",
+  summary: "Run this computer as a Botkins node host and control its policy, approvals, folders and grants",
+  details: "A node host runs Botkins on a remote or second computer and offers scoped file, shell, computer-control and notification operations to your other Botkins hosts. Policy and grants are enforced on this node.",
   commands: {
     status: {
-      summary: "Show node host status, shared folders, last completed request and grants",
+      summary: "Show node host status, policy, pending approvals, shared folders, grants and recent audit log",
       usage: "botkins node status",
       async run(context) {
         context.print(await context.client.call("node.status"), formatStatus);
+      },
+    },
+    approvals: {
+      summary: "List pending node host approval requests",
+      usage: "botkins node approvals",
+      async run(context) {
+        context.print(await context.client.call("node.approvals"), formatApprovals);
+      },
+    },
+    approve: {
+      summary: "Approve or deny a pending node host request at an interactive terminal",
+      usage: "botkins node approve <request-id>",
+      async run(context) {
+        if (context.args.length !== 1) throw usage("botkins node approve <request-id>");
+        const target = context.args[0].trim();
+        const pending = await context.client.call("node.approvals");
+        const request = Array.isArray(pending)
+          ? pending.find((entry) => entry.id === target || entry.chatId === target || entry.chatId === "node-job-" + target)
+          : undefined;
+        if (!request) throw usage("No pending node host approval matches " + safe(target) + ". Run `botkins node approvals` to list them.");
+        if (!context.stdin.isTTY || context.json) {
+          throw usage("Approving a node host request requires an interactive terminal (TTY). Approve at a terminal, in the app window, or on a paired phone.");
+        }
+        const action = await approvalAction(context, request);
+        const result = await context.client.call(
+          "chat.respond",
+          request.id,
+          { action },
+          ...(action === "deny" ? [] : [{ agreed: true, ...(request.review && { reviewed: true }) }]),
+        );
+        context.print(result, "Decision recorded.");
+      },
+    },
+    audit: {
+      summary: "Show the node host audit log",
+      usage: "botkins node audit [--limit <count>]",
+      options: {
+        limit: { type: "string", value: "count", about: "Maximum number of entries to show (default 50)" },
+      },
+      async run(context) {
+        const raw = context.options.limit;
+        const limit = raw !== undefined ? Number(raw) : 50;
+        if (!Number.isFinite(limit) || limit <= 0) throw usage("botkins node audit [--limit <count>]");
+        context.print(await context.client.call("node.audit", Math.floor(limit)), formatAudit);
+      },
+    },
+    policy: {
+      summary: "Set the node host shell execution policy mode (deny, allowlist, ask, full)",
+      usage: "botkins node policy <mode>",
+      async run(context) {
+        if (context.args.length !== 1) throw usage("botkins node policy <deny|allowlist|ask|full>");
+        const mode = context.args[0].trim().toLowerCase();
+        context.print(
+          await context.client.call("node.execMode", mode),
+          (status) => "Exec policy set to " + safe(status?.execPolicy?.mode || mode) + ".",
+        );
+      },
+    },
+    allowlist: {
+      summary: "Inspect or change this node's shell allowlist rules",
+      usage: "botkins node allowlist [--add <pattern>] [--bot <bot-id>] [--remove <rule-id>]",
+      options: {
+        add: { type: "string", value: "pattern", about: "Add an executable name or path glob pattern" },
+        bot: { type: "string", value: "bot-id", about: "Optional source bot ID to scope an added rule (default *)" },
+        remove: { type: "string", value: "rule-id", about: "Remove an allowlist rule by id" },
+      },
+      async run(context) {
+        if (context.options.add && context.options.remove) {
+          throw usage("Use either --add or --remove, not both.");
+        }
+        if (context.options.add) {
+          const status = await context.client.call("node.allowlist.add", context.options.add, context.options.bot || "*");
+          context.print(status, () => `Added allowlist rule "${safe(context.options.add)}" for ${safe(context.options.bot || "*")}.`);
+          return;
+        }
+        if (context.options.remove) {
+          const status = await context.client.call("node.allowlist.remove", context.options.remove);
+          context.print(status, () => `Removed allowlist rule ${safe(context.options.remove)}.`);
+          return;
+        }
+        const status = await context.client.call("node.status");
+        const rules = status?.execPolicy?.allowlist ?? [];
+        context.print(rules, () =>
+          rules.length
+            ? table(
+                ["ID", "BOT", "PATTERN"],
+                rules.map((r) => [safe(r.id), safe(r.botId || "*"), safe(r.pattern)]),
+              )
+            : "No shell allowlist rules configured.",
+        );
+      },
+    },
+    "whole-computer": {
+      summary: "Turn whole-computer file access on or off for this node",
+      usage: "botkins node whole-computer <on|off>",
+      async run(context) {
+        if (context.args.length !== 1) throw usage("botkins node whole-computer <on|off>");
+        const arg = context.args[0].trim().toLowerCase();
+        if (arg !== "on" && arg !== "off") throw usage("botkins node whole-computer <on|off>");
+        const enabled = arg === "on";
+        context.print(
+          await context.client.call("node.wholeComputer", enabled),
+          () => (enabled ? "Whole-computer file access enabled on this node." : "Whole-computer file access turned off."),
+        );
       },
     },
     setup: {
@@ -89,7 +235,7 @@ const node = {
       },
     },
     pause: {
-      summary: "Pause incoming node host requests",
+      summary: "Pause incoming node host requests and kill running operations immediately",
       usage: "botkins node pause",
       async run(context) {
         context.print(await context.client.call("node.pause", true), (status) => "Node host " + safe(status?.name || "") + " is paused.");

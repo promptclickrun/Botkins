@@ -49,7 +49,7 @@ const PREFIX = "/botkins/v1/";
 // A sealed call may carry a file part (4 MB, as base64 and sealed); the pairing steps are tiny.
 const MAX_RPC_BODY = 6 * 1024 * 1024;
 const MAX_BODY = 64 * 1024;
-const MAX_TEAMWORK_BODY = 160 * 1024;
+const MAX_TEAMWORK_BODY = 512 * 1024;
 const PAIR_TTL = 5 * 60_000;
 // Wrong pairing codes: a source gets 8 tries for one open code, and the code is withdrawn only after 200
 // wrong tries from everyone together (it has 60 bits, so that stays safe). Per-source tables stay small.

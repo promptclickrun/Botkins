@@ -214,7 +214,7 @@ private struct VoiceDock: View {
         }
         .buttonStyle(.borderedProminent)
         .tint(.orange)
-        .disabled(!session.reachable || session.snapshot.bot == nil || session.snapshot.computer?.online != true)
+        .disabled(!session.reachable || session.snapshot.bot == nil)
       }
     }
     .padding(.top, 3)

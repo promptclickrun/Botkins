@@ -50,13 +50,14 @@ export default function NewChat({
   const group = picked.length > 1;
   return (
     <>
-      <p>Pick a bot. Tick bots to add a project or start a group chat.</p>
-      <div className="chat-pick">
+      <p className="chat-pick-intro">Pick a bot. Tick bots to add a project or start a group chat.</p>
+      {/* The bots as rows of one card: the tick box picks, the row starts a chat at once. */}
+      <div className="chat-pick group">
         {state.bots.map((b) => {
           const on = picked.includes(b.id);
           const full = !on && picked.length >= GROUP_MAX;
           return (
-            <div className="rowwrap" key={b.id}>
+            <div className={"rowwrap group-row" + (on ? " selected" : "")} key={b.id}>
               <input
                 type="checkbox"
                 aria-label={"Pick " + b.name}
@@ -71,7 +72,7 @@ export default function NewChat({
                   <strong>{b.name}</strong>
                   <small>{b.role}</small>
                 </span>
-                <ArrowRight size={16} />
+                <ArrowRight size={16} className="row-chevron" />
               </button>
             </div>
           );
@@ -99,7 +100,7 @@ export default function NewChat({
               ? picked.length + " bots answer in turn. Group chats are text only."
               : "1 bot picked. Tick another to make a group chat."}
           </small>
-          <button className="primary" disabled={busy} onClick={() => void start(picked)}>
+          <button className="btn primary" disabled={busy} onClick={() => void start(picked)}>
             {group ? (
               <>
                 <Users size={16} /> Start group chat

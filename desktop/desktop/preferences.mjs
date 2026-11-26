@@ -74,8 +74,8 @@ export function canvasColor(appearance, dark) {
   return theme[dark ? "dark" : "light"].canvas;
 }
 
-/** The places in the side menu, in their usual order. The person can rearrange them (Settings › Side menu). Projects are a tab of Work, so an order saved with them loses that name. */
-export const SIDEBAR = ["Home", "Today", "Chats", "Work", "Wiki"];
+/** The places in the side menu, in their usual order. The person can rearrange them (Settings › Side menu). Projects are a tab of Work, so an order saved with them loses that name. The Market (apps, bots and skills to add) is last. */
+export const SIDEBAR = ["Home", "Today", "Chats", "Work", "Wiki", "Market"];
 /** The usual side menu shows icons only; a person opens it with its button, the shortcut or Settings › Side menu. */
 const ICONS_ONLY = true;
 /**

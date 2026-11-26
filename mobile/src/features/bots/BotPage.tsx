@@ -3,6 +3,7 @@ import { type Href, router, Stack, useLocalSearchParams } from "expo-router";
 import { AudioLines, BookmarkPlus, Brain, Copy, Download, Eye, EyeOff, Folder, FolderKanban, MessageCircle, Palette, Pin, Plus, Repeat, ScreenShare, ScrollText, Sparkles, SquarePen, Star, Trash2, Users, Wrench } from "lucide-react-native";
 import { useMemo } from "react";
 import { Alert, View } from "react-native";
+import { openChat } from "@/features/chat/navigate";
 import { newBotChat, openBotChat } from "@/features/chat/open";
 import { describeChoice, useDefaultProvider } from "@/features/models/shared";
 import type { Bot } from "@/link/types";
@@ -204,7 +205,7 @@ function BotDetail({ bot }: { bot: Bot }) {
           <Label>Recent chats</Label>
           <Group>
             {recent.map((chat) => (
-              <Row key={chat.id} title={chat.title || "New chat"} value={ago(chat.time)} chevron onPress={() => router.push({ pathname: "/chat/[id]", params: { id: chat.id } })} />
+              <Row key={chat.id} title={chat.title || "New chat"} value={ago(chat.time)} chevron onPress={() => openChat(chat.id)} />
             ))}
           </Group>
         </View>

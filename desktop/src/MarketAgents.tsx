@@ -142,7 +142,7 @@ export default function MarketAgents({ state, createBot, refreshed = 0 }: { stat
 }
 
 /** Reads a template and opens Create a bot with it. */
-function useInstall(bundlesSupported: boolean, install?: (template: MarketAgentTemplate) => void) {
+export function useInstall(bundlesSupported: boolean, install?: (template: MarketAgentTemplate) => void) {
   const [busy, setBusy] = useState<string>();
   const [error, setError] = useState("");
   const add = (id: string) => {
@@ -158,7 +158,7 @@ function useInstall(bundlesSupported: boolean, install?: (template: MarketAgentT
 }
 
 /** The art band of a card or a page: a soft two-stop gradient from the bot's palette (CSS mixes it into the page, so it reads in light and dark), with its still Botkin on it. */
-function BotArt({ agent, face, className = "" }: { agent: MarketAgent | MarketAgentTemplate; face: number; className?: string }) {
+export function BotArt({ agent, face, className = "" }: { agent: MarketAgent | MarketAgentTemplate; face: number; className?: string }) {
   const look = lookOf(agent);
   const [first, second] = colorsOf(look);
   const style = { "--c1": first, "--c2": second } as React.CSSProperties;
@@ -170,7 +170,7 @@ function BotArt({ agent, face, className = "" }: { agent: MarketAgent | MarketAg
 }
 
 /** A template as a card: a starter's tall one (job, deliverable), or a grid one (summary, category). Tap it for its page; Add starts a bot from it. */
-function BotCard({ agent, starter, open, add, disabled }: { agent: MarketAgent; starter?: boolean; open: () => void; add: () => void; disabled: boolean }) {
+export function BotCard({ agent, starter, open, add, disabled }: { agent: MarketAgent; starter?: boolean; open: () => void; add: () => void; disabled: boolean }) {
   const size = starter ? STARTER : GRID_CARD;
   const style = { "--art": size.art + "px", ...(starter && { "--card-width": STARTER.width + "px" }) } as React.CSSProperties;
   return (
@@ -197,7 +197,7 @@ function BotCard({ agent, starter, open, add, disabled }: { agent: MarketAgent; 
 }
 
 /** One template: its Botkin on a band, what it is for, its instructions as they will be given, and Add. */
-function AgentPage({ id, back, install, bundlesSupported }: { id: string; bundlesSupported: boolean; back: () => void; install?: (template: MarketAgentTemplate) => void }) {
+export function AgentPage({ id, back, install, bundlesSupported }: { id: string; bundlesSupported: boolean; back: () => void; install?: (template: MarketAgentTemplate) => void }) {
   const [template, setTemplate] = useState<MarketAgentTemplate>();
   const [error, setError] = useState("");
   const [revision, setRevision] = useState(0);
