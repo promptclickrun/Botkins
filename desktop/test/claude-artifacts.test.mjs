@@ -12,6 +12,7 @@ import { CopilotProvider } from "../desktop/providers/copilot/index.mjs";
 import { ClaudeProvider } from "../desktop/providers/claude/index.mjs";
 import { CALLER } from "../desktop/harness/claude.mjs";
 import {
+  ARTIFACT_PERMISSION_SETTINGS,
   ClaudeArtifacts,
   FIXED_SYSTEM_PROMPT,
   buildArtifactEnv,
@@ -19,6 +20,7 @@ import {
   buildFixedPrompt,
   detectOutboundSecrets,
   detectSecrets,
+  evaluateArtifactPermissionRequest,
   extractAnchors,
   isClaudeSubscriptionStatus,
   parseArtifactList,
@@ -342,12 +344,14 @@ test("fixed-template prompt: bot text cannot alter system instructions or inject
   assert.ok(prompt.includes('icon="chartrm-rf"'));
 
   // System prompt is strictly constant and never interpolates bot inputs.
+  // CLI args never pre-allow Artifact and always force manual permission mode + Artifact ask settings.
   const args = buildCliArgs({ model: "haiku", allowRead: true });
   const sysIdx = args.indexOf("--system-prompt");
   assert.ok(sysIdx >= 0);
   assert.equal(args[sysIdx + 1], FIXED_SYSTEM_PROMPT);
-  assert.equal(args.includes("--allowedTools"), true);
-  assert.equal(args[args.indexOf("--allowedTools") + 1], "Artifact");
+  assert.equal(args.includes("--allowedTools"), false);
+  assert.equal(args[args.indexOf("--permission-mode") + 1], "manual");
+  assert.equal(args[args.indexOf("--settings") + 1], ARTIFACT_PERMISSION_SETTINGS);
   assert.equal(args.includes("--no-session-persistence"), true);
   assert.equal(args.includes("--strict-mcp-config"), true);
 });
@@ -363,6 +367,8 @@ test("approval and grant path: asks once per chat, Always allow persists per bot
         toolResults: [`Published at https://claude.ai/artifact/TestArt${calls.length}abcdef12`],
         finalResult: { result: `https://claude.ai/artifact/TestArt${calls.length}abcdef12` },
         stderr: "",
+        preflightAuthorized: true,
+        updateVisibility: "private",
       };
     },
   });
@@ -497,11 +503,16 @@ rl.on("line", (line) => {
       prompt: msg.message.content,
     }));
 
-    // Simulate a permission control_request for Artifact publish
+    // Simulate a permission control_request for Artifact publish with Claude Code's private preflight text
     console.log(JSON.stringify({
       type: "control_request",
       request_id: "req-1",
-      request: { subtype: "can_use_tool", tool_name: "Artifact", input: { action: "publish", file_path: "artifact.html" } }
+      request: {
+        subtype: "can_use_tool",
+        tool_name: "Artifact",
+        input: { action: "publish", file_path: "artifact.html" },
+        decision_reason: 'Claude wants to publish "artifact.html", uploading it to claude.ai (Anthropic\\'s servers) to host as the page "Dashboard Prototype". It stays private to you until you share it.'
+      }
     }));
   } else if (msg.type === "control_response") {
     const allow = msg.response?.response?.behavior === "allow";
@@ -621,6 +632,8 @@ test("update, list, read, and persistence of standing grants across workspace re
         toolResults: ["Published at https://claude.ai/artifact/DeckArt1234567890 (Version 2)"],
         finalResult: { result: "https://claude.ai/artifact/DeckArt1234567890" },
         stderr: "",
+        preflightAuthorized: true,
+        updateVisibility: "private",
       };
     },
   });
@@ -648,10 +661,8 @@ test("update, list, read, and persistence of standing grants across workspace re
   const updated = await ws.claudeArtifacts.call({ action: "update", url: "https://claude.ai/artifact/DeckArt1234567890", path: readBack.path, title: "Launch Deck v2" }, { bot, chat, run, task });
   assert.equal(updated.url, "https://claude.ai/artifact/DeckArt1234567890");
   assert.equal(updated.action, "update");
-  // Runner did not confirm visibility -> must not mislabel unknown visibility as private.
-  assert.equal(updated.visibility, "unknown");
-  assert.equal(run.claudeArtifacts[0].private, undefined);
-
+  assert.equal(updated.visibility, "private");
+  assert.equal(run.claudeArtifacts[0].private, true);
   // Reload workspace from disk and verify grant + model persisted.
   const ws2 = new Workspace(join(dir, "data"), ws.providers, () => {});
   assert.equal(ws2.claudeArtifacts.hasStandingGrant(bot.id), true);
@@ -821,4 +832,283 @@ rl.on("line", (line) => {
   assert.equal(ok.visibility, "private");
   assert.equal(run.claudeArtifacts.length, 1);
   assert.equal(run.claudeArtifacts[0].private, true);
+});
+
+test("fail-closed pre-upload authorization: fake runner refuses no-preflight writes and operation/file/destination mismatches", async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "botkins-fake-preflight-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+
+  const modeFile = join(dir, "mode.txt");
+  const uploadedFile = join(dir, "uploaded.txt");
+  const fakeBin = join(dir, "claude");
+  const existingUrl = "https://claude.ai/artifact/DummyExisting1234567";
+  const otherUrl = "https://claude.ai/artifact/DummyOtherUrl9876543";
+
+  writeFileSync(
+    fakeBin,
+    `#!/usr/bin/env node
+const fs = require("node:fs");
+const readline = require("node:readline");
+
+const args = process.argv.slice(2);
+if (args[0] === "--version") { console.log("2.1.325 (Claude Code)"); process.exit(0); }
+if (args[0] === "auth" && args[1] === "status") {
+  console.log(JSON.stringify({ loggedIn: true, authMethod: "claude.ai", apiProvider: "firstParty", email: "dummy@example.com", subscriptionType: "pro" }));
+  process.exit(0);
+}
+
+const mode = fs.readFileSync(${JSON.stringify(modeFile)}, "utf8").trim();
+const rl = readline.createInterface({ input: process.stdin });
+rl.on("line", (line) => {
+  const msg = JSON.parse(line);
+  if (msg.type === "user") {
+    if (mode === "update-no-preflight-private-result") {
+      // Simulates a CLI that skips can_use_tool and returns post-upload "This artifact is private" text.
+      console.log(JSON.stringify({
+        type: "user",
+        message: { role: "user", content: [{ type: "tool_result", content: "Published artifact.html at " + ${JSON.stringify(existingUrl)} + " (Version 2)\\nThis artifact is private: only its owner can open the link." }] }
+      }));
+      console.log(JSON.stringify({ type: "result", subtype: "success", is_error: false, result: ${JSON.stringify(existingUrl)} }));
+      process.exit(0);
+    }
+    if (mode === "publish-no-preflight-private-result") {
+      const url = "https://claude.ai/artifact/DummyNoPreflight12345";
+      console.log(JSON.stringify({
+        type: "user",
+        message: { role: "user", content: [{ type: "tool_result", content: "Published artifact.html at " + url + " (Version 1)\\nThis artifact is private: only its owner can open the link." }] }
+      }));
+      console.log(JSON.stringify({ type: "result", subtype: "success", is_error: false, result: url }));
+      process.exit(0);
+    }
+    if (mode === "publish-tries-existing-url") {
+      console.log(JSON.stringify({
+        type: "control_request",
+        request_id: "req-1",
+        request: {
+          subtype: "can_use_tool",
+          tool_name: "Artifact",
+          input: { action: "publish", url: ${JSON.stringify(existingUrl)}, file_path: "artifact.html" },
+          decision_reason: 'Update artifact "Dummy" on claude.ai. It stays private to you until you share it.'
+        }
+      }));
+      return;
+    }
+    if (mode === "publish-tries-pinned-target") {
+      console.log(JSON.stringify({
+        type: "control_request",
+        request_id: "req-1",
+        request: {
+          subtype: "can_use_tool",
+          tool_name: "Artifact",
+          input: { action: "publish", file_path: "artifact.html", __artifactPublishTarget: ${JSON.stringify(existingUrl)} },
+          decision_reason: 'Claude wants to publish "artifact.html". It stays private to you until you share it.'
+        }
+      }));
+      return;
+    }
+    if (mode === "publish-wrong-file") {
+      console.log(JSON.stringify({
+        type: "control_request",
+        request_id: "req-1",
+        request: {
+          subtype: "can_use_tool",
+          tool_name: "Artifact",
+          input: { action: "publish", file_path: "/etc/hosts" },
+          decision_reason: 'Claude wants to publish "/etc/hosts". It stays private to you until you share it.'
+        }
+      }));
+      return;
+    }
+    if (mode === "update-wrong-url") {
+      console.log(JSON.stringify({
+        type: "control_request",
+        request_id: "req-1",
+        request: {
+          subtype: "can_use_tool",
+          tool_name: "Artifact",
+          input: { action: "publish", url: ${JSON.stringify(otherUrl)}, file_path: "artifact.html" },
+          decision_reason: 'Update artifact "Other" on claude.ai. It stays private to you until you share it.'
+        }
+      }));
+      return;
+    }
+    if (mode === "update-tries-new-publish") {
+      console.log(JSON.stringify({
+        type: "control_request",
+        request_id: "req-1",
+        request: {
+          subtype: "can_use_tool",
+          tool_name: "Artifact",
+          input: { action: "publish", file_path: "artifact.html" },
+          decision_reason: 'Claude wants to publish "artifact.html". It stays private to you until you share it.'
+        }
+      }));
+      return;
+    }
+    if (mode === "publish-unconfirmed-visibility") {
+      console.log(JSON.stringify({
+        type: "control_request",
+        request_id: "req-1",
+        request: {
+          subtype: "can_use_tool",
+          tool_name: "Artifact",
+          input: { action: "publish", file_path: "artifact.html" },
+          decision_reason: 'Claude wants to publish "artifact.html".'
+        }
+      }));
+      return;
+    }
+    if (mode === "publish-unexpected-delete") {
+      console.log(JSON.stringify({
+        type: "control_request",
+        request_id: "req-1",
+        request: {
+          subtype: "can_use_tool",
+          tool_name: "Artifact",
+          input: { action: "delete", url: ${JSON.stringify(existingUrl)} }
+        }
+      }));
+      return;
+    }
+  } else if (msg.type === "control_response") {
+    const allow = msg.response?.response?.behavior === "allow";
+    if (allow) {
+      fs.writeFileSync(${JSON.stringify(uploadedFile)}, "UPLOADED:" + mode);
+      console.log(JSON.stringify({ type: "result", subtype: "success", is_error: false, result: ${JSON.stringify(existingUrl)} }));
+    } else {
+      console.log(JSON.stringify({ type: "result", subtype: "success", is_error: false, result: msg.response?.response?.message || "Denied" }));
+    }
+    process.exit(0);
+  }
+});
+`,
+    { mode: 0o755 },
+  );
+  chmodSync(fakeBin, 0o755);
+
+  const claude = new ClaudeProvider({ dataDir: join(dir, "ws-data"), binary: fakeBin });
+  claude.locate = async () => fakeBin;
+  const { ws } = makeWorkspace(t, { claudeProvider: claude });
+  await ws.claudeArtifacts.primeAvailability();
+  const bot = ws.bot("pip");
+  ws.claudeArtifacts.setGrant(bot.id, true);
+  const chatId = ws.createChat("pip");
+  const chat = ws.chat(chatId);
+  const run = { id: "run-preflight", chatId, botId: bot.id };
+  const task = { stopped: false, run };
+  ws.active.set(chatId, task);
+  t.after(() => ws.active.delete(chatId));
+
+  const dummyHtml = "<!doctype html><html><body><p>Dummy content</p></body></html>";
+
+  // 1. Update with NO preflight prompt is refused even when post-upload result claims "This artifact is private".
+  writeFileSync(modeFile, "update-no-preflight-private-result");
+  await assert.rejects(
+    ws.claudeArtifacts.call({ action: "update", url: existingUrl, title: "Dummy v2", html: dummyHtml }, { bot, chat, run, task }),
+    /Refused to update.*pre-upload authorization did not occur/i,
+  );
+
+  // 2. New publish with NO preflight prompt is refused even when post-upload result claims "This artifact is private".
+  writeFileSync(modeFile, "publish-no-preflight-private-result");
+  await assert.rejects(
+    ws.claudeArtifacts.call({ action: "publish", title: "Dummy v1", html: dummyHtml }, { bot, chat, run, task }),
+    /Refused to publish.*pre-upload authorization did not occur/i,
+  );
+
+  // 3. New publish path cannot issue an update of an existing artifact URL under publish approval.
+  writeFileSync(modeFile, "publish-tries-existing-url");
+  await assert.rejects(
+    ws.claudeArtifacts.call({ action: "publish", title: "Dummy v1", html: dummyHtml }, { bot, chat, run, task }),
+    /Refused to publish.*cannot update an existing artifact URL/i,
+  );
+
+  // 4. New publish path also blocks CLI-pinned __artifactPublishTarget targeting an existing artifact.
+  writeFileSync(modeFile, "publish-tries-pinned-target");
+  await assert.rejects(
+    ws.claudeArtifacts.call({ action: "publish", title: "Dummy v1", html: dummyHtml }, { bot, chat, run, task }),
+    /Refused to publish.*cannot update an existing artifact URL/i,
+  );
+
+  // 5. Publish bound to staged artifact.html rejects any other file_path before upload.
+  writeFileSync(modeFile, "publish-wrong-file");
+  await assert.rejects(
+    ws.claudeArtifacts.call({ action: "publish", title: "Dummy v1", html: dummyHtml }, { bot, chat, run, task }),
+    /Refused to publish.*file_path did not match the staged artifact\.html/i,
+  );
+
+  // 6. Update bound to requested URL rejects a different existing URL before upload.
+  writeFileSync(modeFile, "update-wrong-url");
+  await assert.rejects(
+    ws.claudeArtifacts.call({ action: "update", url: existingUrl, title: "Dummy v2", html: dummyHtml }, { bot, chat, run, task }),
+    /Refused to update.*target URL did not match/i,
+  );
+
+  // 7. Update rejects a publish call missing the requested URL (attempting a new publish under update approval).
+  writeFileSync(modeFile, "update-tries-new-publish");
+  await assert.rejects(
+    ws.claudeArtifacts.call({ action: "update", url: existingUrl, title: "Dummy v2", html: dummyHtml }, { bot, chat, run, task }),
+    /Refused to update.*target URL did not match/i,
+  );
+
+  // 8. New publish fails closed when preflight does not confirm private visibility.
+  writeFileSync(modeFile, "publish-unconfirmed-visibility");
+  await assert.rejects(
+    ws.claudeArtifacts.call({ action: "publish", title: "Dummy v1", html: dummyHtml }, { bot, chat, run, task }),
+    /Refused to publish.*confirm.*private/i,
+  );
+
+  // 9. Operation mismatch (e.g. delete requested during publish) is denied before execution.
+  writeFileSync(modeFile, "publish-unexpected-delete");
+  await assert.rejects(
+    ws.claudeArtifacts.call({ action: "publish", title: "Dummy v1", html: dummyHtml }, { bot, chat, run, task }),
+    /Refused to publish.*unexpected Artifact action "delete"/i,
+  );
+
+  assert.equal(existsSync(uploadedFile), false, "no mismatched write may be allowed to upload");
+  assert.equal(run.claudeArtifacts, undefined, "refused writes must not add chat link cards");
+  assert.equal(ws.artifacts.list({ botId: bot.id, chatId }).items.length, 0, "refused writes must not record workspace artifacts");
+
+  // 10. Direct unit checks on evaluateArtifactPermissionRequest for extra publish fields, second write, and read/list isolation.
+  const stageDir = mkdtempSync(join(dir, "stage-"));
+  writeFileSync(join(stageDir, "artifact.html"), dummyHtml);
+  const withExtraFiles = evaluateArtifactPermissionRequest(
+    {
+      tool_name: "Artifact",
+      input: { action: "publish", file_path: "artifact.html", files: { "leak.txt": "/etc/passwd" } },
+      decision_reason: 'Claude wants to publish "artifact.html". It stays private to you until you share it.',
+    },
+    { operation: "publish", resolvedCwd: stageDir, writeCount: 0 },
+  );
+  assert.equal(withExtraFiles.allow, false);
+  assert.match(withExtraFiles.refusal, /unsupported Artifact publish fields/i);
+
+  const secondWrite = evaluateArtifactPermissionRequest(
+    {
+      tool_name: "Artifact",
+      input: { action: "publish", file_path: "artifact.html" },
+      decision_reason: 'Claude wants to publish "artifact.html". It stays private to you until you share it.',
+    },
+    { operation: "publish", resolvedCwd: stageDir, writeCount: 1 },
+  );
+  assert.equal(secondWrite.allow, false);
+  assert.match(secondWrite.refusal, /only one authorized Artifact write/i);
+
+  const listTriesPublish = evaluateArtifactPermissionRequest(
+    {
+      tool_name: "Artifact",
+      input: { action: "publish", file_path: "artifact.html" },
+      decision_reason: 'Claude wants to publish "artifact.html". It stays private to you until you share it.',
+    },
+    { operation: "list", resolvedCwd: stageDir, writeCount: 0 },
+  );
+  assert.equal(listTriesPublish.allow, false);
+
+  const readTriesOtherUrl = evaluateArtifactPermissionRequest(
+    {
+      tool_name: "Artifact",
+      input: { action: "read", url: otherUrl },
+    },
+    { operation: "read", expectedUrl: existingUrl, resolvedCwd: stageDir, writeCount: 0 },
+  );
+  assert.equal(readTriesOtherUrl.allow, false);
 });
