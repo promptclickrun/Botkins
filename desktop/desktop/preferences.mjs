@@ -163,7 +163,8 @@ export const defaultSettings = {
   // What runs a turn around the model (desktop/harness): "pi" (the default), "provider" (each
   // provider's own tool), "copilot" (one harness for every plan) or "omp".
   harness: DEFAULT_HARNESS,
-  // Staying on (desktop/startup.mjs): keep running when the window is closed, and start with the computer.
+  // Model for headless Claude Code artifact sub-runs ("haiku" | "sonnet" | "opus").
+  claudeArtifactModel: "haiku",
   background: backgroundField(),
   // Model providers the person switched on or off: { [id]: { enabled } }. A provider that isn't
   // named here is on or off as it comes (desktop/providers). Changed with Workspace.setProviderEnabled.
@@ -348,6 +349,11 @@ export function changeSettings(settings, patch) {
       case "sidebar":
         // Opening or collapsing the menu is the person's own choice from then on.
         next.sidebar = sidebarField(value?.collapsed === undefined ? value : { ...value, picked: true }, sidebarField(settings.sidebar));
+        break;
+      case "claudeArtifactModel":
+        if (!["haiku", "sonnet", "opus"].includes(value))
+          throw new Error("Choose haiku, sonnet, or opus for Claude artifacts.");
+        next.claudeArtifactModel = value;
         break;
       case "macTools":
         // A phone can ask for setPreferences, so this one is refused here: only the app's own window may change it.

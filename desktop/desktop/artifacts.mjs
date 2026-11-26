@@ -67,18 +67,18 @@ export class Artifacts {
     return file;
   }
 
-  record(path, { botId, chatId, messageIndex, source, time = Date.now() }) {
+  record(path, { botId, chatId, messageIndex, source, time = Date.now(), url, title }) {
     const info = fileDetails(path);
     if (!info || !this.ws.state.bots.some((bot) => bot.id === botId)) return null;
     const chat = chatId && this.chat(chatId);
     if (chatId && (!chat || !belongs(chat, botId))) return null;
     let row = this.rows.find((r) => r.path === info.path && r.botId === botId && r.chatId === chatId && r.source === source && r.messageIndex === messageIndex);
-    if (row && row.identity === info.identity && row.time === time) return this.describe(row, info);
+    if (row && row.identity === info.identity && row.time === time && row.url === url && row.title === title) return this.describe(row, info);
     if (!row) {
       row = { id: randomUUID(), botId, ...(chatId && { chatId }), ...(Number.isInteger(messageIndex) && { messageIndex }), source };
       this.rows.push(row);
     }
-    Object.assign(row, { ...publicFile(info), identity: info.identity, time });
+    Object.assign(row, { ...publicFile(info), ...(title && { title }), ...(url && { url }), identity: info.identity, time });
     this.save();
     return this.describe(row, info);
   }
@@ -86,7 +86,7 @@ export class Artifacts {
   describe(row, info) {
     const chat = row.chatId && this.chat(row.chatId);
     const { identity, ...meta } = row;
-    return { ...meta, ...(chat && { chatTitle: chat.title }), ...publicFile(info) };
+    return { ...meta, ...(chat && { chatTitle: chat.title }), ...publicFile(info), ...(row.title && { name: row.title }), ...(row.url && { url: row.url }) };
   }
 
   root(row) {

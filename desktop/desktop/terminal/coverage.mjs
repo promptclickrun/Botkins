@@ -227,6 +227,8 @@ export const WORKSPACE = {
   "artifacts.list": cmd("artifacts list"),
   "artifacts.read": cmd("artifacts read"),
   "artifacts.resolve": cmd("artifacts resolve"),
+  // Claude artifacts (Settings › General › Claude artifacts): standing bot approvals and status are managed by the owner in the app/phone UI.
+  ...each("claudeArtifacts.status claudeArtifacts.setModel claudeArtifacts.setBotApproval claudeArtifacts.revokeBotApproval", no("person")),
   // ── Preferences, credentials, usage, voice ──
   setPreferences: cmd("preferences set"),
   // No command shows a value: a list has names, kinds and where each is read from. A new value comes from a hidden question or standard input.
