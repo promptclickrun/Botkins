@@ -4,7 +4,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { answerInline } from "../src/features/home/arrange";
-import { arrangeChatsFlat, chatChips, chatDropPlan, chatsForFilter } from "../src/features/chat/sections";
+import { arrangeChatsFlat, chatChips, chatDropPlan, chatsForFilter, runningChatIds, withChipAt, withChipMoved } from "../src/features/chat/sections";
 import { activeGroups, dayWord, projectProgress, taskCounts, tasksIn, upNext } from "../src/features/work/overview";
 import { folderLabel } from "../src/features/projects/logic";
 import { findSettings, matchesSetting } from "../src/features/settings/search";
@@ -42,15 +42,37 @@ test("a drop on Recent only unpins: a chat keeps its section", () => {
   assert.deepEqual(chatDropPlan({ sectionId: "work" }, sections, "section:home"), { sectionId: "home" }, "a section still moves it");
 });
 
-test("the chips: All, Unread with its count for someone who may read, then each section", () => {
-  assert.deepEqual(chatChips(sections, 3, true), [
+test("the chips: All, Unread with its count for someone who may read, Running, then each section", () => {
+  assert.deepEqual(chatChips(sections, 3, true, 2), [
     { value: "all", label: "All" },
     { value: "unread", label: "Unread", count: 3 },
+    { value: "running", label: "Running", count: 2 },
     { value: "section:work", label: "Work" },
     { value: "section:home", label: "Home" },
   ]);
-  assert.deepEqual(chatChips(undefined, 0, true), [{ value: "all", label: "All" }, { value: "unread", label: "Unread" }]);
-  assert.deepEqual(chatChips(undefined, 2, false), [{ value: "all", label: "All" }]);
+  assert.deepEqual(chatChips(undefined, 0, true), [{ value: "all", label: "All" }, { value: "unread", label: "Unread" }, { value: "running", label: "Running" }]);
+  assert.deepEqual(chatChips(undefined, 2, false), [{ value: "all", label: "All" }, { value: "running", label: "Running" }]);
+});
+
+test("the person's chip order: named chips first in that order, the rest after in the usual order", () => {
+  const values = (order: string[]) => chatChips(sections, 0, true, 0, order).map((chip) => chip.value);
+  assert.deepEqual(values(["running", "section:home"]), ["running", "section:home", "all", "unread", "section:work"]);
+  // A chip the order names that is gone (a deleted section) is skipped; a new section lands at the end.
+  assert.deepEqual(values(["section:gone", "unread", "all", "running", "section:work"]), ["unread", "all", "running", "section:work", "section:home"]);
+  const chips = chatChips(sections, 0, true);
+  assert.deepEqual(withChipAt(chips, "running", 0), ["running", "all", "unread", "section:work", "section:home"]);
+  assert.deepEqual(withChipAt(chips, "all", 99), ["unread", "running", "section:work", "section:home", "all"]);
+  assert.deepEqual(withChipMoved(chips, "unread", -1), ["unread", "all", "running", "section:work", "section:home"]);
+  assert.equal(withChipMoved(chips, "all", -1), null);
+  assert.equal(withChipMoved(chips, "section:home", 1), null);
+});
+
+test("Running: the chats with a turn under way, from the live list and from replies being written", () => {
+  const running = runningChatIds({ active: ["a"], streams: { c: true } });
+  assert.deepEqual([...running].sort(), ["a", "c"]);
+  assert.equal(runningChatIds(undefined).size, 0);
+  const chats = [chat("a", 1), chat("b", 2), chat("c", 3)];
+  assert.deepEqual(chatsForFilter(chats, "running", sections, new Set(), running).map((one) => one.id), ["a", "c"]);
 });
 
 test("a chip shows its chats, and a section that is gone shows them all", () => {

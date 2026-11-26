@@ -45,9 +45,11 @@ export type Prefs = {
   homePanels: PanelPin[];
   computerOrder: string[];
   primaryHost: string | null;
+  /** The order of the chips over the Chats list ("all", "unread", "running", "section:<id>"). The first opens when Chats does. Empty: the usual order. */
+  chatChipOrder: string[];
 };
 export type PanelPin = { spaceId: string; panelId: string };
-const defaults: Prefs = { mode: "system", lightTheme: DEFAULT_THEME, darkTheme: DEFAULT_THEME, themePicked: false, backdrop: DEFAULT_BACKDROP, textSize: 16, font: DEFAULT_FONT, fontPicked: false, controlSize: "regular", haptics: true, avatarAnimations: DEFAULT_AVATAR_ANIMATIONS, todayOpen: true, foldedProviders: [], toldNotices: [], tabOrder: USUAL_TABS, openSpaces: [], homePanels: [], computerOrder: [], primaryHost: null };
+const defaults: Prefs = { mode: "system", lightTheme: DEFAULT_THEME, darkTheme: DEFAULT_THEME, themePicked: false, backdrop: DEFAULT_BACKDROP, textSize: 16, font: DEFAULT_FONT, fontPicked: false, controlSize: "regular", haptics: true, avatarAnimations: DEFAULT_AVATAR_ANIMATIONS, todayOpen: true, foldedProviders: [], toldNotices: [], tabOrder: USUAL_TABS, openSpaces: [], homePanels: [], computerOrder: [], primaryHost: null, chatChipOrder: [] };
 
 export const usePrefs = create<Prefs>(() => defaults);
 
@@ -86,6 +88,7 @@ function read(saved: Record<string, unknown>): Prefs {
     tabOrder: tabOrder(saved.tabOrder),
     openSpaces: ids(saved.openSpaces),
     computerOrder: ids(saved.computerOrder),
+    chatChipOrder: ids(saved.chatChipOrder),
     primaryHost: isId(saved.primaryHost) ? saved.primaryHost : null,
     homePanels: Array.isArray(saved.homePanels) ? saved.homePanels.filter((pin): pin is PanelPin => !!pin && isId((pin as PanelPin).spaceId) && isId((pin as PanelPin).panelId)).map(({ spaceId, panelId }) => ({ spaceId, panelId })).slice(0, 24) : defaults.homePanels,
     foldedProviders: Array.isArray(saved.foldedProviders) ? saved.foldedProviders.filter((id): id is string => typeof id === "string" && id.length <= 100).slice(0, 100) : defaults.foldedProviders,

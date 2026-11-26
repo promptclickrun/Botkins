@@ -24,7 +24,8 @@ import { openChat } from "./navigate";
 import { markChatsPageRead } from "./open";
 import { openFromList, useChatSplit } from "./split";
 import { newSection } from "./sectionMenus";
-import { chatChips, type ChatFilter, chatsForFilter } from "./sections";
+import { ChatChips } from "./ChatChips";
+import { chatChips, type ChatFilter, chatsForFilter, runningChatIds } from "./sections";
 import { chatsPageUnreadChats, isChatsPageArchived, isChatsPageChat } from "./unread";
 
 function SearchField({ value, onChange }: { value: string; onChange: (text: string) => void }) {
@@ -217,7 +218,10 @@ function ChatListScreen() {
   const synced = useApp((state) => state.synced);
   const [query, setQuery] = useState("");
   const [showArchived, setShowArchived] = useState(false);
-  const [filter, setFilter] = useState<ChatFilter>("all");
+  // Null until the person taps a chip: the screen opens on the leftmost one.
+  const [filter, setFilter] = useState<ChatFilter | null>(null);
+  const chipOrder = usePrefs((prefs) => prefs.chatChipOrder);
+  const live = usePart("live");
   const canView = useCan("agents", "view");
   const canChat = useCan("agents", "chat");
   const online = useOnline();
@@ -242,18 +246,20 @@ function ChatListScreen() {
   const archived = useMemo(() => chats.filter((chat) => isChatsPageArchived(chat, listOptions)), [chats, listOptions]);
   const unreadIds = useMemo(() => new Set(chatsPageUnreadChats(chats).map((chat) => chat.id)), [chats]);
   const unreadCount = unreadIds.size;
-  // A chip for a section that is gone goes back to every chat.
-  const picked = filter.startsWith("section:") && !sections?.some((section) => "section:" + section.id === filter) ? "all" : filter;
+  const runningIds = useMemo(() => runningChatIds(live), [live?.active, live?.streams]);
+  const runningCount = useMemo(() => conversations.filter((chat) => runningIds.has(chat.id)).length, [conversations, runningIds]);
+  const chips = chatChips(sections, unreadCount, canView, runningCount, chipOrder);
+  // A chip that is gone (a deleted section, or Unread for someone who can't read) goes back to the first one.
+  const picked: ChatFilter = filter && chips.some((chip) => chip.value === filter) ? filter : (chips[0]?.value ?? "all");
   const { shown, old } = useMemo(() => {
     const matches = (chat: ChatSummary) => {
       if (!needle) return true;
       const names = (chat.botIds ?? [chat.botId]).map((id) => bots.get(id)?.name ?? "").join(" ");
       return (chat.title + " " + names + " " + (chat.last?.text ?? "")).toLowerCase().includes(needle);
     };
-    return { shown: chatsForFilter(conversations, picked, sections, unreadIds).filter(matches), old: showArchived ? archived.filter(matches) : [] };
-  }, [conversations, archived, bots, needle, showArchived, picked, sections, unreadIds]);
+    return { shown: chatsForFilter(conversations, picked, sections, unreadIds, runningIds).filter(matches), old: showArchived ? archived.filter(matches) : [] };
+  }, [conversations, archived, bots, needle, showArchived, picked, sections, unreadIds, runningIds]);
   const pinned = useMemo(() => shown.filter((chat) => chat.pinned).sort((a, b) => b.time - a.time), [shown]);
-  const chips = chatChips(sections, unreadCount, canView);
 
   // The page, for scrolling it under a dragged chat; and whether a drag is under way, which stops its own scrolling.
   const scroll: BoardScroll = { ref: useAnimatedRef<Animated.ScrollView>(), offset: useSharedValue(0), max: useSharedValue(0), edges: useSharedValue({ top: 0, bottom: 0 }) };
@@ -323,15 +329,17 @@ function ChatListScreen() {
           <View style={{ gap: space.md }}>
             <SearchField value={query} onChange={setQuery} />
             {(chips.length > 1 || (sections && canChat) || (online && canView && (hasRoutineChats || showRoutineChats))) && (
-              <ScrollView horizontal showsHorizontalScrollIndicator={false} keyboardShouldPersistTaps="handled" style={{ marginHorizontal: -space.xl }} contentContainerStyle={{ paddingHorizontal: space.xl, gap: space.sm }}>
-                {chips.map((chip) => (
-                  <Chip key={chip.value} label={chip.count ? chip.label + " · " + chip.count : chip.label} selected={picked === chip.value} onPress={() => setFilter(chip.value)} />
-                ))}
-                {online && canView && (hasRoutineChats || showRoutineChats) && (
-                  <Chip label="Show routine chats" selected={showRoutineChats} onPress={toggleRoutineChats} />
-                )}
-                {sections && canChat && <Chip label="New section" icon={FolderPlus} onPress={() => newSection(prompt.ask)} />}
-              </ScrollView>
+              <ChatChips
+                chips={chips}
+                picked={picked}
+                onPick={setFilter}
+                trailing={
+                  <View style={{ flexDirection: "row", gap: space.sm, paddingRight: space.sm }}>
+                    {online && canView && (hasRoutineChats || showRoutineChats) && <Chip label="Show routine chats" selected={showRoutineChats} onPress={toggleRoutineChats} />}
+                    {sections && canChat && <Chip label="New section" icon={FolderPlus} onPress={() => newSection(prompt.ask)} />}
+                  </View>
+                }
+              />
             )}
             {prompt.node}
           </View>
@@ -340,7 +348,7 @@ function ChatListScreen() {
             <View style={{ alignItems: "center", paddingVertical: space.huge, gap: space.sm }}>
               <Search size={26} color={colors.faint} strokeWidth={2} />
               <T variant="callout" color="muted">
-                {needle ? "No matches" : picked === "unread" ? "No unread chats" : picked === "all" && !showRoutineChats && hasRoutineChats ? "Routine chats are hidden" : picked === "all" ? "No chats" : "No chats here yet"}
+                {needle ? "No matches" : picked === "unread" ? "No unread chats" : picked === "running" ? "No chats running right now" : picked === "all" && !showRoutineChats && hasRoutineChats ? "Routine chats are hidden" : picked === "all" ? "No chats" : "No chats here yet"}
               </T>
             </View>
           ) : (
