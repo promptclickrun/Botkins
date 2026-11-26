@@ -2,6 +2,7 @@
 // Ready tasks with a bot start on their own; a finished task waits for review (by the person,
 // or by the creating bot when a bot orchestrated it), or auto-accepts to done.
 import { randomUUID } from "node:crypto";
+import { bindRailStep } from "./activity.mjs";
 import { defineTool } from "./providers/provider.mjs";
 import { textField } from "./panels.mjs";
 import { askToSchedule, scriptInvocation } from "./script-commands.mjs";
@@ -515,10 +516,10 @@ export class Tasks {
         parameters: { type: "object", properties, required, additionalProperties: false },
         skipPermission: true,
         defer: "never",
-        handler: async (args) => {
+        handler: async (args, invocation) => {
           if (task.stopped || this.ws.closing || !run || this.ws.active.get(chat.id) !== task)
             throw new Error("This turn is no longer active");
-          const result = await handler(args);
+          const result = await handler(args, invocation);
           // A plain sentence (the person declined) goes as it is.
           return typeof result === "string" ? result : JSON.stringify(result);
         },
@@ -566,7 +567,8 @@ export class Tasks {
           review: { type: "string", enum: REVIEW_MODES, description: "Who reviews when done: \"creator\" (default for bots), \"auto\" (mark done and notify you), or \"person\"." },
         },
         ["title"],
-        async ({ title, details, bot: name, priority, status, review }) => {
+        async (rawArgs, call) => {
+          const { title, details, bot: name, priority, status, review } = rawArgs;
           if (created >= PER_TURN) throw new Error("Create at most ten tasks per reply.");
           if (this.all.filter((t) => !["done", "archived"].includes(t.status)).length >= MAX_OPEN)
             throw new Error("The task board is full. Ask the person to finish or archive some tasks.");
@@ -596,7 +598,7 @@ export class Tasks {
           // Record bot-to-bot task handoffs on the creating run so the chat shows a rail card with live task status.
           if (assignedBotId && assignedBotId !== bot.id) {
             const handoffs = (run.taskHandoffs ??= []);
-            handoffs.push({
+            const handoff = {
               id: createdTask.id,
               taskId: createdTask.id,
               botId: assignedBotId,
@@ -607,7 +609,9 @@ export class Tasks {
               priority: createdTask.priority,
               status: createdTask.status,
               started: createdTask.createdAt,
-            });
+            };
+            bindRailStep(run, handoff, { toolName: "task_create", toolCallId: call?.toolCallId, args: rawArgs });
+            handoffs.push(handoff);
             this.ws.notify();
           }
           created++;

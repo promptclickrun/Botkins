@@ -13,7 +13,8 @@ import {
   buildTaskHandoffRail,
   isAgentMessage,
 } from "../src/features/chat/agentRailModel";
-import { isStepCoveredByRail } from "../src/features/chat/activityModel";
+import { formatFeedWork, isStepCoveredByRail } from "../src/features/chat/activityModel";
+import { baseParts } from "../link-host/parts.mjs";
 import { continuingKeys } from "../src/features/chat/chatSides";
 import { islandLines } from "../src/features/chat/islandModel";
 import { chatTimeline } from "../src/features/chat/turn";
@@ -94,7 +95,7 @@ function loadMobileRail(extra: Record<string, unknown> = {}) {
   });
 }
 
-test("mobile chatTimeline emits agent-rail and suppresses duplicate ask_teammate / task_create steps", () => {
+test("mobile chatTimeline mixed run: hides correlated rail calls, keeps uncovered task_create and failed rows, and agrees with Link summary", () => {
   const run: Run = {
     id: "r1",
     chatId: "c1",
@@ -104,11 +105,14 @@ test("mobile chatTimeline emits agent-rail and suppresses duplicate ask_teammate
     steps: [
       { id: "s1", name: "read", label: "Read tokens.css", status: "Done", started: T0 + 100 },
       { id: "s2", name: "ask_teammate", label: "Ask Glory", status: "Done", started: T0 + 200 },
-      { id: "s3", name: "task_create", label: "Create task", status: "Done", started: T0 + 300 },
+      { id: "s3", name: "task_create", label: "Delegate to Glory", status: "Done", started: T0 + 300 },
+      { id: "s4", name: "task_create", label: "Personal reminder", status: "Done", started: T0 + 350 },
+      { id: "s5", name: "task_create", label: "Failed task", status: "Failed", started: T0 + 400 },
     ],
     teamwork: [
       {
         id: "tw1",
+        toolCallId: "s2",
         botId: "glory",
         message: "Audit light/dark rail tokens.",
         status: "answered",
@@ -122,6 +126,7 @@ test("mobile chatTimeline emits agent-rail and suppresses duplicate ask_teammate
       {
         id: "th1",
         taskId: "t1",
+        toolCallId: "s3",
         botId: "glory",
         fromBotId: "alfie",
         title: "Ship rail cards",
@@ -136,9 +141,11 @@ test("mobile chatTimeline emits agent-rail and suppresses duplicate ask_teammate
   assert.equal(isStepCoveredByRail(run.steps![0], run), false);
   assert.equal(isStepCoveredByRail(run.steps![1], run), true);
   assert.equal(isStepCoveredByRail(run.steps![2], run), true);
+  assert.equal(isStepCoveredByRail(run.steps![3], run), false, "uncovered task_create remains visible");
+  assert.equal(isStepCoveredByRail(run.steps![4], run), false, "failed task_create remains visible");
 
   const lines = islandLines(run, { steps: true, thoughts: false });
-  assert.deepEqual(lines.map((l) => l.key), ["s:s1"]);
+  assert.deepEqual(lines.map((l) => l.key), ["s:s1", "s:s4", "s:s5"]);
 
   const items = chatTimeline({
     messages: [
@@ -158,9 +165,40 @@ test("mobile chatTimeline emits agent-rail and suppresses duplicate ask_teammate
   assert.equal(workItems.length, 1);
   assert.deepEqual(
     workItems[0].steps.map((s) => s.id),
-    ["s1"],
-    "only non-rail step remains in work item (no double rendering)",
+    ["s1", "s4", "s5"],
+    "delegated calls appear once via rail card while uncovered & failed task_create steps remain visible",
   );
+
+  // Phone activity model and Link summary agree on step count, kinds, and failure count.
+  const phoneWork = formatFeedWork(run);
+  const linkParts = baseParts({ runs: [run] }, {});
+  assert.equal(phoneWork.stepCount, 3);
+  assert.equal(phoneWork.failedCount, 1);
+  assert.deepEqual(phoneWork.kinds, ["read", "tool"]);
+  assert.equal(linkParts.runs[0].stepCount, phoneWork.stepCount);
+  assert.equal(linkParts.runs[0].failedCount, phoneWork.failedCount);
+  assert.deepEqual(linkParts.runs[0].stepKinds, phoneWork.kinds);
+});
+
+test("mobile legacy rail entries without toolCallId preserve unprovable rows and match exact payloads", () => {
+  const legacyRun: Run = {
+    id: "r-legacy",
+    chatId: "c1",
+    title: "Legacy run",
+    time: T0,
+    status: "Completed",
+    steps: [
+      { id: "s-matched", name: "task_create", label: "Delegated", status: "Done", started: T0 + 10, output: JSON.stringify({ id: "t-del", title: "Delegated" }) },
+      { id: "s-self", name: "task_create", label: "Self", status: "Done", started: T0 + 20, output: JSON.stringify({ id: "t-self", title: "Self" }) },
+      { id: "s-unprovable", name: "task_create", label: "Legacy no output", status: "Done", started: T0 + 30 },
+    ],
+    taskHandoffs: [
+      { id: "t-del", taskId: "t-del", botId: "glory", fromBotId: "alfie", title: "Delegated", status: "ready", started: T0 + 10 },
+    ],
+  };
+  assert.equal(isStepCoveredByRail(legacyRun.steps![0], legacyRun), true);
+  assert.equal(isStepCoveredByRail(legacyRun.steps![1], legacyRun), false);
+  assert.equal(isStepCoveredByRail(legacyRun.steps![2], legacyRun), false);
 });
 
 test("continuingKeys does not merge an incoming agent message with an adjacent person bubble", () => {

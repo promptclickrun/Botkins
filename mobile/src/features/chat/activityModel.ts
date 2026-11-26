@@ -76,16 +76,62 @@ const QUIET_TOOL = /^(report_intent|think|thinking|task_complete|read_agent|list
 export const RAIL_COVERED_TEAMWORK_TOOL = /^(ask_teammate|list_node_files|node_read_file|node_write_file|node_mkdir|node_move_file|node_delete_file|node_stat_file|node_search_files|node_exec|node_which|node_screen_info|node_screen_capture|node_screen_input|node_notify)$/i;
 export const RAIL_COVERED_TASK_TOOL = /^task_create$/i;
 
+type RailTeamworkRef = { id?: string; toolCallId?: string; message?: string };
+type RailTaskHandoffRef = { id?: string; taskId?: string; toolCallId?: string };
+
+function parseJsonObject(text?: string): Record<string, unknown> | null {
+  if (typeof text !== "string") return null;
+  const trimmed = text.trim();
+  if (!trimmed.startsWith("{")) return null;
+  try {
+    const parsed: unknown = JSON.parse(trimmed);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed as Record<string, unknown>) : null;
+  } catch {
+    return null;
+  }
+}
+
+function matchesTeamworkCard(
+  step: Pick<Step, "id" | "name" | "input">,
+  entry: RailTeamworkRef | null | undefined,
+): boolean {
+  if (!entry || typeof entry !== "object") return false;
+  if (entry.toolCallId) return step.id === entry.toolCallId;
+  if (String(step.name || "").trim().toLowerCase() === "ask_teammate" && typeof entry.message === "string" && entry.message) {
+    const input = parseJsonObject(step.input);
+    if (typeof input?.message === "string" && input.message.trim() === entry.message.trim()) return true;
+  }
+  return false;
+}
+
+function matchesTaskHandoffCard(
+  step: Pick<Step, "id" | "output">,
+  entry: RailTaskHandoffRef | null | undefined,
+): boolean {
+  if (!entry || typeof entry !== "object") return false;
+  if (entry.toolCallId) return step.id === entry.toolCallId;
+  const taskId = entry.taskId || entry.id;
+  if (taskId) {
+    const output = parseJsonObject(step.output);
+    if (output?.id === taskId) return true;
+  }
+  return false;
+}
+
 /** True when a tool step is already represented by a sender-side agent-message rail card on this run, so it should not also appear as a tool row. */
 export function isStepCoveredByRail(
-  step: Pick<Step, "name" | "status" | "source"> | null | undefined,
-  run?: { teamwork?: readonly unknown[]; taskHandoffs?: readonly unknown[] } | null,
+  step: Pick<Step, "id" | "name" | "status" | "source" | "input" | "output"> | null | undefined,
+  run?: { teamwork?: readonly RailTeamworkRef[]; taskHandoffs?: readonly RailTaskHandoffRef[] } | null,
 ): boolean {
   if (!step || !run || step.source || step.status === "Failed") return false;
   const name = String(step.name || "").trim();
   if (!name) return false;
-  if (run.teamwork?.length && RAIL_COVERED_TEAMWORK_TOOL.test(name)) return true;
-  if (run.taskHandoffs?.length && RAIL_COVERED_TASK_TOOL.test(name)) return true;
+  if (run.teamwork?.length && RAIL_COVERED_TEAMWORK_TOOL.test(name)) {
+    return run.teamwork.some((entry) => matchesTeamworkCard(step, entry));
+  }
+  if (run.taskHandoffs?.length && RAIL_COVERED_TASK_TOOL.test(name)) {
+    return run.taskHandoffs.some((entry) => matchesTaskHandoffCard(step, entry));
+  }
   return false;
 }
 
@@ -528,19 +574,22 @@ function asStepKind(value: string): StepKind {
 }
 
 export function formatFeedWork(
-  run: Pick<RunSummary, "status" | "summary" | "stepKinds" | "stepCount" | "failedCount"> & Partial<Pick<Run, "steps" | "usedTools">>,
+  run: Pick<RunSummary, "status" | "summary" | "stepKinds" | "stepCount" | "failedCount"> &
+    Partial<Pick<Run, "steps" | "usedTools" | "teamwork" | "taskHandoffs">>,
 ): { kinds: StepKind[]; summary: string; stepCount: number; failedCount: number } {
-  const steps = run.steps ?? [];
-  const kinds = run.stepKinds?.length ? run.stepKinds.slice(0, 4).map(asStepKind) : uniqueKinds(steps, run.usedTools, 4);
+  const hasSteps = Array.isArray(run.steps) && run.steps.length > 0;
+  const steps = hasSteps ? run.steps!.filter((s) => !isStepCoveredByRail(s, run)) : [];
+  const legacyTools = hasSteps ? undefined : run.usedTools;
+  const kinds = run.stepKinds?.length ? run.stepKinds.slice(0, 4).map(asStepKind) : uniqueKinds(steps, legacyTools, 4);
   const failedCount = typeof run.failedCount === "number" ? run.failedCount : steps.filter((s) => s.status === "Failed").length;
-  const visibleToolCount = (run.usedTools ?? []).filter((n) => toolKind(n) != null).length;
+  const visibleToolCount = (legacyTools ?? []).filter((n) => toolKind(n) != null).length;
   const stepCount = typeof run.stepCount === "number" ? run.stepCount : visibleSteps(steps).length || visibleToolCount;
   let summary = run.summary || "";
   if (!summary && steps.length) {
     summary = summarizeSteps(steps, { running: run.status === "Working" });
   }
-  if (!summary && run.usedTools?.length) {
-    summary = summarizeToolNames(run.usedTools);
+  if (!summary && legacyTools?.length) {
+    summary = summarizeToolNames(legacyTools);
   }
   return { kinds, summary, stepCount, failedCount };
 }

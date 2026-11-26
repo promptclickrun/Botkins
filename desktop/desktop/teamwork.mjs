@@ -17,7 +17,7 @@ import { isGroup } from "./groups.mjs";
 import { OutgoingDispatches, peerCapabilities, peerRoster, remoteJob, remoteReply, remoteTeamworkAllowed, requireRemoteTurn } from "./remote-teamwork.mjs";
 import { LIST_FILES_OPERATION } from "./node-host.mjs";
 import { canUseProject } from "./access.mjs";
-import { recordActivity } from "./activity.mjs";
+import { bindRailStep, recordActivity } from "./activity.mjs";
 import { recordCanvas } from "./canvas.mjs";
 
 export const MAX_TEAM = 16;
@@ -115,7 +115,7 @@ export class Teamwork {
           required: ["host", "project"],
           additionalProperties: false,
         },
-        handler: (args) => this.listNodeFiles(chat, bot, run, task, args ?? {}),
+        handler: (args, invocation) => this.listNodeFiles(chat, bot, run, task, args ?? {}, invocation),
       }),
       defineTool("node_read_file", {
         description: "Read a file on a node host (inside a shared project folder, or anywhere when whole-computer scope is enabled on that node with project='@computer').",
@@ -133,7 +133,7 @@ export class Teamwork {
           required: ["host", "path"],
           additionalProperties: false,
         },
-        handler: (args) => this.runNodeOperation(chat, bot, run, task, "fs.read", args ?? {}),
+        handler: (args, invocation) => this.runNodeOperation(chat, bot, run, task, "fs.read", args ?? {}, invocation, "node_read_file"),
       }),
       defineTool("node_write_file", {
         description: "Create or overwrite a file on a node host (max 256 KiB). Overwriting an existing file requires overwrite: true and a separate destructive grant.",
@@ -151,7 +151,7 @@ export class Teamwork {
           required: ["host", "path", "content"],
           additionalProperties: false,
         },
-        handler: (args) => this.runNodeOperation(chat, bot, run, task, "fs.write", args ?? {}),
+        handler: (args, invocation) => this.runNodeOperation(chat, bot, run, task, "fs.write", args ?? {}, invocation, "node_write_file"),
       }),
       defineTool("node_mkdir", {
         description: "Create a directory on a node host.",
@@ -166,7 +166,7 @@ export class Teamwork {
           required: ["host", "path"],
           additionalProperties: false,
         },
-        handler: (args) => this.runNodeOperation(chat, bot, run, task, "fs.mkdir", args ?? {}),
+        handler: (args, invocation) => this.runNodeOperation(chat, bot, run, task, "fs.mkdir", args ?? {}, invocation, "node_mkdir"),
       }),
       defineTool("node_move_file", {
         description: "Move or rename a file or folder on a node host.",
@@ -182,7 +182,7 @@ export class Teamwork {
           required: ["host", "from", "to"],
           additionalProperties: false,
         },
-        handler: (args) => this.runNodeOperation(chat, bot, run, task, "fs.move", args ?? {}),
+        handler: (args, invocation) => this.runNodeOperation(chat, bot, run, task, "fs.move", args ?? {}, invocation, "node_move_file"),
       }),
       defineTool("node_delete_file", {
         description: "Delete a file or directory on a node host (always requires its own destructive grant).",
@@ -197,7 +197,7 @@ export class Teamwork {
           required: ["host", "path"],
           additionalProperties: false,
         },
-        handler: (args) => this.runNodeOperation(chat, bot, run, task, "fs.delete", args ?? {}),
+        handler: (args, invocation) => this.runNodeOperation(chat, bot, run, task, "fs.delete", args ?? {}, invocation, "node_delete_file"),
       }),
       defineTool("node_stat_file", {
         description: "Inspect metadata (exists, type, size, mtime, mode) of a path on a node host.",
@@ -211,7 +211,7 @@ export class Teamwork {
           required: ["host", "path"],
           additionalProperties: false,
         },
-        handler: (args) => this.runNodeOperation(chat, bot, run, task, "fs.stat", args ?? {}),
+        handler: (args, invocation) => this.runNodeOperation(chat, bot, run, task, "fs.stat", args ?? {}, invocation, "node_stat_file"),
       }),
       defineTool("node_search_files", {
         description: "Search for files by filename pattern or text query on a node host.",
@@ -229,7 +229,7 @@ export class Teamwork {
           required: ["host"],
           additionalProperties: false,
         },
-        handler: (args) => this.runNodeOperation(chat, bot, run, task, "fs.search", args ?? {}),
+        handler: (args, invocation) => this.runNodeOperation(chat, bot, run, task, "fs.search", args ?? {}, invocation, "node_search_files"),
       }),
       defineTool("node_exec", {
         description: "Run a command on a node host (gated by the node's exec policy and exact-request approval binding). Prefer argv array over a shell string.",
@@ -247,7 +247,7 @@ export class Teamwork {
           required: ["host"],
           additionalProperties: false,
         },
-        handler: (args) => this.runNodeOperation(chat, bot, run, task, "system.run", args ?? {}),
+        handler: (args, invocation) => this.runNodeOperation(chat, bot, run, task, "system.run", args ?? {}, invocation, "node_exec"),
       }),
       defineTool("node_which", {
         description: "Locate executable paths on a node host's PATH.",
@@ -260,7 +260,7 @@ export class Teamwork {
           required: ["host", "names"],
           additionalProperties: false,
         },
-        handler: (args) => this.runNodeOperation(chat, bot, run, task, "system.which", args ?? {}),
+        handler: (args, invocation) => this.runNodeOperation(chat, bot, run, task, "system.which", args ?? {}, invocation, "node_which"),
       }),
       defineTool("node_screen_info", {
         description: "Inspect available displays and screen/accessibility permission status on a node host.",
@@ -272,7 +272,7 @@ export class Teamwork {
           required: ["host"],
           additionalProperties: false,
         },
-        handler: (args) => this.runNodeOperation(chat, bot, run, task, "screen.info", args ?? {}),
+        handler: (args, invocation) => this.runNodeOperation(chat, bot, run, task, "screen.info", args ?? {}, invocation, "node_screen_info"),
       }),
       defineTool("node_screen_capture", {
         description: "Capture a JPEG screenshot of a display on a node host.",
@@ -287,7 +287,7 @@ export class Teamwork {
           required: ["host"],
           additionalProperties: false,
         },
-        handler: (args) => this.runNodeOperation(chat, bot, run, task, "screen.capture", args ?? {}),
+        handler: (args, invocation) => this.runNodeOperation(chat, bot, run, task, "screen.capture", args ?? {}, invocation, "node_screen_capture"),
       }),
       defineTool("node_screen_input", {
         description: "Send mouse, scroll, or keyboard input events to a display on a node host.",
@@ -301,7 +301,7 @@ export class Teamwork {
           required: ["host", "events"],
           additionalProperties: false,
         },
-        handler: (args) => this.runNodeOperation(chat, bot, run, task, "screen.input", args ?? {}),
+        handler: (args, invocation) => this.runNodeOperation(chat, bot, run, task, "screen.input", args ?? {}, invocation, "node_screen_input"),
       }),
       defineTool("node_notify", {
         description: "Show a desktop notification on a node host.",
@@ -315,7 +315,7 @@ export class Teamwork {
           required: ["host", "title"],
           additionalProperties: false,
         },
-        handler: (args) => this.runNodeOperation(chat, bot, run, task, "node.notify", args ?? {}),
+        handler: (args, invocation) => this.runNodeOperation(chat, bot, run, task, "node.notify", args ?? {}, invocation, "node_notify"),
       })] : []),
       defineTool("ask_teammate", {
         description:
@@ -334,11 +334,12 @@ export class Teamwork {
           required: ["teammate", "message"],
           additionalProperties: false,
         },
-        handler: (args) => this.ask(chat, bot, run, task, args ?? {}),
+        handler: (args, invocation) => this.ask(chat, bot, run, task, args ?? {}, invocation),
       }),
     ];
   }
-  async ask(chat, bot, run, task, { host, teammate, message, expecting, constraints }) {
+  async ask(chat, bot, run, task, rawArgs, invocation) {
+    const { host, teammate, message, expecting, constraints } = rawArgs;
     if (!run || task.stopped || this.ws.closing || this.ws.active.get(chat.id) !== task)
       throw new Error("This turn is no longer active");
     const team = this.roster(bot, chat);
@@ -387,6 +388,7 @@ export class Teamwork {
       (entry.expecting ? "\n\nWhat they need back: " + entry.expecting : "") +
       (optional(constraints) ? "\n\nConstraints: " + optional(constraints) : "");
     if (remote && content.length > MESSAGE_MAX) throw new Error("Keep the whole remote request within 16,000 characters.");
+    bindRailStep(run, entry, { toolName: "ask_teammate", toolCallId: invocation?.toolCallId, args: rawArgs });
     asks.push(entry);
     this.ws.notify();
     // The teammate is told whose request this is, as the asker was (desktop/team-turn.mjs).
@@ -411,7 +413,8 @@ export class Teamwork {
       this.ws.notify();
     }
   }
-  async listNodeFiles(chat, bot, run, task, { host, project, path: relPath = "" }) {
+  async listNodeFiles(chat, bot, run, task, rawArgs, invocation) {
+    const { host, project, path: relPath = "" } = rawArgs;
     if (!run || task.stopped || this.ws.closing || this.ws.active.get(chat.id) !== task)
       throw new Error("This turn is no longer active");
     requireRemoteTurn(this.ws, bot, chat, run, task);
@@ -447,6 +450,7 @@ export class Teamwork {
       status: "waiting",
       started: Date.now(),
     };
+    bindRailStep(run, entry, { toolName: "list_node_files", toolCallId: invocation?.toolCallId, args: rawArgs });
     asks.push(entry);
     this.ws.notify();
     try {
@@ -473,7 +477,7 @@ export class Teamwork {
       this.ws.notify();
     }
   }
-  async runNodeOperation(chat, bot, run, task, operation, args = {}) {
+  async runNodeOperation(chat, bot, run, task, operation, args = {}, invocation, toolName) {
     if (!run || task.stopped || this.ws.closing || this.ws.active.get(chat.id) !== task)
       throw new Error("This turn is no longer active");
     requireRemoteTurn(this.ws, bot, chat, run, task);
@@ -509,6 +513,7 @@ export class Teamwork {
       status: "waiting",
       started: Date.now(),
     };
+    bindRailStep(run, entry, { toolName, toolCallId: invocation?.toolCallId, args });
     asks.push(entry);
     this.ws.notify();
     try {

@@ -42,8 +42,8 @@ export type StoryRun<S extends StoryStep = StoryStep> = {
   steps?: S[];
   reasoning?: StoryThought[];
   agents?: StoryHelper[];
-  teamwork?: { id: string }[];
-  taskHandoffs?: { id: string }[];
+  teamwork?: { id?: string; toolCallId?: string; message?: string }[];
+  taskHandoffs?: { id?: string; taskId?: string; toolCallId?: string }[];
 };
 /** Text the bot wrote before it moved on (an interim message), with its time. */
 export type StoryUpdate = { key: string; at: number; text: string };

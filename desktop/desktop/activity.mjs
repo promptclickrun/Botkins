@@ -20,6 +20,8 @@ function toolLabel(name, args) {
 // Provider instance IDs and tool-call IDs can differ. Keep the association private to the run.
 const owners = new WeakMap();
 const pendingOwners = new WeakMap();
+// Pending rail entries whose tool handler ran over MCP without a toolCallId (matched on next start/complete).
+const pendingRailEntries = new WeakMap();
 export function associateHelper(run, instance, toolCallId) {
   if (!instance || !toolCallId) return;
   if (!owners.has(run)) owners.set(run, new Map());
@@ -31,6 +33,65 @@ export function associateHelper(run, instance, toolCallId) {
 }
 export function helperId(run, instance) {
   return owners.get(run)?.get(instance) ?? run.agents?.find(a => a.id === instance)?.id;
+}
+/**
+ * Link a rail card entry (run.teamwork or run.taskHandoffs) to the exact tool step that created it.
+ * Copilot supplies `toolCallId` directly; MCP bridge providers don't pass it in tools/call, so we
+ * bind to the uniquely matching in-flight step on `run.steps` (or queue until that step arrives).
+ */
+export function bindRailStep(run, entry, { toolName, toolCallId, args } = {}) {
+  if (!run || !entry) return;
+  if (typeof toolCallId === "string" && toolCallId) {
+    entry.toolCallId = toolCallId;
+    return;
+  }
+  const match = findMatchingRunningStep(run, toolName, args);
+  if (match) {
+    entry.toolCallId = match.id;
+    return;
+  }
+  if (!pendingRailEntries.has(run)) pendingRailEntries.set(run, []);
+  pendingRailEntries.get(run).push({ entry, toolName, input: args ? displayValue(args, 12000) : "" });
+}
+function usedRailStepIds(run) {
+  const used = new Set();
+  for (const item of run.teamwork ?? []) if (item?.toolCallId) used.add(item.toolCallId);
+  for (const item of run.taskHandoffs ?? []) if (item?.toolCallId) used.add(item.toolCallId);
+  return used;
+}
+function findMatchingRunningStep(run, toolName, args) {
+  const name = String(toolName || "").toLowerCase();
+  if (!name) return null;
+  const used = usedRailStepIds(run);
+  const candidates = (run.steps ?? []).filter(
+    (s) => !s.source && s.status === "Running" && !used.has(s.id) && String(s.name || "").toLowerCase() === name,
+  );
+  if (candidates.length === 1) return candidates[0];
+  if (candidates.length > 1 && args) {
+    const serialized = displayValue(args, 12000);
+    const exact = candidates.filter((s) => s.input === serialized);
+    if (exact.length === 1) return exact[0];
+  }
+  return null;
+}
+function resolvePendingRailEntries(run, step) {
+  const queue = pendingRailEntries.get(run);
+  if (!queue?.length || step.source) return;
+  const stepName = String(step.name || "").toLowerCase();
+  const used = usedRailStepIds(run);
+  if (used.has(step.id)) return;
+  const exactIdx = queue.findIndex(
+    (p) => !p.entry.toolCallId && String(p.toolName || "").toLowerCase() === stepName && p.input && p.input === step.input,
+  );
+  const idx = exactIdx >= 0
+    ? exactIdx
+    : queue.filter((p) => !p.entry.toolCallId && String(p.toolName || "").toLowerCase() === stepName).length === 1
+      ? queue.findIndex((p) => !p.entry.toolCallId && String(p.toolName || "").toLowerCase() === stepName)
+      : -1;
+  if (idx >= 0) {
+    queue[idx].entry.toolCallId = step.id;
+    queue.splice(idx, 1);
+  }
 }
 export function recordActivity(run, { type, data, agentId }, notify) {
   const id = data?.toolCallId;
@@ -48,6 +109,7 @@ export function recordActivity(run, { type, data, agentId }, notify) {
       const source = data.mcpServerName ?? step.source;
       if (name === step.name && source === step.source && input === step.input) return;
       Object.assign(step, { name, source, input, label: args ? toolLabel(name, args) : step.label });
+      resolvePendingRailEntries(run, step);
       notify();
       return;
     }
@@ -66,6 +128,7 @@ export function recordActivity(run, { type, data, agentId }, notify) {
     };
     if (!owner && agentId) pendingOwners.set(step, agentId);
     run.steps.push(step);
+    resolvePendingRailEntries(run, step);
   } else if (!step) return;
   else if (type === "tool.backgrounded") {
     // A command that was moved to the background while it ran.

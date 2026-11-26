@@ -96,7 +96,7 @@ function storyRows(chapters: Chapter<Step>[], filter: Filter): Row[] {
 }
 
 export function ActivityPanel({ run, updates, target, onCrew }: { run: Run; updates: StoryUpdate[]; target?: InspectTarget; /** Opens the Crew tab, on a helper when given its id. */ onCrew?: (id?: string) => void }) {
-  const chapters = useMemo(() => storyChapters(run, updates), [run.steps, run.reasoning, updates]);
+  const chapters = useMemo(() => storyChapters(run, updates), [run.steps, run.reasoning, run.teamwork, run.taskHandoffs, updates]);
   const chips = useMemo(() => filterChips(chapters), [chapters]);
   const [filter, setFilter] = useState<Filter>("all");
   const [picked, setPicked] = useState<string | undefined>(() => target?.select);

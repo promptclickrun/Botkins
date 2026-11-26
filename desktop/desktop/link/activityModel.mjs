@@ -21,12 +21,51 @@ const QUIET_TOOL = /^(report_intent|think|thinking|task_complete|read_agent|list
 export const RAIL_COVERED_TEAMWORK_TOOL = /^(ask_teammate|list_node_files|node_read_file|node_write_file|node_mkdir|node_move_file|node_delete_file|node_stat_file|node_search_files|node_exec|node_which|node_screen_info|node_screen_capture|node_screen_input|node_notify)$/i;
 export const RAIL_COVERED_TASK_TOOL = /^task_create$/i;
 
+function parseJsonObject(text) {
+  if (typeof text !== "string") return null;
+  const trimmed = text.trim();
+  if (!trimmed.startsWith("{")) return null;
+  try {
+    const parsed = JSON.parse(trimmed);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function matchesTeamworkCard(step, entry) {
+  if (!entry || typeof entry !== "object") return false;
+  if (entry.toolCallId) return step.id === entry.toolCallId;
+  // Legacy / un-correlated teamwork entry: only match when we can prove exact correspondence via input payload.
+  if (String(step.name || "").trim().toLowerCase() === "ask_teammate" && typeof entry.message === "string" && entry.message) {
+    const input = parseJsonObject(step.input);
+    if (typeof input?.message === "string" && input.message.trim() === entry.message.trim()) return true;
+  }
+  return false;
+}
+
+function matchesTaskHandoffCard(step, entry) {
+  if (!entry || typeof entry !== "object") return false;
+  if (entry.toolCallId) return step.id === entry.toolCallId;
+  // Legacy / un-correlated handoff entry: match exact created task ID in step output.
+  const taskId = entry.taskId || entry.id;
+  if (taskId) {
+    const output = parseJsonObject(step.output);
+    if (output?.id === taskId) return true;
+  }
+  return false;
+}
+
 export function isStepCoveredByRail(step, run) {
   if (!step || !run || step.source || step.status === "Failed") return false;
   const name = String(step.name || "").trim();
   if (!name) return false;
-  if (run.teamwork?.length && RAIL_COVERED_TEAMWORK_TOOL.test(name)) return true;
-  if (run.taskHandoffs?.length && RAIL_COVERED_TASK_TOOL.test(name)) return true;
+  if (run.teamwork?.length && RAIL_COVERED_TEAMWORK_TOOL.test(name)) {
+    return run.teamwork.some((entry) => matchesTeamworkCard(step, entry));
+  }
+  if (run.taskHandoffs?.length && RAIL_COVERED_TASK_TOOL.test(name)) {
+    return run.taskHandoffs.some((entry) => matchesTaskHandoffCard(step, entry));
+  }
   return false;
 }
 
@@ -455,17 +494,19 @@ export function formatWorkingDuration(ms) {
 
 /** OpenBot-style activity feed representation for a run summary or full run. */
 export function formatFeedWork(run) {
-  const steps = run?.steps ?? [];
-  const kinds = run?.stepKinds?.length ? run.stepKinds.slice(0, 4) : uniqueKinds(steps, run?.usedTools, 4);
+  const hasSteps = Array.isArray(run?.steps) && run.steps.length > 0;
+  const steps = hasSteps ? run.steps.filter((s) => !isStepCoveredByRail(s, run)) : [];
+  const legacyTools = hasSteps ? undefined : run?.usedTools;
+  const kinds = run?.stepKinds?.length ? run.stepKinds.slice(0, 4) : uniqueKinds(steps, legacyTools, 4);
   const failedCount = typeof run?.failedCount === "number" ? run.failedCount : steps.filter((s) => s.status === "Failed").length;
-  const visibleToolCount = (run?.usedTools ?? []).filter((n) => toolKind(n) != null).length;
+  const visibleToolCount = (legacyTools ?? []).filter((n) => toolKind(n) != null).length;
   const stepCount = typeof run?.stepCount === "number" ? run.stepCount : visibleSteps(steps).length || visibleToolCount;
   let summary = run?.summary || "";
   if (!summary && steps.length) {
     summary = summarizeSteps(steps, { running: run?.status === "Working" });
   }
-  if (!summary && run?.usedTools?.length) {
-    summary = summarizeToolNames(run.usedTools);
+  if (!summary && legacyTools?.length) {
+    summary = summarizeToolNames(legacyTools);
   }
   return { kinds, summary, stepCount, failedCount };
 }

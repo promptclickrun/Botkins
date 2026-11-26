@@ -616,6 +616,7 @@ export type Subagent = { id: string; name: string; description?: string; status:
 export type Usage = { input: number; output: number; cacheRead?: number; cacheWrite?: number; cost?: number; model?: string; durationMs?: number };
 export type TeamAsk = {
   id: string;
+  toolCallId?: string;
   botId: string;
   fromBotId: string;
   from?: MessageFrom;
@@ -633,6 +634,7 @@ export type TeamAsk = {
 export type TaskHandoff = {
   id: string;
   taskId: string;
+  toolCallId?: string;
   botId: string;
   fromBotId: string;
   from?: MessageFrom;

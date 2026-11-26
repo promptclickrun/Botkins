@@ -236,23 +236,31 @@ test("desktop AgentMessageRail renders sender teamwork asks and task handoff car
   assert.match(html, /Open task/);
 });
 
-test("no double rendering: storySteps omits ask_teammate and task_create steps covered by rail cards", () => {
+test("no double rendering: mixed run hides only correlated rail steps and keeps uncovered task_create and failed rows visible", () => {
   const run = {
-    teamwork: [{ id: "tw1", botId: "glory", message: "Check", status: "answered", started: 10 }],
-    taskHandoffs: [{ id: "th1", taskId: "t1", botId: "glory", fromBotId: "alfie", title: "Ship it", status: "ready", started: 20 }],
+    status: "Completed",
+    teamwork: [{ id: "tw1", toolCallId: "s2", botId: "glory", message: "Check", status: "answered", started: 10 }],
+    taskHandoffs: [{ id: "th1", taskId: "t1", toolCallId: "s3", botId: "glory", fromBotId: "alfie", title: "Ship it", status: "ready", started: 20 }],
   };
   const steps = [
     { id: "s1", name: "read", label: "Read file", status: "Done", started: 5 },
     { id: "s2", name: "ask_teammate", label: "Ask Glory", status: "Done", started: 10 },
-    { id: "s3", name: "task_create", label: "Create task", status: "Done", started: 20 },
+    { id: "s3", name: "task_create", label: "Create task for Glory", status: "Done", started: 20 },
+    { id: "s3-self", name: "task_create", label: "Create self task", status: "Done", started: 25 },
     { id: "s4", name: "ask_teammate", label: "Ask failed", status: "Failed", started: 30 },
   ];
   assert.equal(isStepCoveredByRail(steps[1], run), true);
   assert.equal(isStepCoveredByRail(steps[2], run), true);
-  assert.equal(isStepCoveredByRail(steps[3], run), false);
+  assert.equal(isStepCoveredByRail(steps[3], run), false, "uncovered self/unassigned task_create stays visible");
+  assert.equal(isStepCoveredByRail(steps[4], run), false, "failed ask_teammate stays visible");
 
   const kept = storySteps(steps, run);
-  assert.deepEqual(kept.map((s) => s.id), ["s1", "s4"]);
+  assert.deepEqual(kept.map((s) => s.id), ["s1", "s3-self", "s4"]);
+
+  const feed = mod.formatFeedWork({ ...run, steps });
+  assert.equal(feed.stepCount, 3);
+  assert.equal(feed.failedCount, 1);
+  assert.deepEqual(feed.kinds, ["read", "tool"]);
 });
 
 test("readableAgentBody and foldPreview handle empty/legacy text gracefully", () => {

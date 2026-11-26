@@ -1,5 +1,6 @@
 import { associateHelper, helperId } from "./activity.mjs";
 import { reasoningPreview } from "./link/reasoning-preview.mjs";
+import { isStepCoveredByRail } from "./link/activityModel.mjs";
 import { toolKind } from "./tool-kind.mjs";
 // Chat canvas helpers: reasoning, usage, context, todos, background helpers,
 // attachments, fork context and the plain-language work summary.
@@ -141,7 +142,11 @@ export function finishCanvas(run) {
       a.finished = now;
     }
   }
-  if (run.steps?.length) run.summary = workSummary(run.steps);
+  if (run.steps?.length) {
+    const summary = workSummary(run.steps.filter((step) => !isStepCoveredByRail(step, run)));
+    if (summary) run.summary = summary;
+    else delete run.summary;
+  }
 }
 
 const statusMap = {

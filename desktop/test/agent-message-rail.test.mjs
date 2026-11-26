@@ -7,7 +7,11 @@ import { join } from "node:path";
 import { Workspace } from "./starter.mjs";
 import { Tasks } from "../desktop/tasks.mjs";
 import { fakeClient, tempDir, tick } from "./fake-copilot.mjs";
-import { isStepCoveredByRail } from "../desktop/link/activityModel.mjs";
+import { readFileSync } from "node:fs";
+import { finishCanvas } from "../desktop/canvas.mjs";
+import { recordActivity } from "../desktop/activity.mjs";
+import { formatFeedWork, isStepCoveredByRail } from "../desktop/link/activityModel.mjs";
+import { baseParts } from "../desktop/link/parts.mjs";
 
 function setup(t, reply, options = {}) {
   const dir = tempDir(t);
@@ -172,16 +176,137 @@ test("remote host dispatch stamps remote from metadata on the recipient chat mes
   });
 });
 
-test("isStepCoveredByRail suppresses duplicate ask_teammate and task_create steps when rail cards exist", () => {
-  const runWithTeamwork = { teamwork: [{ id: "tw1", botId: "scout", name: "Scout", message: "hi", status: "done", started: 1 }] };
-  const runWithHandoff = { taskHandoffs: [{ id: "th1", taskId: "t1", title: "Task", botId: "scout", botName: "Scout", started: 1 }] };
+test("isStepCoveredByRail correlates individual steps to rail cards and preserves uncovered, failed, and legacy rows", () => {
+  const runWithTeamwork = {
+    teamwork: [{ id: "tw1", toolCallId: "s1", botId: "scout", name: "Scout", message: "hi", status: "answered", started: 1 }],
+  };
+  const runWithHandoff = {
+    taskHandoffs: [{ id: "th1", taskId: "t1", toolCallId: "s5", title: "Task", botId: "scout", botName: "Scout", started: 1 }],
+  };
 
   assert.equal(isStepCoveredByRail({ id: "s1", name: "ask_teammate", status: "Done" }, runWithTeamwork), true);
-  assert.equal(isStepCoveredByRail({ id: "s2", name: "ask_teammate", status: "Running" }, runWithTeamwork), true);
-  assert.equal(isStepCoveredByRail({ id: "s3", name: "ask_teammate", status: "Failed" }, runWithTeamwork), false, "failed tool calls stay visible in activity");
+  assert.equal(isStepCoveredByRail({ id: "s1", name: "ask_teammate", status: "Running" }, runWithTeamwork), true);
+  assert.equal(isStepCoveredByRail({ id: "s1", name: "ask_teammate", status: "Failed" }, runWithTeamwork), false, "failed tool calls stay visible in activity");
+  assert.equal(isStepCoveredByRail({ id: "s2", name: "ask_teammate", status: "Done" }, runWithTeamwork), false, "unmatched ask_teammate step stays visible");
   assert.equal(isStepCoveredByRail({ id: "s4", name: "ask_teammate", status: "Done" }, {}), false, "without teamwork entries, fallback step stays visible");
 
   assert.equal(isStepCoveredByRail({ id: "s5", name: "task_create", status: "Done" }, runWithHandoff), true);
+  assert.equal(isStepCoveredByRail({ id: "s6", name: "task_create", status: "Done" }, runWithHandoff), false, "separate self/unassigned task_create in same run stays visible");
   assert.equal(isStepCoveredByRail({ id: "s6", name: "task_create", status: "Done" }, {}), false, "person-only or self tasks without handoff stay visible");
   assert.equal(isStepCoveredByRail({ id: "s7", name: "read", status: "Done" }, runWithTeamwork), false);
+
+  // Legacy rail entries (no toolCallId) match only when exact payload correlation proves correspondence, otherwise stay visible.
+  const legacyRun = {
+    teamwork: [{ id: "tw-legacy", botId: "scout", message: "Check tide", status: "answered", started: 1 }],
+    taskHandoffs: [{ id: "t-delegated", taskId: "t-delegated", botId: "scout", title: "Delegated", status: "ready", started: 2 }],
+  };
+  assert.equal(
+    isStepCoveredByRail({ id: "s-tw-match", name: "ask_teammate", status: "Done", input: JSON.stringify({ teammate: "Scout", message: "Check tide" }) }, legacyRun),
+    true,
+  );
+  assert.equal(
+    isStepCoveredByRail({ id: "s-tw-other", name: "ask_teammate", status: "Done", input: JSON.stringify({ teammate: "Scout", message: "Different ask" }) }, legacyRun),
+    false,
+  );
+  assert.equal(
+    isStepCoveredByRail({ id: "s-tw-no-input", name: "ask_teammate", status: "Done" }, legacyRun),
+    false,
+    "unprovable legacy teamwork step stays visible",
+  );
+  assert.equal(
+    isStepCoveredByRail({ id: "s-th-match", name: "task_create", status: "Done", output: JSON.stringify({ id: "t-delegated", title: "Delegated" }) }, legacyRun),
+    true,
+  );
+  assert.equal(
+    isStepCoveredByRail({ id: "s-th-self", name: "task_create", status: "Done", output: JSON.stringify({ id: "t-self", title: "Self task" }) }, legacyRun),
+    false,
+  );
+  assert.equal(
+    isStepCoveredByRail({ id: "s-th-no-output", name: "task_create", status: "Done" }, legacyRun),
+    false,
+    "unprovable legacy task_create step stays visible",
+  );
+});
+
+test("mixed run: delegated task_create is correlated to its rail card while self/unassigned task_create stays visible and Link summary agrees", async (t) => {
+  const { ws } = setup(t, async () => ({ data: { content: "ok" } }));
+  const tasks = new Tasks(ws);
+  const pip = ws.bot("pip");
+  const scout = ws.bot("scout");
+  const chatId = ws.createChat(pip.id);
+  const run = { id: "r-mixed", chatId, botId: pip.id, title: "Mixed task run", status: "Working", time: Date.now() };
+  ws.state.runs.unshift(run);
+  const active = {};
+  ws.active.set(chatId, active);
+  const tools = Object.fromEntries(tasks.tools(pip, ws.chat(chatId), run, active).map((tool) => [tool.name, tool]));
+
+  // 1) Delegated task_create invoked with direct Copilot-style invocation.toolCallId
+  const delegatedArgs = { title: "Delegate to Scout", bot: scout.name, status: "later" };
+  recordActivity(run, { type: "tool.execution_start", data: { toolCallId: "call-delegated", toolName: "task_create", arguments: delegatedArgs } }, () => {});
+  const delegatedOut = await tools.task_create.handler(delegatedArgs, { toolCallId: "call-delegated" });
+  recordActivity(run, { type: "tool.execution_complete", data: { toolCallId: "call-delegated", success: true, result: { content: delegatedOut } } }, () => {});
+
+  // 2) Self-assigned task_create in the same run (no rail card)
+  const selfArgs = { title: "Reminder for myself", bot: pip.name, status: "later" };
+  recordActivity(run, { type: "tool.execution_start", data: { toolCallId: "call-self", toolName: "task_create", arguments: selfArgs } }, () => {});
+  const selfOut = await tools.task_create.handler(selfArgs, { toolCallId: "call-self" });
+  recordActivity(run, { type: "tool.execution_complete", data: { toolCallId: "call-self", success: true, result: { content: selfOut } } }, () => {});
+
+  // 3) Unassigned task_create via MCP-bridge style (no invocation.toolCallId)
+  const unassignedArgs = { title: "Unassigned backlog item", status: "later" };
+  recordActivity(run, { type: "tool.execution_start", data: { toolCallId: "call-unassigned", toolName: "task_create", arguments: unassignedArgs } }, () => {});
+  const unassignedOut = await tools.task_create.handler(unassignedArgs);
+  recordActivity(run, { type: "tool.execution_complete", data: { toolCallId: "call-unassigned", success: true, result: { content: unassignedOut } } }, () => {});
+
+  // 4) Second delegated task_create via MCP-bridge style (no invocation.toolCallId, correlates via active running step)
+  const bridgeDelegatedArgs = { title: "Second handoff over MCP", bot: scout.name, status: "later" };
+  recordActivity(run, { type: "tool.execution_start", data: { toolCallId: "call-bridge-delegated", toolName: "task_create", arguments: bridgeDelegatedArgs } }, () => {});
+  const bridgeDelegatedOut = await tools.task_create.handler(bridgeDelegatedArgs);
+  recordActivity(run, { type: "tool.execution_complete", data: { toolCallId: "call-bridge-delegated", success: true, result: { content: bridgeDelegatedOut } } }, () => {});
+
+  assert.equal(run.taskHandoffs?.length, 2);
+  assert.equal(run.taskHandoffs[0].toolCallId, "call-delegated");
+  assert.equal(run.taskHandoffs[1].toolCallId, "call-bridge-delegated");
+
+  const visibleIds = run.steps.filter((s) => !isStepCoveredByRail(s, run)).map((s) => s.id);
+  assert.deepEqual(visibleIds, ["call-self", "call-unassigned"]);
+
+  finishCanvas(run);
+  run.status = "Completed";
+  assert.equal(run.summary, "Used 2 tools");
+
+  // Link summary (baseParts -> runSummary -> formatFeedWork) stays in agreement with visible steps.
+  const feed = formatFeedWork(run);
+  assert.equal(feed.stepCount, 2);
+  assert.equal(feed.summary, "Used 2 tools");
+  assert.deepEqual(feed.kinds, ["tool"]);
+
+  const parts = baseParts({ runs: [run] }, {});
+  assert.equal(parts.runs[0].stepCount, 2);
+  assert.equal(parts.runs[0].summary, "Used 2 tools");
+  assert.deepEqual(parts.runs[0].stepKinds, ["tool"]);
+
+  // Run with ONLY a rail-covered step leaves no ghost tool count in Link summary.
+  const onlyRailRun = {
+    id: "r-only-rail",
+    chatId,
+    title: "Delegated only",
+    time: Date.now(),
+    status: "Completed",
+    steps: [{ id: "call-only", name: "task_create", status: "Done", started: 1 }],
+    usedTools: ["task_create"],
+    taskHandoffs: [{ id: "t-only", taskId: "t-only", toolCallId: "call-only", botId: scout.id, fromBotId: pip.id, title: "Only handoff", status: "ready", started: 1 }],
+  };
+  finishCanvas(onlyRailRun);
+  assert.equal(onlyRailRun.summary, undefined);
+  const onlyParts = baseParts({ runs: [onlyRailRun] }, {});
+  assert.equal(onlyParts.runs[0].stepCount, undefined);
+  assert.equal(onlyParts.runs[0].summary, undefined);
+  assert.equal(onlyParts.runs[0].stepKinds, undefined);
+});
+
+test("desktop/desktop/link/activityModel.mjs stays byte-identical to mobile/link-host/activityModel.mjs", () => {
+  const desktop = readFileSync(new URL("../desktop/link/activityModel.mjs", import.meta.url), "utf8");
+  const phone = readFileSync(new URL("../../mobile/link-host/activityModel.mjs", import.meta.url), "utf8");
+  assert.equal(desktop, phone);
 });
