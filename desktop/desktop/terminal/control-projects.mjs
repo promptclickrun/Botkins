@@ -111,9 +111,12 @@ export function projectsApi({ workspace, handlers, bot }) {
     bot: botName(t.botId),
     botId: t.botId ?? null,
     createdBy: t.createdBy === "person" ? "person" : (botName(t.createdBy) ?? "a bot"),
+    ...(t.review && { review: t.review }),
+    ...(t.reviewerBotId && { reviewerBotId: t.reviewerBotId, reviewer: botName(t.reviewerBotId) ?? "a bot" }),
     ...(t.problem && { problem: t.problem }),
     ...(t.result && { result: t.result }),
     ...(t.chatId && { chatId: t.chatId }),
+    ...(t.history?.length && { history: t.history }),
     createdAt: iso(t.createdAt),
     updatedAt: iso(t.updatedAt),
   });
@@ -332,10 +335,13 @@ export function projectsApi({ workspace, handlers, bot }) {
       });
       return taskView(task(found.id));
     },
-    async "tasks.move"([ref, status, mark]) {
+    async "tasks.move"([ref, status, markOrOpts, maybeMark]) {
       const found = task(ref);
+      const hasNote = markOrOpts && typeof markOrOpts === "object" && Object.hasOwn(markOrOpts, "note");
+      const opts = hasNote ? { note: markOrOpts.note } : {};
+      const mark = hasNote ? (maybeMark ?? markOrOpts) : markOrOpts;
       if (status === "ready") needsScriptYes(workspace, found.body?.trim() || found.title, mark, "This task");
-      await handlers.moveTask(found.id, oneOf([...LANES, "archived"], status, "A status"));
+      await handlers.moveTask(found.id, oneOf([...LANES, "archived"], status, "A status"), opts);
       return taskView(task(found.id));
     },
     /** Starts the task now, in its own chat: a turn of its bot's model. A task that is working already is left as it is (`already: true`). */

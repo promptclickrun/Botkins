@@ -926,6 +926,8 @@ export type ChatSchedule = {
   script?: string;
   /** On a script routine: after the script, the bot follows `prompt` with the script's output. */
   followUp?: boolean;
+  /** Owner-approved opt-in: lets this routine create Ready tasks assigned to a bot. */
+  allowReadyTasks?: boolean;
 };
 export type Cadence =
   | { kind: "once"; date: string; time: string }
@@ -962,6 +964,8 @@ export type RoutineInput = {
   notify?: boolean;
   /** Specific notification targets ("routine-notify-targets-v1"). null resets to everyone; omitted on an edit keeps the existing targets. */
   notifyTargets?: RoutineNotifyTargets | null;
+  /** Owner-approved opt-in: lets this routine create Ready tasks assigned to a bot. */
+  allowReadyTasks?: boolean;
 };
 export type UsageTotals = {
   turns: number;
@@ -1218,7 +1222,7 @@ declare global {
       linkPreview(url: string): Promise<LinkPreview | null>;
       // Tasks board
       saveTask(data: TaskInput): Promise<string>;
-      moveTask(id: string, status: TaskStatus | "archived"): Promise<void>;
+      moveTask(id: string, status: TaskStatus | "archived", options?: { note?: string }): Promise<void>;
       startTask(id: string): Promise<void>;
       deleteTask(id: string): Promise<void>;
       // Event-based Workflows
@@ -2439,6 +2443,8 @@ export type Preferences = {
   tasksMax?: number;
   /** Task Board tasks that one bot runs at once, 1 to 8, when the person set it. */
   tasksPerBot?: number;
+  /** Opt-in migration: hand existing bot-created tasks in Review to their creator bot. */
+  tasksCreatorReviewExisting?: boolean;
 };
 /** The Task Board's limits in force, and each one's value without the person's setting (the environment's, else the default). Missing on an older computer. */
 export type TaskLimits = { tasksMax: number; tasksPerBot: number; defaults: { tasksMax: number; tasksPerBot: number } };
@@ -2655,6 +2661,15 @@ export type McpAppView = {
 
 export type TaskStatus = "later" | "ready" | "working" | "review" | "blocked" | "done";
 export type TaskPriority = "low" | "normal" | "high" | "urgent";
+export type TaskReviewMode = "person" | "creator" | "auto";
+export type TaskHistoryEntry = {
+  at: number;
+  by: string;
+  byName?: string;
+  from: TaskStatus | "archived";
+  to: TaskStatus | "archived";
+  note?: string;
+};
 export type BotTask = {
   id: string;
   title: string;
@@ -2663,14 +2678,19 @@ export type BotTask = {
   priority: TaskPriority;
   status: TaskStatus | "archived";
   createdBy: string;
+  createdChatId?: string;
+  review?: TaskReviewMode;
+  reviewerBotId?: string;
   createdAt: number;
   updatedAt: number;
   chatId?: string;
   runId?: string;
   result?: string;
   problem?: string;
+  pendingNote?: { text: string; by: string; byName?: string; from: TaskStatus | "archived"; at: number };
+  history?: TaskHistoryEntry[];
 };
-export type TaskInput = { id?: string; title: string; body?: string; botId?: string | null; priority?: TaskPriority; status?: "later" | "ready" };
+export type TaskInput = { id?: string; title: string; body?: string; botId?: string | null; priority?: TaskPriority; status?: "later" | "ready"; review?: TaskReviewMode };
 
 export type LinkPreview = { url: string; title: string; description: string; site: string; image?: string };
 

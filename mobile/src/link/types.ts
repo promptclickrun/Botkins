@@ -493,6 +493,8 @@ export type ChatSchedule = {
   script?: string;
   /** On a script routine: after the script, the bot follows `prompt` with the script's output. */
   followUp?: boolean;
+  /** Owner-approved opt-in: lets this routine create Ready tasks assigned to a bot. */
+  allowReadyTasks?: boolean;
 };
 /** Explicit routine notification targets ("routine-notify-targets-v1"). Absent means everyone allowed. */
 export type RoutineNotifyTargets = { people?: string[]; devices?: string[] };
@@ -522,6 +524,8 @@ export type RoutineInput = {
   script?: string | null;
   followUp?: boolean;
   /** The routine's own model, kept on its chat ("routine-models-v1"). null on an edit goes back to the Default routines model. */
+  /** Owner-approved opt-in: lets this routine create Ready tasks assigned to a bot. */
+  allowReadyTasks?: boolean;
   model?: ModelChoice | null;
 };
 export type ChatContext = { current: number; limit: number; system?: number; tools?: number; conversation?: number; messages?: number; updatedAt?: number };
@@ -920,6 +924,15 @@ export type BoardItem = {
 };
 export type TaskStatus = "later" | "ready" | "working" | "review" | "blocked" | "done";
 export type TaskPriority = "low" | "normal" | "high" | "urgent";
+export type TaskReviewMode = "person" | "creator" | "auto";
+export type TaskHistoryEntry = {
+  at: number;
+  by: string;
+  byName?: string;
+  from: TaskStatus | "archived";
+  to: TaskStatus | "archived";
+  note?: string;
+};
 export type BotTask = {
   id: string;
   title: string;
@@ -928,14 +941,19 @@ export type BotTask = {
   priority: TaskPriority;
   status: TaskStatus | "archived";
   createdBy: string;
+  createdChatId?: string;
+  review?: TaskReviewMode;
+  reviewerBotId?: string;
   createdAt: number;
   updatedAt: number;
   chatId?: string;
   runId?: string;
   result?: string;
   problem?: string;
+  pendingNote?: { text: string; by: string; byName?: string; from: TaskStatus | "archived"; at: number };
+  history?: TaskHistoryEntry[];
 };
-export type TaskInput = { id?: string; title: string; body?: string; botId?: string | null; priority?: TaskPriority; status?: "later" | "ready" };
+export type TaskInput = { id?: string; title: string; body?: string; botId?: string | null; priority?: TaskPriority; status?: "later" | "ready"; review?: TaskReviewMode };
 export type ProjectTodo = { id: string; text: string; done: boolean; createdAt: number; doneAt?: number };
 export type ProjectColor = "coral" | "amber" | "green" | "teal" | "blue" | "violet" | "pink" | "gray";
 export type Project = {
@@ -1895,7 +1913,7 @@ export type Calls = {
   duplicateRoutine(id: string, botId: string): string;
   previewCadence(cadence: Cadence, timezone?: string): { nextAt: number | null; summary: string; timezone: string };
   saveTask(task: TaskInput): string;
-  moveTask(id: string, status: TaskStatus | "archived"): void;
+  moveTask(id: string, status: TaskStatus | "archived", options?: { note?: string }): void;
   startTask(id: string): void;
   deleteTask(id: string): void;
   workflowsList(): { workflows: Workflow[]; runs: WorkflowRun[] };

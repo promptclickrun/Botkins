@@ -82,11 +82,12 @@ const todoTable = (todos) => table(["#", "DONE", "TO-DO", "ID"], todos.map((todo
 const taskText = (t) =>
   [
     safe(t.title) + "   " + t.id,
-    "Status: " + t.status + ". Priority: " + t.priority + ". Bot: " + (t.bot ? safe(t.bot) : "none") + ". Added by: " + safe(t.createdBy) + ".",
+    "Status: " + t.status + (t.reviewer ? " (reviewing: " + safe(t.reviewer) + ")" : "") + ". Priority: " + t.priority + ". Bot: " + (t.bot ? safe(t.bot) : "none") + ". Added by: " + safe(t.createdBy) + (t.review ? ". Review: " + t.review : "") + ".",
     t.problem ? "Problem: " + safeLines(t.problem) : null,
     t.details ? "Details: " + safeLines(t.details) : null,
     t.result ? "Result: " + safeLines(t.result) : null,
     t.chatId ? "Chat: " + t.chatId : null,
+    ...(t.history?.length ? ["History:", ...t.history.slice(-10).map((h) => "  " + h.from + " → " + h.to + " (" + safe(h.byName ?? h.by) + ")" + (h.note ? ": " + safe(h.note) : ""))] : []),
   ]
     .filter((line) => line !== null)
     .join("\n");
@@ -459,13 +460,18 @@ export const projectsCommands = {
       },
       move: {
         summary: "Move a task to a lane",
-        usage: "botkins tasks move <task> <lane> [--yes]",
-        options: YES,
+        usage: "botkins tasks move <task> <lane> [--note <text>] [--yes]",
+        options: { ...YES, note: { type: "string", value: "text", about: "Feedback or reason (sent to the bot when moving back to ready)" } },
         arguments: [{ name: "task", required: true }, { name: "lane", required: true }],
-        details: "The lanes are " + LANES + ". A task is never moved to working: it gets there by itself when it is Ready, has a bot, and the bot is free (or with `botkins tasks start`). A task that is working cannot be moved. Moving a task that is a script command (`/name words`) to ready asks first.",
+        details: "The lanes are " + LANES + ". A task is never moved to working: it gets there by itself when it is Ready, has a bot, and the bot is free (or with `botkins tasks start`). A task that is working cannot be moved. Moving a Review or Done task back to ready keeps its chat and sends --note as the next message. Moving a task that is a script command (`/name words`) to ready asks first.",
         async run(context) {
           if (context.args.length !== 2) throw usage("Name the task, then the lane: " + LANES + ".");
-          const moved = await withScriptYes(context, (marks) => context.client.call("tasks.move", context.args[0], context.args[1], ...marks));
+          const note = context.options.note;
+          const moved = await withScriptYes(context, (marks) =>
+            note !== undefined
+              ? context.client.call("tasks.move", context.args[0], context.args[1], { note, ...(marks[0] ?? {}) })
+              : context.client.call("tasks.move", context.args[0], context.args[1], ...marks),
+          );
           if (moved === undefined) return EXIT.failed;
           context.print(moved, (t) => "The task " + safe(t.title) + " is now " + t.status + "." + (t.status === "ready" && t.bot ? " It starts by itself when " + safe(t.bot) + " is free: a turn of the bot's model." : t.status === "ready" ? " It has no bot yet. Give it one with `botkins tasks edit " + word(t.title, "<the task>") + " --bot <bot>`." : ""));
         },

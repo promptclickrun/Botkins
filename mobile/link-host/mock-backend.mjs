@@ -3219,8 +3219,16 @@ export class MockBackend {
       this.state.tasks.unshift(task);
       return task.id;
     },
-    moveTask(id, status) {
-      Object.assign(this.state.tasks.find((t) => t.id === id) ?? {}, { status, updatedAt: now() });
+    moveTask(id, status, options = {}) {
+      const task = this.state.tasks.find((t) => t.id === id);
+      if (!task) return;
+      const from = task.status;
+      const ts = now();
+      Object.assign(task, { status, updatedAt: ts });
+      if (status === "ready" || status === "later" || status === "done" || status === "archived") delete task.reviewerBotId;
+      if (status === "ready" || status === "later") delete task.problem;
+      task.history ??= [];
+      task.history.push({ at: ts, by: "person", byName: "Person", from, to: status, ...(options?.note ? { note: String(options.note) } : {}) });
     },
     startTask(id) {
       Object.assign(this.state.tasks.find((t) => t.id === id) ?? {}, { status: "working", updatedAt: now() });

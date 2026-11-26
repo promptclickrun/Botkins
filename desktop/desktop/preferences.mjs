@@ -155,6 +155,8 @@ export const defaultSettings = {
   access: { allBots: true },
   // Bots may ask each other for help from a chat (desktop/teamwork.mjs).
   teamwork: true,
+  // Opt-in migration: hand existing bot-created tasks in Review to their creator bot.
+  tasksCreatorReviewExisting: false,
   // Ask providers that support it to keep a chat's prompt cache for about an hour, not five minutes (Pi and OMP: PI_CACHE_RETENTION=long).
   longPromptCache: true,
   // Turns between a chat's summaries into a new title: 5 to 30, or 0 for off (desktop/summaries.mjs).
@@ -342,6 +344,10 @@ export function changeSettings(settings, patch) {
         // null clears the setting: the limit is then the environment's, else the default (desktop/task-limits.mjs).
         if (taskLimitField(key, value) === null) delete next[key];
         else next[key] = value;
+        break;
+      case "tasksCreatorReviewExisting":
+        if (typeof value !== "boolean") throw new Error("Choose on or off");
+        next.tasksCreatorReviewExisting = value;
         break;
       case "harness":
         if (!HARNESSES.includes(value)) throw new Error("Choose a harness");

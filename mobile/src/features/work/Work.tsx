@@ -276,12 +276,14 @@ function ScheduleRow({ chat, entry, bot }: { chat: ChatSummary; entry: ChatSched
 
 // Tasks
 
-export function TaskRow({ task, bot }: { task: BotTask; bot?: Bot }) {
+export function TaskRow({ task, bot, reviewer }: { task: BotTask; bot?: Bot; reviewer?: Bot }) {
   const { colors } = useTheme();
-  const subtitle = taskSubtitle(task, bot);
+  const subtitle = taskSubtitle(task, bot, reviewer);
   const action =
     task.status === "review" ? (
       <Button title="Approve" variant="ghost" size="sm" onPress={() => void attempt(api.moveTask(task.id, "done"), "Approved")} accessibilityLabel={"Approve " + task.title} />
+    ) : task.status === "done" ? (
+      <Button title="Reopen" variant="ghost" size="sm" onPress={() => void attempt(api.moveTask(task.id, "ready"), "Reopened")} accessibilityLabel={"Reopen " + task.title} />
     ) : (task.status === "later" || task.status === "ready") && task.botId ? (
       <Button title="Start" variant="ghost" size="sm" onPress={() => void attempt(api.startTask(task.id), "Started")} accessibilityLabel={"Start " + task.title} />
     ) : (task.status === "later" || task.status === "ready") && !task.botId ? (
@@ -429,7 +431,7 @@ function TaskPart({ tasks, bots }: { tasks: BotTask[]; bots: Map<string, Bot> })
           <TaskChips view={view} onChange={setView} counts={counts} />
           <Group inset={space.lg + 40 + space.md}>
             {shown.length ? (
-              shown.map((task) => <TaskRow key={task.id} task={task} bot={task.botId ? bots.get(task.botId) : undefined} />)
+              shown.map((task) => <TaskRow key={task.id} task={task} bot={task.botId ? bots.get(task.botId) : undefined} reviewer={task.reviewerBotId ? bots.get(task.reviewerBotId) : undefined} />)
             ) : (
               <Row title={empty} />
             )}
@@ -523,7 +525,7 @@ export function useNeeds(tasks: BotTask[], bots: Map<string, Bot>): Need[] {
       }
     }
     for (const task of tasks)
-      if (task.status === "review" || task.status === "blocked") {
+      if (task.status === "blocked" || (task.status === "review" && !task.reviewerBotId)) {
         const bot = task.botId ? bots.get(task.botId) : undefined;
         out.push({ key: "t" + task.id, bot, title: task.title, caption: task.status === "review" ? "Ready for review" : "Blocked", onPress: () => openTask(task.id) });
       }
