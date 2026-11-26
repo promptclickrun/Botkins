@@ -240,6 +240,21 @@ test("storage defaults, runtime vs plugin memory distinction, and accessible nat
   assert.match(wikiContext, /shared wiki for lasting team knowledge.*not personal preferences or secrets/i);
 });
 
+test("every interactive bot gets the same browser and computer-use routing, DOM first and pixels last", (t) => {
+  const { instructions } = setup(t);
+  const at = (pattern) => {
+    const i = instructions.search(pattern);
+    assert.ok(i >= 0, "missing " + pattern);
+    return i;
+  };
+  const api = at(/An API, a first-party tool or a Composio app/);
+  const dom = at(/Read the page with browser_snapshot, then act on its elements with browser_click and browser_type/);
+  const node = at(/node_screen_input with node_screen_capture only for an app that has no other way in/);
+  const pixels = at(/Clicking by screen coordinates is the last resort/);
+  assert.ok(api < dom && dom < node && node < pixels, "tiers are in order");
+  assert.match(instructions, /always use request_secure_input then use_secure_input, never typing tools/);
+});
+
 test("every bot is told to use SDK context notes silently, including helpers", (t) => {
   const { ws, bot, chat, instructions } = setup(t);
   assert.match(instructions, /may attach its own context notes to a turn/i);
