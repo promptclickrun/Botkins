@@ -47,7 +47,7 @@
   font-size: calc(12px * var(--text-scale));
   font-weight: 600;
   color: var(--muted);
-  background: var(--surface);
+  background: var(--card);
   border: 1px solid var(--line);
 }
 
@@ -64,13 +64,18 @@
 }
 
 .ncw-card {
-  background: var(--surface);
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
+  background: var(--card);
+  border-radius: var(--card-radius);
   padding: 16px;
   display: flex;
   flex-direction: column;
   gap: 12px;
+}
+
+:root:not([data-backdrop="clean"]) .ncw-card {
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
+  box-shadow: inset 0 0 0 1px var(--glass-edge);
 }
 
 .ncw-card-title {
@@ -98,9 +103,8 @@
 }
 
 .ncw-stat {
-  background: var(--raised);
-  border: 1px solid var(--line);
-  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--ink) 4%, transparent);
+  border-radius: var(--radius);
   padding: 10px 12px;
   display: flex;
   flex-direction: column;
@@ -125,9 +129,8 @@
 }
 
 .ncw-bot-card {
-  background: var(--raised);
-  border: 1px solid var(--line);
-  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--ink) 4%, transparent);
+  border-radius: var(--radius);
   padding: 12px 14px;
   display: flex;
   flex-direction: column;
@@ -346,9 +349,8 @@
   justify-content: space-between;
   gap: 10px;
   padding: 10px 12px;
-  border-radius: var(--radius-sm);
-  background: var(--raised);
-  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--ink) 4%, transparent);
 }
 
 .ncw-field {

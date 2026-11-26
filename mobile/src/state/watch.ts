@@ -16,7 +16,7 @@ import {
   subscribeWatchVoice,
   watchVoiceState,
 } from "@/features/watch/voice";
-import { api } from "./link";
+import { api, holdBackgroundLink, syncForPush } from "./link";
 import { mergeChat, type ChatView, type PhoneParts, useApp } from "./store";
 
 let begun = false;
@@ -165,7 +165,10 @@ function hostChanged() {
 function onCommand(value: unknown, commandRevision?: number, sessionId?: string) {
   const command = parseWatchCommand(value);
   if (!command) return;
-  if (command.command !== "refresh" && typeof commandRevision === "number" && commandRevision < revision - 8) return;
+  // Only reject stale session controls or openOnPhone; startVoice and refresh must always work
+  // even if the iPhone restarted (resetting `revision = Date.now()`) or streamed >8 updates while
+  // the Watch was unreachable.
+  if (command.command !== "refresh" && command.command !== "startVoice" && typeof commandRevision === "number" && commandRevision < revision - 8) return;
   if (["mute", "interrupt", "press", "release", "endVoice"].includes(command.command)) {
     const active = watchVoiceState().sessionId;
     if (sessionId && active && sessionId !== active) return;
@@ -190,14 +193,28 @@ function onCommand(value: unknown, commandRevision?: number, sessionId?: string)
       endWatchVoice();
       return;
     case "refresh":
-      void refreshPage(true, true);
-      publishSoon(true);
+      sentSignature = "";
+      void refreshFromWatch();
       return;
     case "openOnPhone": {
       const chatId = command.chatId ?? selectedChat()?.id;
       if (chatId && chatId === selectedChat()?.id) showChat(chatId);
       return;
     }
+  }
+}
+
+async function refreshFromWatch() {
+  const releaseHold = holdBackgroundLink("watch");
+  try {
+    if (useApp.getState().link !== "online") {
+      await syncForPush(8_000);
+    }
+    await refreshPage(true, true);
+    sentSignature = "";
+    publishSoon(true);
+  } finally {
+    releaseHold();
   }
 }
 

@@ -121,11 +121,11 @@ export default function WikiExportDialog({ tree, start, close }: { tree: WikiTre
           </div>
         </div>
         <div className="ask-actions">
-          <button type="button" className="secondary" onClick={() => void api.revealWikiExport().catch(() => {})}>
+          <button type="button" className="btn" onClick={() => void api.revealWikiExport().catch(() => {})}>
             <Folder size={14} aria-hidden="true" />
             Show in Finder
           </button>
-          <button type="button" className="primary" autoFocus onClick={close}>
+          <button type="button" className="btn primary" autoFocus onClick={close}>
             Done
           </button>
         </div>
@@ -272,10 +272,10 @@ export default function WikiExportDialog({ tree, start, close }: { tree: WikiTre
           </p>
         )}
         <div className="ask-actions">
-          <button type="button" className="secondary" onClick={close}>
+          <button type="button" className="btn" onClick={close}>
             Cancel
           </button>
-          <button className="primary" disabled={!plan || !chosen.length || busy}>
+          <button className="btn primary" disabled={!plan || !chosen.length || busy}>
             {busy ? "Exporting…" : "Export…"}
           </button>
         </div>

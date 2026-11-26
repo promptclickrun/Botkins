@@ -48,18 +48,18 @@ try {
   await app.evaluate(() => { globalThis.fetch = async () => { throw new Error("Offline smoke"); }; });
   assert.equal((await call("plugins.addMarketplace", market)).name, "local-agent-market");
 
-  // The Marketplace button sits left of New chat at the top of the side menu, and opens Marketplace.
+  // The Market is a place of the side menu (its own page), and Settings › Marketplace has the same.
   await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1440, 900));
   await page.waitForTimeout(300);
   const expand = page.getByRole("button", { name: "Expand side menu", exact: true });
   if (await expand.count()) await expand.click();
   await page.waitForTimeout(600);
-  const brand = page.locator("aside .brand");
-  const order = await brand.locator("button").evaluateAll((buttons) => buttons.map((b) => b.getAttribute("aria-label")));
-  assert.deepEqual(order.slice(0, 2), ["Marketplace", "New chat"], "Marketplace sits left of New chat");
-  await shot(page, "sidebar-top");
-  await brand.getByRole("button", { name: "Marketplace", exact: true }).click();
-  const dialog = page.locator("dialog.settings-window");
+  await page.getByRole("navigation", { name: "Workspace" }).getByRole("button", { name: "Market", exact: true }).click();
+  await page.getByRole("heading", { name: "Market", exact: true }).waitFor();
+  await shot(page, "market-page");
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "Settings" });
+  await dialog.getByRole("tab", { name: "Marketplace", exact: true }).click();
   await dialog.getByRole("heading", { name: "Marketplace", exact: true }).waitFor();
 
   // Agents: the local templates, with their categories as chips.

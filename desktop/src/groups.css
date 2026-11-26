@@ -142,22 +142,58 @@ article b.speaker .avatar {
 }
 
 /* New chat: pick one bot or several. */
-.chat-pick {
-  display: grid;
-  gap: 2px;
+.chat-pick-intro {
+  margin: 0 0 12px;
+  font-size: calc(13.5px * var(--text-scale));
+  color: var(--muted);
+}
+/* The New chat dialog's bots: one card of rows, a tick box at the left of each. */
+.chat-pick.group {
+  display: block;
   max-height: 46vh;
   overflow: auto;
+  background: var(--sunken);
 }
-.chat-pick .rowwrap {
-  gap: 8px;
+.chat-pick .rowwrap.group-row {
+  gap: 4px;
+  padding: 0 0 0 12px;
+  border-radius: 0;
+  --row-inset: 44px;
+}
+.chat-pick .rowwrap.group-row:hover {
+  background: var(--hover);
+}
+.chat-pick .rowwrap.group-row.selected {
+  background: var(--active);
 }
 .chat-pick .row {
-  padding: 10px 4px;
+  flex: 1 1 auto;
+  min-width: 0;
+  gap: 12px;
+  padding: 9px 14px 9px 6px;
+  border-radius: 0;
+}
+.chat-pick .row:hover {
+  background: none;
+}
+.chat-pick .rowtext {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.chat-pick .rowtext strong {
+  font-family: var(--font-display);
+  font-size: calc(14.5px * var(--text-scale));
+  font-weight: 700;
+}
+.chat-pick .rowtext small {
+  font-size: calc(13px * var(--text-scale));
+  color: var(--muted);
 }
 .chat-pick input[type="checkbox"] {
   width: 18px;
   height: 18px;
-  margin: 0 2px 0 6px;
+  margin: 0;
   accent-color: var(--accent);
   flex: none;
 }
@@ -200,7 +236,7 @@ article b.speaker .avatar {
     max-width: 90px;
   }
 }
-.chat-pick-actions .primary {
+.chat-pick-actions .btn.primary {
   flex: none;
   white-space: nowrap;
 }

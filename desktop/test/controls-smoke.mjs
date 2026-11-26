@@ -186,7 +186,7 @@ try {
     model.efforts[0],
   );
   await expect(dialog()).toBeHidden();
-  // The chat header names the model with its provider's mark and thinking level.
+  // The side pane's Details names the model with its provider's mark and thinking level (it moved there from the header).
   const header = page.getByRole("button", { name: /^Model: / });
   await expect(header).toContainText(model.name);
   await expect(header).toContainText(effortLabel(model.efforts[0]));

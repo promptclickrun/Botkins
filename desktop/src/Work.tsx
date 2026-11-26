@@ -4,7 +4,7 @@ import { IconStack } from "./ChatActivity";
 import { dateLabel, type PageActions } from "./Pages";
 import { scheduleSummary, upcomingRuns, whenLabel } from "./Routines";
 import type { Run, State } from "./types";
-import { WorkBack } from "./WorkBar";
+import { Folded, WorkBack } from "./WorkBar";
 import "./routines.css";
 
 const FILTERS = ["All", "Working", "Needs you", "Completed"] as const;
@@ -44,53 +44,68 @@ export function ActivityPage({
   const upcoming = filter === "All" ? upcomingRuns(state) : [];
   const chatBot = (chatId: string) => state.bots.find((b) => b.id === state.chats.find((c) => c.id === chatId)?.botId);
   return (
-    <>
+    <div className="page work-page activity-page">
       <WorkBack back={back} />
-      <div className="titleline work-head">
-        <h1>Activity</h1>
-      </div>
-      <div className="filters chips">
+      <header className="page-head">
+        <div className="page-heading">
+          <h1 className="page-title">Activity</h1>
+          <p className="page-sub">Every request a bot was given, newest first, and what is scheduled next.</p>
+        </div>
+      </header>
+      <div className="chip-row" role="group" aria-label="Filter">
         {FILTERS.map((f) => (
-          <button key={f} aria-pressed={filter === f} onClick={() => setFilter(f)}>
+          <button type="button" className="chip" key={f} aria-pressed={filter === f} onClick={() => setFilter(f)}>
             {f}
             <span className="count">{counts[f]}</span>
           </button>
         ))}
       </div>
-      {shown.map((r) => {
-        const kind = category.get(r.id);
-        // The status shows as a small dot and word in its status color.
-        const tone = kind === "Working" ? "working" : kind === "Completed" ? "done" : kind === "Needs you" ? "needs" : "";
-        const work = formatFeedWork(r);
-        return (
-          <button className="row work-row" key={r.id} onClick={() => actions.open(r.chatId)}>
-            <i className={"work-dot " + tone} aria-hidden="true" />
-            <span className="rowtext">
-              <strong>{r.title}</strong>
-              <small>
-                {chatBot(r.chatId)?.name} ·{" "}
-                <span className={"status-word " + tone}>{kind === "Needs you" && r.status === "Working" ? "Waiting for you" : r.status}</span>
-                {r.trigger === "scheduled" ? " · Scheduled" : r.scheduleId != null ? " · Routine" : ""}
-                {r.skill ? " · /" + r.skill : ""}
-              </small>
-              {(work.kinds.length > 0 || work.summary) && (
-                <span className={"work-activity" + (tone === "working" ? " live" : "")}>
-                  {work.kinds.length > 0 && <IconStack kinds={work.kinds} size={11} />}
-                  <span className={"work-activity-summary" + (tone === "working" ? " shimmer-text" : "")}>
-                    {work.summary || (work.stepCount === 1 ? "1 step" : work.stepCount + " steps")}
-                  </span>
-                  {work.failedCount > 0 && <span className="work-failed">· {work.failedCount} failed</span>}
-                </span>
-              )}
-            </span>
-            <time>{dateLabel(r.time)}</time>
-            <ChevronRight size={15} />
-          </button>
-        );
-      })}
+      {shown.length > 0 && (
+        <section className="page-section" aria-label="Requests">
+          <h2 className="group-label">{filter === "All" ? "Requests" : filter} · {shown.length}</h2>
+          <div className="group">
+            <Folded
+              limit={25}
+              rows={shown.map((r) => {
+                const kind = category.get(r.id);
+                // The status shows as a small dot and word in its status color.
+                const tone = kind === "Working" ? "working" : kind === "Completed" ? "done" : kind === "Needs you" ? "needs" : "";
+                const work = formatFeedWork(r);
+                return (
+                  <button className="group-row work-row" key={r.id} onClick={() => actions.open(r.chatId)}>
+                    <i className={"work-dot " + tone} aria-hidden="true" />
+                    <span className="row-main">
+                      <span className="row-title">{r.title}</span>
+                      <span className="row-sub">
+                        {chatBot(r.chatId)?.name} ·{" "}
+                        <span className={"status-word " + tone}>{kind === "Needs you" && r.status === "Working" ? "Waiting for you" : r.status}</span>
+                        {r.trigger === "scheduled" ? " · Scheduled" : r.scheduleId != null ? " · Routine" : ""}
+                        {r.skill ? " · /" + r.skill : ""}
+                      </span>
+                      {(work.kinds.length > 0 || work.summary) && (
+                        <span className={"work-activity" + (tone === "working" ? " live" : "")}>
+                          {work.kinds.length > 0 && <IconStack kinds={work.kinds} size={11} />}
+                          <span className={"work-activity-summary" + (tone === "working" ? " shimmer-text" : "")}>
+                            {work.summary || (work.stepCount === 1 ? "1 step" : work.stepCount + " steps")}
+                          </span>
+                          {work.failedCount > 0 && <span className="work-failed">· {work.failedCount} failed</span>}
+                        </span>
+                      )}
+                    </span>
+                    <time>{dateLabel(r.time)}</time>
+                    <ChevronRight size={15} className="row-chevron" aria-hidden="true" />
+                  </button>
+                );
+              })}
+            />
+          </div>
+        </section>
+      )}
       {!shown.length && !upcoming.length && (
-        <div className="empty">
-          <BriefcaseBusiness />
+        <div className="work-empty">
+          <span className="icon-tile">
+            <BriefcaseBusiness size={16} aria-hidden="true" />
+          </span>
           <div>
             <strong>{filter === "All" ? "No activity yet" : "No matching activity"}</strong>
             <small>Each request you send to a bot appears here.</small>
@@ -98,29 +113,33 @@ export function ActivityPage({
         </div>
       )}
       {upcoming.length > 0 && (
-        <section className="work-upcoming" aria-label="Upcoming">
-          <h2>
-            Upcoming <small>{upcoming.length}</small>
-          </h2>
-          {upcoming.map(({ chat, entry, bot, at }) => (
-            <button
-              className="row work-row"
-              key={chat.id + ":" + entry.id}
-              onClick={() => (entry.routine ? routines({ id: chat.id }) : actions.open(chat.id))}
-            >
-              <CalendarClock size={20} />
-              <span className="rowtext">
-                <strong>{entry.routine ? entry.name : entry.prompt}</strong>
-                <small>
-                  {bot?.name} · {scheduleSummary(entry)} · {entry.routine ? "Routine" : "Chat schedule"}
-                </small>
-              </span>
-              <time>{whenLabel(at)}</time>
-              <ChevronRight size={15} />
-            </button>
-          ))}
+        <section className="page-section work-upcoming" aria-label="Upcoming">
+          <h2 className="group-label">Upcoming · {upcoming.length}</h2>
+          <div className="group">
+            <Folded
+              rows={upcoming.map(({ chat, entry, bot, at }) => (
+                <button
+                  className="group-row work-row"
+                  key={chat.id + ":" + entry.id}
+                  onClick={() => (entry.routine ? routines({ id: chat.id }) : actions.open(chat.id))}
+                >
+                  <span className="icon-tile work-upcoming-icon">
+                    <CalendarClock size={16} aria-hidden="true" />
+                  </span>
+                  <span className="row-main">
+                    <span className="row-title">{entry.routine ? entry.name : entry.prompt}</span>
+                    <span className="row-sub">
+                      {bot?.name} · {scheduleSummary(entry)} · {entry.routine ? "Routine" : "Chat schedule"}
+                    </span>
+                  </span>
+                  <time>{whenLabel(at)}</time>
+                  <ChevronRight size={15} className="row-chevron" aria-hidden="true" />
+                </button>
+              ))}
+            />
+          </div>
         </section>
       )}
-    </>
+    </div>
   );
 }

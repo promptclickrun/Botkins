@@ -5,6 +5,7 @@ import { lastOrNewChat } from "@/features/open/opening";
 import { LiveSessionController, type LiveSessionState, companionLiveKit, selectedLiveProvider } from "@/features/voice/live/session";
 import { useLiveCall } from "@/features/voice/liveCall";
 import type { WatchVoice } from "./model";
+import { holdBackgroundLink, syncForPush } from "@/state/link";
 import { useApp } from "@/state/store";
 
 type Listener = (voice: WatchVoice) => void;
@@ -41,19 +42,30 @@ export async function startWatchVoice() {
   if (current.status === "connecting" || controller) return;
   const attempt = ++generation;
   update({ status: "connecting", sessionId: undefined, chatId: undefined, problem: undefined });
+  const releaseHold = holdBackgroundLink("watch");
   try {
     await connect(attempt);
   } catch (error) {
     if (attempt === generation) endWatchVoice(error instanceof Error ? error.message : "The Watch call could not start.");
+  } finally {
+    // LiveSessionController acquires its own "watch" hold in start() before connect() returns,
+    // so releasing this startup hold keeps the link held for active calls and releases on failure.
+    releaseHold();
   }
 }
 
 async function connect(attempt: number) {
   if (useLiveCall.getState().call) throw new Error("A live voice call is already open on iPhone. End it there before starting from Watch.");
+  // A suspended phone can still show "online" for a dead path. Let a fresh sync reconnect before
+  // starting a chat or a voice session, since either write can take effect even if its reply is lost.
+  const synced = await syncForPush(12_000);
+  if (generation !== attempt) return;
   const state = useApp.getState();
   const computer = state.pairing?.serverId;
+  if (!computer) throw new Error("Pair Botkins with a computer first.");
+  if (!synced) throw new Error("Your computer can't be reached right now.");
   const bot = state.parts.bots?.find((item) => !item.hidden);
-  if (!computer || !bot) throw new Error("Pair Botkins with a computer and add a Botkin first.");
+  if (!bot) throw new Error("Add a Botkin before starting a Watch call.");
   const provider = selectedLiveProvider(bot.id);
   if (!provider) throw new Error("Pick a live voice in Settings › Voice.");
   const chatId = await lastOrNewChat(bot.id);

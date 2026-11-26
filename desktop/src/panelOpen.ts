@@ -79,3 +79,22 @@ export function trustedFrameKeyAction(kind: unknown, fullscreen: boolean): Trust
   if (kind === "escape") return fullscreen ? "restore" : null;
   return null;
 }
+
+/**
+ * A space's page in full screen (`SpacePage.tsx`). The root carries this while it is on, and the
+ * shell's CSS hides the side menu, the banners and the app's chrome. Nothing about it is saved.
+ */
+export const SPACE_FULLSCREEN = "space";
+export type SpaceFullscreenKeyAction = "toggle" | "exit" | null;
+
+/**
+ * What a key pressed over a space's page does to its full screen. While a dialog is open over the
+ * page the keys are the dialog's: an opened panel uses the same ⇧⌘F for its own full screen, and
+ * Escape closes or restores it, so the space keeps out of the way.
+ */
+export function spaceFullscreenKeyAction(e: PanelKeyEvent, on: boolean, dialogOpen: boolean): SpaceFullscreenKeyAction {
+  if (dialogOpen) return null;
+  if (isPanelFullscreenShortcut(e)) return "toggle";
+  if (!on || e.repeat || e.isComposing || e.defaultPrevented) return null;
+  return e.key === "Escape" && !e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey ? "exit" : null;
+}

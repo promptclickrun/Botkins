@@ -1021,7 +1021,7 @@ export function TaskChip({
   );
 }
 
-function TodoItems({ todos }: { todos: Todo[] }) {
+export function TodoItems({ todos }: { todos: Todo[] }) {
   return (
     <ol>
       {todos.map((t) => (

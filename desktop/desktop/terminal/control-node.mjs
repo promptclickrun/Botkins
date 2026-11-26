@@ -28,9 +28,46 @@ export function nodeApi({ workspace, handlers }) {
 
   return {
     "node.status": () => handlers.nodeStatus(),
+    "node.approvals": () =>
+      workspace.interactions
+        .snapshot()
+        .filter((entry) => entry.nodeJob === true)
+        .map((entry) => ({
+          id: entry.id,
+          kind: entry.kind,
+          title: entry.title,
+          ...(entry.label && { label: entry.label }),
+          ...(entry.preview && { preview: entry.preview }),
+          ...(entry.detail && { detail: entry.detail }),
+          chatId: entry.chatId,
+          botId: entry.botId,
+          nodeJob: true,
+          ...(entry.dispatch && { dispatch: true }),
+          ...(entry.review && { review: true }),
+          ...(entry.operation && { operation: entry.operation }),
+          ...(entry.resourceId && { resourceId: entry.resourceId }),
+          ...(entry.resourceName && { resourceName: entry.resourceName }),
+          ...(entry.sourceBotName && { sourceBotName: entry.sourceBotName }),
+          ...(entry.sourceHostName && { sourceHostName: entry.sourceHostName }),
+          ...(entry.targetHostName && { targetHostName: entry.targetHostName }),
+          ...(entry.time !== undefined && { time: entry.time }),
+        })),
+    "node.audit": ([limit] = []) => handlers.nodeAuditLog(limit),
     "node.setup": async ([name] = []) => handlers.nodeSetup({ name: text(name, 80, "a name for this node host") }),
     "node.rename": async ([name] = []) => handlers.nodeRename(text(name, 80, "a name for this node host")),
     "node.pause": async ([paused] = []) => handlers.nodePause(paused === true),
+    "node.wholeComputer": async ([enabled] = []) => handlers.nodeSetWholeComputer(enabled === true),
+    "node.execMode": async ([mode] = []) => handlers.nodeSetExecMode(text(mode, 32, "an exec policy mode (deny, allowlist, ask or full)")),
+    "node.allowlist.add": async ([pattern, botId] = []) =>
+      handlers.nodeAddAllowlistRule({
+        pattern: text(pattern, 240, "a command or executable path pattern"),
+        botId: botId === undefined || botId === null || botId === "" ? "*" : text(botId, 160, "a source bot id or *"),
+      }),
+    "node.allowlist.remove": async ([ruleId] = []) => {
+      const id = ruleId === undefined || ruleId === null || ruleId === "" ? undefined : text(ruleId, 120, "an allowlist rule id");
+      const status = await handlers.nodeRemoveAllowlistRule(id);
+      return { ...status, removed: id ?? "all" };
+    },
     "node.share": async ([ref, shared] = []) => {
       const share = shared !== false;
       const project = resolveProject(ref, !share);

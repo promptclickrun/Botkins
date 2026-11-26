@@ -151,6 +151,75 @@ test("closing a screen read after its HTTP headers aborts the frame body", async
   }
 });
 
+test("losing a write reply leaves exactly one chat and clears the session", async (t) => {
+  const { link, backend } = await host();
+  t.after(() => link.stop());
+  const paired = await pair(fetcher, { hosts: [loopback(link)], code: link.startPairing().code }, device);
+
+  for (const warm of [true, false]) {
+    await t.test(warm ? "cached session" : "new session", async (t) => {
+      const sessions: string[] = [];
+      let loseReply = false;
+      const client = new LinkClient(paired, {
+        fetch: async (url, init) => {
+          const answer = await fetcher(url, init);
+          if (!url.endsWith("/rpc")) return answer;
+          sessions.push(init!.headers!["x-botkins-session"]!);
+          if (loseReply && answer.ok) {
+            loseReply = false;
+            return {
+              ok: answer.ok,
+              status: answer.status,
+              json: () => answer.json(),
+              async arrayBuffer() {
+                await answer.arrayBuffer();
+                throw new TypeError("Connection lost after the computer replied");
+              },
+            };
+          }
+          return answer;
+        },
+      });
+      t.after(() => client.stop());
+      if (warm) await client.call("link.sync", { have: {} });
+
+      const before = backend.state.chats.length;
+      loseReply = true;
+      const outcome = await client.call("createChat", "bot-mira").catch((error: unknown) => error);
+      assert.equal(backend.state.chats.length - before, 1, "the host created exactly one chat");
+      assert.ok(outcome instanceof LinkError);
+      assert.match(outcome.message, /may have gone through/i);
+      assert.equal(client.route, null);
+
+      const droppedSession = sessions.at(-1);
+      await client.call("link.sync", { have: {} });
+      assert.notEqual(sessions.at(-1), droppedSession, "the next call reconnects");
+    });
+  }
+});
+
+test("a write retries when the host rejects an unknown session before dispatch", async (t) => {
+  const { link, backend } = await host();
+  t.after(() => link.stop());
+  const paired = await pair(fetcher, { hosts: [loopback(link)], code: link.startPairing().code }, device);
+  const statuses: number[] = [];
+  const client = new LinkClient(paired, {
+    fetch: async (url, init) => {
+      const answer = await fetcher(url, init);
+      if (url.endsWith("/rpc")) statuses.push(answer.status);
+      return answer;
+    },
+  });
+  t.after(() => client.stop());
+  await client.call("link.sync", { have: {} });
+  link.dropSession([...link.sessions.values()][0]);
+
+  const before = backend.state.chats.length;
+  assert.ok(await client.call("createChat", "bot-mira"));
+  assert.deepEqual(statuses, [200, 401, 200]);
+  assert.equal(backend.state.chats.length - before, 1);
+});
+
 test("a phone pairs from the QR link, then follows and changes the computer", async () => {
   const { link } = await host();
   const pairing = link.startPairing();
