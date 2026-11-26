@@ -187,6 +187,7 @@ export function Routines({ routines, chats, bots }: { routines: RoutineEntry[]; 
               <WorkflowRow key={wf.id} workflow={wf} latestRun={workflowRuns.find((r) => r.workflowId === wf.id)} />
             ))}
           </Group>
+          {canCreate && <Button title="New workflow" variant="ghost" size="sm" icon={Plus} style={{ alignSelf: "flex-start", marginTop: space.sm }} onPress={() => openWorkflow("new")} />}
         </View>
       )}
       {routines.length === 0 && workflows.length === 0 ? (
@@ -538,17 +539,18 @@ function NewMenu({ member, canRoutine }: { member: boolean; canRoutine: boolean 
   const { colors } = useTheme();
   const actions = [
     ...(member ? [] : [{ id: "project", title: "New project", image: "folder.badge.plus" }, { id: "task", title: "New task", image: "checklist" }]),
-    ...(canRoutine ? [{ id: "routine", title: "New routine", image: "clock.arrow.circlepath" }] : []),
+    ...(canRoutine ? [{ id: "routine", title: "New routine", image: "clock.arrow.circlepath" }, { id: "workflow", title: "New workflow", image: "point.3.connected.trianglepath.dotted" }] : []),
   ];
   if (!actions.length) return null;
   const run = (id: string) => {
     if (id === "project") router.push({ pathname: "/projects", params: { new: "1" } } as unknown as Href);
     else if (id === "task") openTask("new");
     else if (id === "routine") openRoutine("new");
+    else if (id === "workflow") openWorkflow("new");
   };
   return (
     <MenuView title="New" actions={actions} onPressAction={({ nativeEvent }) => run(nativeEvent.event)}>
-      <View accessible accessibilityRole="button" accessibilityLabel="New project, task or routine" style={{ width: 44, height: 44, borderRadius: 22, backgroundColor: colors.accent, alignItems: "center", justifyContent: "center" }}>
+      <View accessible accessibilityRole="button" accessibilityLabel="New project, task, routine or workflow" style={{ width: 44, height: 44, borderRadius: 22, backgroundColor: colors.accent, alignItems: "center", justifyContent: "center" }}>
         <Plus size={22} color={colors.onAccent} strokeWidth={2.2} />
       </View>
     </MenuView>

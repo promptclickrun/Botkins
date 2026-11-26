@@ -1331,10 +1331,11 @@ export type ProactiveBot = Partial<ProactiveBotSettings> & {
 };
 export type ProactivePart = { chatMode?: "main" | "new"; enabled: boolean; bots: Record<string, ProactiveBot | undefined> };
 export type ProactiveLog = { at: number; reason: "signals" | "sweep" | "check" | "context" | "review"; score?: number; signals: number; outcome: "alerted" | "silent" | "failed"; runId: string; said?: string };
+export type WorkflowTriggerKind = "task" | "schedule" | "manual" | "routine" | "chat" | "webhook" | "github";
 export type WorkflowNode = {
   id: string;
   kind: "trigger" | "agent" | "model" | "condition" | "approval" | "output";
-  triggerKind?: "task" | "schedule" | "manual" | "routine" | "chat" | "webhook" | "github";
+  triggerKind?: WorkflowTriggerKind;
   label: string;
   position: { x: number; y: number };
   config: Record<string, any>;
@@ -1959,6 +1960,8 @@ export type Calls = {
   startTask(id: string): void;
   deleteTask(id: string): void;
   workflowsList(): { workflows: Workflow[]; runs: WorkflowRun[] };
+  workflowCreate(data: { name: string; description?: string; enabled?: boolean; nodes: WorkflowNode[]; edges: WorkflowEdge[] }): Workflow;
+  workflowUpdate(id: string, patch: { name?: string; description?: string; enabled?: boolean; nodes?: WorkflowNode[]; edges?: WorkflowEdge[] }): Workflow;
   workflowPause(id: string): Workflow;
   workflowResume(id: string): Workflow;
   workflowRun(id: string, options?: { triggerNodeId?: string; inputs?: Record<string, unknown> }): WorkflowRun;

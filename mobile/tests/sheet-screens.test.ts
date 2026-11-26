@@ -30,7 +30,7 @@ test("every screen opened as a sheet draws a Sheet, not a Page", () => {
   assert.deepEqual(wrong, []);
 });
 
-test("the workflow screen is a sheet screen", () => {
-  assert.ok(sheetRoutes().includes("workflow/[id]"));
-  assert.match(source("workflow/[id]") ?? "", /<Sheet[\s>]/);
+test("the workflow designer is a full page, so its canvas can fill a tablet or a phone on its side", () => {
+  assert.ok(!sheetRoutes().includes("workflow/[id]"));
+  assert.match(layout, /name="workflow\/\[id\]" \/>/);
 });

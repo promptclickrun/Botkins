@@ -151,7 +151,8 @@ export default function RootLayout() {
               <Stack.Screen name="space/ask" options={half} />
               <Stack.Screen name="space/notes" options={half} />
               <Stack.Screen name="routine/[id]" options={tall} />
-              <Stack.Screen name="workflow/[id]" options={tall} />
+              {/* A full page, not a sheet: the canvas fills a tablet or a phone on its side. */}
+              <Stack.Screen name="workflow/[id]" />
               <Stack.Screen name="task/[id]" options={tall} />
               <Stack.Screen name="tools/index" />
               <Stack.Screen name="tools/[id]" options={tall} />
