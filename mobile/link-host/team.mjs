@@ -373,6 +373,10 @@ const POLICY = {
   nodeHostPause: "owner",
   nodeHostDisconnect: "owner",
   nodeHostRevokeGrant: "owner",
+  "claudeArtifacts.status": "owner",
+  "claudeArtifacts.setModel": "owner",
+  "claudeArtifacts.setBotApproval": "owner",
+  "claudeArtifacts.revokeBotApproval": "owner",
 };
 
 export const TEAM_METHODS = Object.freeze(Object.fromEntries(Object.entries(POLICY).map(([name, value]) => [name, value === "owner" ? "owner" : Object.freeze(value)])));

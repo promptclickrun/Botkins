@@ -131,7 +131,7 @@ export type Attachment = {
   kind?: "file" | "directory";
 };
 export type ArtifactKind = "folder" | "file" | "image" | "audio" | "video";
-export type ArtifactSource = "tool" | "media" | "upload" | "export";
+export type ArtifactSource = "tool" | "media" | "upload" | "export" | "claude";
 export type Artifact = {
   id: string;
   botId: string;
@@ -145,6 +145,8 @@ export type Artifact = {
   size: number | null;
   time: number;
   source: ArtifactSource;
+  /** External URL for published Claude artifacts (private on claude.ai). */
+  url?: string;
 };
 /** A record named in a message with "#" (a project, a wiki page, or a file in the bot's workspace). */
 export type Mention =
@@ -269,6 +271,8 @@ export type Run = {
   connects?: ConnectCard[];
   /** Tools with an MCP App view that ran in this turn. */
   mcpApps?: McpAppCard[];
+  /** Private Claude artifacts published or updated in this turn. */
+  claudeArtifacts?: ClaudeArtifactCard[];
   chatId: string;
   title: string;
   time: number;
@@ -1689,6 +1693,10 @@ declare global {
       /** A read that nobody waited for has come in: ask again. */
       onProviderUsage(fn: () => void): () => void;
       exportUsage(days: number): Promise<boolean>;
+      "claudeArtifacts.status"(refresh?: boolean): Promise<ClaudeArtifactsStatus>;
+      "claudeArtifacts.setModel"(model: "haiku" | "sonnet" | "opus"): Promise<ClaudeArtifactsStatus>;
+      "claudeArtifacts.setBotApproval"(botId: string, allowed: boolean): Promise<ClaudeArtifactsStatus>;
+      "claudeArtifacts.revokeBotApproval"(botId: string): Promise<ClaudeArtifactsStatus>;
       /** A notification click asks to open a chat. */
       onOpenChat(fn: (chatId: string) => void): () => void;
       onOpenSettings(fn: (tab: string) => void): () => void;
@@ -2415,6 +2423,8 @@ export type Preferences = {
    * Set either field with setPreferences({ sidebar: { order } }) or ({ sidebar: { collapsed } }).
    */
   sidebar?: { order: string[]; collapsed: boolean; picked?: boolean };
+  /** Model used by headless Claude Code artifact sub-runs. */
+  claudeArtifactModel?: "haiku" | "sonnet" | "opus";
   /**
    * What runs a turn around the model (desktop/harness). "copilot": one harness, the Copilot
    * runtime, runs every chat it can, and the model's own plan answers (GitHub Copilot, ChatGPT,
@@ -2549,6 +2559,9 @@ export type RequestAnswer = {
 };
 export type AgentRequest = {
   dispatch?: true;
+  artifactGrant?: true;
+  rememberScope?: "bot";
+  botName?: string;
   /** Its words (a script command's whole script) are read in the app: never answered from a notification, a card or a gadget. */
   review?: true;
   nodeJob?: true;
@@ -2632,7 +2645,22 @@ export type ProjectChanges =
 
 /** An HTML app a bot showed in a turn, as its card in the chat. */
 export type AppCard = { id: string; title: string; description: string; sendsAnswers: boolean };
-
+/** A Claude artifact published or updated in a turn, as its link card in the chat. */
+export type ClaudeArtifactCard = { id: string; title: string; url: string; size?: number; action?: "publish" | "update"; time: number; private?: boolean };
+/** Availability, model, and standing per-bot grants for Claude artifacts. */
+export type ClaudeArtifactsStatus = {
+  available: boolean;
+  installed: boolean;
+  signedIn: boolean;
+  subscription: boolean;
+  version?: string;
+  account?: string;
+  plan?: string;
+  reason?: string;
+  model: "haiku" | "sonnet" | "opus";
+  models: ("haiku" | "sonnet" | "opus")[];
+  grants: { botId: string; botName: string; grantedAt: number }[];
+};
 /**
  * A bot asked the person to connect a Composio app (desktop/connects.mjs). The card holds only the
  * app and where it stands; the page to sign in on is given to the owner who presses Connect.

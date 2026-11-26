@@ -60,6 +60,7 @@ export function answerReceipt(view, answer) {
     return view.title + " · " + (labels.length ? "Provided " + labels.join(", ") : "No fields supplied");
   }
   if (view.dispatch) return ({ approve: "Allow this time", today: "Allow for today", remember: "Always allow", deny: "Deny" })[answer.action];
+  if (view.artifactGrant) return ({ approve: "Allow for this chat", remember: "Always allow", deny: "Deny" })[answer.action];
   if (view.kind === "permission") return ({ approve:"Allow once", remember:"Allow for this chat", deny:"Deny" })[answer.action];
   if (view.kind === "question" && view.freeform === false && view.choices?.includes(answer.value)) return answer.value;
   return "Answered";

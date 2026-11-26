@@ -90,8 +90,9 @@ export function headerLabel(request: AgentRequest, { bot, danger, count }: { bot
 export const foldHint = (open: boolean) => (open ? "Folds the request so you can read the chat" : "Opens the request");
 
 /** The buttons' words. `quiet` is Deny or Dismiss, `main` the card's one main action. */
-export function wordsFor(kind: AgentRequest["kind"], dispatch = false): { quiet: string; main: string; remember?: string } {
+export function wordsFor(kind: AgentRequest["kind"], dispatch = false, artifactGrant = false, botName?: string): { quiet: string; main: string; remember?: string } {
   if (dispatch && kind === "permission") return { quiet: "Deny", main: "Allow this time", remember: "Always allow" };
+  if (artifactGrant && kind === "permission") return { quiet: "Deny", main: "Allow for this chat", remember: botName ? "Always allow for " + botName : "Always allow" };
   if (kind === "permission") return { quiet: "Deny", main: "Allow once", remember: "Allow for this chat" };
   if (kind === "secure") return { quiet: "Decline", main: "Send securely" };
   return { quiet: "Dismiss", main: "Send answer" };
@@ -101,8 +102,10 @@ export function wordsFor(kind: AgentRequest["kind"], dispatch = false): { quiet:
 export const DETACHED_LINE = "Waiting for your answer. Your reply starts a new turn.";
 
 /** The line under an approval that can be remembered. */
-export const rememberNote = (remember: string) => "Remembering this approval allows " + remember + " for this conversation.";
-
+export const rememberNote = (remember: string, artifactGrant = false, botName?: string) =>
+  artifactGrant
+    ? `Always allow saves a standing grant for ${botName || "this bot"} (including routines). Manage grants in Settings › General › Claude artifacts.`
+    : "Remembering this approval allows " + remember + " for this conversation.";
 // --- What is shown ---------------------------------------------------------------------------
 
 /** The full request is folded under "Full request" when there is a preview, and shown without one. */

@@ -680,6 +680,8 @@ export type Run = RunSummary & {
   connects?: ConnectCard[];
   /** Tools with an MCP App view that ran in this turn. */
   mcpApps?: McpAppCard[];
+  /** Private Claude artifacts published or updated in this turn. */
+  claudeArtifacts?: { id: string; title: string; url: string; size?: number; action?: "publish" | "update"; time: number; private?: boolean }[];
   options?: { label: string; prompt: string; description?: string }[];
   /** The active run has reasoning available when its detail is opened. */
   hasReasoning?: boolean;
@@ -767,6 +769,9 @@ export type RequestAnswer = {
 };
 export type AgentRequest = {
   dispatch?: true;
+  artifactGrant?: true;
+  rememberScope?: "bot";
+  botName?: string;
   /** Raised by this computer's node host for an incoming remote node operation (not backed by a chat). */
   nodeJob?: true;
   operation?: string;
@@ -1090,6 +1095,8 @@ export type Preferences = {
   longPromptCache?: boolean;
   /** Tools that run in Botkins on a Mac, switched there only: iMessage and Mail. Missing on an older computer or one that isn't a Mac. */
   macTools?: { imessage?: DeviceLevel; mail?: DeviceLevel };
+  /** Model used by headless Claude Code artifact sub-runs. */
+  claudeArtifactModel?: "haiku" | "sonnet" | "opus";
 };
 /**
  * One limit of a provider's plan, as the provider reports it. `percentRemaining` is 0 to 100 and is
@@ -1161,7 +1168,8 @@ export type Artifact = {
   mime: string;
   size: number | null;
   time: number;
-  source: "tool" | "media" | "upload" | "export";
+  source: "tool" | "media" | "upload" | "export" | "claude";
+  url?: string;
   messageIndex?: number;
 };
 /** A page of artifacts, newest first. `nextCursor` asks for the page after it; null at the end. */
@@ -1872,6 +1880,10 @@ export type Calls = {
   providers(refresh?: boolean): ProviderStatus[];
   /** The program harnesses (Pi and OMP): installed, version, and how to install. Unknown on an older computer. */
   harnesses(): HarnessStatus[];
+  "claudeArtifacts.status"(refresh?: boolean): { available: boolean; installed: boolean; signedIn: boolean; subscription: boolean; version?: string; account?: string; plan?: string; reason?: string; model: "haiku" | "sonnet" | "opus"; models: ("haiku" | "sonnet" | "opus")[]; grants: { botId: string; botName: string; grantedAt: number }[] };
+  "claudeArtifacts.setModel"(model: "haiku" | "sonnet" | "opus"): { available: boolean; installed: boolean; signedIn: boolean; subscription: boolean; version?: string; account?: string; plan?: string; reason?: string; model: "haiku" | "sonnet" | "opus"; models: ("haiku" | "sonnet" | "opus")[]; grants: { botId: string; botName: string; grantedAt: number }[] };
+  "claudeArtifacts.setBotApproval"(botId: string, allowed: boolean): { available: boolean; installed: boolean; signedIn: boolean; subscription: boolean; version?: string; account?: string; plan?: string; reason?: string; model: "haiku" | "sonnet" | "opus"; models: ("haiku" | "sonnet" | "opus")[]; grants: { botId: string; botName: string; grantedAt: number }[] };
+  "claudeArtifacts.revokeBotApproval"(botId: string): { available: boolean; installed: boolean; signedIn: boolean; subscription: boolean; version?: string; account?: string; plan?: string; reason?: string; model: "haiku" | "sonnet" | "opus"; models: ("haiku" | "sonnet" | "opus")[]; grants: { botId: string; botName: string; grantedAt: number }[] };
   setProviderEnabled(id: string, enabled: boolean): void;
   signIn(providerId?: string): void;
   cancelSignIn(providerId?: string): void;
