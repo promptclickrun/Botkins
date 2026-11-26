@@ -512,6 +512,34 @@ describe(NODE_RELAY ? "relay (node)" : "relay (wrangler dev)", { timeout: 300_00
     assert.doesNotMatch(html, /<link[^>]+\bhref=/);
   });
 
+  it("bounces /mcp-auth to botkins://mcp-auth with the query intact, fixed target, no cache and no referrer", async () => {
+    const code = "oauth-code-" + randomBytes(12).toString("base64url");
+    const state = "oauth-state-" + randomBytes(12).toString("base64url");
+    secrets.add(code).add(state);
+    const query = `?code=${code}&state=${state}&iss=https%3A%2F%2Fauth.cloudflare.com`;
+    const res = await rawGet("/mcp-auth" + query);
+    assert.equal(res.status, 302);
+    assert.equal(res.headers["location"], "botkins://mcp-auth" + query);
+    assert.equal(res.headers["cache-control"], "no-store");
+    assert.equal(res.headers["referrer-policy"], "no-referrer");
+
+    const errQuery = `?error=access_denied&error_description=User+denied&state=${state}`;
+    const errRes = await rawGet("/mcp-auth" + errQuery);
+    assert.equal(errRes.status, 302);
+    assert.equal(errRes.headers["location"], "botkins://mcp-auth" + errQuery);
+
+    const bare = await rawGet("/mcp-auth");
+    assert.equal(bare.status, 302);
+    assert.equal(bare.headers["location"], "botkins://mcp-auth");
+
+    // Fixed target only: no open redirect, no subpaths, GET only.
+    const tricky = await rawGet("/mcp-auth?redirect=https://evil.example&next=//evil.example");
+    assert.equal(tricky.status, 302);
+    assert.equal(tricky.headers["location"], "botkins://mcp-auth?redirect=https://evil.example&next=//evil.example");
+    assert.equal((await rawGet("/mcp-auth/extra")).status, 404);
+    assert.equal((await rawGet("/mcp-auth?code=x", {}, "POST")).status, 404);
+  });
+
   it("publishes, replaces, reads and deletes an invite card", async () => {
     const owner = newRoom();
     const lookup = newLookup();

@@ -48,7 +48,7 @@ Phones continue to use the original frames. The legacy host protocol is also cov
 - A v2 computer disconnects, or a v3 computer exhausts its reconnect window: every phone in the room gets `[0x05]`, so it stops waiting for answers that will not come.
 - A phone's message over 6 MiB + 64 KiB (6,356,992 bytes) closes that phone with 1009. The computer's limit is 8 MiB.
 
-Other answers: `GET /` is a one-line text, `GET /v1/health` is `{"ok":true}` and `GET /join` serves the self-contained invite page. A wrong room name or any other path is 404. A plain GET on a room path is 426. A phone without its subprotocol is 400. Other unsupported methods are 404 and are counted against the request limit like everything else.
+Other answers: `GET /` is a one-line text, `GET /v1/health` is `{"ok":true}`, `GET /join` serves the self-contained invite page, and `GET /mcp-auth` answers `302` to the fixed `botkins://mcp-auth` target with the original query string kept intact (no-store, no-referrer, nothing logged) for phone OAuth callbacks. A wrong room name or any other path is 404. A plain GET on a room path is 426. A phone without its subprotocol is 400. Other unsupported methods are 404 and are counted against the request limit like everything else.
 
 `conn` is 8 random bytes made for each phone socket. `from` is the first 8 bytes of `SHA-256(room + ":" + network)`. The network is the address in `CF-Connecting-IP`, or `local` when Cloudflare gives none. An IPv6 address counts as its /64 (the first four groups), so one network can not look like many sources. An IPv4-mapped IPv6 address counts as the IPv4 address. The Worker makes the headers that carry the socket kind and `from` to the Durable Object. It never forwards the client's headers.
 
