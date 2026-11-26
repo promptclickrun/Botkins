@@ -288,7 +288,7 @@ function Plugins({ plugins }: { plugins: MarketPluginReview[] }) {
     <Group title="Plugins">
       {plugins.map((plugin) => (
         <div className="set-row stacked" key={plugin.id}>
-          <strong>{plugin.name}{plugin.version ? " " + plugin.version : ""}{plugin.installed ? " · installed" : ""}</strong>
+          <strong>{plugin.name}{plugin.version ? " " + plugin.version : ""}{plugin.installed ? (plugin.installed.matchesRevision === false ? " · installed (different revision)" : " · installed") : ""}</strong>
           {plugin.description && <small>{plugin.description}</small>}
           {(plugin.contents?.mcpServers ?? []).map((server) => (
             <small key={server.name}>Tool {server.name}: {server.kind === "remote" ? server.url : [server.command, ...(server.args ?? [])].join(" ")}</small>
@@ -296,6 +296,9 @@ function Plugins({ plugins }: { plugins: MarketPluginReview[] }) {
           {(plugin.contents?.hooks ?? []).map((hook, i) => (
             <small key={i}>Hook at {hook.event}: {hook.command}</small>
           ))}
+          {plugin.installed?.matchesRevision === false && (
+            <small className="error-text">Installed at a different revision. Update it in Marketplace › Plugins first.</small>
+          )}
           {(plugin.warnings ?? []).map((warning) => <small key={warning} className="error-text">{warning}</small>)}
         </div>
       ))}

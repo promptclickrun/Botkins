@@ -26,7 +26,7 @@ export type MarketSkillReview = CatalogPreview & {
   files: string[]; executable: string[]; size: number; listing: MarketSkillListing;
   update?: { from: string; to: string; added: string[]; changed: string[]; removed: string[] };
 };
-export type MarketPluginReview = { id: string; name: string; version?: string; description?: string; revision: string; contents?: { mcpServers?: { name: string; kind: string; url?: string; command?: string; args?: string[] }[]; hooks?: { event?: string; command?: string }[] }; warnings?: string[]; installed?: { bots: "all" | string[]; enabled: boolean } };
+export type MarketPluginReview = { id: string; name: string; version?: string; description?: string; revision: string; contents?: { mcpServers?: { name: string; kind: string; url?: string; command?: string; args?: string[] }[]; hooks?: { event?: string; command?: string }[] }; warnings?: string[]; installed?: { bots: "all" | string[]; enabled: boolean; revision?: string; matchesRevision?: boolean } };
 export type MarketPackReview = { id: string; name: string; version: string; summary: string; marketplaceName: string; commit: string; token: string; skills: MarketSkillReview[]; plugins: MarketPluginReview[] };
 export type MarketRoutineReview = { name: string; instructions: string; cadence: NonNullable<AgentTemplateBundle["routines"]>[number]["cadence"]; active: boolean };
 export type MarketTemplateReview = {

@@ -32,9 +32,10 @@ const skillLines = (review) => [
   ...(review.update ? ["      update from " + safe(review.update.from) + ": " + ["added", "changed", "removed"].map((k) => review.update[k].length + " " + k).join(", ")] : []),
 ];
 const pluginLines = (plugin) => [
-  "  " + safe(plugin.name) + (plugin.version ? " " + safe(plugin.version) : "") + (plugin.installed ? "   (installed)" : ""),
+  "  " + safe(plugin.name) + (plugin.version ? " " + safe(plugin.version) : "") + (plugin.installed ? (plugin.installed.matchesRevision === false ? "   (installed, different revision)" : "   (installed)") : ""),
   ...((plugin.contents?.mcpServers ?? []).map((s) => "      tool " + safe(s.name) + ": " + safe(s.kind === "remote" ? s.url : [s.command, ...(s.args ?? [])].join(" ")))),
   ...((plugin.contents?.hooks ?? []).map((h) => "      hook at " + safe(h.event ?? h.when) + ": " + safe(h.command))),
+  ...(plugin.installed?.matchesRevision === false ? ["      warning: installed at a different revision; update it with `botkins plugins update` first."] : []),
 ];
 
 function reviewText(kind, review) {

@@ -2,7 +2,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { lstatSync, readdirSync, readFileSync, realpathSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
-import { checkPath, importFiles, MAX_ENTRIES, MAX_UNPACKED } from "./link/skill-import.mjs";
+import { checkPath, importFiles, MAX_ENTRIES, MAX_SKILLS, MAX_UNPACKED } from "./link/skill-import.mjs";
 import { parseSkill, slug } from "./link/skill-format.mjs";
 import { FEATURED_SKILLS, featuredSkill } from "./skills-featured.mjs";
 
@@ -185,8 +185,72 @@ export function skillsCatalog(getIntegrations, request = fetch) {
     }
     return files;
   }
+  /**
+   * Fetches and verifies a previewed skill's pinned files and checks conflicts/preconditions
+   * without mutating disk or workspace state. Call `commit()` to install it.
+   */
+  async function prepare(token, replace = [], { bots = "all" } = {}) {
+    const preview = cached(previews, token);
+    if (!preview) throw new Error("Open the preview again before installing.");
+    const signal = AbortSignal.timeout(40000);
+    const files = await pinnedFiles(preview, signal);
+    const integrations = getIntegrations();
+    const executable = new Set(preview.entries.filter((f) => f.executable).map((f) => f.path));
+    if (preview.listing) {
+      const meta = { catalog: preview.listing.catalog, name: preview.listing.name, version: preview.listing.version, commit: preview.listing.commit, files: Object.fromEntries(preview.entries.map((e) => [e.path, e.sha])) };
+      if (bots !== "all") {
+        for (const id of bots) integrations.checkBotCatalogSkill(integrations.ws.bot(id), files, meta);
+        return {
+          name: meta.name,
+          conflicts: [],
+          commit() {
+            for (const id of bots) integrations.installBotCatalogSkill(integrations.ws.bot(id), files, executable, meta);
+            return { added: [meta.name], conflicts: [], bots };
+          },
+        };
+      }
+      if (!Array.isArray(replace) || replace.length > MAX_SKILLS || !replace.every((s) => typeof s === "string"))
+        throw new Error("Choose the skills to replace.");
+      // The same listing installed again is its update: it replaces its own folder without asking.
+      const own = integrations.skillState.listings?.[meta.name];
+      const again = own?.catalog === meta.catalog ? [meta.name] : [];
+      const effectiveReplace = [...new Set([...replace, ...again])];
+      const parsed = parseSkill(preview.bytes.toString("utf8").slice(0, 60000), preview.skillId);
+      const id = slug(parsed.name);
+      const name = parsed.name || id;
+      const existing = integrations.skills().find((s) => s.name === name || slug(s.name) === id);
+      const conflicts = existing && !effectiveReplace.includes(existing.name) ? [existing.name] : [];
+      return {
+        name,
+        conflicts,
+        commit() {
+          const currentOwn = integrations.skillState.listings?.[meta.name];
+          const currentAgain = currentOwn?.catalog === meta.catalog ? [meta.name] : [];
+          const result = importFiles(integrations, files, preview.skillId, [...new Set([...replace, ...currentAgain])], executable);
+          if (result.added.length) {
+            (integrations.skillState.listings ??= {})[result.added[0]] = meta;
+            integrations.changed();
+          }
+          return result;
+        },
+      };
+    }
+    return {
+      name: preview.skillId,
+      conflicts: [],
+      commit() {
+        const result = importFiles(integrations, files, preview.skillId, replace, executable);
+        if (result.added.length) {
+          (integrations.skillState.catalog ??= {})[preview.id] = result.added[0];
+          integrations.changed();
+        }
+        return result;
+      },
+    };
+  }
   return {
     listingPreview,
+    prepare,
     /** The featured shelf: pinned upstream skills, readable with no search. */
     featured() {
       return FEATURED_SKILLS.map((item) => ({ id: item.id, name: item.name, summary: item.summary, group: item.group, ...sourceOf(item), installed: installed(item.id) }));
@@ -259,41 +323,10 @@ export function skillsCatalog(getIntegrations, request = fetch) {
      * Installs a previewed skill. A marketplace listing can go to chosen bots only
      * (`{ bots: [ids] }`), into each bot's own skills; otherwise it joins the shared skills.
      */
-    async install(token, replace = [], { bots = "all" } = {}) {
-      const preview = cached(previews, token);
-      if (!preview) throw new Error("Open the preview again before installing.");
-      const signal = AbortSignal.timeout(40000);
-      const files = await pinnedFiles(preview, signal);
-      const integrations = getIntegrations();
-      const executable = new Set(preview.entries.filter((f) => f.executable).map((f) => f.path));
-      if (preview.listing) {
-        const meta = { catalog: preview.listing.catalog, name: preview.listing.name, version: preview.listing.version, commit: preview.listing.commit, files: Object.fromEntries(preview.entries.map((e) => [e.path, e.sha])) };
-        if (bots !== "all") {
-          for (const id of bots) integrations.installBotCatalogSkill(integrations.ws.bot(id), files, executable, meta);
-          return { added: [meta.name], conflicts: [], bots };
-        }
-        // The same listing installed again is its update: it replaces its own folder without asking.
-        const own = integrations.skillState.listings?.[meta.name];
-        const again = own?.catalog === meta.catalog ? [meta.name] : [];
-        const result = importFiles(integrations, files, preview.skillId, [...new Set([...replace, ...again])], executable);
-        if (result.added.length) {
-          (integrations.skillState.listings ??= {})[result.added[0]] = meta;
-          integrations.changed();
-        }
-        return result;
-      }
-      const result = importFiles(
-        integrations,
-        files,
-        preview.skillId,
-        replace,
-        new Set(preview.entries.filter((f) => f.executable).map((f) => f.path)),
-      );
-      if (result.added.length) {
-        (integrations.skillState.catalog ??= {})[preview.id] = result.added[0];
-        integrations.changed();
-      }
-      return result;
+    async install(token, replace = [], options = {}) {
+      const plan = await prepare(token, replace, options);
+      if (plan.conflicts.length) return { added: [], conflicts: plan.conflicts };
+      return plan.commit();
     },
   };
 }
