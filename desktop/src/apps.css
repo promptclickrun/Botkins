@@ -40,6 +40,12 @@
 .connect-card .connect-error {
   color: var(--danger);
 }
+.claude-artifact-card button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
 
 /* The view of an MCP App in a chat (McpAppCard.tsx): a header with the tool and its server, then the view. */
 .mcp-app-card {

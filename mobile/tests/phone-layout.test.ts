@@ -62,25 +62,26 @@ test("a chip shows its chats, and a section that is gone shows them all", () => 
   assert.deepEqual(ids(chatsForFilter(chats, "section:gone", sections, new Set())), ["a", "b", "c"]);
 });
 
-const task = (id: string, status: BotTask["status"], priority: BotTask["priority"] = "normal", updatedAt = 0) => ({ id, status, priority, updatedAt }) as BotTask;
+const task = (id: string, status: BotTask["status"], priority: BotTask["priority"] = "normal", updatedAt = 0, extra: Partial<BotTask> = {}) => ({ id, status, priority, updatedAt, ...extra }) as BotTask;
 
-test("Active holds what needs the person, then what works, then what is ready; Later and Done hold the rest", () => {
+test("Active holds what needs the person, then bot-reviewed tasks, then what works, then what is ready; Later and Done hold the rest", () => {
   const tasks = [
     task("ready-low", "ready", "low", 9),
     task("working", "working"),
     task("ready-urgent", "ready", "urgent"),
     task("blocked", "blocked"),
     task("review", "review", "normal", 5),
+    task("creator-review", "review", "high", 6, { reviewerBotId: "alfie" }),
     task("later", "later"),
     task("done-old", "done", "normal", 1),
     task("done-new", "done", "normal", 2),
     task("gone", "archived"),
   ];
-  assert.deepEqual(tasksIn(tasks, "active").map((one) => one.id), ["review", "blocked", "working", "ready-urgent", "ready-low"]);
+  assert.deepEqual(tasksIn(tasks, "active").map((one) => one.id), ["review", "blocked", "creator-review", "working", "ready-urgent", "ready-low"]);
   assert.deepEqual(tasksIn(tasks, "later").map((one) => one.id), ["later"]);
   assert.deepEqual(tasksIn(tasks, "done").map((one) => one.id), ["done-new", "done-old"]);
-  assert.deepEqual(taskCounts(tasks), { active: 5, later: 1, done: 2 });
-  assert.deepEqual(activeGroups(tasks).map((group) => [group.title, group.tasks.length]), [["Needs you", 2], ["Working", 1], ["Ready", 2]]);
+  assert.deepEqual(taskCounts(tasks), { active: 6, later: 1, done: 2 });
+  assert.deepEqual(activeGroups(tasks).map((group) => [group.title, group.tasks.length]), [["Needs you", 2], ["Reviewing", 1], ["Working", 1], ["Ready", 2]]);
   assert.deepEqual(activeGroups([task("l", "later")]), [], "no empty groups");
 });
 

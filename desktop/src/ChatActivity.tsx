@@ -9,6 +9,7 @@ import {
   ChevronRight,
   Circle,
   CircleAlert,
+  ExternalLink,
   Eye,
   FilePenLine,
   FilePlus2,
@@ -1078,6 +1079,23 @@ export function RunCards({
           </span>
           <button className="secondary" onClick={() => void window.botkins.openApp(app.id)}>
             Open app
+          </button>
+        </section>
+      ))}
+      {run.claudeArtifacts?.map((artifact) => (
+        <section className="chat-card app-card claude-artifact-card" key={artifact.id} aria-label={artifact.title}>
+          <span className="app-card-icon" aria-hidden="true">
+            <Sparkles size={20} />
+          </span>
+          <span className="app-card-text">
+            <strong>{artifact.title}</strong>
+            <small>
+              {artifact.action === "update" ? "Updated Claude artifact" : "Claude artifact"}
+              {artifact.private ? " · Private on claude.ai" : " · On claude.ai"}
+            </small>
+          </span>
+          <button className="secondary" onClick={() => void window.botkins.openLink(artifact.url)}>
+            <ExternalLink size={14} aria-hidden="true" /> Open on claude.ai
           </button>
         </section>
       ))}

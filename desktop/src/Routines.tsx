@@ -886,6 +886,7 @@ function RoutineEditor({
   const [followUp, setFollowUp] = useState(item?.entry.followUp === true);
   // The routine's own model; undefined uses the Default routines model.
   const [model, setModel] = useState<ModelChoice | undefined>(item?.chat.model);
+  const [allowReadyTasks, setAllowReadyTasks] = useState(item?.entry.allowReadyTasks === true);
   const scripted = runs === "script";
   const needsPrompt = !scripted || followUp;
   const botName = state.bots.find((b) => b.id === bot)?.name ?? "the bot";
@@ -954,6 +955,7 @@ function RoutineEditor({
               ? { notifyTargets: effectiveNotifyMode === "specific" ? activeTargets : null }
               : {}),
             ...(scripted ? { script, followUp } : item?.entry.script ? { script: null } : {}),
+            ...(!using?.member && { allowReadyTasks }),
             ...(modelsAllowed && modelChanged && { model: model ?? null }),
           };
           if (item) {
@@ -1184,6 +1186,22 @@ function RoutineEditor({
                     : effectiveNotifyMode !== "quiet"
                       ? "On this computer and on your phone, where notifications are on."
                       : "This routine runs quietly. Its result still goes where you chose."}
+                </small>
+              </span>
+            </label>
+          )}
+          {!using?.member && (
+            <label className="routine-notify">
+              <input
+                type="checkbox"
+                role="switch"
+                checked={allowReadyTasks}
+                onChange={(e) => setAllowReadyTasks(e.target.checked)}
+              />
+              <span>
+                Allow creating Ready tasks
+                <small className="muted">
+                  Let this routine create Ready tasks assigned to a bot so follow-up work starts automatically. Otherwise routine-created tasks wait in Later.
                 </small>
               </span>
             </label>

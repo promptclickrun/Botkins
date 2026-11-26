@@ -458,6 +458,10 @@ for (const name of [
   "liveVoiceTranscript",
   "liveVoiceTool",
   "endLiveVoice",
+  "claudeArtifacts.status",
+  "claudeArtifacts.setModel",
+  "claudeArtifacts.setBotApproval",
+  "claudeArtifacts.revokeBotApproval",
 ])
   api[name] = (...args) => ipcRenderer.invoke(name, ...args);
 // A dropped or pasted File's path on disk, or "" for in-memory data.

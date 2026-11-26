@@ -47,6 +47,9 @@ A command that needs one (for example `botkins credentials save <name>`) reads i
 
 For a website login, use the Botkins tools your harness offers. In a private owner chat, `find_saved_credentials` finds labels saved for the HTTPS site when available. The person can also pick an entry without a website in the secure request. On a Linux screen host, open the site with `browser_form` and use its field keys. On desktop, open the HTTPS page with `side_pane_web`. Call `request_secure_input` with `page_fill`, the site and path, and the fields. The person picks or enters each value and approves that use. Pass the returned `handles` object unchanged to `use_secure_input`. Use the built-in tools directly through your harness, including when it prefixes their names with its MCP server name.
 
+## Claude artifacts
+When Claude Code is signed in with a claude.ai subscription here, the built-in `claude_artifact` tool publishes, updates (private-only), lists, or reads Claude artifacts on claude.ai from any harness. Use it when the person wants a shareable claude.ai link; use `side_pane_show` or `render_card` inside Botkins. Manage model and per-bot grants in Settings › General › Claude artifacts.
+
 ## What you cannot do here
 
 Unlocking a password manager, what is inside one, linking a field of one, and using a saved credential by reference are done in the app's window or on a paired phone, where a person is known to be there. No command does them, and the service has no call for them. Tell your person where to do it. Do not look for a way round.

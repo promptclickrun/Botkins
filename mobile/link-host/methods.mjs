@@ -42,6 +42,14 @@ export const PI_PACKAGE_METHODS = ["piPackages.browse", "piPackages.preview", "p
  * adding an entry as a tool server with its keys. A stdio entry needs `confirm`, its exact command line.
  */
 export const MCP_CATALOG_METHODS = ["mcpCatalog.list", "mcpCatalog.add"];
+/**
+ * Marketplace format version 2 ("marketplace-v2-v1", desktop/catalog-v2.mjs): the catalog's skills,
+ * packs and version 3 templates, each review, and its install. Installs are the owner's (team.mjs).
+ */
+export const MARKET_V2_METHODS = [
+  "market.catalog", "market.skillImage", "market.skillPreview", "market.skillInstall",
+  "market.packPreview", "market.packInstall", "market.templatePreview", "market.templateInstall",
+];
 /** Agent templates in a marketplace ("agent-templates-v1", docs/agent-templates.md): reads only. */
 export const AGENT_METHODS = ["agents.browse", "agents.template"];
 
@@ -60,7 +68,8 @@ export const COMPOSIO_METHODS = ["composio.catalog", "composio.connected", "comp
  * it makes to the server its card came from. Each names a chat and a card first.
  */
 export const MCP_APP_METHODS = ["mcpApps.view", "mcpApps.callTool", "mcpApps.readResource"];
-
+/** Claude artifacts ("claude-artifacts-v1", desktop/claude-artifacts.mjs): availability, model, and per-bot standing approvals. */
+export const CLAUDE_ARTIFACT_METHODS = ["claudeArtifacts.status", "claudeArtifacts.setModel", "claudeArtifacts.setBotApproval", "claudeArtifacts.revokeBotApproval"];
 /** The app's space calls ("spaces-v1"), by their wire names. A rename is a change here and in spaceArgs. */
 export const SPACE_METHODS = [
   "spaces.read", "spaces.create", "spaces.rename", "spaces.remove", "spaces.setProject", "spaces.setPanelProject",
@@ -134,11 +143,15 @@ export const REMOTE_METHODS = new Set([
   // Agent templates ("agent-templates-v1") and the computer's Composio apps
   ...AGENT_METHODS,
   "skills.upload", "skills.saveScript", "skills.readScript", "skillsCatalog.search", "skillsCatalog.preview", "skillsCatalog.install", "skillsCatalog.featured",
+  // Marketplace format version 2 ("marketplace-v2-v1"): catalog skills, packs and version 3 templates
+  ...MARKET_V2_METHODS,
   ...MCP_CATALOG_METHODS,
   ...PI_PACKAGE_METHODS,
   ...COMPOSIO_METHODS,
   // The views of MCP Apps in chats ("mcp-apps-v1")
   ...MCP_APP_METHODS,
+  // Claude artifacts ("claude-artifacts-v1")
+  ...CLAUDE_ARTIFACT_METHODS,
 ]);
 
 const MAX_ATTACHMENTS = 10;
@@ -531,7 +544,45 @@ export function remoteArgs(method, args, { deviceId, uploads } = {}) {
     next[at] = { ...data, voice: botVoiceField(data.voice) };
     return next;
   }
-  return fileArgs(method, args) ?? pluginArgs(method, args) ?? marketArgs(method, args) ?? catalogArgs(method, args) ?? mcpAppArgs(method, args) ?? providerArgs(method, args) ?? appUpdateArgs(method, args) ?? projectArtifactArgs(method, args) ?? spaceArgs(method, args) ?? args;
+  return fileArgs(method, args) ?? pluginArgs(method, args) ?? marketArgs(method, args) ?? marketV2Args(method, args) ?? catalogArgs(method, args) ?? mcpAppArgs(method, args) ?? claudeArtifactArgs(method, args) ?? providerArgs(method, args) ?? appUpdateArgs(method, args) ?? projectArtifactArgs(method, args) ?? spaceArgs(method, args) ?? args;
+}
+
+/** The calls of "marketplace-v2-v1", cut to their shape: a listing id, or a review's token and the choices made in it. */
+function marketV2Args(method, args) {
+  if (!MARKET_V2_METHODS.includes(method)) return null;
+  if (method === "market.catalog") return [];
+  const [first, options] = args;
+  if (!pluginText(first, PLUGIN_LIMITS.id)) refuse("Choose a listing from the marketplace.");
+  if (!method.endsWith("Install")) return [first];
+  const given = plain(options) ? options : {};
+  const out = {};
+  const names = (value, what) => (Array.isArray(value) && value.length <= PLUGIN_LIMITS.bots && value.every((item) => pluginText(item, 200)) ? [...value] : refuse("Choose the " + what + "."));
+  if (given.bots !== undefined) out.bots = given.bots === "all" ? "all" : names(given.bots, "bots");
+  if (given.replace !== undefined) out.replace = names(given.replace, "skills to replace");
+  if (given.routines !== undefined) out.routines = names(given.routines, "routines to keep");
+  if (given.commit !== undefined) out.commit = typeof given.commit === "string" && /^[a-f0-9]{40}$/.test(given.commit) ? given.commit : refuse("Review it again.");
+  if (given.name !== undefined) out.name = pluginText(given.name, 48) ? given.name : refuse("Give the bot a name of up to 48 characters.");
+  return [first, out];
+}
+
+/** Claude artifact calls ("claude-artifacts-v1"), validated to their exact shapes. */
+function claudeArtifactArgs(method, args) {
+  if (!CLAUDE_ARTIFACT_METHODS.includes(method)) return null;
+  switch (method) {
+    case "claudeArtifacts.status":
+      return args[0] === true ? [true] : [];
+    case "claudeArtifacts.setModel":
+      if (typeof args[0] !== "string" || !["haiku", "sonnet", "opus"].includes(args[0])) refuse("Choose haiku, sonnet, or opus.");
+      return [args[0]];
+    case "claudeArtifacts.setBotApproval":
+      if (!clean(args[0]) || typeof args[1] !== "boolean") refuse("Choose a bot and on or off.");
+      return [args[0], args[1]];
+    case "claudeArtifacts.revokeBotApproval":
+      if (!clean(args[0])) refuse("Choose a bot.");
+      return [args[0]];
+    default:
+      return null;
+  }
 }
 
 /**
