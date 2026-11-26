@@ -356,6 +356,19 @@
   font-size: calc(12px * var(--text-scale));
 }
 
+.agent-rail-group-toggle {
+  margin-left: 0;
+  gap: 8px;
+}
+
+.agent-rail-group-toggle > .agent-rail-status {
+  flex: none;
+}
+
+.agent-rail-group-body {
+  margin-top: 8px;
+}
+
 .agent-rail-reply-body {
   margin-top: 6px;
   padding: 8px 10px;

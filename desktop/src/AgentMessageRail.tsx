@@ -19,7 +19,9 @@ import {
   buildOutgoingRail,
   buildTaskHandoffRail,
   foldPreview,
+  groupRailAsks,
   type AgentRailTone,
+  type NodeCallGroupModel,
 } from "./agentRailModel";
 import type { Bot, BotTask, Message, Run, TaskHandoff, TeamAsk } from "./types";
 import "./agent-rail.css";
@@ -363,6 +365,37 @@ function TaskHandoffCard({
   );
 }
 
+/** Back-to-back node calls folded into one card; open it to see each call's own card. */
+function NodeCallGroupCard({ group, bots }: { group: NodeCallGroupModel; bots: Bot[] }) {
+  const [open, setOpen] = useState(false);
+  const bodyId = useId();
+  const status = group.live ? group.running + " running" : group.failed ? group.failed + " failed" : "Done";
+  return (
+    <article className={`agent-rail agent-rail-outgoing agent-rail-node-group via-remote${open ? " open" : ""}`} aria-label={group.ariaLabel}>
+      <button
+        type="button"
+        className="agent-rail-reply-toggle agent-rail-group-toggle"
+        aria-expanded={open}
+        aria-controls={bodyId}
+        onClick={() => setOpen((v) => !v)}
+      >
+        {open ? <ChevronDown size={13} aria-hidden="true" /> : <ChevronRight size={13} aria-hidden="true" />}
+        <RailFace remote />
+        <span className="agent-rail-reply-label">{group.title}</span>
+        <StatusPill label={status} tone={group.statusTone} live={group.live} />
+        {!open && <span className="agent-rail-reply-snippet">{group.summary.replace(/\s+/g, " ").trim().slice(0, 110)}</span>}
+      </button>
+      {open && (
+        <div id={bodyId} className="agent-rail-stack agent-rail-group-body">
+          {group.asks.map((ask) => (
+            <OutgoingAskCard key={ask.id} ask={ask} bots={bots} />
+          ))}
+        </div>
+      )}
+    </article>
+  );
+}
+
 /**
  * Renders all sender-side agent-message rail cards for a turn (outgoing teamwork/remote asks
  * and bot-to-bot Task Board handoffs). Replaces the older compact TeamRail bar.
@@ -384,9 +417,13 @@ export function AgentMessageRail({
 
   return (
     <section className="agent-rail-stack" aria-label="Agent messages">
-      {asks.map((ask) => (
-        <OutgoingAskCard key={ask.id} ask={ask} bots={bots} />
-      ))}
+      {groupRailAsks(asks).map((item) =>
+        item.kind === "ask" ? (
+          <OutgoingAskCard key={item.ask.id} ask={item.ask} bots={bots} />
+        ) : (
+          <NodeCallGroupCard key={item.id} group={item} bots={bots} />
+        ),
+      )}
       {handoffs.map((handoff) => (
         <TaskHandoffCard key={handoff.id} handoff={handoff} bots={bots} tasks={tasks} openChat={openChat} />
       ))}

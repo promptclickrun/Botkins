@@ -362,7 +362,8 @@ export class Teamwork {
     if (message.length > MESSAGE_MAX) throw new Error("Keep the message under " + MESSAGE_MAX.toLocaleString("en-US") + " characters.");
     const body = message.trim();
     const asks = (run.teamwork ??= []);
-    if (asks.length >= MAX_ASKS) throw new Error("You can ask teammates up to " + MAX_ASKS + " times in one reply. Answer with what you have.");
+    // Node calls have no per-reply limit; only teammate asks, which each start a model turn, count here.
+    if (asks.filter((a) => !String(a.botId).startsWith("node:")).length >= MAX_ASKS) throw new Error("You can ask teammates up to " + MAX_ASKS + " times in one reply. Answer with what you have.");
     if (asks.some((a) => a.botId === helper.id && a.remote?.hostId === remote?.hostId && a.message === body))
       throw new Error("You already sent " + helper.name + " this exact message in this reply. Use the answer you got.");
     const optional = (value) => (typeof value === "string" && value.trim() ? value.trim().slice(0, 2000) : undefined);
@@ -438,7 +439,6 @@ export class Teamwork {
       throw new Error("Choose a shared project ID on " + discovered.host.name + " from list_node_hosts.");
     }
     const asks = (run.teamwork ??= []);
-    if (asks.length >= MAX_ASKS) throw new Error("You can make up to " + MAX_ASKS + " teamwork or node requests in one reply. Answer with what you have.");
     const folderLabel = targetProject.name + (relPath ? "/" + relPath : "");
     const entry = {
       id: randomUUID(),
@@ -495,9 +495,6 @@ export class Teamwork {
       throw new Error(`${discovered.host.name} does not advertise ${operation}.`);
     }
     const asks = (run.teamwork ??= []);
-    if (asks.length >= MAX_ASKS) {
-      throw new Error("You can make up to " + MAX_ASKS + " teamwork or node requests in one reply. Answer with what you have.");
-    }
     const resourceId = typeof rest.project === "string" && rest.project.trim() ? rest.project.trim() : "";
     const label =
       operation === "system.run"
