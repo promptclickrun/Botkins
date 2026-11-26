@@ -965,7 +965,25 @@ export async function receiveMigration(ws, peer, operation, payload = {}) {
 
   if (operation === "migrate.begin") {
     const existing = ws.nodeHost.imports[transferId];
-    if (existing && ws.state.bots.some((b) => b.id === existing.targetBotId)) {
+    // The source changed after verification: drop the stale, never-activated copy so a fresh one replaces it.
+    // Only a copy that still matches what the source verified is replaced, so edits made here are never dropped.
+    const existingPresent = existing && ws.state.bots.some((b) => b.id === existing.targetBotId);
+    if (
+      typeof payload.replaceSha256 === "string" &&
+      existing &&
+      !existing.routinesActivated &&
+      existing.status !== "committed" &&
+      existing.sourceHostId === peer.serverId &&
+      (!existingPresent || readBackImportedBot(ws, existing).contentSha256 === payload.replaceSha256)
+    ) {
+      await peer.verify();
+      if (existingPresent) {
+        await removeBotForConversion(ws, existing.targetBotId);
+      }
+      delete ws.nodeHost.imports[transferId];
+      staging.delete(transferId);
+      ws.save();
+    } else if (existingPresent) {
       const verification = readBackImportedBot(ws, existing);
       return {
         status: existing.status,
@@ -1450,8 +1468,22 @@ function restoreSourceRoutines(ws, prior) {
   if (changed) ws.save();
 }
 
-async function transferBotToTarget(ws, peers, item, { serverId, name }, pin) {
+/**
+ * Fingerprint of everything a move would carry for this bot, taken from the exact payload that is sent.
+ * Any change (new reply, edited message, routine run, panel/profile/memory edit) changes it.
+ */
+function sourceFingerprintOf(payload) {
+  const { vaultNote: _vaultNote, ...rest } = payload;
+  return sha256(canonicalJson(rest));
+}
+
+export function sourceBotFingerprint(ws, botId, sourceHostMeta = {}, priorRoutines = null) {
+  return sourceFingerprintOf(exportBotBundle(ws, botId, sourceHostMeta, priorRoutines).payload);
+}
+
+async function transferBotToTarget(ws, peers, item, { serverId, name }, pin, { replaceSha256 = null } = {}) {
   const { payload, manifest } = exportBotBundle(ws, item.botId, { serverId, name }, item.priorRoutines);
+  const sourceFingerprint = sourceFingerprintOf(payload);
   const serialized = Buffer.from(JSON.stringify(payload), "utf8");
   if (serialized.length > MAX_TRANSFER_BYTES) {
     throw new Error(`${item.botName} exceeds the maximum transfer size (${MAX_TRANSFER_BYTES} bytes).`);
@@ -1471,14 +1503,21 @@ async function transferBotToTarget(ws, peers, item, { serverId, name }, pin) {
       manifest,
       totalChunks: chunks.length,
       totalBytes: serialized.length,
+      ...(replaceSha256 && { replaceSha256 }),
     },
     pin,
   );
 
   if (beginRes?.alreadyImported) {
     const check = verifyTransferReceipt(manifest, beginRes.verification);
+    // A stale, not-yet-activated copy from an earlier attempt: replace it with the current source state.
+    if (!check.ok && !replaceSha256 && beginRes.verification?.contentSha256) {
+      return transferBotToTarget(ws, peers, item, { serverId, name }, pin, {
+        replaceSha256: item.verification?.contentSha256 ?? beginRes.verification.contentSha256,
+      });
+    }
     if (!check.ok) throw new Error(check.reason);
-    return { targetBotId: beginRes.targetBotId, verification: beginRes.verification, manifest };
+    return { targetBotId: beginRes.targetBotId, verification: beginRes.verification, manifest, sourceFingerprint };
   }
 
   const received = new Set(Array.isArray(beginRes?.receivedChunks) ? beginRes.receivedChunks : []);
@@ -1518,6 +1557,7 @@ async function transferBotToTarget(ws, peers, item, { serverId, name }, pin) {
     targetBotId: verifyRes?.targetBotId ?? commitRes?.targetBotId,
     verification: verifyRes?.verification ?? commitRes?.verification,
     manifest,
+    sourceFingerprint,
   };
 }
 
@@ -1715,7 +1755,7 @@ export async function runConversion(ws, input = {}, { peers, link, announce, onP
         if (item.stage === "routines_disabled" || item.stage === "transferring") {
           item.stage = "transferring";
           emit();
-          const { targetBotId, verification } = await transferBotToTarget(
+          const { targetBotId, verification, sourceFingerprint } = await transferBotToTarget(
             ws,
             effectivePeers,
             item,
@@ -1724,6 +1764,7 @@ export async function runConversion(ws, input = {}, { peers, link, announce, onP
           );
           item.targetBotId = targetBotId;
           item.verification = verification;
+          item.sourceFingerprint = sourceFingerprint;
           item.stage = "verified";
           recordSnapshotTransfer(item);
           emit();
@@ -1731,6 +1772,31 @@ export async function runConversion(ws, input = {}, { peers, link, announce, onP
 
         // 2d. Verified! Now remove from source (never before verification passed).
         if (item.stage === "verified") {
+          // A failed cleanup restores source routines; quiesce them again before re-checking.
+          if (!item.priorRoutines) {
+            item.priorRoutines = disableSourceRoutines(ws, item.botId);
+            emit();
+          }
+          // Replies, edits or routine runs since verification would be lost by deleting now:
+          // refresh the destination copy and re-verify until the source matches what was verified.
+          for (let attempt = 0; ; attempt++) {
+            if (sourceBotFingerprint(ws, item.botId, sourceHostMeta, item.priorRoutines) === item.sourceFingerprint) break;
+            if (attempt >= 3) {
+              throw new Error(`${item.botName} keeps changing on this computer. Let its chats finish, then resume.`);
+            }
+            const { targetBotId, verification, sourceFingerprint } = await transferBotToTarget(
+              ws,
+              effectivePeers,
+              item,
+              sourceHostMeta,
+              pin,
+            );
+            item.targetBotId = targetBotId;
+            item.verification = verification;
+            item.sourceFingerprint = sourceFingerprint;
+            emit();
+          }
+          // No await between the fingerprint check and removal, so nothing can change in between.
           await removeBotForConversion(ws, item.botId);
           item.stage = "cleaned";
           emit();

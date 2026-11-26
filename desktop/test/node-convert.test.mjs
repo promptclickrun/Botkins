@@ -527,6 +527,73 @@ test("verified move preserves verified stage when target is absent on resume, th
   assert.equal(targetWs.state.chats.find((c) => c.botId === tgtBot.id).schedules[0].enabled, true);
 });
 
+test("resume after busy-chat cleanup failure re-transfers and re-verifies new source messages before deleting", async (t) => {
+  const { ws: sourceWs } = makeWorkspace(t);
+  const { ws: targetWs } = makeWorkspace(t);
+  const botId = seedBot(sourceWs, {
+    name: "BusyChatBot",
+    routine: { name: "Hourly Check", cron: "0 * * * *", timezone: "UTC", enabled: true },
+  });
+  const keepIds = sourceWs.state.bots.filter((b) => b.id !== botId).map((b) => b.id);
+  const ops = [];
+  const peers = makeDirectPeers(targetWs, {
+    intercept: async (_hostId, op, payload) => {
+      if (!op.startsWith("migrate.")) return undefined;
+      ops.push(op);
+      return receiveMigration(targetWs, { serverId: "host-source", name: "Source Mac", verify: async () => {} }, op, payload);
+    },
+  });
+
+  const origAssertIdle = sourceWs.agents.assertIdle;
+  let blockRemoval = true;
+  sourceWs.agents.assertIdle = (...args) => {
+    if (blockRemoval) throw new Error("Chat is busy");
+    return origAssertIdle.apply(sourceWs.agents, args);
+  };
+
+  const first = await runConversion(
+    sourceWs,
+    {
+      nodeName: "Edge Node",
+      botActions: [
+        ...keepIds.map((id) => ({ botId: id, action: "keep" })),
+        { botId, action: "move", targetHostId: "host-target" },
+      ],
+    },
+    { peers },
+  );
+  assert.equal(first.job.items.find((i) => i.botId === botId).stage, "verified");
+  const opsAfterVerify = ops.length;
+  // Source routines were restored after the failed cleanup.
+  const srcChat = sourceWs.state.chats.find((c) => c.botId === botId);
+  assert.equal(srcChat.schedules[0].enabled, true);
+
+  // The busy chat finishes its reply and the person edits an earlier message before resuming.
+  srcChat.messages.push({ role: "assistant", text: "Late reply after verification", time: 1700000009000 });
+  srcChat.messages[0].text = "Hello BusyChatBot (edited)";
+  sourceWs.save();
+  const expectedMessages = srcChat.messages.map((m) => ({ role: m.role, text: m.text }));
+
+  blockRemoval = false;
+  const resumed = await runConversion(sourceWs, { resume: true }, { peers });
+  assert.equal(resumed.job.status, "completed");
+  assert.equal(resumed.job.items.find((i) => i.botId === botId).stage, "done");
+  assert.equal(sourceWs.state.bots.some((b) => b.id === botId), false);
+  const resumeOps = ops.slice(opsAfterVerify);
+  assert.ok(resumeOps.includes("migrate.commit"), "changed source is re-transferred");
+  assert.ok(resumeOps.lastIndexOf("migrate.verify") < resumeOps.indexOf("migrate.activate"), "re-verified before activation");
+
+  const tgtBots = targetWs.state.bots.filter((b) => b.name === "BusyChatBot");
+  assert.equal(tgtBots.length, 1);
+  const tgtChat = targetWs.state.chats.find((c) => c.botId === tgtBots[0].id);
+  assert.deepEqual(
+    tgtChat.messages.map((m) => ({ role: m.role, text: m.text })),
+    expectedMessages,
+  );
+  assert.equal(tgtChat.schedules.length, 1);
+  assert.equal(tgtChat.schedules[0].enabled, true);
+});
+
 test("routine de-duplication guarantees a routine is NEVER enabled on both source and target at the same time", async (t) => {
   const { ws: sourceWs } = makeWorkspace(t);
   const { ws: targetWs } = makeWorkspace(t);
