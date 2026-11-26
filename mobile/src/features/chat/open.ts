@@ -1,4 +1,4 @@
-import { router } from "expo-router";
+import { openChat } from "./navigate";
 import type { BoardItem } from "@/link/types";
 import { api, attempt, boundApi } from "@/state/link";
 import { useChatPrefs } from "@/state/chatPrefs";
@@ -55,13 +55,13 @@ export async function openBotChat(botId: string, tap = useChatPrefs.getState().b
   if (held?.archived) api.setChatFlags(held.id, { archived: false }).catch(() => {});
   void markBotRead(botId, { quiet: true });
   const id = held?.id ?? (await attempt(tap === "main" && main ? api.mainChat(botId) : api.createChat(botId)));
-  if (id) router.push({ pathname: "/chat/[id]", params: { id } });
+  if (id) openChat(id);
 }
 
 /** Starts a fresh chat with a bot. */
 export async function newBotChat(botId: string) {
   const id = await attempt(api.createChat(botId));
-  if (id) router.push({ pathname: "/chat/[id]", params: { id } });
+  if (id) openChat(id);
 }
 
 /**
@@ -70,7 +70,7 @@ export async function newBotChat(botId: string) {
  */
 export async function discussBoardItem(item: BoardItem) {
   const id = await attempt(api.createChat(item.botId));
-  if (id) router.push({ pathname: "/chat/[id]", params: { id, board: item.id } });
+  if (id) openChat(id, { board: item.id });
 }
 
 /**
@@ -80,6 +80,6 @@ export async function discussBoardItem(item: BoardItem) {
 export async function actOnIdea(item: BoardItem) {
   const id = await attempt(api.createChat(item.botId));
   if (!id) return;
-  router.push({ pathname: "/chat/[id]", params: { id } });
+  openChat(id);
   await attempt(api.send(id, boardMessage(item, "Let's do it!")).then(() => api.boardAct(item.id, "yes")));
 }

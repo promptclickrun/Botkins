@@ -10,6 +10,8 @@
 // (src/state/device.ts) and sends answers given on a card or a notification (src/state/answers.ts).
 import * as Application from "expo-application";
 import { type Href, router } from "expo-router";
+import { createResponseDeduper } from "@/features/chat/chatNavigation";
+import { openChat } from "@/features/chat/navigate";
 import { spaceRoute } from "@/features/spaces/logic";
 import { keep, readKept } from "@/state/keep";
 import { AppState, Platform } from "react-native";
@@ -250,8 +252,7 @@ function alertOf(response: import("expo-notifications").NotificationResponse): {
 function takeAlert(alert: { bot: string; run: string }, serverId?: string) {
   const send = async () => {
     const answer = await attempt(api.proactiveAct(alert.bot, alert.run, "take"));
-    if (answer?.chatId && serverId === useApp.getState().pairing?.serverId && chatOnScreen() !== answer.chatId)
-      router.push({ pathname: "/chat/[id]", params: { id: answer.chatId } });
+    if (answer?.chatId && serverId === useApp.getState().pairing?.serverId) openChat(answer.chatId);
   };
   const ready = (state: ReturnType<typeof useApp.getState>) => state.link === "online" && state.pairing?.serverId === serverId;
   if (ready(useApp.getState())) return void send();
@@ -265,9 +266,9 @@ function takeAlert(alert: { bot: string; run: string }, serverId?: string) {
 }
 /** A notification's actions that answer a bot where they are (the native side queues them; src/state/answers.ts sends them). */
 const ANSWERED_THERE = /^(approve|remember|deny|reply|choice\.\d)$/;
+const handledResponses = createResponseDeduper();
 function openFrom(response: import("expo-notifications").NotificationResponse | null) {
-  if (!response || !native) return;
-  // Reopen the link immediately on notification tap (even before AppState flips to "active").
+  if (!response || !native || !handledResponses.claim(response)) return;
   wakeForNotification();
   const chatId = chatOf(response);
   const host = hostOf(response);
@@ -306,8 +307,7 @@ function openFrom(response: import("expo-notifications").NotificationResponse | 
     // The button on a proactive alert: the bot starts on what it offered, in the chat that opens.
     const offered = response.actionIdentifier === "alert.take" ? alertOf(response) : undefined;
     if (offered) takeAlert(offered, other ? host : state.pairing?.serverId);
-    if (chatOnScreen() === chatId) return;
-    router.push({ pathname: "/chat/[id]", params: { id: chatId } });
+    openChat(chatId);
   };
   if (useApp.getState().booted && useApp.getState().pairing) go();
   else {

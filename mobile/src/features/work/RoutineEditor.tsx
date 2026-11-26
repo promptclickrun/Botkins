@@ -3,6 +3,7 @@ import { router, useLocalSearchParams } from "expo-router";
 import { Bell, Check, CornerDownRight, MessageCircle, Minus, Monitor, Play, Send, Smartphone, Trash2, TriangleAlert, User } from "lucide-react-native";
 import { useMemo, useState } from "react";
 import { Alert, View } from "react-native";
+import { openChat as openChatRoute } from "@/features/chat/navigate";
 import type { ModelChoice } from "@/link/types";
 import { defaultProviderOf, describeChoice } from "@/features/models/shared";
 import { type RoutineEntry, useBots, useCan, useMember, useModels, usePart, useProviders, useRoutines, useSettings } from "@/state/hooks";
@@ -229,7 +230,7 @@ function Editor({ routine, botId }: { routine?: RoutineEntry; botId: string | nu
   const openChat = () => {
     if (!routine) return;
     router.back();
-    router.push({ pathname: "/chat/[id]", params: { id: routine.id } });
+    openChatRoute(routine.id);
   };
 
   return (

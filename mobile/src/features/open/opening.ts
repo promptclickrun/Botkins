@@ -1,7 +1,7 @@
 // The links widgets, Live Activities and notifications open (botkins://open/…). Each names the
 // computer it is about (`host`) when the phone is paired with several: the phone uses that computer
 // first, as a tap on its notification does.
-import { router } from "expo-router";
+import { openChat } from "@/features/chat/navigate";
 import { chatForTap } from "@/features/chat/habits";
 import { api, attempt, switchComputer } from "@/state/link";
 import { useApp } from "@/state/store";
@@ -38,8 +38,7 @@ export async function lastOrNewChat(botId: string): Promise<string | undefined> 
   return held?.id ?? (await attempt(api.createChat(botId)));
 }
 
-/** Replaces the opening screen with a chat, over Home, so Back goes Home. */
+/** Returns to Home (clearing any transient `/open/*` screen) and opens the chat without stacking duplicates. */
 export function showChat(id: string) {
-  router.replace("/");
-  router.push({ pathname: "/chat/[id]", params: { id } });
+  openChat(id, undefined, { resetToHome: true });
 }

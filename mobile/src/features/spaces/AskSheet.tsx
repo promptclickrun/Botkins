@@ -5,6 +5,7 @@
 import { router, useLocalSearchParams } from "expo-router";
 import { useMemo, useState } from "react";
 import { View } from "react-native";
+import { openChat } from "@/features/chat/navigate";
 import { BotChips } from "@/features/work/bits";
 import { useBots, useCan } from "@/state/hooks";
 import { api, attempt } from "@/state/link";
@@ -36,7 +37,7 @@ export default function AskSheet() {
     setAsking(false);
     if (!made) return;
     router.back();
-    router.push({ pathname: "/chat/[id]", params: { id: made.chatId } });
+    openChat(made.chatId);
   };
   return (
     <Sheet title={title} action="Ask" onAction={() => void ask()} actionDisabled={!ready} actionLoading={asking}>

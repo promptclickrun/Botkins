@@ -9,6 +9,7 @@ import { ScrollView, useWindowDimensions, View } from "react-native";
 import Animated, { FadeIn, useAnimatedRef, useAnimatedScrollHandler, useSharedValue } from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { scheduleOnRN } from "react-native-worklets";
+import { openChat } from "@/features/chat/navigate";
 import { markAllChatsRead, openBotChat } from "@/features/chat/open";
 import { allUnreadChats, isUnreadChat } from "@/features/chat/unread";
 import { useSpacesOn } from "@/features/spaces/data";
@@ -61,7 +62,7 @@ function NeedsYou({ request, bot }: { request: AgentRequest; bot?: Bot }) {
       subtitle={(bot?.name ?? "A bot") + " needs you"}
       trailing={<Dot tone="warning" />}
       chevron
-      onPress={() => router.push({ pathname: "/chat/[id]", params: { id: request.chatId } })}
+      onPress={() => openChat(request.chatId)}
     />
   );
 }
