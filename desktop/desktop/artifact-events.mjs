@@ -51,8 +51,65 @@ function destinations(name, args) {
   return [...new Set(paths.filter((p) => typeof p === "string" && !!p))];
 }
 
+/**
+ * The file a written attachment names, or null: a full path, or a name in the bot's own folder
+ * ("chart.png", where its tools write by default). Only a file that is there counts.
+ */
+function mediaFile(raw, folder) {
+  const name = raw.replace(/[.,;:!?)\]}>]+$/, "");
+  if (!name || name.includes("://")) return null;
+  const relative = !isAbsolute(name) && !name.startsWith("~") && !/^[A-Za-z]:[\\/]/.test(name);
+  const path = relative ? resolve(folder, name) : name;
+  if (relative && !contained(folder, path)) return null;
+  const found = fileDetails(path);
+  return found && found.kind !== "folder" ? { path: relative ? path : name, rest: raw.slice(name.length) } : null;
+}
+
+/**
+ * The ways a model writes an attachment that the apps would not show, written the one way they do
+ * ("MEDIA: /full/path"), only where the file is there:
+ * - a relative path: "MEDIA: chart.png" (a name in the bot's own folder),
+ * - the whole line in backticks: "`MEDIA: /a/chart.png`",
+ * - a bold or lowercase label: "**MEDIA:** /a/chart.png", "media: /a/chart.png",
+ * - a Markdown image of a file here: "![chart](/a/chart.png)" (a web address stays as it is).
+ * Code blocks are left alone. Which files may then be shown is still decided by `messages`.
+ */
+export function normalizeMedia(text, folder) {
+  let fenced = false;
+  return text
+    .split("\n")
+    .map((line) => {
+      if (/^\s*(```|~~~)/.test(line)) {
+        fenced = !fenced;
+        return line;
+      }
+      if (fenced) return line;
+      let out = line.replace(/`\s*MEDIA:\s?([^`\s]+)\s*`/gi, (whole, raw) => {
+        const file = mediaFile(raw, folder);
+        return file ? "MEDIA: " + file.path + file.rest : whole;
+      });
+      // "MEDIA:" anywhere in a line; a bold or lowercase label only where a line starts (after a list or quote mark), so prose ("social media: …") stays prose.
+      out = out.replace(/(^|[\s([{<"'“‘])MEDIA:([ ]?)([`"']?)([^\s`"']+)\3/g, (whole, before, space, quote, raw) => {
+        const file = mediaFile(raw, folder);
+        return file ? before + "MEDIA:" + (space || " ") + quote + file.path + quote + file.rest : whole;
+      });
+      out = out.replace(/^(\s*(?:[-*+]|\d+[.)]|>)?\s*)(\*\*|__)?media:(\*\*|__)?[ ]?([`"']?)([^\s`"']+)\4/i, (whole, lead, open, close, quote, raw) => {
+        if ((open || "") !== (close || "") || (!open && whole.slice(lead.length, lead.length + 6) === "MEDIA:")) return whole;
+        const file = mediaFile(raw, folder);
+        return file ? lead + "MEDIA: " + quote + file.path + quote + file.rest : whole;
+      });
+      out = out.replace(/!\[[^\]\n]*\]\(<?([^)\s>]+)>?(?:\s+"[^"]*")?\)/g, (whole, raw) => {
+        const file = mediaFile(raw, folder);
+        return file ? "MEDIA: " + file.path : whole;
+      });
+      return out;
+    })
+    .join("\n");
+}
+
 /** Raised when the rule for which `MEDIA:` files are a bot's own widens, so old messages are read once more. */
-const MEDIA_PASS = 1;
+// 2: loosely written attachments in the bot's own folder count (normalizeMedia).
+const MEDIA_PASS = 2;
 
 export class ArtifactEvents {
   constructor(ws) {
@@ -94,9 +151,15 @@ export class ArtifactEvents {
 
   messages(chat) {
     const start = this.counts.get(chat.messages) ?? 0;
+    // A piece of a reply whose turn still runs is read again once the turn ends: finishReply compares
+    // those pieces with the final text, so they are not rewritten before then. Recording is safe to repeat.
+    let done = chat.messages.length;
     for (let index = start; index < chat.messages.length; index++) {
       const message = chat.messages[index];
+      const writing = message.interim && message.role === "assistant" && this.ws.state.runs.some((run) => run.id === message.runId && run.status === "Working");
+      if (writing) done = Math.min(done, index);
       const botIds = message.botId ? [message.botId] : message.role === "user" ? chat.botIds ?? [chat.botId] : [chat.botId];
+      if (!writing && message.role === "assistant" && message.text && /media:|!\[/i.test(message.text)) message.text = normalizeMedia(message.text, this.folder(chat, botIds[0]));
       for (const botId of botIds) {
         const context = { botId, chatId: chat.id, messageIndex: index, time: message.time ?? this.ws.state.runs.find((r) => r.id === message.runId)?.time ?? chat.time ?? 0 };
         for (const file of message.attachments ?? []) this.ws.artifacts.record(file.path, { ...context, source: message.role === "user" ? "upload" : "media" });
@@ -114,7 +177,7 @@ export class ArtifactEvents {
         }
       }
     }
-    this.counts.set(chat.messages, chat.messages.length);
+    this.counts.set(chat.messages, done);
   }
 
   // Recover observable outputs of successful structured writes in pre-index workspaces.

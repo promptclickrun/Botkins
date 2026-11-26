@@ -128,6 +128,55 @@ test("an actual workspace turn records uploads, successful tool writes and MEDIA
   assert.deepEqual(ws.artifacts.resolve({ chatId, paths: [secret] }).items, [null]);
 });
 
+test("a picture a small model names loosely still shows: a relative path, a Markdown image or a bold label, buried in a long reply", async (t) => {
+  const { dir, put } = fixture(t);
+  const own = join(dir, "files", "pip");
+  mkdirSync(join(own, "shots"), { recursive: true });
+  writeFileSync(join(own, "chart.png"), "png");
+  writeFileSync(join(own, "shots", "two.png"), "png");
+  writeFileSync(join(own, "three.png"), "png");
+  const elsewhere = put("elsewhere.png");
+  const reply = [
+    "Here is a long answer with several paragraphs before the pictures.",
+    "",
+    "Some more text, then the first one: MEDIA: chart.png and a sentence after it.",
+    "",
+    "![second](" + join(own, "shots", "two.png") + ")",
+    "**MEDIA:** " + join(own, "three.png"),
+    "MEDIA: missing.png",
+    "MEDIA: ../elsewhere.png",
+    "```",
+    "MEDIA: chart.png",
+    "```",
+    "And a closing paragraph.",
+  ].join("\n");
+  const fake = fakeClient(async () => ({ data: { content: reply } }));
+  const ws = new Workspace(dir, fake.client, () => {});
+  const chatId = ws.createChat("pip");
+  await ws.send(chatId, "Show me the charts");
+  const text = ws.chat(chatId).messages.at(-1).text;
+  assert.match(text, new RegExp("first one: MEDIA: " + join(own, "chart.png").replace(/[/\\.]/g, "\\$&") + " and a sentence"));
+  assert.match(text, /\nMEDIA: .*two\.png\n/);
+  assert.match(text, /\nMEDIA: .*three\.png\n/);
+  assert.match(text, /MEDIA: missing\.png/, "a name that isn't a file is left as written");
+  assert.match(text, /MEDIA: \.\.\/elsewhere\.png/, "a name outside the bot's folder is left as written");
+  assert.match(text, /```\nMEDIA: chart\.png\n```/, "a code block is left alone");
+  const shown = ws.artifacts.list({ botId: "pip", chatId }).items.filter((a) => a.source === "media").map((a) => a.name).sort();
+  assert.deepEqual(shown, ["chart.png", "three.png", "two.png"]);
+  assert.deepEqual(ws.artifacts.resolve({ chatId, paths: [elsewhere] }).items, [null]);
+});
+
+test("every chat's instructions say where to save a picture and how to write MEDIA:, with the bot's own folder", (t) => {
+  const { dir } = fixture(t);
+  const ws = new Workspace(dir, fakeClient().client, () => {});
+  const chat = ws.chat(ws.createChat("pip"));
+  const { head } = ws.instructionParts(chat, ws.bot("pip")).fixed;
+  const folder = join(dir, "files", "pip");
+  assert.ok(head.includes("save it in " + folder), head);
+  assert.ok(head.includes("MEDIA: " + join(folder, "chart.png")));
+  assert.match(head, /Never a relative path, a Markdown image/);
+});
+
 test("a paired client pages and reads indexed artifacts over the link", async (t) => {
   const { dir, put } = fixture(t);
   const ws = new Workspace(dir, fakeClient().client, () => {});
@@ -240,7 +289,7 @@ test("a picture that a bot wrote into its own session's folder shows in that cha
   // named in another chat of that bot. So the first chat, which also named the other's picture,
   // may show it after this look, once that picture is the bot's by its own chat.)
   // That look happens once: the next start reads nothing again.
-  assert.equal(ws.state.mediaPass, 1);
+  assert.equal(ws.state.mediaPass, 2);
   ws.artifacts.rows.splice(0);
   ws.artifacts.save();
   ws.save();

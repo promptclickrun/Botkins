@@ -7,7 +7,8 @@ import { mediaPlaces } from "./mediaParts";
 export { pathMarkup } from "./mediaParts";
 
 export type FilePreview = { item: Artifact; local: boolean };
-export type ChatFiles = { chatId: string; botId: string; hostId?: string; remote: boolean; preview: (file: FilePreview) => void };
+/** `revision`: the computer's artifact index revision; a change asks about the paths again (a reply's attachments are recorded just after it is written). */
+export type ChatFiles = { chatId: string; botId: string; hostId?: string; remote: boolean; revision?: number; preview: (file: FilePreview) => void };
 /** A path in a reply that the computer answered for. `media`: a `MEDIA:` attachment the computer knows, drawn in place of its text (`again`: an earlier place draws it). */
 export type Found = { path: string; start: number; end: number; item: Artifact; media?: Artifact; again?: boolean };
 export const ChatFileContext = createContext<{ files?: ChatFiles; found: Found[] }>({ found: [] });
@@ -15,7 +16,9 @@ export const ChatFileContext = createContext<{ files?: ChatFiles; found: Found[]
 export function useChatFiles(text: string, files?: ChatFiles) {
   const candidates = useMemo(() => files ? findPathSpans(text) : [], [text, !!files]);
   const [checked, setChecked] = useState<{ key: string; found: Found[] }>();
-  const key = JSON.stringify([text, files?.chatId, files?.botId, files?.hostId, files?.remote]);
+  // Only a reply that writes MEDIA: waits on the index: other paths are links that don't depend on it.
+  const media = candidates.some((span) => span.media);
+  const key = JSON.stringify([text, files?.chatId, files?.botId, files?.hostId, files?.remote, media ? files?.revision : 0]);
   useEffect(() => {
     if (!files || !candidates.length) return;
     let current = true;
