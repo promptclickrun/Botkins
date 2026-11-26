@@ -7,6 +7,7 @@ import { router, useLocalSearchParams } from "expo-router";
 import { AppWindow, ChartColumn, ChevronRight, FileText, ListChecks, type LucideIcon, Table, TrendingUp } from "lucide-react-native";
 import { useMemo, useState } from "react";
 import { View } from "react-native";
+import { openChat } from "@/features/chat/navigate";
 import { BotChips } from "@/features/work/bits";
 import type { PanelStart } from "@/link/types";
 import { useBots, useCan, useMember, usePart } from "@/state/hooks";
@@ -53,7 +54,7 @@ export default function NewPanel() {
     setAsking(false);
     if (!made) return;
     router.back();
-    router.push({ pathname: "/chat/[id]", params: { id: made.chatId } });
+    openChat(made.chatId);
   };
 
   return (

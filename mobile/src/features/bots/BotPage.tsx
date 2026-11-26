@@ -3,6 +3,7 @@ import { type Href, router, Stack, useLocalSearchParams } from "expo-router";
 import { AudioLines, BookmarkPlus, Brain, Copy, Download, Eye, EyeOff, Folder, FolderKanban, MessageCircle, Palette, Pin, Plus, Repeat, ScreenShare, ScrollText, Sparkles, SquarePen, Star, Trash2, Users, Wrench } from "lucide-react-native";
 import { useMemo } from "react";
 import { Alert, View } from "react-native";
+import { openChat } from "@/features/chat/navigate";
 import { newBotChat, openBotChat } from "@/features/chat/open";
 import { describeChoice, useDefaultProvider } from "@/features/models/shared";
 import type { Bot } from "@/link/types";
@@ -18,6 +19,7 @@ import { usePhoneVoice } from "@/features/voice/prefs";
 import { botVoiceSummary } from "@/features/voice/settings/summary";
 import { useBotVoiceSupported, useVoiceSettings } from "@/features/voice/state";
 import { grantSummary } from "./projectAccess";
+import { botSkills } from "@/features/skills/shared";
 import { myself } from "@/features/chat/people";
 import { peopleOf, PROACTIVE_CAPABILITY, proactiveStanding } from "./proactive";
 import { moveToSection, runSectionChoice, toggleHidden } from "./menus";
@@ -82,8 +84,7 @@ function BotDetail({ bot }: { bot: Bot }) {
   const mine = routines.filter((routine) => routine.chat.botId === bot.id);
   const recent = useMemo(() => chats.filter((chat) => chat.botId === bot.id && !chat.botIds && isConversation(chat)).sort((a, b) => b.time - a.time).slice(0, 3), [chats, bot.id]);
 
-  // Skills and tools this bot can use: on for everyone, and not switched off for it.
-  const skillsOn = skills?.filter((skill) => skill.command !== "script" && skill.enabled && !skillsOffForAll?.includes(skill.name) && !bot.skillsOff?.includes(skill.name)).length;
+  const skillsOn = skills && botSkills(skills, bot, skillsOffForAll).filter((skill) => skill.enabled && !bot.skillsOff?.includes(skill.name)).length;
   const toolsOn = servers?.filter((server) => server.enabled && !bot.mcpOff?.includes(server.id)).length ?? 0;
   const capabilities = skillsOn === undefined ? undefined : skillsOn + toolsOn + " on";
   const primary = bots[0]?.id === bot.id;
@@ -204,7 +205,7 @@ function BotDetail({ bot }: { bot: Bot }) {
           <Label>Recent chats</Label>
           <Group>
             {recent.map((chat) => (
-              <Row key={chat.id} title={chat.title || "New chat"} value={ago(chat.time)} chevron onPress={() => router.push({ pathname: "/chat/[id]", params: { id: chat.id } })} />
+              <Row key={chat.id} title={chat.title || "New chat"} value={ago(chat.time)} chevron onPress={() => openChat(chat.id)} />
             ))}
           </Group>
         </View>

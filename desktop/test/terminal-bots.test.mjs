@@ -482,6 +482,38 @@ test("a template is saved from a bot, shown, renamed, exported as a file and imp
   for (const text of ["TEMPLATE-WORDS", "SHARED-WORDS"]) assert.equal(log().includes(text), false, text);
 });
 
+test("marketplace and imported bundles show every skill and schedule before creating a bot", { skip }, async (t) => {
+  const { running, client, botkins, put, names } = await service(t);
+  const bundle = {
+    skills: [{ name: "sort-mail", description: "Sort messages by urgency.", instructions: "Group mail into urgent and waiting." }],
+    routines: [{ name: "Inbox report", instructions: "Draft the weekly inbox report.", cadence: { kind: "weekly", days: [1, 3], time: "09:15" } }],
+  };
+  const input = { name: "Sorter", role: "Inbox assistant", instructions: "Triage incoming messages.", bundle };
+  const market = { ...input, id: "sorter@local", marketplace: "local", marketplaceName: "Local", builtIn: false };
+  running.runtime.workspace.plugins.catalog.agentTemplate = async () => market;
+  const preview = await botkins(["templates", "use", market.id]);
+  assert.equal(preview.exit, 2, preview.err);
+  for (const value of ["Skill for this bot: sort-mail", bundle.skills[0].description, bundle.skills[0].instructions, "Paused routine: Inbox report", "Mon, Wed at 09:15", bundle.routines[0].instructions]) assert.ok(preview.err.includes(value), value);
+  assert.deepEqual(await names(), []);
+  assert.deepEqual((await botkins(["templates", "show", market.id, "--json"])).json().bundle, bundle);
+  await assert.rejects(client.call("templates.use", market.id), /Update Botkins/);
+  await assert.rejects(client.call("templates.use", market.id, null, { version: 2, template: { ...market, instructions: "Earlier words" } }), /changed/);
+  assert.deepEqual(await names(), []);
+  const installed = await botkins(["templates", "use", market.id, "--yes", "--json"]);
+  assert.equal(installed.exit, 0, installed.err);
+  const botId = installed.json().id;
+  assert.deepEqual(running.runtime.workspace.bot(botId).bundle, bundle);
+  assert.equal(running.runtime.workspace.panels.routines.list(botId)[0].entry.enabled, false);
+
+  const file = put("shared.json", { format: "botkins.bot-template", version: 2, ...input });
+  const saved = await botkins(["templates", "import", file, "--yes", "--json"]);
+  assert.equal(saved.exit, 0, saved.err);
+  assert.ok(saved.err.includes(bundle.routines[0].instructions));
+  const copy = await botkins(["templates", "use", saved.json().id, "--name", "Second sorter", "--yes", "--json"]);
+  assert.equal(copy.exit, 0, copy.err);
+  assert.deepEqual(running.runtime.workspace.bot(copy.json().id).bundle, bundle);
+});
+
 test("`botkins help --json` lists the new commands, and says which ones ask", async () => {
   let out = "";
   const io = { stdout: { write: (text) => void (out += text) }, stderr: { write: () => {} }, env: {} };

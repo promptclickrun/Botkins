@@ -12,6 +12,7 @@ import { usePrefs } from "@/state/prefs";
 import { useApp } from "@/state/store";
 import { loadProfile, useProfile } from "@/state/profile";
 import { JOIN_ATTEMPT_KEY, resumeDecision } from "@/features/pair/joinLogic";
+import { chatRouteId } from "@/features/chat/chatNavigation";
 import { backdropBaseColor, ToastHost, useShape, useTheme } from "@/ui";
 
 void SplashScreen.preventAutoHideAsync();
@@ -109,7 +110,7 @@ export default function RootLayout() {
             </Stack.Protected>
             <Stack.Protected guard={paired} redirectTo="/welcome">
               <Stack.Screen name="(tabs)" options={{ headerShown: false, contentStyle: { backgroundColor: screenBg } }} />
-              <Stack.Screen name="chat/[id]" />
+              <Stack.Screen name="chat/[id]" dangerouslySingular={chatRouteId} />
               {/* Links from widgets, Live Activities and notifications (src/features/open): each hands over to a real screen at once. */}
               <Stack.Screen name="open/bot/[id]" options={{ headerShown: false, animation: "none" }} />
               <Stack.Screen name="open/chat/[id]" options={{ headerShown: false, animation: "none" }} />
@@ -161,6 +162,8 @@ export default function RootLayout() {
               <Stack.Screen name="models/signin" options={{ ...sheet, sheetAllowedDetents: [0.75, 1] }} />
               <Stack.Screen name="projects/index" />
               <Stack.Screen name="work/activity" />
+              <Stack.Screen name="work/tasks" />
+              <Stack.Screen name="work/routines" />
               <Stack.Screen name="projects/[id]" />
               <Stack.Screen name="projects/add-chats" options={tall} />
               <Stack.Screen name="projects/attach" options={tall} />
@@ -186,6 +189,8 @@ export default function RootLayout() {
               <Stack.Screen name="settings/appearance" />
               <Stack.Screen name="settings/approvals" />
               <Stack.Screen name="settings/harness" />
+              <Stack.Screen name="settings/general" />
+              <Stack.Screen name="settings/teamwork" />
               <Stack.Screen name="settings/usage" />
               <Stack.Screen name="settings/about" />
               <Stack.Screen name="settings/feedback" />

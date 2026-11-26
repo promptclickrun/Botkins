@@ -42,3 +42,12 @@ export const sectionOf = (bot: Pick<Bot, "sectionId">, sections: Section[] | und
 export function todayRow(open: boolean, count: number): { open: boolean; value: string | undefined } {
   return { open, value: !open && count > 0 ? String(count) : undefined };
 }
+
+/**
+ * Whether Home answers a waiting request in its own row (Deny and Allow), as a notification does: an
+ * ordinary approval only. A command that looks risky, a script to read whole, one a bot handed on
+ * from another computer, a question, a form and a secure input open where they can be read.
+ */
+export function answerInline(request: { kind: string; review?: true; dispatch?: true; nodeJob?: true }, dangerous: boolean): boolean {
+  return request.kind === "permission" && !request.review && !request.dispatch && !request.nodeJob && !dangerous;
+}

@@ -1,12 +1,12 @@
 // Bot templates the person saves or receives. A template is a bot's setup without its history:
-// name, role, about text, instructions and look. Shared files carry nothing local: no folders,
-// capability sources, chats or credentials.
+// name, role, about text, instructions, look and any portable bundled skills and routines.
 import { LEGACY_NAME } from "./home.mjs";
 import { randomUUID } from "node:crypto";
 import { readFileSync, statSync, writeFileSync } from "node:fs";
 import { textField } from "./panels.mjs";
 import { instructionsField, summaryField } from "./agents.mjs";
 import { cleanLook } from "./looks.mjs";
+import { templateBundle, templateFileBundle } from "./link/template-bundle.mjs";
 
 /** The format a template file is written in. */
 export const FORMAT = "botkins.bot-template";
@@ -20,6 +20,10 @@ const MAX_FILE = 256 * 1024;
  * silhouette an earlier version saved.
  */
 export function templateFields(data) {
+  return checkedFields(data, templateBundle(data?.bundle));
+}
+
+function checkedFields(data, bundle) {
   if (!data || typeof data !== "object" || Array.isArray(data)) throw new Error("This isn't a bot template.");
   const look = cleanLook(data.look);
   return {
@@ -28,18 +32,20 @@ export function templateFields(data) {
     summary: data.summary ? summaryField(data.summary) : "",
     instructions: instructionsField(data.instructions),
     ...(look && { look }),
+    ...(bundle && { bundle }),
   };
 }
 
 /** The file someone else can import. */
 export function templateFile(template) {
   const { name, role, summary, instructions, look } = template;
-  return { format: FORMAT, version: 1, name, role, ...(summary && { summary }), instructions, ...(look && { look }) };
+  const bundle = templateBundle(template.bundle);
+  return { format: FORMAT, version: bundle ? 2 : 1, name, role, ...(summary && { summary }), instructions, ...(look && { look }), ...(bundle && { bundle }) };
 }
 
 /** Reads a shared template file's text, refusing anything that isn't one. */
 export function parseTemplateFile(text) {
-  if (typeof text !== "string" || text.length > MAX_FILE) throw new Error("That file is too large to be a bot template.");
+  if (typeof text !== "string" || Buffer.byteLength(text, "utf8") > MAX_FILE) throw new Error("That file is too large to be a bot template.");
   let data;
   try {
     data = JSON.parse(text);
@@ -47,8 +53,7 @@ export function parseTemplateFile(text) {
     throw new Error("That file isn't a bot template. Templates are .json files exported from Botkins.");
   }
   if (!FORMATS.includes(data?.format)) throw new Error("That file isn't a Botkins bot template.");
-  if (data.version !== 1) throw new Error("This template was made by a newer Botkins. Update Botkins to import it.");
-  return templateFields(data);
+  return checkedFields(data, templateFileBundle(data));
 }
 
 export class Templates {
@@ -71,11 +76,13 @@ export class Templates {
     this.ws.save();
     return template.id;
   }
+  fieldsFromBot(botId, name) {
+    const bot = this.ws.bot(botId);
+    return templateFields({ ...bot, name: name?.trim() || bot.name, bundle: this.ws.bundleForBot(bot) });
+  }
   /** Saves a bot's setup as a template. */
   saveFromBot(botId, name) {
-    const bot = this.ws.bot(botId);
-    const fields = templateFields({ ...bot, name: name?.trim() || bot.name });
-    return this.add(fields, "saved");
+    return this.add(this.fieldsFromBot(botId, name), "saved");
   }
   rename(id, name) {
     this.get(id).name = textField(name, 48, "template name");
@@ -91,7 +98,7 @@ export class Templates {
    * { name, text }. For a window that can't show a save dialog (a phone, another computer).
    */
   exportText({ templateId, botId } = {}) {
-    const fields = templateId ? this.get(templateId) : templateFields(this.ws.bot(botId));
+    const fields = templateId ? this.get(templateId) : this.fieldsFromBot(botId);
     return { name: (fields.name.replace(/[\\/:*?"<>|\0-\x1f]+/g, " ").replace(/\s+/g, " ").trim() || "Bot template") + ".json", text: JSON.stringify(templateFile(fields), null, 2) + "\n" };
   }
   /** Writes a template, or a bot as a template, to a file the person chose. */

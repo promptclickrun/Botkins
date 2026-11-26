@@ -40,7 +40,8 @@ function BotChoice({ bot, multi, selected, busy, disabled, onPress }: { bot: Bot
 }
 
 export default function NewChat() {
-  const { botId } = useLocalSearchParams<{ botId?: string }>();
+  // `project`: "New chat in this project" on a project's page starts with it chosen.
+  const { botId, project } = useLocalSearchParams<{ botId?: string; project?: string }>();
   const allBots = useBots();
   const projects = usePart("projects");
   const canChat = useCan("agents", "chat");
@@ -51,7 +52,7 @@ export default function NewChat() {
   }, [allBots, botId]);
   const [kind, setKind] = useState<Kind>("one");
   const [picked, setPicked] = useState<string[]>(botId ? [botId] : []);
-  const [projectId, setProjectId] = useState<string | null>(null);
+  const [projectId, setProjectId] = useState<string | null>(project ?? null);
   const savedMode = useCapability("project-mode-v1");
   const [folder, setFolder] = useState<string>();
   const chosen = projects?.find((p) => p.id === projectId);

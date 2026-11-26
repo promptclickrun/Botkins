@@ -167,3 +167,17 @@ test("a member's spoken request is updated and runs once in their name", async (
   assert.deepEqual(said[0].author, { memberId: avery.memberId, name: avery.name });
   assert.ok(said[0].runId);
 });
+
+test("the workspace checks bundle permissions even when a separate link sends a member's call", async (t) => {
+  const { ws } = open(t);
+  const perms = { agents: ["view", "create"], skills: [], today: [] };
+  ws.teamOf = () => ({ roles: [{ id: "r", perms }], groups: [{ id: "g", roleId: "r" }], members: [{ id: avery.memberId, groupId: "g" }] });
+  const call = deviceCall({ workspace: ws, folders: {}, handlers: { addBot: (...args) => ws.agents.create(...args), duplicateBot: (...args) => ws.agents.duplicateBot(...args) } });
+  const fields = { name: "Sorter", role: "Helper", instructions: "Sort.", bundle: { skills: [{ name: "sort-mail", description: "Sort mail.", instructions: "List the urgent replies." }] } };
+  const ownerBot = await call("addBot", [fields]);
+  await assert.rejects(call("addBot", [fields], { principal: avery }), /create bundled skills/);
+  await assert.rejects(call("duplicateBot", [ownerBot], { principal: avery }), /create bundled skills/);
+  perms.skills.push("create");
+  const mine = await call("duplicateBot", [ownerBot], { principal: avery });
+  assert.equal(ws.bot(mine).createdBy, avery.memberId);
+});

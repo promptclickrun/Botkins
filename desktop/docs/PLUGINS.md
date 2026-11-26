@@ -54,7 +54,7 @@ In `recall.mjs`, read the prompt event as JSON from standard input. Read `proces
 
 ## Agent templates
 
-A marketplace can also offer agent templates: a bot's name, role, about line, instructions and look. Open **Settings → Marketplace → Agents** (or the Marketplace button left of New chat), choose a template and select **Install**. Create a bot opens filled in from it. Change anything, the look too, and create the bot. Nothing else is installed.
+A marketplace can also offer agent templates: a bot's name, role, about line, instructions and look. Open **Settings → Marketplace → Agents** (or the Marketplace button left of New chat), choose a template and select **Install**. Create a bot opens filled in from it. Review the instructions and any included skills and routines, edit the bot, and choose Create. Bundled skills belong to the new bot. Bundled routines start paused in their own chats for that bot and can be enabled in Routines.
 
 List templates under `agents` in the marketplace's `marketplace.json`, beside `plugins`. Each entry names a template file in the same repository: the file **Export template…** writes.
 
@@ -65,6 +65,8 @@ List templates under `agents` in the marketplace's `marketplace.json`, beside `p
 ```
 
 `name` is lowercase letters, digits and dashes; the id is `name@marketplace`. `category` is one of `writing`, `research`, `productivity`, `work`, `dev`, `learning`, `health`, `finance`, `home`, `media`, `life` or `other`. The host reads the files when someone browses templates, at most once an hour for each marketplace, checks them as an imported template is checked, and leaves out one it can't read. At most 200 templates are read from a marketplace, and a file is at most 256 KB. The phone's contract is `mobile/docs/agent-templates.md`. From a terminal: `botkins templates browse`, `botkins templates show <id>` and `botkins templates use <id>`.
+
+Version 1 templates carry the bot profile. Version 2 adds an inline `bundle` for bot-specific skills, scheduled prompt routines, or both. Each installation makes independent copies. The template detail and create flow show what comes with the bot. See the [template bundle format](../../mobile/docs/agent-templates.md#template-bundles).
 
 ## What a plugin starts, and what you are shown
 

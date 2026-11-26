@@ -6,6 +6,11 @@ import { join } from "node:path";
 import { Workspace } from "./starter.mjs";
 import { LEGACY_NAME } from "../desktop/home.mjs";
 import { FORMAT, FORMATS, Templates, parseTemplateFile } from "../desktop/templates.mjs";
+import { templateBundle, templateForReader } from "../desktop/link/template-bundle.mjs";
+
+const skill = { name: "field-notes", description: "Keep field notes.", instructions: "Record the date and findings." };
+const routine = { name: "Friday notes", instructions: "Summarize the week's notes.", cadence: { kind: "weekly", time: "09:30", days: [5, 1] } };
+const bundle = { skills: [skill], routines: [routine] };
 
 function setup(t) {
   const dir = mkdtempSync(join(tmpdir(), "botkins-templates-"));
@@ -50,6 +55,62 @@ test("export and import round-trip a template file", (t) => {
   assert.deepEqual(imported.look, bot.look);
 });
 
+test("version 2 round-trips only the portable definitions, from an imported template or a bot", (t) => {
+  const { templates, ws } = setup(t);
+  const bot = ws.state.bots[1];
+  const canonical = { skills: [skill], routines: [{ ...routine, cadence: { ...routine.cadence, days: [1, 5] } }] };
+  const published = { ...JSON.parse(templates.exportText({ botId: bot.id }).text), version: 2, bundle };
+  const id = templates.importText({ text: JSON.stringify(published) });
+  assert.deepEqual(JSON.parse(templates.exportText({ templateId: id }).text), { ...published, bundle: canonical });
+  assert.deepEqual(templates.get(id).bundle, canonical);
+  assert.deepEqual(templateForReader(templates.get(id), 2).bundle, canonical);
+  assert.throws(() => templateForReader(templates.get(id)), /Update Botkins/);
+  assert.equal(templateForReader(bot), bot);
+  const created = ws.addBot(templates.get(id));
+  const saved = templates.get(templates.saveFromBot(created));
+  assert.deepEqual(saved.bundle, canonical);
+  assert.deepEqual(JSON.parse(templates.exportText({ botId: created }).text), { ...published, bundle: canonical });
+  assert.notEqual(saved.bundle.skills[0], ws.bot(created).bundle.skills[0]);
+  const [{ chat }] = ws.panels.routines.list(created);
+  ws.panels.routines.update(chat.id, { name: "Monday notes" });
+  assert.equal(JSON.parse(templates.exportText({ botId: created }).text).bundle.routines[0].name, "Monday notes");
+  assert.equal(saved.bundle.routines[0].name, "Friday notes");
+  for (const invalid of [
+    { ...published, version: 1 },
+    { ...published, bundle: undefined },
+    { ...published, bundle: null },
+    { ...published, bundle: {} },
+    { ...published, botId: bot.id },
+  ]) assert.throws(() => templates.importText({ text: JSON.stringify(invalid) }));
+});
+
+test("template bundles reject unsupported definitions before they can be installed or shared", () => {
+  assert.equal(templateBundle(undefined), undefined);
+  assert.deepEqual(templateBundle({ skills: [skill] }), { skills: [skill] });
+  const withSkill = (change) => ({ skills: [{ ...skill, ...change }] });
+  const withRoutine = (change) => ({ routines: [{ ...routine, ...change }] });
+  for (const value of [
+    [], false, { skills: [] }, { routines: {} }, { plugins: [] }, { skills: new Array(9).fill(skill) },
+    { skills: [skill, skill] }, { routines: [routine, { ...routine, name: routine.name.toUpperCase() }] },
+    ...["../notes", "foo/bar", ".git", "con", "__proto__", "prototype", "constructor", "Notes", "k".repeat(65)].map((name) => withSkill({ name })),
+    withSkill({ instructions: "x".repeat(12001) }), withSkill({ description: "x".repeat(601) }),
+    withSkill({ description: "First line\ncommand: script" }), withSkill({ instructions: "spoof\u202e!" }),
+    withSkill({ instructions: "spoof\ufe0f!" }), withSkill({ script: "ls" }), withSkill({ path: "SKILL.md" }),
+    withRoutine({ name: "x".repeat(81) }), withRoutine({ instructions: "x".repeat(4001) }),
+    withRoutine({ instructions: "  /deploy now\n" }), withRoutine({ script: "ls" }), withRoutine({ enabled: true }),
+    withRoutine({ botId: "scout" }), withRoutine({ id: "system" }), withRoutine({ deliver: "chat" }),
+    withRoutine({ notifyTargets: ["owner"] }), withRoutine({ name: "../next" }),
+    ...[
+      null, { kind: "custom", cron: "* * * * *" }, { kind: "once", time: "09:00" },
+      { kind: "daily", time: "24:00" }, { kind: "weekdays", time: "7:00" },
+      { kind: "daily", time: "09:00", days: [0] }, { kind: "weekly", time: "09:00" },
+      ...[[], [1, 1], [7], [-1], [0.5], ["1"]].map((days) => ({ kind: "weekly", time: "09:00", days })),
+    ].map((cadence) => withRoutine({ cadence })),
+    JSON.parse('{"skills":[{"__proto__":{},"name":"x","description":"x","instructions":"x"}]}'),
+    { skills: Array.from({ length: 8 }, (_, i) => ({ ...skill, name: "item-" + i, instructions: "猫".repeat(3000) })) },
+  ]) assert.throws(() => templateBundle(value));
+});
+
 test("imports refuse files that aren't Botkins templates and drop looks Botkins can't draw", (t) => {
   const { dir, templates } = setup(t);
   const write = (name, value) => {
@@ -59,7 +120,7 @@ test("imports refuse files that aren't Botkins templates and drop looks Botkins 
   };
   assert.throws(() => templates.importFrom(write("a.json", "not json")), /isn't a bot template/);
   assert.throws(() => templates.importFrom(write("b.json", { name: "x" })), /isn't a Botkins bot template/);
-  assert.throws(() => templates.importFrom(write("c.json", { format: FORMAT, version: 2, name: "x" })), /newer Botkins/);
+  assert.throws(() => templates.importFrom(write("c.json", { format: FORMAT, version: 3, name: "x" })), /newer Botkins/);
   assert.throws(
     () => templates.importFrom(write("d.json", { format: FORMAT, version: 1, name: "x", role: "y", instructions: "z".repeat(30001) })),
     /Use up to 30,000 characters/,

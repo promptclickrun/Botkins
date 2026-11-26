@@ -1,20 +1,29 @@
+// The Chats tab: search, chips for every chat, the unread ones or one of the person's sections, the
+// pinned chats as a row of faces, then one list of the rest, newest first ("Recent"), and the
+// archived ones behind a row at the end. A held chat can still be dragged onto Pinned or a section,
+// which show above the list while it moves (ChatBoard, `arrangeChatsFlat` in sections.ts).
+import { MenuView } from "@react-native-menu/menu";
 import { router, useIsFocused, useScrollToTop } from "expo-router";
-import { Archive, FolderPlus, MailOpen, Search, SquarePen, X } from "lucide-react-native";
+import { Archive, ChevronDown, ChevronUp, Ellipsis, FolderPlus, Search, SquarePen, X } from "lucide-react-native";
 import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
-import { StyleSheet, TextInput, useWindowDimensions, View } from "react-native";
+import { ScrollView, StyleSheet, TextInput, useWindowDimensions, View } from "react-native";
 import Animated, { FadeIn, useAnimatedRef, useAnimatedScrollHandler, useSharedValue } from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import type { BoardScroll } from "@/features/home/BotBoard";
-import type { ChatSummary } from "@/link/types";
-import { isConversation, useBots, useCan, useCapability, useChats, usePart } from "@/state/hooks";
+import type { Bot, ChatSummary } from "@/link/types";
+import { activityLabel, isConversation, useBots, useCan, useCapability, useChatActivity, useChats, usePart } from "@/state/hooks";
+import { api, attempt } from "@/state/link";
 import { usePrefs } from "@/state/prefs";
 import { useApp } from "@/state/store";
-import { BackdropLayer, Chip, EmptyState, foldGap, Glass, IconButton, LinkBanner, listWidth, Mascot, radius, space, T, Tap, tint, useShape, useTextPrompt, useTheme } from "@/ui";
+import { BackdropLayer, BotAvatar, Chip, EmptyState, foldGap, Glass, Group, HoldMenu, IconButton, IconTile, LinkBanner, listWidth, Mascot, radius, Row, space, T, Tap, tint, useShape, useTextPrompt, useTheme } from "@/ui";
+import { GroupFace } from "./bits";
 import { ChatBoard } from "./ChatBoard";
 import { ChatPane } from "./ChatScreen";
+import { openChat } from "./navigate";
 import { markChatsPageRead } from "./open";
-import { useChatSplit } from "./split";
+import { openFromList, useChatSplit } from "./split";
 import { newSection } from "./sectionMenus";
+import { chatChips, type ChatFilter, chatsForFilter } from "./sections";
 import { chatsPageUnreadChats, isChatsPageArchived, isChatsPageChat } from "./unread";
 
 function SearchField({ value, onChange }: { value: string; onChange: (text: string) => void }) {
@@ -60,6 +69,52 @@ function SearchField({ value, onChange }: { value: string; onChange: (text: stri
     <View style={{ height: control.field, flexDirection: "row", alignItems: "center", gap: space.sm, paddingLeft: space.md, borderRadius: radius.md, backgroundColor: colors.sunken }}>
       {inner}
     </View>
+  );
+}
+
+/** A pinned chat as a face and its name, three to a row above the list. A hold unpins it. */
+function PinnedChat({ chat, bots }: { chat: ChatSummary; bots: Map<string, Bot> }) {
+  const state = useChatActivity(chat.id);
+  const canChat = useCan("agents", "chat");
+  const bot = bots.get(chat.botId);
+  const group = chat.botIds && chat.botIds.length > 1;
+  const live = activityLabel(state);
+  const title = chat.title || bot?.name || "Chat";
+  return (
+    <View style={{ width: "33.33%", alignItems: "center" }}>
+      <HoldMenu
+        actions={canChat ? [{ id: "unpin", title: "Unpin", image: "pin.slash" }] : []}
+        onPressAction={({ nativeEvent }) => {
+          if (nativeEvent.event === "unpin") void attempt(api.setChatFlags(chat.id, { pinned: false }));
+        }}
+      >
+        <Tap onPress={() => openFromList(chat.id)} feel="select" sink={0.94} accessibilityLabel={title + (live ? ", " + live : "") + (chat.unread ? ", unread" : "") + ", pinned"} accessibilityHint={canChat ? "Long press to unpin" : undefined} style={{ alignItems: "center", gap: 6, paddingHorizontal: space.xs, maxWidth: "100%" }}>
+          {group ? <GroupFace bots={chat.botIds!.slice(0, 2).map((id) => bots.get(id))} size={56} state={state} /> : <BotAvatar bot={bot} size={56} state={state} />}
+          <T variant="footnote" weight={chat.unread ? "700" : "600"} color="ink2" numberOfLines={1} center>
+            {title}
+          </T>
+        </Tap>
+      </HoldMenu>
+    </View>
+  );
+}
+
+/** The ⋯ beside New chat: Mark all as read, and New section. Nothing when neither applies. */
+function MoreMenu({ unread, filing, onNewSection }: { unread: boolean; filing: boolean; onNewSection: () => void }) {
+  const { colors, dark } = useTheme();
+  const actions = [
+    ...(unread ? [{ id: "read", title: "Mark all as read", image: "envelope.open" }] : []),
+    ...(filing ? [{ id: "section", title: "New section…", image: "folder.badge.plus" }] : []),
+  ];
+  if (!actions.length) return null;
+  return (
+    <MenuView title="Chats" actions={actions} onPressAction={({ nativeEvent }) => (nativeEvent.event === "read" ? void markChatsPageRead() : onNewSection())}>
+      <View accessible accessibilityRole="button" accessibilityLabel="More" style={{ width: 44, height: 44 }}>
+        <Glass interactive tintColor={tint(colors.surface, dark ? 0.28 : 0.42)} style={{ width: 44, height: 44, borderRadius: 22, alignItems: "center", justifyContent: "center" }}>
+          <Ellipsis size={20} color={colors.ink} strokeWidth={2.2} />
+        </Glass>
+      </View>
+    </MenuView>
   );
 }
 
@@ -152,6 +207,7 @@ function ChatListScreen() {
   const synced = useApp((state) => state.synced);
   const [query, setQuery] = useState("");
   const [showArchived, setShowArchived] = useState(false);
+  const [filter, setFilter] = useState<ChatFilter>("all");
   const canView = useCan("agents", "view");
   const canChat = useCan("agents", "chat");
   // The person's own sections ("chat-sections-v1"). Without them the list is as it always was.
@@ -162,66 +218,81 @@ function ChatListScreen() {
   const bots = useMemo(() => new Map(allBots.map((bot) => [bot.id, bot])), [allBots]);
   const conversations = useMemo(() => chats.filter(isChatsPageChat), [chats]);
   const archived = useMemo(() => chats.filter(isChatsPageArchived), [chats]);
-  const unreadCount = useMemo(() => chatsPageUnreadChats(chats).length, [chats]);
+  const unreadIds = useMemo(() => new Set(chatsPageUnreadChats(chats).map((chat) => chat.id)), [chats]);
+  const unreadCount = unreadIds.size;
   const needle = query.trim().toLowerCase();
+  // A chip for a section that is gone goes back to every chat.
+  const picked = filter.startsWith("section:") && !sections?.some((section) => "section:" + section.id === filter) ? "all" : filter;
   const { shown, old } = useMemo(() => {
     const matches = (chat: ChatSummary) => {
       if (!needle) return true;
       const names = (chat.botIds ?? [chat.botId]).map((id) => bots.get(id)?.name ?? "").join(" ");
       return (chat.title + " " + names + " " + (chat.last?.text ?? "")).toLowerCase().includes(needle);
     };
-    return { shown: conversations.filter(matches), old: showArchived ? archived.filter(matches) : [] };
-  }, [conversations, archived, bots, needle, showArchived]);
+    return { shown: chatsForFilter(conversations, picked, sections, unreadIds).filter(matches), old: showArchived ? archived.filter(matches) : [] };
+  }, [conversations, archived, bots, needle, showArchived, picked, sections, unreadIds]);
+  const pinned = useMemo(() => shown.filter((chat) => chat.pinned).sort((a, b) => b.time - a.time), [shown]);
+  const chips = chatChips(sections, unreadCount, canView);
 
   // The page, for scrolling it under a dragged chat; and whether a drag is under way, which stops its own scrolling.
   const scroll: BoardScroll = { ref: useAnimatedRef<Animated.ScrollView>(), offset: useSharedValue(0), max: useSharedValue(0), edges: useSharedValue({ top: 0, bottom: 0 }) };
   const [dragging, setDragging] = useState(false);
   const empty = synced && conversations.length === 0 && archived.length === 0;
-  const nothing = shown.length === 0 && old.length === 0 && (!!needle || !sections?.length);
+  const nothing = shown.length === 0 && old.length === 0;
 
   // With room for two panes (iPhone Duo opened, an iPad) the chosen chat opens beside the list.
   const shape = useShape();
   const { width } = useWindowDimensions();
   const split = shape.wide;
-  const picked = useChatSplit((state) => state.id);
+  const pickedId = useChatSplit((state) => state.id);
   const projects = usePart("projects");
   // In book pose the list can be asked back; picking a chat in it gives the pages to that chat again.
   const [listShown, setListShown] = useState(false);
   const taps = useChatSplit((state) => state.taps);
   useEffect(() => {
     setListShown(false);
-  }, [picked, taps, shape.pose]);
+  }, [pickedId, taps, shape.pose]);
   // A chat just made or forked beside the list stays picked while the list catches up with it.
-  const paneId = picked ?? (split ? (shown[0]?.id ?? null) : null);
+  const paneId = pickedId ?? (split ? (shown[0]?.id ?? null) : null);
   const focused = useIsFocused();
   useEffect(() => {
     useChatSplit.setState({ active: split });
   }, [split]);
   // The newest chat is open beside the list until the person picks another (its row is marked).
   useEffect(() => {
-    if (split && paneId && !picked) useChatSplit.setState({ id: paneId });
-  }, [split, paneId, picked]);
+    if (split && paneId && !pickedId) useChatSplit.setState({ id: paneId });
+  }, [split, paneId, pickedId]);
   // A picked chat that the list had and lost (deleted elsewhere) is let go.
   const had = useRef<string | null>(null);
   useEffect(() => {
-    if (!picked) return;
-    if (chats.some((chat) => chat.id === picked)) had.current = picked;
-    else if (had.current === picked) useChatSplit.setState({ id: null });
-  }, [chats, picked]);
+    if (!pickedId) return;
+    if (chats.some((chat) => chat.id === pickedId)) had.current = pickedId;
+    else if (had.current === pickedId) useChatSplit.setState({ id: null });
+  }, [chats, pickedId]);
   // Folding with a chat open beside the list: it goes on its own page, so the person stays in it.
   // Only while the list is the screen in front; under another tab or page nothing moves.
   const before = useRef(split);
   useEffect(() => {
     const was = before.current;
     before.current = split;
-    if (was && !split && picked && focused) {
-      useChatSplit.setState({ id: null, pushed: picked });
-      router.push({ pathname: "/chat/[id]", params: { id: picked } });
+    if (was && !split && pickedId && focused) {
+      useChatSplit.setState({ id: null, pushed: pickedId });
+      openChat(pickedId);
     }
-  }, [split, picked, focused]);
+  }, [split, pickedId, focused]);
 
   const frame = (
-    <ChatsFrame scroll={scroll} scrollEnabled={!dragging} inner={split} actions={canChat ? <IconButton icon={SquarePen} label="New chat" variant="accent" size={44} onPress={() => router.push("/chat/new")} /> : undefined}>
+    <ChatsFrame
+      scroll={scroll}
+      scrollEnabled={!dragging}
+      inner={split}
+      actions={
+        <>
+          <MoreMenu unread={unreadCount > 0 && canView} filing={!!sections && canChat} onNewSection={() => newSection(prompt.ask)} />
+          {canChat && <IconButton icon={SquarePen} label="New chat" variant="accent" size={44} onPress={() => router.push("/chat/new")} />}
+        </>
+      }
+    >
       {!synced ? (
         <Skeleton />
       ) : empty ? (
@@ -230,24 +301,37 @@ function ChatListScreen() {
         <Animated.View entering={FadeIn.duration(220)} style={{ gap: space.md }}>
           <View style={{ gap: space.md }}>
             <SearchField value={query} onChange={setQuery} />
-            {(archived.length > 0 || (sections && canChat) || (unreadCount > 0 && canView)) && (
-              <View style={{ flexDirection: "row", flexWrap: "wrap", gap: space.sm }}>
-                {unreadCount > 0 && canView && <Chip label="Mark all as read" icon={MailOpen} onPress={() => void markChatsPageRead()} />}
+            {(chips.length > 1 || (sections && canChat)) && (
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} keyboardShouldPersistTaps="handled" style={{ marginHorizontal: -space.xl }} contentContainerStyle={{ paddingHorizontal: space.xl, gap: space.sm }}>
+                {chips.map((chip) => (
+                  <Chip key={chip.value} label={chip.count ? chip.label + " · " + chip.count : chip.label} selected={picked === chip.value} onPress={() => setFilter(chip.value)} />
+                ))}
                 {sections && canChat && <Chip label="New section" icon={FolderPlus} onPress={() => newSection(prompt.ask)} />}
-                {archived.length > 0 && <Chip label={showArchived ? "Hide archived" : "Show archived"} icon={Archive} selected={showArchived} onPress={() => setShowArchived(!showArchived)} />}
-                {prompt.node}
-              </View>
+              </ScrollView>
             )}
+            {prompt.node}
           </View>
+          {pinned.length > 0 && <View style={{ flexDirection: "row", flexWrap: "wrap", rowGap: space.lg, marginHorizontal: -space.xs, paddingTop: space.xs }}>{pinned.map((chat) => <PinnedChat key={chat.id} chat={chat} bots={bots} />)}</View>}
           {nothing ? (
             <View style={{ alignItems: "center", paddingVertical: space.huge, gap: space.sm }}>
               <Search size={26} color={colors.faint} strokeWidth={2} />
               <T variant="callout" color="muted">
-                {needle ? "No matches" : "No chats"}
+                {needle ? "No matches" : picked === "unread" ? "No unread chats" : picked === "all" ? "No chats" : "No chats here yet"}
               </T>
             </View>
           ) : (
-            <ChatBoard chats={shown} archived={old} sections={sections} bots={bots} searching={!!needle} scroll={scroll} onDragging={setDragging} />
+            <ChatBoard chats={shown} archived={old} sections={sections} bots={bots} searching={!!needle} scroll={scroll} onDragging={setDragging} flat />
+          )}
+          {archived.length > 0 && (
+            <Group>
+              <Row
+                leading={<IconTile icon={Archive} />}
+                title="Archived"
+                value={String(archived.length)}
+                trailing={showArchived ? <ChevronUp size={18} color={colors.faint} strokeWidth={2.2} /> : <ChevronDown size={18} color={colors.faint} strokeWidth={2.2} />}
+                onPress={() => setShowArchived(!showArchived)}
+              />
+            </Group>
           )}
         </Animated.View>
       )}

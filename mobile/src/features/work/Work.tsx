@@ -1,44 +1,42 @@
-import { router } from "expo-router";
-import { Activity as ActivityIcon, ChevronDown, ChevronUp, CircleDashed, Plus, Trash2, X } from "lucide-react-native";
+// The Work tab: one overview, top to bottom. What needs the person; their projects as cards to swipe,
+// each with its to-dos' progress and its bots; tasks under three chips (Active, Later, Done) with the
+// first few shown; and the routines that run next. Each part has "See all": Projects (`/projects`),
+// Tasks (`/work/tasks`, TasksPage.tsx) and Routines (`/work/routines`). A team member's Work has no
+// projects or tasks. Activity is a page of its own, opened by the icon beside the plus.
+import { type Href, router } from "expo-router";
+import { MenuView } from "@react-native-menu/menu";
+import { Activity as ActivityIcon, CircleDashed, FolderClosed, Plus, Trash2 } from "lucide-react-native";
 import { useMemo, useState } from "react";
-import { Alert, Switch, View } from "react-native";
-import Animated, { FadeIn } from "react-native-reanimated";
-import type { Bot, BotTask, ChatSchedule, ChatSummary, Panel } from "@/link/types";
+import { Alert, ScrollView, Switch, View } from "react-native";
+import { openChat } from "@/features/chat/navigate";
+import { projectColor } from "@/features/projects/colors";
+import type { Bot, BotTask, ChatSchedule, ChatSummary, Panel, Project } from "@/link/types";
 import { type RoutineEntry, useBots, useCan, useChats, useMember, usePart, useRoutines } from "@/state/hooks";
 import { api, attempt } from "@/state/link";
+import { usePrefs } from "@/state/prefs";
 import { useApp } from "@/state/store";
-import { upcoming } from "@/state/time";
-import { BotAvatar, Button, Dot, EmptyState, Group, haptic, HoldMenu, IconButton, IconTile, Label, Loading, Mascot, Page, Row, Segmented, space, switchColors, T, useTheme } from "@/ui";
+import { ago, clockTime, upcoming } from "@/state/time";
+import { BotAvatar, Button, Chip, Dot, EmptyState, Glass, Group, haptic, HoldMenu, IconButton, IconTile, Label, Loading, Mascot, Page, radius, Row, space, switchColors, T, Tap, tint, useTheme } from "@/ui";
 import { isFinished, routineName, routineSubtitle, SplitRow, taskSubtitle } from "./bits";
 import { buildNotifyTargetView } from "./notifyTargets";
-import { ProjectList } from "@/features/projects/Projects";
-import { ActivityList } from "./Activity";
 import { cronLabel, scheduleLabel } from "./cron";
+import { dayWord, projectProgress, taskCounts, tasksIn, type TaskView, upNext } from "./overview";
 
-type Segment = "routines" | "projects" | "tasks";
-const SEGMENTS: { value: Segment; label: string }[] = [
-  { value: "routines", label: "Routines" },
-  { value: "projects", label: "Projects" },
-  { value: "tasks", label: "Tasks" },
-];
-// Work opens on the tab last looked at, while the app runs.
-let lastSegment: Segment = "routines";
-
-const openChat = (id: string) => router.push({ pathname: "/chat/[id]", params: { id } });
-const openTask = (id: string) => router.push({ pathname: "/task/[id]", params: { id } });
+export const openTask = (id: string) => router.push({ pathname: "/task/[id]", params: { id } });
 const openRoutine = (id: string) => router.push({ pathname: "/routine/[id]", params: { id } });
+const openProject = (id: string) => router.push({ pathname: "/projects/[id]", params: { id } });
 
 // Needs you
 
 type Need = { key: string; bot?: Bot; title: string; caption: string; onPress: () => void };
 
-function NeedsYou({ needs }: { needs: Need[] }) {
+export function NeedsYou({ needs }: { needs: Need[] }) {
   const { colors } = useTheme();
   if (needs.length === 0) return null;
   return (
     <View>
       <Label>{"Needs you · " + needs.length}</Label>
-      <Group flat inset={space.lg + 40 + space.md}>
+      <Group inset={space.lg + 40 + space.md}>
         {needs.map((need) => (
           <Row
             key={need.key}
@@ -121,7 +119,7 @@ function RoutineRow({ routine }: { routine: RoutineEntry }) {
   );
 }
 
-function Routines({ routines, chats, bots }: { routines: RoutineEntry[]; chats: ChatSummary[]; bots: Map<string, Bot> }) {
+export function Routines({ routines, chats, bots }: { routines: RoutineEntry[]; chats: ChatSummary[]; bots: Map<string, Bot> }) {
   const panels = usePart("panels");
   const canCreate = useCan("today", "create");
   const withRoutine = useMemo(() => (panels ?? []).filter((panel) => panel.routine), [panels]);
@@ -216,7 +214,7 @@ function ScheduleRow({ chat, entry, bot }: { chat: ChatSummary; entry: ChatSched
 
 // Tasks
 
-function TaskRow({ task, bot }: { task: BotTask; bot?: Bot }) {
+export function TaskRow({ task, bot }: { task: BotTask; bot?: Bot }) {
   const { colors } = useTheme();
   const subtitle = taskSubtitle(task, bot);
   const action =
@@ -224,6 +222,8 @@ function TaskRow({ task, bot }: { task: BotTask; bot?: Bot }) {
       <Button title="Approve" variant="ghost" size="sm" onPress={() => void attempt(api.moveTask(task.id, "done"), "Approved")} accessibilityLabel={"Approve " + task.title} />
     ) : (task.status === "later" || task.status === "ready") && task.botId ? (
       <Button title="Start" variant="ghost" size="sm" onPress={() => void attempt(api.startTask(task.id), "Started")} accessibilityLabel={"Start " + task.title} />
+    ) : (task.status === "later" || task.status === "ready") && !task.botId ? (
+      <Button title="Pick a bot" variant="ghost" size="sm" onPress={() => openTask(task.id)} accessibilityLabel={"Pick a bot for " + task.title} />
     ) : undefined;
   return (
     <SplitRow
@@ -238,88 +238,212 @@ function TaskRow({ task, bot }: { task: BotTask; bot?: Bot }) {
   );
 }
 
-const SECTIONS: { title: string; statuses: BotTask["status"][] }[] = [
-  { title: "Needs you", statuses: ["review", "blocked"] },
-  { title: "Working", statuses: ["working"] },
-  { title: "Ready", statuses: ["ready"] },
-  { title: "Later", statuses: ["later"] },
-];
-const PRIORITY_RANK = { urgent: 0, high: 1, normal: 2, low: 3 } as const;
-
-function Tasks({ tasks, bots }: { tasks: BotTask[]; bots: Map<string, Bot> }) {
-  const [showDone, setShowDone] = useState(false);
-  const sections = useMemo(
-    () =>
-      SECTIONS.map((section) => ({
-        ...section,
-        tasks: tasks.filter((task) => section.statuses.includes(task.status)).sort((a, b) => PRIORITY_RANK[a.priority] - PRIORITY_RANK[b.priority] || b.updatedAt - a.updatedAt),
-      })).filter((section) => section.tasks.length > 0),
-    [tasks],
-  );
-  const done = useMemo(() => tasks.filter((task) => task.status === "done").sort((a, b) => b.updatedAt - a.updatedAt), [tasks]);
-  if (sections.length === 0 && done.length === 0) return <EmptyState art={<Mascot size={104} state="working" />} title="No tasks yet" action="New task" onAction={() => openTask("new")} />;
-  const botOf = (task: BotTask) => (task.botId ? bots.get(task.botId) : undefined);
+/** A part's heading, with "See all" at its right when there is more to see. */
+export function PartHead({ title, more, onMore }: { title: string; more?: string; onMore?: () => void }) {
   return (
-    <View style={{ gap: space.xl }}>
-      {sections.map((section) => (
-        <View key={section.title}>
-          <Label>{section.title}</Label>
-          <Group>
-            {section.tasks.map((task) => (
-              <TaskRow key={task.id} task={task} bot={botOf(task)} />
-            ))}
-          </Group>
-        </View>
-      ))}
-      {done.length > 0 && (
-        <View>
-          {showDone && <Label>Done</Label>}
-          <Group>
-            {showDone ? done.map((task) => <TaskRow key={task.id} task={task} bot={botOf(task)} />) : []}
-            <Row
-              key="toggle"
-              title={showDone ? "Hide done" : "Show done"}
-              value={showDone ? undefined : String(done.length)}
-              tone="accent"
-              onPress={() => setShowDone(!showDone)}
-              trailing={<ToggleIcon open={showDone} />}
-            />
-          </Group>
-        </View>
+    <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: space.xs }}>
+      <Label style={{ marginBottom: 0 }}>{title}</Label>
+      {!!more && !!onMore && (
+        <Tap onPress={onMore} feel="select" accessibilityLabel={more} style={{ minHeight: 44, justifyContent: "center", paddingLeft: space.md }}>
+          <T variant="subhead" weight="600" color="ink2">
+            {more}
+          </T>
+        </Tap>
       )}
     </View>
   );
 }
 
-function ToggleIcon({ open }: { open: boolean }) {
-  const { colors } = useTheme();
-  const Icon = open ? ChevronUp : ChevronDown;
-  return <Icon size={18} color={colors.faint} strokeWidth={2.2} />;
+/** The chips over tasks: Active, Later and Done, each with its count. */
+export function TaskChips({ view, onChange, counts }: { view: TaskView; onChange: (view: TaskView) => void; counts: Record<TaskView, number> }) {
+  const options: { value: TaskView; label: string }[] = [
+    { value: "active", label: "Active" },
+    { value: "later", label: "Later" },
+    { value: "done", label: "Done" },
+  ];
+  return (
+    <View style={{ flexDirection: "row", flexWrap: "wrap", gap: space.sm, marginBottom: space.sm }}>
+      {options.map((option) => (
+        <Chip key={option.value} label={option.label + (counts[option.value] ? " · " + counts[option.value] : "")} selected={view === option.value} onPress={() => onChange(option.value)} />
+      ))}
+    </View>
+  );
 }
 
-export default function Work() {
-  const synced = useApp((state) => state.synced);
-  const [segment, pickSegment] = useState<Segment>(lastSegment);
-  const setSegment = (next: Segment) => {
-    lastSegment = next;
-    setAddingProject(false);
-    pickSegment(next);
-  };
-  const [addingProject, setAddingProject] = useState(false);
-  const allBots = useBots();
-  const chats = useChats();
-  const routines = useRoutines();
-  const allTasks = usePart("tasks");
-  const requests = useApp((state) => state.parts.live?.requests);
-  const canToday = useCan("today", "view");
-  const canCreateToday = useCan("today", "create");
-  const member = useMember();
-  // Projects and tasks are the owner's; a member's role decides about routines.
-  const options = SEGMENTS.filter((option) => (option.value === "routines" ? canToday : !member));
+// Work opens on the chip last looked at, while the app runs.
+let lastView: TaskView = "active";
 
-  const bots = useMemo(() => new Map(allBots.map((bot) => [bot.id, bot])), [allBots]);
-  const tasks = useMemo(() => (allTasks ?? []).filter((task) => task.status !== "archived"), [allTasks]);
-  const needs = useMemo(() => {
+/** A project as a card on the shelf: its color and name, its to-dos' progress, and the bots in its chats. */
+function ProjectCard({ project, chats, bots }: { project: Project; chats: ChatSummary[]; bots: Map<string, Bot> }) {
+  const theme = useTheme();
+  const { colors, dark } = theme;
+  const hasBackdrop = usePrefs((prefs) => prefs.backdrop !== "clean");
+  const streams = useApp((state) => state.parts.live?.streams);
+  const progress = projectProgress(project);
+  const own = chats.filter((chat) => chat.projectId === project.id);
+  const working = own.filter((chat) => !!streams && chat.id in streams).length;
+  const faces = [...new Set(own.flatMap((chat) => chat.botIds ?? [chat.botId]))].map((id) => bots.get(id)).filter((bot): bot is Bot => !!bot).slice(0, 3);
+  const foot = working ? working + (working === 1 ? " chat working" : " chats working") : "Used " + ago(project.lastUsed);
+  const body = (
+    <>
+      <View style={{ flexDirection: "row", alignItems: "center", gap: space.sm }}>
+        <IconTile icon={FolderClosed} color={projectColor(project.color, theme)} />
+        <T variant="title3" numberOfLines={1} style={{ flex: 1 }}>
+          {project.name}
+        </T>
+      </View>
+      <T variant="footnote" color="muted" style={{ marginTop: space.md }}>
+        {progress.line}
+      </T>
+      <View style={{ height: 6, borderRadius: 3, backgroundColor: colors.sunken, marginTop: 6, overflow: "hidden" }}>
+        <View style={{ width: `${Math.round(progress.share * 100)}%`, height: 6, borderRadius: 3, backgroundColor: colors.accent }} />
+      </View>
+      <View style={{ flex: 1 }} />
+      <View style={{ flexDirection: "row", alignItems: "center", gap: space.sm }}>
+        {faces.length > 0 && (
+          <View style={{ flexDirection: "row" }}>
+            {faces.map((bot, index) => (
+              <View key={bot.id} style={{ marginLeft: index ? -6 : 0 }}>
+                <BotAvatar bot={bot} size={26} badge={false} />
+              </View>
+            ))}
+          </View>
+        )}
+        <T variant="footnote" weight={working ? "600" : "400"} color={working ? "ink2" : "muted"} numberOfLines={1} style={{ flex: 1 }}>
+          {foot}
+        </T>
+      </View>
+    </>
+  );
+  const frame = { width: 252, height: 152, borderRadius: radius.lg, padding: space.md + 2, overflow: "hidden" as const };
+  return (
+    <Tap onPress={() => openProject(project.id)} feel="select" sink={0.98} accessibilityLabel={project.name + ", " + progress.line + ", " + foot}>
+      {hasBackdrop ? <Glass tintColor={tint(colors.surface, dark ? 0.3 : 0.42)} style={frame}>{body}</Glass> : <View style={[frame, { backgroundColor: colors.surface }]}>{body}</View>}
+    </Tap>
+  );
+}
+
+function ProjectShelf({ chats, bots }: { chats: ChatSummary[]; bots: Map<string, Bot> }) {
+  const projects = usePart("projects");
+  const sorted = useMemo(() => [...(projects ?? [])].sort((a, b) => b.lastUsed - a.lastUsed), [projects]);
+  return (
+    <View>
+      <PartHead title="Projects" more={sorted.length ? "See all " + sorted.length : undefined} onMore={() => router.push("/projects")} />
+      {sorted.length === 0 ? (
+        <Group>
+          <Row leading={<IconTile icon={FolderClosed} />} title="Start a project" subtitle="Its chats, to-dos and files in one place" chevron onPress={() => router.push({ pathname: "/projects", params: { new: "1" } } as unknown as Href)} />
+        </Group>
+      ) : (
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginHorizontal: -space.xl }} contentContainerStyle={{ paddingHorizontal: space.xl, gap: space.md }}>
+          {sorted.map((project) => (
+            <ProjectCard key={project.id} project={project} chats={chats} bots={bots} />
+          ))}
+        </ScrollView>
+      )}
+    </View>
+  );
+}
+
+/** Tasks on the overview: the chips, then the first three of the chosen one. */
+function TaskPart({ tasks, bots }: { tasks: BotTask[]; bots: Map<string, Bot> }) {
+  const [view, pick] = useState<TaskView>(lastView);
+  const setView = (next: TaskView) => {
+    lastView = next;
+    pick(next);
+  };
+  const counts = useMemo(() => taskCounts(tasks), [tasks]);
+  const shown = useMemo(() => tasksIn(tasks, view).slice(0, 3), [tasks, view]);
+  const total = counts.active + counts.later + counts.done;
+  const empty = view === "active" ? "Nothing in progress" : view === "later" ? "Nothing put off" : "Nothing done yet";
+  return (
+    <View>
+      <PartHead title="Tasks" more={total ? "See all " + total : undefined} onMore={() => router.push("/work/tasks" as Href)} />
+      {total === 0 ? (
+        <Group>
+          <Row leading={<IconTile icon={CircleDashed} />} title="New task" subtitle="Hand a bot something to do" chevron onPress={() => openTask("new")} />
+        </Group>
+      ) : (
+        <>
+          <TaskChips view={view} onChange={setView} counts={counts} />
+          <Group inset={space.lg + 40 + space.md}>
+            {shown.length ? (
+              shown.map((task) => <TaskRow key={task.id} task={task} bot={task.botId ? bots.get(task.botId) : undefined} />)
+            ) : (
+              <Row title={empty} />
+            )}
+          </Group>
+        </>
+      )}
+    </View>
+  );
+}
+
+/** One routine in "Up next": when it runs, its name and bot, and its switch. */
+function UpNextRow({ routine }: { routine: RoutineEntry }) {
+  const { colors } = useTheme();
+  const canManage = useCan("today", "manage");
+  const name = routineName(routine);
+  const on = routine.entry.enabled !== false;
+  const at = routine.entry.nextAt ?? 0;
+  return (
+    <SplitRow
+      leading={
+        <View style={{ width: 72 }}>
+          <T variant="headline" numberOfLines={1}>
+            {clockTime(at)}
+          </T>
+          <T variant="caption" weight="400" color="muted" numberOfLines={1}>
+            {dayWord(at)}
+          </T>
+        </View>
+      }
+      title={name}
+      subtitle={routine.bot?.name}
+      label={name + ", " + upcoming(at)}
+      onPress={canManage ? () => openRoutine(routine.id) : () => openChat(routine.id)}
+      accessory={
+        canManage && (
+          <Switch
+            value={on}
+            onValueChange={(next) => {
+              haptic.select();
+              void attempt(api.setRoutineEnabled(routine.id, next));
+            }}
+            {...switchColors(colors, on)}
+            style={{ alignSelf: "center" }}
+            accessibilityLabel={name + (on ? ", on" : ", paused")}
+          />
+        )
+      }
+    />
+  );
+}
+
+function RoutinePart({ routines }: { routines: RoutineEntry[] }) {
+  const canCreate = useCan("today", "create");
+  const next = useMemo(() => upNext(routines, 3), [routines]);
+  return (
+    <View>
+      <PartHead title="Routines · up next" more={routines.length ? "See all " + routines.length : undefined} onMore={() => router.push("/work/routines" as Href)} />
+      <Group inset={space.lg}>
+        {next.length ? (
+          next.map((routine) => <UpNextRow key={routine.id} routine={routine} />)
+        ) : (
+          <Row
+            title={routines.length ? "Nothing scheduled" : "No routines yet"}
+            chevron={!!routines.length || canCreate}
+            onPress={routines.length ? () => router.push("/work/routines" as Href) : canCreate ? () => openRoutine("new") : undefined}
+          />
+        )}
+      </Group>
+    </View>
+  );
+}
+
+/** What needs the person across Work: a bot's question or approval, and tasks to review or unblock. */
+export function useNeeds(tasks: BotTask[], bots: Map<string, Bot>): Need[] {
+  const requests = useApp((state) => state.parts.live?.requests);
+  return useMemo(() => {
     const out: Need[] = [];
     for (const request of requests ?? []) {
       const bot = bots.get(request.botId);
@@ -332,46 +456,78 @@ export default function Work() {
       }
     return out;
   }, [requests, tasks, bots]);
+}
 
-  const shownSegment = options.some((option) => option.value === segment) ? segment : options[0]?.value;
-  const add =
-    shownSegment === "routines" && canCreateToday
-      ? { label: "New routine", run: () => openRoutine("new") }
-      : shownSegment === "projects"
-        ? { label: addingProject ? "Cancel new project" : "New project", run: () => setAddingProject(!addingProject) }
-        : shownSegment === "tasks"
-          ? { label: "New task", run: () => openTask("new") }
-          : undefined;
+/** The plus at the top: New project, New task, New routine, as the person may. */
+function NewMenu({ member, canRoutine }: { member: boolean; canRoutine: boolean }) {
+  const { colors } = useTheme();
+  const actions = [
+    ...(member ? [] : [{ id: "project", title: "New project", image: "folder.badge.plus" }, { id: "task", title: "New task", image: "checklist" }]),
+    ...(canRoutine ? [{ id: "routine", title: "New routine", image: "clock.arrow.circlepath" }] : []),
+  ];
+  if (!actions.length) return null;
+  const run = (id: string) => {
+    if (id === "project") router.push({ pathname: "/projects", params: { new: "1" } } as unknown as Href);
+    else if (id === "task") openTask("new");
+    else if (id === "routine") openRoutine("new");
+  };
+  return (
+    <MenuView title="New" actions={actions} onPressAction={({ nativeEvent }) => run(nativeEvent.event)}>
+      <View accessible accessibilityRole="button" accessibilityLabel="New project, task or routine" style={{ width: 44, height: 44, borderRadius: 22, backgroundColor: colors.accent, alignItems: "center", justifyContent: "center" }}>
+        <Plus size={22} color={colors.onAccent} strokeWidth={2.2} />
+      </View>
+    </MenuView>
+  );
+}
 
+export default function Work() {
+  const synced = useApp((state) => state.synced);
+  const allBots = useBots();
+  const chats = useChats();
+  const routines = useRoutines();
+  const allTasks = usePart("tasks");
+  const canToday = useCan("today", "view");
+  const canCreateToday = useCan("today", "create");
+  const member = !!useMember();
+  const bots = useMemo(() => new Map(allBots.map((bot) => [bot.id, bot])), [allBots]);
+  const tasks = useMemo(() => (allTasks ?? []).filter((task) => task.status !== "archived"), [allTasks]);
+  const needs = useNeeds(tasks, bots);
   return (
     <Page
       tab
       title="Work"
-      keyboard
       actions={
         <View style={{ flexDirection: "row", alignItems: "center", gap: space.sm }}>
           <IconButton icon={ActivityIcon} label="Activity" variant="soft" size={44} onPress={() => router.push("/work/activity")} />
-          {add && <IconButton icon={shownSegment === "projects" && addingProject ? X : Plus} label={add.label} variant="accent" size={44} onPress={add.run} />}
+          <NewMenu member={member} canRoutine={canCreateToday} />
         </View>
       }
     >
       {synced && <NeedsYou needs={needs} />}
-      {options.length > 1 && <Segmented options={options} value={shownSegment ?? options[0].value} onChange={setSegment} />}
       {!synced ? (
         <Loading />
       ) : (
-        <Animated.View key={shownSegment ?? "none"} entering={FadeIn.duration(180)}>
-          {shownSegment === "routines" ? (
-            <Routines routines={routines} chats={chats} bots={bots} />
-          ) : shownSegment === "projects" ? (
-            <ProjectList adding={addingProject} setAdding={setAddingProject} />
-          ) : shownSegment === "tasks" ? (
-            <Tasks tasks={tasks} bots={bots} />
-          ) : (
-            <ActivityList />
-          )}
-        </Animated.View>
+        <>
+          {!member && <ProjectShelf chats={chats} bots={bots} />}
+          {!member && <TaskPart tasks={tasks} bots={bots} />}
+          {canToday && <RoutinePart routines={routines} />}
+        </>
       )}
+    </Page>
+  );
+}
+
+/** Every routine, Today panels that refresh themselves, and schedules made in a chat (the route `/work/routines`). */
+export function RoutinesPage() {
+  const synced = useApp((state) => state.synced);
+  const allBots = useBots();
+  const chats = useChats();
+  const routines = useRoutines();
+  const canCreate = useCan("today", "create");
+  const bots = useMemo(() => new Map(allBots.map((bot) => [bot.id, bot])), [allBots]);
+  return (
+    <Page title="Routines" actions={canCreate ? <IconButton icon={Plus} label="New routine" variant="accent" size={44} onPress={() => openRoutine("new")} /> : undefined}>
+      {!synced ? <Loading /> : <Routines routines={routines} chats={chats} bots={bots} />}
     </Page>
   );
 }
