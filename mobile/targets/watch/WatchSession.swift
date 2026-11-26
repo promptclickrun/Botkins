@@ -248,8 +248,8 @@ final class WatchSession: NSObject, ObservableObject, WCSessionDelegate {
     cancelMediaResetWait()
     let resetBefore = mediaServicesResetCount
     let waitId = UUID()
-    let sleepTask = Task {
-      try? await Task.sleep(for: timeout)
+    let sleepTask = Task<Void, Never> {
+      _ = try? await Task.sleep(for: timeout)
     }
     mediaResetWait = (waitId, sleepTask)
     await withTaskCancellationHandler {
