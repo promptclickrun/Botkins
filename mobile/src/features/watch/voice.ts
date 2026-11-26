@@ -56,18 +56,16 @@ export async function startWatchVoice() {
 
 async function connect(attempt: number) {
   if (useLiveCall.getState().call) throw new Error("A live voice call is already open on iPhone. End it there before starting from Watch.");
-  // When the phone was backgrounded/locked or cold-woken by WatchConnectivity, the relay socket may
-  // have been put to sleep or the initial sync may not have landed yet. Wake and sync before
-  // checking bots/voice settings or making RPCs.
-  let state = useApp.getState();
-  if (!state.booted || !state.pairing || !state.parts.bots?.length || state.link !== "online") {
-    await syncForPush(12_000);
-    if (generation !== attempt) return;
-    state = useApp.getState();
-  }
+  // A suspended phone can still show "online" for a dead path. Let a fresh sync reconnect before
+  // starting a chat or a voice session, since either write can take effect even if its reply is lost.
+  const synced = await syncForPush(12_000);
+  if (generation !== attempt) return;
+  const state = useApp.getState();
   const computer = state.pairing?.serverId;
+  if (!computer) throw new Error("Pair Botkins with a computer first.");
+  if (!synced) throw new Error("Your computer can't be reached right now.");
   const bot = state.parts.bots?.find((item) => !item.hidden);
-  if (!computer || !bot) throw new Error("Pair Botkins with a computer and add a Botkin first.");
+  if (!bot) throw new Error("Add a Botkin before starting a Watch call.");
   const provider = selectedLiveProvider(bot.id);
   if (!provider) throw new Error("Pick a live voice in Settings › Voice.");
   const chatId = await lastOrNewChat(bot.id);

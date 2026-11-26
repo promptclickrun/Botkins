@@ -341,21 +341,16 @@ test("background RPC recovers when a cached direct session dies during sleep and
   });
 
   const code = parsePairingUrl(server.startPairing().url)!;
-  const directEntry = server.hosts().find((h) => !isRelayHost(h))!;
+  const directEntry = "127.0.0.1:" + server.port;
   const relayEntry = server.hosts().find(isRelayHost)!;
   const room = relayEntry.slice("relay!".length).split("@")[0]!;
   const paired: Pairing = await pair(fetcher, { ...code, hosts: [directEntry, relayEntry] }, { name: "iPhone", platform: "ios" });
   const dualPairing: Pairing = { ...paired, hosts: [directEntry, relayEntry] };
 
-  let route: string | null = null;
   const client = new LinkClient(dualPairing, {
     fetch: fetcher,
-    streamAppends: true,
     onParts() {},
     onState() {},
-    onRoute: (next) => { route = next; },
-    check: () => fetcher.check(),
-    probeMs: 60_000,
   });
   t.after(() => {
     client.stop();
@@ -363,16 +358,16 @@ test("background RPC recovers when a cached direct session dies during sleep and
     server.stop();
   });
 
-  client.start();
-  await until(() => client.state === "online" && route === "direct", "online over direct LAN");
+  await client.call("link.sync", { have: {} });
+  assert.equal(client.route, "direct");
 
   // App enters background and sleeps, then leaves the LAN.
-  client.rest();
+  client.start({ resting: true });
   directUp = false;
 
-  // An immediate Watch RPC (like link.voice.live / createChat) must drop the dead direct session
-  // and fail over to the relay instead of throwing offline.
+  // A read can drop the dead direct session and fail over to relay after an ambiguous failure.
   const syncRes = await client.call("link.sync", { have: {} });
   assert.ok(syncRes && typeof syncRes === "object", "RPC failed over to relay after dead direct session");
+  assert.equal(client.route, "relay");
   await until(() => relay.phonesIn(room).length === 1, "relay socket opened for failover");
 });

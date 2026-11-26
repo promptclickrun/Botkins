@@ -103,7 +103,7 @@ test("Watch WebRTC reports the Watch audio recovery error when resuming fails", 
   assert.equal(transport.status, "ended");
 });
 
-test("startWatchVoice acquires watch hold and syncs a sleeping/offline link before starting live voice", async () => {
+test("startWatchVoice acquires the hold and refreshes the link even with a cached online state", async () => {
   const Module = (await import("node:module")).default;
   const { createRequire } = await import("node:module");
   const load = createRequire(__filename);
@@ -120,11 +120,10 @@ test("startWatchVoice acquires watch hold and syncs a sleeping/offline link befo
   const bot = { id: "bot-1", name: "Gordie", role: "Assistant", look: { head: "sprig", palette: "original" } };
   const chat = { id: "chat-1", botId: "bot-1", title: "Chat", count: 0, time: 1 };
   const { useApp } = load("../src/state/store");
+  let canSync = true;
   useApp.setState({
     booted: true,
     pairing: { serverId: "host-1", name: "Mac" },
-    link: "connecting",
-    parts: { bots: [], chats: [] },
   });
 
   standIn("../src/state/link", {
@@ -134,6 +133,7 @@ test("startWatchVoice acquires watch hold and syncs a sleeping/offline link befo
     },
     syncForPush: async () => {
       events.push("syncForPush");
+      if (!canSync) return false;
       useApp.setState({ link: "online", parts: { bots: [bot], chats: [chat] } });
       return true;
     },
@@ -179,15 +179,26 @@ test("startWatchVoice acquires watch hold and syncs a sleeping/offline link befo
 
   delete load.cache[load.resolve("../src/features/watch/voice")];
   const { startWatchVoice, endWatchVoice, watchVoiceState } = load("../src/features/watch/voice");
+  for (const link of ["connecting", "online"]) {
+    useApp.setState({ link, parts: link === "online" ? { bots: [bot], chats: [chat] } : { bots: [], chats: [] } });
+    events.length = 0;
+    await startWatchVoice();
+    assert.equal(watchVoiceState().status, "listening");
+    assert.deepEqual(events, [
+      "hold:watch",
+      "syncForPush",
+      "selectedLiveProvider:bot-1",
+      "lastOrNewChat:bot-1",
+      "controller.start",
+      "release:watch",
+    ], link);
+    endWatchVoice();
+  }
+
+  canSync = false;
+  events.length = 0;
   await startWatchVoice();
-  assert.equal(watchVoiceState().status, "listening");
-  assert.deepEqual(events, [
-    "hold:watch",
-    "syncForPush",
-    "selectedLiveProvider:bot-1",
-    "lastOrNewChat:bot-1",
-    "controller.start",
-    "release:watch",
-  ]);
-  endWatchVoice();
+  assert.equal(watchVoiceState().status, "ended");
+  assert.match(watchVoiceState().problem ?? "", /can't be reached/);
+  assert.deepEqual(events, ["hold:watch", "syncForPush", "release:watch"]);
 });
