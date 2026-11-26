@@ -284,7 +284,8 @@ export function scriptCommandTools(ws, bot, chat, run, task) {
       description:
         "Propose a script command: a slash command that runs a script on this computer with no model, for a workflow that repeats. The person is shown the command's name and the whole script and decides; nothing is saved until they approve. " +
         "The script is a shell script (PowerShell on Windows) that runs in the chat's project folder, or in your own folder. The words typed after the command's name are in $BOTKINS_ARGS and on standard input. Print what the person should see. " +
-        "Give a name that is not a command already (lowercase letters, numbers and dashes). Using the name of an existing script command proposes a change to it. Never put a secret in the script.",
+        "Give a name that is not a command already (lowercase letters, numbers and dashes). Using the name of an existing script command proposes a change to it. Never put a secret in the script. " +
+        "For a script that runs on a schedule, use routine_create with `script` (and followUp when you should write the result) instead; a routine or task whose instructions are /name words also runs this command with no model.",
       parameters: {
         type: "object",
         properties: {

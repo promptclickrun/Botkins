@@ -1,13 +1,14 @@
 // Script routines (a script with no model, with or without a follow-up action) and a routine's model.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Workspace } from "./starter.mjs";
 import { authorize } from "../desktop/link/team.mjs";
 import { shellFor } from "../desktop/routine-script.mjs";
 import { decide } from "../desktop/notify.mjs";
+import { routineStateDir } from "../desktop/routines.mjs";
 
 const T0 = Date.UTC(2026, 10, 17, 12);
 const DAILY = { kind: "daily", time: "09:00" };
@@ -147,6 +148,92 @@ test("Stop ends a running script, and a restart ends one that Botkins closed dur
   await ws.stop(id);
   await done;
   assert.equal(ws.state.runs[0].status, "Stopped");
+});
+
+/** A bot's routine tools in a person's turn, with the approval card answered as `answer` says. */
+function routineTools(ws, { answer = { action: "approve" }, member } = {}) {
+  const views = [];
+  ws.interactions.request = async (_chat, _task, view) => (views.push(view), answer);
+  const chatId = ws.createChat("pip");
+  if (member) ws.chat(chatId).createdBy = member;
+  const run = { id: "run-" + chatId };
+  const task = { run };
+  ws.active.set(chatId, task);
+  const tools = new Map(ws.panels.routines.tools(ws.bot("pip"), ws.chat(chatId), run, task).map((tool) => [tool.name, tool]));
+  return { tools, views, done: () => ws.active.delete(chatId) };
+}
+
+const WATCH = { name: "Task watch", script: "echo '{\"wakeAgent\": false}'", followUp: true, instructions: "Tell me which task changed.", cadence: "custom", cron: "*/15 * * * *" };
+
+test("routine_create with a script shows the whole script in a card and saves it only on a yes", async (t) => {
+  const { ws } = setup(t);
+  const declined = routineTools(ws, { answer: { action: "deny" } });
+  assert.equal(await declined.tools.get("routine_create").handler(WATCH), "The person declined.");
+  assert.equal(ws.panels.routines.list("pip").length, 0, "nothing saved on a no");
+  const [card] = declined.views;
+  assert.equal(card.kind, "permission");
+  assert.equal(card.review, true, "read in the app, never answered from a notification");
+  assert.equal(card.title, "Add the routine Task watch with a script?");
+  for (const text of ["Routine: Task watch", "When: Custom · */15 * * * *", "Follow-up: on", "Tell me which task changed.", "$BOTKINS_ROUTINE_STATE", "Script:\necho '{\"wakeAgent\": false}'"]) assert.ok(card.detail.includes(text), text);
+  declined.done();
+
+  const yes = routineTools(ws);
+  const made = JSON.parse(await yes.tools.get("routine_create").handler(WATCH));
+  assert.equal(yes.views.length, 1);
+  assert.equal(made.script, WATCH.script);
+  assert.equal(made.followUp, true);
+  assert.equal(made.instructions, "Tell me which task changed.");
+  const listed = JSON.parse(await yes.tools.get("routine_list").handler({}));
+  assert.equal(listed[0].script, WATCH.script, "routine_list returns the script");
+  assert.equal(listed[0].followUp, true);
+  // A script-only routine needs no instructions; instructions alone still do; followUp needs a script.
+  const only = JSON.parse(await yes.tools.get("routine_create").handler({ name: "Disk", script: "df -h", cadence: "daily", time: "08:00" }));
+  assert.equal(only.followUp, false);
+  await assert.rejects(async () => yes.tools.get("routine_create").handler({ name: "Empty", cadence: "daily", time: "08:00" }), /instructions, or a script/);
+  await assert.rejects(async () => yes.tools.get("routine_create").handler({ name: "Odd", instructions: "Hi.", followUp: true, cadence: "daily", time: "08:00" }), /followUp needs a script/);
+  // The 15-minute floor holds for a custom cron.
+  await assert.rejects(async () => yes.tools.get("routine_create").handler({ ...WATCH, name: "Fast", cron: "*/5 * * * *" }), /more often than every 15 minutes/);
+  yes.done();
+
+  // routine_update: adding or changing a script asks; a change of deliver alone does not.
+  const plain = ws.panels.routines.create({ botId: "pip", name: "Poller", prompt: "Check my tasks.", cadence: DAILY }, T0);
+  const change = routineTools(ws, { answer: { action: "deny" } });
+  assert.equal(await change.tools.get("routine_update").handler({ id: plain, script: "echo hi", followUp: true }), "The person declined.");
+  assert.equal(ws.panels.routines.find(plain).entry.script, undefined);
+  assert.equal(change.views[0].title, "Add a script to the routine Poller?");
+  change.done();
+  const approve = routineTools(ws);
+  const updated = JSON.parse(await approve.tools.get("routine_update").handler({ id: plain, script: "echo hi", followUp: true }));
+  assert.equal(updated.script, "echo hi");
+  assert.equal(updated.instructions, "Check my tasks.", "the instructions become the follow-up's");
+  await approve.tools.get("routine_update").handler({ id: plain, deliver: { to: "feed" } });
+  assert.equal(approve.views.length, 1, "a destination change alone asks nothing");
+  JSON.parse(await approve.tools.get("routine_update").handler({ id: plain, script: null }));
+  assert.equal(ws.panels.routines.find(plain).entry.script, undefined, "null removes the script");
+  approve.done();
+});
+
+test("a team member's turn can't propose a routine script", async (t) => {
+  const { ws } = setup(t);
+  ws.teamOf = () => ({ members: [{ id: "m_avery", groupId: "g" }], groups: [{ id: "g", roleId: "r" }], roles: [{ id: "r", bots: "all", perms: { today: ["view", "use", "create", "manage"] } }] });
+  const member = routineTools(ws, { member: "m_avery" });
+  await assert.rejects(async () => member.tools.get("routine_create").handler(WATCH), /Only the computer's owner/);
+  assert.equal(member.views.length, 0, "no card is raised");
+  assert.equal(ws.panels.routines.list("pip").length, 0);
+  member.done();
+});
+
+test("a routine's script gets its id and a state folder of its own that lasts between runs", { skip: !unix }, async (t) => {
+  const { ws } = setup(t);
+  const id = ws.panels.routines.create({ botId: "pip", name: "Counter", script: 'n=$(cat "$BOTKINS_ROUTINE_STATE/n" 2>/dev/null || echo 0); n=$((n+1)); echo $n > "$BOTKINS_ROUTINE_STATE/n"; echo "run $n of $BOTKINS_ROUTINE_ID $BOTKINS_ROUTINE_NAME $BOTKINS_BOT_ID $BOTKINS_ROUTINE"', cadence: DAILY }, T0);
+  await ws.panels.routines.run(id);
+  await ws.panels.routines.run(id);
+  const reply = ws.chat(id).messages.findLast((message) => message.role === "assistant").text;
+  assert.equal(reply, "run 2 of " + id + " Counter pip 1");
+  const folder = routineStateDir(ws, id);
+  assert.ok(existsSync(folder));
+  await ws.panels.routines.remove(id);
+  assert.equal(existsSync(folder), false, "removed with the routine");
 });
 
 test("a script runs with the person's shell, or PowerShell on Windows", () => {

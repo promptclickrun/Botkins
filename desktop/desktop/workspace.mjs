@@ -3233,7 +3233,13 @@ const MENTION_LIMIT = 100;
 
 // What every bot is told about routines it makes, and about the person's reactions (desktop/reaction-turns.mjs).
 const ROUTINE_CONFIRM =
-  "\nBefore creating a routine (routine_create), confirm only relevant settings the person has not already specified: cadence and timezone, where results go (deliver: this chat, another chat, Today's Feed, Ideas, Goals, its own routine chat, or none), and whether it notifies (notify or notifyTargets). Suggest a quiet routine (notify: false) or one place to look when frequent alerts would be noisy. A panel refresh (today_routine) always updates that one fixed panel in its space silently and alerts only on failure, so only confirm unspecified cadence and target panel/space; use routine_create if they want an alert on each update. Say what you set once it's done.";
+  "\nBefore creating a routine (routine_create), confirm only relevant settings the person has not already specified: cadence and timezone, where results go (deliver: this chat, another chat, Today's Feed, Ideas, Goals, its own routine chat, or none), and whether it notifies (notify or notifyTargets). Suggest a quiet routine (notify: false) or one place to look when frequent alerts would be noisy. A panel refresh (today_routine) always updates that one fixed panel in its space silently and alerts only on failure, so only confirm unspecified cadence and target panel/space; use routine_create if they want an alert on each update. Say what you set once it's done." +
+  "\nChoose the cheapest routine that does the job. Every run of an instructions routine is a model turn (one on */15 is about 96 a day), so: " +
+  "a script with followUp when a deterministic check (a status, a file, an API, a count) decides whether there is anything to say, and you write the message only then; " +
+  "a script alone when its output is the whole result; instructions alone when each run needs judgment or writing (a daily brief); today_routine to keep one panel fresh. " +
+  "When Botkins itself has the event (a task changing status, a routine finishing, a chat message, a webhook, GitHub), a Workflow (workflow_create) with that trigger needs no polling; poll with a script routine for anything else. " +
+  "A watcher is a script: it polls (e.g. `botkins tasks list --json`), compares with what it saved in $BOTKINS_ROUTINE_STATE, prints {\"wakeAgent\": false} as its last line when nothing changed, else prints the changed facts and saves them, and your followUp turn writes the message from that output. " +
+  "Never poll with instructions and reply [SILENT] most runs. The person approves a script in a card before it is saved.";
 // Model SDKs (Claude Code, Codex, Pi) attach their own context notes to turns, often at the end of a tool result.
 // Bots kept reporting them to the person as suspicious or as news.
 const HARNESS_NOTICES =

@@ -425,7 +425,7 @@ test("a schedule that runs more often than a bot's own tool allows shows its cos
 test("`botkins help --json` describes the routine commands", { skip }, async () => {
   const all = (await botkins(["help", "routines", "--json"])).json();
   const commands = Object.fromEntries(all.areas[0].commands.map((entry) => [entry.command, entry]));
-  assert.deepEqual(Object.keys(commands), ["routines list", "routines run", "routines pause", "routines resume", "routines show", "routines when", "routines add", "routines edit", "routines remove", "routines duplicate", "routines schedules", "routines schedule"]);
+  assert.deepEqual(Object.keys(commands), ["routines list", "routines run", "routines pause", "routines resume", "routines show", "routines runs", "routines when", "routines add", "routines edit", "routines remove", "routines duplicate", "routines schedules", "routines schedule"]);
   assert.deepEqual(commands["routines add"].arguments, [{ name: "name", required: true }]);
   const names = commands["routines add"].options.map((option) => option.name);
   for (const name of ["--bot", "--prompt", "--file", "--cadence", "--at", "--days", "--date", "--cron", "--timezone", "--deliver", "--chat", "--category", "--quiet", "--yes"]) assert.ok(names.includes(name), name);
