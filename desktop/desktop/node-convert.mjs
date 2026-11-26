@@ -1071,6 +1071,9 @@ export async function receiveMigration(ws, peer, operation, payload = {}) {
     const record = ws.nodeHost.imports[transferId];
     if (!record) throw new Error("Unknown migration transfer.");
     await peer.verify();
+    if (record.status === "committed" && record.routinesActivated) {
+      return { status: "committed", targetBotId: record.targetBotId, activatedRoutines: 0, alreadyActivated: true };
+    }
     let activatedRoutines = 0;
     const now = Date.now();
     for (const chat of ownedBotChats(ws, record.targetBotId)) {
@@ -1536,11 +1539,10 @@ export async function runConversion(ws, input = {}, { peers, link, announce, onP
       ? [...ws.nodeHost.conversionJobs].reverse().find((j) => j.status === "failed" || j.status === "paused" || j.status === "running")
       : null;
 
-  const onlineHosts = effectivePeers?.available?.()
-    ? await listConversionTargets(ws, effectivePeers)
-    : [];
-
   if (!job) {
+    const onlineHosts = effectivePeers?.available?.()
+      ? await listConversionTargets(ws, effectivePeers)
+      : [];
     const plan = buildConversionPlan(ws, { ...input, requireConfirmation: true }, onlineHosts);
     if (!plan.valid) throw new Error(plan.errors[0] || "Conversion plan is incomplete.");
 
@@ -1678,8 +1680,13 @@ export async function runConversion(ws, input = {}, { peers, link, announce, onP
     if (item.action === "move") {
       const pin = pinByHost.get(item.targetHostId);
       if (!pin) {
-        item.stage = "failed";
-        item.error = `${item.targetHostName || "Destination host"} is offline. Unmoved bots remain untouched on this computer.`;
+        // Preserve the last durable stage (e.g. verified or cleaned) while the destination is absent
+        // so resuming after reconnect continues from that checkpoint instead of re-exporting a removed bot.
+        item.stage ||= "pending";
+        item.error =
+          item.stage === "cleaned"
+            ? `${item.targetHostName || "Destination host"} is offline. ${item.botName} is already verified on ${item.targetHostName || "the destination host"}; activation will retry when it reconnects.`
+            : `${item.targetHostName || "Destination host"} is offline. Unmoved bots remain untouched on this computer.`;
         job.status = "paused";
         job.error = item.error;
         emit();
@@ -1744,9 +1751,11 @@ export async function runConversion(ws, input = {}, { peers, link, announce, onP
         }
         const offlineError =
           error?.code === "TEAMWORK_OFFLINE"
-            ? `${item.targetHostName || "Destination host"} went offline while moving ${item.botName}. Unmoved items remain untouched on this computer.`
+            ? item.stage === "cleaned"
+              ? `${item.targetHostName || "Destination host"} went offline before activating ${item.botName}. ${item.botName} is already verified on ${item.targetHostName || "the destination host"}; resume to finish activation.`
+              : `${item.targetHostName || "Destination host"} went offline while moving ${item.botName}. Unmoved items remain untouched on this computer.`
             : String(error?.message || `Could not move ${item.botName}.`);
-        item.stage = item.stage === "cleaned" ? "cleaned" : "failed";
+        item.stage = item.stage === "verified" || item.stage === "cleaned" ? item.stage : "failed";
         item.error = offlineError;
         job.status = error?.code === "TEAMWORK_OFFLINE" ? "paused" : "failed";
         job.error = offlineError;

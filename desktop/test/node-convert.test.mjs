@@ -346,6 +346,187 @@ test("idempotent re-run after mid-move offline interruption finishes cleanly wit
   assert.ok(beganCount >= 2);
 });
 
+test("cleaned move preserves activate-only checkpoint when target is absent on resume, then activates once on reconnect", async (t) => {
+  const { ws: sourceWs } = makeWorkspace(t);
+  const { ws: targetWs } = makeWorkspace(t);
+  const botId = seedBot(sourceWs, {
+    name: "ActivateOnlyBot",
+    memory: "- Preserved memory",
+    agentsMd: "# ActivateOnly rules",
+    routine: { name: "Morning Digest", cron: "0 8 * * *", timezone: "America/Chicago", enabled: true },
+  });
+  const keepIds = sourceWs.state.bots.filter((b) => b.id !== botId).map((b) => b.id);
+
+  let targetOnline = true;
+  let failActivate = true;
+  const ops = [];
+  let activateSucceeded = 0;
+  let bothEnabledObserved = false;
+  const checkRoutinesNotDuplicated = () => {
+    const srcChat = sourceWs.state.chats.find((c) => c.botId === botId);
+    const srcEnabled = Boolean(srcChat?.schedules?.some((s) => s.enabled !== false));
+    const tgtBot = targetWs.state.bots.find((b) => b.name === "ActivateOnlyBot");
+    const tgtChat = tgtBot ? targetWs.state.chats.find((c) => c.botId === tgtBot.id) : null;
+    const tgtEnabled = Boolean(tgtChat?.schedules?.some((s) => s.enabled !== false));
+    if (srcEnabled && tgtEnabled) bothEnabledObserved = true;
+  };
+
+  const basePeers = makeDirectPeers(targetWs, {
+    intercept: async (_hostId, op, payload) => {
+      if (!op.startsWith("migrate.")) return undefined;
+      ops.push(op);
+      checkRoutinesNotDuplicated();
+      if (op === "migrate.activate" && failActivate) {
+        throw Object.assign(new Error("Target went offline during activation"), { code: "TEAMWORK_OFFLINE" });
+      }
+      const res = await receiveMigration(
+        targetWs,
+        { serverId: "host-source", name: "Source Mac", verify: async () => {} },
+        op,
+        payload,
+      );
+      if (op === "migrate.activate") activateSucceeded++;
+      checkRoutinesNotDuplicated();
+      return res;
+    },
+  });
+  const peers = {
+    ...basePeers,
+    hosts: async () => (targetOnline ? basePeers.hosts() : []),
+  };
+
+  // 1. Initial run verifies on target and removes source bot, then fails during migrate.activate.
+  const first = await runConversion(
+    sourceWs,
+    {
+      nodeName: "Edge Node",
+      botActions: [
+        ...keepIds.map((id) => ({ botId: id, action: "keep" })),
+        { botId, action: "move", targetHostId: "host-target" },
+      ],
+    },
+    { peers },
+  );
+  checkRoutinesNotDuplicated();
+  assert.equal(first.job.status, "paused");
+  assert.equal(first.job.items.find((i) => i.botId === botId).stage, "cleaned");
+  assert.equal(sourceWs.state.bots.some((b) => b.id === botId), false, "source bot was already removed");
+  assert.equal(targetWs.state.bots.filter((b) => b.name === "ActivateOnlyBot").length, 1);
+  assert.equal(
+    targetWs.state.chats.find((c) => c.botId === targetWs.state.bots.find((b) => b.name === "ActivateOnlyBot").id).schedules[0].enabled,
+    false,
+  );
+  assert.equal(sourceWs.nodeHost.enabled, false);
+  const opsAfterFirstRun = ops.length;
+
+  // 2. Resume while destination host is absent from peer discovery -> must keep "cleaned" checkpoint!
+  targetOnline = false;
+  const whileAbsent = await runConversion(sourceWs, { resume: true }, { peers });
+  checkRoutinesNotDuplicated();
+  assert.equal(whileAbsent.job.status, "paused");
+  assert.equal(whileAbsent.job.items.find((i) => i.botId === botId).stage, "cleaned");
+  assert.equal(sourceWs.state.bots.some((b) => b.id === botId), false, "source bot must not be recreated");
+  assert.equal(ops.length, opsAfterFirstRun, "no migration calls while destination is absent");
+  assert.equal(sourceWs.nodeHost.enabled, false);
+
+  // 3. Destination reconnects -> resume only retries migrate.activate and completes cleanly!
+  targetOnline = true;
+  failActivate = false;
+  const resumed = await runConversion(sourceWs, { resume: true }, { peers });
+  checkRoutinesNotDuplicated();
+  assert.equal(resumed.job.status, "completed");
+  assert.equal(resumed.job.items.find((i) => i.botId === botId).stage, "done");
+  assert.equal(sourceWs.nodeHost.enabled, true);
+  assert.equal(sourceWs.state.bots.some((b) => b.id === botId), false, "source bot remains absent");
+
+  // Only migrate.activate ran after reconnect — no bundle re-export or re-transfer.
+  assert.deepEqual(ops.slice(opsAfterFirstRun), ["migrate.activate"]);
+  assert.equal(ops.filter((op) => op === "migrate.begin").length, 1);
+  assert.equal(activateSucceeded, 1);
+  assert.equal(bothEnabledObserved, false, "routine must never be enabled on both hosts simultaneously");
+
+  // Target bot is present once with data and activated routine intact.
+  const tgtBots = targetWs.state.bots.filter((b) => b.name === "ActivateOnlyBot");
+  assert.equal(tgtBots.length, 1);
+  assert.equal(targetWs.memory.read(tgtBots[0].id).trim(), "- Preserved memory");
+  assert.equal(readProfile(targetWs, tgtBots[0].id, "AGENTS.md"), "# ActivateOnly rules");
+  const tgtSched = targetWs.state.chats.find((c) => c.botId === tgtBots[0].id).schedules[0];
+  assert.equal(tgtSched.enabled, true);
+  assert.equal(tgtSched.cron, "0 8 * * *");
+  assert.equal(tgtSched.timezone, "America/Chicago");
+});
+
+test("verified move preserves verified stage when target is absent on resume, then finishes cleanup and activation without re-exporting", async (t) => {
+  const { ws: sourceWs } = makeWorkspace(t);
+  const { ws: targetWs } = makeWorkspace(t);
+  const botId = seedBot(sourceWs, {
+    name: "VerifiedCheckpointBot",
+    routine: { name: "Hourly Check", cron: "0 * * * *", timezone: "UTC", enabled: true },
+  });
+  const keepIds = sourceWs.state.bots.filter((b) => b.id !== botId).map((b) => b.id);
+
+  let targetOnline = true;
+  const ops = [];
+  const basePeers = makeDirectPeers(targetWs, {
+    intercept: async (_hostId, op, payload) => {
+      if (!op.startsWith("migrate.")) return undefined;
+      ops.push(op);
+      return receiveMigration(
+        targetWs,
+        { serverId: "host-source", name: "Source Mac", verify: async () => {} },
+        op,
+        payload,
+      );
+    },
+  });
+  const peers = {
+    ...basePeers,
+    hosts: async () => (targetOnline ? basePeers.hosts() : []),
+  };
+
+  // Run once, simulating a failure right after verification (source removal blocked by a busy chat).
+  const origAssertIdle = sourceWs.agents.assertIdle;
+  let blockRemoval = true;
+  sourceWs.agents.assertIdle = (...args) => {
+    if (blockRemoval) throw new Error("Chat is busy");
+    return origAssertIdle.apply(sourceWs.agents, args);
+  };
+
+  const first = await runConversion(
+    sourceWs,
+    {
+      nodeName: "Edge Node",
+      botActions: [
+        ...keepIds.map((id) => ({ botId: id, action: "keep" })),
+        { botId, action: "move", targetHostId: "host-target" },
+      ],
+    },
+    { peers },
+  );
+  assert.equal(first.job.status, "failed");
+  assert.equal(first.job.items.find((i) => i.botId === botId).stage, "verified");
+  assert.ok(sourceWs.state.bots.some((b) => b.id === botId));
+  const opsAfterVerify = ops.length;
+
+  // Resume while target is absent -> must keep "verified" stage.
+  targetOnline = false;
+  blockRemoval = false;
+  const whileAbsent = await runConversion(sourceWs, { resume: true }, { peers });
+  assert.equal(whileAbsent.job.status, "paused");
+  assert.equal(whileAbsent.job.items.find((i) => i.botId === botId).stage, "verified");
+  assert.equal(ops.length, opsAfterVerify);
+
+  // Target reconnects -> finishes source cleanup and activates without re-transferring.
+  targetOnline = true;
+  const resumed = await runConversion(sourceWs, { resume: true }, { peers });
+  assert.equal(resumed.job.status, "completed");
+  assert.equal(resumed.job.items.find((i) => i.botId === botId).stage, "done");
+  assert.deepEqual(ops.slice(opsAfterVerify), ["migrate.activate"]);
+  assert.equal(sourceWs.state.bots.some((b) => b.id === botId), false);
+  const tgtBot = targetWs.state.bots.find((b) => b.name === "VerifiedCheckpointBot");
+  assert.equal(targetWs.state.chats.find((c) => c.botId === tgtBot.id).schedules[0].enabled, true);
+});
+
 test("routine de-duplication guarantees a routine is NEVER enabled on both source and target at the same time", async (t) => {
   const { ws: sourceWs } = makeWorkspace(t);
   const { ws: targetWs } = makeWorkspace(t);
