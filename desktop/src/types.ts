@@ -158,6 +158,16 @@ export type Mention =
   | { kind: "board"; id: string; label: string; board?: "feed" | "idea" | "goal"; body?: string; links?: { url: string; title?: string }[] };
 /** What the composer sends for a mention; the main process checks it and fills in the label. */
 export type MentionInput = { kind: "project" | "board"; id: string } | { kind: "file" | "wiki"; path: string };
+/** Structured sender metadata for bot-to-bot messages (teamwork, task handoffs, remote dispatches). */
+export type MessageFrom = {
+  kind: "bot";
+  botId: string;
+  name: string;
+  hostId?: string;
+  hostName?: string;
+  chatId?: string;
+  via: "teamwork" | "task" | "remote";
+};
 export type Message = {
   reactions?: { actor: string; emoji: string }[];
   clientMessageId?: string;
@@ -182,6 +192,8 @@ export type Message = {
   botId?: string;
   /** A team member's stamped identity. The original displayed text is unchanged. */
   author?: { memberId: string; name: string };
+  /** Structured sender metadata when another bot sent this message. */
+  from?: MessageFrom;
 };
 export type Chat = {
   hostDispatch?: true;
@@ -310,6 +322,8 @@ export type Run = {
   failures?: { botId: string; detail: string }[];
   /** Teammates the bot asked for help during this turn, in order (desktop/teamwork.mjs). */
   teamwork?: TeamAsk[];
+  /** Task Board jobs this bot created for another bot during this turn (desktop/tasks.mjs). */
+  taskHandoffs?: TaskHandoff[];
 };
 export type WorkflowNodeKind = "trigger" | "agent" | "model" | "condition" | "approval" | "output";
 export type WorkflowTriggerKind = "task" | "schedule" | "manual" | "routine" | "chat" | "webhook" | "github";
@@ -428,6 +442,8 @@ export type TeamAsk = {
   botId: string;
   /** The bot that asked. */
   fromBotId: string;
+  /** Structured sender metadata set by the backend. */
+  from?: MessageFrom;
   remote?: { hostId: string; hostName: string; botName: string };
   message: string;
   expecting?: string;
@@ -442,6 +458,20 @@ export type TeamAsk = {
   /** The tools the teammate used. */
   steps?: Step[];
   usedTools?: string[];
+};
+/** A Task Board job a bot created for another bot during a turn. */
+export type TaskHandoff = {
+  id: string;
+  taskId: string;
+  botId: string;
+  fromBotId: string;
+  from?: MessageFrom;
+  title: string;
+  details?: string;
+  priority?: TaskPriority;
+  status: TaskStatus | "archived";
+  chatId?: string;
+  started: number;
 };
 export type Reasoning = {
   id: string;
@@ -2706,6 +2736,7 @@ export type BotTask = {
   priority: TaskPriority;
   status: TaskStatus | "archived";
   createdBy: string;
+  /** Chat where a bot created this task via task_create, for linking back. */
   createdChatId?: string;
   review?: TaskReviewMode;
   reviewerBotId?: string;

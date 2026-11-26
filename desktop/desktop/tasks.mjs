@@ -91,7 +91,15 @@ export class Tasks {
     task.history ??= [];
     task.history.push(entry);
     if (task.history.length > MAX_HISTORY) task.history = task.history.slice(-MAX_HISTORY);
+    this.syncHandoffs(task);
     return entry;
+  }
+  /** Keeps the rail card on the run that created this task in step with the task's status and chat. */
+  syncHandoffs(task) {
+    for (const r of this.ws.state.runs) {
+      const handoff = r.taskHandoffs?.find((h) => h.taskId === task.id);
+      if (handoff) Object.assign(handoff, { status: task.status, ...(task.chatId && { chatId: task.chatId }) });
+    }
   }
   save({ id, title, body: details, botId, priority = "normal", status, review, createdChatId }, createdBy = "person") {
     if (botId != null) this.ws.bot(botId);
@@ -272,7 +280,11 @@ export class Tasks {
     const messageText = this.invocation(task)?.text ?? this.prompt(task, { resuming: reuse });
     const invoked = this.invocation(task);
     try {
-      turn = this.ws.send(chatId, messageText, { taskId: task.id, title: "Task · " + task.title.slice(0, 90), ...(invoked && { allowScript: true }) });
+      // A task another bot created arrives as a message from that bot, shown as a rail card.
+      const sender = this.isBotCreator(task.createdBy)
+        ? { kind: "bot", botId: task.createdBy, name: this.botName(task.createdBy) ?? "a bot", ...(task.createdChatId && { chatId: task.createdChatId }), via: "task" }
+        : undefined;
+      turn = this.ws.send(chatId, messageText, { taskId: task.id, title: "Task · " + task.title.slice(0, 90), ...(sender && { from: sender }), ...(invoked && { allowScript: true }) });
     } catch (error) {
       Object.assign(task, { chatId, status: "blocked", problem: error.message, updatedAt: Date.now() });
       this.recordHistory(task, from, "blocked", { by: "system", note: error.message });
@@ -521,8 +533,26 @@ export class Tasks {
             },
             bot.id,
           );
+          const createdTask = this.get(id);
+          // Record bot-to-bot task handoffs on the creating run so the chat shows a rail card with live task status.
+          if (assignedBotId && assignedBotId !== bot.id) {
+            const handoffs = (run.taskHandoffs ??= []);
+            handoffs.push({
+              id: createdTask.id,
+              taskId: createdTask.id,
+              botId: assignedBotId,
+              fromBotId: bot.id,
+              from: { kind: "bot", botId: bot.id, name: bot.name, chatId: chat.id, via: "task" },
+              title: createdTask.title,
+              ...(createdTask.body && { details: createdTask.body }),
+              priority: createdTask.priority,
+              status: createdTask.status,
+              started: createdTask.createdAt,
+            });
+            this.ws.notify();
+          }
           created++;
-          return view(this.get(id));
+          return view(createdTask);
         },
       ),
       tool(

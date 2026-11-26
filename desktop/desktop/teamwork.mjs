@@ -365,10 +365,18 @@ export class Teamwork {
     if (asks.some((a) => a.botId === helper.id && a.remote?.hostId === remote?.hostId && a.message === body))
       throw new Error("You already sent " + helper.name + " this exact message in this reply. Use the answer you got.");
     const optional = (value) => (typeof value === "string" && value.trim() ? value.trim().slice(0, 2000) : undefined);
+    const from = {
+      kind: "bot",
+      botId: bot.id,
+      name: bot.name,
+      chatId: chat.id,
+      via: remote ? "remote" : "teamwork",
+    };
     const entry = {
       id: randomUUID(),
       botId: helper.id,
       fromBotId: bot.id,
+      from,
       ...(remote && { remote }),
       message: body,
       ...(optional(expecting) && { expecting: optional(expecting) }),
@@ -433,6 +441,7 @@ export class Teamwork {
       id: randomUUID(),
       botId: "node:" + targetProject.id,
       fromBotId: bot.id,
+      from: { kind: "bot", botId: bot.id, name: bot.name, chatId: chat.id, via: "remote" },
       remote: { hostId, hostName: discovered.host.name, botName: targetProject.name },
       message: "List files in " + folderLabel,
       status: "waiting",
@@ -494,6 +503,7 @@ export class Teamwork {
       id: randomUUID(),
       botId: "node:" + operation,
       fromBotId: bot.id,
+      from: { kind: "bot", botId: bot.id, name: bot.name, chatId: chat.id, via: "remote" },
       remote: { hostId, hostName: discovered.host.name, botName: operation },
       message: `${operation}: ${label}`.slice(0, 200),
       status: "waiting",
@@ -601,7 +611,8 @@ export class Teamwork {
       if (!text) throw new Error("no reply came back");
       // Record the teammate's exchange so switching harnesses hands off what this helper already discussed.
       record.messages ??= [];
-      record.messages.push({ role: "user", text: prompt }, { role: "assistant", text });
+      const from = entry.from ?? { kind: "bot", botId: asker.id, name: asker.name, chatId: chat.id, via: "teamwork" };
+      record.messages.push({ role: "user", text: prompt, time: entry.started, from }, { role: "assistant", text, time: Date.now() });
       if (record.messages.length > 40) record.messages.splice(0, record.messages.length - 40);
       const helperProviderId = session.providerId ?? record.sessionProvider;
       if (helperProviderId && record.sessions?.[helperProviderId]) {

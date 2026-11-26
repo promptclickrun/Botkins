@@ -14,6 +14,7 @@
 // its calls. Fold finished steps determines whether the work collapses once the turn ends.
 import { isSilentMessage } from "../../../link-host/silent-reply.mjs";
 import type { Message, PanePanel, Reasoning, Run, Step, Subagent } from "@/link/types";
+import { isStepCoveredByRail } from "./activityModel";
 import { crewOf } from "./activityStory";
 import { crewFace } from "./crew";
 import { type FoldEntry, foldLine, foldParts, liveLine, type StepsChoice, stepCount } from "./fold";
@@ -74,9 +75,10 @@ export type Item =
    * once it ended, right under the turn's fold or receipt.
    */
   | { kind: "crew"; key: string; runId: string; line: string; marks: string[]; live: boolean; /** When the first of them started. */ at: number }
+  /** Outgoing bot-to-bot messages (teamwork asks, remote dispatches, Task Board handoffs) as T3 Code-style rail cards. */
+  | { kind: "agent-rail"; key: string; run: Run }
   /** A turn that ended with plan steps open and nothing went on: "Stopped with 2 open steps", with Continue on the newest turn. */
   | { kind: "open"; key: string; run: Run; line: string; /** The newest turn, and nothing under way: Continue is offered. */ again: boolean }
-  /** The end of the turn under way: its latest steps and thinking, and the text being written. */
   | { kind: "live"; key: "live"; run?: Run; steps: Step[]; thinking: string; text: string; /** IDs of reasoning bodies in this active segment, after its last structural boundary. */ reasoningIds?: string[]; /** The body offset already represented by legacy text rows. */ liveFrom?: number; /** A group/fallback body is raw; a single-turn body starts after its cut and trims its leading separator. */ bodyMode?: "raw" | "segment"; /** Room under the text for the reply's row, so it stays put when it becomes the reply. */ reserve?: true }
   /**
    * A folded turn's work in one line (fold.ts), under its reply. While a turn runs (`live`, in every
@@ -416,8 +418,12 @@ export function chatTimeline(input: TimelineInput): Item[] {
     return [{ kind: "live", key: "live", run, steps: visible, thinking, reasoningIds, text, liveFrom, bodyMode, ...(foldFinished && { reserve: true as const }) }];
   };
   /** Under a turn under way, in every mode: its status line, which becomes the fold line where the turn folds. */
+  const visibleRunSteps = (run: Run) => (run.steps ?? []).filter((step) => !isStepCoveredByRail(step, run));
+  const hasAgentRail = (run: Run) => !!(run.teamwork?.length || run.taskHandoffs?.length);
+  const agentRailItem = (run: Run): Item => ({ kind: "agent-rail", key: "ar:" + run.id, run });
+  /** Under a turn under way, in every mode: its status line, which becomes the fold line where the turn folds. */
   const statusLine = (run: Run): Item => {
-    const count = run.steps?.length ?? 0;
+    const count = visibleRunSteps(run).length;
     return { kind: "fold", key: "f:" + run.id, run, entries: [], live: true, line: liveLine(count), count: stepCount(count), ...(island && { island: true as const }) };
   };
 
@@ -461,7 +467,7 @@ export function chatTimeline(input: TimelineInput): Item[] {
 
     const entries: Entry[] = [];
     for (const i of group ? mine.filter((i) => i !== start) : inside) entries.push({ at: timeOf(messages[i].time), order: 1, kind: "message", index: i });
-    for (const step of run.steps ?? []) entries.push({ at: step.started, order: 2, kind: "step", step, key: stepKey(step) });
+    for (const step of visibleRunSteps(run)) entries.push({ at: step.started, order: 2, kind: "step", step, key: stepKey(step) });
     // Thinking shows where it began (Settings › Chat › Thinking says how, or not at all).
     // Folded thoughts stay with the live working rail; once a turn is landed they are only
     // reintroduced by an expanded finished fold. Open puts them directly in the canvas.
@@ -561,6 +567,7 @@ export function chatTimeline(input: TimelineInput): Item[] {
       const thinking = openThinking ? thoughts.map((thought) => thought.text.trim()).filter(Boolean).join("\n\n") || (!run.reasoning?.length ? (input.live?.thinking ?? "") : "") : "";
       items.push(...kept(), ...live(run, steps, thinking, group ? rest : rest.replace(/^\s+/, ""), offset, run.reasoning?.length ? thoughts.map((thought) => thought.id) : undefined, group ? "raw" : "segment"));
       items.push(statusLine(run));
+      if (hasAgentRail(run)) items.push(agentRailItem(run));
       return;
     }
     // A finished turn: its last part's work line, what it wrote before it ended, its reply, how it ended.
@@ -571,11 +578,12 @@ export function chatTimeline(input: TimelineInput): Item[] {
     // "Kept going" sits just before the reply the computer kept going for, so it reads as what happened next.
     items.push(...kept());
     if (!group) replies.forEach((i, n) => items.push(messageItem(i, { end: n === replies.length - 1 })));
-    if (run.steps?.length || run.agents?.length || run.todos?.length || run.teamwork?.length || run.summary ||
+    if (visibleRunSteps(run).length || run.agents?.length || run.todos?.length || run.summary ||
         (showThinking && run.reasoning?.length) || (showUpdates && inside.some((i) => messages[i].interim))) {
       items.push({ kind: "activity", key: "activity:" + run.id, runId: run.id });
     }
     if (crew) items.push(crew);
+    if (hasAgentRail(run)) items.push(agentRailItem(run));
     items.push(...note());
   };
 
@@ -585,7 +593,7 @@ export function chatTimeline(input: TimelineInput): Item[] {
    * happened. A group chat keeps its members' replies in turn.
    */
   const foldTurn = (run: Run, replies: number[], inside: number[], early: number[], kept: () => Item[], note: () => Item[]) => {
-    const own = run.steps ?? [];
+    const own = visibleRunSteps(run);
     const entries: Entry[] = [];
     for (const i of inside) entries.push({ at: timeOf(messages[i].time), order: 1, kind: "message", index: i });
     for (const step of own) entries.push({ at: step.started, order: 2, kind: "step", step, key: stepKey(step) });
@@ -650,7 +658,7 @@ export function chatTimeline(input: TimelineInput): Item[] {
     }
     if (group) items.push(...kept());
     const counted = own.length;
-    if (fold.some((entry) => entry.kind !== "person") || run.agents?.length || run.todos?.length || run.teamwork?.length || run.summary) {
+    if (fold.some((entry) => entry.kind !== "person") || run.agents?.length || run.todos?.length || run.summary) {
       const took = run.finished ? run.finished - run.time : run.usage?.durationMs;
       const onlyThinking = fold.length > 0 && fold.every((entry) => entry.kind === "thought");
       const facts = { took, steps: counted, onlyThinking };
@@ -658,6 +666,7 @@ export function chatTimeline(input: TimelineInput): Item[] {
     }
     const crew = crewItem(run, false);
     if (crew) items.push(crew);
+    if (hasAgentRail(run)) items.push(agentRailItem(run));
     items.push(...note());
   };
 
@@ -702,6 +711,8 @@ function itemTime(item: Item): number {
       return Number.POSITIVE_INFINITY;
     case "fold":
       return item.live ? Number.POSITIVE_INFINITY : (item.run.finished ?? Number.NaN);
+    case "agent-rail":
+      return item.run.teamwork?.[0]?.started ?? item.run.taskHandoffs?.[0]?.started ?? item.run.time;
     default:
       return Number.NaN;
   }

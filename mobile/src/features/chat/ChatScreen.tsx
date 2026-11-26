@@ -46,6 +46,7 @@ import { closed, sessionTodos, todoLabel, TRANSFER_TODOS } from "../../../link-h
 import { TodoList } from "./TodoList";
 import { latestTurn } from "./helpers";
 import { HelperRail, railShown } from "./HelperRail";
+import { AgentMessageRail } from "./AgentMessageRail";
 import { CrewCard } from "./CrewCard";
 import { LiveTurn, TurnText, WorkPart } from "./LiveTurn";
 import { CAPSULE, StatusCapsule } from "./StatusCapsule";
@@ -316,9 +317,9 @@ type RowProps = {
   draftText: (text: string) => void;
   messageActions: MessageActions;
   openPanel: (id: string) => void;
+  openChat: (id: string) => void;
 };
-
-const TimelineRow = memo(function TimelineRow({ item, chatId, group, bot, bots, sendText, draftText, messageActions, openPanel, holdFold, viewport, active, replyRef, continues }: RowProps & {
+const TimelineRow = memo(function TimelineRow({ item, chatId, group, bot, bots, sendText, draftText, messageActions, openPanel, openChat, holdFold, viewport, active, replyRef, continues }: RowProps & {
   item: Item;
   continues?: boolean;
   holdFold: FoldHold;
@@ -328,7 +329,7 @@ const TimelineRow = memo(function TimelineRow({ item, chatId, group, bot, bots, 
 }) {
   const inView = useStore(viewport.rows, (rows) => active && rows.has(item.key));
   const row = item.kind === "message" ? (
-    <MessageRow replyRef={replyRef} item={item} chatId={chatId} group={group} bots={bots} onSend={sendText} onDraft={draftText} actions={messageActions} continues={continues} />
+    <MessageRow replyRef={replyRef} item={item} chatId={chatId} group={group} bots={bots} onSend={sendText} onDraft={draftText} onOpenChat={openChat} actions={messageActions} continues={continues} />
   ) : item.kind === "work" ? (
     <WorkPart chatId={chatId} bot={bot} item={item} />
   ) : item.kind === "text" ? (
@@ -337,6 +338,8 @@ const TimelineRow = memo(function TimelineRow({ item, chatId, group, bot, bots, 
     <ScreenCard chatId={chatId} panel={item.panel} inView={inView} onOpen={() => openPanel(item.panel.id)} />
   ) : item.kind === "crew" ? (
     <CrewCard chatId={chatId} item={item} rows={viewport.rows} />
+  ) : item.kind === "agent-rail" ? (
+    <AgentMessageRail run={item.run} bots={bots} onOpenChat={openChat} />
   ) : item.kind === "activity" ? (
     <WorkLine chatId={chatId} runId={item.runId} label="Turn activity" />
   ) : item.kind === "ended" ? (
@@ -360,7 +363,7 @@ const TimelineRow = memo(function TimelineRow({ item, chatId, group, bot, bots, 
 });
 
 /** Keep text and legacy turn marks at the list that orders them with messages and steps. */
-function ChatTimelineList({ chatId, view, pending, runPart, streaming, group, bot, bots, at, list, position, setPosition, followLatest, sendText, draftText, messageActions, openPanel, emptyView, room, viewport }: RowProps & {
+function ChatTimelineList({ chatId, view, pending, runPart, streaming, group, bot, bots, at, list, position, setPosition, followLatest, sendText, draftText, messageActions, openPanel, openChat, emptyView, room, viewport }: RowProps & {
   /** Which rows are on screen: the screen reads it too, to show the capsule only while the island is away. */
   viewport: ReturnType<typeof createChatViewport>;
   view: ChatView;
@@ -594,7 +597,7 @@ function ChatTimelineList({ chatId, view, pending, runPart, streaming, group, bo
           keyExtractor={(item) => item.key}
           renderItem={({ item }) => (
             <TimelineRow item={item} chatId={chatId} group={group} bot={bot} bots={bots} sendText={sendText}
-              draftText={draftText} messageActions={messageActions} openPanel={openPanel} holdFold={holdFold} viewport={viewport} continues={continuing.has(item.key)}
+              draftText={draftText} messageActions={messageActions} openPanel={openPanel} openChat={openChat} holdFold={holdFold} viewport={viewport} continues={continuing.has(item.key)}
               replyRef={item.kind === "message" && item.latest && item.message.role === "assistant" ? latestReply : undefined}
               active={onShow && inFront && (item.kind === "screen" || item.kind === "live" || (item.kind === "fold" && !!item.live))} />
           )}
@@ -1062,7 +1065,7 @@ function ChatScreenScreen({ pane: paneId, onLeave: leavePane, onList }: { pane?:
           <ChatPeopleLook chat={chat} bots={bots}>
             <ChatTimelineList
               chatId={chatId} view={view ?? EMPTY_CHAT} pending={pending} runPart={runPart} streaming={streaming} group={group} bot={bot} bots={bots}
-              at={at} list={list} position={position} setPosition={setPosition} followLatest={followLatest} sendText={sendText} draftText={draftText} messageActions={messageActions} openPanel={pane.show}
+              at={at} list={list} position={position} setPosition={setPosition} followLatest={followLatest} sendText={sendText} draftText={draftText} messageActions={messageActions} openPanel={pane.show} openChat={openChat}
               room={room} viewport={viewport}
               emptyView={empty && (
                 <View style={{ flex: 1, paddingTop: room.top, paddingBottom: room.bottom }}>
