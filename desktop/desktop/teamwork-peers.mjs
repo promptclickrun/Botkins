@@ -5,10 +5,44 @@ import { createHash } from "node:crypto";
 import { agree, b64u, box, hkdf, random, unb64u, unbox } from "./link/crypto.mjs";
 import { findHost, normalizeHost } from "./remote/link-client.mjs";
 
-const operations = new Set(["list", "submit", "status", "cancel", "capabilities", "job.submit", "job.status", "job.cancel"]);
-const nodeOperations = new Set(["capabilities", "job.submit", "job.status", "job.cancel"]);
-const trackedOperations = new Set(["submit", "status", "job.submit", "job.status"]);
-const cancelOperations = new Set(["cancel", "job.cancel"]);
+const operations = new Set([
+  "list",
+  "submit",
+  "status",
+  "cancel",
+  "capabilities",
+  "job.submit",
+  "job.status",
+  "job.cancel",
+  "control.status",
+  "control.submit",
+  "control.poll",
+  "control.cancel",
+  "migrate.begin",
+  "migrate.chunk",
+  "migrate.commit",
+  "migrate.verify",
+  "migrate.activate",
+  "migrate.rollback",
+]);
+const nodeOperations = new Set([
+  "capabilities",
+  "job.submit",
+  "job.status",
+  "job.cancel",
+  "control.status",
+  "control.submit",
+  "control.poll",
+  "control.cancel",
+  "migrate.begin",
+  "migrate.chunk",
+  "migrate.commit",
+  "migrate.verify",
+  "migrate.activate",
+  "migrate.rollback",
+]);
+const trackedOperations = new Set(["submit", "status", "job.submit", "job.status", "control.submit", "control.poll"]);
+const cancelOperations = new Set(["cancel", "job.cancel", "control.cancel"]);
 const windowMs = 60_000;
 const statusCacheMs = 10_000;
 const maxReplyBytes = 1024 * 1024;

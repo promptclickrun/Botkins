@@ -1,12 +1,15 @@
-// Settings › Node host: turn this computer on as a node host, manage shared project folders,
-// pause or disconnect it, inspect the last completed request, and revoke saved grants.
+// Settings › Node host: turn this computer on as a node host, convert an existing full host
+// safely with the conversion wizard, manage shared project folders, pause or disconnect it,
+// inspect the last completed request, revoke saved grants, or undo a conversion from snapshot.
 import { useEffect, useState } from "react";
 import type { State } from "./types";
 import { Group, Row, SwitchRow, ValueRow, errorText } from "./SettingsRows";
+import ConvertToNodeWizard from "./ConvertToNodeWizard";
 
 const api = window.botkins;
 
-function formatTime(ms: number) {
+function formatTime(ms?: number) {
+  if (!ms) return "";
   try {
     return new Date(ms).toLocaleString();
   } catch {
@@ -19,6 +22,16 @@ export default function NodeHostSettings({ state, fail }: { state: State; fail: 
   const [name, setName] = useState(node?.name ?? "");
   const [busy, setBusy] = useState(false);
   const [confirmDisconnect, setConfirmDisconnect] = useState(false);
+  const [confirmUndo, setConfirmUndo] = useState(false);
+  const [wizardOpen, setWizardOpen] = useState(false);
+  const hasLocalData = node?.hasLocalData ?? (state.bots.length > 0 || state.chats.length > 0);
+  const activeSnapshot = node?.conversion?.snapshot ?? null;
+  const interruptedJob =
+    node?.conversion?.activeJob &&
+    (node.conversion.activeJob.status === "paused" || node.conversion.activeJob.status === "failed")
+      ? node.conversion.activeJob
+      : null;
+
   useEffect(() => {
     setName(node?.name ?? "");
   }, [node?.name]);
@@ -34,41 +47,78 @@ export default function NodeHostSettings({ state, fail }: { state: State; fail: 
     }
   }
 
+  if (wizardOpen) {
+    return <ConvertToNodeWizard onClose={() => setWizardOpen(false)} fail={fail} />;
+  }
+
   if (!node?.enabled) {
     return (
-      <Group
-        title="Node host"
-        footer="A node host publishes this computer to your profile even without bots, and lets bots on your other computers list files in project folders you choose to share."
-        actions={
-          <button
-            type="button"
-            className="set-button primary"
-            disabled={busy}
-            onClick={() => void run(() => api.nodeSetup({ name: name.trim() || undefined }))}
+      <>
+        {hasLocalData && (
+          <Group
+            title="Convert this computer to a Node host"
+            footer="Takes a local backup snapshot first, lets you move, keep as shared, or delete each local bot, keeps routines from running twice, and preserves phone pairing."
+            actions={
+              <button
+                type="button"
+                className="set-button primary"
+                disabled={busy}
+                onClick={() => setWizardOpen(true)}
+              >
+                {interruptedJob ? "Resume conversion" : "Convert this computer to a Node host"}
+              </button>
+            }
           >
-            {busy ? "Setting up…" : "Set Up as Node Host"}
-          </button>
-        }
-      >
-        <ValueRow label="Status" value="Off" />
-        <Row label="Node name" help="How this computer appears to your other Botkins hosts.">
-          {(id, describedBy) => (
-            <input
-              id={id}
-              aria-describedby={describedBy}
-              type="text"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder="e.g. Build Mac or Home Server"
-              disabled={busy}
+            <ValueRow
+              label="Local workspace"
+              value={`${state.bots.length} bot${state.bots.length === 1 ? "" : "s"} · ${state.chats.length} chat${state.chats.length === 1 ? "" : "s"}`}
+              help="Walk through moving or keeping your local bots before turning on Node host mode."
             />
-          )}
-        </Row>
-      </Group>
+            {interruptedJob && (
+              <ValueRow
+                label="Interrupted conversion"
+                value={interruptedJob.status === "paused" ? "Paused safely" : "Stopped"}
+                help={interruptedJob.error ?? "Resume to continue without duplicating moved bots."}
+              />
+            )}
+          </Group>
+        )}
+
+        <Group
+          title="Node host"
+          footer="A node host publishes this computer to your profile even without bots, and lets bots on your other computers list files in project folders you choose to share."
+          actions={
+            <button
+              type="button"
+              className={hasLocalData ? "set-button" : "set-button primary"}
+              disabled={busy}
+              onClick={() => void run(() => api.nodeSetup({ name: name.trim() || undefined }))}
+            >
+              {busy ? "Setting up…" : "Set Up as Node Host"}
+            </button>
+          }
+        >
+          <ValueRow label="Status" value="Off" />
+          <Row label="Node name" help="How this computer appears to your other Botkins hosts.">
+            {(id, describedBy) => (
+              <input
+                id={id}
+                aria-describedby={describedBy}
+                type="text"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                placeholder="e.g. Build Mac or Home Server"
+                disabled={busy}
+              />
+            )}
+          </Row>
+        </Group>
+      </>
     );
   }
 
   const last = node.lastCompleted;
+  const lastAt = last?.finishedAt ?? last?.at;
   const lastText = last
     ? `${last.sourceBotName} on ${last.sourceHostName} · ${last.resourceName} (${last.status})`
     : "None yet";
@@ -155,9 +205,58 @@ export default function NodeHostSettings({ state, fail }: { state: State; fail: 
         <ValueRow
           label="Last completed request"
           value={lastText}
-          help={last ? `${formatTime(last.at)}${last.summary ? " · " + last.summary : ""}` : undefined}
+          help={last ? `${formatTime(lastAt)}${last.summary ? " · " + last.summary : ""}` : undefined}
         />
       </Group>
+
+      {activeSnapshot && (
+        <Group
+          title="Conversion backup snapshot"
+          footer="Restoring brings back your pre-conversion bots, chats, routines, memory, and panels while keeping your phone pairing and encrypted vault intact."
+          actions={
+            confirmUndo ? (
+              <>
+                <button
+                  type="button"
+                  className="set-button"
+                  disabled={busy}
+                  onClick={() => setConfirmUndo(false)}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  className="set-button danger"
+                  disabled={busy}
+                  onClick={() =>
+                    void run(async () => {
+                      await api.nodeConvertUndo({ snapshotId: activeSnapshot.id });
+                      setConfirmUndo(false);
+                    })
+                  }
+                >
+                  Confirm undo conversion
+                </button>
+              </>
+            ) : (
+              <button
+                type="button"
+                className="set-button danger"
+                disabled={busy}
+                onClick={() => setConfirmUndo(true)}
+              >
+                Undo conversion
+              </button>
+            )
+          }
+        >
+          <ValueRow
+            label="Backup location"
+            value={activeSnapshot.path}
+            help={`Taken ${formatTime(activeSnapshot.createdAt)} · ${activeSnapshot.botCount} bot(s), ${activeSnapshot.chatCount} chat(s)`}
+          />
+        </Group>
+      )}
 
       <Group
         title="Shared folders"
@@ -174,7 +273,7 @@ export default function NodeHostSettings({ state, fail }: { state: State; fail: 
             <SwitchRow
               key={project.id}
               label={project.name}
-              help={project.path}
+              help={project.folder ?? project.path}
               checked={!!project.shared}
               disabled={busy}
               onChange={(checked) => void run(() => api.nodeShareProject(project.id, checked))}

@@ -43,6 +43,15 @@ import { releasePage } from "./updates.mjs";
 import { Workspace } from "./workspace.mjs";
 import { liveContextFor } from "./live-context.mjs";
 import { PHONE_PATIENCE_MS, SignIns } from "./terminal/signin.mjs";
+import {
+  buildConversionPlan,
+  inspectLocalWorkspace,
+  listConversionTargets,
+  runConversion,
+  summarizeJob,
+  undoConversion,
+} from "./node-convert.mjs";
+import { remoteNodeControl, remoteNodeStatus } from "./remote-teamwork.mjs";
 import { validateAttachments } from "./canvas.mjs";
 import { wikiPath } from "./wiki.mjs";
 import { pickedSkill, uploadSkill } from "./link/skill-import.mjs";
@@ -1114,6 +1123,57 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
       ...workspace.nodeHost.disconnect(),
       listening: link?.status?.().listening === true,
     }),
+    nodeConvertInspect: async () => ({
+      ...inspectLocalWorkspace(workspace),
+      targets: await listConversionTargets(workspace),
+      nodeHost: {
+        ...workspace.nodeHost.view(),
+        listening: link?.status?.().listening === true,
+      },
+      suggestedName: workspace.nodeHost.name || link?.store?.data?.name || computerName() || "Node Host",
+    }),
+    nodeConvertPlan: async (input = {}) => {
+      const targets = await listConversionTargets(workspace);
+      const fallback = workspace.nodeHost.name || link?.store?.data?.name || computerName() || "Node Host";
+      return buildConversionPlan(workspace, { nodeName: fallback, ...input }, targets);
+    },
+    nodeConvertRun: async (input = {}) => {
+      const fallback = workspace.nodeHost.name || link?.store?.data?.name || computerName() || "Node Host";
+      const result = await runConversion(
+        workspace,
+        { nodeName: fallback, ...input },
+        { peers: workspace.teamworkPeers, link, announce },
+      );
+      return {
+        ...result,
+        nodeHost: {
+          ...result.nodeHost,
+          listening: link?.status?.().listening === true,
+        },
+      };
+    },
+    nodeConvertStatus: () => ({
+      ...workspace.nodeHost.view(),
+      listening: link?.status?.().listening === true,
+      jobs: workspace.nodeHost.conversionJobs.map(summarizeJob),
+    }),
+    nodeConvertUndo: async (input = {}) => {
+      const result = await undoConversion(workspace, {
+        snapshotId: typeof input === "string" ? input : input?.snapshotId,
+        peers: workspace.teamworkPeers,
+      });
+      announce();
+      return {
+        ...result,
+        nodeHost: {
+          ...result.nodeHost,
+          listening: link?.status?.().listening === true,
+        },
+      };
+    },
+    nodeRemoteStatus: async (hostId) => remoteNodeStatus(workspace.teamworkPeers, String(hostId ?? "")),
+    nodeRemoteControl: async (hostId, action, params = {}) =>
+      remoteNodeControl(workspace.teamworkPeers, String(hostId ?? ""), String(action ?? ""), params ?? {}),
     // iMessage and Mail for bots (Settings › MCP servers › On this Mac, desktop/mactools.mjs). Only this
     // window may call these: none is in REMOTE_METHODS, so a phone can't switch them on or check them.
     // The permission check runs only when the page asks, never at start-up.

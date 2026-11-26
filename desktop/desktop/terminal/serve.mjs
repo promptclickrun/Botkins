@@ -132,6 +132,20 @@ export async function startService({ paths, version, trial = false, reach = !tri
       if (profile.token()) void profile.ensureLocalHost({ existing: true }).catch((error) => log.error("Profile local host: " + error.message));
       return result;
     };
+    const originalNodeConvertRun = runtime.handlers.nodeConvertRun;
+    runtime.handlers.nodeConvertRun = async (input) => {
+      const result = await originalNodeConvertRun(input);
+      if (result?.job?.status === "completed" && profile.token()) {
+        void profile.ensureLocalHost({ existing: true }).catch((error) => log.error("Profile local host: " + error.message));
+      }
+      return result;
+    };
+    const originalNodeConvertUndo = runtime.handlers.nodeConvertUndo;
+    runtime.handlers.nodeConvertUndo = async (input) => {
+      const result = await originalNodeConvertUndo(input);
+      if (profile.token()) void profile.ensureLocalHost({ existing: true }).catch((error) => log.error("Profile local host: " + error.message));
+      return result;
+    };
     const originalNodeDisconnect = runtime.handlers.nodeDisconnect;
     runtime.handlers.nodeDisconnect = async () => {
       if (profile.token()) await profile.disconnectLocal().catch((error) => log.error("Profile disconnect: " + error.message));

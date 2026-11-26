@@ -5,10 +5,20 @@
 import { createHash, randomUUID } from "node:crypto";
 import { readdirSync, realpathSync, statSync } from "node:fs";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
+import { listConversionSnapshots, receiveMigration, summarizeJob } from "./node-convert.mjs";
 
 export const CAPABILITIES_VERSION = 1;
 export const LIST_FILES_OPERATION = "project.list_files";
 export const LIST_FILES_VERSION = 1;
+export const REMOTE_CONTROL_OPERATIONS = new Set([
+  "pause",
+  "resume",
+  "share",
+  "unshare",
+  "revoke",
+  "rename",
+  "disconnect",
+]);
 export const MAX_LISTING_ENTRIES = 500;
 export const MAX_LISTING_BYTES = 64 * 1024;
 
@@ -208,6 +218,13 @@ export class NodeHost {
     this.records = Array.isArray(data?.records)
       ? data.records.filter((row) => row && typeof row.id === "string")
       : [];
+    this.conversionJobs = Array.isArray(data?.conversionJobs)
+      ? data.conversionJobs.filter((job) => job && typeof job.id === "string").slice(-20)
+      : [];
+    this.imports =
+      data?.imports && typeof data.imports === "object" && !Array.isArray(data.imports)
+        ? { ...data.imports }
+        : {};
     // A job that was working when the host shut down must never silently run twice on restart.
     for (const row of this.records) {
       if (row.status === "working") {
@@ -215,9 +232,21 @@ export class NodeHost {
         row.error = "The node host closed during this request.";
       }
     }
+    for (const job of this.conversionJobs) {
+      if (job.status === "running") {
+        job.status = "paused";
+        job.error = job.error || "Conversion stopped because Botkins closed. Resume to continue cleanly.";
+      }
+    }
   }
 
   persisted() {
+    const importKeys = Object.keys(this.imports);
+    if (importKeys.length > 100) {
+      const sorted = importKeys.sort((a, b) => (this.imports[a]?.at ?? 0) - (this.imports[b]?.at ?? 0));
+      for (const key of sorted.slice(0, importKeys.length - 100)) delete this.imports[key];
+    }
+    const jobs = this.conversionJobs.slice(-20);
     if (
       !this.enabled &&
       !this.name &&
@@ -225,7 +254,9 @@ export class NodeHost {
       !this.sharedProjects.length &&
       !this.lastCompleted &&
       !this.grants.length &&
-      !this.records.length
+      !this.records.length &&
+      !jobs.length &&
+      !Object.keys(this.imports).length
     )
       return {};
     return {
@@ -237,6 +268,8 @@ export class NodeHost {
         lastCompleted: this.lastCompleted,
         grants: this.grants,
         records: this.records,
+        ...(jobs.length && { conversionJobs: jobs }),
+        ...(Object.keys(this.imports).length && { imports: this.imports }),
       },
     };
   }
@@ -269,6 +302,9 @@ export class NodeHost {
         folder: project.folder,
         shared: sharedSet.has(project.id),
       }));
+    const snapshots = listConversionSnapshots(this.ws);
+    const activeSnapshot = snapshots.find((item) => item.status === "active") ?? null;
+    const lastJob = this.conversionJobs.at(-1) ?? null;
     return {
       enabled: this.enabled,
       role: this.enabled ? "node" : "standard",
@@ -276,10 +312,25 @@ export class NodeHost {
       paused: this.paused,
       online: this.enabled && !this.paused,
       capabilitiesVersion: CAPABILITIES_VERSION,
+      remoteControlSupported: true,
+      hasLocalData: this.ws.state.bots.length > 0 || this.ws.state.chats.length > 0,
       sharedProjects: shared,
       availableProjects,
       grants: this.activeGrants().map(summarizeGrant),
       lastCompleted: this.lastCompleted,
+      conversion: {
+        activeJob: lastJob ? summarizeJob(lastJob) : null,
+        snapshot: activeSnapshot
+          ? {
+              id: activeSnapshot.id,
+              path: activeSnapshot.path,
+              createdAt: activeSnapshot.createdAt,
+              botCount: activeSnapshot.botCount,
+              chatCount: activeSnapshot.chatCount,
+              nodeName: activeSnapshot.nodeName,
+            }
+          : null,
+      },
     };
   }
 
@@ -295,6 +346,7 @@ export class NodeHost {
       name: this.enabled && this.name ? this.name : undefined,
       online: this.enabled ? !this.paused : true,
       paused: this.enabled ? this.paused : false,
+      remoteControl: this.enabled,
       bots,
       operations: this.enabled && projects.length
         ? [{ id: LIST_FILES_OPERATION, version: LIST_FILES_VERSION, readOnly: true }]
@@ -327,7 +379,7 @@ export class NodeHost {
     this.paused = paused === true;
     if (this.paused) {
       for (const row of this.records) {
-        if (row.status === "pending") this.cancel(row);
+        if (row.status === "pending" && row.kind !== "control") this.cancel(row);
       }
     }
     this.ws.save();
@@ -367,9 +419,9 @@ export class NodeHost {
   }
 
   /** Disconnect this node host: cancel active jobs and disable node hosting. */
-  disconnect() {
+  disconnect(excludeRow = null) {
     for (const row of this.records) {
-      if (active(row)) this.cancel(row);
+      if (row !== excludeRow && active(row)) this.cancel(row);
     }
     this.enabled = false;
     this.paused = false;
@@ -416,6 +468,11 @@ export class NodeHost {
       throw new Error("Missing host identity.");
 
     if (operation === "capabilities") return this.capabilities();
+    if (operation === "control.status") return this.view();
+    if (operation.startsWith("migrate.")) return receiveMigration(this.ws, peer, operation, payload);
+    if (["control.submit", "control.poll", "control.cancel"].includes(operation)) {
+      return this.receiveControl(peer, identity, operation, payload);
+    }
 
     if (!["job.submit", "job.status", "job.cancel"].includes(operation) || typeof payload?.id !== "string" || !UUID.test(payload.id))
       throw new Error("Invalid node job request.");
@@ -591,6 +648,238 @@ export class NodeHost {
       if (!task.stopped) {
         row.status = "failed";
         row.error = String(error?.message || "The node host could not complete this request.").slice(0, 360);
+        this.recordCompletion(row);
+      }
+    } finally {
+      if (active(row)) row.status = "cancelled";
+      this.live.delete(row);
+      this.ws.save();
+    }
+  }
+
+  /**
+   * Owner-only remote node management over same-owner teamwork-peers.
+   * Gated to the owner's own hosts (teamwork-peers rejects team members and phones)
+   * and uses the same trusted-device approval and grant model as node jobs, with a
+   * distinct grant namespace ("node-control") so job grants never escalate to control.
+   */
+  async receiveControl(peer, identity, operation, payload = {}) {
+    if (typeof payload?.id !== "string" || !UUID.test(payload.id)) {
+      throw new Error("Invalid remote node control request.");
+    }
+    const host = digest(identity);
+    let row = this.records.find((item) => item.id === payload.id && item.host === host && item.kind === "control");
+
+    if (!row && operation === "control.cancel") {
+      row = { id: payload.id, host, kind: "control", createdAt: Date.now() + 300_000, status: "cancelled" };
+      this.records = this.records.filter((item) => active(item) || item.createdAt >= Date.now() - WEEK);
+      this.records.push(row);
+      this.ws.save();
+    }
+
+    if (operation === "control.submit") {
+      if (row?.status === "cancelled" && !row.fingerprint) return jobResult(row);
+      const action = safeText(payload.action, 32);
+      const projectId = safeText(payload.projectId, 160);
+      const grantId = safeText(payload.grantId, 160);
+      const renameTo = safeText(payload.name, 80);
+      const createdAt = payload.createdAt;
+      if (!REMOTE_CONTROL_OPERATIONS.has(action) || !Number.isSafeInteger(createdAt)) {
+        throw new Error("Invalid remote node control payload.");
+      }
+      if ((action === "share" || action === "unshare") && !projectId) {
+        throw new Error("Choose a project to share or unshare.");
+      }
+      if (action === "rename" && !renameTo) {
+        throw new Error("Give the node host a name.");
+      }
+      const fingerprint = digest(["control", action, projectId, grantId, renameTo, createdAt]);
+      if (row && row.fingerprint !== fingerprint) {
+        throw new Error("This request ID already identifies a different control action.");
+      }
+      if (!row) {
+        if (!this.enabled) throw new Error("Node host mode is not enabled on this computer.");
+        const now = Date.now();
+        if (createdAt < now - WEEK || createdAt > now + 300_000) {
+          throw new Error("Control request timestamp is outside the retry window.");
+        }
+        const resourceId = projectId || grantId || action;
+        const project = projectId ? this.ws.state.projects.find((item) => item.id === projectId) : null;
+        if (action === "share" && (!project || !project.folder)) {
+          throw new Error("That project has no folder to share.");
+        }
+        const resourceName =
+          action === "share" || action === "unshare"
+            ? project?.name || projectId
+            : action === "rename"
+              ? renameTo
+              : action === "revoke"
+                ? grantId || "all grants"
+                : this.name || "this node";
+        // Distinct namespace: regular node-job grants never escalate to remote node control.
+        const scope = digest(["node-control", ...identity, action, resourceId]);
+        row = {
+          id: payload.id,
+          host,
+          kind: "control",
+          scope,
+          fingerprint,
+          operation: "node." + action,
+          controlAction: action,
+          projectId,
+          grantId,
+          renameTo,
+          resourceId,
+          resourceName,
+          sourceBotId: "owner-host",
+          sourceBotName: peer.name,
+          sourceHostName: peer.name,
+          createdAt,
+          status: "pending",
+        };
+        this.records = this.records.filter((item) => active(item) || item.createdAt >= now - WEEK);
+        this.records.push(row);
+        this.ws.save();
+      }
+    }
+
+    if (!row) throw new Error("Unknown remote node control request.");
+    if (operation === "control.cancel" && active(row)) this.cancel(row);
+    if (operation === "control.poll" || operation === "control.submit") this.live.get(row)?.sourceReady?.resolve();
+    if (row.status === "pending" && !this.live.has(row)) {
+      const task = {};
+      this.live.set(row, task);
+      void this.processControl(row, task, peer).catch((error) =>
+        console.error("Could not finish remote node control:", error.message),
+      );
+    }
+    return jobResult(row);
+  }
+
+  async processControl(row, task, peer) {
+    try {
+      if (!this.enabled) throw new Error("Node host mode is not enabled on this computer.");
+      const hasGrant = () =>
+        this.grants.some((grant) => grant.scope === row.scope && (grant.until === null || grant.until > Date.now()));
+      const nodeLabel = this.name || peer.targetName || "this node";
+      const actionSummary = {
+        pause: `pause node host ${nodeLabel}`,
+        resume: `resume node host ${nodeLabel}`,
+        share: `share project ${row.resourceName} on ${nodeLabel}`,
+        unshare: `stop sharing project ${row.resourceName} on ${nodeLabel}`,
+        revoke: row.grantId ? `revoke grant ${row.grantId} on ${nodeLabel}` : `revoke all node grants on ${nodeLabel}`,
+        rename: `rename node host ${nodeLabel} to ${row.renameTo}`,
+        disconnect: `disconnect node host ${nodeLabel}`,
+      }[row.controlAction];
+      let decision;
+      let until;
+
+      if (!hasGrant()) {
+        const syntheticChat = { id: "node-job-" + row.id };
+        ({ action: decision } = await this.ws.interactions.request(syntheticChat, task, {
+          kind: "permission",
+          dispatch: true,
+          nodeJob: true,
+          title: `${peer.name} wants to ${actionSummary}`,
+          detail: `Remote node control: ${row.operation}\nFrom your host: ${peer.name}`,
+          sourceBotName: peer.name,
+          targetBotName: nodeLabel,
+          sourceHostName: peer.name,
+          targetHostName: nodeLabel,
+          operation: row.operation,
+          resourceId: row.resourceId,
+          resourceName: row.resourceName,
+          label: "Allow for today and Always allow apply only to this remote control action from this same-owner computer.",
+        }));
+        if (task.stopped) return;
+        if (decision === "deny" || decision === "cancel") {
+          row.status = decision === "deny" ? "denied" : "cancelled";
+          this.recordCompletion(row);
+          return;
+        }
+        if (decision === "today") {
+          const midnight = new Date();
+          midnight.setHours(24, 0, 0, 0);
+          until = midnight.getTime();
+        }
+        task.sourceReady = Promise.withResolvers();
+        this.ws.notify();
+        await task.sourceReady.promise;
+      }
+
+      if (task.stopped || this.ws.closing) return;
+      if (!this.enabled) throw new Error("Node host mode is not enabled on this computer.");
+      if (!decision && (task.grantsCleared || !hasGrant())) {
+        throw new Error("The remote control grant expired or was revoked.");
+      }
+
+      row.status = "working";
+      this.ws.save();
+
+      await peer.verify();
+      if (task.stopped || this.ws.closing) return;
+      if (!decision && (task.grantsCleared || !hasGrant())) {
+        throw new Error("The remote control grant expired or was revoked.");
+      }
+
+      if (!task.grantsCleared && (decision === "remember" || (decision === "today" && until > Date.now()))) {
+        this.grants = this.grants.filter((grant) => grant.until === null || grant.until > Date.now());
+        const existing = this.grants.find((grant) => grant.scope === row.scope);
+        if (!existing) {
+          this.grants.push({
+            id: randomUUID(),
+            scope: row.scope,
+            sourceHostName: peer.name,
+            sourceBotId: "owner-host",
+            sourceBotName: peer.name,
+            operation: row.operation,
+            resourceId: row.resourceId,
+            resourceName: row.resourceName,
+            until: until ?? null,
+            createdAt: Date.now(),
+          });
+        } else if (decision === "remember") {
+          existing.until = null;
+        } else if (existing.until !== null) {
+          existing.until = Math.max(existing.until, until);
+        }
+      }
+
+      let view;
+      switch (row.controlAction) {
+        case "pause":
+          view = this.setPaused(true);
+          break;
+        case "resume":
+          view = this.setPaused(false);
+          break;
+        case "share":
+          view = this.shareProject(row.projectId, true);
+          break;
+        case "unshare":
+          view = this.shareProject(row.projectId, false);
+          break;
+        case "revoke":
+          view = this.revokeGrant(row.grantId || undefined);
+          break;
+        case "rename":
+          view = this.rename(row.renameTo);
+          break;
+        case "disconnect":
+          view = this.disconnect(row);
+          break;
+        default:
+          throw new Error("Unknown remote node control action.");
+      }
+
+      if (task.stopped || this.ws.closing) return;
+      row.result = { action: row.controlAction, nodeHost: view };
+      row.status = "completed";
+      this.recordCompletion(row);
+    } catch (error) {
+      if (!task.stopped) {
+        row.status = "failed";
+        row.error = String(error?.message || "The node host could not complete this control request.").slice(0, 360);
         this.recordCompletion(row);
       }
     } finally {
