@@ -16,7 +16,7 @@ const size = { height: 800, width: 390 };
 const insets = { top: 0, bottom: 0, right: 0, left: 0, tabRoom: 0 };
 const theme = { colors: {} };
 const ui = { useTheme: () => theme, useShape: () => insets, space: {}, badgeColors: () => ({}),
-  BackdropLayer: "Backdrop", BotAvatar, Chip: "Chip", Dot: "Dot", Group: "Group", HoldMenu: "Menu",
+  BackdropLayer: "Backdrop", BotAvatar, Button: "Button", Chip: "Chip", Dot: "Dot", Group: "Group", HoldMenu: "Menu", Label: "Label",
   IconButton: "IconButton", IconTile: "IconTile", LinkBanner: "Banner", Row: "Row", T: "T", Tap: "Tap" };
 const animated = { __esModule: true, default: { ScrollView: "ScrollView", View: "View" }, FadeIn: { duration: () => 0 }, FadeOut: { duration: () => 0 },
   useAnimatedRef: () => useRef(null), useSharedValue: (value) => useRef({ value }).current, useAnimatedScrollHandler: () => undefined };
@@ -30,6 +30,7 @@ const Home = phoneModule("../src/features/home/Home", {
   "expo-router": { useScrollToTop() {}, router: { push: (target: unknown) => pushed.push(target) } },
   "lucide-react-native": {}, "react-native": native, "react-native-reanimated": animated,
   "react-native-safe-area-context": { useSafeAreaInsets: () => insets }, "react-native-worklets": {},
+  "@react-native-menu/menu": { MenuView: "MenuView" }, "@/features/chat/request/logic": { looksDangerous: () => false },
   "@/features/chat/navigate": { openChat: (id: string) => openedChats.push(id) }, "@/features/chat/open": {},
   "@/features/spaces/data": { useSpacesOn: () => true }, "@/features/spaces/HomePins": { HomePins: "Pins" },
   "@/features/today/Today": { makeSeenSignal: () => ({}) }, "@/state/link": {}, "@/state/hooks": hooks,

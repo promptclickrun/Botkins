@@ -80,5 +80,18 @@ export function nodeApi({ workspace, handlers }) {
       return { ...status, revoked: id ?? "all" };
     },
     "node.disconnect": async () => handlers.nodeDisconnect(),
+    "node.convert.inspect": async () => handlers.nodeConvertInspect(),
+    "node.convert.plan": async ([input] = []) => handlers.nodeConvertPlan(input && typeof input === "object" ? input : {}),
+    "node.convert.run": async ([input] = []) => handlers.nodeConvertRun(input && typeof input === "object" ? input : {}),
+    "node.convert.status": () => handlers.nodeConvertStatus(),
+    "node.convert.undo": async ([snapshotId] = []) =>
+      handlers.nodeConvertUndo(snapshotId ? { snapshotId: text(snapshotId, 160, "a snapshot id") } : {}),
+    "node.remote.status": async ([hostId] = []) => handlers.nodeRemoteStatus(text(hostId, 160, "a remote host id")),
+    "node.remote.control": async ([hostId, action, params] = []) =>
+      handlers.nodeRemoteControl(
+        text(hostId, 160, "a remote host id"),
+        text(action, 32, "a remote control action"),
+        params && typeof params === "object" ? params : {},
+      ),
   };
 }

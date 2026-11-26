@@ -8,10 +8,11 @@ import { useEffect, useState } from "react";
 import { View } from "react-native";
 import type { MarketAgentTemplate } from "@/link/types";
 import { useCan, useCapability, useOnline } from "@/state/hooks";
-import { api } from "@/state/link";
+import { readAgentTemplate } from "@/features/market/agents/calls";
 import { BotAvatar, Button, EmptyState, Group, Label, Loading, Page, radius, Row, space, T } from "@/ui";
 import { useBotWash } from "../art";
-import { AGENTS_CAPABILITY, pageLine, pairingTitle, tooLong } from "./logic";
+import { TemplateBundle } from "@/features/bots/TemplateBundle";
+import { AGENT_TEMPLATE_BUNDLES, AGENTS_CAPABILITY, pageLine, pairingTitle, tooLong } from "./logic";
 import { sentence } from "../catalog";
 
 type Loaded = { id: string; template?: MarketAgentTemplate; error?: string };
@@ -19,6 +20,7 @@ type Loaded = { id: string; template?: MarketAgentTemplate; error?: string };
 export default function AgentPage() {
   const { id } = useLocalSearchParams<{ id?: string }>();
   const ready = useCapability(AGENTS_CAPABILITY);
+  const bundlesSupported = useCapability(AGENT_TEMPLATE_BUNDLES);
   const allowed = useCan("agents", "create");
   const online = useOnline();
   const [loaded, setLoaded] = useState<Loaded>();
@@ -27,14 +29,14 @@ export default function AgentPage() {
   useEffect(() => {
     if (!id || !ready || !allowed || !online) return;
     let live = true;
-    api["agents.template"](id).then(
+    readAgentTemplate(id, bundlesSupported).then(
       (template) => live && setLoaded({ id, template }),
       (error: unknown) => live && setLoaded({ id, error: error instanceof Error ? error.message : "This template couldn't be read." }),
     );
     return () => {
       live = false;
     };
-  }, [id, ready, allowed, online, tries]);
+  }, [id, ready, allowed, online, tries, bundlesSupported]);
 
   if (!id || !ready || !allowed) return <Page title="Agent">{!allowed ? <EmptyState icon={Bot} title="Your team role can't create bots" /> : !ready ? <EmptyState icon={Bot} title="Update the app on your computer" /> : <EmptyState icon={Bot} title="This template is gone" />}</Page>;
   const shown = loaded?.id === id ? loaded : undefined;
@@ -42,7 +44,7 @@ export default function AgentPage() {
   if (!template)
     return <Page title="Agent">{shown?.error ? <EmptyState icon={Bot} title="This template couldn't be read" text={shown.error} action="Try again" onAction={() => setTries((n) => n + 1)} /> : <Loading />}</Page>;
 
-  return <Template template={template} online={online} />;
+  return <Template template={template} online={online} bundlesSupported={bundlesSupported} />;
 }
 
 /** The big art band: how tall it is and how big its Botkin. */
@@ -50,7 +52,7 @@ const HERO = { avatar: 120, padding: space.xl } as const;
 /** How many lines of the instructions show before "Show all". */
 const INSTRUCTION_LINES = 4;
 
-function Template({ template, online }: { template: MarketAgentTemplate; online: boolean }) {
+function Template({ template, online, bundlesSupported }: { template: MarketAgentTemplate; online: boolean; bundlesSupported: boolean }) {
   const stops = useBotWash(template.look, template.id);
   const [open, setOpen] = useState(false);
   const line = pageLine(template);
@@ -94,6 +96,7 @@ function Template({ template, online }: { template: MarketAgentTemplate; online:
           </Group>
         </View>
       )}
+      <TemplateBundle bundle={template.bundle} supported={bundlesSupported} />
       {!!template.instructions && (
         <View>
           <Label>Instructions</Label>

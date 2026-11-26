@@ -22,6 +22,7 @@
 import { basename } from "node:path";
 import { safeName } from "./uploads.mjs";
 import { botVoiceField } from "./voice.mjs";
+import { templateBundle } from "./template-bundle.mjs";
 import { cleanAvatar } from "./team.mjs";
 
 /**
@@ -65,6 +66,12 @@ export const SPACE_METHODS = [
   "spaces.read", "spaces.create", "spaces.rename", "spaces.remove", "spaces.setProject", "spaces.setPanelProject",
   "spaces.newPanel", "spaces.ask", "spaces.movePanel", "spaces.patchState", "spaces.note", "spaces.removeNote",
 ];
+/** Event-based Workflows in Routines ("workflows-v1", desktop/workflows.mjs). */
+export const WORKFLOW_METHODS = [
+  "workflowsList", "workflowCreate", "workflowUpdate", "workflowDelete", "workflowPause", "workflowResume",
+  "workflowRun", "workflowRetryRun", "workflowRespondApproval", "workflowCancelRun",
+  "workflowRotateWebhookSecret", "workflowExportText", "workflowImportText",
+];
 /** How a new panel may start, and the limits of what people write into a space. */
 export const PANEL_STARTS = ["checklist", "tracker", "chart", "table", "notes", "app"];
 export const SPACE_SIZES = { name: 40, prompt: 4000, note: 2000, label: 80, state: 64 * 1024, stateKeys: 200 };
@@ -94,6 +101,7 @@ export const REMOTE_METHODS = new Set([
   // Routines and tasks
   "createRoutine", "updateRoutine", "setRoutineEnabled", "deleteRoutine", "runRoutine", "duplicateRoutine",
   "previewCadence", "changeSchedule",
+  ...WORKFLOW_METHODS,
   "saveTask", "moveTask", "startTask", "deleteTask",
   // Today
   "refreshPanel", "changePanel", "routine", "boardAct",
@@ -336,7 +344,7 @@ function marketArgs(method, args) {
     }
     case "agents.template":
       if (!pluginText(first, PLUGIN_LIMITS.id)) refuse("That template can't be found.");
-      return [first];
+      return args[1] === 2 ? [first, 2] : [first];
     case "composio.catalog":
       // `{ fresh: true }`: the person asked for the list again, so the computer asks the server now.
       return plain(first) && first.fresh === true ? [{ fresh: true }] : [];
@@ -510,6 +518,10 @@ export function remoteArgs(method, args, { deviceId, uploads } = {}) {
     const said = cleanMentions(mentions);
     return [args[0], args[1], { ...options, ...(own.length && { attachments: own }), ...(said.length && { mentions: said }) }];
   }
+  if (method === "addBot" && args[0]?.bundle !== undefined) {
+    args = [{ ...args[0], bundle: templateBundle(args[0].bundle) }];
+  }
+  if (method === "updateBot" && args[1]?.bundle !== undefined) throw new Error("A template bundle is installed when a bot is created.");
   // A bot's own voice ("bot-voice-v1"): only the shape the computer keeps; null clears it. Anything else is refused with a sentence.
   if ((method === "updateBot" || method === "addBot") && args[method === "addBot" ? 0 : 1]?.voice !== undefined) {
     const at = method === "addBot" ? 0 : 1;

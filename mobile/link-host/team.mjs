@@ -116,6 +116,19 @@ const POLICY = {
   duplicateRoutine: ["today", "create"],
   previewCadence: ["today", "use"],
   changeSchedule: ["today", "manage"],
+  workflowsList: ["today", "view"],
+  workflowCreate: ["today", "create"],
+  workflowUpdate: ["today", "manage"],
+  workflowDelete: ["today", "delete"],
+  workflowPause: ["today", "manage"],
+  workflowResume: ["today", "manage"],
+  workflowRun: ["today", "use"],
+  workflowRetryRun: ["today", "use"],
+  workflowRespondApproval: ["today", "use"],
+  workflowCancelRun: ["today", "manage"],
+  workflowRotateWebhookSecret: "owner",
+  workflowExportText: ["today", "view"],
+  workflowImportText: "owner",
   saveTask: "owner",
   moveTask: "owner",
   startTask: "owner",
@@ -453,6 +466,13 @@ export function defaultTeam() {
 }
 
 export const hasAction = (perms, scope, action) => Array.isArray(perms?.[scope]) && perms[scope].includes(action);
+
+/** The same create permissions apply on the link and on the workspace that installs the bundle. */
+export function bundleCreateRefusal(perms, bundle) {
+  if (bundle?.skills?.length && !hasAction(perms, "skills", "create")) return "Your team role cannot create bundled skills.";
+  if (bundle?.routines?.length && !hasAction(perms, "today", "create")) return "Your team role cannot create bundled routines.";
+  return "";
+}
 
 const SELF_METHODS = new Set([
   "link.push.register",
@@ -1068,6 +1088,10 @@ export function authorize(principal, team, method, args = [], lookups = {}) {
       if (!lookup("bot", id, lookups) || !visible(role, id)) return "That bot isn't available to your team role.";
     }
   }
+  // Creating or copying a bundled bot also creates its private skills and routines.
+  const bundle = method === "addBot" ? args[0]?.bundle : method === "duplicateBot" ? lookup("botBundle", args[0], lookups) : undefined;
+  const bundleRefusal = bundleCreateRefusal(role.perms, bundle);
+  if (bundleRefusal) return bundleRefusal;
   const request = method === "respond" ? lookup("request", args[0], lookups) : null;
   // An approval can hold what a member is not sent (a plugin's whole description: each command and written value), so only the
   // owner answers one. The app's own test holds this line and the cut in filterParts (desktop/test/plugin-card-member.test.mjs).
@@ -1276,10 +1300,12 @@ export function filterParts(parts, principal, team, extra = {}) {
   if (sharedVoice) out.voice = sharedVoice;
   const seen = (bot) => {
     // What the owner wrote for the bot (both of its prompts) is for a role that manages bots; where it came from is the owner's alone.
-    const { hidden: _hidden, pinned: _pinned, sectionId: _section, origin: _origin, instructions, clarificationInstructions, ...rest } = bot;
+    const { hidden: _hidden, pinned: _pinned, sectionId: _section, origin: _origin, bundle, skillsOff, instructions, clarificationInstructions, ...rest } = bot;
     const own = view.bots[bot.id] ?? {};
+    const privateNames = new Set(bundle?.skills?.map(skill => skill.name));
     return {
       ...rest,
+      ...(skillsOff && { skillsOff: skillsOff.filter(name => !privateNames.has(name)) }),
       ...(mayManage && instructions !== undefined && { instructions }),
       ...(mayManage && clarificationInstructions !== undefined && { clarificationInstructions }),
       ...(own.hidden && { hidden: true }),

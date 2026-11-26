@@ -1,17 +1,20 @@
-// Home: the computer it talks to, the pinned bots up top as big avatars, then every other bot as a
-// flat list: the primary bot, each section, then the rest. A pinned bot shows only up top, never in
-// the list too. Filters show pinned or hidden bots. Under "All" a bot can be dragged to another place
-// or group (BotBoard.tsx), into Pinned to pin it; a still hold opens its menu.
+// Home: the computer it talks to, what needs the person (an ordinary approval answered right here),
+// the pinned bots up top as big avatars with what each is doing, then every other bot as a flat list:
+// the primary bot, each section, then the rest. A pinned bot shows only up top, never in the list too.
+// The list's one menu ("Edit") shows pinned or hidden bots. Under "All" a bot can be dragged to
+// another place or group (BotBoard.tsx), into Pinned to pin it; a still hold opens its menu.
 import { type Href, router, useScrollToTop } from "expo-router";
-import { ChevronDown, ChevronUp, MailOpen, Plus, ScreenShare, Settings, Sunrise } from "lucide-react-native";
+import { MenuView } from "@react-native-menu/menu";
+import { ChevronDown, ChevronUp, Plus, Settings, Sunrise } from "lucide-react-native";
 import { type ReactNode, useEffect, useMemo, useState } from "react";
-import { ScrollView, useWindowDimensions, View } from "react-native";
+import { useWindowDimensions, View } from "react-native";
 import Animated, { FadeIn, useAnimatedRef, useAnimatedScrollHandler, useSharedValue } from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { scheduleOnRN } from "react-native-worklets";
 import { openChat } from "@/features/chat/navigate";
-import { markAllChatsRead, openBotChat } from "@/features/chat/open";
-import { allUnreadChats, isUnreadChat } from "@/features/chat/unread";
+import { openBotChat } from "@/features/chat/open";
+import { looksDangerous } from "@/features/chat/request/logic";
+import { isUnreadChat } from "@/features/chat/unread";
 import { useSpacesOn } from "@/features/spaces/data";
 import { HomePins } from "@/features/spaces/HomePins";
 import { makeSeenSignal, TodayContent } from "@/features/today/Today";
@@ -24,9 +27,9 @@ import { setPrefs, usePrefs } from "@/state/prefs";
 import { isNodeJobRequest, routeForPendingRequest } from "@/state/pushRouting";
 import { useApp } from "@/state/store";
 import { useProfileHosts } from "@/state/profile";
-import { BackdropLayer, badgeColors, BotAvatar, Button, Chip, Dot, EmptyState, Group, HoldMenu, IconButton, IconTile, LinkBanner, Mascot, Row, space, T, Tap, useShape, useTheme } from "@/ui";
+import { BackdropLayer, badgeColors, BotAvatar, Button, Dot, EmptyState, Group, HoldMenu, IconButton, IconTile, Label, LinkBanner, Mascot, Row, space, T, Tap, useShape, useTheme } from "@/ui";
 import { computerActions } from "@/state/computers";
-import { arrangeBots, type BotFilter, filterBots, filterLabels, todayRow } from "./arrange";
+import { answerInline, arrangeBots, type BotFilter, filterBots, filterLabels, todayRow } from "./arrange";
 import { AVATAR, BotBoard, type BoardScroll, BotMenu, BotRow } from "./BotBoard";
 import { runComputerChoice } from "./computers";
 import { applyPlan, DRAG, dropPlan, type Zone } from "./drag";
@@ -49,6 +52,12 @@ function TopBot({ bot, size, width }: { bot: Bot; size: number; width?: `${numbe
           <T variant="footnote" weight="600" color="ink2" numberOfLines={1} center>
             {bot.name}
           </T>
+          {/* What it is doing, in words beside the still avatar: Home holds still (see "Where avatars move"). */}
+          {!!status && (
+            <T variant="caption" color={state === "waiting" ? "warning" : "muted"} numberOfLines={1} center style={{ marginTop: -4 }}>
+              {status}
+            </T>
+          )}
         </Tap>
       </BotMenu>
     </View>
@@ -57,6 +66,16 @@ function TopBot({ bot, size, width }: { bot: Bot; size: number; width?: `${numbe
 
 function NeedsYou({ request, bot }: { request: AgentRequest; bot?: Bot }) {
   const isNode = isNodeJobRequest(request);
+  const [busy, setBusy] = useState<"deny" | "approve" | null>(null);
+  // An ordinary approval is answered right here, as on a notification; anything risky, a script to
+  // read, a node job, a question or a form opens where it can be read whole.
+  const inline = !isNode && answerInline(request, looksDangerous(request));
+  const answer = async (action: "deny" | "approve") => {
+    if (busy) return;
+    setBusy(action);
+    await attempt(api.respond(request.id, { action }));
+    setBusy(null);
+  };
   const subtitle = isNode
     ? (request.sourceBotName && request.sourceHostName
         ? `${request.sourceBotName} on ${request.sourceHostName}`
@@ -67,8 +86,17 @@ function NeedsYou({ request, bot }: { request: AgentRequest; bot?: Bot }) {
       leading={bot ? <BotAvatar bot={bot} state="waiting" size={40} /> : undefined}
       title={request.title}
       subtitle={subtitle}
-      trailing={<Dot tone="warning" />}
-      chevron
+      trailing={
+        inline ? (
+          <View style={{ flexDirection: "row", gap: space.sm }}>
+            <Button title="Deny" variant="secondary" size="sm" loading={busy === "deny"} disabled={!!busy} onPress={() => void answer("deny")} accessibilityLabel={"Deny " + request.title} />
+            <Button title="Allow" size="sm" loading={busy === "approve"} disabled={!!busy} onPress={() => void answer("approve")} accessibilityLabel={"Allow " + request.title} />
+          </View>
+        ) : (
+          <Dot tone="warning" />
+        )
+      }
+      chevron={!inline}
       onPress={() => {
         const target = routeForPendingRequest(request);
         if (typeof target === "object" && target.pathname === "/chat/[id]") openChat(target.params.id);
@@ -283,7 +311,6 @@ export default function Home() {
   const online = link === "online";
   const computer = useApp((state) => state.pairing?.name) ?? "Computer";
   const adminOn = useApp((state) => state.parts.meta?.you?.kind === "owner" && state.parts.meta.you.admin === true);
-  const showComputer = useApp(state => state.parts.meta?.you?.kind !== "member" && state.parts.meta?.capabilities.includes("screen-v1"));
   const computerOrder = usePrefs(prefs => prefs.computerOrder);
   const computers = useApp((state) => state.pairings);
   const directoryHosts = useProfileHosts();
@@ -291,7 +318,6 @@ export default function Home() {
   const requests = useApp((state) => state.parts.live?.requests);
   const board = usePart("board");
   const panels = usePart("panels");
-  const canView = useCan("agents", "view");
   const canChat = useCan("agents", "chat");
   const canCreate = useCan("agents", "create");
   const canArrange = useCanArrange();
@@ -318,7 +344,6 @@ export default function Home() {
     }
     return out;
   }, [chats]);
-  const hasUnread = useMemo(() => allUnreadChats(chats).length > 0, [chats]);
   // The list: in the computer's order, or one filter's bots. Sections fold while the app is open.
   const sections = usePart("sections");
   const arranged = useMemo(() => arrangeBots(bots, sections), [bots, sections]);
@@ -373,19 +398,20 @@ export default function Home() {
           <ServerLinkStatus />
         </View>
         <View style={{ flexDirection: "row", alignItems: "center", gap: space.sm }}>
-          {showComputer && <IconButton icon={ScreenShare} label="Control computer" variant="soft" size={44} onPress={() => router.push("/remote")} />}
-          {canView && hasUnread && <IconButton icon={MailOpen} label="Mark all as read" variant="soft" size={44} onPress={() => void markAllChatsRead()} />}
           {canCreate && <IconButton icon={Plus} label="New bot" variant="soft" size={44} onPress={() => router.push("/bot/new")} />}
           <SettingsButton />
         </View>
       </View>
 
       {waiting.length > 0 && (
-        <Group flat inset={space.lg + 40 + space.md}>
-          {waiting.slice(0, 3).map((request) => (
-            <NeedsYou key={request.id} request={request} bot={bots.find((bot) => bot.id === request.botId)} />
-          ))}
-        </Group>
+        <View>
+          <Label>{"Needs you · " + waiting.length}</Label>
+          <Group inset={space.lg + 40 + space.md}>
+            {waiting.slice(0, 3).map((request) => (
+              <NeedsYou key={request.id} request={request} bot={bots.find((bot) => bot.id === request.botId)} />
+            ))}
+          </Group>
+        </View>
       )}
 
       {!synced ? (
@@ -402,11 +428,20 @@ export default function Home() {
             ))}
           </View>
           {showFilters && (
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginHorizontal: -space.xl }} contentContainerStyle={{ paddingHorizontal: space.xl, gap: space.sm }}>
-              {filterLabels(bots).map((option) => (
-                <Chip key={option.value} label={option.label} selected={filter === option.value} onPress={() => setFilter(option.value)} />
-              ))}
-            </ScrollView>
+            <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: -space.sm }}>
+              <Label style={{ marginBottom: 0 }}>{filter === "All" ? "Bots" : filter + " bots"}</Label>
+              <MenuView
+                title="Show"
+                actions={filterLabels(bots).map((option) => ({ id: option.value, title: option.value === "All" ? "All bots" : option.label, state: filter === option.value ? ("on" as const) : ("off" as const) }))}
+                onPressAction={({ nativeEvent }) => setFilter(nativeEvent.event as BotFilter)}
+              >
+                <View accessible accessibilityRole="button" accessibilityLabel={"Edit, showing " + (filter === "All" ? "all bots" : filter.toLowerCase() + " bots")} style={{ minWidth: 44, height: 44, alignItems: "flex-end", justifyContent: "center" }}>
+                  <T variant="subhead" weight="600" color="ink2">
+                    Edit
+                  </T>
+                </View>
+              </MenuView>
+            </View>
           )}
           {filter !== "All" ? (
             filtered.length > 0 ? (

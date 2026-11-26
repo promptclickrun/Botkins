@@ -480,3 +480,20 @@ test("preferences: autoSummarize takes off or 5 to 30 turns", { skip }, async (t
   }
   assert.equal(workspace.state.settings.autoSummarize, 0);
 });
+
+test("preferences: tasksMax and tasksPerBot take a number in range, or default", { skip }, async (t) => {
+  const { botkins, workspace } = await service(t);
+  assert.deepEqual((await botkins(["preferences", "show", "tasksMax", "--json"])).json(), { tasksMax: 2 });
+  assert.equal((await botkins(["preferences", "show", "tasksPerBot"])).out, "1\n");
+  assert.equal((await botkins(["preferences", "set", "tasksPerBot", "3"])).exit, 0);
+  assert.equal((await botkins(["preferences", "set", "tasksMax", "12"])).exit, 0);
+  assert.deepEqual([workspace.state.settings.tasksMax, workspace.state.settings.tasksPerBot], [12, 3]);
+  for (const [key, word] of [["tasksMax", "17"], ["tasksMax", "0"], ["tasksPerBot", "9"], ["tasksPerBot", "many"]]) {
+    const refused = await botkins(["preferences", "set", key, word]);
+    assert.notEqual(refused.exit, 0);
+    assert.match(refused.err, new RegExp(key + " takes a number from 1 to (16|8), or default"));
+  }
+  assert.equal((await botkins(["preferences", "set", "tasksMax", "default"])).exit, 0);
+  assert.equal(Object.hasOwn(workspace.state.settings, "tasksMax"), false, "default clears the setting");
+  assert.equal(workspace.state.settings.tasksPerBot, 3);
+});

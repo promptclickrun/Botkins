@@ -9,6 +9,7 @@
 // A secret (an environment value, a header's value, a client secret) goes in through these calls
 // and never comes out: every answer names the keys that have a value, not the values.
 import { parseServers } from "../integrations.mjs";
+import { botSkillRows } from "../link/bot-skills.mjs";
 import { cleanScriptCommand, scriptRevision, whatRuns } from "../script-commands.mjs";
 import { thingForLog } from "./coverage.mjs";
 import { ControlError } from "./socket.mjs";
@@ -116,24 +117,25 @@ export function toolsApi({ workspace, handlers, bot, signIns, log }) {
       exists: servers().some((existing) => existing.name.toLowerCase() === server.name.toLowerCase()),
     }));
   };
-  const skill = (ref) => {
+  const skill = (ref, all = skillList().skills, command = "botkins skills list") => {
     const wanted = text(ref, 200, "a skill's name");
-    const all = skillList().skills;
     // Skills of linked folders can differ only by capitals. The exact name wins; otherwise one name must match one skill.
     const exact = all.filter((entry) => entry.name === wanted);
     const named = exact.length ? exact : all.filter((entry) => entry.name.toLowerCase() === wanted.toLowerCase());
-    if (named.length > 1) throw new ControlError("More than one skill is called " + wanted + ". Give its name exactly as `botkins skills list` shows it, or remove one of the two.", "AMBIGUOUS");
-    if (!named.length) throw new ControlError("There is no skill called " + wanted + ". See `botkins skills list`.", "NOT_FOUND");
+    if (named.length > 1) throw new ControlError("More than one skill is called " + wanted + ". Give its name exactly as `" + command + "` shows it, or remove one of the two.", "AMBIGUOUS");
+    if (!named.length) throw new ControlError("There is no skill called " + wanted + ". See `" + command + "`.", "NOT_FOUND");
     return named[0];
   };
-  /** What a bot leaves out, by name: the tools and skills that are on for every bot and off for this one. */
+  /** Which workspace tools and skills and which bundled skills a bot has on. */
   const botTools = (entry) => {
     const all = servers();
     return {
       id: entry.id,
       name: entry.name,
       tools: all.map((server) => ({ id: server.id, name: server.name, on: !(entry.mcpOff ?? []).includes(server.id), enabled: server.enabled !== false })),
-      skills: skillList().skills.map((item) => ({ name: item.name, on: !(entry.skillsOff ?? []).includes(item.name), enabled: item.enabled !== false })),
+      skills: botSkillRows(skillList().skills, entry).map((item) => ({
+        name: item.name, on: !(entry.skillsOff ?? []).includes(item.name), enabled: item.enabled, ...(!item.shared && { bundled: true }),
+      })),
     };
   };
   const projects = () => state().projects ?? [];
@@ -328,10 +330,13 @@ export function toolsApi({ workspace, handlers, bot, signIns, log }) {
         if (!patch || typeof patch !== "object" || Array.isArray(patch)) throw new ControlError("Give what to turn on and off.", "BAD_ARGUMENT");
         const off = (now, turnOff, turnOn) => [...new Set([...now.filter((item) => !(turnOn ?? []).includes(item)), ...(turnOff ?? [])])];
         const toolIds = (list) => names(list, "Tools")?.map((name) => tool(name).id);
-        const skillNames = (list) => names(list, "Skills")?.map((name) => skill(name).name);
         const next = {};
         if (patch.toolsOn !== undefined || patch.toolsOff !== undefined) next.mcpOff = off(found.mcpOff ?? [], toolIds(patch.toolsOff), toolIds(patch.toolsOn));
-        if (patch.skillsOn !== undefined || patch.skillsOff !== undefined) next.skillsOff = off(found.skillsOff ?? [], skillNames(patch.skillsOff), skillNames(patch.skillsOn));
+        if (patch.skillsOn !== undefined || patch.skillsOff !== undefined) {
+          const rows = botSkillRows(skillList().skills, found);
+          const skillNames = (list) => names(list, "Skills")?.map((name) => skill(name, rows, "botkins bots skills " + found.id).name);
+          next.skillsOff = off(found.skillsOff ?? [], skillNames(patch.skillsOff), skillNames(patch.skillsOn));
+        }
         await handlers.setBotIntegrations(found.id, next);
       }
       return botTools(bot(found.id));

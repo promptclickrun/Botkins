@@ -38,6 +38,7 @@ import { PhoneTools } from "./phonetools.mjs";
 import { BrowserExtensionTools } from "./browsertools.mjs";
 import { Vault } from "./vault.mjs";
 import { Frames } from "./frames.mjs";
+import { Workflows } from "./workflows.mjs";
 
 import {
   defaultSettings,
@@ -96,10 +97,12 @@ import { SidePane } from "./sidepane.mjs";
 import { Artifacts } from "./artifacts.mjs";
 import { ArtifactEvents } from "./artifact-events.mjs";
 import { Tasks } from "./tasks.mjs";
+import { taskLimits } from "./task-limits.mjs";
 import { Proactive } from "./proactive.mjs";
 import { Reminders } from "./reminders.mjs";
 import { proposalsFrom } from "./proactive-learning.mjs";
 import { Templates } from "./templates.mjs";
+import { currentBotBundle, templateBundle } from "./link/template-bundle.mjs";
 import { readWorkspace, WorkspaceWriter } from "./workspace-file.mjs";
 import { Access } from "./access.mjs";
 import { SessionSearch } from "./session-search.mjs";
@@ -389,6 +392,7 @@ export class Workspace {
       }
     }
     this.tasks = new Tasks(this);
+    this.workflows = new Workflows(this, options?.workflows);
     this.proactive = new Proactive(this);
     // One plain nudge for what is left waiting on a person, with no model (desktop/reminders.mjs).
     this.reminders = new Reminders(this);
@@ -441,7 +445,7 @@ export class Workspace {
   flushSave() {
     if (this.saveTimer || this.writer.written.size) this.save();
   }
-  save() {
+  save(announce = true) {
     if (this.batchingSave) return;
     this.fullSavePending = false;
     if (this.saveTimer) {
@@ -460,7 +464,7 @@ export class Workspace {
     // The host's cross-host dispatches, its node jobs and grants, and the requests it sent are kept with the rest.
     const outgoing = this.teamwork?.outgoing.pending;
     this.writer.save({ ...persisted, ...this.hostDispatch?.persisted(), ...this.nodeHost?.persisted(), ...(outgoing?.size && { outgoingDispatches: [...outgoing.values()] }) }, this.active);
-    this.notify();
+    if (announce) this.notify();
   }
   snapshot() {
     return {
@@ -468,6 +472,8 @@ export class Workspace {
       chats: this.state.chats.map(visibleChat),
       // The harness that runs turns: the default gives way while its program isn't here and nobody chose.
       settings: { ...this.state.settings, harness: this.harness.effective() },
+      // The Task Board's limits in force, and each one's value without the person's setting (desktop/task-limits.mjs).
+      taskLimits: taskLimits(this.state.settings),
       // Node host role, advertised folders, pause state, last completed job and active grants.
       nodeHost: this.nodeHost.view(),
       // Each space with what it holds, for the link to make each person's own list from
@@ -475,6 +481,8 @@ export class Workspace {
       spaces: this.spaces.part(),
       // A project's list of artifacts holds only the ones that still exist.
       projects: this.projects.listed(),
+      workflows: this.workflows.list(),
+      workflowRuns: this.workflows.listRuns(null, 100),
       // The Proactive agent: the computer's switch, and each proactive bot's settings and log, without the keys of what it raised.
       proactive: this.proactive.views(),
       // The reminders sent in the last few minutes, for the link to pass to that person's phones (desktop/link/push.mjs). No app is sent this.
@@ -774,9 +782,35 @@ export class Workspace {
     const voice = data.voice === undefined ? null : botVoiceField(data.voice);
     if (voice) bot.voice = voice;
     if (person !== "owner") bot.createdBy = person;
-    this.state.bots.push(bot);
-    this.state.chats.push(makeMainChat(bot.id, person));
-    this.save();
+    return this.installBot(bot, data.bundle);
+  }
+  bundleForBot(bot, person = "owner") {
+    return currentBotBundle(bot, this.state.chats, person);
+  }
+  /** Publish the bot, its Main chat and all its paused routines in one workspace write. */
+  installBot(bot, input, index = this.state.bots.length) {
+    const bundle = templateBundle(input);
+    if (bundle) bot.bundle = bundle;
+    else delete bot.bundle;
+    const chats = [makeMainChat(bot.id, bot.createdBy)];
+    for (const { name, instructions, cadence } of bundle?.routines ?? []) {
+      chats.push(this.panels.routines.buildChat(
+        { botId: bot.id, name, prompt: instructions, cadence, notify: false },
+        Date.now(), bot.createdBy, { fromTemplate: true },
+      ));
+    }
+    if (bundle?.skills) this.integrations.installBotSkills(bot);
+    this.state.bots.splice(index, 0, bot);
+    this.state.chats.push(...chats);
+    try {
+      this.save(false);
+    } catch (error) {
+      this.state.bots.splice(index, 1);
+      this.state.chats.splice(-chats.length);
+      if (bundle?.skills) this.integrations.removeBotSkills(bot);
+      throw error;
+    }
+    if (!this.batchingSave) this.notify();
     return bot.id;
   }
   updateBot(id, data) {
@@ -815,9 +849,14 @@ export class Workspace {
     return chat.id;
   }
   createChat(botId, title = "New chat", panelId, createdBy) {
-    if (!this.state.bots.some((b) => b.id === botId))
-      throw new Error("Unknown bot");
-    const chat = {
+    this.bot(botId);
+    const chat = this.buildChat(botId, title, panelId, createdBy);
+    this.state.chats.unshift(chat);
+    this.save();
+    return chat.id;
+  }
+  buildChat(botId, title, panelId, createdBy) {
+    return {
       id: randomUUID(),
       botId,
       ...(createdBy && { createdBy }),
@@ -827,9 +866,6 @@ export class Workspace {
       messages: [],
       established: false,
     };
-    this.state.chats.unshift(chat);
-    this.save();
-    return chat.id;
   }
   /** A chat with 2 to 6 bots. Returns its id (desktop/groups.mjs). */
   createGroupChat(botIds, title) {
@@ -924,6 +960,15 @@ export class Workspace {
     }, voiceId);
     if (!context.panelId && context.scheduleId == null && !proactiveCheck && !context.reaction) {
       this.recordHumanMentions(chat, prompt, { senderId: author?.memberId ?? "owner", senderName: author?.name });
+    }
+    if (!context.panelId && context.scheduleId == null && !context.taskId && !context.workflowRunId && !chat.workflowId && !proactiveCheck && !context.reaction) {
+      this.events.emit("chat.message", {
+        chat,
+        bot,
+        text: prompt,
+        sender: author?.name ?? author?.memberId ?? "owner",
+        time: chat.time,
+      });
     }
     run.recovery = { extra, ...(proactiveCheck && { proactiveCheck }), ...(message.voiceId && { voicePrompt: prompt }) };
     // With auto-summarize on, the first message is named while the bot replies (desktop/summaries.mjs).
@@ -1455,6 +1500,7 @@ export class Workspace {
       ...updateTools(this.updates, chat, run, task, () => this.active.get(chat.id)),
       ...this.panels.tools(bot, chat, run, task),
       ...this.panels.routines.tools(bot, chat, run, task),
+      ...this.workflows.tools(bot, chat, run, task),
       ...records,
       // iMessage and Mail, for what the person switched on (a turn nobody watches only reads).
       ...this.mac.tools(bot, chat, run, task),
@@ -2061,7 +2107,10 @@ export class Workspace {
     const chat = chatId ? this.state.chats.find((c) => c.id === chatId) : null;
     if (!Array.isArray(data?.choices)) return data;
     const team = this.teamOf();
-    if (![person, chat?.createdBy].every((id) => !id || id === "owner" || turnAccess({ memberId: id }, team).skills)) return data;
+    if (![person, chat?.createdBy].every((id) => !id || id === "owner" || turnAccess({ memberId: id }, team).skills)) {
+      // The provider's cached menu may have been built for the owner.
+      return { ...data, choices: data.choices.filter((entry) => entry.kind !== "Skill") };
+    }
     const taken = commandNames(data.choices);
     const scripts = this.integrations.scriptCommands().filter((c) => c.enabled && !c.unavailable && !taken.has(c.name)).map(scriptChoice);
     return scripts.length ? { ...data, choices: [...data.choices, ...scripts] } : data;

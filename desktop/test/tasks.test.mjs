@@ -162,3 +162,45 @@ test("tasks a bot adds during unattended work wait in Later and say who added th
   assert.match(tasks.prompt(tasks.get(asked.id)), /Pip added it, not the person/);
   assert.match(tasks.prompt(tasks.get(tasks.save({ title: "Mine" }))), /from the person's task board/);
 });
+
+test("one tick starts as many ready tasks as the limits allow: per bot 1 by default, the computer's limit after", async (t) => {
+  const { ws, tasks, pip, scout } = setup(t);
+  const third = ws.state.bots[2].id;
+  const ids = [pip, pip, scout, scout, third].map((botId, i) => tasks.save({ title: "Job " + i, botId, status: "ready" }));
+  tasks.tick();
+  const working = () => tasks.all.filter((x) => x.status === "working");
+  assert.equal(working().length, 2, "two at once on the computer, as before");
+  assert.deepEqual(new Set(working().map((x) => x.botId)), new Set([pip, scout]), "one task per bot by default");
+  await settle(ws);
+  ws.setPreferences({ tasksMax: 3 });
+  tasks.tick();
+  assert.equal(working().length, 3, "three start in one tick");
+  assert.equal(new Set(working().map((x) => x.botId)).size, 3);
+  await settle(ws);
+  assert.ok(ids.every((id) => ["review", "ready"].includes(tasks.get(id).status)));
+});
+
+test("tasks at once per bot 2 runs two of one bot's tasks side by side, in separate chats", async (t) => {
+  let release;
+  const gate = new Promise((resolve) => (release = resolve));
+  const { ws, tasks, pip } = setup(t);
+  ws.setPreferences({ tasksPerBot: 2, tasksMax: 4 });
+  const ids = [0, 1, 2].map((i) => tasks.save({ title: "Pip " + i, botId: pip, status: "ready" }));
+  // The first task's old chat is busy with the person: the dispatcher must not reuse it.
+  const busy = ws.createChat(pip, "Talking");
+  tasks.get(ids[0]).chatId = busy;
+  ws.active.set(busy, { stopped: false, done: gate });
+  tasks.tick();
+  const working = tasks.all.filter((x) => x.status === "working");
+  assert.equal(working.length, 2, "two for Pip, not three");
+  assert.ok(!working.some((x) => x.id === ids[0]), "a ready task whose chat is busy waits");
+  assert.notEqual(working[0].chatId, working[1].chatId, "each task has its own chat");
+  for (const x of working) assert.notEqual(x.chatId, busy);
+  ws.active.delete(busy);
+  release();
+  await settle(ws);
+  tasks.tick();
+  assert.equal(tasks.get(ids[0]).status, "working");
+  assert.notEqual(tasks.get(ids[0]).chatId, working[0].chatId);
+  await settle(ws);
+});

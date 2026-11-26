@@ -37,6 +37,8 @@ import "./botpage.css";
 
 function capabilitySummary(bot: Bot) {
   const off = (bot.skillsOff?.length ?? 0) + (bot.mcpOff?.length ?? 0);
+  const count = bot.bundle?.skills?.length ?? 0;
+  if (count) return count + (count === 1 ? " skill" : " skills") + " from the bot template, plus skills and MCP servers from Settings." + (off ? " " + off + " turned off." : "");
   return off
     ? "Uses the skills and MCP servers from Settings, with " + off + " turned off for this bot."
     : "Uses every skill and MCP server from Settings.";

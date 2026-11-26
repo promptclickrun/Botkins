@@ -23,7 +23,7 @@ import { BotAvatar, Dot, haptic, HoldMenu, radius, space, T, Tap, type TextPromp
 import { GroupFace, plainPreview } from "./bits";
 import { myPlace, myself } from "./people";
 import { moveToSection, runSectionAction, runSectionChoice, sectionActions } from "./sectionMenus";
-import { arrangeChats, chatDropPlan, type ChatGroup, groupAt, type ListItem, listItems, sectionOfChat } from "./sections";
+import { arrangeChats, arrangeChatsFlat, chatDropPlan, type ChatGroup, groupAt, type ListItem, listItems, sectionOfChat } from "./sections";
 import { regenerateTitle, regenerateTitleAction, useCanRegenerateTitle } from "./titleActions";
 
 function remove(chat: ChatSummary) {
@@ -353,19 +353,21 @@ export type ChatBoardProps = {
   scroll: BoardScroll;
   /** A drag started or ended: the screen stops the page's own scrolling while one is under way. */
   onDragging: (on: boolean) => void;
+  /** One list ("Recent") with pinned chats left out (the screen draws them as a row), as the Chats screen does since the redesign. */
+  flat?: boolean;
 };
 
-export function ChatBoard({ chats, archived, sections, bots, searching, scroll, onDragging }: ChatBoardProps) {
+export function ChatBoard({ chats, archived, sections, bots, searching, scroll, onDragging, flat }: ChatBoardProps) {
   const canChat = useCan("agents", "chat");
   const [dragging, setDragging] = useState<string | null>(null);
   // Sections fold while the app is open, as on Home.
   const [folded, setFolded] = useState<string[]>([]);
   const hold = useDropHold(chats, sections);
   const groups = useMemo(() => {
-    const list = arrangeChats(hold.shown, sections, Date.now(), { searching, dragging: !!dragging && !!sections });
+    const list = flat ? arrangeChatsFlat(hold.shown, sections, { dragging: !!dragging && !!sections }) : arrangeChats(hold.shown, sections, Date.now(), { searching, dragging: !!dragging && !!sections });
     const old = [...archived].sort((a, b) => b.time - a.time);
     return old.length ? [...list, { key: "archived", title: "Archived", chats: old }] : list;
-  }, [hold.shown, archived, sections, searching, dragging]);
+  }, [hold.shown, archived, sections, searching, dragging, flat]);
   // A folded section opens while a search is on, so its matches show.
   const closed = searching ? NO_FOLDS : folded;
   const items = useMemo(() => listItems(groups, closed), [groups, closed]);

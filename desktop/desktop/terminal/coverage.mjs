@@ -116,6 +116,22 @@ export const WORKSPACE = {
   duplicateRoutine: cmd("routines duplicate"),
   previewCadence: cmd("routines when"),
   changeSchedule: cmd("routines schedule"),
+  // ── Workflows ──
+  workflowsList: cmd("workflows list"),
+  workflowCreate: cmd("workflows add"),
+  workflowUpdate: cmd("workflows edit"),
+  workflowDelete: cmd("workflows remove"),
+  workflowPause: cmd("workflows pause"),
+  workflowResume: cmd("workflows resume"),
+  workflowRun: cmd("workflows run"),
+  workflowRetryRun: cmd("workflows retry"),
+  workflowRespondApproval: cmd("workflows approve"),
+  workflowCancelRun: cmd("workflows cancel"),
+  workflowExportText: cmd("workflows export"),
+  workflowImportText: cmd("workflows import"),
+  workflowExport: no("window"), // native save file dialog; `workflows export <id>` prints JSON
+  workflowImport: no("window"), // native open file dialog; `workflows import <file>` reads a path
+  workflowRotateWebhookSecret: no("person"), // returns a newly generated webhook secret; stays in the window or owner phone
   // ── Plugins ──
   "skills.upload": cmd("skills upload"),
   // A script command (desktop/script-commands.mjs): `skills add-script` shows the whole script and needs a yes; `skills show` prints it.
@@ -333,6 +349,13 @@ export const WORKSPACE = {
   nodeShareProject: cmd("node share"),
   nodeRevokeGrant: cmd("node revoke"),
   nodeDisconnect: cmd("node disconnect"),
+  nodeConvertInspect: cmd("node convert"),
+  nodeConvertPlan: cmd("node convert"),
+  nodeConvertRun: cmd("node convert"),
+  nodeConvertStatus: cmd("node convert"),
+  nodeConvertUndo: cmd("node convert"),
+  nodeRemoteStatus: cmd("node remote"),
+  nodeRemoteControl: cmd("node remote"),
   // ── What needs a window ──
   ...each("chooseFiles chooseProjectFolder pickPluginFolder pickSkillUpload addSkillFolder", no("window")), // a file or folder dialog (a path is given to the command instead)
   ...each("revealProject revealSkill revealWiki revealWikiExport openChatPath openLink openAppRelease", no("window")), // opens a folder, a file or a link on the computer's screen
@@ -537,6 +560,16 @@ export const CHANGES = {
   "routines.duplicate": (args, value) => (value?.fastMinutes ? withRate(value.name, value.fastMinutes) : (value?.name ?? args?.[0])),
   // A chat's own schedule (a prompt it set with /every or /after): the chat's title, and what was done (pause, resume or delete).
   "routines.schedule": (args, value) => (["pause", "resume", "delete"].includes(value?.action) ? levelOf(value.chat ?? args?.[0], value.action) : (value?.chat ?? args?.[0])),
+  "workflows.add": (args, value) => value?.name ?? args?.[0]?.name,
+  "workflows.edit": (args, value) => value?.name ?? args?.[0],
+  "workflows.remove": (args, value) => value?.name ?? args?.[0],
+  "workflows.pause": (args, value) => value?.name ?? args?.[0],
+  "workflows.resume": (args, value) => value?.name ?? args?.[0],
+  "workflows.run": (args, value) => value?.workflowId ?? args?.[0],
+  "workflows.retry": (args, value) => value?.id ?? args?.[0],
+  "workflows.approve": (args, value) => value?.id ?? args?.[0],
+  "workflows.cancel": (args, value) => value?.id ?? args?.[0],
+  "workflows.import": (args, value) => value?.workflow?.name ?? "imported",
   // ── Projects, to-dos, tasks and artifacts (control-projects.mjs) ──
   // The project's name (the answer has it, whether the caller gave its name or its id). Never a folder, a message, a to-do's words or a diff.
   "projects.add": (args, value) => value?.name ?? args?.[0]?.name,
@@ -678,7 +711,7 @@ export const CHANGES = {
   // The owner's own picture: set or cleared, never the picture.
   "profile.picture": (args) => (args?.[0] ? "set" : "cleared"),
   // ── Node host (control-node.mjs) ──
-  // Logs the node name, policy mode, project name, grant id, or pause state — never local folder paths or command args.
+  // Logs the node name, policy mode, project name, grant id, or pause state — never local folder paths, command args, or vault secrets.
   "node.setup": (args, value) => value?.name ?? args?.[0],
   "node.rename": (args, value) => value?.name ?? args?.[0],
   "node.pause": (args, value) => (value?.paused === true || args?.[0] === true ? "paused" : "online"),
@@ -691,6 +724,9 @@ export const CHANGES = {
   "node.share": (args, value) => levelOf(value?.project?.name ?? args?.[0], (value?.project?.shared ?? args?.[1] !== false) ? "shared" : "unshared"),
   "node.revoke": (args, value) => value?.revoked ?? args?.[0] ?? "all",
   "node.disconnect": null,
+  "node.convert.run": (args, value) => levelOf(value?.job?.nodeName ?? args?.[0]?.nodeName, value?.job?.status ?? "run"),
+  "node.convert.undo": (args, value) => value?.snapshotId ?? args?.[0] ?? "latest",
+  "node.remote.control": (args, value) => levelOf(value?.hostName ?? args?.[0], args?.[1]),
 };
 /** The service's own calls that only read, wait or talk in a chat: no line. Every call is in this list, in CHANGES or in LOGS_ITSELF. */
 export const READS = ["interactions.list", "skills.review", "chat.scriptCommand", "skillsCatalog.search", "skillsCatalog.preview", "skillsCatalog.featured", "mcpCatalog.list", "piPackages.browse", "piPackages.preview", "piPackages.list", "status", "logs.read", "doctor", "events.wait", "pair.status", "devices.list", "bots.list", "bots.get", "providers.list", "providers.services", "providers.login.read", "providers.login.input", "providers.login.cancel", "models", "chat.open", "chat.list", "chat.send", "chat.read", "chat.stop", "runs.list", "routines.list", "plugins.list", "plugins.marketplaces", "plugins.refresh", "plugins.browse", "plugins.preview", "config.get", "config.describe", "relay.status", "update.status", "update.check", "methods", "plugins.get", "tools.list", "tools.get", "tools.import.preview", "tools.signIn.read", "tools.signIn.input", "tools.signIn.cancel", "skills.list", "skills.get", "bots.tools", "bots.access", "bots.menu", "folders.list", "gadgets.get", "profile.status", "profile.home"];
@@ -698,7 +734,7 @@ export const READS = ["interactions.list", "skills.review", "chat.scriptCommand"
 export const MORE_READS = {
   bots: ["bots.flags", "bots.proactive", "bots.memory", "bots.sections", "bots.sections.get", "bots.importable", "bots.import.preview", "templates.list", "templates.get", "templates.import.preview", "templates.browse", "templates.market"],
   chats: ["chats.list", "chats.get", "chats.search", "chats.queue", "chats.helpers", "chats.mentions", "chats.aside", "chats.sections", "chats.projectLook"], // (`chats.aside` asks the chat's model a question that the chat does not keep.)
-  routines: ["routines.get", "routines.review", "routines.when", "routines.schedules"],
+  routines: ["routines.get", "routines.review", "routines.when", "routines.schedules", "workflows.list", "workflows.export"],
   projects: ["projects.list", "projects.get", "projects.artifacts", "projects.changes", "projects.diff", "todos.list", "todos.get", "tasks.list", "tasks.get", "artifacts.list", "artifacts.read", "artifacts.resolve"],
   wiki: ["wiki.tree", "wiki.find", "wiki.page", "wiki.search", "wiki.history", "wiki.version", "wiki.exportPlan"],
   prefs: ["preferences.get", "preferences.harnesses", "usage.report", "usage.export", "cache.info", "macTools.status"],
@@ -713,7 +749,7 @@ export const MORE_READS = {
   // (Marketplace › Apps: the person's Composio apps, control-apps.mjs)
   apps: ["apps.list", "apps.connected", "apps.accounts", "apps.card"], // (`apps.card` looks at a chat's Connect card again; when the app is connected, the chat goes on as it would for the window.)
   // (Node host, control-node.mjs)
-  node: ["node.status", "node.approvals", "node.audit"],
+  node: ["node.status", "node.approvals", "node.audit", "node.convert.inspect", "node.convert.plan", "node.convert.status", "node.remote.status"],
 };
 READS.push(...Object.values(MORE_READS).flat());
 
