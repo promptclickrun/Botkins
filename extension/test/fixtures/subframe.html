@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Reachable Subframe</title>
+  <style>
+    body { margin: 8px; font-family: sans-serif; }
+  </style>
+</head>
+<body>
+  <label for="frame-code">2FA Code</label>
+  <input id="frame-code" type="text" placeholder="6-digit code" />
+  <button id="frame-verify" type="button">Verify Code</button>
+  <p id="frame-status">Idle</p>
+  <script>
+    document.getElementById("frame-verify").addEventListener("click", () => {
+      const code = document.getElementById("frame-code").value;
+      document.getElementById("frame-status").textContent = "Verified:" + code;
+      window.top.__frameVerified = code;
+    });
+  </script>
+</body>
+</html>
