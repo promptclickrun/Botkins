@@ -102,6 +102,7 @@ function createMockChrome({
   onDriverCall,
   onMainWorldEval,
   onCdpCommand,
+  onCaptureVisibleTab,
   failCdpAttach = null,
 } = {}) {
   const attached = new Set();
@@ -165,6 +166,7 @@ function createMockChrome({
       },
       captureVisibleTab: async (windowId, opts) => {
         captureCalls.push({ windowId, opts });
+        if (onCaptureVisibleTab) return await onCaptureVisibleTab(windowId, opts);
         return "data:image/jpeg;base64,Vk1JR0U=";
       },
     },
@@ -405,5 +407,85 @@ test("BrowserController surfaces a clear error when CDP fallback hits another ex
     /different extension/i,
   );
   assert.equal(attached.size, 0);
+});
+
+test("BrowserController discards viewport screenshot when active tab or URL/origin changes mid-capture", async () => {
+  const tabs = [
+    { id: 1, windowId: 1, title: "Target", url: "https://example.com/app", active: true, pinned: false, groupId: -1, incognito: false, status: "complete" },
+    { id: 2, windowId: 1, title: "Bank Account", url: "https://bank.private.example/secrets", active: false, pinned: false, groupId: -1, incognito: false, status: "complete" },
+  ];
+
+  let uploaded = [];
+  let captureBehavior = "switch-tab";
+  const { chromeMock, cdpCalls } = createMockChrome({
+    tabs,
+    onCaptureVisibleTab: async () => {
+      if (captureBehavior === "switch-tab") {
+        // Simulate the user switching to a private tab while captureVisibleTab runs.
+        tabs[0].active = false;
+        tabs[1].active = true;
+        return "data:image/jpeg;base64,U0VDUkVUX0JBTktfSU1BR0U=";
+      }
+      if (captureBehavior === "change-origin") {
+        // Simulate the target tab navigating to another origin mid-capture.
+        tabs[0].url = "https://other-origin.example/private";
+        return "data:image/jpeg;base64,T1RIRVJfT1JJR0lOX0lNQUdF";
+      }
+      if (captureBehavior === "change-window") {
+        tabs[0].windowId = 2;
+        return "data:image/jpeg;base64,TU9WRURfV0lORE9X";
+      }
+      return "data:image/jpeg;base64,Vk1JR0U=";
+    },
+  });
+  globalThis.chrome = chromeMock;
+
+  const ctrl = new BrowserController({
+    getSettings: async () => ({ enabled: true, mode: "all", groupName: "Botkins", groupColor: "orange", pausedTabIds: [] }),
+    uploadScreenshot: async (b64, name) => {
+      uploaded.push({ b64, name });
+      return `up_${name}`;
+    },
+  });
+
+  // Case 1: Active tab switches mid-capture -> discard image, do not upload, do not leak private URL/title, no CDP fallback.
+  await assert.rejects(
+    () => ctrl.run("browser_screenshot", { tabId: 1 }),
+    (err) => {
+      assert.match(err.message, /discarded/i);
+      assert.match(err.message, /active tab/i);
+      assert.doesNotMatch(err.message, /bank\.private\.example|Bank Account/i);
+      return true;
+    },
+  );
+  assert.equal(uploaded.length, 0, "wrong-tab image must never be uploaded");
+  assert.equal(cdpCalls.length, 0, "tab-switch abort must not fall back to CDP");
+
+  // Case 2: Target tab URL/origin changes mid-capture -> discard image, do not upload.
+  tabs[0].active = true;
+  tabs[1].active = false;
+  captureBehavior = "change-origin";
+  await assert.rejects(
+    () => ctrl.run("browser_screenshot", { tabId: 1 }),
+    (err) => {
+      assert.match(err.message, /discarded/i);
+      assert.match(err.message, /URL or origin changed/i);
+      assert.doesNotMatch(err.message, /other-origin\.example/i);
+      return true;
+    },
+  );
+  assert.equal(uploaded.length, 0, "navigated-tab image must never be uploaded");
+  assert.equal(cdpCalls.length, 0);
+
+  // Case 3: Target tab moves to a different window mid-capture -> discard image, do not upload.
+  tabs[0].url = "https://example.com/app";
+  tabs[0].windowId = 1;
+  captureBehavior = "change-window";
+  await assert.rejects(
+    () => ctrl.run("browser_screenshot", { tabId: 1 }),
+    /discarded/i,
+  );
+  assert.equal(uploaded.length, 0);
+  assert.equal(cdpCalls.length, 0);
 });
 

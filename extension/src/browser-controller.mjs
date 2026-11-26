@@ -66,6 +66,22 @@ export function formatCdpError(err, action = "this action") {
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+function urlOrigin(url) {
+  if (!url) return "";
+  try {
+    const parsed = new URL(url);
+    return parsed.origin && parsed.origin !== "null" ? parsed.origin : parsed.protocol;
+  } catch {
+    return "";
+  }
+}
+
+function screenshotAbortedError(message) {
+  const err = new Error(message);
+  err.__botkinsScreenshotAborted = true;
+  return err;
+}
+
 // Zero-closure function serialized by chrome.scripting.executeScript into target frame(s).
 function DISPATCH_DRIVER_FUNC(action, payload, expectedVersion) {
   const driver = globalThis.__botkinsDomDriver;
@@ -593,11 +609,46 @@ export class BrowserController {
 
   async runScreenshot(tab, args) {
     const quality = Math.min(Math.max(Number(args.quality) || 70, 20), 90);
+    const targetTabId = tab.id;
+    const targetWindowId = tab.windowId;
+    const expectedUrl = tab.url || tab.pendingUrl || "";
+    const expectedOrigin = urlOrigin(expectedUrl);
     let b64 = null;
+    let verifiedTab = tab;
+
+    const assertTargetTabStable = async (phase) => {
+      let activeAfter;
+      let currentTab;
+      try {
+        [activeAfter] = await chrome.tabs.query({ active: true, windowId: targetWindowId });
+        currentTab = await chrome.tabs.get(targetTabId);
+      } catch {
+        throw screenshotAbortedError(
+          `Screenshot discarded: could not verify target tab ${targetTabId} in window ${targetWindowId} ${phase}.`,
+        );
+      }
+      if (!activeAfter || activeAfter.id !== targetTabId) {
+        throw screenshotAbortedError(
+          `Screenshot discarded: active tab in window ${targetWindowId} changed away from target tab ${targetTabId} ${phase}.`,
+        );
+      }
+      if (!currentTab || currentTab.windowId !== targetWindowId || currentTab.active === false) {
+        throw screenshotAbortedError(
+          `Screenshot discarded: target tab ${targetTabId} is no longer active in window ${targetWindowId} ${phase}.`,
+        );
+      }
+      const currentUrl = currentTab.url || currentTab.pendingUrl || "";
+      if (currentUrl !== expectedUrl || urlOrigin(currentUrl) !== expectedOrigin) {
+        throw screenshotAbortedError(
+          `Screenshot discarded: target tab ${targetTabId} URL or origin changed ${phase}.`,
+        );
+      }
+      return currentTab;
+    };
 
     if (args.fullPage === true) {
       const shot = await this.cdp(
-        tab.id,
+        targetTabId,
         "Page.captureScreenshot",
         { format: "jpeg", quality, captureBeyondViewport: true },
         "full-page screenshot (try fullPage: false for a viewport screenshot without the debugger)",
@@ -606,34 +657,72 @@ export class BrowserController {
     } else if (typeof chrome.tabs?.captureVisibleTab === "function") {
       let prevActiveId = null;
       try {
-        if (tab.active === false) {
-          const [currentActive] = await chrome.tabs.query({ active: true, windowId: tab.windowId }).catch(() => []);
-          if (currentActive && currentActive.id !== tab.id) prevActiveId = currentActive.id;
-          await chrome.tabs.update(tab.id, { active: true });
-          await sleep(80);
+        let preTab;
+        try {
+          preTab = await chrome.tabs.get(targetTabId);
+        } catch {
+          throw screenshotAbortedError(
+            `Screenshot discarded: target tab ${targetTabId} is no longer available before capture.`,
+          );
         }
-        const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, { format: "jpeg", quality });
+        const preUrl = preTab.url || preTab.pendingUrl || "";
+        if (
+          preTab.windowId !== targetWindowId ||
+          preUrl !== expectedUrl ||
+          urlOrigin(preUrl) !== expectedOrigin
+        ) {
+          throw screenshotAbortedError(
+            `Screenshot discarded: target tab ${targetTabId} changed window or URL before capture.`,
+          );
+        }
+
+        const [activeBefore] = await chrome.tabs.query({ active: true, windowId: targetWindowId });
+        if (!activeBefore || activeBefore.id !== targetTabId) {
+          if (activeBefore && activeBefore.id !== targetTabId) prevActiveId = activeBefore.id;
+          await chrome.tabs.update(targetTabId, { active: true });
+          await sleep(80);
+          await assertTargetTabStable("before capture");
+        }
+
+        let dataUrl = await chrome.tabs.captureVisibleTab(targetWindowId, { format: "jpeg", quality });
+        try {
+          verifiedTab = await assertTargetTabStable("during capture");
+        } catch (verifyErr) {
+          // Explicitly discard the captured image data if verification fails.
+          dataUrl = null;
+          throw verifyErr;
+        }
         b64 = stripDataUrlPrefix(dataUrl);
-      } catch {
-        // Fall back to ephemeral CDP viewport capture only if captureVisibleTab fails.
-        const shot = await this.cdp(tab.id, "Page.captureScreenshot", { format: "jpeg", quality }, "viewport screenshot fallback");
+      } catch (err) {
+        if (err?.__botkinsScreenshotAborted) throw err;
+        const [activeNow] = await chrome.tabs.query({ active: true, windowId: targetWindowId }).catch(() => []);
+        if (!activeNow || activeNow.id !== targetTabId) {
+          throw screenshotAbortedError(
+            `Screenshot discarded: active tab in window ${targetWindowId} changed away from target tab ${targetTabId} during capture.`,
+          );
+        }
+        // Fall back to ephemeral CDP viewport capture only if captureVisibleTab fails while target tab is still active.
+        const shot = await this.cdp(targetTabId, "Page.captureScreenshot", { format: "jpeg", quality }, "viewport screenshot fallback");
         b64 = shot?.data || null;
       } finally {
         if (prevActiveId != null) {
-          await chrome.tabs.update(prevActiveId, { active: true }).catch(() => {});
+          const [activeNow] = await chrome.tabs.query({ active: true, windowId: targetWindowId }).catch(() => []);
+          if (!activeNow || activeNow.id === targetTabId) {
+            await chrome.tabs.update(prevActiveId, { active: true }).catch(() => {});
+          }
         }
       }
     } else {
-      const shot = await this.cdp(tab.id, "Page.captureScreenshot", { format: "jpeg", quality }, "screenshot");
+      const shot = await this.cdp(targetTabId, "Page.captureScreenshot", { format: "jpeg", quality }, "screenshot");
       b64 = shot?.data || null;
     }
 
     if (!b64) throw new Error("Screenshot capture returned no image data.");
-    const path = await this.uploadScreenshot(b64, `browser-tab-${tab.id}.jpg`, "image/jpeg");
+    const path = await this.uploadScreenshot(b64, `browser-tab-${targetTabId}.jpg`, "image/jpeg");
     return {
-      tabId: tab.id,
-      url: tab.url || "",
-      title: tab.title || "",
+      tabId: targetTabId,
+      url: verifiedTab.url || tab.url || "",
+      title: verifiedTab.title || tab.title || "",
       format: "jpeg",
       path,
     };
