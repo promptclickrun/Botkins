@@ -172,7 +172,7 @@ export default function SidePane({
     () => (activityRun ? chat.messages.flatMap((m, i) => (m.interim && m.runId === activityRun.id && m.text.trim() ? [{ key: "interim-" + i, at: m.time ?? activityRun.time, text: m.text }] : [])) : []),
     [chat.messages, activityRun?.id],
   );
-  const hasActivity = !!activityRun && (storySteps(activityRun.steps).length > 0 || !!activityRun.reasoning?.some((t) => t.text.trim()) || updates.length > 0);
+  const hasActivity = !!activityRun && (storySteps(activityRun.steps, activityRun).length > 0 || !!activityRun.reasoning?.some((t) => t.text.trim()) || updates.length > 0);
   const wanted = picked !== undefined ? picked : active;
   // A chat-path preview is an explicit navigation request from ChatView. Keep this
   // local to the pane so it does not mutate the bot's persisted pane selection.

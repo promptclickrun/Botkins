@@ -180,7 +180,7 @@ test("mobile chatTimeline mixed run: hides correlated rail calls, keeps uncovere
   assert.deepEqual(linkParts.runs[0].stepKinds, phoneWork.kinds);
 });
 
-test("mobile legacy rail entries without toolCallId preserve unprovable rows and match exact payloads", () => {
+test("mobile legacy rail entries without toolCallId preserve unprovable or ambiguous rows and align with Link summary", () => {
   const legacyRun: Run = {
     id: "r-legacy",
     chatId: "c1",
@@ -191,6 +191,15 @@ test("mobile legacy rail entries without toolCallId preserve unprovable rows and
       { id: "s-matched", name: "task_create", label: "Delegated", status: "Done", started: T0 + 10, output: JSON.stringify({ id: "t-del", title: "Delegated" }) },
       { id: "s-self", name: "task_create", label: "Self", status: "Done", started: T0 + 20, output: JSON.stringify({ id: "t-self", title: "Self" }) },
       { id: "s-unprovable", name: "task_create", label: "Legacy no output", status: "Done", started: T0 + 30 },
+      { id: "s-ask-exact", name: "ask_teammate", label: "Ask Glory", status: "Done", started: T0 + 40, input: JSON.stringify({ teammate: "Glory", message: "Exact ask" }) },
+      { id: "s-ask-uniq", name: "ask_teammate", label: "Ask Scout", status: "Done", started: T0 + 50, input: JSON.stringify({ teammate: "Scout", message: "Unique legacy ask" }) },
+      { id: "s-ask-dup-1", name: "ask_teammate", label: "Ask Glory", status: "Done", started: T0 + 60, input: JSON.stringify({ teammate: "Glory", message: "Same text" }) },
+      { id: "s-ask-dup-2", name: "ask_teammate", label: "Ask Scout", status: "Done", started: T0 + 70, input: JSON.stringify({ teammate: "Scout", message: "Same text" }) },
+    ],
+    teamwork: [
+      { id: "tw-exact", toolCallId: "s-ask-exact", botId: "glory", fromBotId: "alfie", message: "Exact ask", status: "answered", started: T0 + 40 },
+      { id: "tw-uniq", botId: "scout", fromBotId: "alfie", message: "Unique legacy ask", status: "answered", started: T0 + 50 },
+      { id: "tw-ambig", botId: "glory", fromBotId: "alfie", message: "Same text", status: "answered", started: T0 + 60 },
     ],
     taskHandoffs: [
       { id: "t-del", taskId: "t-del", botId: "glory", fromBotId: "alfie", title: "Delegated", status: "ready", started: T0 + 10 },
@@ -199,6 +208,34 @@ test("mobile legacy rail entries without toolCallId preserve unprovable rows and
   assert.equal(isStepCoveredByRail(legacyRun.steps![0], legacyRun), true);
   assert.equal(isStepCoveredByRail(legacyRun.steps![1], legacyRun), false);
   assert.equal(isStepCoveredByRail(legacyRun.steps![2], legacyRun), false);
+  assert.equal(isStepCoveredByRail(legacyRun.steps![3], legacyRun), true);
+  assert.equal(isStepCoveredByRail(legacyRun.steps![4], legacyRun), true);
+  assert.equal(isStepCoveredByRail(legacyRun.steps![5], legacyRun), false, "ambiguous duplicate-text legacy ask 1 stays visible");
+  assert.equal(isStepCoveredByRail(legacyRun.steps![6], legacyRun), false, "ambiguous duplicate-text legacy ask 2 stays visible");
+
+  const lines = islandLines(legacyRun, { steps: true, thoughts: false });
+  assert.deepEqual(lines.map((l) => l.key), ["s:s-self", "s:s-unprovable", "s:s-ask-dup-1", "s:s-ask-dup-2"]);
+
+  const items = chatTimeline({
+    messages: [
+      { role: "user", text: "Mixed legacy run", runId: "r-legacy", time: T0 },
+      { role: "assistant", text: "Done", runId: "r-legacy", time: T0 + 200 },
+    ],
+    from: 0,
+    runs: { "r-legacy": legacyRun },
+    timeline: true,
+    group: false,
+    prefs: { steps: "show", thinking: "show", foldFinishedSteps: false },
+  });
+  const workItems = items.filter((item) => item.kind === "work");
+  assert.equal(workItems.length, 1);
+  assert.deepEqual(workItems[0].steps.map((s) => s.id), ["s-self", "s-unprovable", "s-ask-dup-1", "s-ask-dup-2"]);
+
+  const phoneWork = formatFeedWork(legacyRun);
+  const linkParts = baseParts({ runs: [legacyRun] }, {});
+  assert.equal(phoneWork.stepCount, 4);
+  assert.equal(linkParts.runs[0].stepCount, 4);
+  assert.equal(linkParts.runs[0].summary, phoneWork.summary);
 });
 
 test("continuingKeys does not merge an incoming agent message with an adjacent person bubble", () => {

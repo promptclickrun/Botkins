@@ -33,17 +33,63 @@ function parseJsonObject(text) {
   }
 }
 
-function matchesTeamworkCard(step, entry) {
-  if (!entry || typeof entry !== "object") return false;
-  if (entry.toolCallId) return step.id === entry.toolCallId;
-  // Legacy / un-correlated teamwork entry: only match when we can prove exact correspondence via input payload.
-  if (String(step.name || "").trim().toLowerCase() === "ask_teammate" && typeof entry.message === "string" && entry.message) {
-    const input = parseJsonObject(step.input);
-    if (typeof input?.message === "string" && input.message.trim() === entry.message.trim()) return true;
-  }
-  return false;
+function legacyAskFields(step) {
+  if (!step || step.source || step.status === "Failed") return null;
+  if (String(step.name || "").trim().toLowerCase() !== "ask_teammate") return null;
+  const input = parseJsonObject(step.input);
+  const message = typeof input?.message === "string" ? input.message.trim() : "";
+  if (!message) return null;
+  const teammate = typeof input?.teammate === "string" ? input.teammate.trim().replace(/^@/, "").toLowerCase() : "";
+  const host = typeof input?.host === "string" ? input.host.trim() : "";
+  const expecting = typeof input?.expecting === "string" ? input.expecting.trim() : "";
+  const output = parseJsonObject(step.output);
+  const reply = typeof output?.reply === "string" ? output.reply.trim() : "";
+  return { message, teammate, host, expecting, reply };
 }
 
+function legacyAskCompatible(fields, entry) {
+  const entryMessage = typeof entry.message === "string" ? entry.message.trim() : "";
+  if (!entryMessage || fields.message !== entryMessage) return false;
+  const entryHost = typeof entry.remote?.hostId === "string" ? entry.remote.hostId.trim() : "";
+  if (fields.host !== entryHost) return false;
+  // For remote asks, teammate in input is the remote botId (or name); enforce it against entry.
+  if (entryHost) {
+    if (!fields.teammate) return false;
+    const remoteTargets = [entry.botId, entry.remote?.botName]
+      .filter((v) => typeof v === "string" && v.trim())
+      .map((v) => v.trim().toLowerCase());
+    if (!remoteTargets.includes(fields.teammate)) return false;
+  }
+  const entryExpecting = typeof entry.expecting === "string" ? entry.expecting.trim() : "";
+  if ((fields.expecting || entryExpecting) && fields.expecting !== entryExpecting) return false;
+  const entryReply = typeof entry.reply === "string" ? entry.reply.trim() : "";
+  if (fields.reply && entryReply && fields.reply !== entryReply) return false;
+  return true;
+}
+
+function isUnambiguousLegacyAskMatch(step, entry, run) {
+  const fields = legacyAskFields(step);
+  if (!fields || !legacyAskCompatible(fields, entry)) return false;
+  // Require run.steps to verify uniqueness; without the full step list we cannot prove another ask_teammate didn't share the same text.
+  if (!Array.isArray(run?.steps)) return false;
+  const exactCardIds = new Set((run.teamwork ?? []).map((item) => item?.toolCallId).filter(Boolean));
+  const matchingSteps = run.steps.filter((candidate) => {
+    if (!candidate || exactCardIds.has(candidate.id)) return false;
+    const candidateFields = legacyAskFields(candidate);
+    return !!candidateFields && legacyAskCompatible(candidateFields, entry);
+  });
+  if (matchingSteps.length !== 1 || matchingSteps[0]?.id !== step.id) return false;
+  const matchingEntries = (run.teamwork ?? []).filter(
+    (candidate) => candidate && !candidate.toolCallId && legacyAskCompatible(fields, candidate),
+  );
+  return matchingEntries.length === 1 && matchingEntries[0] === entry;
+}
+
+function matchesTeamworkCard(step, entry, run) {
+  if (!entry || typeof entry !== "object") return false;
+  if (entry.toolCallId) return step.id === entry.toolCallId;
+  return isUnambiguousLegacyAskMatch(step, entry, run);
+}
 function matchesTaskHandoffCard(step, entry) {
   if (!entry || typeof entry !== "object") return false;
   if (entry.toolCallId) return step.id === entry.toolCallId;
@@ -61,7 +107,7 @@ export function isStepCoveredByRail(step, run) {
   const name = String(step.name || "").trim();
   if (!name) return false;
   if (run.teamwork?.length && RAIL_COVERED_TEAMWORK_TOOL.test(name)) {
-    return run.teamwork.some((entry) => matchesTeamworkCard(step, entry));
+    return run.teamwork.some((entry) => matchesTeamworkCard(step, entry, run));
   }
   if (run.taskHandoffs?.length && RAIL_COVERED_TASK_TOOL.test(name)) {
     return run.taskHandoffs.some((entry) => matchesTaskHandoffCard(step, entry));

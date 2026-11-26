@@ -263,6 +263,35 @@ test("no double rendering: mixed run hides only correlated rail steps and keeps 
   assert.deepEqual(feed.kinds, ["read", "tool"]);
 });
 
+test("mixed legacy run: ambiguous duplicate-text ask_teammate steps stay visible while exact toolCallId and unambiguous legacy matches hide", () => {
+  const steps = [
+    { id: "s-exact", name: "ask_teammate", label: "Ask Glory", status: "Done", started: 10, input: JSON.stringify({ teammate: "Glory", message: "Deploy status" }) },
+    { id: "s-dup-1", name: "ask_teammate", label: "Ask Glory", status: "Done", started: 20, input: JSON.stringify({ teammate: "Glory", message: "Check logs" }) },
+    { id: "s-dup-2", name: "ask_teammate", label: "Ask Scout", status: "Done", started: 30, input: JSON.stringify({ teammate: "Scout", message: "Check logs" }) },
+    { id: "s-uniq", name: "ask_teammate", label: "Ask Scout", status: "Done", started: 40, input: JSON.stringify({ teammate: "Scout", message: "Verify release" }) },
+  ];
+  const run = {
+    status: "Completed",
+    steps,
+    teamwork: [
+      { id: "tw-exact", toolCallId: "s-exact", botId: "glory", message: "Deploy status", status: "answered", started: 10 },
+      { id: "tw-ambig", botId: "glory", message: "Check logs", status: "answered", started: 20 },
+      { id: "tw-uniq", botId: "scout", message: "Verify release", status: "answered", started: 40 },
+    ],
+  };
+  assert.equal(isStepCoveredByRail(steps[0], run), true);
+  assert.equal(isStepCoveredByRail(steps[1], run), false, "ambiguous duplicate-text legacy ask stays visible");
+  assert.equal(isStepCoveredByRail(steps[2], run), false, "second duplicate-text legacy ask stays visible");
+  assert.equal(isStepCoveredByRail(steps[3], run), true, "unambiguous legacy ask is covered");
+
+  const kept = storySteps(steps, run);
+  assert.deepEqual(kept.map((s) => s.id), ["s-dup-1", "s-dup-2"]);
+
+  const feed = mod.formatFeedWork(run);
+  assert.equal(feed.stepCount, 2);
+  assert.equal(feed.summary, "Used 2 tools");
+});
+
 test("readableAgentBody and foldPreview handle empty/legacy text gracefully", () => {
   assert.deepEqual(readableAgentBody("Simple teammate question", "teamwork"), { body: "Simple teammate question" });
   const short = foldPreview("Short line");

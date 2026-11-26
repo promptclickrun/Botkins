@@ -195,23 +195,22 @@ test("isStepCoveredByRail correlates individual steps to rail cards and preserve
   assert.equal(isStepCoveredByRail({ id: "s6", name: "task_create", status: "Done" }, {}), false, "person-only or self tasks without handoff stay visible");
   assert.equal(isStepCoveredByRail({ id: "s7", name: "read", status: "Done" }, runWithTeamwork), false);
 
-  // Legacy rail entries (no toolCallId) match only when exact payload correlation proves correspondence, otherwise stay visible.
+  // Legacy rail entries (no toolCallId) match only when exact payload correlation is unambiguous across the run.
+  const legacyMatchStep = { id: "s-tw-match", name: "ask_teammate", status: "Done", input: JSON.stringify({ teammate: "Scout", message: "Check tide" }) };
+  const legacyOtherStep = { id: "s-tw-other", name: "ask_teammate", status: "Done", input: JSON.stringify({ teammate: "Scout", message: "Different ask" }) };
+  const legacyNoInputStep = { id: "s-tw-no-input", name: "ask_teammate", status: "Done" };
   const legacyRun = {
+    steps: [legacyMatchStep, legacyOtherStep, legacyNoInputStep],
     teamwork: [{ id: "tw-legacy", botId: "scout", message: "Check tide", status: "answered", started: 1 }],
     taskHandoffs: [{ id: "t-delegated", taskId: "t-delegated", botId: "scout", title: "Delegated", status: "ready", started: 2 }],
   };
+  assert.equal(isStepCoveredByRail(legacyMatchStep, legacyRun), true);
+  assert.equal(isStepCoveredByRail(legacyOtherStep, legacyRun), false);
+  assert.equal(isStepCoveredByRail(legacyNoInputStep, legacyRun), false, "unprovable legacy teamwork step stays visible");
   assert.equal(
-    isStepCoveredByRail({ id: "s-tw-match", name: "ask_teammate", status: "Done", input: JSON.stringify({ teammate: "Scout", message: "Check tide" }) }, legacyRun),
-    true,
-  );
-  assert.equal(
-    isStepCoveredByRail({ id: "s-tw-other", name: "ask_teammate", status: "Done", input: JSON.stringify({ teammate: "Scout", message: "Different ask" }) }, legacyRun),
+    isStepCoveredByRail(legacyMatchStep, { teamwork: legacyRun.teamwork }),
     false,
-  );
-  assert.equal(
-    isStepCoveredByRail({ id: "s-tw-no-input", name: "ask_teammate", status: "Done" }, legacyRun),
-    false,
-    "unprovable legacy teamwork step stays visible",
+    "without run.steps to confirm uniqueness, legacy ask_teammate stays visible",
   );
   assert.equal(
     isStepCoveredByRail({ id: "s-th-match", name: "task_create", status: "Done", output: JSON.stringify({ id: "t-delegated", title: "Delegated" }) }, legacyRun),
@@ -226,6 +225,81 @@ test("isStepCoveredByRail correlates individual steps to rail cards and preserve
     false,
     "unprovable legacy task_create step stays visible",
   );
+
+  // Ambiguous legacy ask_teammate rows sharing message text: retain BOTH rows instead of hiding an uncovered ask.
+  const dupA = { id: "s-dup-1", name: "ask_teammate", status: "Done", input: JSON.stringify({ teammate: "Scout", message: "Status?" }) };
+  const dupB = { id: "s-dup-2", name: "ask_teammate", status: "Done", input: JSON.stringify({ teammate: "Gordie", message: "Status?" }) };
+  const ambiguousLegacyRun = {
+    id: "r-ambiguous",
+    chatId: "c1",
+    title: "Ambiguous legacy asks",
+    time: 1000,
+    status: "Completed",
+    steps: [dupA, dupB],
+    teamwork: [{ id: "tw-one", botId: "scout", message: "Status?", status: "answered", started: 1 }],
+  };
+  assert.equal(isStepCoveredByRail(dupA, ambiguousLegacyRun), false, "ambiguous duplicate legacy ask A stays visible");
+  assert.equal(isStepCoveredByRail(dupB, ambiguousLegacyRun), false, "ambiguous duplicate legacy ask B stays visible");
+  const ambiguousFeed = formatFeedWork(ambiguousLegacyRun);
+  assert.equal(ambiguousFeed.stepCount, 2);
+  assert.equal(ambiguousFeed.summary, "Used 2 tools");
+  const ambiguousParts = baseParts({ runs: [ambiguousLegacyRun] }, {});
+  assert.equal(ambiguousParts.runs[0].stepCount, 2);
+  assert.equal(ambiguousParts.runs[0].summary, "Used 2 tools");
+
+  // Mixed run: one ask_teammate has an exact toolCallId and another legacy ask shares the same text -> both match unambiguously.
+  const exactStep = { id: "s-exact", name: "ask_teammate", status: "Done", input: JSON.stringify({ teammate: "Scout", message: "Status?" }) };
+  const legacyUniqueStep = { id: "s-legacy-uniq", name: "ask_teammate", status: "Done", input: JSON.stringify({ teammate: "Gordie", message: "Status?" }) };
+  const mixedSameTextRun = {
+    steps: [exactStep, legacyUniqueStep],
+    teamwork: [
+      { id: "tw-exact", toolCallId: "s-exact", botId: "scout", message: "Status?", status: "answered", started: 1 },
+      { id: "tw-legacy-only", botId: "gordie", message: "Status?", status: "answered", started: 2 },
+    ],
+  };
+  assert.equal(isStepCoveredByRail(exactStep, mixedSameTextRun), true);
+  assert.equal(isStepCoveredByRail(legacyUniqueStep, mixedSameTextRun), true);
+
+  // Two legacy cards with identical message text and two matching steps are ambiguous -> retain both rows.
+  const twoCardAmbiguous = {
+    steps: [dupA, dupB],
+    teamwork: [
+      { id: "tw-a", botId: "scout", message: "Status?", status: "answered", started: 1 },
+      { id: "tw-b", botId: "gordie", message: "Status?", status: "answered", started: 2 },
+    ],
+  };
+  assert.equal(isStepCoveredByRail(dupA, twoCardAmbiguous), false);
+  assert.equal(isStepCoveredByRail(dupB, twoCardAmbiguous), false);
+
+  // Disambiguated by expecting or reply (or remote host/target) -> matches cleanly while other stays visible.
+  const disambigA = {
+    id: "s-dis-1",
+    name: "ask_teammate",
+    status: "Done",
+    input: JSON.stringify({ teammate: "Scout", message: "Status?", expecting: "bullet list" }),
+  };
+  const disambigB = {
+    id: "s-dis-2",
+    name: "ask_teammate",
+    status: "Done",
+    input: JSON.stringify({ teammate: "Gordie", message: "Status?", expecting: "short answer" }),
+  };
+  const disambigRun = {
+    steps: [disambigA, disambigB],
+    teamwork: [{ id: "tw-dis", botId: "scout", message: "Status?", expecting: "bullet list", status: "answered", started: 1 }],
+  };
+  assert.equal(isStepCoveredByRail(disambigA, disambigRun), true);
+  assert.equal(isStepCoveredByRail(disambigB, disambigRun), false);
+
+  // Remote host disambiguation: same message text sent locally vs remotely only matches the matching host+target.
+  const localStep = { id: "s-loc", name: "ask_teammate", status: "Done", input: JSON.stringify({ teammate: "Scout", message: "Ping" }) };
+  const remoteStep = { id: "s-rem", name: "ask_teammate", status: "Done", input: JSON.stringify({ host: "host-2", teammate: "scout-remote", message: "Ping" }) };
+  const hostMixedRun = {
+    steps: [localStep, remoteStep],
+    teamwork: [{ id: "tw-rem", botId: "scout-remote", remote: { hostId: "host-2", botName: "Scout Remote" }, message: "Ping", status: "answered", started: 1 }],
+  };
+  assert.equal(isStepCoveredByRail(remoteStep, hostMixedRun), true);
+  assert.equal(isStepCoveredByRail(localStep, hostMixedRun), false);
 });
 
 test("mixed run: delegated task_create is correlated to its rail card while self/unassigned task_create stays visible and Link summary agrees", async (t) => {
