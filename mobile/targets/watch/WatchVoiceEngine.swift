@@ -4,8 +4,25 @@ import AVFoundation
 import Foundation
 
 extension NSError {
-  var watchAudioServiceDied: Bool {
-    domain == "com.apple.coreaudio.avfaudio" && code == Int(MIG_SERVER_DIED)
+  /// True when Core Audio or AVAudioSession reports that mediaserverd died or is resetting
+  /// (MIG_SERVER_DIED -308, mediaServicesFailed 'msrv' 1836282486, expiredSession '!ses' 561210739).
+  var watchAudioServiceReset: Bool {
+    var current: NSError? = self
+    var depth = 0
+    while let error = current, depth < 4 {
+      if error.domain == "com.apple.coreaudio.avfaudio" && error.code == Int(MIG_SERVER_DIED) {
+        return true
+      }
+      if (error.domain == NSOSStatusErrorDomain || error.domain == "com.apple.coreaudio.avfaudio") && (
+        error.code == AVAudioSession.ErrorCode.mediaServicesFailed.rawValue ||
+        error.code == AVAudioSession.ErrorCode.expiredSession.rawValue
+      ) {
+        return true
+      }
+      current = error.userInfo[NSUnderlyingErrorKey] as? NSError
+      depth += 1
+    }
+    return false
   }
 }
 
@@ -43,17 +60,13 @@ final class WatchVoiceEngine {
     }
   }
 
-  func start(inputRate: Int, outputRate: Int, voiceProcessing: Bool) throws {
+  func start(inputRate: Int, outputRate: Int) throws {
     try queue.sync {
       let engine = AVAudioEngine()
       let player = AVAudioPlayerNode()
-      if voiceProcessing {
-        do { try engine.inputNode.setVoiceProcessingEnabled(true) }
-        catch let error as NSError {
-          // Ordinary input works on routes without voice processing. A lost service needs a fresh graph.
-          if error.watchAudioServiceDied { throw error }
-        }
-      }
+      // Do not enable VoiceProcessingIO on watchOS: setVoiceProcessingEnabled(true) crashes
+      // mediaserverd (-308 / 'msrv') on Apple Watch, and live voice transports already gate
+      // the Watch microphone while the Botkin speaks.
       engine.attach(player)
       guard
         let wire = AVAudioFormat(commonFormat: .pcmFormatInt16, sampleRate: Double(inputRate), channels: 1, interleaved: true),
@@ -149,20 +162,25 @@ final class WatchVoiceEngine {
     }
   }
 
-  func stop() {
-    queue.sync { stopLocked() }
+  func stop(deactivateSession: Bool = true) {
+    queue.sync { stopLocked(deactivateSession: deactivateSession) }
   }
 
-  private func stopLocked() {
+  private func stopLocked(deactivateSession: Bool) {
     if let observer { NotificationCenter.default.removeObserver(observer) }
     observer = nil
     running = false
-    defer { try? AVAudioSession.sharedInstance().setActive(false, options: [.notifyOthersOnDeactivation]) }
+    defer {
+      if deactivateSession {
+        try? AVAudioSession.sharedInstance().setActive(false, options: [.notifyOthersOnDeactivation])
+      }
+    }
     guard let engine else { return }
     engine.inputNode.removeTap(onBus: 0)
     engine.mainMixerNode.removeTap(onBus: 0)
     player?.stop()
     engine.stop()
+    engine.reset()
     self.engine = nil
     self.player = nil
     self.converter = nil
