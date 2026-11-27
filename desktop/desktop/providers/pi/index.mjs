@@ -29,6 +29,7 @@ import { SessionStore, resumeOrRecover, serversWithTokens, uuidFor } from "../se
 import { skillChoices, skillSupport } from "../skills.mjs";
 import { displayValue } from "../../display.mjs";
 import { describeRequest } from "../copilot/permissions.mjs";
+import { NativeDialogs } from "./dialogs.mjs";
 import { DETAIL, INVENTORY, MORE, RESULT } from "./extension-shared.mjs";
 import { PLAN_INSTRUCTIONS, planFromOmpPhases, planSignature, planToOmpPhases, toTodoResult, updatePlanTool } from "./plan.mjs";
 import { PiSse } from "./sse.mjs";
@@ -737,6 +738,7 @@ class PiSession extends ProviderSession {
       return { text: reply };
     } finally {
       // A call that never ran (stopped, or the process went away) must not stay Running.
+      if (this.live) this.provider.cancelDialogs(this.live);
       this.cancelSseCalls();
       if (this.turn) this.stopRows(this.turn);
       stop();
@@ -758,6 +760,7 @@ class PiSession extends ProviderSession {
       // A refused abort leaves the original operation running. Preserve the input for the
       // workspace's ordinary queue. A dead RPC also rejects the outstanding settle.
       turn.redirected = true;
+      this.provider.cancelDialogs(this.live);
       this.cancelSseCalls();
       aborting = rpc.request({ type: "abort" }, 0).catch(error => {
         for (const item of pending.splice(0)) item.ack.reject(error);
@@ -1121,6 +1124,7 @@ class PiSession extends ProviderSession {
     if (this.turn) this.turn.sse = null;
   }
   interrupt() {
+    if (this.live) this.provider.cancelDialogs(this.live);
     this.cancelSseCalls();
     try {
       this.live?.rpc.write({ type: "abort" });
@@ -1744,12 +1748,15 @@ export class PiProvider extends ModelProvider {
       if (parsed) rt.mcpStates.set(parsed.name, parsed.status);
     }
   }
+  cancelDialogs(live) {
+    live?.dialogs?.stop();
+  }
   /**
-   * The extension dialogs. Only Botkins' approval question is answered, and the detail it asks
-   * for when a plugin's hook changed or refused the call; any other is cancelled.
+   * The extension dialogs. Botkins answers its own approval question, the detail it asks for
+   * when a plugin's hook changed or refused the call, and the result hook's question; any other
+   * dialog is an extension's own, routed to the person (dialogs.mjs).
    */
   async dialog(live, request) {
-    if (!["select", "confirm", "input", "editor"].includes(request.method)) return;
     const title = String(request.title ?? "");
     const reply = (body) => {
       try {
@@ -1779,7 +1786,10 @@ export class PiProvider extends ModelProvider {
       live.details?.delete(id);
       return reply(detail ? { value: JSON.stringify(detail) } : { cancelled: true });
     }
-    if (!(request.method === "select" && title.startsWith(ASK + " "))) return reply({ cancelled: true });
+    if (!(request.method === "select" && title.startsWith(ASK + " "))) {
+      live.dialogs ??= new NativeDialogs();
+      return live.dialogs.handle(live, request);
+    }
     let call = {};
     try {
       call = JSON.parse(title.slice(ASK.length + 1));
