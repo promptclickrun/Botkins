@@ -17,6 +17,9 @@ const char* kSettings = "settings";
 const size_t kMaxNetworks = 8;
 // A saved network that isn't answering is left for the next one after this long.
 const int kNetworkSwitchMs = 20000;
+
+/** A network's name and password as a station can use them: 1 to 32 bytes of name, at most 64 of password. */
+bool valid_network(const std::string& ssid, const std::string& password) { return !ssid.empty() && ssid.size() <= 32 && password.size() <= 64; }
 const char* kMark = "@botkins ";
 // A recording goes up in pieces of half a second, while the button is still held.
 const double kPieceSeconds = 0.5;
@@ -68,7 +71,10 @@ void Gadget::begin() {
 }
 
 void Gadget::stop() {
-  if (!running_.exchange(false)) return;
+  {
+    std::lock_guard<std::mutex> start(trial_start_);
+    if (!running_.exchange(false)) return;
+  }
   quiet_++;
   {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -78,6 +84,7 @@ void Gadget::stop() {
   if (sync_thread_.joinable()) sync_thread_.join();
   if (work_thread_.joinable()) work_thread_.join();
   if (hold_thread_.joinable()) hold_thread_.join();
+  if (trial_thread_.joinable()) trial_thread_.join();
 }
 
 View Gadget::view() {
@@ -211,17 +218,17 @@ void Gadget::sync_loop() {
     if (network != "on") {
       stage(network == "failed" ? View::Stage::NoNetwork : View::Stage::Joining);
       // A saved network that refuses or is out of range: the next saved one gets a turn.
-      std::pair<std::string, std::string> next;
       {
         std::lock_guard<std::mutex> lock(mutex_);
         const auto now = std::chrono::steady_clock::now();
-        if (network == "failed" && networks_.size() > 1 && now - switched_at_ > std::chrono::milliseconds(kNetworkSwitchMs)) {
+        if (network == "failed" && !trial_.active && networks_.size() > 1 &&
+            now - switched_at_ > std::chrono::milliseconds(kNetworkSwitchMs) && std::string(board_.network->state()) == "failed") {
           network_at_ = (network_at_ + 1) % networks_.size();
-          next = networks_[network_at_];
+          const auto& next = networks_[network_at_];
+          board_.network->join(next.first, next.second);
           switched_at_ = now;
         }
       }
-      if (!next.first.empty()) board_.network->join(next.first, next.second);
       link->reset();
       if (!wait(300)) break;
       continue;
@@ -635,6 +642,144 @@ void Gadget::save_networks() {
   else board_.storage->save(kWifi, Json::object().set("networks", std::move(list)).dump());
 }
 
+std::vector<std::string> Gadget::saved_networks(std::string* current) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  std::vector<std::string> names;
+  for (const auto& network : networks_) names.push_back(network.first);
+  if (current) *current = trial_.active ? trial_.ssid : network_at_ < networks_.size() ? networks_[network_at_].first : "";
+  return names;
+}
+
+std::string Gadget::try_network(const std::string& ssid, const std::string* given) {
+  std::lock_guard<std::mutex> start(trial_start_);
+  if (!running_) return "Wi-Fi isn't ready.";
+  std::string password;
+  uint32_t generation;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (trial_.active) return "Another network is being tried.";
+    if (given) {
+      password = *given;
+    } else {
+      const auto saved = std::find_if(networks_.begin(), networks_.end(), [&ssid](const auto& network) { return network.first == ssid; });
+      if (saved == networks_.end()) return "That network isn't saved: it needs its password.";
+      password = saved->second;
+    }
+    // A WPA passphrase is 8 to 63 characters (64 is the key in hex); none is an open network.
+    if (!valid_network(ssid, password) || (!password.empty() && password.size() < 8)) return "That isn't a Wi-Fi network's name and password.";
+    trial_.active = true;
+    trial_.ssid = ssid;
+    trial_.password = password;
+    trial_.state = "trying";
+    trial_.fallback.clear();
+    trial_.had_previous = network_at_ < networks_.size();
+    trial_.previous = trial_.had_previous ? networks_[network_at_].first : "";
+    trial_.deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(board_.wifi_trial_ms);
+    generation = ++trial_.generation;
+    board_.network->join(ssid, password);
+    password.assign(password.size(), '\0');
+  }
+  if (trial_thread_.joinable()) trial_thread_.join();  // the previous trial was finished or cancelled
+  trial_thread_ = board_.thread ? board_.thread("wifi", [this, generation] { run_trial(generation); })
+                                : std::thread([this, generation] { run_trial(generation); });
+  return "";
+}
+
+void Gadget::cancel_trial() {
+  if (!trial_.active) return;
+  trial_.active = false;
+  trial_.state = "cancelled";
+  trial_.password.assign(trial_.password.size(), '\0');
+  trial_.password.clear();
+  trial_.generation++;
+}
+
+void Gadget::run_trial(uint32_t generation) {
+  bool returning = false;
+  std::string back;  // the network being joined again
+  std::chrono::steady_clock::time_point back_deadline{};
+  for (;;) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      // Cancelled (a setup over USB, the networks forgotten) or replaced: it is theirs now.
+      if (trial_.generation != generation || !trial_.active) return;
+      const auto now = std::chrono::steady_clock::now();
+      if (!running_) {
+        trial_.active = false;
+        cancel_trial();
+        return;
+      }
+      const std::string state = board_.network->state();
+      const std::string from = board_.network->joined_ssid();
+      if (!returning) {
+        // An address from the network being left is not this one's.
+        if (state == "on" && (from.empty() || from == trial_.ssid)) {
+          // It gave an address: kept first, with its password, as a setup over USB keeps one.
+          const std::string ssid = trial_.ssid;
+          networks_.erase(std::remove_if(networks_.begin(), networks_.end(), [&ssid](const auto& network) { return network.first == ssid; }), networks_.end());
+          networks_.insert(networks_.begin(), {trial_.ssid, trial_.password});
+          if (networks_.size() > kMaxNetworks) networks_.pop_back();
+          network_at_ = 0;
+          save_networks();
+          report_wifi_ = true;
+          trial_.state = "joined";
+          trial_.active = false;
+          trial_.password.assign(trial_.password.size(), '\0');
+          trial_.password.clear();
+          switched_at_ = now;
+          wake_.notify_all();
+          return;
+        }
+        if (state != "failed" && now < trial_.deadline) continue;
+        // No address in time: back to the network it was on, as it is saved now (the owner may have changed
+        // the list meanwhile), else the first saved one. Nothing of the trial is saved.
+        trial_.password.assign(trial_.password.size(), '\0');
+        trial_.password.clear();
+        trial_.state = "rolling-back";
+        auto saved = networks_.end();
+        if (trial_.had_previous) saved = std::find_if(networks_.begin(), networks_.end(), [this](const auto& network) { return network.first == trial_.previous; });
+        if (saved == networks_.end() && trial_.had_previous && !networks_.empty()) saved = networks_.begin();
+        if (saved == networks_.end()) {
+          board_.network->join("", "");
+          trial_.state = "rolled-back";
+          trial_.fallback = "none";
+          trial_.active = false;
+          switched_at_ = now;
+          wake_.notify_all();
+          return;
+        }
+        network_at_ = (size_t)(saved - networks_.begin());
+        back = saved->first;
+        trial_.fallback = "reconnecting";
+        returning = true;
+        back_deadline = now + std::chrono::milliseconds(board_.wifi_trial_ms);
+        switched_at_ = now;
+        board_.network->join(saved->first, saved->second);
+      } else {
+        // The network before, verified: an address of its own, or none in time (the saved ones are then
+        // tried in turn, as always).
+        const bool back_on = state == "on" && (from.empty() || from == back);
+        if (!back_on && now < back_deadline) continue;
+        trial_.state = "rolled-back";
+        trial_.fallback = back_on ? "on" : "unreachable";
+        trial_.active = false;
+        switched_at_ = now;
+        wake_.notify_all();
+        return;
+      }
+    }
+  }
+}
+
+Json Gadget::network_trial() {
+  std::lock_guard<std::mutex> lock(mutex_);
+  if (trial_.state.empty()) return Json();
+  Json out = Json::object().set("n", (double)trial_.generation).set("ssid", trial_.ssid).set("state", trial_.state);
+  if (!trial_.fallback.empty()) out.set("fallback", trial_.fallback);
+  return out;
+}
+
 /** What the owner's page shows: the network in use, the saved names, the signal. Never a password. */
 Json Gadget::wifi_report() {
   Json saved = Json::array();
@@ -1003,18 +1148,20 @@ std::string Gadget::console(const std::string& line) {
     if (link.is_object() && !Introduction::from_json(link, introduction)) return reply_line(Json::object().set("error", "That isn't a computer's introduction."));
     if (wifi.is_object()) {
       const std::string ssid = wifi["ssid"].str(), password = wifi["password"].str();
-      if (ssid.empty() || ssid.size() > 32 || password.size() > 64) return reply_line(Json::object().set("error", "That isn't a Wi-Fi network's name and password."));
+      if (!valid_network(ssid, password)) return reply_line(Json::object().set("error", "That isn't a Wi-Fi network's name and password."));
       {
         // The network given over the cable goes first, ahead of the ones saved before.
         std::lock_guard<std::mutex> lock(mutex_);
+        cancel_trial();
         networks_.erase(std::remove_if(networks_.begin(), networks_.end(), [&ssid](const auto& network) { return network.first == ssid; }), networks_.end());
         networks_.insert(networks_.begin(), {ssid, password});
         if (networks_.size() > kMaxNetworks) networks_.pop_back();
         network_at_ = 0;
+        switched_at_ = std::chrono::steady_clock::now();
         save_networks();
+        board_.network->join(ssid, password);
+        report_wifi_ = true;
       }
-      board_.network->join(ssid, password);
-      report_wifi_ = true;
     }
     if (link.is_object()) adopt(introduction);
     return reply_line(Json::object().set("ok", true));
@@ -1022,12 +1169,13 @@ std::string Gadget::console(const std::string& line) {
   if (what == "forget" || what == "erase") {
     {
       std::lock_guard<std::mutex> lock(mutex_);
+      cancel_trial();
       networks_.clear();
       network_at_ = 0;
+      save_networks();
+      board_.network->join("", "");
     }
-    board_.storage->erase(kWifi);
     board_.storage->erase(kSettings);
-    board_.network->join("", "");
     forget_link();
     if (what == "erase") {
       // A new key: to every computer this is another gadget from now on.

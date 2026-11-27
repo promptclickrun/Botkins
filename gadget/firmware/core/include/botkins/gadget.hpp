@@ -77,6 +77,12 @@ struct Board {
    * start `run` and return the thread; the core joins it.
    */
   std::function<std::thread(const char* name, std::function<void()> run)> thread;
+  /**
+   * How long a network a person picked on the gadget (Gadget::try_network) has to give the gadget an
+   * address before the gadget goes back to the network it was on. The "wifi" thread (`thread` above)
+   * watches it for that long.
+   */
+  int wifi_trial_ms = 30000;
 };
 
 /** The poses a gadget's Botkin takes. The computer draws each from the bot's own look. */
@@ -188,6 +194,28 @@ class Gadget {
   /** The gadget's public key as text: what an introducer hands to the computer. */
   std::string public_key() const;
 
+  // ── Wi-Fi changed by a person at the gadget ──
+  /** The saved networks' names, most recent first; `current` the one in use or being joined. Never a password. */
+  std::vector<std::string> saved_networks(std::string* current = nullptr);
+  /**
+   * Tries a network: joins it, and keeps it (first among the saved networks) once it gives the gadget an
+   * address within Board::wifi_trial_ms. If it doesn't (a wrong password, out of range), the gadget goes
+   * back to the network it was on, and nothing is saved. `password` null: the saved network's own. One
+   * at a time. Returns "" once the trial started, else why it didn't, in words. Neither the name nor the
+   * password is logged.
+   */
+  std::string try_network(const std::string& ssid, const std::string* password);
+  /**
+   * The last trial, null before the first: {"n", "ssid", "state"}, and "fallback" once it is rolled back.
+   * "n" counts trials (and cancels), so a phone or a screen can tell its own trial from an earlier one.
+   * "trying": joining it. "joined": it gave an address and is saved first. "rolling-back": it didn't, and
+   * the network before is being joined again. "rolled-back": over, with "fallback" "on" (the network
+   * before gave an address again), "unreachable" (it didn't in time either: the saved networks are tried
+   * in turn, as always) or "none" (there was none before). "cancelled": a setup over USB, or forgetting
+   * the networks, came first; nothing of the trial was kept or undone.
+   */
+  Json network_trial();
+
  private:
   using Job = std::function<void(Link&)>;
   void sync_loop();
@@ -245,6 +273,21 @@ class Gadget {
   std::string restart_seen_;  // the restart the owner asked for, once it was taken
   std::vector<std::string> wifi_taken_;  // Wi-Fi changes taken, until the computer stops sending them
   std::chrono::steady_clock::time_point switched_at_{};  // when another saved network was last tried
+  // A network a person is trying (try_network): while it runs, saved networks are not cycled.
+  struct Trial {
+    bool active = false;
+    std::string ssid, password, state;
+    std::string fallback;
+    bool had_previous = false;
+    std::string previous;  // the name of the network to go back to; its password is read from the saved list then
+    std::chrono::steady_clock::time_point deadline{};
+    uint32_t generation = 0;  // goes up with each trial and each cancel
+  } trial_;
+  std::mutex trial_start_;  // serializes starting a trial with stopping the gadget
+  std::thread trial_thread_;
+  void run_trial(uint32_t generation);
+  /** Under mutex_: a setup over USB or forgetting the networks ends a trial where it is. */
+  void cancel_trial();
   std::vector<std::pair<std::string, std::string>> bots_;
   std::string bot_id_;
   bool saves_history_ = false, saves_turns_ = false;  // the computer keeps spoken lines in the chat (meta.capabilities)
