@@ -194,6 +194,11 @@ export default function RootLayout() {
               <Stack.Screen name="settings/approvals" />
               <Stack.Screen name="settings/harness" />
               <Stack.Screen name="settings/general" />
+              <Stack.Screen name="settings/channels" />
+              <Stack.Screen name="settings/channels/[id]" />
+              <Stack.Screen name="settings/channels/add" options={tall} />
+              <Stack.Screen name="settings/channels/who" />
+              <Stack.Screen name="settings/channels/activity" />
               <Stack.Screen name="settings/teamwork" />
               <Stack.Screen name="settings/usage" />
               <Stack.Screen name="settings/about" />

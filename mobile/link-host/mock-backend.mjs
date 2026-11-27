@@ -1553,7 +1553,10 @@ export class MockBackend {
     // "plugins-v1" (docs/plugins.md): made-up catalogs and installs. One plugin starts installed.
     this.capabilities.push("pi-packages-v1", "pi-packages-remove-v1", "skill-upload-v1", "skills-catalog-v1", "skills-featured-v1", "script-commands-v1", "mcp-catalog-v1");
     // Each person's own picture ("people-avatars-v1"): `setMyAvatar`, kept on the team's people.
-    this.capabilities.push("people-avatars-v1");
+    this.capabilities.push("people-avatars-v1", "channels-v1");
+    this.channelSecrets = new Map();
+    this.channelAudit = this.seedChannelAudit();
+    if (!Array.isArray(this.state.channels)) this.state.channels = this.seedChannels();
     this.catalogToken = "";
     this.demoSkill = {id:"demo/skills/design-review", source:"demo/skills", skillId:"design-review", name:"design-review", installs:240, available:true};
 
@@ -1606,6 +1609,164 @@ export class MockBackend {
         return { status: "connected", tools: ["COMPOSIO_SEARCH_TOOLS", "COMPOSIO_MULTI_EXECUTE_TOOL"] };
       },
     };
+  }
+  seedChannels() {
+    const t = now();
+    const today = new Date(t);
+    const todayKey = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+    const defaultLimits = {
+      senderPerMinute: 10,
+      connectionPerMinute: 60,
+      maxInboundLength: 4000,
+      maxAttachmentBytes: 5 * 1024 * 1024,
+      allowedAttachmentTypes: ["image/*", "text/plain", "application/pdf"],
+      dailyTurnCap: 200,
+    };
+    const bot0 = this.state.bots[0]?.id ?? "bot-mira";
+    const bot1 = this.state.bots[1]?.id ?? bot0;
+    const bot2 = this.state.bots[2]?.id ?? bot0;
+    return [
+      {
+        id: "ch_slack_acme",
+        kind: "slack",
+        label: "Acme Slack",
+        transport: "socket_mode",
+        enabled: true,
+        paused: false,
+        botId: bot1,
+        configuredSecrets: ["appToken", "botToken"],
+        policy: {
+          dm: "pairing",
+          allowlist: [
+            { senderId: "U01COLT", display: "Colt", addedAt: t - 25 * 24 * HOUR, source: "manual" },
+            { senderId: "U02JORD", display: "Jordan T.", addedAt: t - 9 * 24 * HOUR, source: "pairing" },
+          ],
+          groups: { enabled: true, mode: "mention", channels: ["#general", "#engineering"] },
+          toolProfile: "restricted",
+          ignoreBots: true,
+          notifyPhone: false,
+          limits: { ...defaultLimits },
+        },
+        pendingPairings: [
+          {
+            code: "7K3-M9P",
+            senderId: "U09ALEX",
+            display: "Alex K.",
+            conversationId: "D09ALEX",
+            createdAt: t - 2 * HOUR,
+            expiresAt: t + 22 * HOUR,
+          },
+        ],
+        dailyUsage: { date: todayKey, turns: 142 },
+        status: { state: "connected", detail: "", connectedAt: t - 48 * HOUR, lastEventAt: t - 2 * MIN },
+        createdAt: t - 30 * 24 * HOUR,
+        updatedAt: t - 2 * MIN,
+      },
+      {
+        id: "ch_tg_alfie",
+        kind: "telegram",
+        label: "Alfie on Telegram",
+        transport: "long_polling",
+        enabled: true,
+        paused: false,
+        botId: bot0,
+        configuredSecrets: ["botToken"],
+        policy: {
+          dm: "pairing",
+          allowlist: [
+            { senderId: "@colt", display: "Colt", addedAt: t - 25 * 24 * HOUR, source: "manual" },
+            { senderId: "@jordant", display: "Jordan T.", addedAt: t - 9 * 24 * HOUR, source: "pairing" },
+            { senderId: "@priyak", display: "Priya K.", addedAt: t - 6 * 24 * HOUR, source: "pairing" },
+            { senderId: "@saml", display: "Sam L.", addedAt: t - 3 * 24 * HOUR, source: "pairing" },
+          ],
+          groups: { enabled: true, mode: "mention", channels: ["-100123456"] },
+          toolProfile: "restricted",
+          ignoreBots: true,
+          notifyPhone: false,
+          limits: { ...defaultLimits },
+        },
+        pendingPairings: [
+          {
+            code: "4H7-KQ2",
+            senderId: "@mayar",
+            display: "Maya R.",
+            conversationId: "tg-dm-mayar",
+            createdAt: t - 3 * HOUR,
+            expiresAt: t + 21 * HOUR,
+          },
+        ],
+        dailyUsage: { date: todayKey, turns: 169 },
+        status: { state: "connected", detail: "", connectedAt: t - 72 * HOUR, lastEventAt: t - 4 * MIN },
+        createdAt: t - 20 * 24 * HOUR,
+        updatedAt: t - 4 * MIN,
+      },
+      {
+        id: "ch_dc_botkins",
+        kind: "discord",
+        label: "Botkins Discord",
+        transport: "gateway",
+        enabled: true,
+        paused: false,
+        botId: bot2,
+        configuredSecrets: ["botToken"],
+        policy: {
+          dm: "allowlist",
+          allowlist: [{ senderId: "colt#0001", display: "Colt", addedAt: t - 15 * 24 * HOUR, source: "manual" }],
+          groups: { enabled: false, mode: "mention", channels: [] },
+          toolProfile: "restricted",
+          ignoreBots: true,
+          notifyPhone: false,
+          limits: { ...defaultLimits },
+        },
+        pendingPairings: [],
+        dailyUsage: { date: todayKey, turns: 0 },
+        status: { state: "auth_error", detail: "Token rejected" },
+        createdAt: t - 15 * 24 * HOUR,
+        updatedAt: t - 1 * HOUR,
+      },
+      {
+        id: "ch_imsg_mac",
+        kind: "imessage",
+        label: "iMessage",
+        transport: "imsg_node",
+        nodeHostId: "Mac Studio",
+        enabled: true,
+        paused: true,
+        botId: bot1,
+        configuredSecrets: [],
+        policy: {
+          dm: "allowlist",
+          allowlist: [{ senderId: "+15551234567", display: "Colt", addedAt: t - 10 * 24 * HOUR, source: "manual" }],
+          groups: { enabled: false, mode: "mention", channels: [] },
+          toolProfile: "restricted",
+          ignoreBots: true,
+          notifyPhone: false,
+          limits: { ...defaultLimits },
+        },
+        pendingPairings: [],
+        dailyUsage: { date: todayKey, turns: 0 },
+        status: { state: "paused", detail: "Paused by owner" },
+        createdAt: t - 10 * 24 * HOUR,
+        updatedAt: t - 4 * HOUR,
+      },
+    ];
+  }
+  seedChannelAudit() {
+    const t = now();
+    return [
+      { time: t - 4 * MIN, connectionId: "ch_tg_alfie", kind: "telegram", senderId: "Jordan T.", conversationId: "DM", decision: "reply_sent", replyParts: 2 },
+      { time: t - 9 * MIN, connectionId: "ch_tg_alfie", kind: "telegram", senderId: "Maya R.", conversationId: "DM", decision: "paired", reason: "pairing_code_issued" },
+      { time: t - 21 * MIN, connectionId: "ch_slack_acme", kind: "slack", senderId: "8812034", conversationId: "#general", decision: "denied", reason: "mention_required" },
+      { time: t - 30 * MIN, connectionId: "ch_dc_botkins", kind: "discord", senderId: "spam-bot", conversationId: "DM", decision: "rate_limited", reason: "sender_rate_limit" },
+      { time: t - 63 * MIN, connectionId: "ch_tg_alfie", kind: "telegram", senderId: "Priya K.", conversationId: "DM", decision: "reply_sent", replyParts: 1 },
+      { time: t - 90 * MIN, connectionId: "ch_slack_acme", kind: "slack", senderId: "Alex K.", conversationId: "DM", decision: "paired", reason: "pairing_code_issued" },
+      { time: t - 120 * MIN, connectionId: "ch_dc_botkins", kind: "discord", senderId: "gateway", conversationId: "gateway", decision: "error", reason: "turn_failed" },
+    ];
+  }
+  channelById(id) {
+    const conn = (this.state.channels ?? []).find((c) => c.id === id);
+    if (!conn) throw new Error(`Unknown channel "${id}".`);
+    return conn;
   }
   info() {
     return { app: "botkins", version: this.updates?.current ?? "0.8.0-demo", platform: process.platform };
@@ -4203,6 +4364,221 @@ export class MockBackend {
         rows.push([new Date(time).toISOString(), new Date(time).toISOString().slice(0, 10), this.state.bots.find((bot) => bot.id === chat.botId)?.name ?? "", chat.id, chat.title, "Done", "message", "Claude Fable 5.2", 80_000 + index * 900, 6000 + index * 70, 30_000, (0.4 + index * 0.03).toFixed(2), 42_000 + index * 800, "claude"]);
       });
       return { name: "botkins-usage-" + days + "d.csv", text: rows.map((row) => row.map(cell).join(",")).join("\n") + "\n" };
+    },
+    // External messaging Channel Hooks ("channels-v1", strictly owner-only).
+    channelsList() {
+      return structuredClone(this.state.channels ?? []);
+    },
+    channelAdd(input = {}) {
+      const kinds = ["slack", "telegram", "discord", "imessage"];
+      const kind = String(input.kind ?? "").toLowerCase();
+      if (!kinds.includes(kind)) throw new Error(`Unsupported channel kind "${kind}".`);
+      const requiredSecrets = { slack: ["appToken", "botToken"], telegram: ["botToken"], discord: ["botToken"], imessage: [] }[kind];
+      const secrets = input.secrets && typeof input.secrets === "object" ? input.secrets : {};
+      for (const key of requiredSecrets) {
+        if (typeof secrets[key] !== "string" || !secrets[key].trim()) {
+          throw new Error(`Missing required credential "${key}" for ${kind}.`);
+        }
+      }
+      const id = "ch_" + randomUUID().replace(/-/g, "").slice(0, 12);
+      const storedKeys = Object.entries(secrets)
+        .filter(([, v]) => typeof v === "string" && v.trim())
+        .map(([k]) => k);
+      if (storedKeys.length) {
+        this.channelSecrets.set(id, Object.fromEntries(storedKeys.map((k) => [k, secrets[k].trim()])));
+      }
+      const defaultTransport = { slack: "socket_mode", telegram: "long_polling", discord: "gateway", imessage: input.nodeHostId ? "imsg_node" : "imsg_local" }[kind];
+      const t = now();
+      const rawPolicy = input.policy && typeof input.policy === "object" ? input.policy : {};
+      const conn = {
+        id,
+        kind,
+        label: String(input.label ?? "").trim() || `${kind.charAt(0).toUpperCase() + kind.slice(1)} channel`,
+        transport: input.transport || defaultTransport,
+        enabled: input.enabled !== false,
+        paused: false,
+        botId: input.botId || this.state.bots[0]?.id || "",
+        ...(input.nodeHostId ? { nodeHostId: String(input.nodeHostId) } : {}),
+        configuredSecrets: storedKeys,
+        policy: {
+          dm: ["pairing", "allowlist", "open", "off"].includes(rawPolicy.dm) ? rawPolicy.dm : "pairing",
+          allowlist: Array.isArray(rawPolicy.allowlist) ? rawPolicy.allowlist : [],
+          groups: {
+            enabled: Boolean(rawPolicy.groups?.enabled),
+            mode: rawPolicy.groups?.mode === "all" ? "all" : "mention",
+            channels: Array.isArray(rawPolicy.groups?.channels) ? rawPolicy.groups.channels : [],
+          },
+          toolProfile: rawPolicy.toolProfile === "standard" ? "standard" : "restricted",
+          ignoreBots: rawPolicy.ignoreBots !== false,
+          notifyPhone: Boolean(rawPolicy.notifyPhone),
+          limits: {
+            senderPerMinute: rawPolicy.limits?.senderPerMinute ?? 10,
+            connectionPerMinute: rawPolicy.limits?.connectionPerMinute ?? 60,
+            maxInboundLength: rawPolicy.limits?.maxInboundLength ?? 4000,
+            maxAttachmentBytes: rawPolicy.limits?.maxAttachmentBytes ?? 5 * 1024 * 1024,
+            allowedAttachmentTypes: rawPolicy.limits?.allowedAttachmentTypes ?? ["image/*", "text/plain", "application/pdf"],
+            dailyTurnCap: rawPolicy.limits?.dailyTurnCap ?? 200,
+          },
+        },
+        pendingPairings: [],
+        dailyUsage: { date: new Date(t).toISOString().slice(0, 10), turns: 0 },
+        status: { state: "connected", detail: "", connectedAt: t },
+        createdAt: t,
+        updatedAt: t,
+      };
+      this.state.channels ??= [];
+      this.state.channels.push(conn);
+      return structuredClone(conn);
+    },
+    channelUpdate(id, patch = {}) {
+      const conn = this.channelById(id);
+      if (typeof patch.label === "string" && patch.label.trim()) conn.label = patch.label.trim().slice(0, 80);
+      if (typeof patch.botId === "string" && patch.botId) conn.botId = patch.botId;
+      if (patch.nodeHostId !== undefined && conn.kind === "imessage") {
+        if (patch.nodeHostId) {
+          conn.nodeHostId = String(patch.nodeHostId);
+          conn.transport = "imsg_node";
+        } else {
+          delete conn.nodeHostId;
+          conn.transport = "imsg_local";
+        }
+      }
+      if (patch.secrets && typeof patch.secrets === "object") {
+        const prev = this.channelSecrets.get(conn.id) ?? {};
+        const next = { ...prev };
+        for (const [k, v] of Object.entries(patch.secrets)) {
+          if (typeof v === "string" && v.trim()) next[k] = v.trim();
+        }
+        this.channelSecrets.set(conn.id, next);
+        conn.configuredSecrets = Object.keys(next);
+        if (conn.status?.state === "auth_error") {
+          conn.status = { state: "connected", detail: "", connectedAt: now() };
+        }
+      }
+      if (patch.policy && typeof patch.policy === "object") {
+        this.handlers.channelSetPolicy.call(this, id, patch.policy);
+      }
+      conn.updatedAt = now();
+      return structuredClone(conn);
+    },
+    channelRemove(id) {
+      const conn = this.channelById(id);
+      this.channelSecrets.delete(conn.id);
+      this.state.channels = (this.state.channels ?? []).filter((c) => c.id !== conn.id);
+      return { removed: true, id: conn.id };
+    },
+    channelBind(id, botId) {
+      const conn = this.channelById(id);
+      if (!this.state.bots.some((b) => b.id === botId)) throw new Error(`Unknown bot "${botId}".`);
+      conn.botId = botId;
+      conn.updatedAt = now();
+      return structuredClone(conn);
+    },
+    channelSetPolicy(id, patch = {}) {
+      const conn = this.channelById(id);
+      const cur = conn.policy ?? {};
+      conn.policy = {
+        ...cur,
+        ...(patch.dm && ["pairing", "allowlist", "open", "off"].includes(patch.dm) ? { dm: patch.dm } : {}),
+        ...(Array.isArray(patch.allowlist) ? { allowlist: patch.allowlist } : {}),
+        ...(patch.groups ? { groups: { ...(cur.groups ?? { enabled: false, mode: "mention", channels: [] }), ...patch.groups } } : {}),
+        ...(patch.toolProfile && ["restricted", "standard"].includes(patch.toolProfile) ? { toolProfile: patch.toolProfile } : {}),
+        ...(typeof patch.ignoreBots === "boolean" ? { ignoreBots: patch.ignoreBots } : {}),
+        ...(typeof patch.notifyPhone === "boolean" ? { notifyPhone: patch.notifyPhone } : {}),
+        ...(patch.limits ? { limits: { ...(cur.limits ?? {}), ...patch.limits } } : {}),
+      };
+      conn.updatedAt = now();
+      return structuredClone(conn);
+    },
+    channelPause(id) {
+      const conn = this.channelById(id);
+      conn.paused = true;
+      conn.status = { state: "paused", detail: "Paused by owner" };
+      conn.updatedAt = now();
+      return structuredClone(conn);
+    },
+    channelResume(id) {
+      const conn = this.channelById(id);
+      conn.paused = false;
+      conn.enabled = true;
+      conn.status = { state: "connected", detail: "", connectedAt: now() };
+      conn.updatedAt = now();
+      return structuredClone(conn);
+    },
+    channelPairList(id) {
+      const list = id ? [this.channelById(id)] : (this.state.channels ?? []);
+      return list.flatMap((conn) =>
+        (conn.pendingPairings ?? []).map((p) => ({
+          ...p,
+          connectionId: conn.id,
+          connectionLabel: conn.label,
+          kind: conn.kind,
+        })),
+      );
+    },
+    channelPairApprove(code, id) {
+      const clean = String(code ?? "").trim().toUpperCase();
+      const targets = id ? [this.channelById(id)] : (this.state.channels ?? []);
+      for (const conn of targets) {
+        const idx = (conn.pendingPairings ?? []).findIndex((p) => p.code.toUpperCase() === clean);
+        if (idx < 0) continue;
+        const [pending] = conn.pendingPairings.splice(idx, 1);
+        conn.policy.allowlist ??= [];
+        if (!conn.policy.allowlist.some((a) => a.senderId === pending.senderId)) {
+          conn.policy.allowlist.push({
+            senderId: pending.senderId,
+            display: pending.display || pending.senderId,
+            addedAt: now(),
+            source: "pairing",
+          });
+        }
+        this.channelAudit.unshift({
+          time: now(),
+          connectionId: conn.id,
+          kind: conn.kind,
+          senderId: pending.display || pending.senderId,
+          conversationId: pending.conversationId,
+          decision: "pairing_approved",
+        });
+        return { approved: true, connectionId: conn.id, senderId: pending.senderId, display: pending.display || pending.senderId };
+      }
+      throw new Error(`No pending pairing request matches code "${clean}".`);
+    },
+    channelPairDeny(code, id) {
+      const clean = String(code ?? "").trim().toUpperCase();
+      const targets = id ? [this.channelById(id)] : (this.state.channels ?? []);
+      for (const conn of targets) {
+        const idx = (conn.pendingPairings ?? []).findIndex((p) => p.code.toUpperCase() === clean);
+        if (idx < 0) continue;
+        const [pending] = conn.pendingPairings.splice(idx, 1);
+        this.channelAudit.unshift({
+          time: now(),
+          connectionId: conn.id,
+          kind: conn.kind,
+          senderId: pending.display || pending.senderId,
+          conversationId: pending.conversationId,
+          decision: "pairing_denied",
+        });
+        return { denied: true, connectionId: conn.id, senderId: pending.senderId };
+      }
+      throw new Error(`No pending pairing request matches code "${clean}".`);
+    },
+    channelTest(id) {
+      const conn = this.channelById(id);
+      if (conn.status?.state === "auth_error") {
+        return { ok: false, state: "auth_error", detail: conn.status.detail || "Token rejected" };
+      }
+      return {
+        ok: true,
+        state: "connected",
+        detail: `Connected (${conn.label})`,
+        identity: conn.kind === "telegram" ? "@alfie_bot" : conn.kind === "slack" ? "@botkins" : undefined,
+      };
+    },
+    channelLogs(id, options = {}) {
+      const limit = Math.max(1, Math.min(200, Number(options?.limit) || 100));
+      const list = id ? this.channelAudit.filter((e) => e.connectionId === id) : this.channelAudit;
+      return structuredClone(list.slice(0, limit));
     },
     cacheInfo() {
       return { ...this.cache };

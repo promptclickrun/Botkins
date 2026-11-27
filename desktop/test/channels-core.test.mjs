@@ -1141,3 +1141,69 @@ test("ChannelManager drops iMessage is_from_me self echoes (and legacy isFromSel
 
   await ws.channels.stopAll();
 });
+
+test("LinkHost scrubs channelAdd/channelUpdate inline secrets from logs, responses, and errors", async (t) => {
+  const { ws, botId, dir } = setupWorkspace(t);
+  const { LinkHost } = await import("../desktop/link/server.mjs");
+  const fake = makeFakeAdapter();
+  ws.channels.registerAdapter("slack", fake.factory);
+
+  const linkDir = join(dir, "link");
+  const linkLogs = [];
+  const sentinelApp = "xapp-1-DESKTOP-SENTINEL-APP-778899";
+  const sentinelBot = "xoxb-DESKTOP-SENTINEL-BOT-112233";
+
+  const backend = {
+    info: () => ({ app: "botkins", version: "0.0.0-test", platform: process.platform }),
+    snapshot: () => ({ ...ws.state, channels: ws.channels.list() }),
+    subscribe: () => () => {},
+    call: async (method, args) => {
+      if (method === "channelAdd") return ws.channels.add(args[0]);
+      if (method === "channelUpdate") return ws.channels.update(args[0], args[1]);
+      if (method === "channelsList") return ws.channels.list();
+      throw new Error(`Unexpected ${method}`);
+    },
+  };
+
+  const host = new LinkHost({
+    dir: linkDir,
+    backend,
+    port: 0,
+    relay: false,
+    log: (line) => linkLogs.push(String(line)),
+  });
+  t.after(() => host.stop());
+
+  const session = { id: "s1", deviceId: undefined, principal: { kind: "owner" } };
+  const added = await host.dispatch(session, {
+    m: "channelAdd",
+    a: [{ kind: "slack", label: "Link Slack", botId, secrets: { appToken: sentinelApp, botToken: sentinelBot } }],
+  });
+
+  assert.ok(!JSON.stringify(added).includes(sentinelApp), "channelAdd response leaked appToken");
+  assert.ok(!JSON.stringify(added).includes(sentinelBot), "channelAdd response leaked botToken");
+  assert.deepEqual(added.configuredSecrets.sort(), ["appToken", "botToken"]);
+  assert.ok(!linkLogs.join("\n").includes(sentinelApp), "LinkHost log leaked appToken");
+  assert.ok(!linkLogs.join("\n").includes(sentinelBot), "LinkHost log leaked botToken");
+  assert.ok(!JSON.stringify(ws.channels.logs(added.id)).includes(sentinelApp), "Audit log leaked appToken");
+  assert.ok(!JSON.stringify(ws.channels.logs(added.id)).includes(sentinelBot), "Audit log leaked botToken");
+
+  // Also verify error scrubbing if a backend error ever echoes a passed secret.
+  const sentinelErr = "xoxb-DESKTOP-SENTINEL-ERR-554433";
+  backend.call = async () => {
+    throw new Error(`Upstream rejected ${sentinelErr}`);
+  };
+  await assert.rejects(
+    host.dispatch(session, {
+      m: "channelUpdate",
+      a: [added.id, { secrets: { botToken: sentinelErr } }],
+    }),
+    (err) => {
+      assert.ok(!err.message.includes(sentinelErr), "LinkHost error leaked inline channel secret");
+      return true;
+    },
+  );
+  assert.ok(!linkLogs.join("\n").includes(sentinelErr), "LinkHost log leaked error secret");
+
+  await ws.channels.stopAll();
+});
