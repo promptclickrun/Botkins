@@ -201,6 +201,7 @@ export type Message = {
   text: string;
   interim?: boolean;
   steeredRunId?: string;
+  receipt?: boolean;
   answer?: { runId: string; requestId: string; kind: string; title: string };
   /** A proactive alert the bot sent on its own: the run that made it, and its actions ("proactive-team-v1"). */
   proactiveRunId?: string;
@@ -1522,6 +1523,24 @@ declare global {
       passwordManagerItem(manager: PasswordManagerId, vaultId: string, itemId: string): Promise<PasswordManagerItem>;
       /** Saves a field of a manager's item as a credential that is read from there each time. Returns its id. */
       linkPasswordManagerField(input: { manager: PasswordManagerId; vaultId: string; itemId: string; fieldId: string; name: string }): Promise<string>;
+      /** Explicitly copies a field from a password manager into the Botkins vault (marked as a copy). Returns its id. */
+      copyPasswordManagerField(input: { manager: PasswordManagerId; vaultId: string; itemId: string; fieldId: string; name: string }): Promise<string>;
+      /** Lists standing bot credential grants (metadata only; never values). */
+      credentialGrants(filter?: { botId?: string; credentialId?: string }): Promise<CredentialGrant[]>;
+      /** Creates or updates a standing bot credential grant (owner only). */
+      setCredentialGrant(input: {
+        botId: string;
+        botName?: string;
+        credentialId: string;
+        credentialName?: string;
+        destination: string;
+        operation: string;
+        level: CredentialGrantLevel;
+      }): Promise<CredentialGrant>;
+      /** Revokes one standing credential grant by id. */
+      revokeCredentialGrant(id: string): Promise<boolean>;
+      /** Recent credential use audit entries (who, what, where, when, outcome — never values). */
+      credentialAudit(options?: { limit?: number; botId?: string; credentialId?: string }): Promise<CredentialAuditEntry[]>;
       /** Adds the servers in pasted MCP JSON ({ "mcpServers": { … } }). */
       importMcpServers(json: string): Promise<{ added: string[]; skipped: string[] }>;
       /** Asks for a JSON file and adds its servers. null when the person cancels. */
@@ -1978,23 +1997,69 @@ export type Credential = {
 // Saved credentials (the phone link's store, desktop/link/credentials.mjs), shown in Settings ›
 // Credentials and offered where a bot asks for a secret. Not the MCP vault above. Never a value.
 export type CredentialSource = "vault" | "onepassword" | "bitwarden" | "protonpass";
-export type CredentialKind = "api-key" | "login" | "note";
+export type CredentialKind = "api-key" | "login" | "note" | "totp";
+export type CredentialGrantLevel = "ask" | "today" | "always" | "deny";
+export type CredentialGrant = {
+  id: string;
+  botId: string;
+  botName?: string;
+  credentialId: string;
+  credentialName?: string;
+  destination: string;
+  destinationLabel?: string;
+  operation: string;
+  level: CredentialGrantLevel;
+  createdAt: number;
+  updatedAt: number;
+  expiresAt?: number | null;
+  lastUsedAt?: number | null;
+};
+export type CredentialAuditEntry = {
+  id: string;
+  at: number;
+  botId: string;
+  botName?: string;
+  credentialId?: string;
+  credentialName?: string;
+  source?: string;
+  destination?: string;
+  operation: string;
+  outcome: string;
+  grantLevel?: string;
+  reason?: string;
+};
 export type SavedCredential = {
   id: string;
   name: string;
   kind: CredentialKind;
   username?: string;
   website?: string;
+  aliases?: string[];
   notes?: string;
   /** "vault": typed in and kept encrypted on this computer. Otherwise the password manager it is read from each time. */
   source: CredentialSource;
   /** For a linked one: what is read, as text ("Work / GitHub / token"). Never the value. */
   reference?: string;
+  /** True when this entry has an associated TOTP secret for 2FA code generation. */
+  hasTotp?: boolean;
+  /** True when this entry was explicitly copied into the Botkins vault from a password manager. */
+  copied?: boolean;
+  copiedFrom?: { manager: string; reference: string };
   createdAt: number;
   updatedAt: number;
 };
 /** `value: null` (or none) keeps the saved value. */
-export type SavedCredentialInput = { id?: string; name: string; kind?: CredentialKind; username?: string; website?: string; notes?: string; value?: string | null };
+export type SavedCredentialInput = {
+  id?: string;
+  name: string;
+  kind?: CredentialKind;
+  username?: string;
+  website?: string;
+  aliases?: string[];
+  notes?: string;
+  value?: string | null;
+  totpSecret?: string | null;
+};
 export type PasswordManagerId = Exclude<CredentialSource, "vault">;
 export type PasswordManagerStatus = ProtonStatusFields & {
   id: PasswordManagerId;
@@ -2785,8 +2850,8 @@ export type FormField = {
   maxLength?: number;
   format?: string;
 };
-/** A cross-host permission is scoped to the source and target bots and hosts shown on the card. */
-export type DispatchAction = "approve" | "today" | "remember" | "deny";
+/** A cross-host or credential permission is scoped to the bot, credential and destination shown on the card. */
+export type DispatchAction = "approve" | "today" | "remember" | "deny" | "deny_always";
 export type RequestAnswer = {
   action: DispatchAction | "cancel" | "answer" | "accept";
   /** A saved credential's reference instead of text: the computer puts the value in. */
@@ -2797,6 +2862,11 @@ export type RequestAnswer = {
 };
 export type AgentRequest = {
   dispatch?: true;
+  /** True on a bot credential-use approval card (scoped to bot, credential, destination and operation). */
+  credentialGrant?: true;
+  credentialName?: string;
+  credentialSource?: string;
+  destination?: string;
   artifactGrant?: true;
   rememberScope?: "bot";
   botName?: string;

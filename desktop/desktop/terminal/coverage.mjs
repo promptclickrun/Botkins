@@ -295,7 +295,10 @@ export const WORKSPACE = {
   // service's memory, so every later caller of the socket could list the person's logins. And a
   // field that is linked under a name that the caller chose is a secret that the person's own
   // picker then hands over. (`passwordManagers` and `lockPasswordManager` have commands.)
-  ...each("unlockPasswordManager passwordManagerVaults passwordManagerItems passwordManagerItem linkPasswordManagerField", no("person")),
+  ...each("unlockPasswordManager passwordManagerVaults passwordManagerItems passwordManagerItem linkPasswordManagerField copyPasswordManagerField setCredentialGrant", no("person")),
+  credentialGrants: cmd("credentials grants"),
+  revokeCredentialGrant: cmd("credentials revoke"),
+  credentialAudit: cmd("credentials audit"),
   passwordManagers: cmd("password-managers list"),
   ...each("protonPassInstallPlan protonPassInstall", cmd("password-managers install")),
   ...each("protonPassSignInStart protonPassSignInRead protonPassSignInInput protonPassSignInCancel", cmd("password-managers sign-in")),
@@ -448,7 +451,7 @@ export const LINK = {
   // Admin mode is each owner device's own way of looking: the command line shows everything, as an owner with it on.
   "link.team.setAdminMode": no("phone's own"),
   // A phone's way to the computer's saved credentials and password managers. The owner at the terminal has the commands of the app's own calls for what a command covers; the rest needs a person at the app.
-  ...each("link.credentials.check link.credentials.item link.credentials.items link.credentials.link link.credentials.lock link.credentials.managers link.credentials.remove link.credentials.save link.credentials.unlock link.credentials.vaults", no("phone's own")),
+  ...each("link.credentials.audit link.credentials.check link.credentials.copy link.credentials.grants link.credentials.item link.credentials.items link.credentials.link link.credentials.lock link.credentials.managers link.credentials.remove link.credentials.revokeGrant link.credentials.save link.credentials.setGrant link.credentials.unlock link.credentials.vaults", no("phone's own")),
   ...each("link.credentials.protonPassInstallPlan link.credentials.protonPassInstall", cmd("password-managers install")),
   ...each("link.credentials.protonPassSignInStart link.credentials.protonPassSignInRead link.credentials.protonPassSignInInput link.credentials.protonPassSignInCancel", cmd("password-managers sign-in")),
   "link.credentials.protonPassDisconnect": cmd("password-managers disconnect"),
@@ -668,6 +671,7 @@ export const CHANGES = {
   "credentials.save": (args, value) => value?.name ?? args?.[0]?.name,
   "credentials.edit": (args, value) => value?.name ?? args?.[0],
   "credentials.remove": (args, value) => value?.name ?? args?.[0],
+  "credentials.revokeGrant": (args, value) => value?.revoked ?? args?.[0],
   "credentials.vaultRemove": (args, value) => value?.name ?? args?.[0],
   // The line says that the vault was reset, and only when it was: a refused reset is a "Tried" line that does not say so.
   "credentials.vaultReset": (args, value) => (value?.reset === true ? "the vault was reset" : null),
@@ -794,7 +798,7 @@ export const MORE_READS = {
   projects: ["projects.list", "projects.get", "projects.artifacts", "projects.changes", "projects.diff", "jobs.list", "jobs.setup", "jobs.status", "todos.list", "todos.get", "tasks.list", "tasks.get", "artifacts.list", "artifacts.read", "artifacts.resolve"],
   wiki: ["wiki.tree", "wiki.find", "wiki.page", "wiki.search", "wiki.history", "wiki.version", "wiki.exportPlan"],
   prefs: ["preferences.get", "preferences.harnesses", "usage.report", "usage.export", "cache.info", "macTools.status"],
-  credentials: ["credentials.list", "credentials.vault", "credentials.managers", "protonPass.installPlan", "protonPass.signInRead", "providers.usage", "providers.installPlan", "providers.install.read", "providers.install.input", "providers.install.cancel"],
+  credentials: ["credentials.list", "credentials.grants", "credentials.audit", "credentials.vault", "credentials.managers", "protonPass.installPlan", "protonPass.signInRead", "providers.usage", "providers.installPlan", "providers.install.read", "providers.install.input", "providers.install.cancel"],
   voice: ["voice.get", "voice.options"], // (`voice.options` can make the service ask a provider for its lists, with the saved key, at the address that the app saved: the call cannot choose it.)
   // (Spaces and panels)
   spaces: ["space.list", "space.get", "panel.list", "panel.get", "panel.routine.review", "card.list", "card.get"],

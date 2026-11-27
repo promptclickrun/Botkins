@@ -249,7 +249,7 @@ test("page_fill accepts dotted field keys, resolves extension targets, surfaces 
     { id: 11, title: "Docs", url: "https://docs.example.test/guide", active: false },
   ];
   const secureFillCalls = [];
-  let nextFillOutcome = { filled: ["LoginModel.Email", "LoginModel.Password"], missing: [] };
+  let nextFillOutcome = { filled: ["LoginModel.Email", "LoginModel.Password"], missing: [], submitted: true };
 
   const { client } = fakeClient(async () => ({ data: { content: "ok" } }));
   const ws = new Workspace(dir, client, () => {}, {
@@ -320,6 +320,7 @@ test("page_fill accepts dotted field keys, resolves extension targets, surfaces 
     applied: true,
     filled: ["LoginModel.Email", "LoginModel.Password"],
     missing: [],
+    submitted: true,
   });
   assert.equal(secureFillCalls.length, 1);
   assert.equal(secureFillCalls[0].deviceId, "dev-chrome-1");

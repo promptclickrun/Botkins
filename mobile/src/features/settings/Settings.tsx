@@ -183,7 +183,7 @@ export default function Settings() {
           : []),
         ...(permission("mcp", "view") ? [row("tools", "Tools", <Row leading={<IconTile icon={Wrench} color={brand.clay} />} title="Tools" value={count(toolsOn, "on")} chevron onPress={go("/tools")} />, { words: "mcp servers apps" })] : []),
         ...(permission("skills", "read") ? [row("skills", "Skills", <Row leading={<IconTile icon={BookOpen} color={brand.clay} />} title="Skills" value={count(skillsOn, "on")} chevron onPress={go("/skills")} />, { words: "skill scripts commands plugins" })] : []),
-        ...(owner ? [row("credentials", "Credentials", <Row leading={<IconTile icon={KeyRound} color={brand.clay} />} title="Credentials" chevron onPress={go("/credentials")} />, { words: "keys secrets passwords vault 1password bitwarden proton" })] : []),
+        ...(owner ? [row("credentials", "Credentials", <Row leading={<IconTile icon={KeyRound} color={brand.clay} />} title="Credentials" chevron onPress={go("/credentials")} />, { words: "keys secrets passwords vault 1password bitwarden proton grants audit totp autofill" })] : []),
         ...(owner ? [row("wiki", "Wiki", <Row leading={<IconTile icon={LibraryBig} color={brand.clay} />} title="Wiki" chevron onPress={go("/wiki")} />, { words: "pages notes knowledge" })] : []),
       ],
     },

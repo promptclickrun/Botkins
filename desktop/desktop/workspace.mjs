@@ -118,6 +118,7 @@ import { currentBotBundle, templateBundle } from "./link/template-bundle.mjs";
 import { readWorkspace, WorkspaceWriter } from "./workspace-file.mjs";
 import { Access } from "./access.mjs";
 import { SessionSearch } from "./session-search.mjs";
+import { HowToBotkins } from "./how-to-botkins.mjs";
 import { memberCanSpaces, narrower, personName, speakerContext, speakerPrompt, turnAccess } from "./team-turn.mjs";
 import { Spaces } from "./spaces.mjs";
 
@@ -341,6 +342,8 @@ export class Workspace {
     this.wiki = new Wiki(this);
     // Searching past chats, across every harness (desktop/session-search.mjs)
     this.sessionSearch = new SessionSearch(this);
+    // How Botkins works, from the live FAQ at botkins.app/faq (desktop/how-to-botkins.mjs). Tests pass stand-ins in options.howTo.
+    this.howTo = new HowToBotkins(this, options?.howTo);
     // iMessage and Mail for bots, on a Mac (desktop/mactools.mjs). Tests pass stand-ins in options.macTools.
     this.mac = new MacTools(this, options?.macTools);
     // Tools a bot runs on a paired phone, through the phone link (desktop/phonetools.mjs).
@@ -1517,7 +1520,7 @@ export class Workspace {
       fixed: {
         head,
         group: chat.groupInstructions || "",
-        sessions: this.sessionSearch.context(),
+        sessions: this.sessionSearch.context() + this.howTo.context(),
         extra: chat.extraInstructions || "",
         channel: this.channels?.systemInstructionsForChat(chat) || "",
         profile: this.profileContext(bot.id),
@@ -1555,6 +1558,8 @@ export class Workspace {
       ...this.wiki.tools(bot, chat, run, task),
       // Past chats, from every harness (desktop/session-search.mjs). Read-only.
       ...this.sessionSearch.tools(bot, chat, run, task),
+      // How Botkins works, from its live FAQ (desktop/how-to-botkins.mjs). Read-only.
+      ...this.howTo.tools(bot, chat, run, task),
     ];
     // A helping teammate reads records and keeps its memory; it changes nothing else in the app.
     if (chat.helper) return records;
@@ -3395,7 +3400,7 @@ export const COMPUTER_USE_GUIDANCE =
   "\n4. The person's other computers (node_*): node_exec, the node file tools, node_computer_* by token; node_screen_input only for an app with no other way in." +
   "\n5. Clicking raw screen coordinates is the last resort, after a capture shows exactly where.";
 const SECRETS_GUIDANCE =
-  "\n\n## Secrets\nNever ask for a secret in chat, read a password field back, or pass a credential through a shell command or the clipboard, and never type one with browser_type or computer_act. Use the vault: find_saved_credentials lists names saved for a site; request_secure_input lets the person pick or enter the value (page_fill for a browser tab, browser_form or the desktop side_pane_web viewer; native_fill for an app's password field from computer_observe; https_form, bearer_get or git_read for a request); pass its handles unchanged to use_secure_input.";
+  "\n\n## Secrets\nNever ask for a secret in chat, read a password field back, or pass a credential through a shell command or the clipboard, and never type one with browser_type or computer_act. Use the vault: find_saved_credentials lists names saved for a site; request_secure_input lets the person pick or enter the value (page_fill for a browser tab, browser_form or the desktop side_pane_web viewer; native_fill for an app's password field from computer_observe; https_form, bearer_get or git_read for a request); pass its handles unchanged to use_secure_input. When offered, use_credential uses a saved credential by its ID from find_saved_credentials, after the person's approval or standing grant.";
 const REACTION_GUIDANCE =
   "\n\n## Replies\nAnswer in chat by default. When a thanks or an FYI needs no words, react with one emoji (react). To send nothing, reply with exactly [SILENT]. When the person reacts to your message with an emoji, Botkins gives you a turn that says so; it is not a message from them. Answer only if words add something: each reply is a model turn on their plan. In a chat with more than one person, @Name notifies that person.";
 
