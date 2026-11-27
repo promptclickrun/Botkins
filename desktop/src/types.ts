@@ -196,6 +196,7 @@ export type MessageFrom = {
 export type Message = {
   reactions?: { actor: string; emoji: string }[];
   clientMessageId?: string;
+  voiceId?: string;
   voiceCaption?: string;
   role: "assistant" | "user" | "command";
   text: string;

@@ -16,6 +16,7 @@ import { ComputerScreenGate } from "./ComputerScreen";
 import { AddToProjectDialog, canAddToProject } from "./ProjectExtras";
 import { ActivityPanel, CrewPanel, canStopHelpers, type InspectTarget } from "./ActivityInspector";
 import { crewOf, storySteps, type StoryUpdate } from "./activityStory";
+import { isVoiceTranscriptInterim } from "./chatTimeline";
 import type { Artifact, Bot, Chat, PanePanel, State } from "./types";
 import "./blocks.css";
 import "./sidepane.css";
@@ -169,7 +170,7 @@ export default function SidePane({
   const crew = useMemo(() => (crewRun ? crewOf(crewRun) : null), [crewRun?.steps, crewRun?.agents]);
   // The turn's updates: what the bot wrote before it moved on, keyed as the chat keys them.
   const updates = useMemo<StoryUpdate[]>(
-    () => (activityRun ? chat.messages.flatMap((m, i) => (m.interim && m.runId === activityRun.id && m.text.trim() ? [{ key: "interim-" + i, at: m.time ?? activityRun.time, text: m.text }] : [])) : []),
+    () => (activityRun ? chat.messages.flatMap((m, i) => (m.interim && !isVoiceTranscriptInterim(m) && m.runId === activityRun.id && m.text.trim() ? [{ key: "interim-" + i, at: m.time ?? activityRun.time, text: m.text }] : [])) : []),
     [chat.messages, activityRun?.id],
   );
   const hasActivity = !!activityRun && (storySteps(activityRun.steps, activityRun).length > 0 || !!activityRun.reasoning?.some((t) => t.text.trim()) || updates.length > 0);

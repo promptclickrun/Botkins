@@ -84,7 +84,7 @@ import { PersonBadge, useMentionDirectory, type ChatPerson } from "./PersonBadge
 import type { Bot, Chat, ChatMode, Message, Run, State } from "./types";
 import { closed, sessionTodos, TRANSFER_TODOS } from "../desktop/link/session-todos";
 import { CONTINUE_OPEN_STEPS, keptLine, openLine } from "./keep";
-import { orderedRunEvents, type RunTimelineEvent } from "./chatTimeline";
+import { chatDisplayEntries, isVoiceTranscriptInterim, messageTimelineOwner, orderedRunEvents, type RunTimelineEvent } from "./chatTimeline";
 import { teamCan } from "./teamAccess";
 import { regenerateTitleItem, useAsk, useMenu } from "./Pages";
 import "./canvas.css";
@@ -795,7 +795,6 @@ function ChatViewBody({
     );
   }
 
-  const timelineRendered = new Set<string>();
   const timelineBusy = latest?.status === "Working";
   function messageMenu(e: React.MouseEvent, message: Message, index: number) {
     if (window.getSelection()?.toString()) return;
@@ -871,8 +870,7 @@ function ChatViewBody({
     const live = run.status === "Working";
     const related = chat.messages
       .map((message, index) => ({ message, index }))
-      .filter(({ message }) => message.runId === run.id || message.steeredRunId === run.id || message.answer?.runId === run.id);
-    const initial = related.find(({ message }) => message.role === "user" && message.runId === run.id && !message.steeredRunId && !message.answer);
+      .filter(({ message }) => messageTimelineOwner(message) === run.id);
     const reply = related.filter(({ message }) => message.role === "assistant" && !message.interim && !isSilentMessage(message));
     const allSteps = run.steps ?? [];
     // The bot is on its work now: the turn runs and nothing waits for the person. Its live line
@@ -987,7 +985,6 @@ function ChatViewBody({
     );
     return (
       <Fragment key={`timeline-${run.id}`}>
-        {initial && timelineMessage(initial.message, initial.index)}
         {(live || !folded) && stepsMode === "open" && olderWork}
         {group ? groupTranscript : (live || !folded || islandMode) ? events.map((event) => <Fragment key={event.key}>{event.body}</Fragment>) : personBody}
         {/* A finished one-bot turn folds above its answer: the work, then the reply. With the island
@@ -1303,15 +1300,18 @@ function ChatViewBody({
             </article>
             )
           ))}
-          {chat.messages.map((m, i) => {
-            const timelineOwner = m.runId ?? m.steeredRunId ?? m.answer?.runId;
-            const run = timelineOwner ? runs.get(timelineOwner) : undefined;
-            if (run) {
-              if (timelineRendered.has(run.id)) return null;
-              timelineRendered.add(run.id);
-              return renderTimeline(run);
-            }
-            if (isSilentMessage(m) || (m.interim && thinkingMode !== "open")) return null;
+          {chatDisplayEntries(chat.messages, runs, timelineBusy ? latest : undefined).map((entry) => {
+            if (entry.kind === "timeline") return renderTimeline(entry.run);
+            const { message: m, index: i } = entry;
+            const interim = !!m.interim && !isVoiceTranscriptInterim(m);
+            if (isSilentMessage(m) || (interim && thinkingMode !== "open")) return null;
+            const prev = i > 0 ? chat.messages[i - 1] : undefined;
+            const samePrevAssistant =
+              prev?.role === "assistant" &&
+              !!prev.text &&
+              prev.botId === m.botId &&
+              (!prev.interim || isVoiceTranscriptInterim(prev)) &&
+              !messageTimelineOwner(prev);
             return (
               <Fragment key={i}>
                 {(m.text || m.actionCard || m.role !== "assistant") && (
@@ -1338,11 +1338,11 @@ function ChatViewBody({
                     className={messageClass(m, chat.messages, i)}
                     onContextMenu={e => messageMenu(e, m, loadedFrom + i)}
                   >
-                    {m.interim ? (
+                    {interim ? (
                       <InterimUpdate text={m.text} onToggle={disclosed} />
                     ) : m.role === "assistant" ? (
                       // Consecutive replies from one bot share its label: only the first of a run shows it.
-                      !(chat.messages[i - 1]?.role === "assistant" && chat.messages[i - 1].text && chat.messages[i - 1].botId === m.botId) && (
+                      !samePrevAssistant && (
                         <b className="speaker">
                           {(() => {
                             const who = group ? state.bots.find((b) => b.id === m.botId) : bot;
@@ -1356,7 +1356,7 @@ function ChatViewBody({
                     ) : (
                       <b className="command-label">Command output</b>
                     )}
-                    {!m.interim && <>
+                    {!interim && <>
                       {m.quote && <blockquote className="msg-quote">{m.quote}</blockquote>}
                       {m.actionCard ? (
                         <WorkflowActionCard
@@ -1399,11 +1399,6 @@ function ChatViewBody({
               </Fragment>
             );
           })}
-          {timelineBusy && !timelineRendered.has(latest.id) && (
-            <Fragment key={`unanchored-timeline-${latest.id}`}>
-              {renderTimeline(latest)}
-            </Fragment>
-          )}
           {busy && !timelineBusy && group && hasText && showUpdates && (
             <article className="assistant live">
               {speaker && (

@@ -369,6 +369,48 @@ test("a voice acknowledgement and tool share the input item even before its word
   await desk.liveTool("call", "ask_bot", { request: "Check the list" });
   desk.heard("call", "Anything on my list?", true, { item: "input" });
   assert.deepEqual(ws.chat(chat).messages.map(m => m.text), ["Anything on my list?", "Checking.", "ok"]);
+  const ack = ws.chat(chat).messages[1];
+  assert.equal(ack.role, "assistant");
+  assert.equal(ack.runId, undefined, "voice acknowledgement stays a standalone chat message, not part of the work block");
+  assert.equal(ack.interim, undefined);
+});
+
+test("live voice transcripts spoken while ask_bot is still running stay outside the running run", async t => {
+  const { VoiceDesk } = await import("../desktop/voicedesk.mjs");
+  const { fakeClient } = await import("./fake-copilot.mjs");
+  const dir = mkdtempSync(join(tmpdir(), "voice-midturn-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  let finishTurn;
+  const { client } = fakeClient(() => new Promise((resolve) => {
+    finishTurn = () => resolve({ data: { content: "Finished the refactor." } });
+  }));
+  const ws = new Workspace(dir, client, () => {});
+  const chat = ws.createChat("pip");
+  const desk = new VoiceDesk({ workspace: () => ws });
+  desk.noteSession("call", { chatId: chat });
+  desk.heard("call", "Refactor the parser", true, { item: "u1" });
+  const asking = desk.liveTool("call", "ask_bot", { request: "Refactor the parser" });
+  await new Promise((r) => setImmediate(r));
+  desk.heard("call", "Sure, starting on that now.", true, { role: "assistant", item: "a1" });
+  desk.heard("call", "How is it going?", true, { item: "u2" });
+  desk.heard("call", "Still running through the tests.", true, { role: "assistant", item: "a2" });
+  const during = ws.chat(chat).messages;
+  assert.deepEqual(during.map((m) => [m.role, m.text]), [
+    ["user", "Refactor the parser"],
+    ["assistant", "Sure, starting on that now."],
+    ["user", "How is it going?"],
+    ["assistant", "Still running through the tests."],
+  ]);
+  assert.ok(during[0].runId, "the ask_bot prompt owns the running turn");
+  for (const line of during.slice(1)) {
+    assert.equal(line.runId, undefined, "mid-turn voice lines are not attached to the running turn");
+    assert.equal(line.interim, undefined, "mid-turn voice lines are not marked as work-block interims");
+  }
+  finishTurn();
+  await asking;
+  const after = ws.chat(chat).messages;
+  assert.equal(after.at(-1).text, "Finished the refactor.");
+  assert.equal(after.at(-1).runId, during[0].runId);
 });
 
 test("longPromptCache is on by default, takes only on or off, and is kept across a restart", (t) => {

@@ -134,12 +134,16 @@ export type MessageOwnership = {
   byRun: Map<string, number[]>;
 };
 
+/** Assistant voice lines were previously saved as run-owned interims; keep them as normal chat messages. */
+export const isVoiceTranscriptInterim = (message: Pick<Message, "role" | "voiceId" | "interim">) =>
+  message.role === "assistant" && !!message.voiceId && !!message.interim;
+
 /** Index the loaded messages once: a run's block can then take its messages without rescanning. */
 export function indexMessageOwnership(messages: Message[]): MessageOwnership {
   const owners: (string | undefined)[] = [];
   const byRun = new Map<string, number[]>();
   messages.forEach((message, index) => {
-    const owner = personOf(message) ?? message.runId;
+    const owner = isVoiceTranscriptInterim(message) ? undefined : (personOf(message) ?? message.runId);
     owners.push(owner);
     if (!owner || isSilentMessage(message)) return;
     const indices = byRun.get(owner);
@@ -403,9 +407,11 @@ export function chatTimeline(input: TimelineInput): Item[] {
   const done = new Set<string>();
   const items: Item[] = [];
   const messageItem = (index: number, more: Partial<Extract<Item, { kind: "message" }>> = {}): Item => {
-    const message = messages[index];
+    const raw = messages[index];
+    const legacyVoice = isVoiceTranscriptInterim(raw);
+    const message = legacyVoice ? { ...raw, interim: undefined, runId: undefined } : raw;
     const receipt = isAnswerReceipt(message, index > 0 ? messages[index - 1] : undefined) || undefined;
-    return { kind: "message", key: "m" + (from + index), message, index: from + index, run: runOf(message.runId), end: false, latest: index === messages.length - 1, ...(receipt && { receipt }), ...more };
+    return { kind: "message", key: "m" + (from + index), message, index: from + index, run: legacyVoice ? undefined : runOf(message.runId), end: false, latest: index === messages.length - 1, ...(receipt && { receipt }), ...more };
   };
   // With the island, Open's steps and thoughts are in the island, never in the chat, and a finished turn is its receipt.
   const island = !!prefs.island;
@@ -440,7 +446,6 @@ export function chatTimeline(input: TimelineInput): Item[] {
     const isLive = !!run && run.id === current?.id;
     const starts = mine.filter((i) => messages[i].role === "user" && messages[i].runId === runId && personOf(messages[i]) === undefined);
     const start = starts[0];
-    if (start !== undefined) items.push(messageItem(start));
     const allReplies = mine.filter((i) => i !== start && personOf(messages[i]) === undefined && !messages[i].interim);
     // A run the computer kept going has a reply for each turn. Those before the last are drawn where they came
     // (all of them while it runs: the live text is the next one), and the last is the run's reply.
@@ -684,18 +689,71 @@ export function chatTimeline(input: TimelineInput): Item[] {
     items.push(...note());
   };
 
+  const startByRun = new Map<string, number>();
+  const lastIndexByRun = new Map<string, number>();
+  const lastNoRunReplyByRun = new Map<string, number>();
+  const seenRuns: string[] = [];
+  const seenRunIds = new Set<string>();
   for (let i = 0; i < messages.length; i++) {
     const owner = owners[i];
-    if (!owner) {
-      if (isSilentMessage(messages[i])) continue;
-      if (messages[i].interim) {
-        if (openUpdates && clean(messages[i].text)) items.push({ kind: "text", key: "i" + (from + i), text: clean(messages[i].text) });
-      } else items.push(messageItem(i));
-      continue;
+    if (!owner) continue;
+    lastIndexByRun.set(owner, i);
+    if (!seenRunIds.has(owner)) {
+      seenRunIds.add(owner);
+      seenRuns.push(owner);
     }
-    if (!done.has(owner)) block(owner);
+    const message = messages[i];
+    if (!startByRun.has(owner) && message.role === "user" && message.runId === owner && personOf(message) === undefined) {
+      startByRun.set(owner, i);
+    } else if (!runOf(owner) && !isSilentMessage(message) && personOf(message) === undefined && !message.interim) {
+      lastNoRunReplyByRun.set(owner, i);
+    }
   }
-  // The turn under way when none of its messages is loaded yet.
+  const anchorsAt = new Map<number, string[]>();
+  for (const runId of seenRuns) {
+    const run = runOf(runId);
+    if (!run || run.id === current?.id) continue;
+    const mine = ownership.byRun.get(runId) ?? [];
+    const start = startByRun.get(runId);
+    const hasReply = mine.some((i) => i !== start && personOf(messages[i]) === undefined && !messages[i].interim);
+    let anchor = lastIndexByRun.get(runId)!;
+    if (!hasReply && typeof run.finished === "number") {
+      while (anchor + 1 < messages.length) {
+        const nextOwner = owners[anchor + 1];
+        if (nextOwner && runOf(nextOwner)) break;
+        const nextTime = messages[anchor + 1].time;
+        if (typeof nextTime !== "number" || nextTime > run.finished) break;
+        anchor++;
+      }
+    }
+    const list = anchorsAt.get(anchor);
+    if (list) list.push(runId);
+    else anchorsAt.set(anchor, [runId]);
+  }
+
+  for (let i = 0; i < messages.length; i++) {
+    const owner = owners[i];
+    const run = runOf(owner);
+    if (!owner || !run) {
+      if (!isSilentMessage(messages[i])) {
+        if (messages[i].interim && !isVoiceTranscriptInterim(messages[i])) {
+          if (openUpdates && clean(messages[i].text)) items.push({ kind: "text", key: "i" + (from + i), text: clean(messages[i].text) });
+        } else {
+          const end = !!owner && i === lastNoRunReplyByRun.get(owner);
+          items.push(messageItem(i, end ? { end: true } : {}));
+        }
+      }
+    } else if (startByRun.get(owner) === i) {
+      items.push(messageItem(i));
+    }
+    const anchored = anchorsAt.get(i);
+    if (anchored) {
+      for (const runId of anchored) {
+        if (!done.has(runId)) block(runId);
+      }
+    }
+  }
+  // The turn under way: always after any standalone messages (such as live voice) that happened while it ran.
   if (current && !done.has(current.id)) block(current.id);
   else if (streaming && !current) items.push(...live(undefined, [], openThinking ? (input.live?.thinking ?? "") : "", input.live?.stream ?? "", 0, undefined, "raw"));
 

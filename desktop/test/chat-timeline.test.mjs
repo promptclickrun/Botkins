@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { orderedRunEvents } from "../src/chatTimeline.ts";
+import { chatDisplayEntries, isVoiceTranscriptInterim, orderedRunEvents } from "../src/chatTimeline.ts";
 
 const run = {
   id: "run-1",
@@ -64,4 +64,89 @@ test("group turns interleave each speaker's reply with activity without duplicat
   assert.deepEqual(events.map((event) => event.kind), ["interim", "reasoning", "reply", "command", "interim", "person", "step", "reply"]);
   assert.deepEqual(events.filter((event) => event.kind === "reply").map((event) => event.value.botId), ["pip", "scout"]);
   assert.equal(events.filter((event) => event.kind === "reply").length, 2);
+});
+
+test("live voice transcripts render outside the running turn's work block in time order", () => {
+  const working = { ...run, id: "run-live", status: "Working", finished: undefined };
+  const messages = [
+    { role: "user", text: "Refactor the parser", runId: "run-live", time: 100 },
+    { role: "assistant", text: "Reading parser.ts", runId: "run-live", interim: true, time: 110 },
+    { role: "user", text: "How is it going?", voiceId: "call:u1", time: 200 },
+    { role: "assistant", text: "Still working on parser.ts.", voiceId: "call:a1", time: 205 },
+  ];
+  const entries = chatDisplayEntries(messages, new Map([[working.id, working]]), working);
+  assert.deepEqual(
+    entries.map((e) => (e.kind === "message" ? `${e.message.role}:${e.message.text}` : `timeline:${e.run.id}`)),
+    [
+      "user:Refactor the parser",
+      "user:How is it going?",
+      "assistant:Still working on parser.ts.",
+      "timeline:run-live",
+    ],
+  );
+  assert.deepEqual(
+    orderedRunEvents(working, messages).filter((e) => e.kind === "interim").map((e) => e.value.text),
+    ["Reading parser.ts"],
+  );
+
+  // When the turn finishes, its work block and final reply land at the end without reordering earlier voice lines.
+  const finished = { ...working, status: "Completed", finished: 300 };
+  const completedMessages = [...messages, { role: "assistant", text: "Refactor done.", runId: "run-live", time: 300 }];
+  const after = chatDisplayEntries(completedMessages, new Map([[finished.id, finished]]));
+  assert.deepEqual(
+    after.map((e) => (e.kind === "message" ? `${e.message.role}:${e.message.text}` : `timeline:${e.run.id}`)),
+    [
+      "user:Refactor the parser",
+      "user:How is it going?",
+      "assistant:Still working on parser.ts.",
+      "timeline:run-live",
+    ],
+  );
+});
+
+test("ask_bot voice acknowledgements (including legacy interim-tagged lines) stay outside the work block", () => {
+  const working = { ...run, id: "run-ask", status: "Working", finished: undefined };
+  const messages = [
+    { role: "user", text: "Check my list", voiceId: "call:u1", runId: "run-ask", time: 100 },
+    { role: "assistant", text: "Checking now.", voiceId: "call:a1", runId: "run-ask", interim: true, time: 102 },
+    { role: "user", text: "Thanks", voiceId: "call:u2", time: 150 },
+    { role: "assistant", text: "Sure thing.", voiceId: "call:a2", time: 155 },
+  ];
+  assert.equal(isVoiceTranscriptInterim(messages[1]), true);
+  assert.deepEqual(
+    orderedRunEvents(working, messages).filter((e) => e.kind === "interim"),
+    [],
+  );
+  const entries = chatDisplayEntries(messages, new Map([[working.id, working]]), working);
+  assert.deepEqual(
+    entries.map((e) => (e.kind === "message" ? `${e.message.role}:${e.message.text}` : `timeline:${e.run.id}`)),
+    [
+      "user:Check my list",
+      "assistant:Checking now.",
+      "user:Thanks",
+      "assistant:Sure thing.",
+      "timeline:run-ask",
+    ],
+  );
+});
+
+test("a finished run without a reply stays between mid-turn and post-turn voice messages", () => {
+  const stopped = { ...run, id: "run-stopped", status: "Stopped", finished: 200 };
+  const messages = [
+    { role: "user", text: "Run the build", runId: "run-stopped", time: 100 },
+    { role: "user", text: "Still running?", voiceId: "call:u1", time: 150 },
+    { role: "assistant", text: "Yep, compiling.", voiceId: "call:a1", time: 155 },
+    { role: "user", text: "What happened?", voiceId: "call:u2", time: 250 },
+  ];
+  const entries = chatDisplayEntries(messages, new Map([[stopped.id, stopped]]));
+  assert.deepEqual(
+    entries.map((e) => (e.kind === "message" ? `${e.message.role}:${e.message.text}` : `timeline:${e.run.id}`)),
+    [
+      "user:Run the build",
+      "user:Still running?",
+      "assistant:Yep, compiling.",
+      "timeline:run-stopped",
+      "user:What happened?",
+    ],
+  );
 });
