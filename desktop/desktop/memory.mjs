@@ -126,7 +126,7 @@ export class Memory {
    * nobody watching, so they can't write what every later conversation will be told.
    */
   tools(bot, chat, run, task) {
-    const readOnly = !!(chat.helper || run?.panelId || run?.scheduleId || run?.taskId);
+    const readOnly = !!(chat.helper || run?.panelId || run?.scheduleId || run?.taskId || run?.workflowRunId);
     let changes = 0;
     const tool = (name, description, properties, required, handler) =>
       defineTool(name, {

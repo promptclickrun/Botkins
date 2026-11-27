@@ -114,7 +114,7 @@ function starterTemplates(bots: Bot[]): Array<{ id: string; name: string; descri
             label: "Summarize PR risk",
             position: { x: 350, y: 120 },
             config: {
-              prompt: "PR #{{number}} ({{title}}) by {{author}} has status {{status}}. Assess risk briefly.",
+              prompt: "PR #{{number}} ({{title}}) by {{author}} has state {{state}}. Assess risk briefly.",
               outputFields: [
                 { name: "risk", type: "string", choices: ["low", "medium", "high"] },
                 { name: "summary", type: "string" },

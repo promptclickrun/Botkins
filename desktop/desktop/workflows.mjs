@@ -16,6 +16,7 @@ import {
   nodeOutputFields,
   resolveTemplate,
   parseNeedsYou,
+  frameExternalPrompt,
   lookupField,
   evaluateCondition,
   analyzeWorkflowFields,
@@ -1722,8 +1723,9 @@ export class Workflows {
   /** Runs an Agent step by handing off to a Botkins bot via `ws.send(...)`; ends when its turn ends. */
   async executeAgentNode(wf, run, node) {
     const bot = this.resolveBotForNode(node);
-    const basePrompt = resolveTemplate(node.config?.prompt || "", run.context);
-    if (!basePrompt.trim()) throw new Error("Agent step prompt is empty.");
+    const stepPrompt = resolveTemplate(node.config?.prompt || "", run.context);
+    if (!stepPrompt.trim()) throw new Error("Agent step prompt is empty.");
+    const basePrompt = frameExternalPrompt(stepPrompt, run);
 
     const outputFields = Array.isArray(node.config?.outputFields)
       ? node.config.outputFields.filter((f) => f && isValidFieldName(f.name))
@@ -1808,8 +1810,9 @@ export class Workflows {
 
   /** Runs a one-shot LLM model step with NO tools and optional structured JSON output fields. */
   async executeModelNode(wf, run, node) {
-    const prompt = resolveTemplate(node.config?.prompt || "", run.context);
-    if (!prompt.trim()) throw new Error("Model step prompt is empty.");
+    const stepPrompt = resolveTemplate(node.config?.prompt || "", run.context);
+    if (!stepPrompt.trim()) throw new Error("Model step prompt is empty.");
+    const prompt = frameExternalPrompt(stepPrompt, run);
     const outputFields = Array.isArray(node.config?.outputFields)
       ? node.config.outputFields.filter((f) => f && isValidFieldName(f.name))
       : [];
