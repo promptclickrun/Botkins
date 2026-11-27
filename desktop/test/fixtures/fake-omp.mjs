@@ -47,18 +47,27 @@ let aborted = false;
 // "kids:<name>:<outcome>,…" in a prompt spawns one background child per entry (outcome ok|bad|cancel).
 let subagentLevel = "off";
 const kidReplies = new Map();
-const lifecycle = (payload) => subagentLevel !== "off" && send({ type: "subagent_lifecycle", payload: { agent: "task", agentSource: "bundled", parentToolCallId: "call_task|fc_t", detached: true, ...payload } });
-function spawnKids(spec) {
+const lifecycle = (payload) => subagentLevel !== "off" && send({ type: "subagent_lifecycle", payload: { agent: "task", agentSource: "bundled", detached: true, ...payload } });
+let taskCalls = 0;
+// As OMP does: the `task` call is asked about first (Botkins' extension), then its children start as
+// background jobs naming it ("<call id>|<item id>"). "kids:a:ok@300" ends child a 300 ms later, after the turn.
+async function spawnKids(spec) {
+  const toolCallId = "task-" + ++taskCalls;
+  const answer = await ask("botkins:permission " + JSON.stringify({ toolCallId, toolName: "task", input: { tasks: spec } }));
+  log({ taskCall: { toolCallId, answer: answer.value } });
+  if (answer.value !== "allow" && answer.value !== "more") return;
   spec.split(",").forEach((entry, index) => {
-    const [name, outcome = "ok"] = entry.split(":");
+    const [name, rest = "ok"] = entry.split(":");
+    const [outcome, delay] = rest.split("@");
     const id = "kid-" + name;
-    lifecycle({ id, index, status: "started" });
+    const parentToolCallId = toolCallId + "|fc_" + taskCalls;
+    lifecycle({ id, index, parentToolCallId, status: "started" });
     setTimeout(() => {
       if (outcome === "ok") kidReplies.set(id, "kid " + name);
       // A duplicate frame, as a reconnecting bus can send: Botkins must not run a hook twice for it.
-      lifecycle({ id, index, status: outcome === "ok" ? "completed" : outcome === "cancel" ? "aborted" : "failed" });
-      if (outcome === "ok") lifecycle({ id, index, status: "completed" });
-    }, 20 + index * 20);
+      lifecycle({ id, index, parentToolCallId, status: outcome === "ok" ? "completed" : outcome === "cancel" ? "aborted" : "failed" });
+      if (outcome === "ok") lifecycle({ id, index, parentToolCallId, status: "completed" });
+    }, delay ? Number(delay) : 20 + index * 20);
   });
 }
 
@@ -67,7 +76,7 @@ async function turn(text) {
   send({ type: "agent_start" });
   send({ type: "message_start", message: { role: "user" } });
   const kids = /kids:(\S+)/.exec(text);
-  if (kids) spawnKids(kids[1]);
+  if (kids) await spawnKids(kids[1]);
   const bash = /bash:(\S+)/.exec(text);
   const mcp = /mcp:([a-z0-9_-]+):([a-z0-9_-]+)/.exec(text);
   const own = /own:([a-z0-9_-]+)/.exec(text);

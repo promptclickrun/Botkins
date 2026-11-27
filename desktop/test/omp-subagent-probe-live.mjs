@@ -145,7 +145,7 @@ try {
   }
 } catch (error) {
   failed = true;
-  console.log("FAILED: OMP could not run the probe: " + String(error?.message ?? error).slice(0, 300));
+  console.log("FAILED: OMP could not run the probe: " + String(error?.message ?? error).slice(0, 300) + (process.env.PROBE_DEBUG ? "\n" + error?.stack : ""));
 } finally {
   await new Promise((resolve) => model.close(resolve));
   rmSync(root, { recursive: true, force: true });

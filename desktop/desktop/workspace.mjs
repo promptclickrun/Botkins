@@ -1898,7 +1898,9 @@ export class Workspace {
     const hooks = access.plugins && fullPlugins && !(chat.subagent && !parentHooks)
       ? (chat.subagent ? childHooks(pluginSpec.hooks, chat.subagentId) : pluginSpec.hooks)
       : undefined;
-    if (task && !chat.helper) task.pluginHooks = hooks ?? null;
+    // Whether this turn's plugins may still run, asked by a hook that fires after the turn moved on.
+    const pluginAuthorized = hooks ? () => this.plugins.authorizes(bot.id, pluginSpec.ids ?? []) : undefined;
+    if (task && !chat.helper) Object.assign(task, { pluginHooks: hooks ?? null, pluginAuthorized: pluginAuthorized ?? null });
     // What the session was told when it began, or what it begins with now (desktop/session-prompts.mjs).
     const prompt = this.sessionPrompt(chat, bot, provider, hosted?.model ?? choice, providerSessionId, providerEstablished);
     // Servers with views (and the Composio tool) are run by Botkins, when they answer; their tools
@@ -1950,6 +1952,7 @@ export class Workspace {
       // A plugin's own folder is never handed on: the runtime would read its hooks and tools by itself.
       plugins: [...(access.plugins ? pluginSpec.directories : [])],
       pluginHooks: hooks,
+      ...(pluginAuthorized && { pluginAuthorized }),
       pluginRevision: this.plugins.generation,
       history: () => chat.helper ? (chat.helperMessages ?? []) : (chat.compacted ? chat.messages.slice(chat.compacted.through) : chat.messages ?? []),
       handlers: handlers || null,

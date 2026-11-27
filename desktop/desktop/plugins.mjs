@@ -754,6 +754,17 @@ export class Plugins {
     stops.plugins.clear();
     Object.assign(stops, { total: 0, toldTotal: false });
   }
+  /**
+   * Whether every one of these plugins may still run for this bot: installed, on, for this bot,
+   * ready and its copy intact. A hook that fires after its turn (a child that ends later) asks first.
+   */
+  authorizes(botId, ids) {
+    if (!Array.isArray(ids) || !ids.length) return false;
+    return ids.every((id) => {
+      const row = this.records.find((r) => r.preview.id === id);
+      return !!row && scoped(row, botId) && this.intact(row) && this.public(row).status === "ready";
+    });
+  }
   async session(bot, chat, { skillsOnly = false } = {}) {
     // A copy that is no longer the reviewed bytes is not used, and the app shows why.
     const scopedRows = this.records.filter((r) => scoped(r, bot.id));

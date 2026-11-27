@@ -209,3 +209,76 @@ test("without a subagent hook, Botkins doesn't ask OMP for its subagent frames",
   await session.close();
   await provider.stop();
 });
+
+// Two plugins with subagent hooks, each writing to its own log, for the warm-process cases below.
+function lifecyclePlugin(name) {
+  const folder = join(root, "life-" + name);
+  const logFile = join(root, "life-" + name + ".log");
+  mkdirSync(folder, { recursive: true });
+  writeFileSync(join(folder, "plugin.json"), JSON.stringify({ name: "life-" + name, hooks: "hooks.json" }));
+  writeFileSync(join(folder, "hook.mjs"), 'import { appendFileSync } from "node:fs";\nconst [event, log] = process.argv.slice(2);\nlet d = ""; process.stdin.on("data", (b) => (d += b)).on("end", () => { const x = JSON.parse(d); appendFileSync(log, JSON.stringify({ event, agentId: x.agentId, response: x.response, parentAgentId: x.parentAgentId }) + "\\n"); console.log("{}"); });\n');
+  writeFileSync(join(folder, "hooks.json"), JSON.stringify({ hooks: Object.fromEntries(["subagentStart", "subagentStop"].map((event) => [event, [{ type: "command", command: `node "\${PLUGIN_ROOT}/hook.mjs" ${event} ${JSON.stringify(logFile)}` }]])) }));
+  const record = { id: "life-" + name, folder, config: [], status: "ready", enabled: true, bots: "all" };
+  const events = () => (existsSync(logFile) ? readFileSync(logFile, "utf8").trim().split("\n").filter(Boolean).map((line) => JSON.parse(line)) : []);
+  return { record, events };
+}
+const settle = async (until, ms = 2000) => {
+  for (let waited = 0; waited < ms && !until(); waited += 20) await new Promise((resolve) => setTimeout(resolve, 20));
+};
+
+test("an OMP child reports only to the turn that started it, never to a later turn's plugin on the same warm process", { skip }, async () => {
+  const first = lifecyclePlugin("first");
+  const later = lifecyclePlugin("later");
+  const { provider, seen, spec } = setup();
+  const open = (plugins, more = {}) => {
+    const session = pluginSession(plugins, { dir: join(root, "warm"), chatId: "chat-1", botId: "bot-1" });
+    return provider.openSession({ ...spec, mcpServers: session.mcpServers, plugins: session.directories, pluginHooks: session.hooks, pluginAuthorized: () => true, ...more });
+  };
+  // Turn 1: plugin "first", whose child ends 400 ms later, after the turn.
+  const one = await open([first.record]);
+  await one.send({ prompt: "kids:slow:ok@400" });
+  await one.close();
+  // Turn 2 on the same process (warm), with only plugin "later" and a child of its own.
+  const two = await open([later.record]);
+  await two.send({ prompt: "kids:mine:ok" });
+  await settle(() => first.events().length >= 2 && later.events().length >= 2);
+  await new Promise((resolve) => setTimeout(resolve, 150));
+  assert.equal(seen().filter((entry) => entry.started).length, 1, "both turns ran on one OMP process");
+  // Each plugin hears its own turn's child, start and stop once each, and nothing of the other's.
+  assert.deepEqual(first.events().map((e) => [e.event, e.agentId, e.response ?? null]), [["subagentStart", "kid-slow", null], ["subagentStop", "kid-slow", "kid slow"]]);
+  assert.deepEqual(later.events().map((e) => [e.event, e.agentId, e.response ?? null]), [["subagentStart", "kid-mine", null], ["subagentStop", "kid-mine", "kid mine"]]);
+  await two.close();
+  await provider.stop();
+});
+
+test("an OMP child of a turn with no subagent hook reports to no later turn's hook", { skip }, async () => {
+  const later = lifecyclePlugin("enabled-later");
+  const { provider, spec } = setup({}, [record()], { hooks: false });
+  // Turn 1: no plugin access (no hooks); its child ends after turn 2 has a subagent hook.
+  const one = await provider.openSession(spec);
+  await one.send({ prompt: "kids:orphan:ok@300" });
+  await one.close();
+  const session = pluginSession([later.record], { dir: join(root, "warm2"), chatId: "chat-1", botId: "bot-1" });
+  const two = await provider.openSession({ ...spec, pluginHooks: session.hooks, pluginAuthorized: () => true });
+  await two.send({ prompt: "hello" });
+  await new Promise((resolve) => setTimeout(resolve, 500));
+  assert.deepEqual(later.events(), [], "the later turn's newly enabled hook hears nothing of the earlier child");
+  await two.close();
+  await provider.stop();
+});
+
+test("an OMP child whose plugin is switched off before it ends delivers no subagentStop", { skip }, async () => {
+  const plugin = lifecyclePlugin("revoked");
+  const { provider, spec } = setup();
+  let allowed = true;
+  const session = pluginSession([plugin.record], { dir: join(root, "warm3"), chatId: "chat-1", botId: "bot-1" });
+  const one = await provider.openSession({ ...spec, pluginHooks: session.hooks, pluginAuthorized: () => allowed });
+  await one.send({ prompt: "kids:late:ok@300,early:ok@20" });
+  await settle(() => plugin.events().some((e) => e.event === "subagentStop"));
+  // The plugin is switched off while "late" still runs.
+  allowed = false;
+  await new Promise((resolve) => setTimeout(resolve, 500));
+  assert.deepEqual(plugin.events().map((e) => [e.event, e.agentId]).sort(), [["subagentStart", "kid-early"], ["subagentStart", "kid-late"], ["subagentStop", "kid-early"]]);
+  await one.close();
+  await provider.stop();
+});
