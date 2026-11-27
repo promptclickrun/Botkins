@@ -114,7 +114,7 @@ describe("iMessage adapter — normalization and local imsg transport", () => {
     assert.equal(dm.sender.id, "user-101");
     assert.equal(dm.sender.display, "Alex");
     assert.equal(dm.isDirect, true);
-    assert.equal(dm.isFromSelf, false);
+    assert.equal(dm.isSelf, undefined);
     assert.equal(dm.text, "Hello from iMessage");
 
     const group = normalizeImsgEvent(
@@ -139,7 +139,7 @@ describe("iMessage adapter — normalization and local imsg transport", () => {
       text: "Echo",
       is_from_me: true,
     });
-    assert.equal(selfMsg.isFromSelf, true);
+    assert.equal(selfMsg.isSelf, true);
   });
 
   it("spawns imsg watch --json without a shell and delivers inbound events", async () => {

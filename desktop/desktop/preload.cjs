@@ -406,6 +406,7 @@ for (const name of [
   "unqueue",
   "sendNow",
   "reactToMessage",
+  "chat.cardAction",
   "showEmojiPanel",
   "forkChat",
   "retry",

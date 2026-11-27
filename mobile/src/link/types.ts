@@ -365,6 +365,42 @@ export type Message = {
   receipt?: boolean;
   /** What the person answered to a request in a turn ("turn-timeline-v1"): `text` is the answer in words, never a secret. */
   answer?: { runId: string; requestId: string; kind: AgentRequest["kind"]; title: string };
+  /** Metadata when this message was posted by a Workflow Output step. */
+  fromWorkflow?: { workflowId: string; workflowName: string; runId: string };
+  /** Interactive action card attached by a Workflow Output step (dispatch/dismiss + needs-you badge). */
+  actionCard?: WorkflowActionCard;
+};
+
+export type WorkflowActionCard = {
+  id: string;
+  title: string;
+  subtitle?: string;
+  blocks: PanelBlock[];
+  link?: { label: string; url: string };
+  needsYou: boolean;
+  dispatch?: {
+    botId?: string;
+    botName?: string;
+    label?: string;
+    chatTitle?: string;
+    prompt: string;
+  };
+  state: "open" | "dispatched" | "dismissed";
+  dispatchedChatId?: string;
+  dispatchedBotId?: string;
+  dispatchedBotName?: string;
+  actedBy?: string;
+  actedAt?: number;
+};
+
+export type ChatCardActionResult = {
+  ok: true;
+  state: "dispatched" | "dismissed";
+  chatId?: string;
+  botId?: string;
+  botName?: string;
+  alreadyDispatched?: boolean;
+  card: WorkflowActionCard;
 };
 /**
  * What the composer sends for a mention; the computer checks it and fills in the label. "board" is a
@@ -2047,6 +2083,7 @@ export type Calls = {
   regenerateChatTitle(id: string): string;
   deleteChat(id: string): void;
   reactToMessage(chatId: string, index: number, time: number | null, emoji: string): NonNullable<Message["reactions"]>;
+  "chat.cardAction"(chatId: string, target: number | string, action: "dispatch" | "dismiss"): ChatCardActionResult;
   forkChat(chatId: string, messageIndex: number): string;
   warmChat(chatId: string): void;
   startProjectChat(botIds: string[], projectId: string, mode?: ChatMode, folder?: string | null): string;

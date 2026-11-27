@@ -1089,3 +1089,55 @@ test("Phone notifications policy defaults off, normalizes legacy records, persis
 
   await ws.channels.stopAll();
 });
+
+test("ChannelManager drops iMessage is_from_me self echoes (and legacy isFromSelf payloads) without dispatching a turn", async (t) => {
+  const { ws, botId, prompts } = setupWorkspace(t, { replyFn: () => "Real reply" });
+  const { normalizeImsgEvent } = await import("../desktop/channels/adapters/imessage.mjs");
+  const fake = makeFakeAdapter();
+  ws.channels.registerAdapter("imessage", fake.factory);
+
+  const conn = await ws.channels.add({
+    kind: "imessage",
+    label: "imsg",
+    botId,
+    policy: { dm: "open" },
+    secrets: {},
+  });
+
+  // Normalized `imsg watch` outbound event (`is_from_me: true`)
+  const selfEvent = normalizeImsgEvent({
+    chat_id: 3,
+    sender: "bot@example.com",
+    text: "Bot reply echo",
+    is_from_me: true,
+  });
+  await fake.deliver(selfEvent);
+
+  // Legacy node-host event still carrying `isFromSelf: true`
+  await fake.deliver({
+    channel: "imessage",
+    conversationId: "3",
+    sender: { id: "bot@example.com", display: "Bot" },
+    isDirect: true,
+    isFromSelf: true,
+    text: "Legacy echo",
+  });
+
+  // Genuine inbound DM still dispatches normally
+  const inboundEvent = normalizeImsgEvent({
+    chat_id: 3,
+    sender: "+12025550123",
+    text: "Hello from phone",
+    is_from_me: false,
+  });
+  await fake.deliver(inboundEvent);
+  await waitFor(() => fake.sent.length === 1);
+
+  assert.equal(prompts.length, 1);
+  assert.match(prompts[0], /Hello from phone/);
+  const ignored = ws.channels.logs(conn.id).filter((e) => e.decision === "ignored_bot");
+  assert.equal(ignored.length, 2);
+  assert.ok(ignored.every((e) => e.reason === "self_message"));
+
+  await ws.channels.stopAll();
+});

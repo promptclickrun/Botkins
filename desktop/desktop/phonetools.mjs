@@ -58,7 +58,7 @@ export class PhoneTools {
   }
   /** The session tools for one turn. */
   tools(bot, chat, run, task) {
-    const attended = !(chat.helper || run?.panelId || run?.scheduleId || run?.taskId);
+    const attended = !(chat.helper || run?.panelId || run?.scheduleId || run?.taskId || run?.workflowRunId);
     return this.listed()
       .filter((tool) => tool.readOnly === true || attended)
       .map((tool) =>

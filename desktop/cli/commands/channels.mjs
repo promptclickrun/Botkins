@@ -120,7 +120,7 @@ export const channelsCommands = {
             ...(context.options.dm && { policy: { dm: context.options.dm } }),
             secrets,
           };
-          const created = await context.client.call("channels.add", [payload]);
+          const created = await context.client.call("channels.add", payload);
           context.print(created, (c) => `Added ${c.kind} channel "${c.label}" (${c.id}). Status: ${c.status?.state ?? "configured"}.`);
         },
       },
@@ -131,7 +131,7 @@ export const channelsCommands = {
         async run(context) {
           const ref = context.args[0];
           if (!ref) throw usage("Specify a channel ID or label.");
-          const res = await context.client.call("channels.remove", [ref]);
+          const res = await context.client.call("channels.remove", ref);
           context.print(res, (r) => `Removed channel ${r.id}.`);
         },
       },
@@ -142,7 +142,7 @@ export const channelsCommands = {
         async run(context) {
           const [ref, botRef] = context.args;
           if (!ref || !botRef) throw usage("Usage: botkins channels bind <channel> <bot>");
-          const updated = await context.client.call("channels.bind", [ref, botRef]);
+          const updated = await context.client.call("channels.bind", ref, botRef);
           context.print(updated, (c) => `Bound "${c.label}" (${c.id}) to bot ${c.botId}.`);
         },
       },
@@ -194,7 +194,7 @@ export const channelsCommands = {
           if (Object.keys(limits).length) patch.limits = limits;
 
           if (!Object.keys(patch).length) throw usage("Provide at least one policy option to change.");
-          const updated = await context.client.call("channels.policy", [ref, patch]);
+          const updated = await context.client.call("channels.policy", ref, patch);
           context.print(updated, (c) =>
             `Updated policy for "${c.label}": dm=${c.policy.dm}, groups=${c.policy.groups.enabled ? c.policy.groups.mode : "off"}, notifyPhone=${c.policy.notifyPhone ? "on" : "off"}, tools=${c.policy.toolProfile}, dailyCap=${c.policy.limits.dailyTurnCap}.`,
           );
@@ -209,7 +209,7 @@ export const channelsCommands = {
             usage: "botkins channels pair list [<channel>]",
             async run(context) {
               const ref = context.args[0] ?? null;
-              const items = await context.client.call("channels.pair.list", [ref]);
+              const items = await context.client.call("channels.pair.list", ref);
               context.print(items, (rows) => {
                 if (!rows.length) return "No pending pairing requests.";
                 return table(
@@ -225,7 +225,7 @@ export const channelsCommands = {
             async run(context) {
               const [code, ref] = context.args;
               if (!code) throw usage("Specify the pairing code to approve.");
-              const res = await context.client.call("channels.pair.approve", [code, ref ?? null]);
+              const res = await context.client.call("channels.pair.approve", code, ref ?? null);
               context.print(res, (r) => `Approved ${r.senderId} (${r.display || r.senderId}) on ${r.connectionId}.`);
             },
           },
@@ -235,7 +235,7 @@ export const channelsCommands = {
             async run(context) {
               const [code, ref] = context.args;
               if (!code) throw usage("Specify the pairing code to deny.");
-              const res = await context.client.call("channels.pair.deny", [code, ref ?? null]);
+              const res = await context.client.call("channels.pair.deny", code, ref ?? null);
               context.print(res, (r) => `Denied ${r.senderId} on ${r.connectionId}.`);
             },
           },
@@ -248,7 +248,7 @@ export const channelsCommands = {
         async run(context) {
           const ref = context.args[0];
           if (!ref) throw usage("Specify a channel ID or label.");
-          const updated = await context.client.call("channels.pause", [ref]);
+          const updated = await context.client.call("channels.pause", ref);
           context.print(updated, (c) => `Paused "${c.label}" (${c.id}).`);
         },
       },
@@ -259,7 +259,7 @@ export const channelsCommands = {
         async run(context) {
           const ref = context.args[0];
           if (!ref) throw usage("Specify a channel ID or label.");
-          const updated = await context.client.call("channels.resume", [ref]);
+          const updated = await context.client.call("channels.resume", ref);
           context.print(updated, (c) => `Resumed "${c.label}" (${c.id}). Status: ${c.status?.state ?? "active"}.`);
         },
       },
@@ -270,7 +270,7 @@ export const channelsCommands = {
         async run(context) {
           const ref = context.args[0];
           if (!ref) throw usage("Specify a channel ID or label.");
-          const res = await context.client.call("channels.test", [ref]);
+          const res = await context.client.call("channels.test", ref);
           context.print(res, (r) => (r.ok ? `OK: ${r.detail || "Connected"}` : `FAILED: ${r.detail || "Unable to connect"}`));
         },
       },
@@ -284,7 +284,7 @@ export const channelsCommands = {
         async run(context) {
           const ref = context.args[0] ?? null;
           const limit = parsePositiveInt(context.options.limit, "limit") ?? 50;
-          const entries = await context.client.call("channels.logs", [ref, { limit }]);
+          const entries = await context.client.call("channels.logs", ref, { limit });
           context.print(entries, (rows) => {
             if (!rows.length) return "No channel audit entries.";
             return table(

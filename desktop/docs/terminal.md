@@ -370,6 +370,7 @@ botkins chats flags "Plan for" --pin
 botkins chats regenerate-title "Plan for"
 botkins chats fork "Plan for" --at 4
 botkins chats react "Plan for" 4 👍
+botkins chats card "Plan for" card_abc1234567 dispatch
 botkins chats group Nova Orbit --title "Launch team"
 botkins chats project "Launch team" Website --mode plan
 botkins chats queue "Plan for"

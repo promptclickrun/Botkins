@@ -494,3 +494,46 @@ test("an error line keeps a name as it was given, and a plugin's text is written
   // The --json document keeps the message as it is.
   assert.equal((await botkins(["plugins", "list", "--json"], { service: plugins })).json().error.message, "The plugin a​b‍ failed.");
 });
+
+test("channels CLI passes flat positional arguments to control-socket methods (no extra array wrapper)", async () => {
+  const created = { id: "ch_1", kind: "imessage", label: "imsg", botId: "b1", status: { state: "connected" } };
+  const service = fakeService({
+    "channels.add": (payload) => {
+      assert.equal(Array.isArray(payload), false);
+      assert.equal(payload.kind, "imessage");
+      assert.equal(payload.label, "imsg");
+      assert.equal(payload.bot, "Gordie");
+      assert.deepEqual(payload.policy, { dm: "open" });
+      return created;
+    },
+    "channels.bind": (ref, botRef) => ({ ...created, id: ref, botId: botRef }),
+    "channels.policy": (ref, patch) => ({ ...created, id: ref, policy: { dm: patch.dm ?? "open", groups: { enabled: false, mode: "mention" }, toolProfile: "restricted", limits: { dailyTurnCap: 200 } } }),
+    "channels.pause": (ref) => ({ ...created, id: ref }),
+    "channels.resume": (ref) => ({ ...created, id: ref }),
+    "channels.test": () => ({ ok: true, detail: "imsg ready" }),
+    "channels.logs": () => [],
+    "channels.pair.list": () => [],
+    "channels.pair.approve": (code, ref) => ({ senderId: "u1", connectionId: ref ?? "ch_1", code }),
+    "channels.pair.deny": (code, ref) => ({ senderId: "u1", connectionId: ref ?? "ch_1", code }),
+    "channels.remove": (ref) => ({ id: ref }),
+  });
+
+  const runs = [
+    [["channels", "add", "imessage", "--label", "imsg", "--bot", "Gordie", "--dm", "open"], ["channels.add", { kind: "imessage", label: "imsg", bot: "Gordie", enabled: true, policy: { dm: "open" }, secrets: {} }]],
+    [["channels", "bind", "ch_1", "Gordie"], ["channels.bind", "ch_1", "Gordie"]],
+    [["channels", "policy", "ch_1", "--dm", "allowlist"], ["channels.policy", "ch_1", { dm: "allowlist" }]],
+    [["channels", "pause", "ch_1"], ["channels.pause", "ch_1"]],
+    [["channels", "resume", "ch_1"], ["channels.resume", "ch_1"]],
+    [["channels", "test", "ch_1"], ["channels.test", "ch_1"]],
+    [["channels", "logs", "ch_1", "--limit", "5"], ["channels.logs", "ch_1", { limit: 5 }]],
+    [["channels", "pair", "list", "ch_1"], ["channels.pair.list", "ch_1"]],
+    [["channels", "pair", "approve", "ABC123", "ch_1"], ["channels.pair.approve", "ABC123", "ch_1"]],
+    [["channels", "pair", "deny", "ABC123", "ch_1"], ["channels.pair.deny", "ABC123", "ch_1"]],
+    [["channels", "remove", "ch_1"], ["channels.remove", "ch_1"]],
+  ];
+  for (const [argv, expectedCall] of runs) {
+    const res = await botkins(argv, { service });
+    assert.equal(res.exit, EXIT.ok, `${argv.join(" ")} failed: ${res.err}`);
+    assert.deepEqual(service.calls.at(-1), expectedCall, argv.join(" "));
+  }
+});

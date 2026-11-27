@@ -2758,6 +2758,55 @@ export class MockBackend {
       setReaction(message, emoji, this.caller.id === "owner" ? "owner" : "member:" + this.caller.id);
       return message.reactions;
     },
+    "chat.cardAction"(chatId, target, action) {
+      const chat = this.chat(chatId);
+      const message =
+        typeof target === "number"
+          ? chat.messages[target]
+          : chat.messages.find((m) => m.actionCard?.id === target);
+      if (!message?.actionCard) throw new Error("Action card not found in this chat.");
+      const card = message.actionCard;
+      if (action === "dismiss") {
+        if (card.state === "dispatched") throw new Error("This card has already been dispatched.");
+        const next = { ...card, state: "dismissed", actedBy: "owner", actedAt: Date.now() };
+        message.actionCard = next;
+        this.emit?.();
+        return { ok: true, state: "dismissed", card: next };
+      }
+      if (card.state === "dismissed") throw new Error("This card has already been dismissed.");
+      if (card.state === "dispatched" && card.dispatchedChatId) {
+        return {
+          ok: true,
+          state: "dispatched",
+          chatId: card.dispatchedChatId,
+          botId: card.dispatchedBotId,
+          botName: card.dispatchedBotName,
+          alreadyDispatched: true,
+          card,
+        };
+      }
+      const prompt = card.dispatch?.prompt?.trim();
+      if (!prompt) throw new Error("This card does not have a dispatch action configured.");
+      const bot =
+        this.state.bots.find((b) => b.id === card.dispatch?.botId) ??
+        this.state.bots.find((b) => b.name.toLowerCase() === String(card.dispatch?.botName ?? "").toLowerCase()) ??
+        this.state.bots.find((b) => b.id === chat.botId) ??
+        this.state.bots[0];
+      const newChatId = this.createChat(bot.id, card.dispatch?.chatTitle || card.title);
+      const next = {
+        ...card,
+        state: "dispatched",
+        dispatchedChatId: newChatId,
+        dispatchedBotId: bot.id,
+        dispatchedBotName: bot.name,
+        actedBy: "owner",
+        actedAt: Date.now(),
+      };
+      message.actionCard = next;
+      this.send(newChatId, prompt);
+      this.emit?.();
+      return { ok: true, state: "dispatched", chatId: newChatId, botId: bot.id, botName: bot.name, alreadyDispatched: false, card: next };
+    },
     forkChat(chatId, messageIndex) {
       const from = this.chat(chatId);
       if (from.botIds) throw new Error("A group chat can't be forked.");

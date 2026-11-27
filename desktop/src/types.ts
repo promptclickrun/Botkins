@@ -220,6 +220,40 @@ export type Message = {
   author?: { memberId: string; name: string };
   /** Structured sender metadata when another bot sent this message. */
   from?: MessageFrom;
+  /** Metadata when this message was posted by a Workflow Output step. */
+  fromWorkflow?: { workflowId: string; workflowName: string; runId: string };
+  /** Interactive action card attached by a Workflow Output step (dispatch/dismiss + needs-you badge). */
+  actionCard?: WorkflowActionCard;
+};
+export type WorkflowActionCard = {
+  id: string;
+  title: string;
+  subtitle?: string;
+  blocks: PanelBlock[];
+  link?: { label: string; url: string };
+  needsYou: boolean;
+  dispatch?: {
+    botId?: string;
+    botName?: string;
+    label?: string;
+    chatTitle?: string;
+    prompt: string;
+  };
+  state: "open" | "dispatched" | "dismissed";
+  dispatchedChatId?: string;
+  dispatchedBotId?: string;
+  dispatchedBotName?: string;
+  actedBy?: string;
+  actedAt?: number;
+};
+export type ChatCardActionResult = {
+  ok: true;
+  state: "dispatched" | "dismissed";
+  chatId?: string;
+  botId?: string;
+  botName?: string;
+  alreadyDispatched?: boolean;
+  card: WorkflowActionCard;
 };
 export type Chat = {
   hostDispatch?: true;
@@ -1463,6 +1497,7 @@ declare global {
       /** Resolves a dropped or pasted File to its path. Synchronous, in the preload. */
       pathForFile(file: File): string;
       reactToMessage(chatId: string, index: number, time: number | null, emoji: string): Promise<NonNullable<Message["reactions"]>>;
+      "chat.cardAction"(chatId: string, target: number | string, action: "dispatch" | "dismiss"): Promise<ChatCardActionResult>;
       showEmojiPanel(): Promise<void>;
       forkChat(chatId: string, messageIndex: number): Promise<string>;
       retry(runId: string): Promise<void>;

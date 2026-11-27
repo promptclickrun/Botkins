@@ -1,4 +1,5 @@
 import AlertActions, { hasProactiveTeam } from "./AlertActions";
+import WorkflowActionCard from "./WorkflowActionCard";
 import {
   Fragment,
   useCallback,
@@ -839,7 +840,18 @@ function ChatViewBody({
       ) : <b className="command-label">Command output</b>}
       {m.answer && <small className="answer-label">{m.answer.title}</small>}
       {m.quote && <blockquote className="msg-quote">{m.quote}</blockquote>}
-      {m.role === "command" && m.plain ? <pre className="command-output">{m.text}</pre> : <RichText text={m.voiceCaption ?? m.text} files={files} mentions={mentions} />}
+      {m.actionCard ? (
+        <WorkflowActionCard
+          chatId={chat.id}
+          card={m.actionCard}
+          readOnly={!!(state.team && "me" in state.team)}
+          openChat={openChat}
+        />
+      ) : m.role === "command" && m.plain ? (
+        <pre className="command-output">{m.text}</pre>
+      ) : (
+        <RichText text={m.voiceCaption ?? m.text} files={files} mentions={mentions} />
+      )}
       <Attachments list={m.attachments} />
       {!!m.mentions?.length && (
         <MentionChips
@@ -849,7 +861,7 @@ function ChatViewBody({
           open={(r) => { if (r.kind === "project") openProject?.(r.id); else if (r.kind === "wiki") openWiki?.(r.path); else if (r.kind === "board") openToday?.(); }}
         />
       )}
-      {m.role === "assistant" && <LinkPreviewCard text={m.text} enabled={!!state.settings.linkPreviews} />}
+      {m.role === "assistant" && !m.actionCard && <LinkPreviewCard text={m.text} enabled={!!state.settings.linkPreviews} />}
       <Reactions state={state} message={m} botId={chat.botId} />
       {actions(m, index)}
     </article>
@@ -1276,7 +1288,16 @@ function ChatViewBody({
             ) : (
             <article key={historic.from + i} id={`message-${chat.id}-${historic.from + i}`} className={messageClass(message, historic.messages, i)} onContextMenu={e => messageMenu(e, message, historic.from + i)}>
               {message.role === "user" && personLabel(message, historic.messages, i)}
-              <RichText text={message.text} files={files} mentions={mentions} />
+              {message.actionCard ? (
+                <WorkflowActionCard
+                  chatId={chat.id}
+                  card={message.actionCard}
+                  readOnly={!!(state.team && "me" in state.team)}
+                  openChat={openChat}
+                />
+              ) : (
+                <RichText text={message.text} files={files} mentions={mentions} />
+              )}
               <Attachments list={message.attachments} />
               <Reactions state={state} message={message} botId={chat.botId} />
             </article>
@@ -1293,7 +1314,7 @@ function ChatViewBody({
             if (isSilentMessage(m) || (m.interim && thinkingMode !== "open")) return null;
             return (
               <Fragment key={i}>
-                {(m.text || m.role !== "assistant") && (
+                {(m.text || m.actionCard || m.role !== "assistant") && (
                   isAgentMessage(m) ? (
                     <IncomingAgentRail
                       id={`message-${chat.id}-${loadedFrom + i}`}
@@ -1337,7 +1358,14 @@ function ChatViewBody({
                     )}
                     {!m.interim && <>
                       {m.quote && <blockquote className="msg-quote">{m.quote}</blockquote>}
-                      {m.role === "command" && m.plain ? (
+                      {m.actionCard ? (
+                        <WorkflowActionCard
+                          chatId={chat.id}
+                          card={m.actionCard}
+                          readOnly={!!(state.team && "me" in state.team)}
+                          openChat={openChat}
+                        />
+                      ) : m.role === "command" && m.plain ? (
                         <pre className="command-output">{m.text}</pre>
                       ) : (
                         <RichText text={m.voiceCaption ?? m.text} files={files} mentions={mentions} />
@@ -1361,7 +1389,7 @@ function ChatViewBody({
                         }}
                       />
                     )}
-                      {m.role === "assistant" && <LinkPreviewCard text={m.text} enabled={!!state.settings.linkPreviews} />}
+                      {m.role === "assistant" && !m.actionCard && <LinkPreviewCard text={m.text} enabled={!!state.settings.linkPreviews} />}
                       <Reactions state={state} message={m} botId={chat.botId} />
                       {actions(m, i)}
                     </>}
