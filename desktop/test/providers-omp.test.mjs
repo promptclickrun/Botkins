@@ -382,4 +382,3 @@ test("OMP inventory maps aliased plugin servers across tools and /mcp test probe
   assert.ok(!inv.choices.some((c) => c.source?.startsWith("bkp_") || c.name === "revoked"), "internal aliases and revoked tools stay hidden");
   await session.close();
 });
-

@@ -733,13 +733,16 @@ export class McpOAuth {
     if (running) return running;
     const work = (async () => {
       const saved = this.read(server);
-      if (!saved?.refreshToken) return null;
+      if (!saved?.refreshToken || saved.needsSignIn) return null;
+      // A sign-out, fresh consent, or scope refusal while the token request is out wins over it.
+      const unchanged = () => JSON.stringify(this.read(server)) === JSON.stringify(saved);
       try {
         const reply = await this.tokenRequest(
           { token_endpoint: endpoint(saved.tokenEndpoint, "token address", saved.limit ?? 0), token_endpoint_auth_methods_supported: saved.authMethods },
           { clientId: saved.clientId, clientSecret: saved.registered ? saved.clientSecret : client?.clientSecret },
           { grant_type: "refresh_token", refresh_token: saved.refreshToken, ...(saved.resource && { resource: saved.resource }) },
         );
+        if (!unchanged()) return null;
         const { needsSignIn: _lapsed, ...rest } = saved;
         const next = { ...rest, ...this.tokens(reply, saved) };
         if (!Number.isFinite(Number(reply.expires_in))) delete next.expiresAt;
@@ -748,7 +751,7 @@ export class McpOAuth {
         return next;
       } catch (error) {
         // The sign-in itself has ended (revoked or expired). Anything else may work next time.
-        if (error.code === "invalid_grant" || error.code === "invalid_client") {
+        if ((error.code === "invalid_grant" || error.code === "invalid_client") && unchanged()) {
           const { accessToken: _a, refreshToken: _r, expiresAt: _e, ...rest } = saved;
           this.write(server, { ...rest, needsSignIn: true });
           this.changed();
@@ -765,11 +768,16 @@ export class McpOAuth {
    * { accessToken, tokenType, expiresIn? } or null when the person has to sign in.
    * @param request.reason "initial" | "refresh" | "reauth" | "upscope"
    */
-  async token(server, { reason = "initial", client } = {}) {
+  async token(server, { reason = "initial", client, rejectedAccessToken } = {}) {
     let saved = this.read(server);
-    if (!saved) return null;
+    if (!saved || saved.needsSignIn) return null;
     // A sign-in made for another address is never sent to this one.
     if (saved.url && saved.url !== server.url) return null;
+    // An old challenge must not invalidate a newer sign-in or rotate a newer token.
+    if (rejectedAccessToken && saved.accessToken !== rejectedAccessToken) {
+      if (reason === "upscope") return null;
+      reason = "initial";
+    }
     const usable = (s) => !!s?.accessToken && !s.needsSignIn;
     const live = (s) => usable(s) && (!s.expiresAt || s.expiresAt > Date.now());
     const good = (s) => usable(s) && (!s.expiresAt || s.expiresAt - Date.now() > EARLY);

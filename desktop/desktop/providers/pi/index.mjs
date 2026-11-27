@@ -28,6 +28,7 @@ import { buildInventory, resolvePrompt } from "../commands.mjs";
 import { SessionStore, resumeOrRecover, serversWithTokens, uuidFor } from "../sessions.mjs";
 import { skillChoices, skillSupport } from "../skills.mjs";
 import { displayValue } from "../../display.mjs";
+import { DirectMcpOAuth } from "./direct-mcp-oauth.mjs";
 import { describeToolCall } from "./permissions.mjs";
 import { permissionName } from "../permission-request.mjs";
 import { describeRequest } from "../copilot/permissions.mjs";
@@ -92,6 +93,8 @@ export function launcher(file, args) {
 }
 /** Pi's thinking levels. Botkins' efforts are the same words. */
 const LEVELS = new Set(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
+const OAUTH_ASKING = Symbol("pending OAuth tool approval");
+const oauthCalls = () => ({ controller: new AbortController(), pending: new Map(), requests: new Map() });
 const level = (effort) => (effort === "none" ? "off" : LEVELS.has(effort) ? effort : null);
 /** A conversation lets go of its Pi after this long unused; the next turn starts it again on the same session. */
 const IDLE_MS = 15 * 60 * 1000;
@@ -471,7 +474,7 @@ class PiSession extends ProviderSession {
       if (!entry) continue;
       const shown = isPluginServer(name) ? pluginAlias(name) : name;
       if (shown !== name) this.aliases.set(shown, name);
-      servers[shown] = entry;
+      servers[shown] = server.oauthId ? { ...entry, oauthId: server.oauthId } : entry;
     }
     if (this.bridge) {
       const entry = this.provider.serverRecord({ type: "http", url: this.bridge.url, headers: this.bridge.headers });
@@ -633,6 +636,7 @@ class PiSession extends ProviderSession {
       // `pending`: plugin hooks started from an event (errorOccurred), waited for before the turn ends;
       // `posted` and `refused`: tool calls whose result hook ran, and calls Botkins or a hook turned down.
       const turn = (this.turn = { text: "", parts: [], thinking: null, gap: false, error: null, stopReason: null, calls: new Map(), rows: new Map(), users: 0, steered: 0, ended: false, pending: [], posted: new Set(), refused: new Set() });
+      if (live.oauth) turn.oauth = oauthCalls();
       // One listener for the whole turn; a run started again for a late steer waits on a new settle.
       let settle = () => {};
       let fail = () => {};
@@ -647,10 +651,19 @@ class PiSession extends ProviderSession {
       let settled = nextSettle();
       const timer = timeoutMs > 0 && setTimeout(() => fail(new Error(this.provider.name + " took too long to answer.")), timeoutMs);
       const off = rpc.on((event) => {
-        if (event.type === "botkins_exit") return fail(event.error);
+        if (event.type === "botkins_exit") {
+          this.cancelOAuthCalls();
+          return fail(event.error);
+        }
+        if (event.type === "agent_end") this.cancelOAuthCalls();
+        if (event.type === "tool_execution_end" && turn.oauth?.pending.has(event.toolCallId))
+          turn.oauth.pending.set(event.toolCallId, null);
         if (turn.buffer) turn.buffer.push(event);
         else this.event(event);
-        if (this.provider.settled(event) || (event.type === "prompt_result" && event.agentInvoked === false)) settle(event);
+        if (this.provider.settled(event) || (event.type === "prompt_result" && event.agentInvoked === false)) {
+          this.cancelOAuthCalls();
+          settle(event);
+        }
       });
       stop = () => {
         clearTimeout(timer);
@@ -738,6 +751,7 @@ class PiSession extends ProviderSession {
       return { text: reply };
     } finally {
       // A call that never ran (stopped, or the process went away) must not stay Running.
+      this.cancelOAuthCalls();
       if (this.live) this.provider.cancelDialogs(this.live);
       this.cancelSseCalls();
       if (this.turn) this.stopRows(this.turn);
@@ -760,6 +774,7 @@ class PiSession extends ProviderSession {
       // A refused abort leaves the original operation running. Preserve the input for the
       // workspace's ordinary queue. A dead RPC also rejects the outstanding settle.
       turn.redirected = true;
+      this.cancelOAuthCalls();
       this.provider.cancelDialogs(this.live);
       this.cancelSseCalls();
       aborting = rpc.request({ type: "abort" }, 0).catch(error => {
@@ -788,6 +803,7 @@ class PiSession extends ProviderSession {
         // A fast Pi can send the new prompt acknowledgement and reply in a single stdout
         // chunk. Let the workspace commit the user's message before surfacing those deltas.
         turn.buffer = [];
+        if (this.live?.oauth) turn.oauth = oauthCalls();
         const answer = await rpc.request({ type: "prompt", message: current.text }, 0);
         current.ack.resolve(true);
         current = null;
@@ -949,6 +965,14 @@ class PiSession extends ProviderSession {
     if (server && server !== BRIDGE && this.given(server) && !Object.hasOwn(this.spec.mcpServers ?? {}, server)) return false;
     // A plugin server this session wasn't given (its plugin was switched off or removed) does nothing either.
     if (server && PLUGIN_ALIAS.test(server)) return false;
+    // A direct OAuth server's call needs a single-use grant (direct-mcp-oauth.mjs). Reserve the tool
+    // call ID before anything asks; repeated UI requests cannot mint extra grants.
+    const oauth = this.spec.mcpServers?.[server]?.oauthId ? turn.oauth : undefined;
+    if (this.spec.mcpServers?.[server]?.oauthId) {
+      if (!oauth || typeof call.toolCallId !== "string" || !call.toolCallId || oauth.pending.has(call.toolCallId) ||
+        (call.input !== undefined && (!call.input || typeof call.input !== "object" || Array.isArray(call.input)))) return false;
+      oauth.pending.set(call.toolCallId, OAUTH_ASKING);
+    }
     const given = call.input && typeof call.input === "object" && !Array.isArray(call.input) ? call.input : {};
     // With no hook the question goes to the person at once, in the same tick.
     const hooked = this.hook("onPreToolUse") ? await this.preToolUse(call, name, server, given) : {};
@@ -966,12 +990,12 @@ class PiSession extends ProviderSession {
         const grant = this.sseGrant(turn, server);
         const answer = await handlers.permission({ ...request, preview: command ?? displayValue(input, Infinity), detail: displayValue({ ...call, input }, Infinity), ...(restricted && { remember: null, managed: !!call.managed, sandboxEscape: !!call.sandboxEscape }) });
         if (!answer?.allow || !active()) return false;
-        return this.grantSse(turn, grant, name, server, input) ? changed : false;
+        return this.grantOAuth(turn, oauth, call, name, server, input) && this.grantSse(turn, grant, name, server, input) ? changed : false;
       } catch {
         return false;
       }
     }
-    return (await this.approve(call, name, server, input)) ? changed : false;
+    return (await this.approve(call, name, server, input, oauth)) ? changed : false;
   }
   /**
    * The plugins' userPromptSubmitted hooks for the person's message: `{ block: true }` (nothing
@@ -1081,7 +1105,7 @@ class PiSession extends ProviderSession {
     return { ...(next && { input: next }), ...(out.permissionDecision === "ask" && { ask: true, reason }) };
   }
   /** Botkins' approval rules and the person, for a call with these arguments. */
-  async approve(call, name, server, input) {
+  async approve(call, name, server, input, oauth) {
     const handlers = this.spec.handlers;
     const turn = this.turn;
     const active = () => turn && this.turn === turn && !turn.ended && !this.stopRequested && !this.closed;
@@ -1093,7 +1117,7 @@ class PiSession extends ProviderSession {
       const grant = this.sseGrant(turn, server);
       const answer = await handlers.permission(describeToolCall({ ...call, input, ...(registryServer !== undefined && { registryServer }) }, { name, server, configured }));
       if (!answer?.allow || !active()) return false;
-      return this.grantSse(turn, grant, name, server, input);
+      return this.grantOAuth(turn, oauth, call, name, server, input) && this.grantSse(turn, grant, name, server, input);
     } catch {
       return false;
     }
@@ -1123,7 +1147,38 @@ class PiSession extends ProviderSession {
     this.turn?.sse?.controller.abort();
     if (this.turn) this.turn.sse = null;
   }
+  /** Records an allowed call to a direct OAuth server under its reserved ID; false when the turn moved on. */
+  grantOAuth(turn, oauth, call, name, server, input) {
+    if (!oauth) return true;
+    if (this.turn !== turn || turn.oauth !== oauth || turn.ended || this.stopRequested || this.closed ||
+      oauth.pending.get(call.toolCallId) !== OAUTH_ASKING) return false;
+    // The OAuth proxy knows a plugin's server by its harness name (its alias).
+    oauth.pending.set(call.toolCallId, { server: this.harnessServerName(server), name, input });
+    return true;
+  }
+  takeOAuthGrant(server, { name, arguments: input = {} }, requestId) {
+    const turn = this.turn;
+    const oauth = turn?.oauth;
+    if (!oauth || turn.ended || this.stopRequested || this.closed) return null;
+    let requests = oauth.requests.get(server);
+    if (requests?.has(requestId)) return null;
+    for (const [id, grant] of oauth.pending) {
+      if (grant?.server !== server || grant.name !== name || !isDeepStrictEqual(grant.input, input)) continue;
+      oauth.pending.set(id, null);
+      if (!requests) oauth.requests.set(server, requests = new Set());
+      requests.add(requestId);
+      return oauth.controller.signal;
+    }
+    return null;
+  }
+  cancelOAuthCalls() {
+    const oauth = this.turn?.oauth;
+    if (!oauth) return;
+    this.turn.oauth = null;
+    oauth.controller.abort();
+  }
   interrupt() {
+    this.cancelOAuthCalls();
     if (this.live) this.provider.cancelDialogs(this.live);
     this.cancelSseCalls();
     try {
@@ -1578,6 +1633,7 @@ export class PiProvider extends ModelProvider {
     let live = this.live.get(spec.sessionId);
     if (live && (fresh || live.key !== key || live.rpc.closed)) {
       this.live.delete(spec.sessionId);
+      live.oauth?.close();
       await live.rpc.close().catch(() => {});
       live = null;
     }
@@ -1652,6 +1708,7 @@ export class PiProvider extends ModelProvider {
       await this.write(live, described);
       live.rpc = new PiRpc(start.file, start.args, { env: { ...env, ...start.env }, cwd: launchDir, name: this.name, ...(this.runtime === OMP_ID && { protocolVersion: 2 }) });
     } catch (error) {
+      live.oauth?.close();
       await live.sse?.stop();
       rmSync(live.file, { force: true });
       throw error;
@@ -1663,6 +1720,7 @@ export class PiProvider extends ModelProvider {
     live.cleaned = live.rpc.exited.then(async () => {
       this.sessionEnded(live, "complete");
       if (this.live.get(spec.sessionId) === live) this.live.delete(spec.sessionId);
+      live.oauth?.close();
       // Its own file only: a process let go a moment ago can exit after the next turn's process
       // started, and that one's file must stay (without it Pi starts with no connections: "Model … not found").
       rmSync(live.file, { force: true });
@@ -1690,6 +1748,17 @@ export class PiProvider extends ModelProvider {
   }
   /** Writes the files the extension and OMP read, each containing session secrets and user-only. */
   async write(live, described) {
+    const servers = Object.entries(described.servers);
+    if (servers.some(([, server]) => server.oauthId)) {
+      live.oauth ??= await DirectMcpOAuth.listen();
+    }
+    if (live.oauth) {
+      described = { ...described, servers: live.oauth.project(servers, {
+        // Sign-in is asked for by Botkins' own server name, not a plugin server's alias.
+        auth: (request) => live.session?.spec.mcpAuth?.({ ...request, server: live.session.realServerName(request.server) }),
+        takeGrant: (server, params, id) => live.session?.takeOAuthGrant(server, params, id),
+      }) };
+    }
     // Every server Botkins gave this process (PiSession.permission).
     live.given = new Set([...(live.given ?? []), ...Object.keys(described.servers ?? {})]);
     live.pendingConfigs = new Map(Object.entries(described.servers ?? {}).map(([name, cfg]) => [name, JSON.stringify(cfg)]));
@@ -1827,6 +1896,7 @@ export class PiProvider extends ModelProvider {
     if (!live) return;
     this.live.delete(sessionId);
     clearTimeout(live.timer);
+    live.oauth?.close();
     this.sessionEnded(live, "user_exit");
     void live.rpc.close().catch(() => {});
   }
@@ -1859,6 +1929,7 @@ export class PiProvider extends ModelProvider {
     for (const live of all) this.sessionEnded(live, "user_exit");
     await Promise.allSettled(all.map(async (live) => {
       clearTimeout(live.timer);
+      live.oauth?.close();
       await live.rpc.close();
       await live.cleaned;
     }));
