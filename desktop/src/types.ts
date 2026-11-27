@@ -2173,6 +2173,8 @@ export type Capability = {
   command: string;
   source: string;
   description: string;
+  /** How a Tool is offered to the model: directly in its tool schemas, or indirectly (e.g. codemode/tool commands). */
+  exposure?: "direct" | "indirect";
 };
 export type Catalog = {
   choices: Capability[];

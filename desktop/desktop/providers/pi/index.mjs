@@ -28,8 +28,9 @@ import { buildInventory, resolvePrompt } from "../commands.mjs";
 import { SessionStore, resumeOrRecover, serversWithTokens, uuidFor } from "../sessions.mjs";
 import { skillChoices, skillSupport } from "../skills.mjs";
 import { displayValue } from "../../display.mjs";
-import { PLAN_INSTRUCTIONS, updatePlanTool } from "./plan.mjs";
 import { DirectMcpOAuth } from "./direct-mcp-oauth.mjs";
+import { INVENTORY } from "./extension-shared.mjs";
+import { PLAN_INSTRUCTIONS, planFromOmpPhases, planSignature, planToOmpPhases, toTodoResult, updatePlanTool } from "./plan.mjs";
 
 export const PI_ID = "pi";
 export const OMP_ID = "omp";
@@ -106,6 +107,9 @@ const OMP_MCP_STARTUP_TIMEOUT_MS = 2000;
  * - `mcp.shared: false`: keep each session's ToolBridge token and MCP catalog out of OMP's shared daemon.
  * - `tools.commands: false`: expose Botkins and MCP tools directly as typed model tool schemas
  *   rather than hiding them behind OMP's bash command wrapper.
+ * - `todo.enabled: false` and `todo.reminders: false`: Botkins owns the chat plan (via `update_plan`
+ *   and `set_todos` sync) and continuation decisions (`keep-moving.mjs`), so disable OMP's competing
+ *   schema-less `todo` tool and internal reminder loop.
  */
 const OMP_CONFIG = [
   "mcp:",
@@ -115,6 +119,9 @@ const OMP_CONFIG = [
   "enabledProviders: []",
   "tools:",
   "  commands: false",
+  "todo:",
+  "  enabled: false",
+  "  reminders: false",
   "",
 ].join("\n");
 const MAX_LIVE = 8;
@@ -124,15 +131,100 @@ const hash = (value) => createHash("sha256").update(JSON.stringify(value)).diges
 
 const READS = new Set(["read", "grep", "find", "ls"]);
 const WRITES = new Set(["write", "edit"]);
+const INVENTORY_WAIT_MS = 1500;
+const INVENTORY_STEP_MS = 100;
+const PI_MCP_PROBE_MS = 700;
+const OMP_MCP_PROBE_MS = 1200;
+const OMP_PROBE_TTL_MS = 5000;
 /** [tool, MCP server or undefined] for a Pi or OMP MCP tool name. */
 function splitName(name) {
   const match = /^mcp__(.+?)__(.+)$/.exec(String(name ?? "")) ?? /^mcp__([^_]+)_(.+)$/.exec(String(name ?? ""));
   return match ? [match[2], match[1]] : [String(name ?? "tool"), undefined];
 }
+/** Resolves an MCP tool's [remoteTool, server] even when an OMP server name contains underscores. */
+function splitMcpTool(name, knownServers = []) {
+  const raw = String(name ?? "");
+  const double = /^mcp__(.+?)__(.+)$/.exec(raw);
+  if (double) return [double[2], double[1]];
+  if (raw.startsWith("mcp__") && knownServers.length) {
+    const sorted = [...knownServers].sort((a, b) => b.length - a.length);
+    for (const server of sorted) {
+      const prefix = "mcp__" + server + "_";
+      if (raw.startsWith(prefix) && raw.length > prefix.length) return [raw.slice(prefix.length), server];
+    }
+  }
+  return splitName(raw);
+}
 const toolIdentity = (call) => {
   const [fallbackName, fallbackServer] = splitName(call.toolName);
   return { name: call.mcpToolName ?? fallbackName, server: call.mcpServerName ?? fallbackServer };
 };
+function normalizeMcpState(raw) {
+  const text = String(raw ?? "").trim().toLowerCase();
+  if (!text) return null;
+  if (/needs?\s+sign[- ]in|\b401\b|unauthorized|oauth|www-authenticate/.test(text)) return "needs-auth";
+  if (text.startsWith("connected")) return "connected";
+  if (text.startsWith("connecting") || text.startsWith("starting") || text.startsWith("pending")) return "pending";
+  if (text.startsWith("disconnected")) return "disconnected";
+  if (text.startsWith("disabled")) return "disabled";
+  if (text.startsWith("failed") || text.startsWith("error")) return "failed";
+  return null;
+}
+/** Parses Pi's `builtin:mcp` notifications (startup problem notices and `/mcp` status lines). */
+export function parsePiMcpNotify(message) {
+  const text = String(message ?? "").trim();
+  if (!text) return null;
+  const states = new Map();
+  let settled = false;
+  if (/^No MCP servers configured\b/i.test(text)) return { states, settled: true };
+  if (/^MCP servers need attention:/i.test(text)) {
+    settled = true;
+    for (const line of text.split("\n").slice(1)) {
+      const match = /^\s+([^\s:]+):\s+(.+)$/.exec(line);
+      if (!match) continue;
+      const status = normalizeMcpState(match[2]);
+      if (status) states.set(match[1], status);
+    }
+    return { states, settled };
+  }
+  for (const line of text.split("\n")) {
+    const match = /^([^\s:]+):\s+(connected|connecting|starting|needs sign-in|failed|disconnected|disabled)\b(.*)$/i.exec(line);
+    if (!match) continue;
+    const status = normalizeMcpState(match[2] + match[3]);
+    if (status) states.set(match[1], status);
+  }
+  return states.size ? { states, settled: true } : null;
+}
+/** Parses OMP's `/mcp test <name>` command_output text. */
+export function parseOmpMcpOutput(text) {
+  const raw = String(text ?? "").trim();
+  if (!raw) return null;
+  const ok = /^Server\s+"([^"]+)"\s+connected\b/i.exec(raw);
+  if (ok) return { name: ok[1], status: "connected" };
+  const fail = /^Connection to\s+"([^"]+)"\s+failed:\s*([\s\S]*)$/i.exec(raw);
+  if (fail) {
+    const reason = fail[2] ?? "";
+    const status = /\b401\b|unauthorized|oauth|sign[- ]in|www-authenticate/i.test(reason) ? "needs-auth" : "failed";
+    return { name: fail[1], status };
+  }
+  const missing = /^Server\s+"([^"]+)"\s+not found\b/i.exec(raw);
+  if (missing) return { name: missing[1], status: "unavailable" };
+  return null;
+}
+function createRuntimeState() {
+  return {
+    startedAt: Date.now(),
+    tools: null,
+    servers: null,
+    mcpStates: new Map(),
+    mcpSettled: false,
+    mcpProbeInFlight: null,
+    toolCommands: new Set(),
+    availableCommands: null,
+    probed: new Map(),
+  };
+}
+const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 /**
  * Pi's words for a failed request ("402 {…}", "<provider> API error (400): {…}") as the
  * provider's own message, which is what a person can act on. Anything else is kept as it is.
@@ -331,6 +423,7 @@ class PiSession extends ProviderSession {
     this.mode = "interactive";
     this.turn = null;
     this.lost = "";
+    this.plan = undefined;
   }
   on(handler) {
     this.handlers.add(handler);
@@ -365,9 +458,46 @@ class PiSession extends ProviderSession {
       prompt: (spec.instructions ?? "") + (this.bridge && this.planTools().length ? "\n\n" + PLAN_INSTRUCTIONS + "\n\n" : "") + this.skills.instructions + (spec.context ?? ""),
     };
   }
-  /** Pi's plan, the one tool Botkins adds to Pi itself. Pi has no plan of its own (OMP does), and a plan means nothing in a throwaway session. */
+  /** In-chat progress checklist tool for Pi and OMP; omitted in throwaway or sources-only sessions. */
   planTools() {
-    return this.provider.runtime === PI_ID && !this.spec.temporary && !this.spec.sourcesOnly ? [updatePlanTool(this)] : [];
+    return !this.spec.temporary && !this.spec.sourcesOnly ? [updatePlanTool(this)] : [];
+  }
+  /** The plan currently known for this conversation, from this turn, a warm process, or the persisted session record. */
+  storedPlan() {
+    if (this.plan !== undefined) return this.plan;
+    if (this.spec.temporary) return null;
+    const live = this.provider.live.get(this.spec.sessionId);
+    if (live && live.folder === this.spec.folder && live.plan !== undefined) return live.plan;
+    return this.provider.storedPlan(this.spec.sessionId, this.spec.folder);
+  }
+  /** Records a normalized `{ rows, dependencies }` plan, persists it, optionally mirrors to OMP `set_todos`, and emits `session.todos_changed`. */
+  async setPlan(plan, { syncNative = false, emit = true } = {}) {
+    const normalized = toTodoResult(plan);
+    this.plan = normalized;
+    if (this.live) this.live.plan = normalized;
+    if (!this.spec.temporary) this.provider.savePlan(this.spec.sessionId, this.spec.folder, normalized);
+    if (syncNative && this.provider.runtime === OMP_ID && this.live && !this.live.rpc.closed) {
+      await this.live.rpc.request({ type: "set_todos", phases: planToOmpPhases(normalized) }, 15000).catch(() => {});
+    }
+    if (emit) this.emit("session.todos_changed", {});
+  }
+  /** Reconciles OMP's native `todoPhases` into Botkins' plan without ever inventing dependency edges. */
+  syncFromOmpPhases(phases, { emit = true, allowEmpty = false } = {}) {
+    const current = this.storedPlan();
+    const next = planFromOmpPhases(phases, current, { allowEmpty });
+    if (!next || planSignature(next) === planSignature(current)) return false;
+    this.plan = next;
+    if (this.live) this.live.plan = next;
+    if (!this.spec.temporary) this.provider.savePlan(this.spec.sessionId, this.spec.folder, next);
+    if (emit) this.emit("session.todos_changed", {});
+    return true;
+  }
+  async syncOmpTodos(rpc, { emit = true } = {}) {
+    if (this.provider.runtime !== OMP_ID || !rpc || rpc.closed) return;
+    const state = await rpc.request({ type: "get_state" }, 15000).catch(() => null);
+    if (Array.isArray(state?.todoPhases)) {
+      this.syncFromOmpPhases(state.todoPhases, { emit, allowEmpty: !!this.storedPlan() });
+    }
   }
   /** Starts this conversation's process when its chat opens, so its first message doesn't wait for it (Workspace.prewarm). */
   async warm() {
@@ -400,16 +530,39 @@ class PiSession extends ProviderSession {
       hasRef: !!(known && !folderChanged),
       resume: () => provider.process(this, described, { ref: known.ref }),
       onMissing: () => {
-        if (!spec.temporary) provider.sessions.delete(spec.sessionId);
+        if (!spec.temporary) {
+          provider.sessions.delete(spec.sessionId);
+          provider.clearPlan(spec.sessionId);
+        }
       },
       create: () => provider.process(this, described, { fresh: true }),
     });
     this.live = live;
+    if (recovered) {
+      this.plan = null;
+      live.plan = null;
+      if (folderChanged && !spec.temporary) provider.clearPlan(spec.sessionId);
+    } else {
+      const carried = this.storedPlan();
+      if (carried !== null) {
+        this.plan = carried;
+        live.plan = carried;
+      }
+      if (provider.runtime === OMP_ID) {
+        const phases = live.state?.todoPhases;
+        if (Array.isArray(phases) && phases.some((phase) => Array.isArray(phase?.tasks) && phase.tasks.length)) {
+          this.syncFromOmpPhases(phases, { emit: true });
+        } else if (live.plan?.rows?.length && !live.rpc.closed) {
+          await live.rpc.request({ type: "set_todos", phases: planToOmpPhases(live.plan) }, 15000).catch(() => {});
+        }
+      }
+    }
     // Only inject transcript context when the workspace believed this harness already held the session
     // (or when resuming a stale ref failed). A brand-new session on a fresh chat needs no transcript.
     if (recovered && lost && (spec.established || known)) this.lost = lost;
     if (!spec.temporary && (!known || recovered || known.ref !== this.live.ref || known.folder !== spec.folder)) {
-      provider.sessions.set(spec.sessionId, { ref: this.live.ref, folder: spec.folder });
+      const preservedPlan = !recovered && !folderChanged ? (live.plan ?? known?.plan) : undefined;
+      provider.sessions.set(spec.sessionId, { ref: this.live.ref, folder: spec.folder, ...(preservedPlan !== undefined && preservedPlan !== null && { plan: preservedPlan }) });
     }
     return this.live;
   }
@@ -484,10 +637,16 @@ class PiSession extends ProviderSession {
       };
       try {
         const answer = await rpc.request({ type: "prompt", message: text }, 30000);
-        // An extension command can finish inside prompt() without starting an agent turn.
-        if (answer?.disposition !== "handled" && this.interruptsForSteering && onReady) {
+        // `before_agent_start` has now registered any pending server config updates on warm Pi.
+        if (live.pendingConfigs) {
+          live.registeredConfigs ??= new Map();
+          for (const [name, serialized] of live.pendingConfigs) live.registeredConfigs.set(name, serialized);
+        }
+        // An extension or built-in slash command (e.g. OMP `/todo`) can finish inside prompt() without starting an agent turn.
+        const handled = answer?.disposition === "handled" || answer?.agentInvoked === false;
+        if (!handled && this.interruptsForSteering && onReady) {
           await this.runSteerablePi(rpc, turn, settled, nextSettle, withFiles, onReady);
-        } else if (answer?.disposition !== "handled") {
+        } else if (!handled) {
           onReady?.(deliver);
           await settled;
           // A steer the harness took as the run was ending, but never delivered, goes as one more
@@ -499,8 +658,11 @@ class PiSession extends ProviderSession {
             if (!pending.length) break;
             settled = nextSettle();
             const again = await rpc.request({ type: "prompt", message: pending.join("\n\n") }, 30000);
-            if (again?.disposition !== "handled") await settled;
+            if (again?.disposition !== "handled" && again?.agentInvoked !== false) await settled;
           }
+        }
+        if (this.provider.runtime === OMP_ID && (handled || turn.ompCommandOutput)) {
+          await this.syncOmpTodos(rpc, { emit: true });
         }
         turn.ended = true;
       } catch (error) {
@@ -652,9 +814,19 @@ class PiSession extends ProviderSession {
         this.toolRow(turn, event.toolCallId, event, event.args);
         return;
       }
+      case "command_output": {
+        if (this.provider.runtime === OMP_ID) turn.ompCommandOutput = true;
+        return;
+      }
       case "tool_execution_end": {
         turn.calls.delete(event.toolCallId);
         turn.rows.delete(event.toolCallId);
+        if (this.provider.runtime === OMP_ID && !event.isError && event.toolName === "todo") {
+          const details = event.result?.details;
+          if (details && details.op !== "view" && Array.isArray(details.phases)) {
+            this.syncFromOmpPhases(details.phases, { emit: true, allowEmpty: true });
+          }
+        }
         const output = textOf(event.result?.content) || (event.result?.details ? displayValue(event.result.details, 12000) : "");
         const success = !event.isError;
         this.emit("tool.execution_complete", { toolCallId: event.toolCallId, success, ...(output && { result: { content: output } }), ...(!success && { error: { message: output || "Failed" } }) });
@@ -795,27 +967,265 @@ class PiSession extends ProviderSession {
     this.mode = mode === "plan" ? "plan" : "interactive";
     return true;
   }
-  /** The plan the model kept with update_plan this turn, or null when it made none. */
+  /** The plan kept on this session (rows + explicit dependencies), or null when none exists. */
   async todos() {
-    return this.plan ? { rows: this.plan, dependencies: [] } : null;
+    const plan = this.storedPlan();
+    return plan ? toTodoResult(plan) : null;
   }
   async compact() {
     const live = await this.start();
     await live.rpc.request({ type: "compact" }, 600000);
   }
+  /** Maps a Botkins server name to its harness name when a plugin alias is active (PR #321 compatibility). */
+  harnessServerName(name) {
+    for (const [alias, real] of this.aliases ?? []) if (real === name) return alias;
+    return name;
+  }
+  /** Maps a harness server name (including a plugin alias) back to Botkins' own server name. */
+  realServerName(name) {
+    return (name && this.aliases?.get(name)) ?? name;
+  }
+  /** Classifies live runtime tools into Botkins bridge tools and per-server MCP tools with direct/indirect exposure. */
+  classifyTools(live, state, allowedServers) {
+    const rt = live?.runtime;
+    const isOmp = this.provider.runtime === OMP_ID;
+    const knownServers = [BRIDGE, ...allowedServers, ...(this.aliases?.keys() ?? [])];
+    const directDump = isOmp && Array.isArray(state?.dumpTools) ? new Map(state.dumpTools.filter((t) => t?.name).map((t) => [String(t.name), t])) : null;
+    const byServer = new Map();
+    const record = (server, tool) => {
+      let map = byServer.get(server);
+      if (!map) byServer.set(server, (map = new Map()));
+      const prev = map.get(tool.name);
+      // Direct exposure wins over indirect if seen through multiple channels.
+      if (!prev || (prev.exposure === "indirect" && tool.exposure === "direct")) map.set(tool.name, tool);
+    };
+    for (const tool of rt?.tools ?? []) {
+      if (!tool?.name) continue;
+      const [fallbackName, fallbackServer] = splitMcpTool(tool.name, knownServers);
+      const server = this.realServerName(tool.mcpServerName ?? fallbackServer);
+      if (!server || (server !== BRIDGE && !allowedServers.includes(server))) continue;
+      const name = tool.mcpToolName ?? fallbackName;
+      if (!name) continue;
+      let exposure = null;
+      if (isOmp) {
+        if (directDump) {
+          if (directDump.has(tool.name)) exposure = "direct";
+          else if (tool.active !== false || rt.toolCommands.has(tool.name)) exposure = "indirect";
+        } else if (rt.toolCommands.has(tool.name)) {
+          exposure = "indirect";
+        } else if (tool.active !== false) {
+          exposure = "direct";
+        }
+      } else {
+        if (tool.exposure === "hidden" || tool.active === false) continue;
+        exposure = tool.exposure && tool.exposure !== "direct" ? "indirect" : "direct";
+      }
+      if (!exposure) continue;
+      record(server, { name, description: String(tool.description ?? ""), exposure });
+    }
+    if (directDump) {
+      for (const [fullName, tool] of directDump) {
+        const [name, rawServer] = splitMcpTool(fullName, knownServers);
+        const server = this.realServerName(rawServer);
+        if (!server || (server !== BRIDGE && !allowedServers.includes(server))) continue;
+        record(server, { name, description: String(tool.description ?? ""), exposure: "direct" });
+      }
+    }
+    if (isOmp) {
+      for (const fullName of rt?.toolCommands ?? []) {
+        const [name, rawServer] = splitMcpTool(fullName, knownServers);
+        const server = this.realServerName(rawServer);
+        if (!server || (server !== BRIDGE && !allowedServers.includes(server))) continue;
+        const exposure = directDump?.has(fullName) ? "direct" : "indirect";
+        record(server, { name, description: "", exposure });
+      }
+    }
+    return byServer;
+  }
+  async probePiMcp(live) {
+    const rt = live.runtime;
+    if (rt.mcpProbeInFlight) return rt.mcpProbeInFlight;
+    const before = rt.mcpStates.size;
+    const probe = (async () => {
+      try {
+        await Promise.race([
+          live.rpc.request({ type: "prompt", message: "/mcp" }, PI_MCP_PROBE_MS).catch(() => null),
+          delay(PI_MCP_PROBE_MS),
+        ]);
+        // Give the trailing notify event a tick to arrive after the response.
+        if (rt.mcpStates.size === before) await delay(30);
+      } finally {
+        rt.mcpProbeInFlight = null;
+      }
+    })();
+    rt.mcpProbeInFlight = probe;
+    return probe;
+  }
+  async probeOmpMcp(live, name) {
+    if (!name || /\s/.test(name)) return;
+    const rt = live.runtime;
+    const last = rt.probed.get(name) ?? 0;
+    if (Date.now() - last < OMP_PROBE_TTL_MS) return;
+    rt.probed.set(name, Date.now());
+    let settled = false;
+    const waiter = Promise.withResolvers();
+    const off = live.rpc.on((event) => {
+      if (event.type !== "command_output") return;
+      const parsed = parseOmpMcpOutput(event.text);
+      if (parsed?.name === name) {
+        settled = true;
+        waiter.resolve(parsed.status);
+      }
+    });
+    try {
+      const req = live.rpc.request({ type: "prompt", message: "/mcp test " + name }, OMP_MCP_PROBE_MS).catch(() => null);
+      await Promise.race([waiter.promise, req.then(() => delay(30)), delay(OMP_MCP_PROBE_MS)]);
+      if (!settled && !rt.mcpStates.has(name)) rt.mcpStates.set(name, "pending");
+    } finally {
+      off();
+    }
+  }
   async inventory() {
-    const servers = Object.keys(this.spec.mcpServers ?? {}).map((name) => ({ name, status: "not started" }));
-    const inventory = buildInventory({ name: this.provider.name, tools: this.spec.tools, servers, native: skillChoices(this.skills.list), compact: true });
-    if (this.provider.runtime !== PI_ID || !this.provider.packages.activePaths().length) return inventory;
-    // Asking for the menu during a turn must never restart its process for a changed package.
-    const live = this.turn ? this.live : await this.start();
-    const { commands } = await live.rpc.request({ type: "get_commands" });
-    const taken = new Set(inventory.choices.flatMap((item) => [item.command, ...(item.aliases ?? [])]));
-    for (const cmd of commands ?? []) {
-      if (!cmd.name || taken.has(cmd.name) || cmd.sourceInfo?.path?.startsWith("builtin:")) continue;
-      inventory.choices.push({ name: cmd.name, command: cmd.name, aliases: [], kind: cmd.source === "skill" ? "Skill" : "Command",
-        source: this.provider.name, description: String(cmd.description ?? "").split("\n")[0].slice(0, 300), duringTurn: false, native: true });
-      taken.add(cmd.name);
+    const isOmp = this.provider.runtime === OMP_ID;
+    // Asking for the menu during a turn must never restart its process.
+    const activeTurn = !!this.turn;
+    const live = activeTurn ? this.live : await this.start();
+    const configured = Object.entries(this.spec.mcpServers ?? {}).filter(([name]) => name !== BRIDGE);
+    const configuredNames = configured.map(([name]) => name);
+    const supportedNames = [];
+    const unsupported = new Set();
+    const describedServers = new Map();
+    for (const [name, cfg] of configured) {
+      const entry = this.provider.serverRecord(cfg);
+      if (!entry) unsupported.add(name);
+      else {
+        supportedNames.push(name);
+        describedServers.set(name, JSON.stringify(entry));
+      }
+    }
+    const harnessName = (name) => this.harnessServerName(name);
+    const recordedState = (name) => {
+      const h = harnessName(name);
+      return live?.runtime?.mcpStates.get(h) ?? live?.runtime?.mcpStates.get(name);
+    };
+    const clearPendingState = (name) => {
+      const h = harnessName(name);
+      if (live?.runtime?.mcpStates.get(h) === "pending") live.runtime.mcpStates.delete(h);
+      if (live?.runtime?.mcpStates.get(name) === "pending") live.runtime.mcpStates.delete(name);
+    };
+    const staleConfig = (name) => {
+      if (!live?.registeredConfigs) return false;
+      const current = describedServers.get(name);
+      const h = harnessName(name);
+      const registered = live.registeredConfigs.get(h) ?? live.registeredConfigs.get(name);
+      return registered !== undefined && current !== undefined && registered !== current;
+    };
+    const unregisteredOnWarmPi = (name) => {
+      if (isOmp || !live) return false;
+      const h = harnessName(name);
+      if (Array.isArray(live.runtime?.servers)) return !live.runtime.servers.some((s) => s.name === h || s.name === name);
+      if (live.registeredConfigs) return !live.registeredConfigs.has(h) && !live.registeredConfigs.has(name);
+      return false;
+    };
+    let state = live ? await live.rpc.request({ type: "get_state" }, activeTurn ? 1500 : 10000).catch(() => null) : null;
+    const rawCommands = !live
+      ? null
+      : isOmp
+        ? (await live.rpc.request({ type: "get_available_commands" }, activeTurn ? 1500 : 5000).catch(() => null))?.commands ?? live.runtime?.availableCommands ?? null
+        : (await live.rpc.request({ type: "get_commands" }, activeTurn ? 1500 : 5000).catch(() => null))?.commands ?? null;
+    const commands = Array.isArray(rawCommands) ? rawCommands : [];
+    const hasMcpCommand = commands.some((c) => c?.name === "mcp");
+    const hasTelemetry = () => live?.runtime?.tools !== null || (isOmp && Array.isArray(state?.dumpTools));
+    // Wait briefly after cold start so fast local/HTTP MCP servers and the Botkins bridge settle before returning.
+    if (!activeTurn && live && (supportedNames.length > 0 || (this.provider.bridge && this.spec.tools.length > 0))) {
+      const deadline = Date.now() + INVENTORY_WAIT_MS;
+      while (Date.now() < deadline && !this.turn && !this.closed) {
+        if (!hasTelemetry()) break;
+        const toolsByServer = this.classifyTools(live, state, supportedNames);
+        const bridgeReady = !this.provider.bridge || !this.spec.tools.length || (toolsByServer.get(BRIDGE)?.size ?? 0) > 0 || live.runtime.mcpStates.has(BRIDGE);
+        const serversReady = supportedNames.every((name) =>
+          unregisteredOnWarmPi(name) || staleConfig(name) || (toolsByServer.get(name)?.size ?? 0) > 0 || !!recordedState(name),
+        );
+        if (bridgeReady && serversReady) break;
+        await delay(INVENTORY_STEP_MS);
+        if (isOmp) state = (await live.rpc.request({ type: "get_state" }, 2000).catch(() => null)) ?? state;
+      }
+    }
+    let toolsByServer = live ? this.classifyTools(live, state, supportedNames) : new Map();
+    // When idle, probe unresolved registered servers so 0-tool connected, failed, needs-auth and pending are distinguished.
+    if (!activeTurn && live && hasMcpCommand) {
+      const unresolved = supportedNames.filter(
+        (name) => !unregisteredOnWarmPi(name) && !staleConfig(name) && !(toolsByServer.get(name)?.size > 0) && !recordedState(name),
+      );
+      if (unresolved.length > 0) {
+        if (isOmp) {
+          const probeDeadline = Date.now() + 2500;
+          for (const name of unresolved) {
+            if (this.turn || this.closed || Date.now() >= probeDeadline) break;
+            await this.probeOmpMcp(live, harnessName(name));
+          }
+          state = (await live.rpc.request({ type: "get_state" }, 2000).catch(() => null)) ?? state;
+        } else {
+          await this.probePiMcp(live);
+        }
+        toolsByServer = this.classifyTools(live, state, supportedNames);
+      }
+    }
+    const servers = configuredNames.map((name) => {
+      if (unsupported.has(name)) return { name, status: "unavailable", tools: [] };
+      if (!live) return { name, status: "not started", tools: [] };
+      if (unregisteredOnWarmPi(name) || staleConfig(name)) return { name, status: "configured", tools: [] };
+      const observed = [...(toolsByServer.get(name)?.values() ?? [])];
+      const recorded = recordedState(name);
+      if (observed.length > 0 && (!recorded || recorded === "connected" || recorded === "pending")) {
+        if (recorded === "pending") clearPendingState(name);
+        return { name, status: "connected", tools: observed };
+      }
+      if (recorded && recorded !== "connected") return { name, status: recorded, tools: [] };
+      if (recorded === "connected") return { name, status: "connected", tools: [] };
+      if (!isOmp && hasTelemetry() && !live.runtime.mcpSettled) return { name, status: "pending", tools: [] };
+      if (isOmp && state?.hasPendingAsyncWork) return { name, status: "pending", tools: [] };
+      return { name, status: "unobservable", tools: [] };
+    });
+    // Botkins' own tools: when real runtime telemetry is active on a bridged session, reflect observed exposure and availability.
+    let botkinsTools = this.spec.tools;
+    if (live && this.provider.bridge && hasTelemetry()) {
+      const bridgeTools = toolsByServer.get(BRIDGE);
+      const bridgeState = live.runtime.mcpStates.get(BRIDGE);
+      if (bridgeState && bridgeState !== "connected") {
+        botkinsTools = [];
+      } else if (bridgeTools && bridgeTools.size > 0) {
+        botkinsTools = [];
+        for (const tool of this.spec.tools) {
+          const match = bridgeTools.get(tool.name) ?? bridgeTools.get(tool.name.replace(/[^A-Za-z0-9_]/g, "_"));
+          if (match) botkinsTools.push({ ...tool, exposure: match.exposure });
+        }
+      } else {
+        botkinsTools = [];
+      }
+    }
+    const inventory = buildInventory({ name: this.provider.name, tools: botkinsTools, servers, native: skillChoices(this.skills.list), compact: true });
+    if (this.provider.packages.activePaths().length) {
+      const taken = new Set(inventory.choices.flatMap((item) => [item.command, ...(item.aliases ?? [])]));
+      for (const cmd of commands) {
+        if (!cmd?.name || taken.has(cmd.name)) continue;
+        if (isOmp) {
+          if ((cmd.source !== "extension" && cmd.source !== "skill") || cmd.name === "autoresearch") continue;
+        } else {
+          if (cmd.sourceInfo?.path?.startsWith("builtin:")) continue;
+        }
+        inventory.choices.push({
+          name: cmd.name,
+          command: cmd.name,
+          aliases: [],
+          kind: cmd.source === "skill" ? "Skill" : "Command",
+          source: this.provider.name,
+          description: String(cmd.description ?? "").split("\n")[0].slice(0, 300),
+          duringTurn: false,
+          native: true,
+        });
+        taken.add(cmd.name);
+      }
     }
     return inventory;
   }
@@ -855,11 +1265,32 @@ export class PiProvider extends ModelProvider {
       baseEnv: env,
     });
     this.sessions = new SessionStore(dataDir && join(this.dataDir, "sessions.json"));
-    // Botkins session id → { rpc, ref, key, file, session, timer }: one process per conversation.
+    // Botkins session id → { folder, plan }: in-memory plan mirror alongside sessions.json.
+    this.plans = new Map();
+    // Botkins session id → { rpc, ref, key, file, folder, session, timer, plan, state }: one process per conversation.
     this.live = new Map();
     // OMP session id → current ToolBridge key (rotated when declared bridge schemas change so OMP refreshes tools/list).
     this.bridgeKeys = new Map();
     this.packages = packages ?? new PiPackages({ dataDir: this.dataDir, install: (source, dir) => this.installPackage(source, dir) });
+  }
+  storedPlan(sessionId, folder) {
+    const record = this.sessions.get(sessionId);
+    if (record && record.folder === folder && record.plan !== undefined) return record.plan;
+    const entry = this.plans.get(sessionId);
+    if (entry && entry.folder === folder) return entry.plan;
+    return null;
+  }
+  savePlan(sessionId, folder, plan) {
+    this.plans.set(sessionId, { folder, plan });
+    this.sessions.update(sessionId, (record) => {
+      if (record.folder === folder) record.plan = plan;
+    });
+  }
+  clearPlan(sessionId) {
+    this.plans.delete(sessionId);
+    this.sessions.update(sessionId, (record) => {
+      delete record.plan;
+    });
   }
   async installPackage(source, dir) {
     const file = await this.locate();
@@ -964,6 +1395,7 @@ export class PiProvider extends ModelProvider {
       await this.write(live, described);
       clearTimeout(live.timer);
       const state = await live.rpc.request({ type: "get_state" }, 15000).catch(() => null);
+      live.state = state;
       if (state?.model && (state.model.provider !== target.provider || state.model.id !== target.modelId)) await live.rpc.request({ type: "set_model", ...target });
       const wanted = level(session.model.reasoningEffort);
       if (wanted && state?.thinkingLevel !== wanted) await live.rpc.request({ type: "set_thinking_level", level: wanted }).catch(() => {});
@@ -990,12 +1422,18 @@ export class PiProvider extends ModelProvider {
     live = {
       ref,
       key,
+      folder: spec.folder,
       // A file of this process's own: one let go a moment ago may still be exiting, and removes its own.
       file: join(dir, hash(spec.sessionId).slice(0, 24) + "-" + randomBytes(4).toString("hex") + ".json"),
       config: join(agentDir, "botkins.yml"),
       agentDir,
       session,
       timer: null,
+      plan: undefined,
+      state: null,
+      runtime: createRuntimeState(),
+      registeredConfigs: new Map(Object.entries(described.servers ?? {}).map(([name, cfg]) => [name, JSON.stringify(cfg)])),
+      pendingConfigs: null,
     };
     const wanted = level(session.model.reasoningEffort);
     const args = this.launchArgs(live, spec, target, wanted, packages);
@@ -1025,6 +1463,7 @@ export class PiProvider extends ModelProvider {
       throw error;
     }
     live.rpc.on((event) => {
+      this.observeRuntime(live, event);
       if (event.type === "extension_ui_request") void this.dialog(live, event);
     });
     live.rpc.exited.then(() => {
@@ -1044,6 +1483,7 @@ export class PiProvider extends ModelProvider {
     let state;
     try {
       state = await live.rpc.request({ type: "get_state" }, 60000);
+      live.state = state;
       if (this.runtime === OMP_ID && state?.sessionId) live.ref = state.sessionId;
     } catch (error) {
       this.live.delete(spec.sessionId);
@@ -1066,11 +1506,56 @@ export class PiProvider extends ModelProvider {
     }
     // Every server Botkins gave this process (PiSession.permission).
     live.given = new Set([...(live.given ?? []), ...Object.keys(described.servers ?? {})]);
+    live.pendingConfigs = new Map(Object.entries(described.servers ?? {}).map(([name, cfg]) => [name, JSON.stringify(cfg)]));
     mkdirSync(live.agentDir, { recursive: true, mode: 0o700 });
     writeFileSync(live.file, JSON.stringify(described), { mode: 0o600 });
     if (this.runtime === OMP_ID) {
       writeFileSync(join(live.agentDir, "mcp.json"), JSON.stringify({ mcpServers: described.servers }), { mode: 0o600 });
       writeFileSync(live.config, OMP_CONFIG, { mode: 0o600 });
+    }
+  }
+  /** Passively tracks runtime tool snapshots, MCP notices and command updates from the harness stream. */
+  observeRuntime(live, event) {
+    const rt = live.runtime;
+    if (!rt || !event) return;
+    if (event.type === "extension_ui_request") {
+      if (event.method === "setStatus" && event.statusKey === INVENTORY && typeof event.statusText === "string") {
+        try {
+          const parsed = JSON.parse(event.statusText);
+          if (Array.isArray(parsed?.tools)) rt.tools = parsed.tools;
+          if (Array.isArray(parsed?.servers)) rt.servers = parsed.servers;
+        } catch {
+          // Ignore malformed telemetry payloads.
+        }
+        return;
+      }
+      if (event.method === "notify" && typeof event.message === "string") {
+        const parsed = parsePiMcpNotify(event.message);
+        if (parsed) {
+          if (parsed.settled) rt.mcpSettled = true;
+          for (const [name, status] of parsed.states) rt.mcpStates.set(name, status);
+        }
+      }
+      return;
+    }
+    if (event.type === "notice" && event.source === "toolCommands" && typeof event.message === "string") {
+      const match = /^Tool commands:\s+(added|removed)\s+(.+)$/i.exec(event.message.trim());
+      if (match) {
+        const adding = match[1].toLowerCase() === "added";
+        for (const name of match[2].split(/[\s,]+/).filter(Boolean)) {
+          if (adding) rt.toolCommands.add(name);
+          else rt.toolCommands.delete(name);
+        }
+      }
+      return;
+    }
+    if (event.type === "available_commands_update" && Array.isArray(event.commands)) {
+      rt.availableCommands = event.commands;
+      return;
+    }
+    if (event.type === "command_output" && typeof event.text === "string") {
+      const parsed = parseOmpMcpOutput(event.text);
+      if (parsed) rt.mcpStates.set(parsed.name, parsed.status);
     }
   }
   /** The extension dialogs. Only Botkins' approval question is answered; any other is cancelled. */
@@ -1151,6 +1636,7 @@ export class PiProvider extends ModelProvider {
     this.release(sessionId);
     const prev = this.bridgeKeys.get(sessionId);
     this.bridgeKeys.delete(sessionId);
+    this.plans.delete(sessionId);
     this.bridge?.forget(prev ?? this.id + ":" + sessionId);
     const record = this.sessions.get(sessionId);
     if (!record) return;
