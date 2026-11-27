@@ -2,6 +2,8 @@ import { addUserMessage, recordVoiceLine } from "./link/voice-history.mjs";
 import { reasoningPreview } from "./link/reasoning-preview.mjs";
 import { commitInterim, finishReply, wholeMessage } from "./transcript.mjs";
 import { changeMainContext, conversations, findMainChat, makeMainChat, migrateMainChats, visibleChat } from "./link/main-chat.mjs";
+/** "/new" and "/clear" typed in a Main chat clear its context in place: a Main chat is never replaced by a command. */
+const MAIN_RESET = /^\/(?:new|clear)\s*$/i;
 import { isRoutineChat } from "./link/routine-chat.mjs";
 import { findHumanMentions } from "./human-mentions.mjs";
 import { stripVTControlCharacters } from "node:util";
@@ -912,6 +914,7 @@ export class Workspace {
         ? rawQuote.trim().slice(0, 4000)
         : undefined;
     const chat = this.state.chats.find((c) => c.id === chatId);
+    if (chat?.main && MAIN_RESET.test(prompt.trim())) return this.changeMainFork(chat.id, "reset", undefined, undefined, author?.memberId ?? "owner");
     if (chat?.hostDispatch) throw new Error("Start a new chat to send this teammate a message.");
     if (!chat || this.active.has(chatId))
       throw new Error("Chat unavailable or already working");
@@ -1106,6 +1109,8 @@ export class Workspace {
   submit(chatId, text, options = {}) {
     const chat = this.chat(chatId);
     this.access.assertChat(chat, this.projects.botsOf(chat));
+    if (chat.main && typeof text === "string" && MAIN_RESET.test(text.trim()))
+      return this.changeMainFork(chat.id, "reset", undefined, undefined, options.author?.memberId ?? "owner");
     const { delivery, ...messageOptions } = options;
     if (!this.active.has(chat.id)) return this.send(chat.id, text, messageOptions);
     if (isGroup(chat) && options.attachments?.length)

@@ -69,7 +69,7 @@ function ChatRow({ chat, bots, sections, actions }: { chat: ChatSummary; bots: M
   const mine = myPlace(chat, me) === "manages";
   const canRegenerate = useCanRegenerateTitle(chat, mine);
   const starters = mine && !chat.main ? [{ id: "rename", title: "Rename…", image: "pencil" }, ...(canRegenerate ? [regenerateTitleAction] : [])] : [];
-  const ends = mine && !chat.main ? [{ id: "delete", title: "Delete", image: "trash", attributes: { destructive: true } }] : [];
+  const ends = mine ? [{ id: "delete", title: "Delete", image: "trash", attributes: { destructive: true } }] : [];
   // A section is the person's own way to group their chats, like a pin.
   const filing = sections ? [moveToSection(chat, sections)] : [];
   const menu = chat.archived
@@ -79,7 +79,7 @@ function ChatRow({ chat, bots, sections, actions }: { chat: ChatSummary; bots: M
         ...filing,
         ...(!isRoutineChat(chat) ? [{ id: "unread", title: chat.unread ? "Mark as read" : "Mark as unread", image: chat.unread ? "envelope.open" : "envelope.badge" }] : []),
         ...starters,
-        ...(chat.main ? [] : [{ id: "archive", title: "Archive", image: "archivebox" }]),
+        ...(chat.main && !mine ? [] : [{ id: "archive", title: "Archive", image: "archivebox" }]),
         ...ends,
       ];
   const viewOnlyMenu = canView && !chat.archived && chat.unread ? [{ id: "unread", title: "Mark as read", image: "envelope.open" }] : [];

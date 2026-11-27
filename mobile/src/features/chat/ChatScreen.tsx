@@ -177,7 +177,8 @@ function ChatMenu({ chat, bot, bots, started, projects, settings, onDelete, pane
     ...(ownMain ? [
       ...(chat.forks ?? []).map(f => ({ id: "fork:" + f.id, title: f.name, state: f.id === chat.activeFork ? "on" as const : "off" as const })),
       { id: "reset", title: "Reset context", image: "arrow.counterclockwise" },
-    ] : mine && !chat.main ? [{ id: "delete", title: "Delete", image: "trash", attributes: { destructive: true } }] : []),
+      { id: "delete", title: "Delete", image: "trash", attributes: { destructive: true } },
+    ] : mine ? [{ id: "delete", title: "Delete", image: "trash", attributes: { destructive: true } }] : []),
   ];
   return (
     <>
@@ -828,7 +829,8 @@ function ChatScreenScreen({ pane: paneId, onLeave: leavePane, onList }: { pane?:
     // "/btw" and "/ask" are answered beside the chat, also while the bot works.
     const asked = fromComposer && chatId ? sideQuestionOf(composed) : null;
     if (asked) return Promise.resolve(askSide(asked.command, asked.question));
-    if (chat?.main && fromComposer && composed.toLowerCase() === "/clear") {
+    // In a Main chat "/new" and "/clear" clear its context in place; the Main chat stays the same chat.
+    if (chat?.main && fromComposer && /^\/(?:new|clear)$/.test(composed.toLowerCase())) {
       return attempt(api.changeMainFork(chatId, "reset", undefined, chat.activeFork)).then(id => {
         if (id) setText("");
         return !!id;

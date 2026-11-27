@@ -23,7 +23,7 @@ import { BotStudio } from "./BotStudio";
 import { availableHeads, lookOf, sameLook } from "./botkins";
 import ModelPicker from "./ModelPicker";
 import { openProviderSettings } from "./providers";
-import { ChatRow, deleteBot, useAsk, type PageActions } from "./Pages";
+import { ChatRow, deleteBot, keepsMainChats, useAsk, type PageActions } from "./Pages";
 import { isRoutineChat } from "../desktop/link/routine-chat.mjs";
 import { BotRoutines } from "./Routines";
 import BotAccess from "./BotAccess";
@@ -198,7 +198,7 @@ export default function BotProfile({
             </p>
           )}
           <div className="profile-actions">
-            {state.proactive?.chatMode ? (
+            {keepsMainChats(state) ? (
               <button className="btn primary" onClick={() => actions.mainChat(bot.id)}>
                 <MessageCircle size={15} />
                 Main chat
