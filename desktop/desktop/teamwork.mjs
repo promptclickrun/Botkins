@@ -51,11 +51,11 @@ export class Teamwork {
   brief(bot, chat) {
     const team = this.roster(bot, chat);
     const remote = remoteTeamworkAllowed(this.ws, bot, chat, this.ws.active.get(chat.id)?.run, this.ws.active.get(chat.id))
-      ? "\nUse list_host_teammates to find teammates on the owner’s other computers, and use list_node_hosts with node_* tools (list_node_files, node_read_file, node_write_file, node_mkdir, node_move_file, node_delete_file, node_stat_file, node_search_files, node_exec, node_which, node_computer_apps, node_computer_observe, node_computer_act, node_screen_info, node_screen_capture, node_screen_input, node_notify) to work on the owner’s node hosts. Prefer node_computer_* element tokens over raw node_screen_* pixels when available. The node enforces its own policy and approval." : "";
+      ? "\nlist_host_teammates finds teammates on the owner’s other computers; list_node_hosts lists the node hosts your node_* tools work on. Each node enforces its own policy and approvals." : "";
     if (!team.length) return remote;
     return (
       "\n\n## Your team\nYou're " + bot.name + ". Your teammates:\n" + team.map(line).join("\n") +
-      "\nUse ask_teammate when a teammate fits a substantial part of the request. Split independent work across roles. Handle quick requests yourself or when the person asks for you. Say whom you're asking and why, share only the context they need, and combine their results into your reply." + remote
+      "\nUse ask_teammate when a teammate fits a substantial part of the request; split independent work across roles. Handle quick requests yourself, or when the person asks for you. Say whom you're asking and why, give them only the context they need, and fold their results into your reply." + remote
     );
   }
   /**

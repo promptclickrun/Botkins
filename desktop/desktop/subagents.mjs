@@ -77,10 +77,8 @@ export class Subagents {
     if (chat?.helper || chat?.subagent || chat?.panelId || run?.panelId) return "";
     return (
       "\n\n## Subagents\n" +
-      "Use subagent_run to delegate focused tasks to isolated child workers (or pass a `tasks` array to fan out in parallel). " +
-      "Subagents run through Botkins' own provider gateway, inherit your model (or accept an optional `model` override), and report live progress in Activity. " +
-      "Set `async: true` to launch in the background, then check or collect results with subagent_status, subagent_wait, or stop with subagent_stop. " +
-      "Prefer Botkins' subagent_* tools over harness-specific subagent plugins."
+      "subagent_run hands a focused task to an isolated worker on your model (`tasks` runs up to 8 in parallel; `async: true` runs it in the background for subagent_status, subagent_wait and subagent_stop). " +
+      "Prefer these over your harness's own subagent tools."
     );
   }
 
