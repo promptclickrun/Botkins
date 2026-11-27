@@ -47,7 +47,7 @@ export { SCRIPT_LENGTH };
  * test/script-commands.test.mjs holds the list to Botkins' own command tables.
  */
 export const RESERVED_COMMANDS = new Set([
-  "btw", "ask", "help", "model", "models", "permissions", "allow-all", "reset-allowed-tools", "compact", "config", "settings", "theme",
+  "btw", "ask", "help", "model", "models", "permissions", "allow-all", "reset-allowed-tools", "reload-tools", "compact", "config", "settings", "theme",
   "new", "clear", "agent", "agents", "resume", "login", "user", "version", "search", "copy", "tasks", "instructions", "lsp",
   "init", "review", "plan", "diff", "context", "usage", "mcp", "skills", "plugin", "plugins", "exit", "quit", "fleet", "delegate",
   "share", "session", "sessions", "rename", "rewind", "undo", "cwd", "add-dir", "env", "feedback", "experimental", "ide", "yolo",

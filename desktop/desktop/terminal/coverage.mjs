@@ -40,6 +40,7 @@ export const WORKSPACE = {
   updateBot: cmd("bots edit"),
   deleteBot: cmd("bots remove"),
   duplicateBot: cmd("bots duplicate"),
+  reloadBotTools: cmd("bots reload-tools"),
   reorderBots: cmd("bots order"),
   makePrimary: cmd("bots primary"),
   setBotFlags: cmd("bots flags"),
@@ -531,6 +532,7 @@ export const CHANGES = {
   // ── More of a bot, and templates (control-bots.mjs) ──
   // (By the name of the bot, the section or the template, as the answer has it. The text of a memory, an agent's instructions and a template's words are never in a line.)
   "bots.duplicate": (args, value) => value?.name ?? args?.[0],
+  "bots.reloadTools": (args, value) => value?.name ?? args?.[0],
   "bots.order": null,
   "bots.primary": (args, value) => value?.name ?? args?.[0],
   "bots.flags.set": (args, value) => value?.name ?? args?.[0],

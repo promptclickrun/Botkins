@@ -38,7 +38,8 @@ test("the tool bridge serves a session's tools as an MCP server, to that session
   const hello = await (await rpc(endpoint.url, endpoint.headers, { jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-03-26", capabilities: {}, clientInfo: { name: "t", version: "1" } } })).json();
   assert.equal(hello.result.protocolVersion, "2025-03-26", "the client's protocol version is kept when the bridge knows it");
   assert.deepEqual(hello.result.serverInfo, { name: "botkins", version: "9" });
-  assert.deepEqual(hello.result.capabilities, { tools: { listChanged: false } });
+  // A backend that keeps its connection is told when the tools change (toolbridge.test.mjs).
+  assert.deepEqual(hello.result.capabilities, { tools: { listChanged: true } });
   const unknown = await (await rpc(endpoint.url, endpoint.headers, { jsonrpc: "2.0", id: 2, method: "initialize", params: { protocolVersion: "1999-01-01" } })).json();
   assert.equal(unknown.result.protocolVersion, "2025-06-18");
   const noted = await rpc(endpoint.url, endpoint.headers, { jsonrpc: "2.0", method: "notifications/initialized" });
@@ -69,7 +70,7 @@ test("the tool bridge serves a session's tools as an MCP server, to that session
   assert.equal((await rpc(endpoint.url, { ...endpoint.headers, Origin: "https://evil.example" }, { jsonrpc: "2.0", id: 1, method: "tools/list" })).status, 403);
   const other = await bridge.open([]);
   assert.equal((await rpc(other.url, endpoint.headers, { jsonrpc: "2.0", id: 1, method: "tools/list" })).status, 401, "one session's secret doesn't open another's address");
-  assert.equal((await fetch(endpoint.url, { headers: endpoint.headers })).status, 405, "there is no event stream to open");
+  assert.equal((await fetch(endpoint.url, { headers: endpoint.headers })).status, 405, "a GET that doesn't ask for the event stream is refused");
   const garbled = await fetch(endpoint.url, { method: "POST", headers: { "content-type": "application/json", ...endpoint.headers }, body: "not json {" });
   assert.equal(garbled.status, 400);
   assert.equal((await garbled.json()).error.code, -32700);
@@ -83,10 +84,12 @@ test("the tool bridge serves a session's tools as an MCP server, to that session
   assert.equal((await rpc(endpoint.url, endpoint.headers, { jsonrpc: "2.0", id: 1, method: "tools/list" })).status, 401, "a closed address answers nobody");
 
   // An address kept for a conversation is the same each time it is opened, for a backend that
-  // goes on using the one it was first given. Closing it only takes the tools away.
+  // goes on using the one it was first given. Closing it keeps the tools listed (a backend that connects
+  // late must not cache an empty list) and refuses their calls until the next turn.
   const kept = await bridge.open([tools[0]], { key: "codex:chat-1" });
   kept.close();
-  assert.deepEqual((await (await rpc(kept.url, kept.headers, { jsonrpc: "2.0", id: 1, method: "tools/list" })).json()).result.tools, []);
+  assert.deepEqual((await (await rpc(kept.url, kept.headers, { jsonrpc: "2.0", id: 1, method: "tools/list" })).json()).result.tools.map((x) => x.name), ["greet"]);
+  assert.equal((await (await rpc(kept.url, kept.headers, { jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "greet", arguments: { name: "Ada" } } })).json()).result.isError, true);
   const again = await bridge.open([tools[0]], { key: "codex:chat-1" });
   assert.deepEqual([again.url, again.authorization], [kept.url, kept.authorization]);
   assert.deepEqual((await (await rpc(kept.url, kept.headers, { jsonrpc: "2.0", id: 1, method: "tools/list" })).json()).result.tools.map((x) => x.name), ["greet"]);

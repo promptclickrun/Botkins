@@ -165,6 +165,12 @@ export function botsApi({ workspace, handlers, bot }) {
       await handlers.reorderBots(ids);
       return state().bots.map(placeView);
     },
+    /** Reconnects a bot's tools: each of its chats starts its harness afresh at its next turn. */
+    async "bots.reloadTools"([ref]) {
+      const found = bot(ref);
+      await handlers.reloadBotTools(found.id);
+      return placeView(found);
+    },
     /** Makes a bot the primary bot: the first one, which is never hidden. */
     async "bots.primary"([ref]) {
       const found = bot(ref);
