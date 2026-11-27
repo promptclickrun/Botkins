@@ -160,7 +160,7 @@ export function normalizeInboundEvent(raw = {}) {
     sender,
     isDirect: Boolean(raw.isDirect),
     mentionsBot: Boolean(raw.mentionsBot),
-    ...(raw.isSelf && { isSelf: true }),
+    ...(Boolean(raw.isSelf || raw.isFromSelf) && { isSelf: true }),
     text: typeof raw.text === "string" ? raw.text : "",
     attachments,
     receivedAt: Number(raw.receivedAt) || Date.now(),
