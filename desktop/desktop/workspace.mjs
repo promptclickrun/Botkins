@@ -3516,7 +3516,7 @@ export function deliveryGuidance(folder, ownerChat = true) {
     (ownerChat
       ? "Pictures, audio and video show from anywhere on this computer; other files only from your folders (that one or the chat's project folder), an upload, or a file you wrote."
       : "Files show only from your folders (that one or the chat's project folder), an upload, or a file you wrote.") +
-    "\nFor a view rather than a file: render_ui for an interactive A2UI v1.0 surface in the chat (forms, inputs, buttons that return structured actions back to you, tabs, live data-bound updates), render_card for a static inline summary card, side_pane_show for a panel beside the chat (HTML or a table), show_app for an interactive app in its own window, today_publish for a panel kept on Today or a space, claude_artifact for a private claude.ai page the person can share. side_pane_show kind \"screen\" offers a live view of browser or desktop work worth watching, not of code, shell commands or fetches."
+    "\nFor a view rather than a file: render_card for an inline card, render_ui for an interactive A2UI v1.0 surface in the chat (forms, inputs, buttons that return structured actions back to you, tabs, live data-bound updates), side_pane_show for a panel beside the chat (HTML or a table), show_app for an interactive app in its own window, today_publish for a panel kept on Today or a space, claude_artifact for a private claude.ai page the person can share. side_pane_show kind \"screen\" offers a live view of browser or desktop work worth watching, not of code, shell commands or fetches."
   );
 }
 /**
