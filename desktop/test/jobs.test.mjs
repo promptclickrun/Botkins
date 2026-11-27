@@ -298,3 +298,66 @@ test("a project with no repository can't have worktree jobs", async () => {
   git(empty, "init", "-q", "-b", "main");
   await assert.rejects(workspace(empty).jobs.start("p1", { botIds: ["b1"], prompt: "Go" }), /no commits yet/);
 });
+
+test("a repository's own merge program never runs: not when checking for conflicts, not when bringing in", async () => {
+  const root = repo({ "a.txt": "base\n", ".gitattributes": "a.txt merge=evil\n" });
+  const marker = join(temp("botkins-jobs-marker-"), "PWNED");
+  git(root, "config", "merge.evil.driver", "touch " + marker + "; cp %B %A");
+  const ws = workspace(root);
+  const [id] = await ws.jobs.start("p1", { botIds: ["b1"], prompt: "Edit a" });
+  await settled(ws, 1);
+  const { job } = ws.chat(id);
+  writeFileSync(join(job.path, "a.txt"), "the job's\n");
+  git(job.path, "commit", "-qam", "job");
+  writeFileSync(join(root, "a.txt"), "the checkout's\n");
+  git(root, "commit", "-qam", "checkout");
+  const status = await ws.jobs.status(id);
+  assert.equal(existsSync(marker), false, "status ran no merge program");
+  assert.deepEqual(status.conflicts, ["a.txt"], "a file with a blanked driver is a conflict");
+  assert.deepEqual(await ws.jobs.bringIn(id), { ok: false, conflicts: ["a.txt"] });
+  assert.equal(existsSync(marker), false, "bring-in ran no merge program");
+});
+
+test("while a setup runs the job is busy; a job removed meanwhile never sends its prompt, least of all into the checkout", async () => {
+  const root = repo({ ".botkins/worktrees.json": JSON.stringify({ setup: ["sleep 1"] }) });
+  const ws = workspace(root);
+  await ws.jobs.approveSetup("p1", undefined, (await ws.jobs.setupOf("p1")).hash);
+  const [id] = await ws.jobs.start("p1", { botIds: ["b1"], prompt: "Slow" });
+  const chat = ws.chat(id);
+  for (let i = 0; i < 100 && chat.job.setup !== "running"; i++) await new Promise((done) => setTimeout(done, 10));
+  assert.equal(chat.job.setup, "running");
+  await assert.rejects(ws.jobs.bringIn(id), /setting up/);
+  await assert.rejects(ws.jobs.removeWorktree(id), /setting up/);
+  assert.throws(() => ws.jobs.startTurn(id), /setting up/);
+  // Its chat deleted while the setup runs (forget marks the job removed): the prompt is never sent.
+  chat.job.state = "removed";
+  for (let i = 0; i < 200 && ws.jobs.busy.has(id); i++) await new Promise((done) => setTimeout(done, 10));
+  await new Promise((done) => setTimeout(done, 50));
+  assert.equal(ws.jobs.busy.has(id), false);
+  assert.equal(ws.submitted.length, 0);
+});
+
+test("a setup cut off by a restart is failed, so Start anyway can send the prompt", async () => {
+  const root = repo();
+  const ws = workspace(root);
+  ws.state.chats.push({ id: "c-cut", botId: "b1", projectId: "p1", messages: [], job: { prompt: "Go", where: "worktree", state: "open", setup: "running", path: root } });
+  const again = new Jobs(ws);
+  assert.equal(ws.chat("c-cut").job.setup, "failed");
+  assert.match(ws.chat("c-cut").job.setupError, /interrupted/);
+  again.startTurn("c-cut");
+  assert.equal(ws.submitted.at(-1).text, "Go");
+});
+
+test("deleting a job's chat keeps what wasn't committed on the job's branch", async () => {
+  const root = repo();
+  const ws = workspace(root);
+  const [id] = await ws.jobs.start("p1", { botIds: ["b1"], prompt: "Sketch" });
+  await settled(ws, 1);
+  const chat = ws.chat(id);
+  const { job } = chat;
+  writeFileSync(join(job.path, "sketch.txt"), "unsaved\n");
+  ws.jobs.forget(chat);
+  for (let i = 0; i < 200 && existsSync(job.path); i++) await new Promise((done) => setTimeout(done, 25));
+  assert.equal(existsSync(job.path), false);
+  assert.equal(git(root, "show", job.branch + ":sketch.txt"), "unsaved");
+});

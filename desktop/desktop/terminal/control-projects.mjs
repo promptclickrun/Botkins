@@ -44,6 +44,9 @@ function pick(list, ref, what, see, label = (entry) => entry.name) {
  * @param handlers   `runtime.handlers`.
  * @param bot        (ref) → a bot, by id or by a name only one bot has (desktop/terminal/control.mjs).
  */
+/** The mark of a caller that showed the person what happens and got their yes at a terminal or in the app. */
+const personAgreed = (mark) => mark !== null && typeof mark === "object" && !Array.isArray(mark) && mark.agreed === true;
+
 export function projectsApi({ workspace, handlers, bot }) {
   const state = () => workspace.state;
   const projects = () => state().projects ?? [];
@@ -286,8 +289,13 @@ export function projectsApi({ workspace, handlers, bot }) {
       const found = project(ref);
       return { project: named(found), ...(await handlers.projectJobSetup(found.id, folder ?? undefined)) };
     },
-    /** Says yes to the setup commands the caller showed the person: `hash` is theirs, from `jobs.setup`. */
-    async "jobs.allowSetup"([ref, hash, folder]) {
+    /**
+     * Says yes to the setup commands the caller showed the person: `hash` is theirs, from `jobs.setup`. The commands
+     * run outside any bot's sandbox, so this needs the mark `{ agreed: true }` of a person's yes: a bot's shell must
+     * not allow commands it wrote by a quiet call (`botkins jobs allow-setup` asks at a terminal; no flag gives it).
+     */
+    async "jobs.allowSetup"([ref, hash, folder, mark]) {
+      if (!personAgreed(mark)) throw new ControlError("Allowing a repository's setup commands needs a yes of the person: they run on this computer, outside any sandbox. Show them to the person and give `{ \"agreed\": true }` as the last argument (`botkins jobs allow-setup` asks at a terminal; no flag gives it), or allow them in the app.", "NEEDS_YES");
       const found = project(ref);
       await handlers.approveJobSetup(found.id, folder ?? undefined, text(hash, 64, "the setup's hash"));
       return { project: named(found) };
@@ -307,7 +315,9 @@ export function projectsApi({ workspace, handlers, bot }) {
       const chat = jobChat(ref);
       return { job: jobView(chat), ...(await handlers.projectJobStatus(chat.id)) };
     },
-    async "jobs.bringIn"([ref, message]) {
+    /** Merges into the person's checkout, so it needs the mark `{ agreed: true }` of a person's yes, as `jobs.allowSetup` does. */
+    async "jobs.bringIn"([ref, message, mark]) {
+      if (!personAgreed(mark)) throw new ControlError("Bringing a job in changes your checkout, so it needs a yes of the person. Show the files to the person and give `{ \"agreed\": true }` as the last argument (`botkins jobs bring-in` asks at a terminal; no flag gives it), or bring it in from the app.", "NEEDS_YES");
       const chat = jobChat(ref);
       return { job: jobView(chat), ...(await handlers.bringInJob(chat.id, message ?? undefined)) };
     },

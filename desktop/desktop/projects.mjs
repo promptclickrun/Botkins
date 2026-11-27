@@ -37,18 +37,28 @@ export const ENV = { ...process.env, GIT_OPTIONAL_LOCKS: "0", GIT_LITERAL_PATHSP
 async function raw(cwd, args) {
   return run("git", ["-C", cwd, ...args], { maxBuffer: 16 * 1024 * 1024, timeout: 20000, env: ENV });
 }
-/** Overrides every filter driver the repository's config names, so reading status runs none of them. */
+/**
+ * Overrides every filter driver and merge driver the repository's config names, so reading status, checking
+ * for conflicts and merging run none of them. A merge driver left blank makes git treat its files as a
+ * conflict, which is the safe answer (`git merge-tree` and `git merge` would otherwise run the repository's program).
+ */
 export async function filterOverrides(cwd) {
   let out = "";
   try {
-    out = (await raw(cwd, ["config", "--null", "--get-regexp", "^filter\\."])).stdout;
+    out = (await raw(cwd, ["config", "--null", "--get-regexp", "^(filter|merge)\\."])).stdout;
   } catch {}
-  const names = new Set();
+  const filters = new Set();
+  const merges = new Set();
   for (const entry of out.split("\0")) {
-    const m = /^filter\.(.+)\.[^.\n]+\n/s.exec(entry);
-    if (m) names.add(m[1]);
+    const filter = /^filter\.(.+)\.[^.\n]+\n/s.exec(entry);
+    if (filter) filters.add(filter[1]);
+    const merge = /^merge\.(.+)\.(?:driver|recursive)\n/s.exec(entry);
+    if (merge) merges.add(merge[1]);
   }
-  return [...names].flatMap((n) => ["-c", `filter.${n}.clean=cat`, "-c", `filter.${n}.smudge=cat`, "-c", `filter.${n}.process=`, "-c", `filter.${n}.required=false`]);
+  return [
+    ...[...filters].flatMap((n) => ["-c", `filter.${n}.clean=cat`, "-c", `filter.${n}.smudge=cat`, "-c", `filter.${n}.process=`, "-c", `filter.${n}.required=false`]),
+    ...[...merges].flatMap((n) => ["-c", `merge.${n}.driver=`, "-c", `merge.${n}.recursive=`]),
+  ];
 }
 async function git(cwd, args, { allowFail = false, differences = false } = {}) {
   try {

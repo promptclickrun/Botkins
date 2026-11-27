@@ -9,7 +9,8 @@
 //    needs a yes (`--yes` with no terminal). Git hooks do not run.
 //  - `tasks start` and `projects chat` are about a turn of a model: the text says what starts, and what does not.
 //  - `jobs start` runs a repository's setup commands (.botkins/worktrees.json) only once the person saw them and said yes,
-//    and `jobs bring-in` shows the files it merges first and needs a yes (`--yes` with no terminal).
+//    and `jobs bring-in` shows the files it merges first. Both yeses are a person's at a terminal: --yes doesn't give them,
+//    so a bot's shell (which has `botkins` and the socket) can't allow commands it wrote or merge into the checkout.
 //  - A text that somebody else wrote (a name, a to-do, a task's details, a diff, a file's content) is made safe
 //    before it is printed to a person. `--json` and a pipe get it as it is.
 import { closeSync, existsSync, openSync, readFileSync, renameSync, unlinkSync, writeSync } from "node:fs";
@@ -127,14 +128,22 @@ const setupText = (found) => {
     ...(found.error ? [] : found.setup.map((line) => "  $ " + safe(line))),
   ].join("\n");
 };
-/** Shows a repository's setup commands and asks; then allows them. False when the person said no. */
+/**
+ * A yes that only a person at a terminal gives: --yes doesn't, so a bot's shell can't say yes for them.
+ * For what runs outside any sandbox or changes the person's checkout. With no terminal: do it in the app.
+ */
+async function personConfirm(context, question, where) {
+  if (!context.stdin.isTTY || context.json) throw new CliError("This needs a yes from you at a terminal, and --yes doesn't give it. " + where);
+  return /^y(es)?$/i.test(((await ask(context, question + " [y/N] ")) ?? "").trim());
+}
+/** Shows a repository's setup commands and asks the person at a terminal; then allows them. False when they said no. */
 async function allowSetup(context, found) {
   if (!found.repo) throw new CliError("The folder of " + safe(found.project.name) + " is not a git repository.");
   if (found.error) throw new CliError(safe(found.error));
   if (!found.setup.length || found.approved) return true;
-  show(context, ["Each new worktree of " + safe(found.project.name) + " runs these commands from .botkins/worktrees.json, on this computer, as the user that runs Botkins:", ...found.setup.map((line) => "  $ " + safe(line))].join("\n"));
-  if (!(await confirm(context, "Allow them?"))) return false;
-  await context.client.call("jobs.allowSetup", found.project.id, found.hash, found.folder);
+  show(context, ["Each new worktree of " + safe(found.project.name) + " runs these commands from .botkins/worktrees.json, on this computer, as the user that runs Botkins, outside any sandbox:", ...found.setup.map((line) => "  $ " + safe(line))].join("\n"));
+  if (!(await personConfirm(context, "Allow them?", "Run `botkins jobs allow-setup` at a terminal, or allow the setup on the project's Jobs page in the app."))) return false;
+  await context.client.call("jobs.allowSetup", found.project.id, found.hash, found.folder, { agreed: true });
   return true;
 }
 const statusText = (found) => {
@@ -568,9 +577,9 @@ export const projectsCommands = {
       },
       "allow-setup": {
         summary: "Allow a repository's setup commands to run in new worktrees",
-        usage: "botkins jobs allow-setup <project> [--folder <path>] [--yes]",
-        options: { folder: { type: "string", value: "path", about: "A folder in the project" }, ...YES },
-        details: "The commands come from .botkins/worktrees.json in the repository, so anybody who can change the repository can change them. They run on this computer, in each new worktree, as the user that runs Botkins. The command shows them first and asks; with no terminal it needs --yes. A changed list needs a yes again.",
+        usage: "botkins jobs allow-setup <project> [--folder <path>]",
+        options: { folder: { type: "string", value: "path", about: "A folder in the project" } },
+        details: "The commands come from .botkins/worktrees.json in the repository, so anybody who can change the repository (a bot included) can change them. They run on this computer, in each new worktree, as the user that runs Botkins, outside any sandbox. The command shows them first and asks you at a terminal; --yes doesn't answer for you, so with no terminal allow them in the app. A changed list needs a yes again.",
         async run(context) {
           const found = await context.client.call("jobs.setup", one(context, "Name the project (its name or id)."), context.options.folder);
           if (!(await allowSetup(context, found))) return EXIT.failed;
@@ -589,7 +598,7 @@ export const projectsCommands = {
           file: { type: "string", value: "path", about: "The prompt from a file (\"-\" reads standard input)" },
           ...YES,
         },
-        details: "This sends the prompt at once: a turn of the model starts in each job's chat, after the worktree's setup. The bot's tools work in the job's worktree (or in your checkout with --checkout), and each tool asks for an approval as it does in any chat. When the repository has setup commands that weren't allowed, they are shown first and the command asks; --mode yolo asks too. With no terminal both need --yes.",
+        details: "This sends the prompt at once: a turn of the model starts in each job's chat, after the worktree's setup. The bot's tools work in the job's worktree (or in your checkout with --checkout), and each tool asks for an approval as it does in any chat. When the repository has setup commands that weren't allowed, they are shown first and the command asks you at a terminal (--yes doesn't answer that; with no terminal allow them in the app). --mode yolo asks too; with no terminal that needs --yes.",
         async run(context) {
           const ref = context.args[0];
           if (!ref) throw usage("Name the project (its name or id).");
@@ -623,16 +632,16 @@ export const projectsCommands = {
       },
       "bring-in": {
         summary: "Merge a finished job into your checkout",
-        usage: "botkins jobs bring-in <job> [--message <text>] [--yes]",
-        options: { message: { type: "string", short: "m", value: "text", about: "The message of the commit that takes what was left uncommitted in the worktree" }, ...YES },
-        details: "This commits what was left uncommitted in the job's worktree, checks that the job's branch merges into your checkout's branch with no conflict, merges it (git merge --no-ff), and removes the worktree. The branch stays. Git hooks do not run. Your checkout must be on the branch the job started from, with nothing uncommitted. The command shows the files first and asks; with no terminal it needs --yes. When the branches clash, nothing changes: `botkins jobs catch-up` asks the bot to sort it out.",
+        usage: "botkins jobs bring-in <job> [--message <text>]",
+        options: { message: { type: "string", short: "m", value: "text", about: "The message of the commit that takes what was left uncommitted in the worktree" } },
+        details: "This commits what was left uncommitted in the job's worktree, checks that the job's branch merges into your checkout's branch with no conflict, merges it (git merge --no-ff), and removes the worktree. The branch stays. Git hooks do not run. Your checkout must be on the branch the job started from, with nothing uncommitted. The command shows the files first and asks you at a terminal; --yes doesn't answer for you, so with no terminal bring it in from the app. When the branches clash, nothing changes: `botkins jobs catch-up` asks the bot to sort it out.",
         async run(context) {
           const ref = one(context, "Name the job (its chat's id or its title).");
           const found = await context.client.call("jobs.status", ref);
           if (!found.canBringIn) throw new CliError(safe(found.reason || "This job can't be brought in."));
           show(context, ["This merges " + safe(found.branch) + " into " + safe(found.base) + " in your checkout, then removes the job's worktree. Git hooks do not run.", "Files (" + found.files.length + "), +" + found.added + " -" + found.removed + ":", ...found.files.slice(0, 40).map((file) => "  " + safe(file.path) + (file.new ? "  (new)" : "  +" + file.added + " -" + file.removed)), ...(found.files.length > 40 ? ["  and " + (found.files.length - 40) + " more"] : [])].join("\n"));
-          if (!(await confirm(context, "Bring this job in?"))) return EXIT.failed;
-          const done = await context.client.call("jobs.bringIn", found.job.id, context.options.message);
+          if (!(await personConfirm(context, "Bring this job in?", "Run `botkins jobs bring-in` at a terminal, or bring the job in from the app."))) return EXIT.failed;
+          const done = await context.client.call("jobs.bringIn", found.job.id, context.options.message ?? null, { agreed: true });
           if (!done.ok) {
             show(context, ["It clashes with " + safe(found.base) + " in:", ...done.conflicts.map((path) => "  " + safe(path)), "Nothing changed. `botkins jobs catch-up " + found.job.id + "` asks the bot to merge " + safe(found.base) + " into its branch."].join("\n"));
             context.print(done, () => "Not brought in.");

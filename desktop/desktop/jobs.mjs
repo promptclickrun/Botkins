@@ -185,9 +185,28 @@ async function commitLeftovers(job, message) {
   await git(job.path, ["commit", "--no-verify", "-m", message]);
 }
 
+/** What a setup that was running when Botkins stopped says. */
+export const SETUP_INTERRUPTED = "The setup was interrupted when Botkins stopped. Start anyway, or remove the job.";
+
 export class Jobs {
   constructor(ws) {
     this.ws = ws;
+    /** Jobs whose setup, bring-in or removal is under way: no turn starts and nothing else changes them meanwhile. */
+    this.busy = new Set();
+    // A setup can't still be running after a restart: it was cut off.
+    for (const chat of ws.state.chats ?? []) {
+      if (chat.job?.setup === "running") Object.assign(chat.job, { setup: "failed", setupError: SETUP_INTERRUPTED });
+    }
+  }
+  /** Runs `work` with the job held busy, so no turn starts and no other job action runs until it ends. */
+  async holding(chat, work) {
+    this.idle(chat);
+    this.busy.add(chat.id);
+    try {
+      return await work();
+    } finally {
+      this.busy.delete(chat.id);
+    }
   }
   job(chatId) {
     const chat = this.ws.chat(chatId);
@@ -196,6 +215,7 @@ export class Jobs {
   }
   idle(chat) {
     if (this.ws.active.has(chat.id)) throw new Error("Wait for the job to finish first.");
+    if (this.busy.has(chat.id)) throw new Error("This job is setting up or changing its worktree. Wait for that to finish.");
   }
 
   /** Where a project's jobs would start: its repository, the checkout's branch and commit, and the setup to run. */
@@ -305,7 +325,23 @@ export class Jobs {
     const job = chat.job;
     if (job.where === "worktree" && job.setup === "waiting") {
       job.setup = "running";
+      this.busy.add(chat.id);
       this.ws.save();
+      try {
+        if (!(await this.runSetup(job))) return;
+      } finally {
+        this.busy.delete(chat.id);
+      }
+    }
+    // The job may have been removed, or its chat deleted, while the setup ran: then nothing is sent, and
+    // never into the person's checkout, which is where a job without its worktree would work.
+    if (job.state !== "open" || !this.ws.state.chats.includes(chat)) return;
+    if (job.where === "worktree" && !existsSync(job.path ?? "")) return;
+    this.send(chat, author);
+  }
+  /** Runs a job's setup commands in its worktree. False when one failed (the page offers "Start anyway"). */
+  async runSetup(job) {
+    {
       for (const command of job.commands ?? []) {
         try {
           const shell = process.platform === "win32" ? ["cmd.exe", ["/d", "/s", "/c", command]] : ["/bin/sh", ["-c", command]];
@@ -315,8 +351,10 @@ export class Jobs {
           const said = String(error?.stderr || error?.stdout || error?.message || "").trim().split("\n").slice(-3).join("\n");
           job.setupError = ("“" + command + "” failed" + (said ? ": " + said : ".")).slice(0, 600);
           this.ws.save();
-          return;
+          return false;
         }
+        // Removed meanwhile: the rest of the setup doesn't run.
+        if (job.state !== "open") return false;
       }
       job.setup = "done";
       // What the setup made that git would see (a copied .env that isn't ignored, say) is the setup's, not the job's:
@@ -324,7 +362,7 @@ export class Jobs {
       job.setupFiles = (await untracked(job.path)).slice(0, MAX_SETUP_FILES);
       this.ws.save();
     }
-    this.send(chat, author);
+    return true;
   }
   send(chat, author) {
     try {
@@ -406,9 +444,11 @@ export class Jobs {
   }
 
   /** "Bring in": commits what is left in the worktree, merges the job's branch into the checkout, and removes the worktree. */
-  async bringIn(chatId, message) {
+  bringIn(chatId, message) {
     const chat = this.job(chatId);
-    this.idle(chat);
+    return this.holding(chat, () => this.bringInHeld(chat, message));
+  }
+  async bringInHeld(chat, message) {
     const job = chat.job;
     if (job.where !== "worktree") throw new Error("This job worked in your checkout: its changes are there already.");
     if (job.state !== "open") throw new Error(job.state === "brought-in" ? "This job was brought in already." : "This job's worktree was removed.");
@@ -446,10 +486,12 @@ export class Jobs {
   }
 
   /** Removes a job's worktree and keeps its branch. */
-  async removeWorktree(chatId) {
+  removeWorktree(chatId) {
     const chat = this.job(chatId);
-    this.idle(chat);
     if (chat.job.where !== "worktree" || chat.job.state !== "open") throw new Error("This job has no worktree to remove.");
+    return this.holding(chat, () => this.removeHeld(chat));
+  }
+  async removeHeld(chat) {
     // What wasn't committed goes on the job's branch first: the branch stays, so nothing is lost.
     const path = chat.job.path;
     if (path && existsSync(path)) await commitLeftovers(chat.job, "Botkins: unfinished work of " + titleOf(chat.job.prompt)).catch(() => {});
@@ -464,8 +506,14 @@ export class Jobs {
     if (existsSync(job.path)) rmSync(job.path, { recursive: true, force: true });
     await git(job.root, ["worktree", "prune"], { allowFail: true });
   }
-  /** A deleted chat's worktree goes with it. The branch stays. */
+  /** A deleted chat's worktree goes with it. What wasn't committed goes on the branch first, and the branch stays. */
   forget(chat) {
-    if (chat?.job?.where === "worktree" && chat.job.state === "open" && chat.job.path) void this.dropWorktree(chat.job).catch(() => {});
+    if (chat?.job?.where !== "worktree" || chat.job.state !== "open" || !chat.job.path) return;
+    const job = chat.job;
+    job.state = "removed";
+    void (async () => {
+      if (existsSync(job.path)) await commitLeftovers(job, "Botkins: unfinished work of " + titleOf(job.prompt)).catch(() => {});
+      await this.dropWorktree(job);
+    })().catch(() => {});
   }
 }

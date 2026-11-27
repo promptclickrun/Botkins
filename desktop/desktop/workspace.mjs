@@ -1111,6 +1111,8 @@ export class Workspace {
   submit(chatId, text, options = {}) {
     const chat = this.chat(chatId);
     this.access.assertChat(chat, this.projects.botsOf(chat));
+    // A job's setup, bring-in or removal is under way (desktop/jobs.mjs): its bot doesn't start meanwhile.
+    if (this.jobs?.busy.has(chat.id)) throw new Error("This job is setting up or changing its worktree. Wait for that to finish.");
     if (chat.main && typeof text === "string" && MAIN_RESET.test(text.trim()))
       return this.changeMainFork(chat.id, "reset", undefined, undefined, options.author?.memberId ?? "owner");
     const { delivery, ...messageOptions } = options;
