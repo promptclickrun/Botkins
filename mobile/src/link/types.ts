@@ -582,6 +582,8 @@ export type ChatSummary = {
   projectId?: string;
   folder?: string;
   mode?: ChatMode;
+  /** Set on a chat that a job started ("project-jobs-v1"). */
+  job?: JobSummary;
   panelId?: string;
   model?: ModelChoice;
   forkedFrom?: { chatId: string; messageIndex: number };
@@ -589,6 +591,49 @@ export type ChatSummary = {
   schedules?: ChatSchedule[];
   count: number;
   last?: { role: Message["role"]; text: string; time?: number; botId?: string };
+};
+/** A job ("project-jobs-v1"): a prompt that started its own chat, on its own branch in a git worktree, or in the checkout. Never a path on the computer. */
+export type JobSummary = {
+  where: "worktree" | "checkout";
+  state: "open" | "brought-in" | "removed";
+  createdAt: number;
+  branch?: string;
+  base?: string;
+  /** 7 characters. */
+  baseSha?: string;
+  setup?: "waiting" | "running" | "done" | "failed" | "skipped" | "none";
+  setupError?: string;
+  mergedSha?: string;
+  carryFailed?: true;
+};
+export type JobStart = { botIds: string[]; prompt: string; where?: "worktree" | "checkout"; folder?: string; mode?: ChatMode; carry?: boolean };
+/** Where a project's jobs start: the checkout's branch and commit, and the setup commands from .botkins/worktrees.json. */
+export type JobSetup =
+  | { repo: false; folder?: string }
+  | { repo: true; folder: string; root: string; base: string | null; sha: string | null; short: string | null; changed: number; setup: string[]; branch: string; file: boolean; hash: string; error?: string; approved: boolean };
+/** What a job changed, how far the checkout's branch moved since, what clashes, and whether it can be brought in. */
+export type JobStatus = {
+  where: "worktree" | "checkout";
+  state: JobSummary["state"];
+  working: boolean;
+  canBringIn: boolean;
+  /** Why it can't be brought in yet, in words; "" when it can. */
+  reason: string;
+  branch?: string;
+  base?: string;
+  baseSha?: string;
+  exists?: boolean;
+  ahead?: number;
+  behind?: number;
+  uncommitted?: number;
+  files?: { path: string; added: number; removed: number; new?: true }[];
+  added?: number;
+  removed?: number;
+  conflicts?: string[];
+  conflictsUnknown?: true;
+  checkout?: string | null;
+  checkoutChanged?: number;
+  mergedSha?: string;
 };
 export type Step = {
   background?: boolean;
@@ -1269,6 +1314,7 @@ export type UsageReport = {
  * "member-rename-v1" (the owner renames a member: `link.team.renameMember`).
  * "project-folders-v1" (ordered folders and chat folder choice), "project-mode-v1" (saved project mode),
  * "project-clone-v1" (clone from GitHub on the computer),
+ * "project-jobs-v1" (a project's jobs: a prompt per bot, each in its own chat and git worktree; `ChatSummary.job` and eight calls),
  * "project-artifacts-v1" (artifacts attached to a project: `Project.artifacts` and three calls).
  * "sync-push-v1" (sealed sync updates on an open relay request),
  * "stream-appends-v1" (boolean indicators and cursor-based text), "text-chunks-v1" (word chunks), and
@@ -1921,6 +1967,17 @@ export type Calls = {
   forkChat(chatId: string, messageIndex: number): string;
   warmChat(chatId: string): void;
   startProjectChat(botIds: string[], projectId: string, mode?: ChatMode, folder?: string | null): string;
+  /** Jobs ("project-jobs-v1", owner only; docs/link-contract.md). */
+  projectJobSetup(projectId: string, folder?: string): JobSetup;
+  /** The person saw the setup commands and said yes: `hash` is from projectJobSetup. */
+  approveJobSetup(projectId: string, folder: string | undefined, hash: string): string;
+  /** One job per bot (1 to 6): the new chats' ids. */
+  startProjectJob(projectId: string, options: JobStart): string[];
+  projectJobStatus(chatId: string): JobStatus;
+  bringInJob(chatId: string, message?: string): { ok: true; commit: string } | { ok: false; conflicts: string[] };
+  catchUpJob(chatId: string): void;
+  removeJobWorktree(chatId: string): void;
+  startJobTurn(chatId: string): void;
   /** While the chat works, `delivery: "steer"` hands the message to the turn under way where the provider can take it (the desktop app's default), and "queue" keeps it for after. */
   recordVoiceLine(chatId: string, id: string, text: string, final: boolean, options?: { role: "assistant"; sessionId: string; afterVoiceId?: string }): void;
   send(chatId: string, text: string, options?: { clientMessageId?: string; voiceId?: string; notify?: false; quote?: string; mentions?: MentionInput[]; attachments?: { name: string; path: string }[]; delivery?: "steer" | "queue" }): void;

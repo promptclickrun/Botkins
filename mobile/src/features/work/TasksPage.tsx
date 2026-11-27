@@ -1,20 +1,21 @@
-// Every task (the route `/work/tasks`, from "See all" on Work). Three chips: Active, Later and Done.
-// Active is in three groups: Needs you first, each as a card that shows what the bot said (its result
-// for a review, what it needs when blocked) with the answer right under it; then Working; then Ready,
-// with Start, or Pick a bot for a task that has none. The order and the groups are `overview.ts`.
-import { CircleDashed, Plus } from "lucide-react-native";
-import { useMemo, useState } from "react";
+// Every task (the route `/work/tasks`, from "See all" on Work), as a pipeline: the computer's board, left to right.
+// Needs you comes first, each as a card that shows what the bot said (its result for a review, what it needs
+// when blocked) with the answer right under it. Then a strip of the stages (Later › Ready › Working › Review ›
+// Done), each with its count; the chosen stage's tasks are under it. The stages and their order are `overview.ts`.
+import { ChevronRight, CircleDashed, Plus } from "lucide-react-native";
+import { Fragment, useMemo, useState } from "react";
 import { View } from "react-native";
 import { openChat } from "@/features/chat/navigate";
 import type { Bot, BotTask } from "@/link/types";
 import { useBots, useMember, usePart } from "@/state/hooks";
 import { api, attempt } from "@/state/link";
 import { useApp } from "@/state/store";
-import { BotAvatar, Button, EmptyState, Group, IconButton, IconTile, Label, Loading, Mascot, Page, radius, space, T, Tap, useTheme } from "@/ui";
-import { activeGroups, taskCounts, tasksIn, type TaskView } from "./overview";
-import { openTask, TaskChips, TaskRow } from "./Work";
+import { BotAvatar, Button, EmptyState, Glass, Group, IconButton, IconTile, Label, Loading, Mascot, Page, radius, space, T, Tap, useTheme } from "@/ui";
+import { firstStage, pipeline, STAGES, type TaskStage } from "./overview";
+import { openTask, TaskRow } from "./Work";
 
-let lastView: TaskView = "active";
+// The stage the person last chose, kept while the app runs; null opens where something moves.
+let lastStage: TaskStage | null = null;
 
 /** A task that waits on the person (or is under review by its creator bot): who and why, what the bot said, and actions. */
 function NeedCard({ task, bot, reviewer }: { task: BotTask; bot?: Bot; reviewer?: Bot }) {
@@ -80,14 +81,13 @@ export default function TasksPage() {
   const member = !!useMember();
   const bots = useMemo(() => new Map(allBots.map((bot) => [bot.id, bot])), [allBots]);
   const tasks = useMemo(() => (allTasks ?? []).filter((task) => task.status !== "archived"), [allTasks]);
-  const [view, pick] = useState<TaskView>(lastView);
-  const setView = (next: TaskView) => {
-    lastView = next;
-    pick(next);
+  const { needs, stages } = useMemo(() => pipeline(tasks), [tasks]);
+  const [chosen, choose] = useState<TaskStage | null>(lastStage);
+  const stage = chosen ?? firstStage(stages);
+  const pick = (next: TaskStage) => {
+    lastStage = next;
+    choose(next);
   };
-  const counts = useMemo(() => taskCounts(tasks), [tasks]);
-  const groups = useMemo(() => activeGroups(tasks), [tasks]);
-  const list = useMemo(() => (view === "active" ? [] : tasksIn(tasks, view)), [tasks, view]);
   const botOf = (task: BotTask) => (task.botId ? bots.get(task.botId) : undefined);
   const add = <IconButton icon={Plus} label="New task" variant="accent" size={44} onPress={() => openTask("new")} />;
   if (member)
@@ -96,6 +96,7 @@ export default function TasksPage() {
         <EmptyState title="Tasks are your computer owner’s" />
       </Page>
     );
+  const shown = stages[stage];
   return (
     <Page title="Tasks" actions={add}>
       {!synced ? (
@@ -104,31 +105,30 @@ export default function TasksPage() {
         <EmptyState art={<Mascot size={104} state="working" />} title="No tasks yet" action="New task" onAction={() => openTask("new")} />
       ) : (
         <>
-          <TaskChips view={view} onChange={setView} counts={counts} />
-          {view === "active" ? (
-            groups.length === 0 ? (
-              <T variant="callout" color="muted" center style={{ paddingVertical: space.xl }}>
-                Nothing in progress
-              </T>
-            ) : (
-              groups.map((group) => (
-                <View key={group.title}>
-                  <Label>{group.title + " · " + group.tasks.length}</Label>
-                  <Group inset={group.title === "Needs you" || group.title === "Reviewing" ? 0 : space.lg + 40 + space.md}>
-                    {group.title === "Needs you" || group.title === "Reviewing"
-                      ? group.tasks.map((task) => <NeedCard key={task.id} task={task} bot={botOf(task)} reviewer={task.reviewerBotId ? bots.get(task.reviewerBotId) : undefined} />)
-                      : group.tasks.map((task) => <TaskRow key={task.id} task={task} bot={botOf(task)} reviewer={task.reviewerBotId ? bots.get(task.reviewerBotId) : undefined} />)}
-                  </Group>
-                </View>
-              ))
-            )
-          ) : list.length === 0 ? (
+          {needs.length > 0 && (
+            <View>
+              <Label>{"Needs you · " + needs.length}</Label>
+              <Group inset={0}>
+                {needs.map((task) => (
+                  <NeedCard key={task.id} task={task} bot={botOf(task)} />
+                ))}
+              </Group>
+            </View>
+          )}
+          <StageStrip stages={stages} stage={stage} onPick={pick} />
+          {shown.length === 0 ? (
             <T variant="callout" color="muted" center style={{ paddingVertical: space.xl }}>
-              {view === "later" ? "Nothing put off" : "Nothing done yet"}
+              {STAGES.find((item) => item.id === stage)!.empty}
             </T>
+          ) : stage === "reviewing" ? (
+            <Group inset={0}>
+              {shown.map((task) => (
+                <NeedCard key={task.id} task={task} bot={botOf(task)} reviewer={task.reviewerBotId ? bots.get(task.reviewerBotId) : undefined} />
+              ))}
+            </Group>
           ) : (
             <Group inset={space.lg + 40 + space.md}>
-              {list.map((task) => (
+              {shown.map((task) => (
                 <TaskRow key={task.id} task={task} bot={botOf(task)} reviewer={task.reviewerBotId ? bots.get(task.reviewerBotId) : undefined} />
               ))}
             </Group>
@@ -136,5 +136,36 @@ export default function TasksPage() {
         </>
       )}
     </Page>
+  );
+}
+
+/** The pipeline as a row of stages, each its count over its name; the chosen one is filled. A task moves left to right. */
+function StageStrip({ stages, stage, onPick }: { stages: Record<TaskStage, unknown[]>; stage: TaskStage; onPick: (stage: TaskStage) => void }) {
+  const { colors } = useTheme();
+  return (
+    <View accessibilityRole="tablist" style={{ flexDirection: "row", alignItems: "center", gap: 2 }}>
+      {STAGES.map((item, index) => {
+        const on = item.id === stage;
+        const count = stages[item.id].length;
+        const tile = (
+          <View style={{ height: 62, alignItems: "center", justifyContent: "center", gap: 1, borderRadius: radius.lg, ...(on && { backgroundColor: colors.accent }) }}>
+            <T variant="title3" weight="700" color={on ? "onAccent" : count ? "ink" : "faint"}>
+              {String(count)}
+            </T>
+            <T variant="caption" weight={on ? "700" : "600"} color={on ? "onAccent" : "muted"} numberOfLines={1}>
+              {item.label}
+            </T>
+          </View>
+        );
+        return (
+          <Fragment key={item.id}>
+            {index > 0 && <ChevronRight size={12} color={colors.faint} strokeWidth={2.4} />}
+            <Tap onPress={() => onPick(item.id)} feel="select" sink={0.95} accessibilityRole="tab" accessibilityState={{ selected: on }} accessibilityLabel={item.label + ", " + count} style={{ flex: 1, minWidth: 0 }}>
+              {on ? tile : <Glass style={{ borderRadius: radius.lg }}>{tile}</Glass>}
+            </Tap>
+          </Fragment>
+        );
+      })}
+    </View>
   );
 }

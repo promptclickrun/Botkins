@@ -19,6 +19,7 @@ import {
   Trash2,
   X,
   Info,
+  Rocket,
 } from "lucide-react";
 import { BotAvatar } from "./Avatar";
 import { Block } from "./Today";
@@ -34,6 +35,8 @@ import { AddChatDialog, ProjectArtifacts, chatsToAdd, hasProjectArtifacts } from
 import { CloneFields, FolderChoice, projectCapability } from "./ProjectFolders";
 import { FolderBrowserSheet } from "./PluginsSettings";
 import ProjectSpaces from "./ProjectSpaces";
+import ProjectJobs from "./ProjectJobs";
+import { jobStage, projectJobs } from "./jobs";
 import { hasSpaces } from "./spaces";
 const api = window.botkins;
 const COLORS: ProjectColor[] = ["coral", "amber", "green", "teal", "blue", "violet", "pink", "gray"];
@@ -231,7 +234,7 @@ function NewProjectDialog({
   );
 }
 
-type Section = "overview" | "chats" | "panels" | "todos" | "artifacts" | "access" | "changes";
+type Section = "jobs" | "overview" | "chats" | "panels" | "todos" | "artifacts" | "access" | "changes";
 
 function ProjectPage({
   state,
@@ -254,7 +257,8 @@ function ProjectPage({
   openNew: (chatId: string) => void;
   fail: (e: unknown) => void;
 }) {
-  const [section, setSection] = useState<Section>("overview");
+  // A project opens on its Jobs: the place to start work in it (src/ProjectJobs.tsx).
+  const [section, setSection] = useState<Section>("jobs");
   const [repo, setRepo] = useState(false);
   const chats = state.chats.filter((c) => c.projectId === project.id && !c.archived).sort((a, b) => b.time - a.time);
   const panels = state.panels.filter((p) => p.projectId === project.id);
@@ -282,7 +286,9 @@ function ProjectPage({
   }, [repo]);
   // The same sections, in the same order and by the same names, as the phone app's project page.
   // Overview (the name, the description and the folder) and Changes are the computer's own.
+  const working = projectJobs(state, project.id).filter((c) => ["working", "setting-up", "needs-you"].includes(jobStage(state, c))).length;
   const menu: [Section, string, typeof Info, string][] = [
+    ["jobs", "Jobs", Rocket, working ? String(working) : ""],
     ["overview", "Overview", Info, ""],
     ["todos", "To-do", ListTodo, open ? String(open) : ""],
     ["chats", "Chats", MessagesSquare, chats.length ? String(chats.length) : ""],
@@ -324,6 +330,7 @@ function ProjectPage({
           ))}
         </nav>
         <div className="project-section">
+          {section === "jobs" && <ProjectJobs key={project.id} state={state} project={project} openChat={openChat} manageAccess={() => setSection("access")} fail={fail} />}
           {section === "overview" && <Overview key={project.id} state={state} project={project} deleted={back} fail={fail} />}
           {section === "chats" && <ProjectChats state={state} project={project} chats={chats} actions={actions} openChat={openChat} botPage={botPage} />}
           {section === "panels" && !spaces && <ProjectPanels state={state} panels={panels} />}
