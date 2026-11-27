@@ -172,10 +172,17 @@ test("every chat's instructions say how to write MEDIA:, with the bot's own fold
   const chat = ws.chat(ws.createChat("pip"));
   const { head } = ws.instructionParts(chat, ws.bot("pip")).fixed;
   const folder = join(dir, "files", "pip");
-  assert.ok(head.includes("MEDIA: " + join(folder, "chart.png")), head);
-  assert.match(head, /A picture, sound or video shows from anywhere on this computer/);
-  assert.ok(head.includes("save other files you want to share in " + folder));
-  assert.match(head, /Write the full path, not a relative one or a Markdown image/);
+  assert.ok(head.includes("MEDIA: " + join(folder, "report.pdf")), head);
+  // Every kind of file goes as a MEDIA: line, not only pictures: bots pasted paths for the rest.
+  assert.match(head, /a file of any kind \(picture, audio, video, PDF, HTML, spreadsheet, archive\)/);
+  assert.match(head, /any other file as a card that opens it/);
+  assert.match(head, /Never send a bare path, a relative path, a Markdown link or a Markdown image instead/);
+  assert.ok(head.includes("Save what you make in " + folder));
+  assert.match(head, /Pictures, audio and video show from anywhere on this computer/);
+  // A chat a team member started keeps every file to the bot's own folders (desktop/artifact-events.mjs).
+  const member = ws.instructionParts({ ...chat, createdBy: "m_1" }, ws.bot("pip")).fixed.head;
+  assert.doesNotMatch(member, /show from anywhere/);
+  assert.match(member, /Files show only from your folders/);
 });
 
 test("a paired client pages and reads indexed artifacts over the link", async (t) => {
