@@ -129,7 +129,17 @@ config[].sentTo?: ({ tool: string; env: string } | { tool: string; header: strin
 
 ## Runtime support
 
-Copilot SDK sessions receive a per-bot plugin directory for supported content. Botkins configures the plugin’s MCP servers and runs supported hook events through SDK handlers. Pi and OMP sessions get the plugin's MCP servers too, and Botkins runs its `preToolUse` and `userPromptSubmitted` hooks itself, in its own approval step: a hook can change a call's arguments, ask the person or deny the call, and can change or block the person's message, with the same outcome as on Copilot. Each hook runs once for each call. On Pi and OMP a plugin's server has a short name of its own inside the harness, and Botkins shows it by the plugin's name in approvals and in the activity. The other hook events don't run on Pi and OMP yet. Direct Claude, Codex, OpenCode and ACP sessions use plugin skills only. This release skips plugin language servers and hook entries that specify a matcher. Local MCP processes receive the environment keys configured for that plugin and the system variables required to start the process. A plugin that is switched off or removed loses its tools at the next turn, also in a chat whose harness is still running.
+Copilot SDK sessions receive a per-bot plugin directory for supported content. Botkins configures the plugin’s MCP servers and runs supported hook events through SDK handlers. Pi and OMP sessions get the plugin's MCP servers too, and Botkins runs the plugin's hooks itself, in the order and with the effects the Copilot runtime has:
+
+- `sessionStart` once for each harness process, before the first message. What it adds goes before that message.
+- `userPromptSubmitted` for each message, also for the message an `agentStop` block sends. It can change, add to or block the message.
+- `preToolUse` once for each call, in Botkins' approval step. It can change the arguments, ask the person or deny the call. It can't allow a call by itself.
+- `postToolUse` after a call that ran, and `postToolUseFailure` after one that failed. A refused or stopped call has neither. `postToolUse` can replace the result the model gets, and both can add guidance after it.
+- `agentStop` at the natural end of a turn. A `block` sends its reason as the next message, within Botkins' limits: three times in a row for one plugin, six for one turn. A stopped turn and a turn that ended in an error don't ask.
+- `errorOccurred` for each failed model request. As on Copilot, its answer doesn't change what happens.
+- `sessionEnd` when Botkins lets the harness process go, or the process ends.
+
+`subagentStart` and `subagentStop` don't run on Pi and OMP: Pi has no subagents, and OMP's own subagents don't report to Botkins. On Pi and OMP a plugin's server has a short name of its own inside the harness, and Botkins shows it by the plugin's name in approvals and in the activity. A turn without plugin access, a plugin that is off, and a plugin that is not for this bot run no hook. Direct Claude, Codex, OpenCode and ACP sessions use plugin skills only. This release skips plugin language servers and hook entries that specify a matcher. Local MCP processes receive the environment keys configured for that plugin and the system variables required to start the process. A plugin that is switched off or removed loses its tools at the next turn, also in a chat whose harness is still running.
 
 The public plugin contract is `plugins-v1`. Its installed list includes per-bot scope, component descriptions and whether each field has been set. On a paired client, OAuth servers use `signInMcpServer(serverId)`. A preview’s revision identifies the source the person reviewed.
 

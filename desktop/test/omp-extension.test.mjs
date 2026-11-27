@@ -26,7 +26,8 @@ test("OMP's extension registers plans and leaves MCP registration to OMP", () =>
   const providers = [];
   botkins({ registerProvider: (name, config) => providers.push([name, config]), on: (name, handler) => (handlers[name] = handler) });
   assert.deepEqual(providers, [["botkins-claude", { api: "anthropic-messages" }]]);
-  assert.deepEqual(Object.keys(handlers).sort(), ["before_agent_start", "tool_call"]);
+  // tool_result does nothing unless a plugin has a result hook (the session file says postToolUse).
+  assert.deepEqual(Object.keys(handlers).sort(), ["before_agent_start", "tool_call", "tool_result"]);
 });
 
 test("the extension removes OMP's docs and asks Botkins with MCP metadata", async () => {

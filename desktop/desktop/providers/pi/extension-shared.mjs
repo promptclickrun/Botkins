@@ -4,6 +4,9 @@ export const ASK = "botkins:permission";
 /** Botkins' answer when the call goes on changed or is refused with a reason (a plugin's hook): the extension then asks for the detail. */
 export const MORE = "more";
 export const DETAIL = "botkins:detail";
+/** The extension's question after a tool ran, when a plugin has a postToolUse or postToolUseFailure hook. Botkins answers the result to use, or cancels. */
+export const RESULT = "botkins:result";
+const MAX_RESULT = 200_000;
 const OWN = "mcp__botkins__";
 const OMP_OWN = "mcp__botkins_";
 
@@ -96,6 +99,31 @@ export function makeBotkinsExtension(file, { mcp = true } = {}) {
         Object.assign(event.input, next);
       }
       return { input: next };
+    });
+    // A plugin's postToolUse / postToolUseFailure hook sees every tool's result, and may change
+    // what the model is told. Botkins runs the hook and answers the text to use (desktop/providers/pi/index.mjs).
+    pi.on("tool_result", async (event, ctx) => {
+      if (!(read() ?? first).postToolUse) return undefined;
+      const text = (Array.isArray(event.content) ? event.content : []).map((part) => (part?.type === "text" ? String(part.text ?? "") : "")).filter(Boolean).join("\n");
+      const name = String(event.toolName);
+      const info = typeof pi.getAllTools === "function" ? pi.getAllTools().find((tool) => tool.name === name) : undefined;
+      const call = {
+        toolCallId: event.toolCallId,
+        toolName: event.toolName,
+        input: event.input,
+        isError: !!event.isError,
+        text: text.slice(0, MAX_RESULT),
+        ...((info?.mcpServerName ?? event.mcpServerName) && { mcpServerName: info?.mcpServerName ?? event.mcpServerName }),
+        ...((info?.mcpToolName ?? event.mcpToolName) && { mcpToolName: info?.mcpToolName ?? event.mcpToolName }),
+      };
+      let answer = null;
+      try {
+        answer = JSON.parse(String(await ctx.ui.input(RESULT + " " + JSON.stringify(call))));
+      } catch {
+        return undefined;
+      }
+      if (!answer || typeof answer.text !== "string") return undefined;
+      return { content: [{ type: "text", text: answer.text }], ...(typeof answer.isError === "boolean" && { isError: answer.isError }) };
     });
   };
 }

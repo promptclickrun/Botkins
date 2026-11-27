@@ -73,14 +73,26 @@ async function turn(text) {
     }
     log({ ran: allowed ? { toolName, input: ran } : null });
     send({ type: "tool_execution_start", toolCallId, toolName, args: ran });
-    send({ type: "tool_execution_end", toolCallId, toolName, isError: !allowed, result: { content: [{ type: "text", text: allowed ? "ran" : refused }] } });
+    if (text.includes("slowtool")) await new Promise((resolve) => setTimeout(resolve, 300));
+    const failed = allowed && text.includes("badtool");
+    let result = { text: !allowed ? refused : failed ? "tool broke" : "ran", isError: !allowed || failed };
+    // As the extension does after a tool runs (extension-shared.mjs, tool_result), when a plugin has a result hook.
+    const now = JSON.parse(readFileSync(process.env.BOTKINS_OMP_SESSION, "utf8"));
+    if (now.postToolUse && !aborted) {
+      const answer = await ask("botkins:result " + JSON.stringify({ toolCallId, toolName, input: ran, isError: result.isError, text: result.text, ...(server && { mcpServerName: server, mcpToolName: remoteName }) }), "input");
+      if (!answer.cancelled) result = { ...result, ...JSON.parse(answer.value) };
+    }
+    log({ result });
+    send({ type: "tool_execution_end", toolCallId, toolName, isError: result.isError, result: { content: [{ type: "text", text: result.text }] } });
   }
   if (aborted) {
     send({ type: "agent_end", messages: [], isTerminal: true });
     send({ type: "session_settled" });
     return;
   }
-  const reply = text.includes("fail") || text.includes("extra") ? "" : "echo: " + text;
+  const reply = (text.includes("fail") && !text.includes("failonce")) || text.includes("extra") ? "" : "echo: " + text;
+  // A model request that fails once, then works (as Pi's own retry does).
+  if (text.includes("failonce")) send({ type: "message_end", message: { role: "assistant", content: [], stopReason: "error", errorMessage: "502 {\"error\":{\"message\":\"flaky\"}}" } });
   const error = text.includes("extra")
     ? '402 {"type":"error","error":{"type":"billing_error","message":"API Error: 400 You\'re out of extra usage. Add more at claude.ai/settings/usage and keep going."}}'
     : "The plan said no.";

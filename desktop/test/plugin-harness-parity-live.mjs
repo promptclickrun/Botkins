@@ -10,7 +10,8 @@
 // with `hooked` (a write, so every harness asks: Copilot passes read-only commands by itself), then the
 // plugin's `echo` MCP tool, then answers. What must hold, on each harness:
 //   - the person is asked about the changed command, and the changed command is what ran;
-//   - the hook ran once for each tool call;
+//   - every hook event ran once, in Copilot's order (sessionStart, userPromptSubmitted, pre/postToolUse
+//     for each call, agentStop, sessionEnd), with the same tool names;
 //   - the plugin's tool is asked about under the plugin's own server name, and its result comes back;
 //   - the plugin's approved setting reaches its server's environment and nothing else.
 // Copilot runs the real SDK runtime with Botkins' own sessionOptions(); Pi and OMP run Botkins' own providers.
@@ -36,11 +37,14 @@ copyFileSync(fileURLToPath(new URL("./fixtures/fake-mcp.mjs", import.meta.url)),
 writeFileSync(join(plugin, "server.mjs"), readFileSync(join(plugin, "server.mjs"), "utf8").replace('"echo:" + String(', '"echo:" + (process.env.TOKEN === "synthetic-token-value" ? "scoped:" : "unscoped:") + String('));
 writeFileSync(join(plugin, "plugin.json"), JSON.stringify({ name: "guard", hooks: "hooks.json", mcpServers: ".mcp.json" }));
 writeFileSync(join(plugin, ".mcp.json"), JSON.stringify({ mcpServers: { tools: { type: "local", command: "node", args: ["server.mjs"], env: { TOKEN: "${TOKEN}" } } } }));
+// One hook command for every event Copilot runs: it writes "<event>" (and the tool for tool events)
+// in its data folder, and changes the shell command in preToolUse.
+const EVENTS = ["sessionStart", "userPromptSubmitted", "preToolUse", "postToolUse", "postToolUseFailure", "agentStop", "sessionEnd", "errorOccurred"];
 writeFileSync(
   join(plugin, "hook.mjs"),
-  'import { appendFileSync } from "node:fs";\nlet d = ""; process.stdin.on("data", (b) => (d += b)).on("end", () => { const x = JSON.parse(d); appendFileSync(process.env.PLUGIN_DATA + "/calls.log", x.toolName + "\\n"); console.log(JSON.stringify(x.toolArgs?.command === "touch original.txt && echo original" ? { modifiedArgs: { ...x.toolArgs, command: "touch hooked.txt && echo hooked" } } : {})); });\n',
+  'import { appendFileSync } from "node:fs";\nconst event = process.argv[2];\nlet d = ""; process.stdin.on("data", (b) => (d += b)).on("end", () => { const x = JSON.parse(d); appendFileSync(process.env.PLUGIN_DATA + "/calls.log", event + (x.toolName ? " " + x.toolName : "") + "\\n"); console.log(JSON.stringify(event === "preToolUse" && x.toolArgs?.command === "touch original.txt && echo original" ? { modifiedArgs: { ...x.toolArgs, command: "touch hooked.txt && echo hooked" } } : {})); });\n',
 );
-writeFileSync(join(plugin, "hooks.json"), JSON.stringify({ hooks: { preToolUse: [{ type: "command", command: 'node "${PLUGIN_ROOT}/hook.mjs"' }] } }));
+writeFileSync(join(plugin, "hooks.json"), JSON.stringify({ hooks: Object.fromEntries(EVENTS.map((event) => [event, [{ type: "command", command: 'node "${PLUGIN_ROOT}/hook.mjs" ' + event }]])) }));
 const SERVER = pluginServerName("guard", "tools");
 const ALIAS = pluginAlias(SERVER);
 
@@ -122,12 +126,16 @@ async function check(label, open, mcpToolName) {
     assert.ok(mcpResult !== null && mcpResult.includes("echo:scoped:plugin"), label + ": the plugin's tool ran with its own setting: " + mcpResult);
     assert.ok(!sent.includes("synthetic-token-value"), label + ": the setting never reached the model");
     const data = join(dir, ".botkins-plugin-data");
+    // The sessionEnd hook runs as the harness lets the session go.
+    await close();
+    close = async () => {};
     const calls = readdirSync(data).flatMap((f) => (existsSync(join(data, f, "calls.log")) ? readFileSync(join(data, f, "calls.log"), "utf8").trim().split("\n") : []));
-    // One hook run for each call, and the hook is told the same names on every harness.
-    assert.equal(calls.length, 2, label + ": the hook ran once for each call: " + calls.join(", "));
-    assert.ok(isShell(calls[0]), label + ": the hook saw the shell call first: " + calls[0]);
-    assert.equal(calls[1], SERVER + "-echo", label + ": the hook saw the plugin's tool by the plugin's name");
-    console.log(label + ": PASSED (hook changed args, single run, plugin MCP tool, scoped setting; hook saw the MCP tool as " + JSON.stringify(calls[1]) + ")");
+    // One hook run for each event, in the order Copilot runs them, with the same tool names on every harness.
+    const shell = calls.find((line) => line.startsWith("preToolUse "))?.slice("preToolUse ".length);
+    assert.ok(isShell(shell), label + ": the hook saw the shell call first: " + shell);
+    const expected = ["sessionStart", "userPromptSubmitted", "preToolUse " + shell, "postToolUse " + shell, "preToolUse " + SERVER + "-echo", "postToolUse " + SERVER + "-echo", "agentStop", "sessionEnd"];
+    assert.deepEqual(calls, expected, label + ": hook events");
+    console.log(label + ": PASSED (hook changed args, every hook event once and in order, plugin MCP tool, scoped setting) events=" + JSON.stringify(calls));
   } finally {
     await close().catch(() => {});
     await new Promise((resolve) => model.close(resolve));
