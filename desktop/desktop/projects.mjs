@@ -24,7 +24,7 @@ const MAX_DIFF = 400_000;
 
 // A repository's own config could otherwise run programs when Botkins reads it: fsmonitor, hooks,
 // external diff and textconv drivers, filter drivers and signing. Botkins turns all of them off.
-const SAFE = [
+export const SAFE = [
   "-c", "core.fsmonitor=false",
   "-c", "core.hooksPath=" + devNull,
   "-c", "diff.external=",
@@ -32,13 +32,13 @@ const SAFE = [
   "-c", "commit.gpgSign=false",
   "-c", "credential.helper=",
 ];
-const ENV = { ...process.env, GIT_OPTIONAL_LOCKS: "0", GIT_LITERAL_PATHSPECS: "1", GIT_TERMINAL_PROMPT: "0", GIT_PAGER: "cat" };
+export const ENV = { ...process.env, GIT_OPTIONAL_LOCKS: "0", GIT_LITERAL_PATHSPECS: "1", GIT_TERMINAL_PROMPT: "0", GIT_PAGER: "cat" };
 
 async function raw(cwd, args) {
   return run("git", ["-C", cwd, ...args], { maxBuffer: 16 * 1024 * 1024, timeout: 20000, env: ENV });
 }
 /** Overrides every filter driver the repository's config names, so reading status runs none of them. */
-async function filterOverrides(cwd) {
+export async function filterOverrides(cwd) {
   let out = "";
   try {
     out = (await raw(cwd, ["config", "--null", "--get-regexp", "^filter\\."])).stdout;

@@ -1,6 +1,6 @@
 // Projects, to-dos, tasks and artifacts: the commands (cli/commands/index.mjs adds them).
 // `projectsCommands` maps a top-level word to a group `{ summary, commands }`: `botkins projects`,
-// `botkins todos`, `botkins tasks` and `botkins artifacts`.
+// `botkins todos`, `botkins tasks`, `botkins jobs` and `botkins artifacts`.
 //
 // What these hold to (desktop/AGENTS.md):
 //  - A project's folder is a path on the computer that runs Botkins. The app's own rule says which folders can be
@@ -8,6 +8,8 @@
 //  - `projects commit` makes a git commit in the project's folder. It shows the files that go into it first and
 //    needs a yes (`--yes` with no terminal). Git hooks do not run.
 //  - `tasks start` and `projects chat` are about a turn of a model: the text says what starts, and what does not.
+//  - `jobs start` runs a repository's setup commands (.botkins/worktrees.json) only once the person saw them and said yes,
+//    and `jobs bring-in` shows the files it merges first and needs a yes (`--yes` with no terminal).
 //  - A text that somebody else wrote (a name, a to-do, a task's details, a diff, a file's content) is made safe
 //    before it is printed to a person. `--json` and a pipe get it as it is.
 import { closeSync, existsSync, openSync, readFileSync, renameSync, unlinkSync, writeSync } from "node:fs";
@@ -112,6 +114,42 @@ async function commitMessage(context) {
   if (!text) throw usage("The commit message is empty.");
   return text;
 }
+
+// ── Jobs ──
+const jobState = (job) => (job.working ? "working" : job.setup === "failed" ? "setup failed" : job.state === "brought-in" ? "brought in" : job.state);
+const setupText = (found) => {
+  if (!found.repo) return "The folder of " + safe(found.project.name) + " is not a git repository: its jobs work in your checkout (--checkout).";
+  return [
+    safe(found.project.name) + ": " + JSON.stringify(safe(found.root)),
+    "New worktrees start from " + (found.base ? safe(found.base) : "a detached HEAD") + " at " + (found.short ?? "no commit") + (found.changed ? " (" + count(found.changed, "file") + " not committed: --carry takes them)" : "") + ".",
+    "Branches: " + safe(found.branch) + ".",
+    found.error ? "Setup: " + safe(found.error) : !found.setup.length ? "No setup commands" + (found.file ? "." : " (none in .botkins/worktrees.json).") : "Setup (" + (found.approved ? "allowed" : "not allowed yet: `botkins jobs allow-setup`") + "):",
+    ...(found.error ? [] : found.setup.map((line) => "  $ " + safe(line))),
+  ].join("\n");
+};
+/** Shows a repository's setup commands and asks; then allows them. False when the person said no. */
+async function allowSetup(context, found) {
+  if (!found.repo) throw new CliError("The folder of " + safe(found.project.name) + " is not a git repository.");
+  if (found.error) throw new CliError(safe(found.error));
+  if (!found.setup.length || found.approved) return true;
+  show(context, ["Each new worktree of " + safe(found.project.name) + " runs these commands from .botkins/worktrees.json, on this computer, as the user that runs Botkins:", ...found.setup.map((line) => "  $ " + safe(line))].join("\n"));
+  if (!(await confirm(context, "Allow them?"))) return false;
+  await context.client.call("jobs.allowSetup", found.project.id, found.hash, found.folder);
+  return true;
+}
+const statusText = (found) => {
+  const job = found.job;
+  const head = safe(job.title) + "   " + job.id + "\n" + "Bot: " + (job.bot ? safe(job.bot) : "none") + ". State: " + jobState(job) + "." + (job.setupError ? "\nSetup: " + safeLines(job.setupError) : "");
+  if (found.where !== "worktree" || !found.branch) return head + "\n" + safe(found.reason);
+  return [
+    head,
+    "Branch " + safe(found.branch) + " from " + safe(found.base) + " (" + found.baseSha + "): " + found.ahead + " ahead, " + found.behind + " behind" + (found.uncommitted ? ", " + count(found.uncommitted, "file") + " not committed" : "") + ".",
+    found.files.length ? count(found.files.length, "changed file") + ", +" + found.added + " -" + found.removed + ":" : "No changes yet.",
+    ...found.files.slice(0, 40).map((file) => "  " + safe(file.path) + (file.new ? "  (new)" : "  +" + file.added + " -" + file.removed)),
+    ...(found.conflicts.length ? ["Clashes with " + safe(found.base) + " in:", ...found.conflicts.map((path) => "  " + safe(path))] : []),
+    found.canBringIn ? "Ready to bring in: `botkins jobs bring-in " + job.id + "`." : found.reason ? safe(found.reason) : "",
+  ].filter(Boolean).join("\n");
+};
 
 const projectOptions = {
   name: { type: "string", value: "text", about: "The project's name (60 characters at most)" },
@@ -501,6 +539,136 @@ export const projectsCommands = {
           show(context, "This deletes the task " + safe(found.title) + " (" + found.status + ").");
           if (!(await confirm(context, "Delete the task?"))) return EXIT.failed;
           context.print(await context.client.call("tasks.remove", found.id), (gone) => "Deleted the task " + safe(gone.title) + ".");
+        },
+      },
+    },
+  },
+
+  jobs: {
+    summary: "Jobs: a prompt per bot, each in its own chat and git worktree",
+    details: "A job is a chat in a project that starts with a prompt. By default each job works in a git worktree of its own: a new branch (botkins/<topic>) made from the commit your checkout is on, in a folder outside your repository, so jobs that run side by side don't touch your checkout or each other. `bring-in` merges a finished job into your checkout; `catch-up` asks the job's bot to merge your branch into its own when they clash. A repository can list commands that set a new worktree up, in .botkins/worktrees.json ({ \"setup\": [\"npm ci\"] }); they run on this computer, so they run only once you allowed that list. A job is its chat's id (6 characters at least) or its title.",
+    commands: {
+      list: {
+        summary: "List a project's jobs, newest first",
+        usage: "botkins jobs list <project>",
+        async run(context) {
+          context.print(await context.client.call("jobs.list", one(context, "Name the project (its name or id).")), (found) =>
+            found.jobs.length ? table(["JOB", "BOT", "WHERE", "STATE", "BRANCH", "ID"], found.jobs.map((job) => [safe(job.title), job.bot ? safe(job.bot) : "", job.where, jobState(job), job.branch ? safe(job.branch) : "", job.id])) : "No jobs in " + safe(found.project.name) + ". Start one with `botkins jobs start`.",
+          );
+        },
+      },
+      setup: {
+        summary: "Show where a project's jobs start, and its setup commands",
+        usage: "botkins jobs setup <project> [--folder <path>]",
+        options: { folder: { type: "string", value: "path", about: "A folder in the project" } },
+        async run(context) {
+          const found = await context.client.call("jobs.setup", one(context, "Name the project (its name or id)."), context.options.folder);
+          context.print(found, setupText);
+        },
+      },
+      "allow-setup": {
+        summary: "Allow a repository's setup commands to run in new worktrees",
+        usage: "botkins jobs allow-setup <project> [--folder <path>] [--yes]",
+        options: { folder: { type: "string", value: "path", about: "A folder in the project" }, ...YES },
+        details: "The commands come from .botkins/worktrees.json in the repository, so anybody who can change the repository can change them. They run on this computer, in each new worktree, as the user that runs Botkins. The command shows them first and asks; with no terminal it needs --yes. A changed list needs a yes again.",
+        async run(context) {
+          const found = await context.client.call("jobs.setup", one(context, "Name the project (its name or id)."), context.options.folder);
+          if (!(await allowSetup(context, found))) return EXIT.failed;
+          context.print({ project: found.project, allowed: found.setup.length }, () => "Allowed " + count(found.setup.length, "setup command") + " for " + safe(found.project.name) + ".");
+        },
+      },
+      start: {
+        summary: "Start a job for each bot: a prompt in a new chat",
+        usage: "botkins jobs start <project> --bot <bot>… [--checkout] [--carry] [--folder <path>] [--mode <mode>] [--file <path>] [--yes] <prompt…>",
+        options: {
+          bot: { type: "string", multiple: true, value: "bot", about: "A bot to give the prompt to (name or id). Give it up to 6 times: each bot gets a job of its own" },
+          checkout: { type: "boolean", about: "Work in your checkout, with no worktree (one job at a time)" },
+          carry: { type: "boolean", about: "Take the checkout's uncommitted changes into each worktree" },
+          folder: { type: "string", value: "path", about: "A folder in the project" },
+          mode: { type: "string", value: "mode", about: "default (the default), plan or yolo. Yolo asks first" },
+          file: { type: "string", value: "path", about: "The prompt from a file (\"-\" reads standard input)" },
+          ...YES,
+        },
+        details: "This sends the prompt at once: a turn of the model starts in each job's chat, after the worktree's setup. The bot's tools work in the job's worktree (or in your checkout with --checkout), and each tool asks for an approval as it does in any chat. When the repository has setup commands that weren't allowed, they are shown first and the command asks; --mode yolo asks too. With no terminal both need --yes.",
+        async run(context) {
+          const ref = context.args[0];
+          if (!ref) throw usage("Name the project (its name or id).");
+          if (!context.options.bot?.length) throw usage("Name a bot with --bot <bot>.");
+          const prompt = await wordsOrFile(context, 1, "prompt");
+          if (!prompt) throw usage("Give the prompt as words after the project, or with --file.");
+          const options = { bots: context.options.bot, prompt, ...(context.options.checkout && { checkout: true }), ...(context.options.carry && { carry: true }), ...(context.options.folder && { folder: context.options.folder }), ...(context.options.mode !== undefined && { mode: context.options.mode }) };
+          if (!context.options.checkout) {
+            const found = await context.client.call("jobs.setup", ref, context.options.folder);
+            if (!found.repo) throw new CliError("The folder of " + safe(found.project.name) + " is not a git repository, so a job can't have a worktree of its own. Use --checkout.");
+            if (found.error) throw new CliError(safe(found.error));
+            if (!found.approved && !(await allowSetup(context, found))) return EXIT.failed;
+          }
+          if ((context.options.mode ?? (await context.client.call("projects.get", ref)).mode) === "yolo") {
+            show(context, ["This starts " + (context.options.bot.length === 1 ? "a job" : "jobs") + " in the mode yolo.", "Each request of the bot in a job gets a yes with no question, but for one that leaves the sandbox."].join("\n"));
+            if (!(await confirm(context, "Start in the mode yolo?"))) return EXIT.failed;
+            options.agreed = true;
+          }
+          const started = await context.client.call("jobs.start", ref, options);
+          context.print(started, (found) =>
+            ["Started " + count(found.jobs.length, "job") + " in " + safe(found.project.name) + ":", ...found.jobs.map((job) => "  " + job.id + "  " + (job.bot ? safe(job.bot) : "a bot") + (job.branch ? " on " + safe(job.branch) : " in your checkout") + (job.setup === "failed" ? " (setup failed: see `botkins jobs status " + job.id + "`)" : "")), "Follow one with `botkins jobs status <job>`."].join("\n"),
+          );
+        },
+      },
+      status: {
+        summary: "Show what a job changed, and whether it can be brought in",
+        usage: "botkins jobs status <job>",
+        async run(context) {
+          context.print(await context.client.call("jobs.status", one(context, "Name the job (its chat's id or its title).")), statusText);
+        },
+      },
+      "bring-in": {
+        summary: "Merge a finished job into your checkout",
+        usage: "botkins jobs bring-in <job> [--message <text>] [--yes]",
+        options: { message: { type: "string", short: "m", value: "text", about: "The message of the commit that takes what was left uncommitted in the worktree" }, ...YES },
+        details: "This commits what was left uncommitted in the job's worktree, checks that the job's branch merges into your checkout's branch with no conflict, merges it (git merge --no-ff), and removes the worktree. The branch stays. Git hooks do not run. Your checkout must be on the branch the job started from, with nothing uncommitted. The command shows the files first and asks; with no terminal it needs --yes. When the branches clash, nothing changes: `botkins jobs catch-up` asks the bot to sort it out.",
+        async run(context) {
+          const ref = one(context, "Name the job (its chat's id or its title).");
+          const found = await context.client.call("jobs.status", ref);
+          if (!found.canBringIn) throw new CliError(safe(found.reason || "This job can't be brought in."));
+          show(context, ["This merges " + safe(found.branch) + " into " + safe(found.base) + " in your checkout, then removes the job's worktree. Git hooks do not run.", "Files (" + found.files.length + "), +" + found.added + " -" + found.removed + ":", ...found.files.slice(0, 40).map((file) => "  " + safe(file.path) + (file.new ? "  (new)" : "  +" + file.added + " -" + file.removed)), ...(found.files.length > 40 ? ["  and " + (found.files.length - 40) + " more"] : [])].join("\n"));
+          if (!(await confirm(context, "Bring this job in?"))) return EXIT.failed;
+          const done = await context.client.call("jobs.bringIn", found.job.id, context.options.message);
+          if (!done.ok) {
+            show(context, ["It clashes with " + safe(found.base) + " in:", ...done.conflicts.map((path) => "  " + safe(path)), "Nothing changed. `botkins jobs catch-up " + found.job.id + "` asks the bot to merge " + safe(found.base) + " into its branch."].join("\n"));
+            context.print(done, () => "Not brought in.");
+            return EXIT.failed;
+          }
+          context.print(done, (result) => "Brought in as " + result.commit + ".");
+        },
+      },
+      "catch-up": {
+        summary: "Ask a job's bot to merge your branch into its own",
+        usage: "botkins jobs catch-up <job>",
+        details: "This sends the job's bot a message, so a turn of the model starts: it merges your checkout's branch into the job's branch in its worktree, resolves what clashes and commits. Your checkout doesn't change.",
+        async run(context) {
+          const done = await context.client.call("jobs.catchUp", one(context, "Name the job (its chat's id or its title)."));
+          context.print(done, (found) => "Asked " + (found.job.bot ? safe(found.job.bot) : "the bot") + " to catch up " + safe(found.job.branch ?? "its branch") + ".");
+        },
+      },
+      remove: {
+        summary: "Remove a job's worktree, and keep its branch",
+        usage: "botkins jobs remove <job> [--yes]",
+        options: { ...YES },
+        details: "What the worktree had that wasn't committed is committed on the job's branch first, so nothing is lost. The command asks; with no terminal it needs --yes.",
+        async run(context) {
+          const ref = one(context, "Name the job (its chat's id or its title).");
+          const found = await context.client.call("jobs.status", ref);
+          show(context, "This removes the worktree of the job " + found.job.id + (found.branch ? ". Its branch " + safe(found.branch) + " stays" : "") + ".");
+          if (!(await confirm(context, "Remove the worktree?"))) return EXIT.failed;
+          context.print(await context.client.call("jobs.remove", found.job.id), (done) => "Removed the worktree of " + done.job.id + ".");
+        },
+      },
+      "start-anyway": {
+        summary: "Send a job's prompt when its setup failed",
+        usage: "botkins jobs start-anyway <job>",
+        details: "This sends the job's prompt, so a turn of the model starts, in a worktree whose setup didn't finish.",
+        async run(context) {
+          context.print(await context.client.call("jobs.startAnyway", one(context, "Name the job (its chat's id or its title).")), (done) => "Sent the prompt of " + done.job.id + ".");
         },
       },
     },

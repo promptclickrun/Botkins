@@ -81,6 +81,7 @@ import { starterById } from "./starters.mjs";
 import { botVoiceField } from "./link/voice.mjs";
 import { Board } from "./board.mjs";
 import { Projects } from "./projects.mjs";
+import { Jobs } from "./jobs.mjs";
 import {
   catchUp,
   createGroupChat,
@@ -347,6 +348,7 @@ export class Workspace {
     // Pages of panels and cards, each a person's (desktop/spaces.mjs). Every panel and card is in one.
     this.spaces = new Spaces(this);
     this.projects = new Projects(this);
+    this.jobs = new Jobs(this);
     this.artifacts = new Artifacts(this);
     this.artifactEvents = new ArtifactEvents(this);
     // Per run: the stops being tried (Workspace.stopHelper) and the function that reads a turn's events.

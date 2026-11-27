@@ -69,6 +69,8 @@ export const COMPOSIO_METHODS = ["composio.catalog", "composio.connected", "comp
  */
 export const MCP_APP_METHODS = ["mcpApps.view", "mcpApps.callTool", "mcpApps.readResource"];
 /** Claude artifacts ("claude-artifacts-v1", desktop/claude-artifacts.mjs): availability, model, and per-bot standing approvals. */
+/** A project's jobs ("project-jobs-v1"; desktop/jobs.mjs), the owner's alone (team.mjs). `jobArgs` cuts each to its shape. */
+export const JOB_METHODS = new Set(["projectJobSetup", "approveJobSetup", "startProjectJob", "projectJobStatus", "bringInJob", "catchUpJob", "removeJobWorktree", "startJobTurn"]);
 export const CLAUDE_ARTIFACT_METHODS = ["claudeArtifacts.status", "claudeArtifacts.setModel", "claudeArtifacts.setBotApproval", "claudeArtifacts.revokeBotApproval"];
 /** The app's space calls ("spaces-v1"), by their wire names. A rename is a change here and in spaceArgs. */
 export const SPACE_METHODS = [
@@ -128,6 +130,8 @@ export const REMOTE_METHODS = new Set([
   "addTodo", "updateTodo", "deleteTodo", "moveTodo",
   // What a project keeps of the artifacts ("project-artifacts-v1"): a list of ids on the project.
   "addProjectArtifact", "removeProjectArtifact", "projectArtifacts",
+  // Jobs from a project's page ("project-jobs-v1"): a prompt per bot, each in a chat and a git worktree of its own.
+  ...JOB_METHODS,
   // Wiki
   "wikiTree", "wikiPage", "saveWikiPage", "createWikiPage", "createWikiPageFor", "createWikiFolder", "moveWiki",
   "deleteWiki", "searchWiki", "wikiHistory", "wikiVersion", "restoreWikiVersion", "wikiExportPlan", "exportWikiFile",
@@ -552,7 +556,7 @@ export function remoteArgs(method, args, { deviceId, uploads } = {}) {
     next[at] = { ...data, voice: botVoiceField(data.voice) };
     return next;
   }
-  return fileArgs(method, args) ?? pluginArgs(method, args) ?? marketArgs(method, args) ?? marketV2Args(method, args) ?? catalogArgs(method, args) ?? mcpAppArgs(method, args) ?? claudeArtifactArgs(method, args) ?? providerArgs(method, args) ?? appUpdateArgs(method, args) ?? projectArtifactArgs(method, args) ?? spaceArgs(method, args) ?? args;
+  return fileArgs(method, args) ?? pluginArgs(method, args) ?? marketArgs(method, args) ?? marketV2Args(method, args) ?? catalogArgs(method, args) ?? mcpAppArgs(method, args) ?? claudeArtifactArgs(method, args) ?? providerArgs(method, args) ?? appUpdateArgs(method, args) ?? projectArtifactArgs(method, args) ?? jobArgs(method, args) ?? spaceArgs(method, args) ?? args;
 }
 
 /** The calls of "marketplace-v2-v1", cut to their shape: a listing id, or a review's token and the choices made in it. */
@@ -670,6 +674,46 @@ function projectArtifactArgs(method, args) {
   const artifact = args[1];
   if (typeof artifact !== "string" || !artifact || artifact.length > 4096 || artifact.includes("\0")) throw new Error("This artifact no longer exists.");
   return [project, artifact];
+}
+
+/**
+ * A project's jobs ("project-jobs-v1"), cut to their shape before the computer's app sees them: ids and a folder
+ * as plain strings, the setup's hash, and of a job's options only the fields desktop/jobs.mjs reads. Null for any
+ * other call.
+ */
+export function jobArgs(method, args) {
+  if (!JOB_METHODS.has(method)) return null;
+  const id = (value, what) => {
+    if (typeof value !== "string" || !value || value.length > 200 || value.includes("\0")) throw new Error("Choose a " + what + ".");
+    return value;
+  };
+  const folder = (value) => (value === undefined || value === null ? undefined : clean(value) ? value : (() => { throw new Error("Choose a folder in this project."); })());
+  if (method === "projectJobSetup") return [id(args[0], "project"), folder(args[1])];
+  if (method === "approveJobSetup") {
+    if (typeof args[2] !== "string" || !/^[0-9a-f]{1,64}$/.test(args[2])) throw new Error("The setup commands changed. Look at them again.");
+    return [id(args[0], "project"), folder(args[1]), args[2]];
+  }
+  if (method === "startProjectJob") {
+    const options = args[1];
+    if (!options || typeof options !== "object" || Array.isArray(options)) throw new Error("Give the job a prompt.");
+    const bots = Array.isArray(options.botIds) ? options.botIds : [];
+    if (!bots.length || bots.length > 6 || !bots.every((bot) => typeof bot === "string" && bot && bot.length <= 200)) throw new Error("Choose 1 to 6 bots.");
+    if (typeof options.prompt !== "string" || !options.prompt.trim() || options.prompt.length > 32000) throw new Error("Give the job a prompt.");
+    if (options.mode !== undefined && !["default", "plan", "yolo"].includes(options.mode)) throw new Error("Choose a mode.");
+    return [id(args[0], "project"), {
+      botIds: [...bots],
+      prompt: options.prompt,
+      where: options.where === "checkout" ? "checkout" : "worktree",
+      ...(folder(options.folder) && { folder: options.folder }),
+      ...(options.mode !== undefined && { mode: options.mode }),
+      ...(options.carry === true && { carry: true }),
+    }];
+  }
+  if (method === "bringInJob") {
+    if (args[1] !== undefined && args[1] !== null && (typeof args[1] !== "string" || args[1].length > 2000)) throw new Error("A commit message is 2000 characters at most.");
+    return [id(args[0], "job"), ...(typeof args[1] === "string" && args[1] ? [args[1]] : [])];
+  }
+  return [id(args[0], "job")];
 }
 
 /** The longest of each thing a phone sends to sign a provider in or install one. */

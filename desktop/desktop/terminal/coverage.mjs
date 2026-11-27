@@ -229,6 +229,14 @@ export const WORKSPACE = {
   projectDiff: cmd("projects diff"),
   projectCommit: cmd("projects commit"),
   startProjectChat: cmd("projects chat"),
+  projectJobSetup: cmd("jobs setup"),
+  approveJobSetup: cmd("jobs allow-setup"),
+  startProjectJob: cmd("jobs start"),
+  projectJobStatus: cmd("jobs status"),
+  bringInJob: cmd("jobs bring-in"),
+  catchUpJob: cmd("jobs catch-up"),
+  removeJobWorktree: cmd("jobs remove"),
+  startJobTurn: cmd("jobs start-anyway"),
   addTodo: cmd("todos add"),
   updateTodo: cmd("todos edit"),
   moveTodo: cmd("todos move"),
@@ -604,6 +612,13 @@ export const CHANGES = {
     if ((value ? value.mode : args?.[1]?.mode) !== "yolo") return name;
     return thingForLog(name) && name.length <= 73 ? name + " (yolo)" : "(yolo)";
   },
+  // A job is in the log by its project (setup, start) or by its chat's id: never its prompt, its setup's commands or a branch.
+  "jobs.allowSetup": (args, value) => value?.project?.name ?? args?.[0],
+  "jobs.start": (args, value) => value?.project?.name ?? args?.[0],
+  "jobs.bringIn": (_args, value) => value?.job?.id,
+  "jobs.catchUp": (_args, value) => value?.job?.id,
+  "jobs.remove": (_args, value) => value?.job?.id,
+  "jobs.startAnyway": (_args, value) => value?.job?.id,
   // A to-do is a person's own text: its line names the project.
   "todos.add": (args, value) => value?.project?.name ?? args?.[0],
   "todos.edit": (args, value) => value?.project?.name ?? args?.[0],
@@ -750,7 +765,7 @@ export const MORE_READS = {
   bots: ["bots.flags", "bots.proactive", "bots.memory", "bots.sections", "bots.sections.get", "bots.importable", "bots.import.preview", "templates.list", "templates.get", "templates.import.preview", "templates.browse", "templates.market"],
   chats: ["chats.list", "chats.get", "chats.search", "chats.queue", "chats.helpers", "chats.mentions", "chats.aside", "chats.sections", "chats.projectLook", "chats.messages"], // (`chats.aside` asks the chat's model a question that the chat does not keep.)
   routines: ["routines.get", "routines.runs", "routines.review", "routines.when", "routines.schedules", "workflows.list", "workflows.export"],
-  projects: ["projects.list", "projects.get", "projects.artifacts", "projects.changes", "projects.diff", "todos.list", "todos.get", "tasks.list", "tasks.get", "artifacts.list", "artifacts.read", "artifacts.resolve"],
+  projects: ["projects.list", "projects.get", "projects.artifacts", "projects.changes", "projects.diff", "jobs.list", "jobs.setup", "jobs.status", "todos.list", "todos.get", "tasks.list", "tasks.get", "artifacts.list", "artifacts.read", "artifacts.resolve"],
   wiki: ["wiki.tree", "wiki.find", "wiki.page", "wiki.search", "wiki.history", "wiki.version", "wiki.exportPlan"],
   prefs: ["preferences.get", "preferences.harnesses", "usage.report", "usage.export", "cache.info", "macTools.status"],
   credentials: ["credentials.list", "credentials.vault", "credentials.managers", "protonPass.installPlan", "protonPass.signInRead", "providers.usage", "providers.installPlan", "providers.install.read", "providers.install.input", "providers.install.cancel"],

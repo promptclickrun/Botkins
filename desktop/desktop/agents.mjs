@@ -320,6 +320,8 @@ export class Agents {
     // Deleting a Main chat is allowed: the next visit to the bot makes a new one (workspace.mainChat).
     this.assertIdle([chat], "chat");
     this.state.chats = this.state.chats.filter((c) => c !== chat);
+    // A job's worktree goes with it; its branch stays (desktop/jobs.mjs).
+    this.ws.jobs?.forget(chat);
     // A question left waiting in the chat goes with it.
     this.ws.interactions.cancel(id, { detached: true });
     this.ws.mcpApps?.removeChats([id]);
