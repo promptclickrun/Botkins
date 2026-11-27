@@ -34,7 +34,7 @@ import { updateTools } from "./updates.mjs";
 import { profileContext } from "./bot-profile-files.mjs";
 import { Memory } from "./memory.mjs";
 import { Teamwork, helperSessionId } from "./teamwork.mjs";
-import { Subagents } from "./subagents.mjs";
+import { SUBAGENT_TYPE, Subagents } from "./subagents.mjs";
 import { Mentions } from "./mentions.mjs";
 import { Summaries } from "./summaries.mjs";
 import { Wiki } from "./wiki.mjs";
@@ -156,6 +156,23 @@ export function appendStream(task, data) {
 const SAVE_SOON_MS = 750;
 /** The harnesses Botkins hands a plugin's MCP servers and hooks to. The others get its skills only. */
 const PLUGIN_RUNTIMES = new Set(["copilot", "pi", "omp"]);
+/** Hook events a child doesn't run itself. A Copilot `task` child runs neither (test/subagent-hooks-probe-live.mjs). */
+const PARENT_ONLY_HOOKS = new Set(["onSessionStart", "onSessionEnd", "onSubagentStart", "onSubagentStop"]);
+/**
+ * The plugin hooks of a subagent_run child's own session: what it is told says which child it is
+ * (`agentId`, `agentType`), as a Copilot `task` child's hooks say. It runs no session or subagent
+ * hooks: the parent's turn runs subagentStart and subagentStop for it, once each.
+ */
+export function childHooks(hooks, agentId) {
+  const handlers = hooks?.handlers;
+  if (!handlers || !agentId) return hooks;
+  const out = {};
+  for (const [name, handler] of Object.entries(handlers)) {
+    if (PARENT_ONLY_HOOKS.has(name)) continue;
+    out[name] = (input, invocation) => handler({ ...(input ?? {}), agentId, agentType: SUBAGENT_TYPE }, invocation);
+  }
+  return { handlers: out };
+}
 /** Workspaces with a write waiting, written when the process exits. */
 const unsaved = new Set();
 let exitHooked = false;
@@ -1874,6 +1891,14 @@ export class Workspace {
     const pluginSpec = access.plugins
       ? await this.plugins.session(bot, chat, { skillsOnly: !fullPlugins })
       : { directories: [], mcpServers: {}, hooks: undefined };
+    // A subagent_run child runs its plugins' hooks as a child (childHooks); the turn keeps its own
+    // for the subagentStart and subagentStop that Botkins runs around each child (desktop/subagents.mjs).
+    // A child has hooks only when its parent's turn has them: a turn with no plugin access gives its children none.
+    const parentHooks = chat.subagent ? task?.pluginHooks : undefined;
+    const hooks = access.plugins && fullPlugins && !(chat.subagent && !parentHooks)
+      ? (chat.subagent ? childHooks(pluginSpec.hooks, chat.subagentId) : pluginSpec.hooks)
+      : undefined;
+    if (task && !chat.helper) task.pluginHooks = hooks ?? null;
     // What the session was told when it began, or what it begins with now (desktop/session-prompts.mjs).
     const prompt = this.sessionPrompt(chat, bot, provider, hosted?.model ?? choice, providerSessionId, providerEstablished);
     // Servers with views (and the Composio tool) are run by Botkins, when they answer; their tools
@@ -1924,7 +1949,7 @@ export class Workspace {
       // Only what Botkins itself wrote for the session from installed plugins (desktop/plugin-runtime.mjs).
       // A plugin's own folder is never handed on: the runtime would read its hooks and tools by itself.
       plugins: [...(access.plugins ? pluginSpec.directories : [])],
-      pluginHooks: access.plugins && fullPlugins ? pluginSpec.hooks : undefined,
+      pluginHooks: hooks,
       pluginRevision: this.plugins.generation,
       history: () => chat.helper ? (chat.helperMessages ?? []) : (chat.compacted ? chat.messages.slice(chat.compacted.through) : chat.messages ?? []),
       handlers: handlers || null,

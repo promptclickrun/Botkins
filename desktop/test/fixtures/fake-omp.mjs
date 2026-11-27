@@ -43,11 +43,31 @@ const ask = (title, method = "select") =>
     send({ type: "extension_ui_request", id, method, title, ...(method === "select" && { options: ["allow", "deny", "more"] }) });
   });
 let aborted = false;
+// OMP's own subagents (its `task` tool), as the real OMP 19.1.0 reports them (test/omp-subagent-probe-live.mjs):
+// "kids:<name>:<outcome>,…" in a prompt spawns one background child per entry (outcome ok|bad|cancel).
+let subagentLevel = "off";
+const kidReplies = new Map();
+const lifecycle = (payload) => subagentLevel !== "off" && send({ type: "subagent_lifecycle", payload: { agent: "task", agentSource: "bundled", parentToolCallId: "call_task|fc_t", detached: true, ...payload } });
+function spawnKids(spec) {
+  spec.split(",").forEach((entry, index) => {
+    const [name, outcome = "ok"] = entry.split(":");
+    const id = "kid-" + name;
+    lifecycle({ id, index, status: "started" });
+    setTimeout(() => {
+      if (outcome === "ok") kidReplies.set(id, "kid " + name);
+      // A duplicate frame, as a reconnecting bus can send: Botkins must not run a hook twice for it.
+      lifecycle({ id, index, status: outcome === "ok" ? "completed" : outcome === "cancel" ? "aborted" : "failed" });
+      if (outcome === "ok") lifecycle({ id, index, status: "completed" });
+    }, 20 + index * 20);
+  });
+}
 
 async function turn(text) {
   aborted = false;
   send({ type: "agent_start" });
   send({ type: "message_start", message: { role: "user" } });
+  const kids = /kids:(\S+)/.exec(text);
+  if (kids) spawnKids(kids[1]);
   const bash = /bash:(\S+)/.exec(text);
   const mcp = /mcp:([a-z0-9_-]+):([a-z0-9_-]+)/.exec(text);
   const own = /own:([a-z0-9_-]+)/.exec(text);
@@ -134,6 +154,15 @@ process.stdin.on("data", (chunk) => {
         dialogs.get(command.id)?.(command);
         dialogs.delete(command.id);
         break;
+      case "set_subagent_subscription":
+        subagentLevel = command.level;
+        ok({ level: command.level });
+        break;
+      case "get_subagent_messages": {
+        const reply = kidReplies.get(command.subagentId);
+        ok({ sessionFile: "", fromByte: 0, nextByte: 0, reset: false, entries: [], messages: [{ role: "user", content: [{ type: "text", text: "task" }] }, { role: "assistant", content: reply ? [{ type: "text", text: reply }] : [] }] });
+        break;
+      }
       case "negotiate_protocol":
         ok({ protocolVersion: command.protocolVersion });
         break;

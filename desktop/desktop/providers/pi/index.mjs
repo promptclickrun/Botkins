@@ -440,6 +440,7 @@ class PiSession extends ProviderSession {
       // A plugin's session hook once for each harness process, then its prompt hook once, before the
       // harness sees the message: the Copilot runtime's order (test/hook-events-probe-live.mjs).
       const started = await this.sessionStart(live, message.prompt);
+      await this.watchSubagents(live);
       const hooked = await this.userPromptSubmitted(message.prompt);
       if (hooked.block) return { text: "" };
       message = { ...message, prompt: (started ? started + "\n\n" : "") + hooked.prompt };
@@ -800,6 +801,57 @@ class PiSession extends ProviderSession {
     const out = await this.runHook("onSessionStart", { source: live.resumed ? "resume" : "new", initialPrompt: prompt });
     return typeof out?.additionalContext === "string" ? out.additionalContext.trim() : "";
   }
+  /**
+   * OMP runs subagents of its own (its `task` tool) as background jobs, and says when each starts
+   * and ends with a `subagent_lifecycle` frame once asked (`set_subagent_subscription`). With a
+   * plugin's subagent hook, Botkins asks, and runs subagentStart and subagentStop from those frames
+   * (test/omp-subagent-probe-live.mjs). Pi has no subagents. The latest turn's hooks are the ones
+   * that run: a child can end after its turn.
+   */
+  async watchSubagents(live) {
+    if (this.provider.runtime !== OMP_ID) return;
+    const wanted = !!(this.hook("onSubagentStart") || this.hook("onSubagentStop"));
+    live.subagents ??= { subscribed: false, owner: null, started: new Set(), ended: new Set() };
+    live.subagents.owner = wanted ? this : null;
+    if (!wanted || live.subagents.subscribed) return;
+    try {
+      await live.rpc.request({ type: "set_subagent_subscription", level: "progress" }, 15000);
+      live.subagents.subscribed = true;
+    } catch {
+      // An OMP without the subagent event bus: its children run without these hooks.
+    }
+  }
+  /**
+   * One `subagent_lifecycle` frame of OMP's: `started` runs subagentStart, `completed` runs
+   * subagentStop with the child's last reply (read with `get_subagent_messages`). A child that
+   * `failed` or was `aborted` has no subagentStop, as on Copilot. Each child's id is its own, and
+   * each hook runs once for it. OMP's children run in the background, after OMP has already begun
+   * them and while their result goes to OMP: a hook's answer can't change them here.
+   */
+  async subagentLifecycle(live, payload) {
+    const id = typeof payload?.id === "string" ? payload.id : "";
+    const seen = live.subagents;
+    if (!id || !seen) return;
+    const identity = { agentId: id, agentType: String(payload.agent ?? "task"), agentName: String(payload.agent ?? "task"), ...(payload.description && { agentDisplayName: String(payload.description) }), parentAgentId: this.spec.sessionId, transcriptPath: typeof payload.sessionFile === "string" ? payload.sessionFile : "" };
+    if (payload.status === "started") {
+      if (seen.started.has(id)) return;
+      seen.started.add(id);
+      await this.runHook("onSubagentStart", identity);
+      return;
+    }
+    if (!seen.started.has(id) || seen.ended.has(id)) return;
+    seen.ended.add(id);
+    if (payload.status !== "completed") return;
+    let response = "";
+    try {
+      const read = await live.rpc.request({ type: "get_subagent_messages", subagentId: id }, 15000);
+      const last = (read?.messages ?? []).filter((message) => message?.role === "assistant").at(-1);
+      response = textOf(last?.content);
+    } catch {
+      // The transcript couldn't be read: the hook is told no response.
+    }
+    await this.runHook("onSubagentStop", { ...identity, stopReason: "end_turn", stopHookActive: false, response });
+  }
   /** agentStop at a natural end of the turn: the reason to go on with, when a hook blocks; else null. */
   async agentStop(active) {
     const out = await this.runHook("onAgentStop", { stopReason: "end_turn", stopHookActive: active });
@@ -1143,6 +1195,8 @@ export class PiProvider extends ModelProvider {
     live.rpc = new PiRpc(start.file, start.args, { env: { ...env, ...start.env }, cwd: launchDir, name: this.name, ...(this.runtime === OMP_ID && { protocolVersion: 2 }) });
     live.rpc.on((event) => {
       if (event.type === "extension_ui_request") void this.dialog(live, event);
+      // OMP's own subagents (its `task` tool), when a plugin has a subagent hook (PiSession.subagentLifecycle).
+      else if (event.type === "subagent_lifecycle") void live.subagents?.owner?.subagentLifecycle(live, event.payload);
     });
     live.rpc.exited.then(() => {
       this.sessionEnded(live, "complete");

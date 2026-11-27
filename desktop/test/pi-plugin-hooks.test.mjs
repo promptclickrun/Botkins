@@ -20,7 +20,7 @@ const binary = join(root, "omp");
 writeFileSync(binary, "#!/bin/sh\nexec " + JSON.stringify(process.execPath) + " " + JSON.stringify(FIXTURE) + ' "$@"\n');
 chmodSync(binary, 0o755);
 
-const EVENTS = ["sessionStart", "userPromptSubmitted", "preToolUse", "postToolUse", "postToolUseFailure", "agentStop", "sessionEnd", "errorOccurred"];
+const EVENTS = ["sessionStart", "userPromptSubmitted", "preToolUse", "postToolUse", "postToolUseFailure", "agentStop", "sessionEnd", "errorOccurred", "subagentStart", "subagentStop"];
 const plugin = join(root, "every-hook");
 mkdirSync(plugin, { recursive: true });
 writeFileSync(join(plugin, "plugin.json"), JSON.stringify({ name: "every", hooks: "hooks.json" }));
@@ -32,7 +32,7 @@ writeFileSync(
     "const event = process.argv[2];",
     'let d = ""; process.stdin.on("data", (b) => (d += b)).on("end", () => {',
     "  const x = JSON.parse(d);",
-    "  const said = { source: x.source, toolName: x.toolName, stopHookActive: x.stopHookActive, reason: x.reason, errorContext: x.errorContext, error: x.error, result: x.toolResult?.textResultForLlm };",
+    "  const said = { source: x.source, toolName: x.toolName, stopHookActive: x.stopHookActive, reason: x.reason, errorContext: x.errorContext, error: x.error, result: x.toolResult?.textResultForLlm, agentId: x.agentId, agentType: x.agentType, response: x.response, parentAgentId: x.parentAgentId };",
     '  appendFileSync(process.env.PLUGIN_DATA + "/events.log", JSON.stringify({ event, ...said }) + "\\n");',
     '  const file = process.env.PLUGIN_DATA + "/answers/" + event + ".json";',
     '  console.log(existsSync(file) ? readFileSync(file, "utf8").trim() : "{}");',
@@ -179,4 +179,33 @@ test("no hook runs for a turn without plugin access, or for a switched-off plugi
     assert.ok(!started.described.preToolUse && !started.described.postToolUse, label + ": the extension asks nothing more");
     assert.equal(made.asked.length, 1, label + ": the call still goes to Botkins' approval");
   }
+});
+
+test("OMP's own subagents: one subagentStart each, one subagentStop for each that completed, from OMP's own frames", { skip }, async () => {
+  const { provider, seen, events, spec } = setup();
+  const session = await provider.openSession(spec);
+  await session.send({ prompt: "kids:a:ok,b:bad,c:ok,d:cancel" });
+  // The children are OMP's background jobs: they end after the turn.
+  for (let i = 0; i < 100 && events().filter((e) => e.event === "subagentStop").length < 2; i++) await new Promise((resolve) => setTimeout(resolve, 20));
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  assert.ok(seen().some((entry) => entry.command?.type === "set_subagent_subscription" && entry.command.level === "progress"), "Botkins asked OMP for its subagent frames");
+  const life = events().filter((e) => e.event === "subagentStart" || e.event === "subagentStop");
+  const of = (event, id) => life.filter((e) => e.event === event && e.agentId === id);
+  for (const id of ["kid-a", "kid-b", "kid-c", "kid-d"]) assert.equal(of("subagentStart", id).length, 1, id + " started once");
+  // A failed or cancelled child has no subagentStop (Copilot: test/subagent-hooks-probe-live.mjs); a repeated frame runs nothing again.
+  assert.deepEqual(life.filter((e) => e.event === "subagentStop").map((e) => [e.agentId, e.response]).sort(), [["kid-a", "kid a"], ["kid-c", "kid c"]]);
+  assert.ok(life.every((e) => e.agentType === "task" && e.parentAgentId === "chat-1"));
+  await session.close();
+  await provider.stop();
+});
+
+test("without a subagent hook, Botkins doesn't ask OMP for its subagent frames", { skip }, async () => {
+  const { provider, seen, events, spec } = setup({}, [record()], { hooks: false });
+  const session = await provider.openSession(spec);
+  await session.send({ prompt: "kids:a:ok" });
+  await new Promise((resolve) => setTimeout(resolve, 150));
+  assert.ok(!seen().some((entry) => entry.command?.type === "set_subagent_subscription"));
+  assert.deepEqual(events(), []);
+  await session.close();
+  await provider.stop();
 });
