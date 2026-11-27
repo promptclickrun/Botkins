@@ -562,7 +562,7 @@ export default function Settings({
                           <summary>Commands, skills and tools</summary>
                           {catalog.choices.map((c) => (
                             <small key={c.command}>
-                              /{c.command} · {c.source}
+                              /{c.command} · {c.source}{c.exposure === "indirect" ? " · indirect" : ""}
                             </small>
                           ))}
                         </details>
