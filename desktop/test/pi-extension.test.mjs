@@ -65,3 +65,12 @@ test("a server a turn leaves out stays registered, and only a changed server is 
   assert.deepEqual(registered.slice(2), [["crm", "Bearer two"]]);
   writeFileSync(file, JSON.stringify({ providers: [], servers: {}, prompt: "You are Testy." }));
 });
+
+test("a configured server whose name starts with botkins_ still asks", async () => {
+  const handlers = {};
+  botkins({ on: (name, handler) => (handlers[name] = handler) });
+  const result = await handlers.tool_call({
+    toolName: "mcp__botkins_example__echo", mcpServerName: "botkins_example", mcpToolName: "echo", input: {},
+  }, { ui: { select: async () => "deny" } });
+  assert.equal(result?.block, true);
+});

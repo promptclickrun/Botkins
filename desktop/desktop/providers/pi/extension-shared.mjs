@@ -120,7 +120,10 @@ export function makeBotkinsExtension(file, { mcp = true } = {}) {
       const info = typeof pi.getAllTools === "function" ? pi.getAllTools().find((tool) => tool.name === name) : undefined;
       const mcpServerName = info?.mcpServerName ?? event.mcpServerName;
       const mcpToolName = info?.mcpToolName ?? event.mcpToolName;
-      if (mcpServerName === "botkins" || name.startsWith(OWN) || name.startsWith(OMP_OWN)) return undefined;
+      const own = mcp
+        ? (mcpServerName ? mcpServerName === "botkins" : name.startsWith(OWN))
+        : mcpServerName === "botkins" || name.startsWith(OWN) || name.startsWith(OMP_OWN);
+      if (own) return undefined;
       const call = {
         toolCallId: event.toolCallId,
         toolName: event.toolName,
