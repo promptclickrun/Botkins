@@ -4,7 +4,9 @@
  */
 
 import { createSlackAdapter } from "./slack.mjs";
+import { createTelegramAdapter } from "./telegram.mjs";
 
 export function registerBuiltInAdapters(manager) {
   manager.registerAdapter("slack", () => createSlackAdapter());
+  manager.registerAdapter("telegram", () => createTelegramAdapter());
 }
