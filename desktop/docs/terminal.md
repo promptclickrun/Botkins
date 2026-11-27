@@ -207,12 +207,15 @@ A **tool** is something a bot can call. One that you add is an MCP server: a pro
 ```sh
 botkins tools add files --command npx --env API_KEY -- -y @example/files-mcp
 botkins tools add search --url https://mcp.example.com/v1 --header Authorization
+botkins tools add legacy --url https://mcp.example.com/sse --sse
 botkins tools list
 botkins tools test files
 botkins skills add weekly-report --description "Use for the Friday report." --instructions-file report.md
 botkins bots tools Nova --off search
 botkins bots skills Nova --off weekly-report
 ```
+
+Use `--sse` only for servers that use the older MCP SSE transport. Pi connects through a local Botkins adapter, under the configured server name and the same per-call approval rules. This does not change how you configure the server on a paired phone.
 
 - **A program's own arguments come last, after `--`.** Thus an argument can start with a dash, and no word of the program is taken as an option of Botkins. `--yes` has no short form in these commands: `-y` is `npx`'s own.
 - **A value is never a word on the command line.** Name each environment value or header (`--env API_KEY`, `--header Authorization`). The command then asks for each value and does not show what you type. From a script, give the values in a JSON file: `--secrets values.json`, or `--secrets -` to read the file from standard input. The file is `{ "env": { "API_KEY": "…" }, "headers": { "Authorization": "…" }, "clientSecret": "…" }`. No command prints a value: `botkins tools show` gives the names that have one.

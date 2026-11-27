@@ -1569,6 +1569,7 @@ export class BrowserController {
           origin: approvedOrigin,
           fields,
           submit: Boolean(args?.submit),
+          allowLocalHttp: args?.allowLocalHttp === true,
         },
         { frameIds: [0] },
       );
@@ -1601,7 +1602,14 @@ export class BrowserController {
           docToken: typeof res.docToken === "string" ? res.docToken : "",
         });
       }
-      return { filled, missing };
+      const out = { filled, missing };
+      if (args?.submit) {
+        out.submitted = res.submitted === true;
+        if (res.submitRefused === "cross_site_action" || res.submitRefused === "origin_changed") {
+          out.submitRefused = res.submitRefused;
+        }
+      }
+      return out;
     } finally {
       for (const f of fields) f.value = "";
       fields.length = 0;

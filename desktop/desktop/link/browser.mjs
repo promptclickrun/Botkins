@@ -189,6 +189,7 @@ export const BROWSER_TOOLS = [
 
 const BY_NAME = new Map(BROWSER_TOOLS.map((tool) => [tool.name, tool]));
 const SAFE_SECURE_CODES = new Set(["origin_mismatch", "password_type_mismatch", "type_mismatch"]);
+const SAFE_SUBMIT_REFUSALS = new Set(["cross_site_action", "origin_changed"]);
 
 function zeroSecureFields(fields) {
   if (!Array.isArray(fields)) return;
@@ -379,6 +380,7 @@ export class BrowserTools {
         origin,
         fields,
         submit: Boolean(payload?.submit),
+        ...(payload?.allowLocalHttp === true && { allowLocalHttp: true }),
       },
       at: this.now(),
     };
@@ -487,7 +489,12 @@ export class BrowserTools {
       const allowed = entry.tool.allowedKeys;
       const filled = Array.isArray(result?.filled) ? result.filled.filter((k) => typeof k === "string" && allowed.has(k)) : [];
       const missing = Array.isArray(result?.missing) ? result.missing.filter((k) => typeof k === "string" && allowed.has(k)) : [];
-      return entry.resolve({ filled, missing });
+      const out = { filled, missing };
+      if (entry.ask.args?.submit) {
+        out.submitted = result?.submitted === true;
+        if (SAFE_SUBMIT_REFUSALS.has(result?.submitRefused)) out.submitRefused = result.submitRefused;
+      }
+      return entry.resolve(out);
     }
     if (entry.tool.file && (result?.path || result?.uploadId)) {
       const path = this.uploads?.ownFile(deviceId, result.path ?? result.uploadId);

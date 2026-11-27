@@ -70,14 +70,17 @@ export class ToolBridge {
    * opened: a backend that keeps a conversation loaded goes on using the address it was first
    * given. Closing it keeps the tools listed but refuses their calls until the next turn's `set`;
    * `forget(key)` removes the address. A change to the list is pushed on the address's event stream.
+   *
+   * A transport adapter can supply `dispatch(method, params)` for tools/list and tools/call
+   * instead of local definitions. The adapter must authorize each upstream invocation.
    */
-  async open(tools = [], { key } = {}) {
+  async open(tools = [], { key, dispatch } = {}) {
     const port = await this.start();
     let id = key && this.kept.get(key);
     let endpoint = id && this.endpoints.get(id);
     if (!endpoint) {
       id = randomBytes(12).toString("hex");
-      endpoint = { secret: Buffer.from(randomBytes(24).toString("base64url")), tools: new Map(), streams: new Set(), idle: false };
+      endpoint = { secret: Buffer.from(randomBytes(24).toString("base64url")), tools: new Map(), streams: new Set(), idle: false, dispatch };
       this.endpoints.set(id, endpoint);
       if (key) this.kept.set(key, id);
     }
@@ -171,6 +174,13 @@ export class ToolBridge {
     const { id, method, params } = message;
     if (id === undefined || id === null) return null;
     const ok = (result) => ({ jsonrpc: "2.0", id, result });
+    if (endpoint.dispatch && (method === "tools/list" || method === "tools/call")) {
+      try {
+        return ok(await endpoint.dispatch(method, params));
+      } catch (error) {
+        return { jsonrpc: "2.0", id, error: { code: -32603, message: error.message } };
+      }
+    }
     switch (method) {
       case "initialize":
         return ok({

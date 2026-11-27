@@ -540,13 +540,14 @@ test(
       const foreignFill = await ctrl.runSecureFill({
         tabId: 101,
         origin: new URL(pageUrl).origin,
+        allowLocalHttp: true,
         fields: [
           { key: "email", kind: "text", value: "member@example.test" },
           { key: "password", kind: "password", value: "SENTINEL_FOREIGN_PASS_1!" },
         ],
         submit: true,
       });
-      assert.deepEqual(foreignFill, { filled: ["email", "password"], missing: [] });
+      assert.deepEqual(foreignFill, { filled: ["email", "password"], missing: [], submitted: true });
       assert.equal(JSON.stringify(foreignFill).includes("SENTINEL_FOREIGN_PASS_1!"), false);
       assert.equal(debuggerAttachAttempts, 2, "secure fill must never attach chrome.debugger");
       const foreignSubmits = await browser.cdp.evalInContext(`window.__submits`);
@@ -671,7 +672,7 @@ test(
       const mismatchTenantField = { key: "tenant_code", kind: "text", value: "acme" };
       const mismatchFields = [mismatchPassField, mismatchTenantField];
       await assert.rejects(
-        () => ctrl.runSecureFill({ tabId: 202, origin, fields: mismatchFields }),
+        () => ctrl.runSecureFill({ tabId: 202, origin, allowLocalHttp: true, fields: mismatchFields }),
         (err) => err.secureCode === "password_type_mismatch",
       );
       assert.equal(mismatchPassField.value, "");
@@ -691,6 +692,7 @@ test(
       const fillPayload = {
         tabId: 202,
         origin,
+        allowLocalHttp: true,
         fields: [...fillItems],
         submit: true,
       };
@@ -698,6 +700,7 @@ test(
       assert.deepEqual(result, {
         filled: ["LoginModel.Email", "LoginModel.Password", "tenant_code"],
         missing: ["nonexistent.field"],
+        submitted: true,
       });
       assert.equal(JSON.stringify(result).includes(sentinelEmail), false);
       assert.equal(JSON.stringify(result).includes(sentinelPass), false);
@@ -867,6 +870,7 @@ test(
       const fillRes = await ctrl.runSecureFill({
         tabId: tabA.id,
         origin: originA,
+        allowLocalHttp: true,
         fields: [
           { key: "LoginModel.Email", kind: "text", value: "user@example.test" },
           { key: "LoginModel.Password", kind: "password", value: sentinelPass },
@@ -1016,6 +1020,7 @@ test(
       await ctrl.runSecureFill({
         tabId: tabA.id,
         origin: originA,
+        allowLocalHttp: true,
         fields: [{ key: "LoginModel.Password", kind: "password", value: sentinelPass }],
         submit: false,
       });
@@ -1028,6 +1033,94 @@ test(
       assert.equal(evalAfterNav.result, "/login-with-foreign-extension.html");
       const cdpAfterNav = await ctrl.run("browser_cdp", { tabId: tabA.id, method: "Runtime.evaluate", params: { expression: "2+2" } });
       assert.equal(cdpAfterNav.result?.result?.value, "cdp-ok:Runtime.evaluate");
+    } finally {
+      await browser.close();
+      server.close();
+    }
+  },
+);
+
+test(
+  "secureFill submits a same-site form, and fills but refuses to submit a form whose action, formaction, base or clobbered action points at another site",
+  { skip: !chromeBin ? "No Chromium/Chrome binary available on this host" : false },
+  async () => {
+    const driverCode = readFileSync(driverBundlePath, "utf8");
+    const form = (action, extra = "") => `<!doctype html><html><head>${extra.startsWith("<base") ? extra : ""}</head><body>
+      <form id="f" method="post"${action === null ? "" : ` action="${action}"`}>
+        ${extra.startsWith("<input") ? extra : ""}
+        <input id="pw" name="password" type="password" value="">
+        <button id="go" type="submit"${extra.startsWith("formaction") ? " " + extra : ""}>Sign In</button>
+      </form>
+      ${extra.startsWith("<button") ? extra : ""}
+      <script>
+        window.__submits = 0;
+        document.getElementById("f").addEventListener("submit", (e) => { e.preventDefault(); window.__submits++; });
+      </script>
+    </body></html>`;
+    const pages = {
+      "/no-action": form(null),
+      "/same-origin": form("/login"),
+      "/evil-action": form("https://evil.example/collect"),
+      "/evil-base": form("collect", `<base href="https://evil.example/">`),
+      "/evil-formaction": form("/login", `formaction="https://evil.example/steal"`),
+      "/evil-external-submitter": form("/login", `<button type="submit" form="f" formaction="https://evil.example/steal">External</button>`),
+      "/evil-clobbered": form("https://evil.example/collect", `<input name="action" value="/local-decoy">`),
+    };
+    const server = http.createServer((req, res) => {
+      const path = (req.url || "/").split("?")[0];
+      if (!Object.hasOwn(pages, path)) {
+        res.writeHead(404);
+        res.end("Not found");
+        return;
+      }
+      res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+      res.end(pages[path]);
+    });
+    await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const origin = `http://127.0.0.1:${server.address().port}`;
+    const browser = await launchChromium(chromeBin);
+    const dummySecret = "dummy-test-pass-001";
+
+    async function fillOn(path, submit) {
+      await browser.navigate(`${origin}${path}`);
+      const frameTree = await browser.cdp.send("Page.getFrameTree");
+      const isolated = await browser.cdp.send("Page.createIsolatedWorld", {
+        frameId: frameTree.frameTree.frame.id,
+        worldName: `botkins-submit-${path}`,
+      });
+      const contextId = isolated.executionContextId;
+      await browser.cdp.evalInContext(driverCode, { contextId });
+      const payload = { origin, allowLocalHttp: true, submit, fields: [{ key: "password", kind: "password", value: dummySecret }] };
+      const res = await browser.cdp.evalInContext(`window.__botkinsDomDriver.dispatch("secureFill", ${JSON.stringify(payload)})`, { contextId });
+      const pw = await browser.cdp.evalInContext(`document.getElementById("pw").value`);
+      const submits = await browser.cdp.evalInContext(`window.__submits`);
+      return { res, pw, submits };
+    }
+
+    try {
+      for (const path of ["/no-action", "/same-origin"]) {
+        const ok = await fillOn(path, true);
+        assert.equal(ok.res.ok, true, path);
+        assert.deepEqual(ok.res.filled, ["password"]);
+        assert.equal(ok.res.submitted, true, `${path} is the same site and must be submitted`);
+        assert.equal(ok.res.submitRefused, undefined);
+        assert.equal(ok.submits, 1);
+        assert.equal(ok.pw, dummySecret);
+      }
+
+      for (const path of ["/evil-action", "/evil-base", "/evil-formaction", "/evil-external-submitter", "/evil-clobbered"]) {
+        const refused = await fillOn(path, true);
+        assert.equal(refused.res.ok, true, `${path} still fills`);
+        assert.deepEqual(refused.res.filled, ["password"]);
+        assert.equal(refused.res.submitted, false, `${path} must not be submitted`);
+        assert.equal(refused.res.submitRefused, "cross_site_action", path);
+        assert.equal(refused.submits, 0, `${path} must never fire a submit`);
+        assert.equal(refused.pw, dummySecret);
+      }
+
+      const fillOnly = await fillOn("/evil-action", false);
+      assert.equal(fillOnly.res.submitted, false);
+      assert.equal(fillOnly.res.submitRefused, undefined, "no submit asked for, so nothing to refuse");
     } finally {
       await browser.close();
       server.close();

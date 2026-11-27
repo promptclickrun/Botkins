@@ -18,9 +18,9 @@ export const LOCKED =
 const WENT_WRONG = "Something went wrong with the saved credentials. Try again.";
 
 const MANAGERS = ["onepassword", "bitwarden", "protonpass"];
-const KINDS = ["api-key", "login", "note"];
+const KINDS = ["api-key", "login", "note", "totp"];
 // What the page may see of each thing. Anything else a store or a tool hands back is left out.
-const ENTRY = ["id", "name", "kind", "username", "website", "notes", "source", "reference", "createdAt", "updatedAt"];
+const ENTRY = ["id", "name", "kind", "username", "website", "aliases", "notes", "source", "reference", "hasTotp", "copied", "copiedFrom", "createdAt", "updatedAt"];
 const STATUS = ["id", "name", "state", "version", "account", "message", "canUnlock", "setup", "source", "expiresAt", "sharedVaults", "step", "code", "unsupported"];
 
 const isPlain = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
@@ -54,8 +54,9 @@ const text = (value, what) => {
  * @param options.get  () => Credentials | null
  */
 export class SavedCredentials {
-  constructor({ get }) {
+  constructor({ get, grants } = {}) {
     this.get = get;
+    this.grantsStore = grants ?? null;
   }
   store() {
     const store = this.get();
@@ -87,13 +88,46 @@ export class SavedCredentials {
   /** Adds one typed in here, or changes one (`id`). `value` null or left out keeps the saved value. Returns the id. */
   async save(input) {
     if (!isPlain(input)) throw new Failure("That credential can't be saved.");
-    const clean = keep(input, ["id", "name", "kind", "username", "website", "notes", "value"]);
+    const clean = keep(input, ["id", "name", "kind", "username", "website", "aliases", "notes", "value", "totpSecret"]);
     if (clean.kind !== undefined && !KINDS.includes(clean.kind)) throw new Failure("That kind of credential isn't supported.");
     return this.change(async (store) => String(await store.save(clean)));
   }
   async remove(id) {
     text(id, "credential");
     await this.change((store) => store.remove(id));
+    this.grantsStore?.revokeForCredential?.(id);
+  }
+  /** Explicit copy of a manager item into the Botkins vault, marked as a copy. */
+  async copy(input) {
+    if (!isPlain(input)) throw new Failure("That field can't be copied.");
+    const { manager, vaultId, itemId, fieldId, name } = input;
+    managerId(manager);
+    return this.change(async (store) => String(await store.copyFromManager({ manager, vaultId, itemId, fieldId, name })));
+  }
+
+  // ── Standing grants & audit log (metadata only, never values) ─────────────────────────────
+
+  listGrants(filter = {}) {
+    if (!this.grantsStore) return [];
+    return this.grantsStore.list(filter);
+  }
+  setGrant(input) {
+    if (!this.grantsStore) throw new Failure(NOT_READY);
+    if (!isPlain(input)) throw new Failure("That grant can't be saved.");
+    try {
+      return this.grantsStore.set({ ...input, isOwnerPrivateChat: true });
+    } catch (error) {
+      throw new Failure(short(error?.message, 200) ?? "That grant isn't valid.");
+    }
+  }
+  revokeGrant(id) {
+    if (!this.grantsStore) throw new Failure(NOT_READY);
+    text(id, "grant");
+    return this.grantsStore.revoke(id);
+  }
+  audit(options = {}) {
+    if (!this.grantsStore) return [];
+    return this.grantsStore.audit(options);
   }
   /** Whether it can be read right now: { ok, message? }. The value is read and dropped on the computer. */
   async check(id) {
