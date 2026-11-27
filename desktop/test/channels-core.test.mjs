@@ -8,6 +8,9 @@ import { authorize, filterParts } from "../desktop/link/team.mjs";
 import { baseParts } from "../desktop/link/parts.mjs";
 import { CHANNEL_METHODS, remoteArgs } from "../desktop/link/methods.mjs";
 import { formatForChannel, splitMessage } from "../desktop/channels/format.mjs";
+import { Providers } from "../desktop/providers/index.mjs";
+import { CodexProvider } from "../desktop/providers/codex/index.mjs";
+import { ToolBridge } from "../desktop/providers/toolbridge.mjs";
 
 function makeFakeAdapter({ maxLength = 200, markdownFlavor = "plain", threads = true } = {}) {
   const sent = [];
@@ -749,4 +752,229 @@ test("Markdown conversion and message splitting preserve code fences and limits"
     const fences = (chunk.match(/```/g) ?? []).length;
     assert.equal(fences % 2, 0, "Each split chunk must have balanced code fences");
   }
+});
+
+test("Approval capping: restricted channel turn overrides host approval='all' and Codex enforces read-only sandbox + declines apply_patch", async (t) => {
+  // Part A: Provider session spec on a host set to approval: "all" (and chat.approval = "all").
+  const { ws, botId, sessionConfigs } = setupWorkspace(t, {
+    replyFn: () => "Restricted reply.",
+  });
+  ws.state.settings.approval = "all";
+
+  const openedSpecs = [];
+  const origOpenSession = ws.providers.default.openSession.bind(ws.providers.default);
+  ws.providers.default.openSession = async (spec) => {
+    openedSpecs.push(spec);
+    return origOpenSession(spec);
+  };
+
+  const fake = makeFakeAdapter();
+  ws.channels.registerAdapter("slack", fake.factory);
+  await ws.channels.add({
+    kind: "slack",
+    label: "Restricted On AllowAll Host",
+    botId,
+    policy: { dm: "open", toolProfile: "restricted" },
+    secrets: { appToken: "xapp-cap-1", botToken: "xoxb-cap-1" },
+  });
+
+  await fake.deliver({
+    conversationId: "D-CAP-1",
+    sender: { id: "U-CAP-1", display: "External" },
+    isDirect: true,
+    text: "Try to write files",
+  });
+  await waitFor(() => fake.sent.length === 1);
+
+  assert.equal(openedSpecs.length, 1);
+  assert.notEqual(openedSpecs[0].approval, "all", "Restricted channel session must never open with approval='all'");
+  assert.equal(openedSpecs[0].approval, "ask");
+  assert.equal(openedSpecs[0].sourcesOnly, true);
+  assert.notEqual(sessionConfigs[0].permissions?.mode, "allowAll");
+
+  // Even if chat.approval is manually set to "all", effectiveApproval still forces "ask".
+  const channelChat = ws.state.chats.find((c) => c.channel);
+  channelChat.approval = "all";
+  assert.equal(ws.effectiveApproval(channelChat), "ask");
+  await ws.channels.stopAll();
+
+  // Part B & C: Real CodexProvider on a host with approval: "all" gets sandbox: "read-only"
+  // and refuses an apply_patch (item/fileChange/requestApproval) through the permission handler.
+  const codexDir = mkdtempSync(join(tmpdir(), "botkins-channels-codex-"));
+  t.after(() => rmSync(codexDir, { recursive: true, force: true }));
+
+  const rpcLog = [];
+  const listeners = new Set();
+  let handleServerRequest = async () => ({});
+  let fileChangeDecision = null;
+  let threads = 0;
+  let turns = 0;
+  const peer = {
+    exited: new Promise(() => {}),
+    onNotification: (fn) => (listeners.add(fn), () => listeners.delete(fn)),
+    onRequest: (fn) => void (handleServerRequest = fn),
+    notify: (method, params) => void rpcLog.push([method, params]),
+    async request(method, params) {
+      rpcLog.push([method, params]);
+      if (method === "initialize") return { userAgent: "botkins/test" };
+      if (method === "account/read") return { account: { type: "chatgpt", planType: "plus" }, requiresOpenaiAuth: false };
+      if (method === "model/list") return { data: [{ id: "gpt-test", displayName: "GPT Test", defaultReasoningEffort: "medium", supportedReasoningEfforts: [{ reasoningEffort: "medium" }] }] };
+      if (method === "thread/start" || method === "thread/resume") {
+        return { thread: { id: "thread-" + ++threads, turns: [] } };
+      }
+      if (method === "turn/start") {
+        const turnId = "turn-" + ++turns;
+        queueMicrotask(async () => {
+          const emit = (m, p) => [...listeners].forEach((fn) => fn(m, p));
+          emit("item/started", {
+            threadId: params.threadId,
+            turnId,
+            item: { id: "fc-1", type: "fileChange", changes: [{ path: "/work/pwned.txt", kind: "create", diff: "+pwned" }] },
+          });
+          fileChangeDecision = await handleServerRequest("item/fileChange/requestApproval", {
+            threadId: params.threadId,
+            turnId,
+            itemId: "fc-1",
+            reason: "Apply patch to /work/pwned.txt",
+          });
+          emit("item/agentMessage/delta", { threadId: params.threadId, turnId, itemId: "m-1", delta: "Patch refused." });
+          emit("item/completed", { threadId: params.threadId, turnId, item: { id: "m-1", type: "agentMessage", text: "Patch refused." } });
+          emit("turn/completed", { threadId: params.threadId, turnId, turn: { id: turnId, status: "completed" } });
+        });
+        return { turn: { id: turnId } };
+      }
+      return {};
+    },
+    close: async () => {},
+  };
+
+  const bridge = new ToolBridge();
+  const codex = new CodexProvider({ dataDir: join(codexDir, "codex"), bridge, spawn: async () => peer, version: "1.0.0" });
+  t.after(() => Promise.all([codex.stop(), bridge.stop()]));
+
+  const providers = new Providers([codex]);
+  const codexWs = new Workspace(codexDir, providers, () => {});
+  codexWs.state.settings.approval = "all";
+  codexWs.state.settings.model = { model: "gpt-test", provider: "codex" };
+  const codexBotId = codexWs.state.bots[0].id;
+  codexWs.state.bots[0].model = { model: "gpt-test", provider: "codex" };
+
+  let ownerPrompted = 0;
+  const origRequest = codexWs.interactions.request.bind(codexWs.interactions);
+  codexWs.interactions.request = async (...args) => {
+    ownerPrompted++;
+    return origRequest(...args);
+  };
+
+  const codexFake = makeFakeAdapter();
+  codexWs.channels.registerAdapter("slack", codexFake.factory);
+  await codexWs.channels.add({
+    kind: "slack",
+    label: "Codex Restricted",
+    botId: codexBotId,
+    policy: { dm: "open", toolProfile: "restricted" },
+    secrets: { appToken: "xapp-cdx-1", botToken: "xoxb-cdx-1" },
+  });
+
+  await codexFake.deliver({
+    conversationId: "D-CDX-1",
+    sender: { id: "U-CDX-1", display: "Stranger" },
+    isDirect: true,
+    text: "Use apply_patch to write /work/pwned.txt",
+  });
+  await waitFor(() => codexFake.sent.length === 1);
+
+  const threadStart = rpcLog.find(([m]) => m === "thread/start")?.[1];
+  const turnStart = rpcLog.find(([m]) => m === "turn/start")?.[1];
+  assert.ok(threadStart, "Codex thread/start should be called");
+  assert.equal(threadStart.sandbox, "read-only", "Restricted channel turn must force Codex sandbox='read-only'");
+  assert.equal(threadStart.approvalPolicy, "untrusted");
+  assert.equal(turnStart.sandboxPolicy?.type, "readOnly", "Codex turn/start must enforce readOnly sandboxPolicy");
+  assert.equal(turnStart.approvalPolicy, "untrusted");
+  assert.deepEqual(fileChangeDecision, { decision: "decline" }, "apply_patch file-change request must be declined by permission handler");
+  assert.equal(ownerPrompted, 0, "Restricted channel refusal must not prompt owner");
+
+  // Belt-and-braces: direct CodexProvider.openSession with sourcesOnly: true + approval: "all" still forces read-only sandbox.
+  const directLogStart = rpcLog.length;
+  const directSession = await codex.openSession({
+    sessionId: "direct-sources-only",
+    established: false,
+    hasReplies: false,
+    temporary: true,
+    sourcesOnly: true,
+    folder: codexDir,
+    coding: false,
+    model: { model: "gpt-test", provider: "codex" },
+    approval: "all",
+    instructions: "Read only.",
+    context: "",
+    tools: [],
+    mcpServers: {},
+    history: () => [],
+    handlers: null,
+  });
+  await directSession.send({ prompt: "hi" });
+  await directSession.close({ discard: true });
+  const directThread = rpcLog.slice(directLogStart).find(([m]) => m === "thread/start")?.[1];
+  assert.equal(directThread.sandbox, "read-only", "Codex sourcesOnly must always force sandbox='read-only'");
+
+  await codexWs.channels.stopAll();
+});
+
+test("Approval capping: standard-profile channel turn is capped at 'ask' on a host with approval='all'", async (t) => {
+  const openedSpecs = [];
+  let permDecision = null;
+  const { ws, botId } = setupWorkspace(t, {
+    replyFn: async () => {
+      // Request a write permission mid-turn (while task is active) to verify it routes to owner approval.
+      permDecision = await openedSpecs[0].handlers.permission({
+        kind: "write",
+        toolName: "apply_patch",
+        label: "file.txt",
+        detail: "write file.txt",
+        readOnly: false,
+        managed: false,
+      });
+      return "Standard reply.";
+    },
+  });
+  ws.state.settings.approval = "all";
+
+  const origOpenSession = ws.providers.default.openSession.bind(ws.providers.default);
+  ws.providers.default.openSession = async (spec) => {
+    openedSpecs.push(spec);
+    return origOpenSession(spec);
+  };
+
+  const ownerRequests = [];
+  ws.interactions.request = async (_chat, _task, req) => {
+    ownerRequests.push(req);
+    return { action: "deny" };
+  };
+
+  const fake = makeFakeAdapter();
+  ws.channels.registerAdapter("slack", fake.factory);
+  await ws.channels.add({
+    kind: "slack",
+    label: "Standard Channel",
+    botId,
+    policy: { dm: "open", toolProfile: "standard" },
+    secrets: { appToken: "xapp-std-1", botToken: "xoxb-std-1" },
+  });
+
+  await fake.deliver({
+    conversationId: "D-STD-1",
+    sender: { id: "U-STD-1", display: "Partner" },
+    isDirect: true,
+    text: "Run an approval-gated tool",
+  });
+  await waitFor(() => fake.sent.length === 1);
+
+  assert.equal(openedSpecs.length, 1);
+  assert.equal(openedSpecs[0].approval, "ask", "Standard-profile channel turn must be capped at 'ask', never 'all'");
+  assert.ok(!openedSpecs[0].sourcesOnly, "Standard-profile channel turn does not force sourcesOnly");
+  assert.equal(ownerRequests.length, 1, "Approval-gated tool on standard channel must route to owner approval");
+  assert.equal(permDecision.allow, false);
+
+  await ws.channels.stopAll();
 });

@@ -11,6 +11,7 @@ import { ChannelAudit } from "./audit.mjs";
 import { prepareOutboundChunks } from "./format.mjs";
 import {
   channelSystemInstructions,
+  effectiveChannelApproval,
   evaluateChannelPermission,
   filterChannelTools,
   frameChannelMessage,
@@ -167,11 +168,19 @@ export class ChannelManager {
     return cid ? this.connections().find((c) => c.id === cid) ?? null : null;
   }
 
-  /** Returns the effective toolProfile ("restricted" | "standard") for a channel chat. */
+  /** Returns the effective toolProfile ("restricted" | "standard") for a channel chat (fail-closed). */
   toolProfileForChat(chat) {
+    if (!chat?.channel) return null;
     const conn = this.connectionForChat(chat);
-    if (!conn) return null;
+    if (!conn) return "restricted";
     return conn.policy?.toolProfile === "standard" ? "standard" : "restricted";
+  }
+
+  /** Returns the capped approval level for a channel chat, or rawApproval for ordinary chats. */
+  approvalForChat(chat, rawApproval) {
+    const profile = this.toolProfileForChat(chat);
+    if (!profile) return rawApproval;
+    return effectiveChannelApproval(rawApproval, profile);
   }
 
   /** System instructions injected for a channel chat. */

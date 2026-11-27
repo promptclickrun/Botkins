@@ -74,13 +74,25 @@ export function filterChannelTools(tools, toolProfile = "restricted") {
 }
 
 /**
+ * Computes the effective session/permission approval level for a channel chat.
+ * - "restricted" profile ALWAYS forces "ask" regardless of chat or host approval settings,
+ *   keeping every harness (including Codex's read-only sandbox) out of auto-approve / full-access modes.
+ * - "standard" profile caps approval so channel chats never inherit "all" or "assisted",
+ *   ensuring approval-gated tools always route to the owner.
+ */
+export function effectiveChannelApproval(rawApproval, toolProfile = "restricted") {
+  if (toolProfile === "restricted") return "ask";
+  return rawApproval === "read" ? "read" : "ask";
+}
+
+/**
  * Evaluates a harness permission request (shell, write, node, browser, mcp, etc.) on a channel turn.
  * Returns a refusal object when blocked by the restricted profile, or null to let normal owner
  * approval handling run (still never prompting inside the external channel).
  */
 export function evaluateChannelPermission(request, toolProfile = "restricted") {
   if (toolProfile === "restricted") {
-    const kind = String(request?.kind || request?.tool || "tool");
+    const kind = String(request?.kind || request?.toolName || request?.tool || "tool");
     return {
       allow: false,
       message: `Refused "${kind}": restricted tool profile is active for external channel turns.`,

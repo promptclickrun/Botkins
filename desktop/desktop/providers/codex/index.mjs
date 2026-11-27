@@ -241,7 +241,8 @@ class CodexSession extends ProviderSession {
     if (!spec.hostDispatch)
       this.bridge = await provider.bridge.open(spec.handlers ? [...spec.tools, ...this.skills.tools] : [], spec.temporary ? {} : { key: provider.id + ":" + spec.sessionId });
     const isolation = spec.hostDispatch ? await dispatchConfig(provider, rpc, spec.folder) : null;
-    const settings = approvalSettings(spec.approval);
+    // Belt-and-braces: sourcesOnly sessions never leave the read-only sandbox even if a caller passes approval: "all".
+    const settings = approvalSettings(spec.sourcesOnly ? "ask" : spec.approval);
     const params = {
       model: this.model.model,
       cwd: spec.folder,
@@ -384,7 +385,7 @@ class CodexSession extends ProviderSession {
         : undefined;
       // Stop was pressed while the thread was still starting: the turn never begins.
       if (this.stopRequested) return { text: "" };
-      const settings = approvalSettings(this.mode === "plan" ? "ask" : this.spec.approval);
+      const settings = approvalSettings(this.mode === "plan" || this.spec.sourcesOnly ? "ask" : this.spec.approval);
       const turn = (this.turn = { text: [], current: null, failure: null, id: null, baseline: this.usage?.total ?? null });
       const finished = new Promise((resolve, reject) => Object.assign(turn, { resolve, reject }));
       // The turn can be failed from elsewhere (the CLI stopping) before anything waits on it.

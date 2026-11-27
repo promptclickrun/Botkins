@@ -42,6 +42,7 @@ import { Frames } from "./frames.mjs";
 import { ClaudeArtifacts } from "./claude-artifacts.mjs";
 import { Workflows } from "./workflows.mjs";
 import { ChannelManager } from "./channels/index.mjs";
+import { effectiveChannelApproval } from "./channels/security.mjs";
 import { registerBuiltInAdapters } from "./channels/adapters/index.mjs";
 import { createNodeChannelBridge } from "./channels/adapters/imessage.mjs";
 
@@ -734,6 +735,17 @@ export class Workspace {
     this.hostDispatch.clearGrants(chatId);
     this.claudeArtifacts.clearGrants(chatId);
     this.save();
+  }
+  /**
+   * Effective approval level for a chat. Channel chats never inherit "all" (or "assisted"):
+   * restricted channel chats are forced to "ask" (keeping Codex in its read-only sandbox),
+   * and standard-profile channel chats are capped at "ask" (preserving "read" if set).
+   */
+  effectiveApproval(chat) {
+    const raw = chat?.approval ?? this.state.settings.approval;
+    if (!chat?.channel) return raw;
+    const profile = this.channels?.toolProfileForChat(chat) ?? "restricted";
+    return effectiveChannelApproval(raw, profile);
   }
   async sideQuestion(id, question) {
     const chat = this.chat(id),
@@ -1827,7 +1839,7 @@ export class Workspace {
       }
     }
     if (catchUpContext) chat.forkContext = catchUpContext;
-    const channelRestricted = !!chat.channel && this.channels?.toolProfileForChat(chat) === "restricted";
+    const channelRestricted = !!chat.channel && (this.channels?.toolProfileForChat(chat) ?? "restricted") === "restricted";
     const handlers = run && {
       cancelForSteer: () => this.interactions.cancel(chat.id),
       permission: (request) => {
@@ -1921,7 +1933,7 @@ export class Workspace {
       coding: !!projectFolder && !channelRestricted,
       model: hosted?.model ?? choice,
       ...(hosted && { inference: hosted.inference }),
-      approval: chat.approval ?? this.state.settings.approval,
+      approval: this.effectiveApproval(chat),
       // How long a provider that can choose keeps the prompt cache (Settings › General › Keep prompt cache longer).
       cacheRetention: this.state.settings.longPromptCache === false ? "short" : "long",
       // The same on every turn of the session; what changed since is told in the turn's message (tellSession).
@@ -2585,6 +2597,7 @@ export class Workspace {
       botId: bot.id,
       title: chat.title,
       approval: chat.approval,
+      ...(chat.channel && { channel: chat.channel }),
       messages: member.restartSession ? chat.messages : chat.messages.filter((m) => m.botId === bot.id),
       fastMode: chat.fastMode,
       groupInstructions: groupInstructions(bot, members),

@@ -611,6 +611,7 @@ export class Teamwork {
       botId: helper.id,
       title: chat.title,
       approval: chat.approval,
+      ...(chat.channel && { channel: chat.channel }),
       messages: [],
       get helperMessages() { return record.messages; },
       projectId: chat.projectId,

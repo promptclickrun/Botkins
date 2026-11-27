@@ -626,7 +626,7 @@ export class McpApps {
     if (args !== undefined && (typeof args !== "object" || args === null || Array.isArray(args) || JSON.stringify(args).length > MAX_ARGS)) throw new Error("Those arguments can't be sent.");
     const tool = (await upstream.tools()).find((item) => item.name === name);
     if (!tool || !visibilityOf(tool).has("app")) throw new Error("This view can't use that tool.");
-    const mode = chat.approval ?? this.ws.state.settings?.approval;
+    const mode = this.ws.effectiveApproval ? this.ws.effectiveApproval(chat) : (chat.approval ?? this.ws.state.settings?.approval);
     if (tool.annotations?.readOnlyHint !== true && mode !== "all" && approved !== true) return { needsApproval: { tool: tool.name, title: clip(str(tool.title) || tool.name, 80), server: card.server } };
     const result = await upstream.call(name, args);
     return { result: { content: Array.isArray(result?.content) ? result.content : [], ...(result?.structuredContent && { structuredContent: result.structuredContent }), ...(result?._meta && { _meta: result._meta }), ...(result?.isError && { isError: true }) } };
