@@ -385,64 +385,59 @@ test("approval preview shows typed text with visible control characters and omit
   const tools = new Map(ws.sessionTools(bot, chat, run, task).map((tool) => [tool.name, tool]));
 
   await tools.get("computer_observe").handler({ pid: 4242 });
+  async function denyWithPrompt(args) {
+    let prompt;
+    const deny = (request) => {
+      prompt = request;
+      ws.interactions.respond(request.id, { action: "deny" });
+    };
+    ws.events.once("request", deny);
+    try {
+      await assert.rejects(() => tools.get("computer_act").handler(args), /declined/i);
+    } finally {
+      ws.events.off("request", deny);
+    }
+    assert.equal(prompt?.kind, "permission", `${args.action} opens an approval prompt`);
+    return prompt;
+  }
 
   // type_text shows visible control chars (\n, \t, \x03) and omits remember grant.
   const longText = `hello\nworld\t\x03 ${"a".repeat(250)}`;
-  const typePromise = tools.get("computer_act").handler({
+  const typePending = await denyWithPrompt({
     action: "type_text",
     pid: 4242,
     element_token: "tok-search",
     text: longText,
   });
-  await new Promise((r) => setTimeout(r, 25));
-  const typePending = ws.interactions.snapshot().find((r) => r.kind === "permission");
-  assert.ok(typePending, "type_text opens approval prompt");
   assert.match(typePending.preview, /hello\\nworld\\t\\x03/);
   assert.ok(typePending.preview.includes("…"), "long typed text is truncated in preview");
   assert.ok(!typePending.remember, "type_text must NOT offer 'Allow computer actions in this chat' remember grant");
-  ws.interactions.respond(typePending.id, { action: "deny" });
-  await assert.rejects(() => typePromise, /declined/i);
 
   // set_value also shows typed text and omits remember grant.
-  const setPromise = tools.get("computer_act").handler({
+  const setPending = await denyWithPrompt({
     action: "set_value",
     pid: 4242,
     element_token: "tok-search",
     text: "line1\r\nline2",
   });
-  await new Promise((r) => setTimeout(r, 25));
-  const setPending = ws.interactions.snapshot().find((r) => r.kind === "permission");
-  assert.ok(setPending);
   assert.match(setPending.preview, /line1\\r\\nline2/);
   assert.ok(!setPending.remember, "set_value must NOT offer remember grant");
-  ws.interactions.respond(setPending.id, { action: "deny" });
-  await assert.rejects(() => setPromise, /declined/i);
 
   // hotkey omits remember grant.
-  const hotkeyPromise = tools.get("computer_act").handler({
+  const hotkeyPending = await denyWithPrompt({
     action: "hotkey",
     pid: 4242,
     keys: ["cmd", "v"],
   });
-  await new Promise((r) => setTimeout(r, 25));
-  const hotkeyPending = ws.interactions.snapshot().find((r) => r.kind === "permission");
-  assert.ok(hotkeyPending);
   assert.ok(!hotkeyPending.remember, "hotkey must NOT offer remember grant");
-  ws.interactions.respond(hotkeyPending.id, { action: "deny" });
-  await assert.rejects(() => hotkeyPromise, /declined/i);
 
   // click still offers remember grant.
-  const clickPromise = tools.get("computer_act").handler({
+  const clickPending = await denyWithPrompt({
     action: "click",
     pid: 4242,
     element_token: "tok-submit",
   });
-  await new Promise((r) => setTimeout(r, 25));
-  const clickPending = ws.interactions.snapshot().find((r) => r.kind === "permission");
-  assert.ok(clickPending);
   assert.ok(clickPending.remember, "click keeps remember grant");
-  ws.interactions.respond(clickPending.id, { action: "deny" });
-  await assert.rejects(() => clickPromise, /declined/i);
 });
 
 test("request timeout stops hung driver and respawns a fresh process on the next call", async (t) => {

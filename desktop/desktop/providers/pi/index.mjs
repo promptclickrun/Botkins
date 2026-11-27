@@ -21,6 +21,7 @@ import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
+import { isDeepStrictEqual } from "node:util";
 import { ModelProvider, ProviderSession, usageData } from "../provider.mjs";
 import { cliEnv, findBinary, run, versionOf } from "../cli.mjs";
 import { buildInventory, resolvePrompt } from "../commands.mjs";
@@ -30,6 +31,7 @@ import { displayValue } from "../../display.mjs";
 import { describeRequest } from "../copilot/permissions.mjs";
 import { DETAIL, INVENTORY, MORE, RESULT } from "./extension-shared.mjs";
 import { PLAN_INSTRUCTIONS, planFromOmpPhases, planSignature, planToOmpPhases, toTodoResult, updatePlanTool } from "./plan.mjs";
+import { PiSse } from "./sse.mjs";
 
 export const PI_ID = "pi";
 export const OMP_ID = "omp";
@@ -269,13 +271,13 @@ const textOf = (content) =>
     .filter(Boolean)
     .join("\n");
 
-/** A Botkins MCP server record as Pi's, or null for a kind Pi can't connect to (SSE). */
 // A plugin's local tool names its folder `workingDirectory` (the Copilot SDK's word); the person's own, `cwd`.
 const folderOf = (server) => server.cwd ?? server.workingDirectory;
+/** A Botkins MCP server record as Pi's, with SSE adapted when the process is configured. */
 function piServer(server) {
   if (server.type === "stdio") return { command: server.command, args: server.args ?? [], ...(server.env && { env: server.env }), ...(folderOf(server) && { cwd: folderOf(server) }), exposure: "direct" };
-  if (server.type === "sse" || !server.url) return null;
-  return { url: server.url, ...(server.headers && { headers: server.headers }), exposure: "direct" };
+  if (!server.url) return null;
+  return { ...(server.type === "sse" && { type: "sse" }), url: server.url, ...(server.headers && { headers: server.headers }), exposure: "direct" };
 }
 /** A Botkins MCP server record in OMP's native mcp.json format. */
 function ompServer(server) {
@@ -735,6 +737,7 @@ class PiSession extends ProviderSession {
       return { text: reply };
     } finally {
       // A call that never ran (stopped, or the process went away) must not stay Running.
+      this.cancelSseCalls();
       if (this.turn) this.stopRows(this.turn);
       stop();
       this.turn = null;
@@ -755,6 +758,7 @@ class PiSession extends ProviderSession {
       // A refused abort leaves the original operation running. Preserve the input for the
       // workspace's ordinary queue. A dead RPC also rejects the outstanding settle.
       turn.redirected = true;
+      this.cancelSseCalls();
       aborting = rpc.request({ type: "abort" }, 0).catch(error => {
         for (const item of pending.splice(0)) item.ack.reject(error);
         aborting = null;
@@ -928,9 +932,10 @@ class PiSession extends ProviderSession {
    */
   async permission(call) {
     const handlers = this.spec.handlers;
-    if (!handlers || !this.turn) return false;
+    const turn = this.turn;
+    if (!handlers || !turn) return false;
     const { name, server } = toolIdentity(call, this.aliases);
-    this.turn.calls?.set(call.toolCallId, { name, server });
+    turn.calls?.set(call.toolCallId, { name, server });
     // Pi keeps every server Botkins gave it registered, so its tool list stays the same; one this
     // turn doesn't have (the person writing may not use it, or its plugin was switched off) does
     // nothing. (A Pi package's own server isn't Botkins'.)
@@ -948,8 +953,10 @@ class PiSession extends ProviderSession {
       const command = typeof input.command === "string" ? input.command : null;
       const request = describeRequest({ kind: "hook", toolName: name, toolArgs: command === null ? input : { ...input, command }, hookMessage: hooked.reason });
       try {
+        const grant = this.sseGrant(turn, server);
         const answer = await handlers.permission({ ...request, preview: command ?? displayValue(input, Infinity), detail: displayValue({ ...call, input }, Infinity) });
-        return answer?.allow ? changed : false;
+        if (!answer?.allow) return false;
+        return this.grantSse(turn, grant, name, server, input) ? changed : false;
       } catch {
         return false;
       }
@@ -1077,14 +1084,44 @@ class PiSession extends ProviderSession {
       request = { kind: "write", label: path || name, title: (name === "edit" ? "Edit" : "Write") + " this file?", preview: String(input.content ?? input.newText ?? (displayValue(input, Infinity) || path)), remember: path ? ["writes to this path", path] : null };
     else if (READS.has(name)) request = { kind: "read", label: path || name, title: "Read " + (path || "files") + "?", preview: path || displayValue(input, Infinity), remember: path ? ["reads of this path", path] : null };
     else request = { kind: "custom-tool", label: name, title: "Use " + name + "?", preview: displayValue(input, Infinity), remember: null };
+    const turn = this.turn;
+    if (!turn) return false;
     try {
+      const grant = this.sseGrant(turn, server);
       const answer = await handlers.permission({ ...request, toolName: name, detail: displayValue({ ...call, input }, Infinity), readOnly: request.kind === "read", sandboxEscape: false, managed: false });
-      return !!answer?.allow;
+      if (!answer?.allow) return false;
+      return this.grantSse(turn, grant, name, server, input);
     } catch {
       return false;
     }
   }
+  /** The turn's SSE grants, when this call goes to a legacy SSE server Botkins proxies; else null. */
+  sseGrant(turn, server) {
+    // The SSE adapter knows a plugin's server by its harness name (its alias).
+    const sse = server && this.live?.sse?.entries.has(this.harnessServerName(server));
+    return sse ? (turn.sse ??= { controller: new AbortController(), grants: [] }) : null;
+  }
+  /** Records an allowed SSE call for the proxy to admit; false when the turn moved on meanwhile. */
+  grantSse(turn, grant, name, server, input) {
+    if (!grant) return true;
+    if (this.turn !== turn || turn.ended || this.stopRequested || this.closed || grant.controller.signal.aborted) return false;
+    grant.grants.push({ name, server: this.harnessServerName(server), input });
+    return true;
+  }
+  takeSseGrant(server, params) {
+    const grant = this.turn?.sse;
+    if (!grant || this.turn.ended || this.stopRequested || this.closed || grant.controller.signal.aborted) return null;
+    const index = grant.grants.findIndex(call => call.server === server && call.name === params?.name && isDeepStrictEqual(call.input, params?.arguments ?? {}));
+    if (index < 0) return null;
+    grant.grants.splice(index, 1);
+    return grant.controller.signal;
+  }
+  cancelSseCalls() {
+    this.turn?.sse?.controller.abort();
+    if (this.turn) this.turn.sse = null;
+  }
   interrupt() {
+    this.cancelSseCalls();
     try {
       this.live?.rpc.write({ type: "abort" });
     } catch {
@@ -1587,7 +1624,6 @@ export class PiProvider extends ModelProvider {
       registeredConfigs: new Map(Object.entries(described.servers ?? {}).map(([name, cfg]) => [name, JSON.stringify(cfg)])),
       pendingConfigs: null,
     };
-    await this.write(live, described);
     const wanted = level(session.model.reasoningEffort);
     const args = this.launchArgs(live, spec, target, wanted, packages);
     const env = await cliEnv({
@@ -1608,18 +1644,27 @@ export class PiProvider extends ModelProvider {
       [this.program.sessionEnv]: live.file,
     }, this.baseEnv);
     const start = launcher(file, args);
-    live.rpc = new PiRpc(start.file, start.args, { env: { ...env, ...start.env }, cwd: launchDir, name: this.name, ...(this.runtime === OMP_ID && { protocolVersion: 2 }) });
+    try {
+      await this.write(live, described);
+      live.rpc = new PiRpc(start.file, start.args, { env: { ...env, ...start.env }, cwd: launchDir, name: this.name, ...(this.runtime === OMP_ID && { protocolVersion: 2 }) });
+    } catch (error) {
+      await live.sse?.stop();
+      rmSync(live.file, { force: true });
+      throw error;
+    }
     live.rpc.on((event) => {
       this.observeRuntime(live, event);
       if (event.type === "extension_ui_request") void this.dialog(live, event);
     });
-    live.rpc.exited.then(() => {
+    live.cleaned = live.rpc.exited.then(async () => {
       this.sessionEnded(live, "complete");
       if (this.live.get(spec.sessionId) === live) this.live.delete(spec.sessionId);
       // Its own file only: a process let go a moment ago can exit after the next turn's process
       // started, and that one's file must stay (without it Pi starts with no connections: "Model … not found").
       rmSync(live.file, { force: true });
+      await live.sse?.stop();
     });
+    live.cleaned.catch((error) => console.error(this.name + " session cleanup:", error.message));
     this.live.set(spec.sessionId, live);
     // The fewest at once: the conversation used longest ago lets go of its harness.
     if (this.live.size > MAX_LIVE) {
@@ -1645,6 +1690,10 @@ export class PiProvider extends ModelProvider {
     live.given = new Set([...(live.given ?? []), ...Object.keys(described.servers ?? {})]);
     live.pendingConfigs = new Map(Object.entries(described.servers ?? {}).map(([name, cfg]) => [name, JSON.stringify(cfg)]));
     mkdirSync(live.agentDir, { recursive: true, mode: 0o700 });
+    if (this.runtime === PI_ID && (live.sse || Object.values(described.servers).some(server => server.type === "sse"))) {
+      live.sse ??= new PiSse();
+      described = { ...described, servers: await live.sse.records(described.servers, () => live.session) };
+    }
     writeFileSync(live.file, JSON.stringify(described), { mode: 0o600 });
     if (this.runtime === OMP_ID) {
       writeFileSync(join(live.agentDir, "mcp.json"), JSON.stringify({ mcpServers: described.servers }), { mode: 0o600 });
@@ -1798,7 +1847,11 @@ export class PiProvider extends ModelProvider {
     const all = [...this.live.values()];
     this.live.clear();
     for (const live of all) this.sessionEnded(live, "user_exit");
-    await Promise.allSettled(all.map((live) => (clearTimeout(live.timer), live.rpc.close())));
+    await Promise.allSettled(all.map(async (live) => {
+      clearTimeout(live.timer);
+      await live.rpc.close();
+      await live.cleaned;
+    }));
     await Promise.allSettled(all.map((live) => live.pending));
   }
   /** Stable ToolBridge key per session. For OMP, rotates when declared bridge tool schemas change so OMP's discovery cache refreshes. */

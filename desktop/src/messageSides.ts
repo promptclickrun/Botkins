@@ -9,27 +9,27 @@
 
 export const OWNER = "owner";
 
-type Said = { role: string; author?: { memberId: string }; interim?: boolean };
+type Said = { role: string; author?: { memberId: string }; interim?: boolean; receipt?: boolean };
 
 /** Who wrote a person's message: "owner" or a member's id. */
 export const authorOf = (message: Said) => message.author?.memberId ?? OWNER;
 
 /** "mine" on the right, "person" for someone else on the left, "other" for a bot or the computer. */
 export function messageSide(message: Said, viewer: string): "mine" | "person" | "other" {
-  if (message.role !== "user") return "other";
+  if (message.role !== "user" || message.receipt) return "other";
   return authorOf(message) === viewer ? "mine" : "person";
 }
 
 /**
  * Whether the message at `index` starts a run of another person's messages, and so shows their name
- * and picture. A thought shown between two messages is not part of the conversation and does not break a run.
+ * and picture. A thought or receipt shown between two messages does not break a run.
  */
 export function startsPersonRun(messages: readonly Said[], index: number, viewer: string): boolean {
   const message = messages[index];
   if (!message || messageSide(message, viewer) !== "person") return false;
   for (let at = index - 1; at >= 0; at--) {
     const before = messages[at];
-    if (before.interim) continue;
+    if (before.interim || before.receipt) continue;
     return messageSide(before, viewer) !== "person" || authorOf(before) !== authorOf(message);
   }
   return true;

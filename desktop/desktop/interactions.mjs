@@ -94,7 +94,9 @@ export class Interactions {
       throw new Error("Only the destination owner can answer this dispatch request.");
     if (
       view.kind === "permission" &&
-      !["approve", "deny", "remember", "cancel"].includes(answer.action) && !(view.dispatch && answer.action === "today")
+      !["approve", "deny", "remember", "cancel"].includes(answer.action) &&
+      !(view.dispatch && answer.action === "today") &&
+      !(view.credentialGrant && answer.action === "deny_always")
     )
       throw new Error("Unknown approval response");
     // A request whose script is the point (a script command, desktop/script-commands.mjs) is approved only by an answer that says its whole text was shown:
@@ -125,7 +127,7 @@ export class Interactions {
     }
     if (human && entry.task.run && !entry.task.run.noOutput) {
       commitInterim(entry.chat, entry.task.run, entry.task);
-      entry.chat.messages.push({ role: "user", text: answerReceipt(view, answer), time: Date.now(),
+      entry.chat.messages.push({ role: "user", text: answerReceipt(view, answer), time: Date.now(), receipt: true,
         answer: { runId: entry.task.run.id, requestId: id, kind: view.kind, title: view.title } });
       this.ws.save();
     }

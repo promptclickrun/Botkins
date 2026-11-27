@@ -127,7 +127,9 @@ export function makeBotkinsExtension(file, { mcp = true } = {}) {
       const mcpServerName = info?.mcpServerName ?? event.mcpServerName;
       const mcpToolName = info?.mcpToolName ?? event.mcpToolName;
       // Botkins' own tools never ask, unless a plugin's hook is to see each tool call first.
-      const own = mcpServerName === "botkins" || name.startsWith(OWN) || name.startsWith(OMP_OWN);
+      const own = mcp
+        ? (mcpServerName ? mcpServerName === "botkins" : name.startsWith(OWN))
+        : mcpServerName === "botkins" || name.startsWith(OWN) || name.startsWith(OMP_OWN);
       if (own && !(read() ?? first).preToolUse) return undefined;
       const call = {
         toolCallId: event.toolCallId,

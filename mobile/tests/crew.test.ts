@@ -43,23 +43,30 @@ test("while a turn runs, its crew card sits where the first helper started, befo
   }
 });
 
-test("once the turn ended, the crew card sits right under its fold, receipt or activity line", () => {
+test("once the turn ended, finished crew folds into the fold, receipt or activity line while a still-running command keeps its crew card", () => {
   const done = run({ status: "Completed", finished: at(20), steps: steps.map((s) => ({ ...s, status: "Done", finished: s.started + 1000 })), agents: [helper("h1", 3, { status: "Done", finished: at(9), result: "Found two places." })] });
-  const cases: [string, Partial<TimelineInput["prefs"]>, string][] = [
+  const cases: [string, Partial<TimelineInput["prefs"]>, "activity" | "fold"][] = [
     ["every step", {}, "activity"],
     ["folded", { foldFinishedSteps: true }, "fold"],
     ["island", { island: true }, "fold"],
   ];
-  for (const [name, prefs, before] of cases) {
+  for (const [name, prefs, kind] of cases) {
     const items = chatTimeline(input({ messages: [ask, reply], runs: { r1: done }, prefs }));
     const shape = kinds(items);
-    const crew = shape.indexOf("crew");
-    assert.equal(shape[crew - 1], before, name + ": " + shape.join(" "));
-    assert.equal(shape.filter((kind) => kind === "crew").length, 1, name);
-    const card = items[crew] as Extract<Item, { kind: "crew" }>;
-    assert.equal(card.live, false);
-    assert.equal(card.line, "1 helper · 1 step");
+    assert.equal(shape.includes("crew"), false, name + ": finished crew folds into the turn line");
+    const row = items.find((item) => item.kind === kind);
+    assert.ok(row, name + ": " + shape.join(" "));
+    const text = row.kind === "activity" ? row.label ?? "" : row.kind === "fold" ? row.line : "";
+    assert.match(text, /1 helper finished/, name + ": " + text);
   }
+  // A still-running background command stays reachable as a crew card even after the turn ended.
+  const dev = step("dev", 2, { background: true, status: "Running", finished: undefined });
+  const withBg = run({ status: "Completed", finished: at(20), steps: [...steps.map((s) => ({ ...s, status: "Done", finished: s.started + 1000 })), dev] });
+  const bgItems = chatTimeline(input({ messages: [ask, reply], runs: { r1: withBg }, prefs: { foldFinishedSteps: true } }));
+  const bgShape = kinds(bgItems);
+  const bgCrew = bgShape.indexOf("crew");
+  assert.equal(bgShape[bgCrew - 1], "fold");
+  assert.equal((bgItems[bgCrew] as Extract<Item, { kind: "crew" }>).line, "1 command · 1 working");
 });
 
 test("a turn without helpers or background commands has no crew card", () => {

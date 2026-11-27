@@ -81,7 +81,9 @@ test("a turn starts Pi in RPC mode on Botkins' own folder, streams the reply, an
   assert.equal(started.args[started.args.indexOf("--session-id") + 1], "chat-1");
   // The extension is given the connection, the servers Pi can reach, and the bot's instructions.
   assert.deepEqual(started.described.providers, [CONNECTION]);
-  assert.deepEqual(started.described.servers, { files: { url: "https://mcp.example/x", headers: { A: "b" }, exposure: "direct" } }, "an SSE server is left out");
+  assert.deepEqual(started.described.servers.files, { url: "https://mcp.example/x", headers: { A: "b" }, exposure: "direct" });
+  assert.match(started.described.servers.old.url, /^http:\/\/127\.0\.0\.1:\d+\/mcp\//);
+  assert.match(started.described.servers.old.headers.Authorization, /^Bearer /);
   assert.equal(started.described.prompt, "You are Testy.");
   await session.close();
   await provider.stop();
@@ -583,7 +585,7 @@ test("Pi inventory reflects runtime connection states, direct vs indirect exposu
     { name: "pend_srv", status: "pending" },
     { name: "fail_srv", status: "failed" },
     { name: "auth_srv", status: "needs-auth" },
-    { name: "sse_srv", status: "unavailable" },
+    { name: "sse_srv", status: "configured" },
   ]);
   const direct = inv.choices.find((c) => c.kind === "Tool" && c.name === "search" && c.source === "direct_srv");
   const indirect = inv.choices.find((c) => c.kind === "Tool" && c.name === "query" && c.source === "indirect_srv");

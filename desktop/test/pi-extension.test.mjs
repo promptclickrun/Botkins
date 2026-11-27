@@ -92,3 +92,12 @@ test("Botkins' own tools ask only when a plugin's preToolUse hook is to see ever
   assert.equal(asked, 1);
   writeFileSync(file, JSON.stringify({ providers: [], servers: {}, prompt: "You are Testy." }));
 });
+
+test("a configured server whose name starts with botkins_ still asks", async () => {
+  const handlers = {};
+  botkins({ on: (name, handler) => (handlers[name] = handler) });
+  const result = await handlers.tool_call({
+    toolName: "mcp__botkins_example__echo", mcpServerName: "botkins_example", mcpToolName: "echo", input: {},
+  }, { ui: { select: async () => "deny" } });
+  assert.equal(result?.block, true);
+});

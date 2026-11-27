@@ -1,19 +1,22 @@
-// While a turn runs, its status floats over the message box on glass, the way T3 Code shows a
-// working thread: the bot's face (held still, for battery), what it is doing, how long it has been
-// at it and how many steps ("Coding | 0:42 · 3 steps"). A tap opens the turn's activity. The clock
-// ticks once a second only while the chat is on screen and the app is in front.
+// While a turn runs, one quiet status line sits directly above the message box: a small pulsing
+// accent dot, what the bot is doing (activityLabel or the island's thinking heading), and
+// right-aligned tabular time and step count ("34:24 · 328 steps"). A tap opens the turn's activity.
+// The clock ticks once a second only while the chat is on screen and the app is in front.
 import { router } from "expo-router";
-import { useElapsedClock } from "./useElapsedClock";
+import { useEffect } from "react";
 import { View } from "react-native";
-import Animated, { FadeIn } from "react-native-reanimated";
+import Animated, { FadeIn, useAnimatedStyle, useReducedMotion, useSharedValue, withRepeat, withSequence, withTiming } from "react-native-reanimated";
 import type { Bot, Run } from "@/link/types";
+import { useChatPrefs } from "@/state/chatPrefs";
 import { activityLabel, useChatActivity } from "@/state/hooks";
 import { useApp } from "@/state/store";
-import { BotAvatar, Glass, T, Tap, useTheme } from "@/ui";
+import { space, T, Tap, useOnShow, useTheme } from "@/ui";
 import { stepCount } from "./fold";
+import { thinkingHeading } from "./islandModel";
+import { useElapsedClock } from "./useElapsedClock";
 
-/** The capsule's height: ChatScreen keeps this much room above the message box while a turn runs. */
-export const CAPSULE = 44;
+/** Height reserved for the quiet status line directly above the message box while a turn runs. */
+export const CAPSULE = 32;
 
 /** "0:42", "12:05", "1:02:09". */
 export function clock(ms: number): string {
@@ -24,44 +27,59 @@ export function clock(ms: number): string {
   return hours ? hours + ":" + String(minutes).padStart(2, "0") + ":" + seconds : minutes + ":" + seconds;
 }
 
+function StatusDot({ color }: { color: string }) {
+  const reduced = useReducedMotion();
+  const visible = useOnShow();
+  const opacity = useSharedValue(reduced ? 0.9 : 0.45);
+  useEffect(() => {
+    if (reduced || !visible) {
+      opacity.value = 0.9;
+      return;
+    }
+    opacity.value = withRepeat(
+      withSequence(withTiming(1, { duration: 750 }), withTiming(0.35, { duration: 750 })),
+      -1,
+      false,
+    );
+  }, [reduced, visible, opacity]);
+  const anim = useAnimatedStyle(() => ({ opacity: opacity.value }));
+  return <Animated.View style={[{ width: 7, height: 7, borderRadius: 3.5, backgroundColor: color }, anim]} />;
+}
+
 export function StatusCapsule({ chatId, bot, group, bots, run }: { chatId: string; bot?: Bot; group: boolean; bots: Map<string, Bot>; /** The turn under way, once the computer has started it. */ run?: Run }) {
   const { colors } = useTheme();
   const state = useChatActivity(chatId);
+  const thinkingOpen = useChatPrefs((prefs) => prefs.thinking === "show");
   const speakerId = useApp((s) => s.parts.live?.speakers[chatId]);
   const now = useElapsedClock(!!run);
   const face = (group && speakerId ? bots.get(speakerId) : undefined) ?? bot;
-  const doing = (activityLabel(state) || "Working").replace(/…$/, "");
+  const heading = thinkingOpen ? thinkingHeading(run) : undefined;
+  const doing = heading || activityLabel(state) || "Working…";
   const own = run?.steps ?? [];
   const count = stepCount(own.length);
   const facts = [run ? clock(now - run.time) : "", count].filter(Boolean).join(" · ");
-  const name = face?.name && !group ? face.name + " is " + doing.toLowerCase() : doing;
+  const cleanDoing = doing.replace(/…$/, "");
+  const name = face?.name && !group ? face.name + ": " + cleanDoing : cleanDoing;
   return (
-    // It goes at once when the turn ends: the fold line takes its place under the reply.
-    <Animated.View entering={FadeIn.duration(180)} pointerEvents="box-none" style={{ flexShrink: 1, minWidth: 0 }}>
+    <Animated.View entering={FadeIn.duration(160)} style={{ width: "100%" }}>
       <Tap
         onPress={run ? () => router.push({ pathname: "/chat/activity", params: { chatId, runId: run.id } }) : undefined}
         disabled={!run}
         feel="select"
-        sink={0.96}
+        sink={0.99}
+        accessibilityRole="button"
         accessibilityLabel={name + (facts ? ", " + facts : "") + (run ? ", show activity" : "")}
+        style={{ height: CAPSULE, paddingHorizontal: space.md, flexDirection: "row", alignItems: "center", gap: 8 }}
       >
-        {/* The glass only draws: the press belongs to the button around it. */}
-        <View pointerEvents="none">
-          <Glass style={{ height: CAPSULE, borderRadius: CAPSULE / 2, flexDirection: "row", alignItems: "center", gap: 8, paddingLeft: 8, paddingRight: 16 }}>
-            <BotAvatar bot={face} size={28} state={state === "idle" ? "thinking" : state} animated />
-            <T variant="footnote" weight="600" numberOfLines={1} style={{ flexShrink: 1 }}>
-              {doing}
-            </T>
-            {!!facts && (
-              <>
-                <View style={{ width: 1, height: 16, backgroundColor: colors.line }} />
-                <T variant="footnote" color="muted" numberOfLines={1} style={{ flexShrink: 1, fontVariant: ["tabular-nums"] }}>
-                  {facts}
-                </T>
-              </>
-            )}
-          </Glass>
-        </View>
+        <StatusDot color={state === "waiting" ? colors.warning : colors.accent} />
+        <T variant="footnote" color="muted" numberOfLines={1} style={{ flex: 1 }}>
+          {doing}
+        </T>
+        {!!facts && (
+          <T variant="caption" color="faint" numberOfLines={1} style={{ fontVariant: ["tabular-nums"] }}>
+            {facts}
+          </T>
+        )}
       </Tap>
     </Animated.View>
   );
