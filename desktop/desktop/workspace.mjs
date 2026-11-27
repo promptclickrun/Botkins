@@ -43,6 +43,7 @@ import { ClaudeArtifacts } from "./claude-artifacts.mjs";
 import { Workflows } from "./workflows.mjs";
 import { ChannelManager } from "./channels/index.mjs";
 import { registerBuiltInAdapters } from "./channels/adapters/index.mjs";
+import { createNodeChannelBridge } from "./channels/adapters/imessage.mjs";
 
 import {
   defaultSettings,
@@ -405,7 +406,12 @@ export class Workspace {
     }
     this.tasks = new Tasks(this);
     this.workflows = new Workflows(this, options?.workflows);
-    this.channels = new ChannelManager({ workspace: this, vault: this.vault, ...(options?.channels ?? {}) });
+    this.channels = new ChannelManager({
+      workspace: this,
+      vault: this.vault,
+      nodeBridge: options?.channels?.nodeBridge ?? createNodeChannelBridge(this),
+      ...(options?.channels ?? {}),
+    });
     registerBuiltInAdapters(this.channels);
     this.proactive = new Proactive(this);
     // One plain nudge for what is left waiting on a person, with no model (desktop/reminders.mjs).
