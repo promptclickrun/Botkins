@@ -1068,9 +1068,11 @@ export class Workflows {
         if (cfg.connection && cfg.connection !== connection) continue;
         if (cfg.conversation && cfg.conversation !== conversation) continue;
         if (cfg.sender && cfg.sender !== sender) continue;
-        if (cfg.isDirect === true && !isDirect) continue;
-        if (cfg.isDirect === false && isDirect) continue;
-        if (cfg.mentionsBot === true && !mentionsBot) continue;
+        // (directOnly and mentionOnly are what the window saved before it used the trigger's own field names.)
+        const direct = cfg.isDirect ?? (cfg.directOnly === true ? true : undefined);
+        if (direct === true && !isDirect) continue;
+        if (direct === false && isDirect) continue;
+        if ((cfg.mentionsBot === true || cfg.mentionOnly === true) && !mentionsBot) continue;
         if (cfg.textContains && !lowText.includes(String(cfg.textContains).toLowerCase())) continue;
 
         this.startRun(wf, node, {

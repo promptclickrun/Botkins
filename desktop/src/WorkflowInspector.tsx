@@ -864,16 +864,16 @@ export function WorkflowInspector({
                         <label className="wf-checkbox-row">
                           <input
                             type="checkbox"
-                            checked={Boolean(node.config.directOnly)}
-                            onChange={(e) => setConfig({ directOnly: e.target.checked })}
+                            checked={node.config.isDirect === true}
+                            onChange={(e) => setConfig({ isDirect: e.target.checked ? true : undefined, directOnly: undefined })}
                           />
                           <span>Direct messages only</span>
                         </label>
                         <label className="wf-checkbox-row">
                           <input
                             type="checkbox"
-                            checked={Boolean(node.config.mentionOnly)}
-                            onChange={(e) => setConfig({ mentionOnly: e.target.checked })}
+                            checked={node.config.mentionsBot === true}
+                            onChange={(e) => setConfig({ mentionsBot: e.target.checked ? true : undefined, mentionOnly: undefined })}
                           />
                           <span>Mentions only</span>
                         </label>
