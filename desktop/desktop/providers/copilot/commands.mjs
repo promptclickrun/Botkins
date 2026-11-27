@@ -33,6 +33,7 @@ export const desktopCommands = [
     "[list|start|stop|diagnose]",
   ],
   ["version", [], "Show the running Copilot harness version."],
+  ["reload-tools", [], "Reconnect this chat's tools: Botkins' own and the bot's MCP servers."],
   ["search", [], "Search the messages in this conversation.", "<text>"],
   ["copy", [], "Copy the most recent assistant reply."],
 ];

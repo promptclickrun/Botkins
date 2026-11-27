@@ -161,3 +161,38 @@ test("a Main chat is only replaced when its person archives or deletes it; /new 
   assert.ok(![id, next].includes(third));
   assert.equal(ws.state.chats.filter(c => c.main && c.botId === "pip" && !c.createdBy).length, 1);
 });
+
+test("/reload-tools reconnects a chat's tools: its harness starts afresh at the next turn, and the conversation stays", async t => {
+  const dir = folder(t);
+  const opened = [], released = [];
+  const registry = new Providers([new class extends ModelProvider {
+    id = "copilot";
+    name = "copilot";
+    async status() { return { connected: true }; }
+    async models() { return [{ id: "model", name: "Model", available: true }]; }
+    async releaseSession(id) { released.push(id); }
+    async openSession(spec) {
+      opened.push(spec.sessionId);
+      return new class extends ProviderSession {
+        async inventory() { return buildInventory({ name: "copilot" }); }
+        resolvePrompt(...args) { return resolvePrompt(this, ...args); }
+        async send() { return { text: "ok" }; }
+      }();
+    }
+  }()]);
+  const ws = new Workspace(dir, registry, () => {});
+  const id = ws.mainChat("pip");
+  await ws.send(id, "first");
+  const before = ws.chat(id).messages.length;
+  await ws.submit(id, "/reload-tools");
+  assert.ok(released.length >= 1, "the chat's session was let go");
+  assert.equal(ws.mainChat("pip"), id);
+  assert.equal(ws.chat(id).messages.length, before + 1, "one line says the tools were reloaded");
+  assert.match(ws.chat(id).messages.at(-1).text, /Tools reloaded/);
+  assert.ok(!ws.state.runs.some(r => r.chatId === id && r.title === "/reload-tools"), "no turn of the model ran for it");
+  await ws.send(id, "after");
+  assert.equal(ws.chat(id).messages.at(-1).text, "ok");
+  // Every chat of a bot, from the command line's `bots reload-tools`.
+  ws.reloadBotTools("pip");
+  assert.throws(() => ws.reloadBotTools("nobody"));
+});

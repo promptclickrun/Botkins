@@ -719,6 +719,7 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
     makePrimary: (id) => workspace.agents.makePrimary(id),
     reorderBots: (ids) => workspace.agents.reorderBots(ids),
     duplicateBot: (id, person) => workspace.agents.duplicateBot(id, person),
+    reloadBotTools: (id) => workspace.reloadBotTools(id),
     // Bot templates (desktop/templates.mjs)
     saveTemplate: (botId, name) => workspace.templates.saveFromBot(botId, name),
     renameTemplate: (id, name) => workspace.templates.rename(id, name),

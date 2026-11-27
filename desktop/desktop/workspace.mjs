@@ -4,6 +4,8 @@ import { commitInterim, finishReply, wholeMessage } from "./transcript.mjs";
 import { changeMainContext, conversations, findMainChat, makeMainChat, migrateMainChats, visibleChat } from "./link/main-chat.mjs";
 /** "/new" and "/clear" typed in a Main chat clear its context in place: a Main chat is never replaced by a command. */
 const MAIN_RESET = /^\/(?:new|clear)\s*$/i;
+/** "/reload-tools" typed in any chat reconnects that chat's tools before anything is sent (Workspace.reloadTools). */
+const RELOAD_TOOLS = /^\/reload-tools\s*$/i;
 import { isRoutineChat } from "./link/routine-chat.mjs";
 import { findHumanMentions } from "./human-mentions.mjs";
 import { stripVTControlCharacters } from "node:util";
@@ -915,6 +917,7 @@ export class Workspace {
         : undefined;
     const chat = this.state.chats.find((c) => c.id === chatId);
     if (chat?.main && MAIN_RESET.test(prompt.trim())) return this.changeMainFork(chat.id, "reset", undefined, undefined, author?.memberId ?? "owner");
+    if (chat && RELOAD_TOOLS.test(prompt.trim())) return this.reloadTools(chat.id);
     if (chat?.hostDispatch) throw new Error("Start a new chat to send this teammate a message.");
     if (!chat || this.active.has(chatId))
       throw new Error("Chat unavailable or already working");
@@ -1111,6 +1114,7 @@ export class Workspace {
     this.access.assertChat(chat, this.projects.botsOf(chat));
     if (chat.main && typeof text === "string" && MAIN_RESET.test(text.trim()))
       return this.changeMainFork(chat.id, "reset", undefined, undefined, options.author?.memberId ?? "owner");
+    if (typeof text === "string" && RELOAD_TOOLS.test(text.trim())) return this.reloadTools(chat.id);
     const { delivery, ...messageOptions } = options;
     if (!this.active.has(chat.id)) return this.send(chat.id, text, messageOptions);
     if (isGroup(chat) && options.attachments?.length)
@@ -2098,6 +2102,35 @@ export class Workspace {
   releaseServerSessions() {
     this.clearCatalogs();
     for (const provider of [...this.providers.list, ...this.providers.harnesses]) provider.releaseSessions({ busy: true }).catch(() => {});
+  }
+  /**
+   * "/reload-tools": the chat's next turn starts its harness afresh, so it connects to Botkins' tools and
+   * the bot's MCP servers again and lists them anew. The conversation and its messages stay.
+   */
+  async reloadTools(chatId) {
+    const chat = this.chat(chatId);
+    if (this.active.has(chat.id)) throw new Error("Wait for the reply to finish, then reload the tools.");
+    this.clearCatalogs();
+    this.sessionPrompts?.staleWhere((record) => record.chatId === chat.id);
+    const def = this.providers.default.id;
+    for (const holder of conversations(chat)) {
+      const sessions = [
+        ...(isGroup(holder) ? Object.entries(holder.members ?? {}).flatMap(([botId, member]) => holderSessions(member, memberSessionId(holder, botId), def)) : holderSessions(holder, holder.sessionId ?? holder.id, def)),
+        ...Object.entries(holder.helpers ?? {}).flatMap(([botId, helper]) => holderSessions(helper, helperSessionId(holder, botId), def)),
+      ];
+      for (const [id, provider] of sessions) await this.providers.get(provider).releaseSession(id).catch(() => {});
+    }
+    chat.messages.push({ role: "command", plain: true, time: Date.now(), text: "Tools reloaded. The next reply connects to every tool again." });
+    chat.time = Date.now();
+    this.save();
+    return chat.id;
+  }
+  /** `reloadTools` for every chat of a bot (`botkins bots reload-tools`). Chats in a turn reload when it ends. */
+  reloadBotTools(botId) {
+    this.bot(botId);
+    this.clearCatalogs();
+    this.sessionPrompts?.staleWhere((record) => record.botId === botId);
+    this.releaseBotSessions(botId, { busy: true });
   }
   releaseBotSessions(botId, { busy = false } = {}) {
     const def = this.providers.default.id;
