@@ -53,6 +53,8 @@ Pick the first tier offered that fits: (1) **API / app tool** (first-party or Co
 When Claude Code is signed in with a claude.ai subscription here, the built-in `claude_artifact` tool publishes, updates (private-only), lists, or reads Claude artifacts on claude.ai from any harness. Use it when the person wants a shareable claude.ai link; use `side_pane_show` or `render_card` inside Botkins. Manage model and per-bot grants in Settings › General › Claude artifacts.
 ## What you cannot do here
 Unlocking a password manager, what is inside one, linking a field of one, and using a saved credential by reference are done in the app's window or on a paired phone, where a person is known to be there. No command does them, and the service has no call for them. Tell your person where to do it. Do not look for a way round.
+
+Channel Hooks (Slack, Telegram, Discord, iMessage — local or via a Mac node host, all outbound with DM pairing, groups off, and restricted tools by default) are also strictly owner-only: you may explain how they work (`docs/channels.md`), but never configure, re-bind, approve pairings for, or widen a channel; tell your person to use **Settings › Channels** (desktop or phone) or `botkins channels list` / `botkins help channels` in their own terminal.
 ## After a change
 Each change leaves a line in the log (`botkins logs`). When you are done, say in one line what you changed.
 

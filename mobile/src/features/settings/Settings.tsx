@@ -19,6 +19,7 @@ import {
   Monitor,
   MonitorSmartphone,
   PanelBottom,
+  Radio,
   ScreenShare,
   Search,
   Settings2,
@@ -98,6 +99,8 @@ export default function Settings() {
   const skillsOff = usePart("skills")?.disabled;
   const meta = usePart("meta");
   const team = usePart("team");
+  const channels = usePart("channels");
+  const pendingPairings = (channels ?? []).reduce((n, c) => n + (c.pendingPairings?.length ?? 0), 0);
   const lightTheme = usePrefs((prefs) => prefs.lightTheme);
   const backdrop = usePrefs((prefs) => prefs.backdrop);
   const member = meta?.you?.kind === "member" && team && "me" in team ? team : undefined;
@@ -161,6 +164,23 @@ export default function Settings() {
       label: "Your bots’ toolbox",
       rows: [
         ...(permission("agents", "view") ? [row("models", "Model providers", <Row leading={<IconTile icon={Boxes} color={brand.clay} />} title="Model providers" value={count(signedIn, "signed in")} chevron onPress={go("/models")} />, { words: "models default sign in api key copilot chatgpt claude opencode openrouter limits" })] : []),
+        ...(owner
+          ? [
+              row(
+                "channels",
+                "Channels",
+                <Row
+                  leading={<IconTile icon={Radio} color={brand.clay} />}
+                  title="Channels"
+                  value={channels?.length ? count(channels.filter((c) => c.enabled && !c.paused).length, "active") : undefined}
+                  trailing={pendingPairings > 0 ? <Badge label={pendingPairings === 1 ? "1 pairing" : `${pendingPairings} pairings`} tone="warning" /> : undefined}
+                  chevron
+                  onPress={go("/settings/channels")}
+                />,
+                { words: "channel hooks slack telegram discord imessage pairing allowlist publish" },
+              ),
+            ]
+          : []),
         ...(permission("mcp", "view") ? [row("tools", "Tools", <Row leading={<IconTile icon={Wrench} color={brand.clay} />} title="Tools" value={count(toolsOn, "on")} chevron onPress={go("/tools")} />, { words: "mcp servers apps" })] : []),
         ...(permission("skills", "read") ? [row("skills", "Skills", <Row leading={<IconTile icon={BookOpen} color={brand.clay} />} title="Skills" value={count(skillsOn, "on")} chevron onPress={go("/skills")} />, { words: "skill scripts commands plugins" })] : []),
         ...(owner ? [row("credentials", "Credentials", <Row leading={<IconTile icon={KeyRound} color={brand.clay} />} title="Credentials" chevron onPress={go("/credentials")} />, { words: "keys secrets passwords vault 1password bitwarden proton" })] : []),

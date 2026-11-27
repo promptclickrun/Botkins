@@ -975,6 +975,29 @@ Use `BOTKINS_DESKTOP=managed` to give a service with a personal display its own 
 In a private owner chat, ask the bot to open the login page and use a saved credential. When a Botkins Chromium browser extension is connected, `request_secure_input` (`operation: "page_fill"`) can fill a tab there directly (with optional `target: { browser, tabId }`, or auto-picked when one tab matches the origin) over the sealed Link channel without ever showing the secret to the bot. Otherwise, its `browser_form` tool opens or inspects the page on the host screen and returns the site, path and visible field keys. The secure request lets you pick the saved password and approve the destination. Botkins fills the fields in that browser. You can finish the login on the screen and close the browser from the same chat. The browser uses a temporary profile and a private pipe. The bot needs no Python environment, pip package or WebSocket script.
 
 
+## Channels
+
+Publish a bot to external messaging channels (**Slack** Socket Mode, **Telegram** long polling, **Discord** Gateway, or **iMessage** via local `imsg` or a paired Mac node host). All transports connect outbound with no public URL. See `docs/channels.md` for setup steps and the security model.
+
+```sh
+botkins channels list --json
+botkins channels add slack --bot Nova --label "Support Slack"
+botkins channels add imessage --bot Nova --node <mac-node-id>
+botkins channels bind <connection> <bot>
+botkins channels policy <connection> --dm pairing --groups off --tool-profile restricted
+botkins channels pair list --json
+botkins channels pair approve <CODE>
+botkins channels pause <connection>
+botkins channels resume <connection>
+botkins channels test <connection>
+botkins channels logs <connection> --limit 25 --json
+botkins channels remove <connection> --yes
+```
+
+- **Owner-only.** Only the owner configures channels (Desktop **Settings › Channels**, the owner's Phone for status/pairings/pause/resume, or the CLI at a terminal). No bot tool can create, re-bind, approve pairings for, or widen a channel.
+- **Secrets never go on the command line.** `botkins channels add` reads tokens from a hidden prompt at a terminal, or from standard input (`--secrets -` as JSON, e.g. `{"appToken":"…","botToken":"…"}`). Tokens are stored in the encrypted vault and never appear in `workspace.json`, logs, tool results, or transcripts.
+- **Safe defaults.** Every new channel starts with `--dm pairing` (strangers get a one-time code and no bot turn until approved), `--groups off`, and `--tool-profile restricted` (read-only knowledge tools only).
+
 ## Scripts and JSON
 
 Each command accepts `--json`. It then prints one JSON document, which is the value from the service. A command that follows a stream (`logs -f`, a sign-in) prints one JSON line for each item.

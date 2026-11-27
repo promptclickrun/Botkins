@@ -88,6 +88,15 @@ export const TRIGGER_FIELDS: Record<WorkflowTriggerKind, Array<{ name: string; t
     { name: "review_state", type: "string", description: "Review decision" },
     { name: "ci_status", type: "string", description: "CI rollup status" },
   ],
+  channel: [
+    { name: "channel", type: "string", description: "Channel kind", choices: ["slack", "telegram", "discord", "imessage"] },
+    { name: "connection", type: "string", description: "Channel connection label or ID" },
+    { name: "conversation", type: "string", description: "External conversation or channel ID" },
+    { name: "sender", type: "string", description: "External sender ID or display name" },
+    { name: "text", type: "string", description: "Inbound message text" },
+    { name: "isDirect", type: "boolean", description: "Whether the message was a direct message" },
+    { name: "mentionsBot", type: "boolean", description: "Whether the message mentioned the bot" },
+  ],
 };
 
 const FIELD_NAME_RE = /^[a-zA-Z_][a-zA-Z0-9_.-]{0,63}$/;

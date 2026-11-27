@@ -291,6 +291,7 @@ export function WorkflowInspector({
                       <option value="chat">Chat message / @mention</option>
                       <option value="webhook">Local webhook (secret protected)</option>
                       <option value="github">GitHub PR / review / CI (gh polling)</option>
+                      <option value="channel">External channel (Slack, Telegram, Discord, iMessage)</option>
                     </select>
                   </div>
 
@@ -554,6 +555,62 @@ export function WorkflowInspector({
                         </div>
                       </div>
                       <p className="wf-hint">Polls via local <code>gh</code> CLI (no inbound tunnel required).</p>
+                    </>
+                  )}
+
+                  {node.triggerKind === "channel" && (
+                    <>
+                      <div className="wf-two-col">
+                        <div className="wf-field-group">
+                          <label className="wf-label">Channel kind</label>
+                          <select
+                            value={node.config.channel || ""}
+                            onChange={(e) => setConfig({ channel: e.target.value })}
+                          >
+                            <option value="">Any channel</option>
+                            <option value="slack">Slack</option>
+                            <option value="telegram">Telegram</option>
+                            <option value="discord">Discord</option>
+                            <option value="imessage">iMessage</option>
+                          </select>
+                        </div>
+                        <div className="wf-field-group">
+                          <label className="wf-label">Connection (optional)</label>
+                          <input
+                            type="text"
+                            value={node.config.connection || ""}
+                            placeholder="Connection ID or label"
+                            onChange={(e) => setConfig({ connection: e.target.value.trim() })}
+                          />
+                        </div>
+                      </div>
+                      <div className="wf-field-group">
+                        <label className="wf-label">Text contains (optional)</label>
+                        <input
+                          type="text"
+                          value={node.config.textContains || ""}
+                          placeholder="Filter by substring"
+                          onChange={(e) => setConfig({ textContains: e.target.value })}
+                        />
+                      </div>
+                      <div className="wf-two-col">
+                        <label className="wf-checkbox-row">
+                          <input
+                            type="checkbox"
+                            checked={Boolean(node.config.directOnly)}
+                            onChange={(e) => setConfig({ directOnly: e.target.checked })}
+                          />
+                          <span>Direct messages only</span>
+                        </label>
+                        <label className="wf-checkbox-row">
+                          <input
+                            type="checkbox"
+                            checked={Boolean(node.config.mentionOnly)}
+                            onChange={(e) => setConfig({ mentionOnly: e.target.checked })}
+                          />
+                          <span>Mentions only</span>
+                        </label>
+                      </div>
                     </>
                   )}
 

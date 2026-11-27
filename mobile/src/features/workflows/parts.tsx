@@ -1,5 +1,5 @@
 // Small pieces the workflow designer's sheets share: step icons, option chips, and text fields that take {{field}} chips.
-import { Bot, Clock, GitBranch, GitPullRequest, Hand, ListChecks, MessageSquareText, Repeat, Send, ShieldCheck, Sparkles, Webhook, type LucideIcon } from "lucide-react-native";
+import { Bot, Clock, GitBranch, GitPullRequest, Hand, ListChecks, MessageSquareText, Radio, Repeat, Send, ShieldCheck, Sparkles, Webhook, type LucideIcon } from "lucide-react-native";
 import { useState } from "react";
 import { ScrollView, View } from "react-native";
 import type { WorkflowNode, WorkflowTriggerKind } from "@/link/types";
@@ -14,6 +14,7 @@ export const TRIGGER_ICON: Record<WorkflowTriggerKind, LucideIcon> = {
   routine: Repeat,
   webhook: Webhook,
   github: GitPullRequest,
+  channel: Radio,
 };
 const STEP_ICON: Record<Exclude<WorkflowNode["kind"], "trigger">, LucideIcon> = {
   agent: Bot,

@@ -81,6 +81,13 @@ export const WORKFLOW_METHODS = [
   "workflowRun", "workflowRetryRun", "workflowRespondApproval", "workflowCancelRun",
   "workflowRotateWebhookSecret", "workflowExportText", "workflowImportText",
 ];
+/** External messaging Channel Hooks ("channels-v1", desktop/channels/index.mjs). Strictly owner-only. */
+export const CHANNEL_METHODS = [
+  "channelsList", "channelAdd", "channelUpdate", "channelRemove", "channelBind",
+  "channelSetPolicy", "channelPause", "channelResume",
+  "channelPairList", "channelPairApprove", "channelPairDeny",
+  "channelTest", "channelLogs",
+];
 /** How a new panel may start, and the limits of what people write into a space. */
 export const PANEL_STARTS = ["checklist", "tracker", "chart", "table", "notes", "app"];
 export const SPACE_SIZES = { name: 40, prompt: 4000, note: 2000, label: 80, state: 64 * 1024, stateKeys: 200 };
@@ -111,6 +118,8 @@ export const REMOTE_METHODS = new Set([
   "createRoutine", "updateRoutine", "setRoutineEnabled", "deleteRoutine", "runRoutine", "duplicateRoutine",
   "previewCadence", "changeSchedule",
   ...WORKFLOW_METHODS,
+  // Channel Hooks ("channels-v1"): strictly owner-only.
+  ...CHANNEL_METHODS,
   "saveTask", "moveTask", "startTask", "deleteTask",
   // Today
   "refreshPanel", "changePanel", "routine", "boardAct",
@@ -700,9 +709,62 @@ function providerArgs(method, args) {
     case "providerConfigure":
       // The settings of a key provider ("keyed-providers-v1"), cut to their shape. The computer checks every value.
       return [id(), keyedConfig(args[1])];
+    case "channelsList":
+      return [];
+    case "channelAdd":
+      return [channelInput(args[0])];
+    case "channelUpdate":
+      return [id(), channelInput(args[1])];
+    case "channelRemove":
+    case "channelPause":
+    case "channelResume":
+    case "channelTest":
+      return [id()];
+    case "channelBind":
+      return [id(), typeof args[1] === "string" ? args[1].slice(0, 120) : ""];
+    case "channelSetPolicy":
+      return [id(), args[1] && typeof args[1] === "object" && !Array.isArray(args[1]) ? args[1] : {}];
+    case "channelPairList":
+      return [typeof args[0] === "string" && args[0] ? args[0].slice(0, 120) : null];
+    case "channelPairApprove":
+    case "channelPairDeny":
+      return [typeof args[0] === "string" ? args[0].slice(0, 32) : "", typeof args[1] === "string" && args[1] ? args[1].slice(0, 120) : null];
+    case "channelLogs":
+      return [
+        typeof args[0] === "string" && args[0] ? args[0].slice(0, 120) : null,
+        args[1] && typeof args[1] === "object" && !Array.isArray(args[1])
+          ? { limit: typeof args[1].limit === "number" ? Math.max(1, Math.min(200, Math.floor(args[1].limit))) : 100 }
+          : {},
+      ];
     default:
       return null;
   }
+}
+
+/** Shapes a channel add/update payload sent from a paired owner phone. */
+function channelInput(value) {
+  const obj = value && typeof value === "object" && !Array.isArray(value) ? value : {};
+  const str = (v, max = 200) => (typeof v === "string" ? v.slice(0, max) : undefined);
+  const secrets =
+    obj.secrets && typeof obj.secrets === "object" && !Array.isArray(obj.secrets)
+      ? Object.fromEntries(
+          Object.entries(obj.secrets)
+            .slice(0, 10)
+            .filter(([k, v]) => typeof k === "string" && k.length <= 40 && typeof v === "string" && v.length <= 4096),
+        )
+      : undefined;
+  return Object.fromEntries(
+    Object.entries({
+      kind: str(obj.kind, 40),
+      label: str(obj.label, 80),
+      transport: str(obj.transport, 40),
+      botId: obj.botId === null ? null : str(obj.botId, 120),
+      nodeHostId: obj.nodeHostId === null ? null : str(obj.nodeHostId, 120),
+      enabled: typeof obj.enabled === "boolean" ? obj.enabled : undefined,
+      policy: obj.policy && typeof obj.policy === "object" && !Array.isArray(obj.policy) ? obj.policy : undefined,
+      secrets,
+    }).filter(([, v]) => v !== undefined),
+  );
 }
 
 /** A key provider's settings as a phone sends them: strings of a bounded length and a short list of models, nothing else. */

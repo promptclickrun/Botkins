@@ -1023,7 +1023,6 @@ export class ChannelManager {
     // Submit through workspace's existing send/queue path.
     const submitPromise = this.workspace.submit(chat.id, framed, {
       attachments: savedAttachments,
-      allowScript: false,
       title: `${conn.label}: ${event.sender.display}`.slice(0, 100),
     });
     if (submitPromise && typeof submitPromise.catch === "function") {
