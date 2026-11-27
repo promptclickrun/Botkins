@@ -201,6 +201,7 @@ export type Message = {
   text: string;
   interim?: boolean;
   steeredRunId?: string;
+  receipt?: boolean;
   answer?: { runId: string; requestId: string; kind: string; title: string };
   /** A proactive alert the bot sent on its own: the run that made it, and its actions ("proactive-team-v1"). */
   proactiveRunId?: string;

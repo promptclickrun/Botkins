@@ -15,7 +15,8 @@
 import { isSilentMessage } from "../../../link-host/silent-reply.mjs";
 import type { Message, PanePanel, Reasoning, Run, Step, Subagent } from "@/link/types";
 import { isStepCoveredByRail } from "./activityModel";
-import { crewOf } from "./activityStory";
+import { crewOf, finishedCrewLine } from "./activityStory";
+import { isAnswerReceipt } from "./agentRailModel";
 import { crewFace } from "./crew";
 import { type FoldEntry, foldLine, foldParts, liveLine, type StepsChoice, stepCount } from "./fold";
 import { receiptLine } from "./islandModel";
@@ -54,8 +55,10 @@ export type Item =
       end: boolean;
       /** The newest message in the chat. */
       latest: boolean;
+      /** This user message is a quiet answer receipt ("You answered · Allow once"). */
+      receipt?: boolean;
     }
-  | { kind: "activity"; key: string; runId: string }
+  | { kind: "activity"; key: string; runId: string; /** Optional label when finished helpers/commands fold into it. */ label?: string }
   /** What the bot did between two things it said or the person said: steps, and its thinking while the turn runs. */
   /** `run` is for its id only: a row kept by `reuseItems` can hold the run as it was a moment ago. */
   | { kind: "work"; key: string; run: Run; steps: Step[]; thinking: string; /** The newest thought can still grow after a steer placed it in this row. */ reasoningIds?: string[]; live: boolean; /** A finished part's line ("Ran 2 commands"). */ label: string }
@@ -401,7 +404,8 @@ export function chatTimeline(input: TimelineInput): Item[] {
   const items: Item[] = [];
   const messageItem = (index: number, more: Partial<Extract<Item, { kind: "message" }>> = {}): Item => {
     const message = messages[index];
-    return { kind: "message", key: "m" + (from + index), message, index: from + index, run: runOf(message.runId), end: false, latest: index === messages.length - 1, ...more };
+    const receipt = isAnswerReceipt(message, index > 0 ? messages[index - 1] : undefined) || undefined;
+    return { kind: "message", key: "m" + (from + index), message, index: from + index, run: runOf(message.runId), end: false, latest: index === messages.length - 1, ...(receipt && { receipt }), ...more };
   };
   // With the island, Open's steps and thoughts are in the island, never in the chat, and a finished turn is its receipt.
   const island = !!prefs.island;
@@ -578,11 +582,14 @@ export function chatTimeline(input: TimelineInput): Item[] {
     // "Kept going" sits just before the reply the computer kept going for, so it reads as what happened next.
     items.push(...kept());
     if (!group) replies.forEach((i, n) => items.push(messageItem(i, { end: n === replies.length - 1 })));
-    if (visibleRunSteps(run).length || run.agents?.length || run.todos?.length || run.summary ||
+    const crewRaw = crewOf(run);
+    const crewDone = crewRaw && crewRaw.running === 0 ? finishedCrewLine(crewRaw) : "";
+    if (visibleRunSteps(run).length || run.agents?.length || run.todos?.length || run.summary || crewRaw ||
         (showThinking && run.reasoning?.length) || (showUpdates && inside.some((i) => messages[i].interim))) {
-      items.push({ kind: "activity", key: "activity:" + run.id, runId: run.id });
+      items.push({ kind: "activity", key: "activity:" + run.id, runId: run.id, ...(crewDone && { label: ["Turn activity", crewDone].join(" · ") }) });
     }
-    if (crew) items.push(crew);
+    // Keep a crew card in the feed only while a helper or background command is still running.
+    if (crew && crewRaw && crewRaw.running > 0) items.push(crew);
     if (hasAgentRail(run)) items.push(agentRailItem(run));
     items.push(...note());
   };
@@ -657,14 +664,21 @@ export function chatTimeline(input: TimelineInput): Item[] {
       replies.forEach((i, n) => items.push(messageItem(i, { end: n === replies.length - 1 })));
     }
     if (group) items.push(...kept());
+    const crewRaw = crewOf(run);
+    const crewDone = crewRaw && crewRaw.running === 0 ? finishedCrewLine(crewRaw) : "";
+    const crew = crewRaw && crewRaw.running > 0 ? crewItem(run, false) : undefined;
     const counted = own.length;
-    if (fold.some((entry) => entry.kind !== "person") || run.agents?.length || run.todos?.length || run.summary) {
+    if (fold.some((entry) => entry.kind !== "person") || run.agents?.length || run.todos?.length || run.summary || crewRaw) {
       const took = run.finished ? run.finished - run.time : run.usage?.durationMs;
       const onlyThinking = fold.length > 0 && fold.every((entry) => entry.kind === "thought");
       const facts = { took, steps: counted, onlyThinking };
-      items.push({ kind: "fold", key: "f:" + run.id, run, entries: fold, live: false, line: island ? receiptLine(facts) : foldLine(facts), ...foldParts(facts), ...(island && { island: true as const }) });
+      const parts = foldParts(facts);
+      const baseLine = island ? receiptLine(facts) : foldLine(facts);
+      const line = [baseLine === "Show work" && crewDone ? "" : baseLine, crewDone].filter(Boolean).join(" · ") || baseLine;
+      const lead = parts.lead === "Show work" && crewDone ? "" : parts.lead;
+      const count = [parts.count, crewDone].filter(Boolean).join(" · ");
+      items.push({ kind: "fold", key: "f:" + run.id, run, entries: fold, live: false, line, lead, count, ...(island && { island: true as const }) });
     }
-    const crew = crewItem(run, false);
     if (crew) items.push(crew);
     if (hasAgentRail(run)) items.push(agentRailItem(run));
     items.push(...note());

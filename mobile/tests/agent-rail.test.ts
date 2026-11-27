@@ -8,12 +8,19 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createElement as el } from "react";
 import {
+  answerReceiptLabel,
+  askRowSummary,
   buildIncomingRail,
   buildOutgoingRail,
+  buildTaskHandoffGroup,
   buildTaskHandoffRail,
+  formatCompactElapsed,
+  groupAsks,
   groupRailAsks,
   isAgentMessage,
+  isAnswerReceipt,
 } from "../src/features/chat/agentRailModel";
+import { finishedCrewLine, crewOf } from "../src/features/chat/activityStory";
 import { formatFeedWork, isStepCoveredByRail } from "../src/features/chat/activityModel";
 import { baseParts } from "../link-host/parts.mjs";
 import { continuingKeys } from "../src/features/chat/chatSides";
@@ -62,11 +69,13 @@ function makeIcons() {
     ArrowRight: mk("ArrowRight"),
     ArrowUpRight: mk("ArrowUpRight"),
     Bot: mk("BotIcon"),
+    Check: mk("Check"),
     ChevronDown: mk("ChevronDown"),
     ChevronRight: mk("ChevronRight"),
     CircleAlert: mk("CircleAlert"),
     ClipboardList: mk("ClipboardList"),
     Globe: mk("Globe"),
+    X: mk("X"),
   };
 }
 
@@ -76,6 +85,15 @@ function loadMobileRail(extra: Record<string, unknown> = {}) {
       View: "View",
       StyleSheet: { create: (s: unknown) => s },
     },
+    "react-native-reanimated": {
+      default: { View: "AnimatedView" },
+      useAnimatedStyle: (fn: () => unknown) => fn(),
+      useReducedMotion: () => true,
+      useSharedValue: (v: unknown) => ({ value: v }),
+      withRepeat: (v: unknown) => v,
+      withSequence: (v: unknown) => v,
+      withTiming: (v: unknown) => v,
+    },
     "lucide-react-native": makeIcons(),
     "@/state/hooks": {
       useChats: () => [{ id: "chat-alfie", title: "Alfie", botId: "alfie", updated: T0 }],
@@ -83,6 +101,7 @@ function loadMobileRail(extra: Record<string, unknown> = {}) {
     },
     "@/ui": {
       useTheme: () => mockTheme,
+      useOnShow: () => true,
       radius: { sm: 8, md: 12, lg: 16, pill: 999 },
       space: { 1: 4, 2: 8, 3: 12, 4: 16 },
       T: "T",
@@ -323,21 +342,105 @@ test("mobile AgentMessageRail renders outgoing ask and task handoff cards with f
   const screen = await mount(el(AgentMessageRail, { run, bots: botMap }));
   t.after(screen.unmount);
 
-  const outgoingCard = screen.root.root.find((n) => n.props?.accessibilityLabel === "Message to Glory, Answered");
-  assert.ok(outgoingCard, "outgoing ask card rendered with accessible label");
-
-  const handoffCard = screen.root.root.find(
-    (n) => n.props?.accessibilityLabel === "Task handed to Glory: Polish mobile cards, Ready for review",
+  const outgoingRow = screen.root.root.find(
+    (n) => n.props?.accessibilityRole === "button" && n.props?.accessibilityLabel === "Message to Glory, Answered",
   );
-  assert.ok(handoffCard, "task handoff card rendered with accessible label");
+  assert.ok(outgoingRow, "outgoing ask row rendered as expandable button with accessible label");
+  assert.equal(outgoingRow.props?.accessibilityState?.expanded, false, "outgoing ask row starts folded");
 
-  const openTaskBtn = screen.root.root.find((n) => n.props?.accessibilityLabel === "Open task chat: Polish mobile cards");
-  assert.ok(openTaskBtn, "task handoff card exposes Open task link");
-
-  const replyToggle = screen.root.root.find(
-    (n) => n.props?.accessibilityRole === "button" && n.props?.accessibilityState?.expanded === false,
+  const handoffRow = screen.root.root.find(
+    (n) =>
+      n.props?.accessibilityRole === "button" &&
+      n.props?.accessibilityLabel === "Task handed to Glory: Polish mobile cards, Ready for review",
   );
-  assert.ok(replyToggle, "reply starts folded with accessibilityState.expanded = false");
+  assert.ok(handoffRow, "task handoff row rendered as expandable button with accessible label");
+  assert.equal(handoffRow.props?.accessibilityState?.expanded, false, "task handoff row starts folded");
+});
+
+test("groupAsks groups consecutive teammate asks into one quiet card header and leaves node calls separate", () => {
+  const extraBots: Bot[] = [
+    ...bots,
+    { id: "gordie", name: "Gordie", role: "Ops", color: "#4a6fa5", accent: "#d8e3f2" },
+  ];
+  const asks = [
+    { id: "a1", botId: "alfie", message: "Check calendar", status: "answered" as const, reply: "Tuesday at 3pm is open.", started: T0, finished: T0 + 1200 },
+    { id: "a2", botId: "gordie", message: "Check thermostat", status: "answered" as const, reply: "Set to 70F.", started: T0 + 100, finished: T0 + 2100 },
+    { id: "a3", botId: "alfie", message: "Draft invite", status: "answered" as const, reply: "Draft ready.", started: T0 + 200, finished: T0 + 3400 },
+    { id: "a4", botId: "gordie", message: "Verify lights are off", status: "working" as const, started: T0 + 300 },
+  ];
+  const grouped = groupAsks(asks, extraBots);
+  assert.equal(grouped.length, 1);
+  assert.equal(grouped[0].kind, "ask-group");
+  if (grouped[0].kind !== "ask-group") return;
+  assert.equal(grouped[0].header, "4 asks to Alfie and Gordie · 3 answered · 1 working");
+  assert.equal(grouped[0].asks.length, 4);
+  assert.equal(askRowSummary(buildOutgoingRail(grouped[0].asks[0], extraBots)), "Tuesday at 3pm is open.");
+  assert.equal(askRowSummary(buildOutgoingRail(grouped[0].asks[3], extraBots)), "Verify lights are off");
+
+  const handoffs = buildTaskHandoffGroup(
+    [
+      { id: "th1", taskId: "t1", botId: "glory", fromBotId: "alfie", title: "Ship cleanup", status: "working", started: T0 },
+      { id: "th2", taskId: "t2", botId: "alfie", fromBotId: "glory", title: "Review PR", status: "done", started: T0 + 10 },
+    ],
+    { bots: extraBots },
+  );
+  assert.ok(handoffs);
+  assert.equal(handoffs.header, "2 tasks to Glory and Alfie · 1 done · 1 working");
+  assert.equal(formatCompactElapsed(2064_000), "34m");
+});
+
+test("isAnswerReceipt recognizes receipt marker and legacy receipt after a request, and excludes normal user messages", () => {
+  assert.equal(isAnswerReceipt({ role: "user", text: "Allow once", receipt: true }), true);
+  assert.equal(answerReceiptLabel({ role: "user", text: "Allow once", receipt: true }), "You answered · Allow once");
+  assert.equal(answerReceiptLabel({ role: "user", text: "Answered", receipt: true }), "You answered");
+  assert.equal(
+    isAnswerReceipt(
+      { role: "user", text: "Allow once" },
+      { role: "assistant", text: "Run git push?", request: { id: "req1", title: "Approve" } },
+    ),
+    true,
+  );
+  assert.equal(
+    isAnswerReceipt(
+      { role: "user", text: "Allow once" },
+      { role: "assistant", text: "Here is the summary." },
+    ),
+    false,
+    "without receipt flag or preceding request, ordinary message stays a bubble",
+  );
+  const steer = { role: "user" as const, text: "Deny", steeredRunId: "r1" };
+  const interim = { role: "assistant" as const, interim: true, runId: "r1" };
+  assert.equal(isAnswerReceipt(steer, interim), false);
+  assert.equal(isAnswerReceipt({ role: "assistant", text: "Answered", receipt: true }), false);
+
+  // Answer receipts never merge with surrounding user bubbles.
+  const cont = continuingKeys(
+    [
+      { role: "user", text: "First", time: T0 },
+      { role: "user", text: "Allow once", receipt: true, time: T0 + 1000 },
+      { role: "user", text: "Second", time: T0 + 2000 },
+    ],
+    0,
+  );
+  assert.equal(cont.size, 0);
+
+  // finishedCrewLine formats helpers and commands cleanly.
+  const crew = crewOf({
+    id: "r-crew",
+    chatId: "c1",
+    title: "Crew",
+    time: T0,
+    status: "Completed",
+    agents: [
+      { id: "a1", label: "h1", status: "Done", started: T0, finished: T0 + 1000 },
+      { id: "a2", label: "h2", status: "Done", started: T0, finished: T0 + 1000 },
+    ],
+    steps: [
+      { id: "s1", name: "bash", label: "cmd", status: "Done", background: true, started: T0, finished: T0 + 1000 },
+    ],
+  });
+  assert.ok(crew);
+  assert.equal(finishedCrewLine(crew), "2 helpers finished · 1 command");
 });
 
 const nodeAsk = (id: string, status: "working" | "answered" | "failed", host = "Mac Studio") => ({

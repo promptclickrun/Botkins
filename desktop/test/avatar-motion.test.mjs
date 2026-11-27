@@ -8,7 +8,7 @@ import { readdirSync, readFileSync } from "node:fs";
 const src = new URL("../src/", import.meta.url);
 const MOVING = {
   "BotProfile.tsx": 1, // the bot's own page
-  "ChatView.tsx": 3, // the chat header's face, a group header's faces, the live line while a turn runs
+  "ChatView.tsx": 2, // the chat header's face and a group header's faces
   "ChatSide.tsx": 1, // the chat's details panel, beside the chat
   "LiveVoice.tsx": 1, // live voice
   "BotStudio.tsx": 1, // the look editor's preview

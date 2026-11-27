@@ -567,9 +567,9 @@ button.lg-button.to-latest.shown:active {
 }
 
 :root[data-backdrop]:not([data-backdrop="clean"]) .chathead {
-  background: color-mix(in srgb, var(--canvas) 44%, transparent);
-  -webkit-backdrop-filter: blur(18px) saturate(1.35);
-  backdrop-filter: blur(18px) saturate(1.35);
+  background: var(--canvas);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
 }
 
 :root[data-backdrop]:not([data-backdrop="clean"]) :is(
