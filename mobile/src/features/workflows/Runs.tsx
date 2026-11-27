@@ -54,8 +54,11 @@ function RunCard({ run, nodes, canUse, open, onToggle }: { run: WorkflowRun; nod
   const Chevron = open ? ChevronDown : ChevronRight;
   const steps = ordered(run, nodes);
   const failed = steps.find((s) => s.status === "failed");
-  const respond = (decision: "approved" | "rejected") =>
-    void attempt(api.workflowRespondApproval(run.id, run.pendingApproval!.nodeId, decision, note.trim() || undefined), decision === "approved" ? "Approved" : "Rejected").then(() => setNote(""));
+  const pendingApproval = run.pendingApproval;
+  const respond = (decision: "approved" | "rejected") => {
+    if (!pendingApproval) return;
+    void attempt(api.workflowRespondApproval(run.id, pendingApproval.nodeId, decision, note.trim() || undefined), decision === "approved" ? "Approved" : "Rejected").then(() => setNote(""));
+  };
   return (
     <Group>
       <Tap onPress={onToggle} accessibilityRole="button" accessibilityState={{ expanded: open }} style={{ flexDirection: "row", alignItems: "center", gap: space.md, padding: space.md }}>
@@ -71,16 +74,16 @@ function RunCard({ run, nodes, canUse, open, onToggle }: { run: WorkflowRun; nod
         <Chevron size={18} color={colors.muted} />
       </Tap>
 
-      {run.status === "waiting_approval" && run.pendingApproval && canUse && (
+      {run.status === "waiting_approval" && pendingApproval && canUse && (
         <View style={{ padding: space.md, gap: space.sm, backgroundColor: colors.warningSoft }}>
           <View style={{ flexDirection: "row", alignItems: "center", gap: space.xs }}>
             <ShieldCheck size={16} color={colors.warning} />
             <T variant="callout" weight="700">
-              {run.pendingApproval.label}
+              {pendingApproval.label}
             </T>
           </View>
-          <T variant="subhead">{run.pendingApproval.message}</T>
-          {!!run.pendingApproval.noteField && <Field placeholder="Add a note (optional)" value={note} onChangeText={setNote} />}
+          <T variant="subhead">{pendingApproval.message}</T>
+          {!!pendingApproval.noteField && <Field placeholder="Add a note (optional)" value={note} onChangeText={setNote} />}
           <View style={{ flexDirection: "row", gap: space.sm }}>
             <Button title="Approve" size="sm" onPress={() => respond("approved")} />
             <Button title="Reject" variant="secondary" size="sm" onPress={() => respond("rejected")} />
