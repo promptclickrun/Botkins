@@ -34,6 +34,7 @@ import { teamApi } from "./control-team.mjs";
 import { appsApi } from "./control-apps.mjs";
 import { profileApi } from "./control-profile.mjs";
 import { nodeApi } from "./control-node.mjs";
+import { channelsApi } from "./control-channels.mjs";
 import { checkReach } from "./reach.mjs";
 import { normaliseConfig } from "../providers/keyed/config.mjs";
 
@@ -666,7 +667,7 @@ export function controlApi(service) {
   // A plugin by its name, bots by their names, and what of a plugin runs here (desktop/terminal/control-plugins.mjs).
   Object.assign(api, pluginsApi({ workspace, handlers, bot, signIns, log: (line) => log?.info?.(line) }));
   // The rest of the workspace, one file for each area (desktop/terminal/control-<area>.mjs). A name that is there already is not replaced.
-  for (const area of [botsApi, chatsApi, routinesApi, projectsApi, wikiApi, prefsApi, credentialsApi, voiceApi, spacesApi, sharingApi, teamApi, appsApi, nodeApi]) {
+  for (const area of [botsApi, chatsApi, routinesApi, projectsApi, wikiApi, prefsApi, credentialsApi, voiceApi, spacesApi, sharingApi, teamApi, appsApi, nodeApi, channelsApi]) {
     for (const [name, call] of Object.entries(area({ workspace, handlers, bot, signIns, selection }))) {
       if (Object.hasOwn(api, name)) throw new Error("Two control calls have the name " + name + ".");
       api[name] = call;

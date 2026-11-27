@@ -2,7 +2,7 @@
 // Kept pure (no I/O) so the backend runner, bot tools, tests, and UI analysis stay in lockstep.
 
 export const NODE_KINDS = ["trigger", "agent", "model", "condition", "approval", "output"];
-export const TRIGGER_KINDS = ["task", "schedule", "manual", "routine", "chat", "webhook", "github"];
+export const TRIGGER_KINDS = ["task", "schedule", "manual", "routine", "chat", "webhook", "github", "channel"];
 export const OUTPUT_DESTINATIONS = ["chat", "feed", "idea", "goal", "notification"];
 export const CONDITION_OPS = [
   "equals",
@@ -78,6 +78,15 @@ export const TRIGGER_FIELDS = {
     { name: "state", type: "string", description: "Pull request state" },
     { name: "review_state", type: "string", description: "Review decision" },
     { name: "ci_status", type: "string", description: "CI rollup status" },
+  ],
+  channel: [
+    { name: "channel", type: "string", description: "Channel kind (slack, telegram, discord, imessage)" },
+    { name: "connection", type: "string", description: "Channel connection ID" },
+    { name: "conversation", type: "string", description: "External conversation or channel ID" },
+    { name: "sender", type: "string", description: "External sender ID" },
+    { name: "text", type: "string", description: "Inbound message text" },
+    { name: "isDirect", type: "boolean", description: "True when the message is a direct message" },
+    { name: "mentionsBot", type: "boolean", description: "True when the message mentions or replies to the bot" },
   ],
 };
 
@@ -167,6 +176,7 @@ export function defaultNodeLabel(node) {
           chat: "Chat trigger",
           webhook: "Webhook trigger",
           github: "GitHub trigger",
+          channel: "Channel message trigger",
         }[node.triggerKind] ?? "Trigger"
       );
     case "agent":

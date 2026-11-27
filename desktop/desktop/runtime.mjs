@@ -27,7 +27,7 @@ import { PROVIDER_USAGE, ProviderUsage } from "./providerusage.mjs";
 import { ARTIFACTS, SIDE_PANE } from "./sidepane.mjs";
 import { cloneProjectRepository } from "./project-clone.mjs";
 import { PROJECT_ARTIFACTS, PROJECT_ARTIFACT_CALLS } from "./projects.mjs";
-import { MCP_APP_METHODS, PI_PACKAGE_METHODS, REMOTE_METHODS, WORKFLOW_METHODS } from "./link/methods.mjs";
+import { CHANNEL_METHODS, MCP_APP_METHODS, PI_PACKAGE_METHODS, REMOTE_METHODS, WORKFLOW_METHODS } from "./link/methods.mjs";
 import { chunk, fileDetails, openChatPath, publicFile, thumbnail } from "./artifact-files.mjs";
 import { REMOTE_HOSTS } from "./remotehosts.mjs";
 import { FILES, usageFile, wikiExportName, wikiFile } from "./phonefiles.mjs";
@@ -137,13 +137,15 @@ const MARK_CHATS_READ = "mark-chats-read-v1";
 const STOP_HELPER = "stop-helper-v1";
 /** Event-based Workflows in the Routines area (`workflows-v1`). */
 export const WORKFLOWS = "workflows-v1";
-export const CAPABILITIES = ["main-chat-v1", "message-reactions-v1", "client-message-id-v1", "voice-turns-v1", "voice-history-v1", "quiet-replies-v1", "models-v2", "fast-mode-v1", LOOKS_CAPABILITY, ...headCapabilities, BOT_VOICE, ROUTINE_DELIVERY, "routine-no-output-v1", ROUTINE_OWNER, ROUTINE_SCRIPTS, ROUTINE_MODELS, ROUTINE_SILENT, ROUTINE_NOTIFY_TARGETS, WORKFLOWS, PROACTIVE, PROACTIVE_LEARNING, PROACTIVE_TEAM, BOARD_MENTIONS, PROVIDER_USAGE, SIDE_PANE, REMOTE_HOSTS, FILES, FOLDERS, ARTIFACTS, PROJECT_ARTIFACTS, "project-folders-v1", "project-mode-v1", "project-clone-v1", "secure-input-v1", "turn-timeline-v1", PLUGINS, PLUGIN_STARTS, PROVIDER_SIGNIN, SPACES, AGENT_TEMPLATES, "agent-template-bundles-v1", COMPOSIO_APPS, MARKET_REFRESH, MCP_APPS, "pi-packages-v1", "pi-packages-remove-v1", "skill-upload-v1", "skills-catalog-v1", "skills-featured-v1", MARKETPLACE_V2, SCRIPT_COMMANDS_CAPABILITY, MCP_CATALOG_CAPABILITY, CHAT_TITLE_REGENERATION, MARK_CHATS_READ, STOP_HELPER, KEYED_PROVIDERS, CLAUDE_ARTIFACTS_CAPABILITY];
+/** External messaging Channel Hooks (`channels-v1`). */
+export const CHANNELS = "channels-v1";
+export const CAPABILITIES = ["main-chat-v1", "message-reactions-v1", "client-message-id-v1", "voice-turns-v1", "voice-history-v1", "quiet-replies-v1", "models-v2", "fast-mode-v1", LOOKS_CAPABILITY, ...headCapabilities, BOT_VOICE, ROUTINE_DELIVERY, "routine-no-output-v1", ROUTINE_OWNER, ROUTINE_SCRIPTS, ROUTINE_MODELS, ROUTINE_SILENT, ROUTINE_NOTIFY_TARGETS, WORKFLOWS, CHANNELS, PROACTIVE, PROACTIVE_LEARNING, PROACTIVE_TEAM, BOARD_MENTIONS, PROVIDER_USAGE, SIDE_PANE, REMOTE_HOSTS, FILES, FOLDERS, ARTIFACTS, PROJECT_ARTIFACTS, "project-folders-v1", "project-mode-v1", "project-clone-v1", "secure-input-v1", "turn-timeline-v1", PLUGINS, PLUGIN_STARTS, PROVIDER_SIGNIN, SPACES, AGENT_TEMPLATES, "agent-template-bundles-v1", COMPOSIO_APPS, MARKET_REFRESH, MCP_APPS, "pi-packages-v1", "pi-packages-remove-v1", "skill-upload-v1", "skills-catalog-v1", "skills-featured-v1", MARKETPLACE_V2, SCRIPT_COMMANDS_CAPABILITY, MCP_CATALOG_CAPABILITY, CHAT_TITLE_REGENERATION, MARK_CHATS_READ, STOP_HELPER, KEYED_PROVIDERS, CLAUDE_ARTIFACTS_CAPABILITY];
 /**
  * What a paired device is told this app supports. A feature whose calls the link does not carry
  * (desktop/link/methods.mjs) is left out, so a device never asks for what it cannot reach.
  */
 export const linkCapabilities = (methods = REMOTE_METHODS) =>
-  CAPABILITIES.filter((name) => (name !== "agent-template-bundles-v1" || (methods.has("addBot") && methods.has("agents.template"))) && (name !== "message-reactions-v1" || methods.has("reactToMessage")) && (!["voice-history-v1", "voice-turns-v1"].includes(name) || methods.has("recordVoiceLine")) && (name !== "project-folders-v1" || (methods.has("editProjectFolder") && methods.has("setChatFolder") && methods.has("chatProjectFolder"))) && (name !== "project-clone-v1" || methods.has("cloneProjectRepository")) && (name !== "project-mode-v1" || methods.has("updateProject")) && (name !== PROJECT_ARTIFACTS || PROJECT_ARTIFACT_CALLS.every((call) => methods.has(call))) && (name !== SPACES || SPACE_CALLS.every((call) => methods.has(call))) && (name !== MARKET_REFRESH || methods.has("plugins.refresh")) && (name !== "pi-packages-v1" || PI_PACKAGE_METHODS.every((call) => methods.has(call))) && (name !== "pi-packages-remove-v1" || methods.has("piPackages.remove")) && (name !== "skill-upload-v1" || methods.has("skills.upload")) && (name !== "skills-catalog-v1" || ["search", "preview", "install"].every(key => methods.has("skillsCatalog." + key))) && (name !== "skills-featured-v1" || methods.has("skillsCatalog.featured")) && (name !== MARKETPLACE_V2 || MARKET_V2_METHODS.every((call) => methods.has(call))) && (name !== SCRIPT_COMMANDS_CAPABILITY || ["skills.saveScript", "skills.readScript"].every((call) => methods.has(call))) && (name !== MCP_CATALOG_CAPABILITY || MCP_CATALOG_METHODS.every((call) => methods.has(call))) && (name !== MCP_APPS || MCP_APP_METHODS.every((call) => methods.has(call))) && (name !== CLAUDE_ARTIFACTS_CAPABILITY || CLAUDE_ARTIFACT_METHODS.every((call) => methods.has(call))) && (name !== CHAT_TITLE_REGENERATION || methods.has("regenerateChatTitle")) && (name !== MARK_CHATS_READ || methods.has("markChatsRead")) && (name !== STOP_HELPER || methods.has("stopHelper")) && (name !== WORKFLOWS || WORKFLOW_METHODS.every((call) => methods.has(call))));
+  CAPABILITIES.filter((name) => (name !== "agent-template-bundles-v1" || (methods.has("addBot") && methods.has("agents.template"))) && (name !== "message-reactions-v1" || methods.has("reactToMessage")) && (!["voice-history-v1", "voice-turns-v1"].includes(name) || methods.has("recordVoiceLine")) && (name !== "project-folders-v1" || (methods.has("editProjectFolder") && methods.has("setChatFolder") && methods.has("chatProjectFolder"))) && (name !== "project-clone-v1" || methods.has("cloneProjectRepository")) && (name !== "project-mode-v1" || methods.has("updateProject")) && (name !== PROJECT_ARTIFACTS || PROJECT_ARTIFACT_CALLS.every((call) => methods.has(call))) && (name !== SPACES || SPACE_CALLS.every((call) => methods.has(call))) && (name !== MARKET_REFRESH || methods.has("plugins.refresh")) && (name !== "pi-packages-v1" || PI_PACKAGE_METHODS.every((call) => methods.has(call))) && (name !== "pi-packages-remove-v1" || methods.has("piPackages.remove")) && (name !== "skill-upload-v1" || methods.has("skills.upload")) && (name !== "skills-catalog-v1" || ["search", "preview", "install"].every(key => methods.has("skillsCatalog." + key))) && (name !== "skills-featured-v1" || methods.has("skillsCatalog.featured")) && (name !== MARKETPLACE_V2 || MARKET_V2_METHODS.every((call) => methods.has(call))) && (name !== SCRIPT_COMMANDS_CAPABILITY || ["skills.saveScript", "skills.readScript"].every((call) => methods.has(call))) && (name !== MCP_CATALOG_CAPABILITY || MCP_CATALOG_METHODS.every((call) => methods.has(call))) && (name !== MCP_APPS || MCP_APP_METHODS.every((call) => methods.has(call))) && (name !== CLAUDE_ARTIFACTS_CAPABILITY || CLAUDE_ARTIFACT_METHODS.every((call) => methods.has(call))) && (name !== CHAT_TITLE_REGENERATION || methods.has("regenerateChatTitle")) && (name !== MARK_CHATS_READ || methods.has("markChatsRead")) && (name !== STOP_HELPER || methods.has("stopHelper")) && (name !== WORKFLOWS || WORKFLOW_METHODS.every((call) => methods.has(call))) && (name !== CHANNELS || CHANNEL_METHODS.every((call) => methods.has(call))));
 /** The calls of spaces (docs/spaces.md). The capability is named to a device only when the link carries them all. */
 export const SPACE_CALLS = ["read", "create", "rename", "remove", "setProject", "setPanelProject", "newPanel", "ask", "movePanel", "patchState", "note", "removeNote"].map((name) => "spaces." + name);
 
@@ -859,6 +861,20 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
       const text = readFileSync(paths[0], "utf8");
       return workspace.workflows.importJson(text);
     },
+    // External messaging Channel Hooks (desktop/channels/index.mjs) — strictly owner-only.
+    channelsList: () => workspace.channels.list(),
+    channelAdd: (input) => workspace.channels.add(input),
+    channelUpdate: (id, patch) => workspace.channels.update(id, patch),
+    channelRemove: (id) => workspace.channels.remove(id),
+    channelBind: (id, botId) => workspace.channels.bind(id, botId),
+    channelSetPolicy: (id, policy) => workspace.channels.setPolicy(id, policy),
+    channelPause: (id) => workspace.channels.pause(id),
+    channelResume: (id) => workspace.channels.resume(id),
+    channelPairList: (id) => workspace.channels.pairList(id ?? null),
+    channelPairApprove: (code, id) => workspace.channels.pairApprove(code, id ?? null),
+    channelPairDeny: (code, id) => workspace.channels.pairDeny(code, id ?? null),
+    channelTest: (id) => workspace.channels.test(id),
+    channelLogs: (id, options) => workspace.channels.logs(id ?? null, options ?? {}),
     // Projects and Project Changes (desktop/projects.mjs)
     // Folders for a window that can't show the system's chooser (desktop/folders.mjs). A folder
     // is taken only when the browser could have shown it.
@@ -1386,7 +1402,13 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
     // LinkHost only passes names in REMOTE_METHODS. What a paired device sends is checked and,
     // for a team member, marked as theirs on its way to the handlers (desktop/device-call.mjs).
     call: deviceCall({ workspace, handlers, folders }),
-    webhook: (routeId, req) => workspace.workflows.handleWebhook(routeId, req),
+    webhook: async (routeId, req) => {
+      const wfResult = workspace.workflows.handleWebhook(routeId, req);
+      if (wfResult?.status !== 404) return wfResult;
+      const chResult = await workspace.channels.handleWebhook(routeId, req);
+      if (chResult?.handled) return { status: chResult.status ?? 200, body: chResult.body ?? { ok: true } };
+      return wfResult;
+    },
     subscribe: (listener) => {
       changeListeners.add(listener);
       return () => changeListeners.delete(listener);
@@ -1605,6 +1627,7 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
       timer = setInterval(tick, 5000);
       host.power.onResume(tick);
       tick();
+      void workspace.channels.startAll().catch((error) => console.error("Channels:", error.message));
       // The default harness's runtime starts now, in the background, instead of with the first message.
       checking.push(setTimeout(() => void workspace.warmUp(), 1500));
       if (host.packaged && !trial && updates) {
@@ -1617,6 +1640,7 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
     stop() {
       stopAnnouncing();
       workspace.closing = true;
+      void workspace.channels.stopAll().catch(() => {});
       workspace.reactionTurns?.close();
       workspace.hostDispatch.close();
       workspace.nodeHost.close();
