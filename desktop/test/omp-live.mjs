@@ -1,5 +1,6 @@
-// Real OMP, local model endpoint. No provider account or plan is used.
+// Real OMP (or bundled Pi with --pi), local model endpoint. No provider account or plan is used.
 //   OMP_BINARY=/path/to/omp node test/omp-live.mjs
+//   node test/omp-live.mjs --pi
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -7,6 +8,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { OmpProvider } from "../desktop/providers/omp/index.mjs";
+import { PiProvider } from "../desktop/providers/pi/index.mjs";
+
+const pi = process.argv.includes("--pi");
+const harness = pi ? "Pi" : "OMP";
 
 const sse = (name, data) => "event: " + name + "\ndata: " + JSON.stringify(data) + "\n\n";
 const body = (request) =>
@@ -34,9 +39,18 @@ const mcpToolOutput = {
   id: "fc_2",
   type: "function_call",
   call_id: "call_2",
-  name: "mcp__fixture_echo",
+  name: pi ? "mcp__fixture__echo" : "mcp__fixture_echo",
   status: "completed",
   arguments: JSON.stringify({ value: "omp-mcp" }),
+};
+const patch = "[test.txt#A1B2]\nPUT 1.=1:\n+fixture";
+const editToolOutput = {
+  id: "fc_3",
+  type: "function_call",
+  call_id: "call_3",
+  name: "edit",
+  status: "completed",
+  arguments: JSON.stringify({ input: patch }),
 };
 
 const requests = [];
@@ -47,6 +61,7 @@ const outputs = [
   [textOutput("msg_2", "The tool ran.")],
   [mcpToolOutput],
   [textOutput("msg_3", "The MCP tool ran.")],
+  ...(!pi ? [[editToolOutput], [textOutput("msg_4", "The edit was refused.")]] : []),
 ];
 const model = createServer(async (request, response) => {
   const input = await body(request);
@@ -76,7 +91,8 @@ const model = createServer(async (request, response) => {
 });
 await new Promise((resolve) => model.listen(0, "127.0.0.1", resolve));
 const root = mkdtempSync(join(tmpdir(), "botkins-omp-live-"));
-const provider = new OmpProvider({ dataDir: join(root, "data"), ...(process.env.OMP_BINARY && { binary: process.env.OMP_BINARY }) });
+const Provider = pi ? PiProvider : OmpProvider;
+const provider = new Provider({ dataDir: join(root, "data"), ...(!pi && process.env.OMP_BINARY && { binary: process.env.OMP_BINARY }) });
 const approvals = [];
 try {
   const address = model.address();
@@ -119,7 +135,7 @@ try {
       },
     },
     history: () => [],
-    handlers: { permission: async (request) => (approvals.push(request), { allow: true }) },
+    handlers: { permission: async (request) => (approvals.push(request), { allow: request.kind !== "write" }) },
   });
   const events = [];
   session.on((event) => events.push(event));
@@ -130,8 +146,20 @@ try {
   assert.equal(approvals.length, 2);
   assert.deepEqual([approvals[0].kind, approvals[0].toolName, approvals[0].preview], ["shell", "bash", "printf omp-tool"]);
   assert.deepEqual([approvals[1].kind, approvals[1].label, approvals[1].toolName], ["mcp", "fixture / echo", "echo"]);
+  assert.deepEqual(approvals[0].remember, ["this exact command", "printf omp-tool"], approvals[0].detail);
+  assert.equal(approvals[1].readOnly, true, approvals[1].detail);
+  assert.deepEqual(approvals[1].remember, pi ? null : ["MCP tool fixture/echo", "fixture", "echo"]);
+  if (!pi) {
+    assert.equal((await session.send({ prompt: "Request a fixture edit, then answer." })).text, "The edit was refused.");
+    assert.deepEqual([approvals[2].kind, approvals[2].preview, approvals[2].remember], ["write", patch, null]);
+  }
   assert.ok(requests.length >= 5);
+  assert.ok(
+    requests.every((request) => Array.isArray(request.tools) && request.tools.some((tool) => tool.name === "mcp__fixture_echo" && tool.parameters?.properties?.value)),
+    "OMP should expose configured MCP tools directly as typed schemas",
+  );
   const prompts = requests.map((request) => {
+    if (pi) return JSON.stringify(request.input ?? []);
     const at = typeof request.instructions === "string" ? request.instructions.indexOf("omp://: harness docs") : -1;
     return {
       type: typeof request.instructions,
@@ -141,9 +169,13 @@ try {
       ...(at >= 0 && { around: request.instructions.slice(Math.max(0, at - 180), at + 180) }),
     };
   });
-  assert.ok(prompts.every((prompt) => prompt.type === "string" && !prompt.docsTag && !prompt.harnessDocs), JSON.stringify(prompts));
-  assert.ok(prompts.every((prompt) => prompt.bot), JSON.stringify(prompts));
-  console.log("OMP live: startup, streamed reply, approvals, shell, MCP and settlement passed.");
+  if (pi) {
+    assert.ok(prompts[0].includes("You are Testy."));
+  } else {
+    assert.ok(prompts.every((prompt) => prompt.type === "string" && !prompt.docsTag && !prompt.harnessDocs), JSON.stringify(prompts));
+    assert.ok(prompts.every((prompt) => prompt.bot), JSON.stringify(prompts));
+  }
+  console.log(`${harness} offline: startup, streamed reply, approvals, shell, MCP and settlement passed.`);
 } finally {
   await provider.stop();
   await new Promise((resolve) => model.close(resolve));

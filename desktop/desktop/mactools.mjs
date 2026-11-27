@@ -57,12 +57,12 @@ const fail = (message) => {
   throw new MacToolError(message);
 };
 
-const IMSG_MISSING = "iMessage needs the imsg program, and it isn't installed on this computer. The person can install it with: " + IMSG_INSTALL.command + " (" + IMSG_INSTALL.url + ")";
-const NO_DISK_ACCESS = "Botkins isn't allowed to read Messages yet. The person needs to switch on Full Disk Access for Botkins in System Settings › Privacy & Security, then you can try again.";
-const noAutomation = (app) => "Botkins isn't allowed to control " + app + " yet. The person needs to allow it under System Settings › Privacy & Security › Automation, then you can try again.";
+export const IMSG_MISSING = "iMessage needs the imsg program, and it isn't installed on this computer. The person can install it with: " + IMSG_INSTALL.command + " (" + IMSG_INSTALL.url + ")";
+export const NO_DISK_ACCESS = "Botkins isn't allowed to read Messages yet. The person needs to switch on Full Disk Access for Botkins in System Settings › Privacy & Security, then you can try again.";
+export const noAutomation = (app) => "Botkins isn't allowed to control " + app + " yet. The person needs to allow it under System Settings › Privacy & Security › Automation, then you can try again.";
 
 /** Runs a program with an argument array, no shell, and never waits on its input. */
-function launchProgram(file, args, { timeout = 30000 } = {}) {
+export function launchProgram(file, args, { timeout = 30000 } = {}) {
   return new Promise((resolve) => {
     const child = execFile(file, args, { timeout, maxBuffer: 8 * 1024 * 1024, encoding: "utf8", windowsHide: true }, (error, stdout, stderr) => {
       resolve({
@@ -79,7 +79,7 @@ function launchProgram(file, args, { timeout = 30000 } = {}) {
 }
 
 /** The imsg program: on PATH first, then where Homebrew puts it (an app started from the Dock has a short PATH). */
-function findImsgProgram(env = process.env) {
+export function findImsgProgram(env = process.env) {
   const folders = [...(env.PATH ?? "").split(delimiter).filter(Boolean), "/opt/homebrew/bin", "/usr/local/bin"];
   for (const folder of folders) {
     const file = join(folder, "imsg");
@@ -123,7 +123,7 @@ function when(value, name) {
 }
 
 /** An imsg option. A value that starts with a dash is joined to its name, so it can't be mistaken for another option. */
-const option = (name, value) => (String(value).startsWith("-") ? [name + "=" + value] : [name, String(value)]);
+export const option = (name, value) => (String(value).startsWith("-") ? [name + "=" + value] : [name, String(value)]);
 
 const chatId = (value) => {
   const text = String(value ?? "").trim();

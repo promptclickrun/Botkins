@@ -1055,6 +1055,39 @@ export class Workflows {
     }
   }
 
+  /** Handles inbound messages from external Channel Hooks (Slack, Telegram, Discord, iMessage). */
+  onChannelMessage({ channel, connection, conversation, sender, text, isDirect, mentionsBot } = {}) {
+    if (!channel || !connection) return;
+    const lowText = String(text ?? "").toLowerCase();
+    for (const wf of this.all) {
+      if (!wf.enabled) continue;
+      for (const node of wf.nodes) {
+        if (node.kind !== "trigger" || node.triggerKind !== "channel") continue;
+        const cfg = node.config ?? {};
+        if (cfg.channel && String(cfg.channel).toLowerCase() !== String(channel).toLowerCase()) continue;
+        if (cfg.connection && cfg.connection !== connection) continue;
+        if (cfg.conversation && cfg.conversation !== conversation) continue;
+        if (cfg.sender && cfg.sender !== sender) continue;
+        // (directOnly and mentionOnly are what the window saved before it used the trigger's own field names.)
+        const direct = cfg.isDirect ?? (cfg.directOnly === true ? true : undefined);
+        if (direct === true && !isDirect) continue;
+        if (direct === false && isDirect) continue;
+        if ((cfg.mentionsBot === true || cfg.mentionOnly === true) && !mentionsBot) continue;
+        if (cfg.textContains && !lowText.includes(String(cfg.textContains).toLowerCase())) continue;
+
+        this.startRun(wf, node, {
+          channel: String(channel),
+          connection: String(connection),
+          conversation: String(conversation ?? ""),
+          sender: String(sender ?? ""),
+          text: String(text ?? ""),
+          isDirect: Boolean(isDirect),
+          mentionsBot: Boolean(mentionsBot),
+        });
+      }
+    }
+  }
+
   /**
    * Handles incoming local webhook HTTP requests (`POST /botkins/v1/webhooks/:routeId`).
    * Enforces 64KB max body, per-workflow secret stored in vault, and case-sensitive declared JSON fields.
@@ -1834,7 +1867,7 @@ export class Workflows {
         config: {
           type: "object",
           description:
-            "Step config. Trigger(task): {event,toStatus,fromStatus,botName,taskId,titleContains}. Trigger(schedule): {cadence,time,days,cron,timezone}. Trigger(manual): {inputs}. Trigger(routine): {routineChatId,routineName,botId,onlyOnStatus}. Trigger(chat): {chatId,botId,mentionOnly,textContains}. Trigger(webhook): {fields}. Trigger(github): {repo,events,mentionHandle,branch,author,pollMinutes}. Agent: {botName,botId,prompt,outputKey,outputFields}. Model: {model,prompt,outputKey,outputFields}. Condition: {expression,match,rules}. Approval: {message,noteField}. Output: {destination,chatId,botName,title,template,category}.",
+            "Step config. Trigger(task): {event,toStatus,fromStatus,botName,taskId,titleContains}. Trigger(schedule): {cadence,time,days,cron,timezone}. Trigger(manual): {inputs}. Trigger(routine): {routineChatId,routineName,botId,onlyOnStatus}. Trigger(chat): {chatId,botId,mentionOnly,textContains}. Trigger(webhook): {fields}. Trigger(github): {repo,events,mentionHandle,branch,author,pollMinutes}. Trigger(channel): {channel,connection,conversation,sender,isDirect,mentionsBot,textContains}. Agent: {botName,botId,prompt,outputKey,outputFields}. Model: {model,prompt,outputKey,outputFields}. Condition: {expression,match,rules}. Approval: {message,noteField}. Output: {destination,chatId,botName,title,template,category}.",
         },
       },
       required: ["id", "kind"],

@@ -25,6 +25,7 @@ import { profileCommands } from "./profile.mjs";
 import { nodeCommands } from "./node.mjs";
 import { feedbackCommands } from "./feedback.mjs";
 import { marketplaceCommands } from "./marketplace.mjs";
+import { channelsCommands } from "./channels.mjs";
 
 export const COMMANDS = { ...service, ...tui, ...install, ...link, ...workspace, ...tools, ...settings, ...profileCommands, ...nodeCommands, ...feedbackCommands, ...marketplaceCommands };
 // What one bot has of the tools and skills is said under the bot: `botkins bots tools <bot>`.
@@ -32,7 +33,7 @@ Object.assign(COMMANDS.bots.commands, botTools);
 // Plugins: to install, update and switch one on is to look at it first (cli/commands/plugins.mjs).
 Object.assign(COMMANDS.plugins.commands, pluginCommands);
 // The rest of the workspace, one file for each area. A group that is there already gets the new commands; a command's name is never taken twice.
-for (const area of [botsCommands, chatsCommands, routinesCommands, projectsCommands, wikiCommands, prefsCommands, credentialsCommands, voiceCommands, spacesCommands, sharingCommands, teamCommands, appsCommands, piCommands]) {
+for (const area of [botsCommands, chatsCommands, routinesCommands, projectsCommands, wikiCommands, prefsCommands, credentialsCommands, voiceCommands, spacesCommands, sharingCommands, teamCommands, appsCommands, piCommands, channelsCommands]) {
   for (const [word, group] of Object.entries(area)) {
     if (!COMMANDS[word]) COMMANDS[word] = group;
     else {

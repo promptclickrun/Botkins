@@ -1,29 +1,33 @@
-// T3 Code-style vertical accent rail cards for bot-to-bot messages (incoming, outgoing, task handoff).
-import { useId, useState } from "react";
+// Quiet hairline cards for bot-to-bot messages (incoming, grouped outgoing asks,
+// grouped task handoffs, and folded node calls). Matches the phone's AgentMessageRail.
+import { useId, useMemo, useState } from "react";
 import {
-  ArrowRight,
   ArrowUpRight,
   Bot as BotIcon,
+  Check,
   ChevronDown,
   ChevronRight,
   CircleAlert,
-  ClipboardList,
   Globe,
+  X as XIcon,
 } from "lucide-react";
 import { BotAvatar } from "./Avatar";
-import { StepList, duration, useNow } from "./ChatActivity";
+import { StepList, useNow } from "./ChatActivity";
 import { RichText } from "./RichText";
 import type { ChatFiles } from "./ChatFileLink";
 import {
+  askRowSummary,
   buildIncomingRail,
   buildOutgoingRail,
-  buildTaskHandoffRail,
-  foldPreview,
-  groupRailAsks,
-  type AgentRailTone,
+  buildTaskHandoffGroup,
+  formatCompactElapsed,
+  groupAsks,
+  type AskGroupModel,
   type NodeCallGroupModel,
+  type TaskHandoffGroupModel,
+  type TaskHandoffRailModel,
 } from "./agentRailModel";
-import type { Bot, BotTask, Message, Run, TaskHandoff, TeamAsk } from "./types";
+import type { Bot, BotTask, Message, Run, TeamAsk } from "./types";
 import "./agent-rail.css";
 
 function clock(time?: number): string {
@@ -35,7 +39,7 @@ function clock(time?: number): string {
   }
 }
 
-function RailFace({ bot, size = 20, remote }: { bot?: Bot; size?: number; remote?: boolean }) {
+function RailFace({ bot, size = 18, remote }: { bot?: Bot; size?: number; remote?: boolean }) {
   if (bot) {
     return (
       <span className="agent-rail-face" aria-hidden="true">
@@ -45,24 +49,14 @@ function RailFace({ bot, size = 20, remote }: { bot?: Bot; size?: number; remote
   }
   return (
     <span className="agent-rail-face neutral" aria-hidden="true" style={{ width: size, height: size }}>
-      {remote ? <Globe size={Math.round(size * 0.65)} /> : <BotIcon size={Math.round(size * 0.65)} />}
-    </span>
-  );
-}
-
-function StatusPill({ label, tone, live }: { label: string; tone: AgentRailTone; live?: boolean }) {
-  return (
-    <span className={`agent-rail-status tone-${tone}${live ? " live" : ""}`}>
-      {live && <span className="agent-rail-dot" aria-hidden="true" />}
-      <span>{label}</span>
+      {remote ? <Globe size={Math.round(size * 0.62)} /> : <BotIcon size={Math.round(size * 0.62)} />}
     </span>
   );
 }
 
 /**
- * Recipient-side card: renders an incoming bot-to-bot message (task handoff, remote dispatch, or teamwork)
- * with a crisp vertical left accent rail, sender identity, channel tag, collapsible body, and optional
- * link back to the originating chat. Distinct from person bubbles and bot replies.
+ * Recipient-side card: quiet hairline card for an incoming bot-to-bot message
+ * (task handoff, remote dispatch, or teamwork). No colored left rail and no channel pills.
  */
 export function IncomingAgentRail({
   message,
@@ -87,6 +81,7 @@ export function IncomingAgentRail({
   const senderBot = bots.find((b) => b.id === model.senderBotId);
   const stamp = clock(model.time);
   const canOpenSource = !!(model.sourceChatId && openChat);
+  const metaParts = [model.viaLabel, stamp].filter(Boolean).join(" · ");
 
   return (
     <article
@@ -95,18 +90,13 @@ export function IncomingAgentRail({
       aria-label={model.ariaLabel}
     >
       <div className="agent-rail-head">
-        <RailFace bot={senderBot} remote={model.via === "remote"} />
+        <RailFace bot={senderBot} size={18} remote={model.via === "remote"} />
         <div className="agent-rail-identity">
           <span className="agent-rail-who">
             <span className="agent-rail-dir">from</span>{" "}
             <strong className="agent-rail-name">{model.senderName}</strong>
           </span>
-          <span className="agent-rail-via">
-            {model.via === "task" && <ClipboardList size={11} aria-hidden="true" />}
-            {model.via === "remote" && <Globe size={11} aria-hidden="true" />}
-            <span>{model.viaLabel}</span>
-          </span>
-          {stamp && <time className="agent-rail-time">{stamp}</time>}
+          {metaParts && <span className="agent-rail-meta">· {metaParts}</span>}
         </div>
         {canOpenSource && (
           <button
@@ -149,246 +139,242 @@ export function IncomingAgentRail({
   );
 }
 
-/**
- * Sender-side card for one outgoing teamwork or remote ask:
- * shows "to <Teammate>", the sent message, live status (asked / working / answered / failed),
- * and the folded reply + optional tool steps expandable inline.
- */
-function OutgoingAskCard({ ask, bots }: { ask: TeamAsk; bots: Bot[] }) {
-  const model = buildOutgoingRail(ask, bots);
-  const [replyOpen, setReplyOpen] = useState(false);
-  const [messageOpen, setMessageOpen] = useState(false);
+/** One compact expandable ask row inside a grouped card. */
+function AskRow({ ask, bots }: { ask: TeamAsk; bots: Bot[] }) {
+  const model = useMemo(() => buildOutgoingRail(ask, bots), [ask, bots]);
+  const [expanded, setExpanded] = useState(false);
   const [stepsOpen, setStepsOpen] = useState(false);
-  const replyId = useId();
+  const detailId = useId();
   const now = useNow(model.live);
   const targetBot = ask.remote ? undefined : bots.find((b) => b.id === ask.botId);
-  const messageFold = foldPreview(model.message);
   const took = model.durationMs ?? (model.live ? Math.max(0, now - ask.started) : undefined);
-  const hasReplyOrError = !!(model.reply || model.error);
+  const summary = askRowSummary(model);
   const steps = ask.steps ?? [];
 
   return (
-    <article
-      className={`agent-rail agent-rail-outgoing via-${model.via} status-${model.status}`}
-      aria-label={model.ariaLabel}
-    >
-      <div className="agent-rail-head">
-        <RailFace bot={targetBot} remote={model.via === "remote"} />
-        <div className="agent-rail-identity">
-          <span className="agent-rail-who">
-            <ArrowRight size={12} className="agent-rail-arrow" aria-hidden="true" />
-            <span className="agent-rail-dir">to</span>{" "}
-            <strong className="agent-rail-name">{model.targetName}</strong>
-            {model.hostLabel && <span className="agent-rail-host">on {model.hostLabel}</span>}
-          </span>
-          <StatusPill label={model.statusLabel} tone={model.statusTone} live={model.live} />
-          {took !== undefined && took > 0 && <span className="agent-rail-meta">{duration(took)}</span>}
-        </div>
-      </div>
+    <div className={`agent-rail-row status-${model.status}${expanded ? " expanded" : ""}`}>
+      <button
+        type="button"
+        className="agent-rail-row-btn"
+        aria-expanded={expanded}
+        aria-controls={detailId}
+        aria-label={model.ariaLabel}
+        onClick={() => setExpanded((v) => !v)}
+      >
+        <RailFace bot={targetBot} size={18} remote={model.via === "remote"} />
+        <strong className="agent-rail-name">{model.targetName}</strong>
+        <span className="agent-rail-row-summary">{summary}</span>
+        <span className="agent-rail-row-trail">
+          {model.status === "answered" ? (
+            <Check size={14} className="agent-rail-check" aria-hidden="true" />
+          ) : model.status === "failed" ? (
+            <XIcon size={14} className="agent-rail-fail" aria-hidden="true" />
+          ) : model.status === "stopped" ? (
+            <span className="agent-rail-muted-tag">stopped</span>
+          ) : (
+            <span className="agent-rail-live-time">{formatCompactElapsed(took ?? 0)}</span>
+          )}
+        </span>
+      </button>
 
-      <div className="agent-rail-body">
-        {messageFold.collapsible && !messageOpen ? (
-          <p className="agent-rail-preview">{messageFold.preview}</p>
-        ) : (
+      {expanded && (
+        <div id={detailId} className="agent-rail-row-body">
           <p className="agent-rail-text">{model.message}</p>
-        )}
-        {model.expecting && (
-          <p className="agent-rail-expect">
-            <strong>Needs:</strong> {model.expecting}
-          </p>
-        )}
-        {messageFold.collapsible && (
-          <button
-            type="button"
-            className="agent-rail-toggle inline"
-            aria-expanded={messageOpen}
-            onClick={() => setMessageOpen((v) => !v)}
-          >
-            {messageOpen ? <ChevronDown size={12} aria-hidden="true" /> : <ChevronRight size={12} aria-hidden="true" />}
-            <span>{messageOpen ? "Hide full request" : "Show full request"}</span>
-          </button>
-        )}
-      </div>
-
-      {hasReplyOrError && (
-        <div className={"agent-rail-reply-wrap" + (replyOpen ? " open" : "")}>
-          <button
-            type="button"
-            className="agent-rail-reply-toggle"
-            aria-expanded={replyOpen}
-            aria-controls={replyId}
-            onClick={() => setReplyOpen((value) => !value)}
-          >
-            {replyOpen ? <ChevronDown size={13} aria-hidden="true" /> : <ChevronRight size={13} aria-hidden="true" />}
-            <span className="agent-rail-reply-label">
-              {model.error ? "Error" : `Reply from ${model.targetName}`}
-            </span>
-            {!replyOpen && (
-              <span className="agent-rail-reply-snippet">
-                {(model.error ?? model.reply ?? "").replace(/\s+/g, " ").trim().slice(0, 110)}
-              </span>
-            )}
-          </button>
-          {replyOpen && (
-            <div id={replyId} className="agent-rail-reply-body">
-              {model.reply ? (
-                <RichText text={model.reply} />
-              ) : (
-                <p className="agent-rail-error" role="status">
-                  <CircleAlert size={14} aria-hidden="true" />
-                  <span>{model.error}</span>
-                </p>
-              )}
-              {steps.length > 0 && (
-                <div className="agent-rail-steps">
-                  <button
-                    type="button"
-                    className="agent-rail-toggle inline"
-                    aria-expanded={stepsOpen}
-                    onClick={() => setStepsOpen((v) => !v)}
-                  >
-                    {stepsOpen ? <ChevronDown size={12} aria-hidden="true" /> : <ChevronRight size={12} aria-hidden="true" />}
-                    <span>
-                      {steps.length} {steps.length === 1 ? "tool step" : "tool steps"}
-                    </span>
-                  </button>
-                  {stepsOpen && (
-                    <div className="tool-trail work-done team-steps">
-                      <StepList steps={steps} />
-                    </div>
-                  )}
+          {model.expecting && (
+            <p className="agent-rail-expect">
+              <strong>Needs:</strong> {model.expecting}
+            </p>
+          )}
+          {model.reply && (
+            <div className="agent-rail-reply-body">
+              <RichText text={model.reply} />
+            </div>
+          )}
+          {model.error && (
+            <p className="agent-rail-error" role="status">
+              <CircleAlert size={14} aria-hidden="true" />
+              <span>{model.error}</span>
+            </p>
+          )}
+          {steps.length > 0 && (
+            <div className="agent-rail-steps">
+              <button
+                type="button"
+                className="agent-rail-toggle inline"
+                aria-expanded={stepsOpen}
+                onClick={() => setStepsOpen((v) => !v)}
+              >
+                {stepsOpen ? <ChevronDown size={12} aria-hidden="true" /> : <ChevronRight size={12} aria-hidden="true" />}
+                <span>
+                  {steps.length} {steps.length === 1 ? "tool step" : "tool steps"}
+                </span>
+              </button>
+              {stepsOpen && (
+                <div className="tool-trail work-done team-steps">
+                  <StepList steps={steps} />
                 </div>
               )}
             </div>
           )}
         </div>
       )}
+    </div>
+  );
+}
+
+/** One quiet hairline card holding consecutive teammate/remote asks as 1-line expandable rows. */
+function AskGroupCard({ group, bots }: { group: AskGroupModel; bots: Bot[] }) {
+  return (
+    <article className="agent-rail-group" aria-label={group.header}>
+      <div className="agent-rail-group-head">
+        {group.live && <span className="agent-rail-dot" aria-hidden="true" />}
+        <span className="agent-rail-group-title">{group.header}</span>
+      </div>
+      <div className="agent-rail-rows">
+        {group.asks.map((ask) => (
+          <AskRow key={ask.id} ask={ask} bots={bots} />
+        ))}
+      </div>
     </article>
   );
 }
 
-/**
- * Compact sender-side card in the creating bot's chat for a Task Board handoff to another bot,
- * showing live status and linking directly to the task's chat when available.
- */
-function TaskHandoffCard({
-  handoff,
+/** One compact expandable task handoff row inside a grouped handoff card. */
+function TaskHandoffRow({
+  model,
   bots,
-  tasks,
   openChat,
 }: {
-  handoff: TaskHandoff;
+  model: TaskHandoffRailModel;
   bots: Bot[];
-  tasks?: BotTask[];
   openChat?: (chatId: string) => void;
 }) {
-  const model = buildTaskHandoffRail(handoff, { bots, tasks });
   const [expanded, setExpanded] = useState(false);
   const detailId = useId();
   const targetBot = bots.find((b) => b.id === model.targetBotId);
-  const hasExpandable = !!(model.details || model.result || model.problem);
+  const done = model.status === "done" || model.status === "review";
 
   return (
-    <article
-      className={`agent-rail agent-rail-task via-task status-${model.status}`}
-      aria-label={model.ariaLabel}
-    >
-      <div className="agent-rail-head">
-        <RailFace bot={targetBot} />
-        <div className="agent-rail-identity">
-          <span className="agent-rail-who">
-            <ClipboardList size={12} className="agent-rail-arrow" aria-hidden="true" />
-            <span className="agent-rail-dir">task for</span>{" "}
-            <strong className="agent-rail-name">{model.targetName}</strong>
-          </span>
-          <StatusPill label={model.statusLabel} tone={model.statusTone} live={model.live} />
-        </div>
-        {model.taskChatId && openChat && (
-          <button
-            type="button"
-            className="agent-rail-link"
-            onClick={() => openChat(model.taskChatId!)}
-            aria-label={`Open task chat: ${model.title}`}
-          >
-            <span>Open task</span>
-            <ArrowUpRight size={12} aria-hidden="true" />
-          </button>
-        )}
-      </div>
-
-      <div className="agent-rail-title">{model.title}</div>
-
-      {hasExpandable && (
-        <div className={"agent-rail-reply-wrap" + (expanded ? " open" : "")}>
-          <button
-            type="button"
-            className="agent-rail-reply-toggle"
-            aria-expanded={expanded}
-            aria-controls={detailId}
-            onClick={() => setExpanded((v) => !v)}
-          >
-            {expanded ? <ChevronDown size={13} aria-hidden="true" /> : <ChevronRight size={13} aria-hidden="true" />}
-            <span className="agent-rail-reply-label">
-              {model.problem ? "Blocked reason" : model.result ? "Result" : "Details"}
+    <div className={`agent-rail-row status-${model.status}${expanded ? " expanded" : ""}`}>
+      <button
+        type="button"
+        className="agent-rail-row-btn"
+        aria-expanded={expanded}
+        aria-controls={detailId}
+        aria-label={model.ariaLabel}
+        onClick={() => setExpanded((v) => !v)}
+      >
+        <RailFace bot={targetBot} size={18} />
+        <strong className="agent-rail-name">{model.targetName}</strong>
+        <span className="agent-rail-row-summary">{model.title}</span>
+        <span className="agent-rail-row-trail">
+          {done ? (
+            <Check size={14} className="agent-rail-check" aria-hidden="true" />
+          ) : model.status === "blocked" ? (
+            <XIcon size={14} className="agent-rail-fail" aria-hidden="true" />
+          ) : (
+            <span className={model.live ? "agent-rail-live-time" : "agent-rail-muted-tag"}>
+              {model.statusLabel.toLowerCase()}
             </span>
-            {!expanded && (
-              <span className="agent-rail-reply-snippet">
-                {(model.problem ?? model.result ?? model.details ?? "").replace(/\s+/g, " ").trim().slice(0, 110)}
-              </span>
+          )}
+        </span>
+      </button>
+
+      {expanded && (
+        <div id={detailId} className="agent-rail-row-body">
+          <div className="agent-rail-head">
+            <span className="agent-rail-title">{model.title}</span>
+            {model.taskChatId && openChat && (
+              <button
+                type="button"
+                className="agent-rail-link"
+                onClick={() => openChat(model.taskChatId!)}
+                aria-label={`Open task chat: ${model.title}`}
+              >
+                <span>Open task</span>
+                <ArrowUpRight size={12} aria-hidden="true" />
+              </button>
             )}
-          </button>
-          {expanded && (
-            <div id={detailId} className="agent-rail-reply-body">
-              {model.details && (
-                <div className="agent-rail-subblock">
-                  <small className="agent-rail-sublabel">Task brief</small>
-                  <RichText text={model.details} />
-                </div>
-              )}
-              {model.result && (
-                <div className="agent-rail-subblock">
-                  <small className="agent-rail-sublabel">Result from {model.targetName}</small>
-                  <RichText text={model.result} />
-                </div>
-              )}
-              {model.problem && (
-                <p className="agent-rail-error" role="status">
-                  <CircleAlert size={14} aria-hidden="true" />
-                  <span>{model.problem}</span>
-                </p>
-              )}
+          </div>
+          {model.details && (
+            <div className="agent-rail-subblock">
+              <small className="agent-rail-sublabel">Task brief</small>
+              <RichText text={model.details} />
             </div>
+          )}
+          {model.result && (
+            <div className="agent-rail-reply-body">
+              <RichText text={model.result} />
+            </div>
+          )}
+          {model.problem && (
+            <p className="agent-rail-error" role="status">
+              <CircleAlert size={14} aria-hidden="true" />
+              <span>{model.problem}</span>
+            </p>
           )}
         </div>
       )}
+    </div>
+  );
+}
+
+/** One quiet hairline card grouping bot-to-bot Task Board handoffs for a turn. */
+function TaskHandoffGroupCard({
+  group,
+  bots,
+  openChat,
+}: {
+  group: TaskHandoffGroupModel;
+  bots: Bot[];
+  openChat?: (chatId: string) => void;
+}) {
+  return (
+    <article className="agent-rail-group" aria-label={group.header}>
+      <div className="agent-rail-group-head">
+        {group.live && <span className="agent-rail-dot" aria-hidden="true" />}
+        <span className="agent-rail-group-title">{group.header}</span>
+      </div>
+      <div className="agent-rail-rows">
+        {group.items.map((model) => (
+          <TaskHandoffRow key={model.id} model={model} bots={bots} openChat={openChat} />
+        ))}
+      </div>
     </article>
   );
 }
 
-/** Back-to-back node calls folded into one card; open it to see each call's own card. */
+/** Back-to-back node calls folded into one quiet hairline card; open it to inspect each call row. */
 function NodeCallGroupCard({ group, bots }: { group: NodeCallGroupModel; bots: Bot[] }) {
   const [open, setOpen] = useState(false);
   const bodyId = useId();
-  const status = group.live ? group.running + " running" : group.failed ? group.failed + " failed" : "Done";
   return (
-    <article className={`agent-rail agent-rail-outgoing agent-rail-node-group via-remote${open ? " open" : ""}`} aria-label={group.ariaLabel}>
+    <article className={`agent-rail-group agent-rail-node-group${open ? " open" : ""}`} aria-label={group.ariaLabel}>
       <button
         type="button"
-        className="agent-rail-reply-toggle agent-rail-group-toggle"
+        className="agent-rail-row-btn"
         aria-expanded={open}
         aria-controls={bodyId}
         onClick={() => setOpen((v) => !v)}
       >
-        {open ? <ChevronDown size={13} aria-hidden="true" /> : <ChevronRight size={13} aria-hidden="true" />}
-        <RailFace remote />
-        <span className="agent-rail-reply-label">{group.title}</span>
-        <StatusPill label={status} tone={group.statusTone} live={group.live} />
-        {!open && <span className="agent-rail-reply-snippet">{group.summary.replace(/\s+/g, " ").trim().slice(0, 110)}</span>}
+        {open ? <ChevronDown size={13} className="agent-rail-chev" aria-hidden="true" /> : <ChevronRight size={13} className="agent-rail-chev" aria-hidden="true" />}
+        <RailFace size={18} remote />
+        <strong className="agent-rail-name">{group.title}</strong>
+        {!open && <span className="agent-rail-row-summary">{group.summary.replace(/\s+/g, " ").trim()}</span>}
+        <span className="agent-rail-row-trail">
+          {group.live ? (
+            <span className="agent-rail-live-time">{group.running} running</span>
+          ) : group.failed ? (
+            <span className="agent-rail-fail-text">{group.failed} failed</span>
+          ) : (
+            <Check size={14} className="agent-rail-check" aria-hidden="true" />
+          )}
+        </span>
       </button>
       {open && (
-        <div id={bodyId} className="agent-rail-stack agent-rail-group-body">
+        <div id={bodyId} className="agent-rail-rows">
           {group.asks.map((ask) => (
-            <OutgoingAskCard key={ask.id} ask={ask} bots={bots} />
+            <AskRow key={ask.id} ask={ask} bots={bots} />
           ))}
         </div>
       )}
@@ -397,8 +383,8 @@ function NodeCallGroupCard({ group, bots }: { group: NodeCallGroupModel; bots: B
 }
 
 /**
- * Renders all sender-side agent-message rail cards for a turn (outgoing teamwork/remote asks
- * and bot-to-bot Task Board handoffs). Replaces the older compact TeamRail bar.
+ * Renders all sender-side quiet grouped agent cards for a turn (outgoing teamwork/remote asks,
+ * folded node calls, and bot-to-bot Task Board handoffs).
  */
 export function AgentMessageRail({
   run,
@@ -413,20 +399,20 @@ export function AgentMessageRail({
 }) {
   const asks = run.teamwork ?? [];
   const handoffs = run.taskHandoffs ?? [];
-  if (!asks.length && !handoffs.length) return null;
+  const groupedAsks = useMemo(() => groupAsks(asks, bots), [asks, bots]);
+  const handoffGroup = useMemo(() => buildTaskHandoffGroup(handoffs, { bots, tasks }), [handoffs, bots, tasks]);
+  if (!groupedAsks.length && !handoffGroup) return null;
 
   return (
     <section className="agent-rail-stack" aria-label="Agent messages">
-      {groupRailAsks(asks).map((item) =>
-        item.kind === "ask" ? (
-          <OutgoingAskCard key={item.ask.id} ask={item.ask} bots={bots} />
+      {groupedAsks.map((item) =>
+        item.kind === "ask-group" ? (
+          <AskGroupCard key={item.id} group={item} bots={bots} />
         ) : (
           <NodeCallGroupCard key={item.id} group={item} bots={bots} />
         ),
       )}
-      {handoffs.map((handoff) => (
-        <TaskHandoffCard key={handoff.id} handoff={handoff} bots={bots} tasks={tasks} openChat={openChat} />
-      ))}
+      {handoffGroup && <TaskHandoffGroupCard group={handoffGroup} bots={bots} openChat={openChat} />}
     </section>
   );
 }

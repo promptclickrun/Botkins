@@ -311,6 +311,7 @@ export class Subagents {
         botId: bot.id,
         title: `${chat.title || "Chat"} · ${spec.label}`,
         approval: chat.approval,
+        ...(chat.channel && { channel: chat.channel }),
         messages: [],
         projectId: chat.projectId,
         folder: spec.folderOverride ?? chat.folder,

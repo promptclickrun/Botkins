@@ -33,6 +33,14 @@ let model = (args[args.indexOf("--model") + 1] ?? "").split("/");
 let thinking = args.includes("--thinking") ? args[args.indexOf("--thinking") + 1] : "high";
 const resumed = args.includes("--resume") ? args[args.indexOf("--resume") + 1] : "";
 const sessionId = resumed || "omp-session-1";
+let todoPhases = [];
+if (resumed && process.env.FAKE_OMP_MISSING === resumed) {
+  process.stderr.write("Session not found: " + resumed + "\n");
+  process.exit(1);
+}
+if (resumed && process.env.FAKE_OMP_RESUMED_PHASES) {
+  try { todoPhases = JSON.parse(process.env.FAKE_OMP_RESUMED_PHASES); } catch {}
+}
 const dialogs = new Map();
 let next = 1;
 // As Botkins' extension asks (desktop/providers/pi/extension-shared.mjs): "more" is followed by an input for the detail.
@@ -80,13 +88,27 @@ async function turn(text) {
   const bash = /bash:(\S+)/.exec(text);
   const mcp = /mcp:([a-z0-9_-]+):([a-z0-9_-]+)/.exec(text);
   const own = /own:([a-z0-9_-]+)/.exec(text);
+  const nativeTodo = /native-todo:(\{.+\})/.exec(text);
+  if (nativeTodo) {
+    const details = JSON.parse(nativeTodo[1]);
+    if (Array.isArray(details.phases)) todoPhases = details.phases;
+    send({ type: "tool_execution_start", toolCallId: "todo-1", toolName: "todo", args: { op: details.op ?? "init" } });
+    send({
+      type: "tool_execution_end",
+      toolCallId: "todo-1",
+      toolName: "todo",
+      isError: false,
+      result: { content: [{ type: "text", text: "Updated todos." }], details },
+    });
+  }
   if (bash || mcp || own) {
     const toolCallId = "call-1";
     const toolName = bash ? "bash" : mcp ? `mcp__${mcp[1]}_${mcp[2]}` : `mcp__botkins_${own[1]}`;
     const input = bash ? { command: bash[1] } : mcp ? { id: "x" } : { id: "bot" };
     const server = bash ? undefined : mcp?.[1] ?? "botkins";
     const remoteName = mcp?.[2] ?? own?.[1];
-    const call = { toolCallId, toolName, input, ...(server && { mcpServerName: server, mcpToolName: remoteName }) };
+    const call = { toolCallId, toolName, input, ...(bash && { native: true }),
+      ...(server && { mcpServerName: server, mcpToolName: remoteName, registryServer: server, registryTool: remoteName }) };
     send({ type: "tool_call_pending", toolCallId, toolName });
     const answer = await ask("botkins:permission " + JSON.stringify(call));
     log({ answer });
@@ -176,7 +198,11 @@ process.stdin.on("data", (chunk) => {
         ok({ protocolVersion: command.protocolVersion });
         break;
       case "get_state":
-        ok({ sessionId, model: { provider: model[0], id: model[1] }, thinkingLevel: thinking, isSettled: true });
+        ok({ sessionId, model: { provider: model[0], id: model[1] }, thinkingLevel: thinking, isSettled: true, todoPhases });
+        break;
+      case "set_todos":
+        todoPhases = Array.isArray(command.phases) ? command.phases : [];
+        ok({ phases: todoPhases });
         break;
       case "set_model":
         model = [command.provider, command.modelId];
@@ -187,6 +213,28 @@ process.stdin.on("data", (chunk) => {
         ok();
         break;
       case "prompt":
+        if (command.message.startsWith("/todo done ")) {
+          const target = command.message.slice("/todo done ".length).trim();
+          for (const phase of todoPhases) {
+            for (const task of phase.tasks ?? []) {
+              if (task.content === target) task.status = "completed";
+            }
+          }
+          send({ type: "command_output", text: "Marked completed: " + target });
+          ok({ agentInvoked: false });
+          break;
+        }
+        if (command.message.startsWith("/todo drop ")) {
+          const target = command.message.slice("/todo drop ".length).trim();
+          for (const phase of todoPhases) {
+            for (const task of phase.tasks ?? []) {
+              if (task.content === target) task.status = "abandoned";
+            }
+          }
+          send({ type: "command_output", text: "Abandoned: " + target });
+          ok({ agentInvoked: false });
+          break;
+        }
         ok({ agentInvoked: true });
         void turn(command.message);
         break;

@@ -6,7 +6,7 @@
 // How it stays cheap: the lines are worked out once per change of the turn's steps or thoughts,
 // the clock is its own small component that ticks once a second only while the bot works, and
 // only the header's label shimmers (Shimmer.tsx, which pauses off screen).
-import { memo, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Brain, Check, ChevronRight, ChevronUp, Hand, MessageSquareText, X } from "lucide-react";
 import { StepDetailBody, stepIcon, useNow } from "./ChatActivity";
 import { Shimmer } from "./Shimmer";
@@ -153,10 +153,12 @@ export type IslandProps = {
   onToggle?: () => void;
   /** Opens the side pane's Activity on this turn, at a line's key ("step-…", "thought-…", "update-…"). */
   onOpen?: (key?: string) => void;
+  /** Reports whether the live island card is visible inside the chat scroller. */
+  onVisibility?: (visible: boolean) => void;
 };
 
 /** The live island under a running turn. */
-export const ActivityIsland = memo(function ActivityIsland({ run, who, avatar, waiting, waitingFor, steps, thinking, thoughts, onToggle, onOpen }: IslandProps) {
+export const ActivityIsland = memo(function ActivityIsland({ run, who, avatar, waiting, waitingFor, steps, thinking, thoughts, onToggle, onOpen, onVisibility }: IslandProps) {
   const [open, setOpen] = useState(false);
   // Every line in order (the thoughts too, unless Thinking is Hidden), for the label and the full list.
   const all = useMemo(() => islandLines(run, { thoughts, keep: shownFor(run) }), [run.steps, run.reasoning, run.teamwork, run.taskHandoffs, thoughts]);
@@ -169,6 +171,25 @@ export const ActivityIsland = memo(function ActivityIsland({ run, who, avatar, w
   const tail = useMemo(() => (steps || !thinking ? null : reasoningTail(run.reasoning)), [steps, thinking, run.reasoning]);
   const label = islandLabel({ who, waiting, lines: all });
   const card = useRef<HTMLElement>(null);
+  useEffect(() => {
+    if (!onVisibility) return;
+    const el = card.current;
+    if (!el || typeof IntersectionObserver === "undefined") {
+      onVisibility(true);
+      return () => onVisibility(false);
+    }
+    const observer = new IntersectionObserver(
+      (entries) => {
+        onVisibility(entries.some((entry) => entry.isIntersecting));
+      },
+      { root: el.closest(".messages"), threshold: 0.1 },
+    );
+    observer.observe(el);
+    return () => {
+      observer.disconnect();
+      onVisibility(false);
+    };
+  }, [onVisibility]);
   const toggle = () => {
     onToggle?.();
     if (!open) reveal(card.current);
@@ -207,16 +228,17 @@ export const ActivityIsland = memo(function ActivityIsland({ run, who, avatar, w
 
 /** A finished turn's island, folded into a receipt under the answer: "Worked 42s · 9 steps".
  * Clicking it opens the side pane's Activity on the turn (`onOpen`), or else the same full list in place. */
-export const IslandReceipt = memo(function IslandReceipt({ run, thoughts, updates, onToggle, onOpen }: { run: Run; thoughts: boolean; /** What the bot wrote before it moved on: it folds in here with the thinking. */ updates?: IslandUpdate[]; onToggle?: () => void; onOpen?: (key?: string) => void }) {
+export const IslandReceipt = memo(function IslandReceipt({ run, thoughts, updates, extra, onToggle, onOpen }: { run: Run; thoughts: boolean; /** What the bot wrote before it moved on: it folds in here with the thinking. */ updates?: IslandUpdate[]; /** Optional finished helper/command summary appended to the receipt line. */ extra?: string; onToggle?: () => void; onOpen?: (key?: string) => void }) {
   const [open, setOpen] = useState(false);
   const card = useRef<HTMLElement>(null);
   const all = useMemo(() => islandLines(run, { thoughts, keep: shownFor(run), updates }), [run.steps, run.reasoning, run.teamwork, run.taskHandoffs, thoughts, updates]);
   useLayoutEffect(() => {
     if (open) reveal(card.current);
   }, [open]);
-  if (!all.length) return null;
+  if (!all.length && !extra) return null;
   const elapsed = run.finished === undefined ? run.usage?.durationMs : run.finished - run.time;
-  const label = receiptLabel(elapsed, all.filter((line) => line.kind === "step").length);
+  const baseLabel = all.length ? receiptLabel(elapsed, all.filter((line) => line.kind === "step").length) : "";
+  const label = [baseLabel, extra].filter(Boolean).join(" · ");
   const toggle = () => {
     if (onOpen) return onOpen();
     onToggle?.();
@@ -243,4 +265,4 @@ export const IslandReceipt = memo(function IslandReceipt({ run, thoughts, update
       <FullList lines={all} close={toggle} onToggle={onToggle} onOpen={onOpen} />
     </section>
   );
-}, (a, b) => a.run === b.run && a.thoughts === b.thoughts && a.onToggle === b.onToggle && a.onOpen === b.onOpen && sameUpdates(a.updates, b.updates));
+}, (a, b) => a.run === b.run && a.thoughts === b.thoughts && a.extra === b.extra && a.onToggle === b.onToggle && a.onOpen === b.onOpen && sameUpdates(a.updates, b.updates));

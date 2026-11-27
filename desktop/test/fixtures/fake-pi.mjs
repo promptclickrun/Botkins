@@ -49,7 +49,7 @@ async function turn(text) {
     send({ type: "message_end", message: { role: "assistant", content: [], stopReason: "toolUse" } });
   }
   if (bash) {
-    const call = { toolCallId: "call-1", toolName: "bash", input: { command: bash[1] } };
+    const call = { toolCallId: "call-1", toolName: "bash", native: true, input: { command: bash[1] } };
     send({ type: "tool_execution_start", toolCallId: call.toolCallId, toolName: "bash", args: call.input });
     const answer = await ask("botkins:permission " + JSON.stringify(call));
     log({ answer });

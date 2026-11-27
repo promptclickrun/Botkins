@@ -80,15 +80,24 @@ test("arguments a plugin's hook changed replace the call's input in place, and a
   assert.equal(await handlers.tool_call({ toolCallId: "c1", toolName: "bash", input: {} }, ui("allow")), undefined);
 });
 
-test("Botkins' own tools ask only when a plugin's preToolUse hook is to see every call", async () => {
+test("Botkins' own tools still go to Botkins, which checks the registry (and a plugin's preToolUse hook) itself", async () => {
   const handlers = {};
   botkins({ registerProvider() {}, registerMcpServer() {}, on: (name, handler) => (handlers[name] = handler) });
   let asked = 0;
   const ctx = { ui: { select: async () => (asked++, "allow") } };
   await handlers.tool_call({ toolCallId: "c1", toolName: "mcp__botkins__wiki_read", input: {} }, ctx);
-  assert.equal(asked, 0);
+  assert.equal(asked, 1);
   writeFileSync(file, JSON.stringify({ providers: [], servers: {}, prompt: "You are Testy.", preToolUse: true }));
   await handlers.tool_call({ toolCallId: "c1", toolName: "mcp__botkins__wiki_read", input: {} }, ctx);
-  assert.equal(asked, 1);
+  assert.equal(asked, 2);
   writeFileSync(file, JSON.stringify({ providers: [], servers: {}, prompt: "You are Testy." }));
+});
+
+test("a configured server whose name starts with botkins_ still asks", async () => {
+  const handlers = {};
+  botkins({ on: (name, handler) => (handlers[name] = handler) });
+  const result = await handlers.tool_call({
+    toolName: "mcp__botkins_example__echo", mcpServerName: "botkins_example", mcpToolName: "echo", input: {},
+  }, { ui: { select: async () => "deny" } });
+  assert.equal(result?.block, true);
 });

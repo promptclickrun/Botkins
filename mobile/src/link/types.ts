@@ -361,6 +361,8 @@ export type Message = {
    * without a reply ("turn-timeline-v1", docs/turn-timeline.md). `time` is when its first words came.
    */
   interim?: true;
+  /** True when the message is a system receipt for a request answer (rendered as a muted line, not a person bubble). */
+  receipt?: boolean;
   /** What the person answered to a request in a turn ("turn-timeline-v1"): `text` is the answer in words, never a secret. */
   answer?: { runId: string; requestId: string; kind: AgentRequest["kind"]; title: string };
 };
@@ -846,8 +848,8 @@ export type SecureField = {
   hint?: string;
   optional?: true;
 };
-/** A cross-host permission is scoped to the source and target bots and hosts shown on the card. */
-export type DispatchAction = "approve" | "today" | "remember" | "deny";
+/** A cross-host or credential permission is scoped to the bot, credential and destination shown on the card. */
+export type DispatchAction = "approve" | "today" | "remember" | "deny" | "deny_always";
 export type RequestAnswer = {
   action: DispatchAction | "cancel" | "answer" | "accept";
   /** A saved credential's reference instead of text: the computer puts the value in. */
@@ -856,8 +858,43 @@ export type RequestAnswer = {
   /** Only the in-app request panel sends it, after it showed a `review` request whole (a script command's script). The computer refuses a yes to one without it. */
   reviewed?: true;
 };
+export type CredentialGrantLevel = "ask" | "today" | "always" | "deny";
+export type CredentialGrant = {
+  id: string;
+  botId: string;
+  botName?: string;
+  credentialId: string;
+  credentialName?: string;
+  destination: string;
+  destinationLabel?: string;
+  operation: string;
+  level: CredentialGrantLevel;
+  createdAt: number;
+  updatedAt: number;
+  expiresAt?: number | null;
+  lastUsedAt?: number | null;
+};
+export type CredentialAuditEntry = {
+  id: string;
+  at: number;
+  botId: string;
+  botName?: string;
+  credentialId?: string;
+  credentialName?: string;
+  source?: string;
+  destination?: string;
+  operation: string;
+  outcome: string;
+  grantLevel?: string;
+  reason?: string;
+};
 export type AgentRequest = {
   dispatch?: true;
+  /** True on a bot credential-use approval card (scoped to bot, credential, destination and operation). */
+  credentialGrant?: true;
+  credentialName?: string;
+  credentialSource?: string;
+  destination?: string;
   artifactGrant?: true;
   rememberScope?: "bot";
   botName?: string;
@@ -1393,7 +1430,46 @@ export type ProactiveBot = Partial<ProactiveBotSettings> & {
 };
 export type ProactivePart = { chatMode?: "main" | "new"; enabled: boolean; bots: Record<string, ProactiveBot | undefined> };
 export type ProactiveLog = { at: number; reason: "signals" | "sweep" | "check" | "context" | "review"; score?: number; signals: number; outcome: "alerted" | "silent" | "failed"; runId: string; said?: string };
-export type WorkflowTriggerKind = "task" | "schedule" | "manual" | "routine" | "chat" | "webhook" | "github";
+export type ChannelKind = "slack" | "telegram" | "discord" | "imessage";
+export type ChannelStatusState =
+  | "connected"
+  | "reconnecting"
+  | "auth_error"
+  | "disabled"
+  | "paused"
+  | "waiting_permission"
+  | "disconnected";
+
+export type ChannelPairing = {
+  code: string;
+  connectionId?: string;
+  label?: string;
+  kind?: ChannelKind;
+  senderId: string;
+  display?: string;
+  conversationId: string;
+  createdAt: number;
+  expiresAt: number;
+};
+
+export type ChannelConnection = {
+  id: string;
+  kind: ChannelKind;
+  label: string;
+  transport: string;
+  enabled: boolean;
+  paused?: boolean;
+  botId: string;
+  nodeHostId?: string;
+  pendingPairings?: ChannelPairing[];
+  status?: {
+    state: ChannelStatusState;
+    detail?: string;
+    updatedAt?: number;
+  };
+};
+
+export type WorkflowTriggerKind = "task" | "schedule" | "manual" | "routine" | "chat" | "webhook" | "github" | "channel";
 
 export type WorkflowGithubSignIn = {
   status: "idle" | "starting" | "waiting" | "done" | "failed";
@@ -1478,6 +1554,8 @@ export type Parts = {
   /** Event-based workflows and recent runs ("workflows-v1"). */
   workflows?: Workflow[];
   workflowRuns?: WorkflowRun[];
+  /** External messaging Channel Hooks ("channels-v1", owner only). */
+  channels?: ChannelConnection[];
   /** The Proactive agent: the computer's switch and each bot's agent ("proactive-agent-v2"). A member is sent only their own. */
   proactive?: ProactivePart;
   projects: Project[];
@@ -2063,6 +2141,13 @@ export type Calls = {
   workflowGithubStatus(options?: { includeRepos?: boolean }): WorkflowGithubStatus;
   workflowGithubSignInStart(): WorkflowGithubSignIn;
   workflowGithubSignInCancel(): WorkflowGithubStatus;
+  channelsList(): ChannelConnection[];
+  channelPause(id: string): ChannelConnection;
+  channelResume(id: string): ChannelConnection;
+  channelPairList(id?: string | null): ChannelPairing[];
+  channelPairApprove(code: string, id?: string | null): { approved: boolean; senderId: string; connectionId: string };
+  channelPairDeny(code: string, id?: string | null): { denied: boolean; senderId: string; connectionId: string };
+  channelTest(id: string): { ok: boolean; state: string; detail: string; identity?: string };
   refreshPanel(id: string): void;
   changePanel(id: string, action: "delete" | "hide" | "show" | "small" | "wide" | "tall" | "earlier" | "later"): void;
   boardAct(id: string, action: "read" | "unread" | "clear" | "done" | "reopen" | "yes" | "goal" | "notToday" | "up" | "down" | "delete", value?: string): string | undefined;
@@ -2332,6 +2417,16 @@ export type Calls = {
   "link.credentials.item"(manager: PasswordManagerId, vaultId: string, itemId: string): PasswordManagerItem;
   /** Links a field of a password manager item as a credential. Returns the new credential's id. */
   "link.credentials.link"(input: { manager: PasswordManagerId; vaultId: string; itemId: string; fieldId: string; name: string }): string;
+  /** Explicitly copies a field from a password manager into the Botkins vault. */
+  "link.credentials.copy"(input: { manager: PasswordManagerId; vaultId: string; itemId: string; fieldId: string; name: string }): string;
+  /** Lists standing bot credential grants (metadata only; never values). */
+  "link.credentials.grants"(filter?: { botId?: string; credentialId?: string }): CredentialGrant[];
+  /** Creates or updates a standing bot credential grant. */
+  "link.credentials.setGrant"(input: { botId: string; botName?: string; credentialId: string; credentialName?: string; destination: string; operation: string; level: CredentialGrantLevel }): CredentialGrant;
+  /** Revokes one standing credential grant. */
+  "link.credentials.revokeGrant"(id: string): boolean;
+  /** Lists recent credential use audit entries (never values). */
+  "link.credentials.audit"(options?: { limit?: number }): CredentialAuditEntry[];
   "link.screen.video.open"(id: string, options: { display: string; maxWidth: number; fps: number; mimeTypes: string[] }): { mimeType: string };
   "link.screen.video.read"(id: string, sequence: number): string;
   "link.screen.video.close"(id: string): void;

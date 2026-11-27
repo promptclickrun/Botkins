@@ -580,13 +580,14 @@ export class Integrations {
   async mcpAuth(request) {
     const server = this.servers.find((s) => s.enabled && s.type !== "stdio" && s.name === request?.server);
     if (!server?.oauth) return null;
+    if (request.serverId && (server.id !== request.serverId || server.url !== request.url)) return null;
     // The token goes only to the address the person signed in to.
     try {
       if (request.url && new URL(request.url).origin !== new URL(server.url).origin) return null;
     } catch {
       return null;
     }
-    return this.oauth.token(server, { reason: request.reason, client: this.client(server) });
+    return this.oauth.token(server, { reason: request.reason, client: this.client(server), ...(request.serverId && { rejectedAccessToken: request.rejectedAccessToken }) });
   }
   setServerEnabled(id, enabled) {
     this.server(id).enabled = enabled === true;
@@ -635,9 +636,14 @@ export class Integrations {
     return this.importServers(source, dirname(path));
   }
   /** The servers a bot's sessions connect to, in the shape of the provider contract. */
-  serversFor(bot) {
+  serversFor(bot, { liveOAuth = false } = {}) {
     const off = new Set(bot?.mcpOff ?? []);
-    return Object.fromEntries(this.servers.filter((s) => s.enabled && !off.has(s.id)).map((s) => [s.name, serverConfig(s, this.open)]));
+    return Object.fromEntries(this.servers.filter((s) => s.enabled && !off.has(s.id)).map((s) => {
+      const config = serverConfig(s, this.open);
+      if (liveOAuth && s.type === "http" && s.oauth && !Object.keys(config.headers).some((h) => h.toLowerCase() === "authorization"))
+        config.oauthId = s.id;
+      return [s.name, config];
+    }));
   }
   /**
    * Connects to one server once and reports whether it works and which tools it offers. Botkins
