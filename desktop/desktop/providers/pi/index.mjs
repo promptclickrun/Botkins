@@ -91,6 +91,29 @@ const level = (effort) => (effort === "none" ? "off" : LEVELS.has(effort) ? effo
 const IDLE_MS = 15 * 60 * 1000;
 /** How long Pi lets one call to Botkins' tool server take. A call can wait for the person (a secure prompt), so it is longer than Pi's 60 seconds. */
 const BRIDGE_CALL_TIMEOUT_S = 10 * 60;
+/**
+ * How long OMP waits for initial MCP discovery before answering `get_state`. Local Botkins bridge
+ * discovery finishes in milliseconds, so this keeps cold and prewarmed sessions populated while
+ * keeping unreachable external servers bounded.
+ */
+const OMP_MCP_STARTUP_TIMEOUT_MS = 2000;
+/**
+ * OMP's isolated config overlay (`botkins.yml`).
+ * - `mcp.enableProjectConfig: false`: never pull a repo's `.omp/mcp.json` into Botkins.
+ * - `mcp.shared: false`: keep each session's ToolBridge token and MCP catalog out of OMP's shared daemon.
+ * - `tools.commands: false`: expose Botkins and MCP tools directly as typed model tool schemas
+ *   rather than hiding them behind OMP's bash command wrapper.
+ */
+const OMP_CONFIG = [
+  "mcp:",
+  "  enableProjectConfig: false",
+  "  shared: false",
+  "  startupTimeoutMs: " + OMP_MCP_STARTUP_TIMEOUT_MS,
+  "enabledProviders: []",
+  "tools:",
+  "  commands: false",
+  "",
+].join("\n");
 const MAX_LIVE = 8;
 /** Pi's session ids: letters, digits, `.`, `_` and `-`, starting and ending with a letter or digit. */
 const piSessionId = (id) => (/^[A-Za-z0-9](?:[A-Za-z0-9._-]{0,126}[A-Za-z0-9])?$/.test(id) ? id : uuidFor(id));
@@ -444,7 +467,12 @@ class PiSession extends ProviderSession {
     // A warmed process started with none would leave the conversation without Botkins' tools until
     // Pi restarts. Each tool checks for its turn itself and refuses to run without one.
     const tools = [...spec.tools, ...this.skills.tools, ...this.planTools()];
-    this.bridge ??= await provider.bridge?.open(tools, spec.temporary ? {} : { key: provider.id + ":" + spec.sessionId });
+    const bridgeShape = provider.runtime === OMP_ID
+      ? hash(tools.map(({ name, description, parameters }) => ({ name, description: description ?? "", parameters: parameters ?? null })))
+      : null;
+    this.bridgeShape = bridgeShape;
+    const bridgeKey = spec.temporary ? undefined : provider.bridgeKey(spec.sessionId, bridgeShape);
+    this.bridge ??= await provider.bridge?.open(tools, bridgeKey ? { key: bridgeKey } : {});
     this.bridge?.set(tools);
     const known = provider.sessions.get(spec.sessionId);
     const folderChanged = !!(known && known.folder !== spec.folder);
@@ -1104,6 +1132,8 @@ export class PiProvider extends ModelProvider {
     this.sessions = new SessionStore(dataDir && join(this.dataDir, "sessions.json"));
     // Botkins session id → { rpc, ref, key, file, session, timer }: one process per conversation.
     this.live = new Map();
+    // OMP session id → current ToolBridge key (rotated when declared bridge schemas change so OMP refreshes tools/list).
+    this.bridgeKeys = new Map();
     this.packages = packages ?? new PiPackages({ dataDir: this.dataDir, install: (source, dir) => this.installPackage(source, dir) });
   }
   async installPackage(source, dir) {
@@ -1195,7 +1225,8 @@ export class PiProvider extends ModelProvider {
     const packages = spec.sourcesOnly ? [] : this.packages.activePaths();
     // An hour's prompt cache where a connection can keep one (pi-ai's PI_CACHE_RETENTION, read as each request is made).
     const retention = spec.cacheRetention === "long" ? "long" : "short";
-    const key = hash([spec.folder, described.providers, spec.temporary, packages, retention, ...(this.runtime === OMP_ID ? [described.servers] : [])]);
+    // OMP discovers bridge tool schemas at startup: restart only when the declared bridge schema set changes.
+    const key = hash([spec.folder, described.providers, spec.temporary, packages, retention, ...(this.runtime === OMP_ID ? [described.servers, session.bridgeShape ?? null] : [])]);
     let live = this.live.get(spec.sessionId);
     if (live && (fresh || live.key !== key || live.rpc.closed)) {
       this.live.delete(spec.sessionId);
@@ -1302,7 +1333,7 @@ export class PiProvider extends ModelProvider {
     writeFileSync(live.file, JSON.stringify(described), { mode: 0o600 });
     if (this.runtime === OMP_ID) {
       writeFileSync(join(live.agentDir, "mcp.json"), JSON.stringify({ mcpServers: described.servers }), { mode: 0o600 });
-      writeFileSync(live.config, "mcp:\n  enableProjectConfig: false\nenabledProviders: []\n", { mode: 0o600 });
+      writeFileSync(live.config, OMP_CONFIG, { mode: 0o600 });
     }
   }
   /** Passively tracks runtime tool snapshots, MCP notices and command updates from the harness stream. */
@@ -1408,9 +1439,21 @@ export class PiProvider extends ModelProvider {
     this.live.clear();
     await Promise.allSettled(all.map((live) => (clearTimeout(live.timer), live.rpc.close())));
   }
+  /** Stable ToolBridge key per session. For OMP, rotates when declared bridge tool schemas change so OMP's discovery cache refreshes. */
+  bridgeKey(sessionId, shape) {
+    const base = this.id + ":" + sessionId;
+    if (this.runtime !== OMP_ID) return base;
+    const next = shape ? base + ":" + shape.slice(0, 16) : base;
+    const prev = this.bridgeKeys.get(sessionId);
+    if (prev && prev !== next) this.bridge?.forget(prev);
+    this.bridgeKeys.set(sessionId, next);
+    return next;
+  }
   async deleteSession(sessionId) {
     this.release(sessionId);
-    this.bridge?.forget(this.id + ":" + sessionId);
+    const prev = this.bridgeKeys.get(sessionId);
+    this.bridgeKeys.delete(sessionId);
+    this.bridge?.forget(prev ?? this.id + ":" + sessionId);
     const record = this.sessions.get(sessionId);
     if (!record) return;
     this.sessions.delete(sessionId);

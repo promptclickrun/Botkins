@@ -92,6 +92,9 @@ test("a turn runs OMP in RPC-UI with isolated config and OMP's session directory
     },
   });
   assert.match(started.overlay, /enableProjectConfig:\s*false/);
+  assert.match(started.overlay, /shared:\s*false/);
+  assert.match(started.overlay, /startupTimeoutMs:\s*\d+/);
+  assert.match(started.overlay, /tools:\n\s+commands:\s*false/);
 
   const live = provider.live.get("chat-1");
   assert.equal(statSync(live.file).mode & 0o777, 0o600);
@@ -226,6 +229,31 @@ test("OMP loads the Marketplace Pi packages that are on, and stops when one is t
   assert.deepEqual(loaded(starts[1].args), [provider.program.extension]);
   await session.close();
   await provider.stop();
+});
+
+test("OMP stays warm when Botkins bridge schemas match and restarts when they change", { skip }, async (t) => {
+  const { provider, seen } = setup();
+  t.after(() => provider.stop());
+  const tool = (name, description = "Test tool") => ({
+    name,
+    description,
+    parameters: { type: "object", properties: { q: { type: "string" } }, required: ["q"] },
+    handler: async () => "ok",
+  });
+
+  const first = await provider.openSession(spec({ tools: [tool("wiki_search")] }));
+  await first.send({ prompt: "one" });
+  await first.close();
+
+  const warm = await provider.openSession(spec({ established: true, hasReplies: true, tools: [tool("wiki_search")] }));
+  await warm.send({ prompt: "two" });
+  await warm.close();
+  assert.equal(seen().filter((entry) => entry.started).length, 1, "identical bridge schemas keep the warm OMP process");
+
+  const changed = await provider.openSession(spec({ established: true, hasReplies: true, tools: [tool("wiki_search"), tool("ask_teammate")] }));
+  await changed.send({ prompt: "three" });
+  await changed.close();
+  assert.equal(seen().filter((entry) => entry.started).length, 2, "new bridge schemas restart OMP so it discovers them");
 });
 
 test("OMP inventory distinguishes direct, indirect, unavailable, unobservable and preserves package commands", { skip }, async (t) => {
