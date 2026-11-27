@@ -1073,7 +1073,13 @@ export function WorkflowInspector({
                 <>
                   <div className="wf-field-group">
                     <label className="wf-label">Destination</label>
-                    <select value={node.config.destination || "chat"} onChange={(e) => setConfig({ destination: e.target.value })}>
+                    <select
+                      value={node.config.destination || "chat"}
+                      onChange={(e) => {
+                        const destination = e.target.value;
+                        setConfig(destination === "chat" ? { destination } : { destination, card: undefined });
+                      }}
+                    >
                       <option value="chat">Post to chat</option>
                       <option value="feed">Today · Feed</option>
                       <option value="idea">Today · Ideas</option>
@@ -1105,6 +1111,198 @@ export function WorkflowInspector({
                           ))}
                         </select>
                       </div>
+                      <label className="wf-check">
+                        <input
+                          type="checkbox"
+                          checked={!!node.config.card}
+                          onChange={(e) =>
+                            setConfig({
+                              card: e.target.checked
+                                ? {
+                                    title: node.config.title || "{{title}}",
+                                    needsYou: "",
+                                    body: node.config.template || "",
+                                  }
+                                : undefined,
+                            })
+                          }
+                        />
+                        <span>Post as action card (Dispatch / Dismiss + Needs-you badge)</span>
+                      </label>
+                      {node.config.card && (() => {
+                        const card = node.config.card;
+                        const setCard = (patch: Record<string, any>) => setConfig({ card: { ...card, ...patch } });
+                        const fields: Array<{ label: string; value: string; tone?: string }> = Array.isArray(card.fields) ? card.fields : [];
+                        const dispatch = card.dispatch && typeof card.dispatch === "object" ? card.dispatch : null;
+                        const setDispatch = (patch: Record<string, any>) => {
+                          const next = { ...(dispatch || {}), ...patch };
+                          setCard({ dispatch: next });
+                        };
+                        return (
+                          <div className="wf-card-editor">
+                            <WorkflowFieldInput
+                              label="Card title"
+                              multiline={false}
+                              value={card.title || ""}
+                              onChange={(title) => setCard({ title })}
+                              analysis={analysis}
+                              placeholder="{{repo}} #{{number}}: {{title}}"
+                            />
+                            <WorkflowFieldInput
+                              label="Subtitle / link line (optional)"
+                              multiline={false}
+                              value={card.subtitle || ""}
+                              onChange={(subtitle) => setCard({ subtitle: subtitle || undefined })}
+                              analysis={analysis}
+                              placeholder="[{{repo}}#{{number}}]({{url}})"
+                            />
+                            <WorkflowFieldInput
+                              label="Needs your direction flag (optional — yes/true or no/false)"
+                              multiline={false}
+                              value={typeof card.needsYou === "boolean" ? (card.needsYou ? "true" : "false") : card.needsYou || ""}
+                              onChange={(needsYou) => setCard({ needsYou: needsYou || undefined })}
+                              analysis={analysis}
+                              placeholder="{{needs_colt}}"
+                            />
+                            <WorkflowFieldInput
+                              label="Summary body (optional — falls back to message template)"
+                              value={card.body || ""}
+                              onChange={(body) => setCard({ body: body || undefined })}
+                              analysis={analysis}
+                              placeholder="{{summary}}"
+                            />
+                            <div className="wf-field-group">
+                              <div className="wf-inline-head">
+                                <label className="wf-label">Metadata badges (optional)</label>
+                                <button
+                                  type="button"
+                                  className="wf-small-btn"
+                                  onClick={() => setCard({ fields: [...fields, { label: "", value: "", tone: "neutral" }] })}
+                                >
+                                  + Add badge
+                                </button>
+                              </div>
+                              {fields.map((f, idx) => (
+                                <div key={idx} className="wf-rule-row">
+                                  <input
+                                    type="text"
+                                    placeholder="Label (e.g. Priority)"
+                                    value={f.label || ""}
+                                    onChange={(e) => {
+                                      const next = fields.slice();
+                                      next[idx] = { ...f, label: e.target.value };
+                                      setCard({ fields: next });
+                                    }}
+                                  />
+                                  <input
+                                    type="text"
+                                    placeholder="Value (e.g. {{priority}})"
+                                    value={f.value || ""}
+                                    onChange={(e) => {
+                                      const next = fields.slice();
+                                      next[idx] = { ...f, value: e.target.value };
+                                      setCard({ fields: next });
+                                    }}
+                                  />
+                                  <select
+                                    value={f.tone || "neutral"}
+                                    onChange={(e) => {
+                                      const next = fields.slice();
+                                      next[idx] = { ...f, tone: e.target.value };
+                                      setCard({ fields: next });
+                                    }}
+                                  >
+                                    <option value="neutral">Neutral</option>
+                                    <option value="accent">Accent</option>
+                                    <option value="positive">Positive</option>
+                                    <option value="warning">Warning</option>
+                                    <option value="negative">Negative</option>
+                                  </select>
+                                  <button
+                                    type="button"
+                                    className="wf-icon-btn"
+                                    aria-label="Remove badge"
+                                    onClick={() => setCard({ fields: fields.filter((_, j) => j !== idx) })}
+                                  >
+                                    ×
+                                  </button>
+                                </div>
+                              ))}
+                            </div>
+                            <WorkflowFieldInput
+                              label="Reference link URL (optional, e.g. GitHub comment)"
+                              multiline={false}
+                              value={card.link?.url || ""}
+                              onChange={(url) =>
+                                setCard({
+                                  link: url.trim()
+                                    ? { label: card.link?.label || "View comment", url }
+                                    : undefined,
+                                })
+                              }
+                              analysis={analysis}
+                              placeholder="{{comment_url}}"
+                            />
+                            {card.link?.url && (
+                              <WorkflowFieldInput
+                                label="Reference link label"
+                                multiline={false}
+                                value={card.link?.label || ""}
+                                onChange={(label) => setCard({ link: { ...card.link, label } })}
+                                analysis={analysis}
+                                placeholder="View GitHub comment"
+                              />
+                            )}
+                            <label className="wf-check">
+                              <input
+                                type="checkbox"
+                                checked={!!dispatch}
+                                onChange={(e) =>
+                                  setCard({
+                                    dispatch: e.target.checked
+                                      ? { botId: node.config.botId || undefined, prompt: "" }
+                                      : undefined,
+                                  })
+                                }
+                              />
+                              <span>Enable Dispatch button (starts a new chat with a bot)</span>
+                            </label>
+                            {dispatch && (
+                              <>
+                                <div className="wf-field-group">
+                                  <label className="wf-label">Dispatch bot</label>
+                                  <select
+                                    value={dispatch.botId || ""}
+                                    onChange={(e) => setDispatch({ botId: e.target.value || undefined, botName: undefined })}
+                                  >
+                                    <option value="">Same as posting bot</option>
+                                    {bots.map((b) => (
+                                      <option key={b.id} value={b.id}>
+                                        {b.name}
+                                      </option>
+                                    ))}
+                                  </select>
+                                </div>
+                                <WorkflowFieldInput
+                                  label="New chat title (optional — defaults to card title)"
+                                  multiline={false}
+                                  value={dispatch.chatTitle || ""}
+                                  onChange={(chatTitle) => setDispatch({ chatTitle: chatTitle || undefined })}
+                                  analysis={analysis}
+                                  placeholder="{{repo}} #{{number}}: {{title}}"
+                                />
+                                <WorkflowFieldInput
+                                  label="Dispatch prompt (first message sent to the bot)"
+                                  value={dispatch.prompt || ""}
+                                  onChange={(prompt) => setDispatch({ prompt })}
+                                  analysis={analysis}
+                                  placeholder="Work on {{repo}} #{{number}} ({{url}}):\n{{summary}}"
+                                />
+                              </>
+                            )}
+                          </div>
+                        );
+                      })()}
                     </>
                   )}
                   {node.config.destination === "goal" && (
@@ -1130,7 +1328,7 @@ export function WorkflowInspector({
                     />
                   )}
                   <WorkflowFieldInput
-                    label="Message template"
+                    label={node.config.card ? "Fallback text template (optional — for notifications & older clients)" : "Message template"}
                     value={node.config.template || ""}
                     onChange={(template) => setConfig({ template })}
                     analysis={analysis}

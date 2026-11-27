@@ -183,6 +183,11 @@ export function chatsApi({ workspace, handlers, bot }) {
       await handlers.reactToMessage(found.id, index, found.messages[index]?.time ?? null, emoji);
       return { id: found.id, index, emoji };
     },
+    async "chats.card"([ref, target, action]) {
+      const found = chat(ref);
+      const res = await handlers["chat.cardAction"](found.id, target, action);
+      return { id: found.id, ...res };
+    },
     /** A new chat of the same bot with the conversation up to a message (`at`: its place in the chat, 0 is the first; the last without it). */
     async "chats.fork"([ref, at, inMain]) {
       const found = chat(ref);

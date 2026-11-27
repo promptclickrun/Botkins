@@ -342,7 +342,7 @@ export class MacTools {
     if (!this.available()) return [];
     const levels = this.levels();
     if (levels.imessage === "off" && levels.mail === "off") return [];
-    const attended = !(chat.helper || run?.panelId || run?.scheduleId || run?.taskId);
+    const attended = !(chat.helper || run?.panelId || run?.scheduleId || run?.taskId || run?.workflowRunId);
     let changes = 0;
     const str = { type: "string" };
     const whole = (description) => ({ type: "integer", description });

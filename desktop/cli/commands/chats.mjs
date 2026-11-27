@@ -263,6 +263,22 @@ export const chatsCommands = {
           context.print(await context.client.call("chats.react", chat, Number(at), emoji), (result) => "Reacted " + result.emoji);
         },
       },
+      card: {
+        summary: "Dispatch or dismiss a workflow action card in a chat",
+        usage: "botkins chats card <chat> <card-id-or-index> <dispatch|dismiss>",
+        async run(context) {
+          const [chat, target, action] = context.args;
+          if (context.args.length !== 3 || !["dispatch", "dismiss"].includes(action)) {
+            throw usage("Give the chat, card id or zero-based message index, and dispatch or dismiss.");
+          }
+          const parsedTarget = /^\d+$/.test(target) ? Number(target) : target;
+          context.print(await context.client.call("chats.card", chat, parsedTarget, action), (result) =>
+            result.state === "dispatched"
+              ? `Dispatched to ${result.botName || "bot"} (${result.chatId})`
+              : "Card dismissed.",
+          );
+        },
+      },
       fork: {
         summary: "Make a new chat that holds this one up to a message",
         usage: "botkins chats fork <chat> [--at <number>] [--in-main]",

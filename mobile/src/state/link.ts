@@ -570,6 +570,25 @@ export async function reactToMessage(chatId: string, index: number, time: number
   });
 }
 
+/** Dispatches or dismisses a workflow action card and updates loaded chat pages immediately. */
+export async function chatCardAction(chatId: string, target: number | string, action: "dispatch" | "dismiss") {
+  const host = client;
+  const result = await api["chat.cardAction"](chatId, target, action);
+  useApp.setState(state => {
+    const view = state.chats[chatId];
+    if (client !== host || !view) return {};
+    const offset =
+      typeof target === "number"
+        ? target - view.from
+        : view.messages.findIndex(m => m.actionCard?.id === target);
+    if (offset < 0 || offset >= view.messages.length) return {};
+    const messages = view.messages.slice();
+    messages[offset] = { ...messages[offset], actionCard: result.card };
+    return { chats: { ...state.chats, [chatId]: { ...view, messages } } };
+  });
+  return result;
+}
+
 /** Runs a call and shows its failure as a toast. Resolves to undefined when it failed. */
 export async function attempt<T>(work: Promise<T>, done?: string): Promise<T | undefined> {
   try {

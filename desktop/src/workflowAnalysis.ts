@@ -196,6 +196,52 @@ export function nodeOutputFields(node: WorkflowNode) {
   return [];
 }
 
+function pushCardTemplates(card: Record<string, any> | undefined, push: (prop: string, v: unknown) => void) {
+  if (!card || typeof card !== "object") return;
+  push("card.title", card.title);
+  push("card.subtitle", card.subtitle);
+  push("card.needsYou", card.needsYou);
+  push("card.body", card.body);
+  if (card.link && typeof card.link === "object") {
+    push("card.link.label", card.link.label);
+    push("card.link.url", card.link.url);
+  }
+  if (Array.isArray(card.fields)) {
+    card.fields.forEach((f: any, i: number) => {
+      if (!f || typeof f !== "object") return;
+      push(`card.fields[${i}].label`, f.label);
+      push(`card.fields[${i}].value`, f.value);
+    });
+  }
+  if (Array.isArray(card.blocks)) {
+    card.blocks.forEach((b: any, i: number) => {
+      if (!b || typeof b !== "object") return;
+      push(`card.blocks[${i}].text`, b.text);
+      push(`card.blocks[${i}].label`, b.label);
+      push(`card.blocks[${i}].value`, b.value);
+      push(`card.blocks[${i}].note`, b.note);
+      if (Array.isArray(b.items)) {
+        b.items.forEach((it: any, j: number) => {
+          if (typeof it === "string") push(`card.blocks[${i}].items[${j}]`, it);
+          else if (it && typeof it === "object") push(`card.blocks[${i}].items[${j}].label`, it.label);
+        });
+      }
+      if (Array.isArray(b.columns)) b.columns.forEach((c: any, j: number) => push(`card.blocks[${i}].columns[${j}]`, c));
+      if (Array.isArray(b.rows)) {
+        b.rows.forEach((row: any, r: number) => {
+          if (Array.isArray(row)) row.forEach((cell: any, c: number) => push(`card.blocks[${i}].rows[${r}][${c}]`, cell));
+        });
+      }
+    });
+  }
+  if (card.dispatch && typeof card.dispatch === "object") {
+    push("card.dispatch.botName", card.dispatch.botName);
+    push("card.dispatch.label", card.dispatch.label);
+    push("card.dispatch.chatTitle", card.dispatch.chatTitle);
+    push("card.dispatch.prompt", card.dispatch.prompt);
+  }
+}
+
 function nodeTemplates(node: WorkflowNode): Array<{ prop: string; value: string }> {
   const cfg = node.config ?? {};
   const list: Array<{ prop: string; value: string }> = [];
@@ -207,6 +253,7 @@ function nodeTemplates(node: WorkflowNode): Array<{ prop: string; value: string 
   else if (node.kind === "output") {
     push("template", cfg.template);
     push("title", cfg.title);
+    pushCardTemplates(cfg.card, push);
   } else if (node.kind === "condition") {
     push("expression", cfg.expression);
     if (Array.isArray(cfg.rules)) {

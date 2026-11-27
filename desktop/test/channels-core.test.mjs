@@ -996,7 +996,7 @@ test("ChannelManager drops iMessage is_from_me self echoes (and legacy isFromSel
   // Normalized `imsg watch` outbound event (`is_from_me: true`)
   const selfEvent = normalizeImsgEvent({
     chat_id: 3,
-    sender: "gordie@coltoncoan.com",
+    sender: "bot@example.com",
     text: "Bot reply echo",
     is_from_me: true,
   });
@@ -1006,7 +1006,7 @@ test("ChannelManager drops iMessage is_from_me self echoes (and legacy isFromSel
   await fake.deliver({
     channel: "imessage",
     conversationId: "3",
-    sender: { id: "gordie@coltoncoan.com", display: "Gordie" },
+    sender: { id: "bot@example.com", display: "Bot" },
     isDirect: true,
     isFromSelf: true,
     text: "Legacy echo",
@@ -1015,7 +1015,7 @@ test("ChannelManager drops iMessage is_from_me self echoes (and legacy isFromSel
   // Genuine inbound DM still dispatches normally
   const inboundEvent = normalizeImsgEvent({
     chat_id: 3,
-    sender: "+18162263922",
+    sender: "+12025550123",
     text: "Hello from phone",
     is_from_me: false,
   });

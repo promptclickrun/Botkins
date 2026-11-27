@@ -575,7 +575,7 @@ export class Tasks {
           const assignedBotId = botByName(name);
           // Work that runs without the person (a routine or another task) waits in Later by default.
           // An owner-approved routine (allowReadyTasks: true) may create a ready task when assigned to a bot.
-          const unattended = !!(run.scheduleId || run.taskId);
+          const unattended = !!(run.scheduleId || run.taskId || run.workflowRunId);
           const canRoutineReady = Boolean(run.scheduleId && !run.taskId && assignedBotId && this.routineAllowsReady(chat, run));
           const effectiveStatus = unattended && !canRoutineReady ? "later" : status;
           const invocation = scriptInvocation(this.ws, (details && String(details).trim()) || title || "");
@@ -677,7 +677,7 @@ export class Tasks {
           const after = { title: title !== undefined ? title : t.title, body: details !== undefined ? body(details) : t.body };
           const invocation = (title !== undefined || details !== undefined || status === "ready") && scriptInvocation(this.ws, (after.body && after.body.trim()) || after.title || "");
           if (invocation) {
-            if (run.scheduleId || run.taskId) throw new Error("A task that runs a script command can only be changed with the person there. Ask them to.");
+            if (run.scheduleId || run.taskId || run.workflowRunId) throw new Error("A task that runs a script command can only be changed with the person there. Ask them to.");
             if (!(await approved(invocation, ["Task: " + shownText(after.title), "Change: " + [title !== undefined && "title", details !== undefined && "details", status && "status " + status].filter(Boolean).join(", ")]))) return "The person declined.";
           }
           if (title !== undefined || details !== undefined || priority !== undefined) {

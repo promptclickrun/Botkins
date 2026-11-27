@@ -1058,6 +1058,11 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
     unqueue: (id, itemId) => workspace.unqueue(id, itemId),
     sendNow: (id, itemId) => workspace.sendNow(id, itemId),
     reactToMessage: (id, index, time, emoji, person = "owner") => workspace.reactToMessage(id, index, time, emoji, person === "owner" ? person : "member:" + person),
+    "chat.cardAction": (chatId, target, action, person = "owner") => {
+      const { turn, ...answer } = workspace.chatCardAction(chatId, target, action, person === "owner" ? person : "member:" + person);
+      turn?.catch((error) => console.error("Workspace turn:", error.message));
+      return answer;
+    },
     forkChat: (id, index) => workspace.forkChat(id, index),
     retry: (runId, options) => {
       workspace.retry(runId, { allowScript: options?.allowScript === true })?.catch((err) => console.error("Retry:", err.message));

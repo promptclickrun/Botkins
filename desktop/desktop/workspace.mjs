@@ -950,7 +950,7 @@ export class Workspace {
   }
   send(chatId, text, options = {}) {
     if (this.closing) throw new Error("Botkins is closing");
-    const { attachments: files, quote: rawQuote, mentions: rawMentions, voiceId, clientMessageId, author, from, also: rawAlso, proactiveCheck, merged: rawMerged, allowScript, ...context } = options;
+    const { attachments: files, quote: rawQuote, mentions: rawMentions, voiceId, clientMessageId, author, from, also: rawAlso, proactiveCheck, merged: rawMerged, allowScript, keepTitle, ...context } = options;
     // People whose limits apply to this turn beside the chat's maker and the message's writer:
     // someone else wrote text that runs in it (a routine's prompt on a panel that another person
     // refreshes). Members only: the owner narrows nothing.
@@ -998,7 +998,7 @@ export class Workspace {
     if (!keepPosted) delete chat.posted;
     const extra = [posted, where].filter(Boolean).join("\n\n");
     const first = !chat.messages.length;
-    if (first && !chat.main && !context.panelId && !isGroup(chat) && !chat.channel)
+    if (first && !chat.main && !context.panelId && !isGroup(chat) && !chat.channel && !keepTitle)
       chat.title = prompt.slice(0, 80);
     chat.time = Date.now();
 
@@ -1402,6 +1402,92 @@ export class Workspace {
     this.save();
     this.reactionTurns?.reacted(this.chat(chatId), index, emoji, actor);
     return message.reactions;
+  }
+  /**
+   * Handles an owner action (`dispatch` or `dismiss`) on a workflow action card posted in a chat.
+   * Dispatch creates a new chat for the configured bot, starts a turn with the card's prompt, and is idempotent.
+   */
+  chatCardAction(chatId, target, action, actor = "owner") {
+    if (action !== "dispatch" && action !== "dismiss") {
+      throw new Error(`Unknown card action "${action}". Use "dispatch" or "dismiss".`);
+    }
+    const chat = this.chat(chatId);
+    let message = null;
+    if (typeof target === "number") {
+      if (Number.isSafeInteger(target) && target >= 0 && target < chat.messages.length && chat.messages[target]?.actionCard) {
+        message = chat.messages[target];
+      }
+    } else if (typeof target === "string" && target.trim()) {
+      const key = target.trim();
+      message = chat.messages.find((m) => m.actionCard?.id === key) ?? null;
+      if (!message && /^\d+$/.test(key)) {
+        const idx = Number(key);
+        if (Number.isSafeInteger(idx) && idx >= 0 && idx < chat.messages.length && chat.messages[idx]?.actionCard) {
+          message = chat.messages[idx];
+        }
+      }
+    }
+    if (!message?.actionCard) throw new Error("Action card not found in this chat.");
+    const card = message.actionCard;
+
+    if (action === "dismiss") {
+      if (card.state === "dispatched") throw new Error("This card has already been dispatched.");
+      if (card.state === "dismissed") return { ok: true, state: "dismissed", card };
+      const next = { ...card, state: "dismissed", actedBy: actor, actedAt: Date.now() };
+      message.actionCard = next;
+      this.save();
+      return { ok: true, state: "dismissed", card: next };
+    }
+
+    // Dispatch: idempotent if already dispatched.
+    if (card.state === "dismissed") throw new Error("This card has already been dismissed.");
+    if (card.state === "dispatched" && card.dispatchedChatId) {
+      return {
+        ok: true,
+        state: "dispatched",
+        chatId: card.dispatchedChatId,
+        botId: card.dispatchedBotId,
+        botName: card.dispatchedBotName,
+        alreadyDispatched: true,
+        card,
+      };
+    }
+    if (this.closing) throw new Error("Botkins is closing");
+    const prompt = typeof card.dispatch?.prompt === "string" ? card.dispatch.prompt.trim() : "";
+    if (!prompt) throw new Error("This card does not have a dispatch action configured.");
+    const bot =
+      (card.dispatch.botId ? this.state.bots.find((b) => b.id === card.dispatch.botId) : null) ??
+      (card.dispatch.botName
+        ? this.state.bots.find((b) => b.name.toLowerCase() === String(card.dispatch.botName).toLowerCase())
+        : null) ??
+      this.state.bots.find((b) => b.id === chat.botId) ??
+      this.state.bots[0];
+    if (!bot) throw new Error("No bot available for dispatch.");
+
+    const title = (card.dispatch.chatTitle || card.title || "Dispatched").trim().slice(0, 120);
+    const newChatId = this.createChat(bot.id, title);
+    const next = {
+      ...card,
+      state: "dispatched",
+      dispatchedChatId: newChatId,
+      dispatchedBotId: bot.id,
+      dispatchedBotName: bot.name,
+      actedBy: actor,
+      actedAt: Date.now(),
+    };
+    message.actionCard = next;
+    this.save();
+    const turn = this.submit(newChatId, prompt, { keepTitle: true });
+    return {
+      ok: true,
+      state: "dispatched",
+      chatId: newChatId,
+      botId: bot.id,
+      botName: bot.name,
+      alreadyDispatched: false,
+      card: next,
+      turn,
+    };
   }
   /**
    * Makes a new chat for the same bot holding the conversation up to `messageIndex`.

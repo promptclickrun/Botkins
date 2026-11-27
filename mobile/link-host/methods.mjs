@@ -107,7 +107,7 @@ export const REMOTE_METHODS = new Set([
   "addSection", "renameSection", "deleteSection", "orderSections",
   "saveTemplate", "renameTemplate", "deleteTemplate", "exportTemplateText", "importTemplateText",
   // Chats
-  "mainChat", "changeMainFork", "setProactiveChatMode", "createChat", "createGroupChat", "setChatFlags", "markChatsRead", "renameChat", "regenerateChatTitle", "deleteChat", "forkChat", "reactToMessage", "warmChat",
+  "mainChat", "changeMainFork", "setProactiveChatMode", "createChat", "createGroupChat", "setChatFlags", "markChatsRead", "renameChat", "regenerateChatTitle", "deleteChat", "forkChat", "reactToMessage", "chat.cardAction", "warmChat",
   "setChatProject", "startProjectChat", "recordVoiceLine",
   "send", "stop", "stopHelper", "unqueue", "sendNow", "retry", "compact", "sideQuestion", "respond", "clearApprovals",
   "mentionables", "catalog", "linkPreview",
@@ -523,6 +523,14 @@ export function remoteArgs(method, args, { deviceId, uploads } = {}) {
   }
   if (method === "stopHelper" && (args.length !== 2 || !clean(args[0]) || !clean(args[1]))) throw new Error("Choose the helper or command to stop.");
   if (method === "mainChat" && (args.length !== 1 || !clean(args[0]))) throw new Error("Choose a bot.");
+  if (method === "chat.cardAction") {
+    const [chatId, target, action] = args;
+    const validTarget = (typeof target === "number" && Number.isSafeInteger(target) && target >= 0) || (typeof target === "string" && clean(target) && target.length <= 128);
+    if (args.length !== 3 || !clean(chatId) || !validTarget || !["dispatch", "dismiss"].includes(action)) {
+      throw new Error("Choose a chat, action card, and valid action (dispatch or dismiss).");
+    }
+    return [chatId, typeof target === "string" ? target.trim() : target, action];
+  }
   if (method === "setProactiveChatMode" && (args.length !== 1 || !["main", "new"].includes(args[0]))) throw new Error("Choose Main chat or New chat every time.");
   if (method === "changeMainFork") {
     const [id, action, value, expected] = args;
