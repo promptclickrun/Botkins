@@ -413,7 +413,7 @@ export class Plugins {
       if (!ok && was !== false) this.ws.notify?.();
       return ok;
     };
-    return { id: row.preview.id, folder: row.folder, config: row.preview.config, values: this.values(row), intact };
+    return { id: row.preview.id, revision: row.revision ?? basename(row.folder), folder: row.folder, config: row.preview.config, values: this.values(row), intact };
   }
   oauthServers(row) {
     // Manifests are immutable per revision. Snapshotting a streaming chat must not
@@ -755,14 +755,16 @@ export class Plugins {
     Object.assign(stops, { total: 0, toldTotal: false });
   }
   /**
-   * Whether every one of these plugins may still run for this bot: installed, on, for this bot,
-   * ready and its copy intact. A hook that fires after its turn (a child that ends later) asks first.
+   * Whether every one of these plugins may still run for this bot as the revision that gave the
+   * hooks: installed, on, for this bot, ready, its copy intact, and still that revision. A hook
+   * that fires after its turn (a child that ends later) asks first. An update under the same id is
+   * another revision, and its predecessor's hooks then run no more. `plugins` is [{ id, revision }].
    */
-  authorizes(botId, ids) {
-    if (!Array.isArray(ids) || !ids.length) return false;
-    return ids.every((id) => {
-      const row = this.records.find((r) => r.preview.id === id);
-      return !!row && scoped(row, botId) && this.intact(row) && this.public(row).status === "ready";
+  authorizes(botId, plugins) {
+    if (!Array.isArray(plugins) || !plugins.length) return false;
+    return plugins.every((held) => {
+      const row = this.records.find((r) => r.preview.id === held?.id);
+      return !!row && typeof held.revision === "string" && held.revision === (row.revision ?? basename(row.folder)) && scoped(row, botId) && this.intact(row) && this.public(row).status === "ready";
     });
   }
   async session(bot, chat, { skillsOnly = false } = {}) {

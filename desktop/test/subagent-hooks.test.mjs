@@ -179,3 +179,48 @@ test("no subagent hook for a plugin that is off, or a turn without plugin access
   const childId = [...bare.log.sessions.keys()].find((k) => k.includes("-sub-"));
   assert.equal(bare.log.configs.get(childId).hooks, undefined);
 });
+
+// A plugin updated under the same id while a child runs: the child's late hook belongs to the
+// revision that gave it. Botkins' real authorization (Plugins.authorizes) decides, not a stub.
+async function lateChild(t, { update }) {
+  let release;
+  const gate = new Promise((resolve) => (release = resolve));
+  const s = await setup(t, async (id, options, session) => {
+    if (id.includes("-sub-")) {
+      await gate;
+      return { data: { content: "late answer" } };
+    }
+    const r = JSON.parse(await session.tool("subagent_run", { task: "Slow work", label: "Slow" }));
+    return { data: { content: r.status + ":" + (r.reply ?? "") } };
+  });
+  const chatId = s.ws.createChat("pip");
+  const sent = s.ws.send(chatId, "Go");
+  while (!s.events().some((e) => e.event === "subagentStart")) await tick(5);
+  const before = s.ws.plugins.records[0].revision;
+  if (update) {
+    // The same plugin, a new revision: its hook command changes (a new answers folder), as a real update would.
+    const source = s.ws.plugins.records[0].sourceFolder;
+    const hooks = JSON.parse(readFileSync(join(source, "hooks.json"), "utf8"));
+    for (const list of Object.values(hooks.hooks)) for (const entry of list) entry.command += " v2";
+    writeFileSync(join(source, "hooks.json"), JSON.stringify(hooks));
+    const { revision } = await s.ws.plugins.preview(s.added.id);
+    assert.notEqual(revision, before);
+    await s.ws.plugins.update(s.added.id, { revision });
+    assert.equal(s.ws.plugins.records[0].revision, revision);
+  }
+  release();
+  await sent;
+  return { ...s, chatId, before };
+}
+
+test("a host child's late subagentStop runs once when its plugin's revision is unchanged", async (t) => {
+  const { ws, events, chatId } = await lateChild(t, { update: false });
+  assert.deepEqual(lifecycle(events()).map((e) => e.event), ["subagentStart", "subagentStop"]);
+  assert.equal(ws.chat(chatId).messages.at(-1).text, "Done:late answer");
+});
+
+test("a host child's late subagentStop doesn't run when its plugin was updated to another revision", async (t) => {
+  const { ws, events, chatId } = await lateChild(t, { update: true });
+  assert.deepEqual(lifecycle(events()).map((e) => e.event), ["subagentStart"], "the old revision's callback is not run");
+  assert.equal(ws.chat(chatId).messages.at(-1).text, "Done:late answer");
+});

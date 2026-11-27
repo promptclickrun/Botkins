@@ -543,7 +543,8 @@ export function pluginSession(plugins, context = {}, { run = runHook } = {}) {
   const directories = [];
   const mcpServers = {};
   const handlerLists = {};
-  // The plugins whose hooks and tools this session has, so a later check can ask whether each is still allowed.
+  // The plugins (id and revision) whose hooks and tools this session has, so a later check can ask
+  // whether each is still allowed, and still the revision that gave them (Plugins.authorizes).
   const ids = [];
   for (const plugin of Array.isArray(plugins) ? plugins : []) {
     if (!eligible(plugin, safeContext)) continue;
@@ -553,7 +554,7 @@ export function pluginSession(plugins, context = {}, { run = runHook } = {}) {
     const projection = project(plugin, safeContext, manifest);
     directories.push(projection);
     if (context.skillsOnly === true) continue;
-    ids.push(String(plugin.id));
+    ids.push({ id: String(plugin.id), revision: typeof plugin.revision === "string" ? plugin.revision : null });
     const { settings, secrets, secretValues } = approvedSettings(plugin, manifest);
     const values = valuesFor(plugin, manifest, safeContext, projection, settings);
     for (const planned of starts.servers) {

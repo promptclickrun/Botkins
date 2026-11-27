@@ -282,3 +282,40 @@ test("an OMP child whose plugin is switched off before it ends delivers no subag
   await one.close();
   await provider.stop();
 });
+
+// The same through Botkins' real plugin manager: an installed plugin, its hooks from Plugins.session,
+// and Plugins.authorizes deciding, as Workspace.openSession wires them for an OMP turn.
+async function installedLateChild(name, { update }) {
+  const { Workspace } = await import("./starter.mjs");
+  const { fakeClient } = await import("./fake-copilot.mjs");
+  const plugin = lifecyclePlugin(name);
+  const ws = new Workspace(join(root, "ws-" + name), fakeClient().client, () => {});
+  const added = await ws.plugins.addFolder(plugin.record.folder);
+  const bot = ws.bot("pip");
+  const held = await ws.plugins.session(bot, { id: "chat-1" });
+  assert.deepEqual(held.ids, [{ id: added.id, revision: ws.plugins.records[0].revision }], "the session holds the revision that gave its hooks");
+  const { provider, spec } = setup();
+  const session = await provider.openSession({ ...spec, pluginHooks: held.hooks, pluginAuthorized: () => ws.plugins.authorizes(bot.id, held.ids) });
+  await session.send({ prompt: "kids:late:ok@400" });
+  await settle(() => plugin.events().some((e) => e.event === "subagentStart"));
+  if (update) {
+    const hooks = JSON.parse(readFileSync(join(plugin.record.folder, "hooks.json"), "utf8"));
+    for (const list of Object.values(hooks.hooks)) for (const entry of list) entry.command += " v2";
+    writeFileSync(join(plugin.record.folder, "hooks.json"), JSON.stringify(hooks));
+    const { revision } = await ws.plugins.preview(added.id);
+    await ws.plugins.update(added.id, { revision });
+    assert.notEqual(ws.plugins.records[0].revision, held.ids[0].revision);
+  }
+  await new Promise((resolve) => setTimeout(resolve, 700));
+  await session.close();
+  await provider.stop();
+  return plugin.events().map((e) => [e.event, e.agentId]);
+}
+
+test("an OMP child's late subagentStop runs once when its plugin's revision is unchanged (real authorization)", { skip }, async () => {
+  assert.deepEqual(await installedLateChild("same-rev", { update: false }), [["subagentStart", "kid-late"], ["subagentStop", "kid-late"]]);
+});
+
+test("an OMP child's late subagentStop doesn't run when its plugin was updated to another revision (real authorization)", { skip }, async () => {
+  assert.deepEqual(await installedLateChild("new-rev", { update: true }), [["subagentStart", "kid-late"]]);
+});

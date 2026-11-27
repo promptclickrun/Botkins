@@ -439,7 +439,7 @@ export class Subagents {
   async _hook(task, sessionId, name, input) {
     const handler = task?.pluginHooks?.handlers?.[name];
     if (typeof handler !== "function") return null;
-    // A plugin switched off, removed or taken from this bot while the child ran hears nothing more.
+    // A plugin switched off, removed, taken from this bot or updated to another revision while the child ran hears nothing more.
     if (task.pluginAuthorized && !task.pluginAuthorized()) return null;
     try {
       return (await handler({ sessionId, timestamp: new Date(), workingDirectory: "", ...input }, { sessionId })) ?? null;
