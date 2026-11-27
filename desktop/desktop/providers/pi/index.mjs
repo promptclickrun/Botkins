@@ -626,6 +626,7 @@ class PiSession extends ProviderSession {
       // A plugin's session hook once for each harness process, then its prompt hook once, before the
       // harness sees the message: the Copilot runtime's order (test/hook-events-probe-live.mjs).
       const started = await this.sessionStart(live, message.prompt);
+      await this.watchSubagents(live);
       const hooked = await this.userPromptSubmitted(message.prompt);
       if (hooked.block) return { text: "" };
       message = { ...message, prompt: (started ? started + "\n\n" : "") + hooked.prompt };
@@ -1039,6 +1040,95 @@ class PiSession extends ProviderSession {
     live.sessionStarted = true;
     const out = await this.runHook("onSessionStart", { source: live.resumed ? "resume" : "new", initialPrompt: prompt });
     return typeof out?.additionalContext === "string" ? out.additionalContext.trim() : "";
+  }
+  /**
+   * OMP runs subagents of its own (its `task` tool) as background jobs, and says when each starts
+   * and ends with a `subagent_lifecycle` frame once asked (`set_subagent_subscription`). With a
+   * plugin's subagent hook, Botkins asks, and runs subagentStart and subagentStop from those frames
+   * (test/omp-subagent-probe-live.mjs). Pi has no subagents.
+   *
+   * A child belongs to the turn whose `task` call started it, and only that turn's hooks ever hear
+   * of it: the call's id is registered with its turn when Botkins approves the call (`owners`), and
+   * a frame names it (`parentToolCallId`). A later turn on the same warm process, with other
+   * plugins, never takes over a child it didn't start. A frame for a call no turn registered (a
+   * child of a turn with no subagent hook) runs nothing.
+   */
+  async watchSubagents(live) {
+    if (this.provider.runtime !== OMP_ID || !this.subagentHooks()) return;
+    live.subagents ??= { subscribed: false, owners: new Map(), children: new Map() };
+    if (live.subagents.subscribed) return;
+    try {
+      await live.rpc.request({ type: "set_subagent_subscription", level: "progress" }, 15000);
+      live.subagents.subscribed = true;
+    } catch {
+      // An OMP without the subagent event bus: its children run without these hooks.
+    }
+  }
+  /** This turn's subagent hooks, fixed when the turn began: { start, stop, authorized, parent }, or null. */
+  subagentHooks() {
+    const start = this.hook("onSubagentStart");
+    const stop = this.hook("onSubagentStop");
+    if (!start && !stop) return null;
+    return { start, stop, authorized: typeof this.spec.pluginAuthorized === "function" ? this.spec.pluginAuthorized : () => true, parent: this.spec.sessionId };
+  }
+  /** A `task` call this turn approved: its children report to this turn's hooks (`owners`). */
+  ownTaskCall(live, toolCallId) {
+    if (this.provider.runtime !== OMP_ID || !toolCallId) return;
+    const hooks = this.subagentHooks();
+    if (!hooks || !live.subagents) return;
+    // OMP may name the call "<call id>|<item id>" in one place and by its first part in the other.
+    for (const key of new Set([String(toolCallId), String(toolCallId).split("|")[0]])) live.subagents.owners.set(key, hooks);
+    // A process lives long; its oldest calls go first.
+    if (live.subagents.owners.size > 500) live.subagents.owners.delete(live.subagents.owners.keys().next().value);
+  }
+  /**
+   * One `subagent_lifecycle` frame of OMP's: `started` runs subagentStart, `completed` runs
+   * subagentStop with the child's last reply (read with `get_subagent_messages`). A child that
+   * `failed` or was `aborted` has no subagentStop, as on Copilot. Each child's id is its own, and
+   * each hook runs once for it, with the hooks of the turn that started it, while that turn's
+   * plugins are still allowed. OMP's children run in the background, after OMP has already begun
+   * them and while their result goes to OMP: a hook's answer can't change them here.
+   */
+  static async subagentLifecycle(live, payload) {
+    const id = typeof payload?.id === "string" ? payload.id : "";
+    const seen = live.subagents;
+    if (!id || !seen) return;
+    let child = seen.children.get(id);
+    if (payload.status === "started") {
+      if (child) return;
+      // OMP writes the call's id as "<call id>|<item id>"; Botkins approved it by the first part.
+      const call = String(payload.parentToolCallId ?? "");
+      const hooks = seen.owners.get(call) ?? seen.owners.get(call.split("|")[0]);
+      child = { hooks: hooks ?? null, ended: false };
+      seen.children.set(id, child);
+      if (!hooks) return;
+      child.identity = { agentId: id, agentType: String(payload.agent ?? "task"), agentName: String(payload.agent ?? "task"), ...(payload.description && { agentDisplayName: String(payload.description) }), parentAgentId: hooks.parent, transcriptPath: typeof payload.sessionFile === "string" ? payload.sessionFile : "" };
+      if (hooks.start && hooks.authorized()) await PiSession.callHook(hooks.start, hooks.parent, child.identity);
+      return;
+    }
+    if (!child || child.ended) return;
+    child.ended = true;
+    const hooks = child.hooks;
+    if (payload.status !== "completed" || !hooks?.stop || !hooks.authorized()) return;
+    let response = "";
+    try {
+      const read = await live.rpc.request({ type: "get_subagent_messages", subagentId: id }, 15000);
+      const last = (read?.messages ?? []).filter((message) => message?.role === "assistant").at(-1);
+      response = textOf(last?.content);
+    } catch {
+      // The transcript couldn't be read: the hook is told no response.
+    }
+    // Asked again: the plugin could have been switched off while the transcript was read.
+    if (!hooks.authorized()) return;
+    await PiSession.callHook(hooks.stop, hooks.parent, { ...child.identity, stopReason: "end_turn", stopHookActive: false, response });
+  }
+  /** Runs one hook handler held from an earlier turn; a hook that fails said nothing. */
+  static async callHook(handler, sessionId, input) {
+    try {
+      return (await handler({ sessionId, timestamp: new Date(), workingDirectory: "", ...input }, { sessionId })) ?? null;
+    } catch {
+      return null;
+    }
   }
   /** agentStop at a natural end of the turn: the reason to go on with, when a hook blocks; else null. */
   async agentStop(active) {
@@ -1716,6 +1806,8 @@ export class PiProvider extends ModelProvider {
     live.rpc.on((event) => {
       this.observeRuntime(live, event);
       if (event.type === "extension_ui_request") void this.dialog(live, event);
+      // OMP's own subagents (its `task` tool), when a plugin has a subagent hook (PiSession.subagentLifecycle).
+      else if (event.type === "subagent_lifecycle") void PiSession.subagentLifecycle(live, event.payload);
     });
     live.cleaned = live.rpc.exited.then(async () => {
       this.sessionEnded(live, "complete");
@@ -1866,6 +1958,8 @@ export class PiProvider extends ModelProvider {
       // Not Botkins' own question.
     }
     const answer = live.session ? await live.session.permission(call) : false;
+    // OMP's `task` call that Botkins lets run: the children it starts report to this turn's hooks.
+    if (answer && !answer.deny && call.toolName === "task") live.session.ownTaskCall(live, call.toolCallId);
     if (answer === true) return reply({ value: "allow" });
     // A call that doesn't run gets no result hook (Copilot: "rejected" and "denied" results don't).
     if ((!answer || answer.deny) && call.toolCallId) live.session?.turn?.refused.add(String(call.toolCallId));
