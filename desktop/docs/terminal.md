@@ -357,6 +357,10 @@ botkins templates use inbox-sorter@botkins --name Sorter
 
 When the bot asks for an approval in `botkins chat`, the command shows the request on standard error and asks at a terminal. With no terminal it refuses the request: no flag approves one. A person approves a request at a terminal, in the app's window or on a phone. The service's call `chat.respond` refuses a yes (`approve`, `remember`) without the mark `{ "agreed": true }`. A no, a cancel and an answer to a question need none. A bot must never answer a request that waits in a chat: the person does.
 
+Pi, OMP and Copilot show the target of a file read or write. An edit preview shows the proposed removals and additions when the harness supplies them. OMP's hashline edits show the patch itself and cannot be remembered: a patch can touch several paths. In **Read** mode, a direct MCP call counts as a read only when the harness supplies trusted read-only metadata. Signing in to a server or naming a tool `read` does not make it read-only.
+
+An approval can be remembered only for the scope shown on the card, such as an absolute file path or an exact MCP server and tool. Pi's built-in MCP registry can report the server and read-only hint without reporting the original tool name. In that case Botkins does not offer to remember the approval. Managed requests still require a person's answer. **Assisted** review is provided by the Copilot runtime; Pi and OMP still ask when Botkins' existing rules do not settle the call.
+
 ```sh
 botkins chats list
 botkins chats search "browser extension" --since 2026-11-01

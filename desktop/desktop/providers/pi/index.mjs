@@ -28,6 +28,8 @@ import { buildInventory, resolvePrompt } from "../commands.mjs";
 import { SessionStore, resumeOrRecover, serversWithTokens, uuidFor } from "../sessions.mjs";
 import { skillChoices, skillSupport } from "../skills.mjs";
 import { displayValue } from "../../display.mjs";
+import { describeToolCall } from "./permissions.mjs";
+import { permissionName } from "../permission-request.mjs";
 import { describeRequest } from "../copilot/permissions.mjs";
 import { NativeDialogs } from "./dialogs.mjs";
 import { DETAIL, INVENTORY, MORE, RESULT } from "./extension-shared.mjs";
@@ -129,8 +131,6 @@ const MAX_LIVE = 8;
 const piSessionId = (id) => (/^[A-Za-z0-9](?:[A-Za-z0-9._-]{0,126}[A-Za-z0-9])?$/.test(id) ? id : uuidFor(id));
 const hash = (value) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 
-const READS = new Set(["read", "grep", "find", "ls"]);
-const WRITES = new Set(["write", "edit"]);
 const INVENTORY_WAIT_MS = 1500;
 const INVENTORY_STEP_MS = 100;
 const PI_MCP_PROBE_MS = 700;
@@ -936,9 +936,13 @@ class PiSession extends ProviderSession {
   async permission(call) {
     const handlers = this.spec.handlers;
     const turn = this.turn;
-    if (!handlers || !turn) return false;
+    const active = () => turn && this.turn === turn && !turn.ended && !this.stopRequested && !this.closed;
+    if (!handlers?.permission || !active() || !permissionName(call?.toolName)) return false;
     const { name, server } = toolIdentity(call, this.aliases);
+    if (!permissionName(name) || (server !== undefined && !permissionName(server))) return false;
     turn.calls?.set(call.toolCallId, { name, server });
+    // A name alone is not the bridge: Pi's or OMP's registry must say the tool is Botkins' own.
+    if (server === BRIDGE && !(this.bridge && call.registryServer === BRIDGE && !call.managed && !call.sandboxEscape)) return false;
     // Pi keeps every server Botkins gave it registered, so its tool list stays the same; one this
     // turn doesn't have (the person writing may not use it, or its plugin was switched off) does
     // nothing. (A Pi package's own server isn't Botkins'.)
@@ -946,7 +950,9 @@ class PiSession extends ProviderSession {
     // A plugin server this session wasn't given (its plugin was switched off or removed) does nothing either.
     if (server && PLUGIN_ALIAS.test(server)) return false;
     const given = call.input && typeof call.input === "object" && !Array.isArray(call.input) ? call.input : {};
-    const hooked = await this.preToolUse(call, name, server, given);
+    // With no hook the question goes to the person at once, in the same tick.
+    const hooked = this.hook("onPreToolUse") ? await this.preToolUse(call, name, server, given) : {};
+    if (!active()) return false;
     if (hooked.deny) return { deny: true, reason: hooked.reason };
     const input = hooked.input ?? given;
     const changed = hooked.input ? { input } : true;
@@ -954,11 +960,12 @@ class PiSession extends ProviderSession {
     if (server === BRIDGE && !hooked.ask) return changed;
     if (hooked.ask) {
       const command = typeof input.command === "string" ? input.command : null;
-      const request = describeRequest({ kind: "hook", toolName: name, toolArgs: command === null ? input : { ...input, command }, hookMessage: hooked.reason });
+      const request = describeRequest({ kind: "hook", toolName: name, toolArgs: command === null ? input : { ...input, command }, hookMessage: hooked.reason, managedApprovalRequired: !!call.managed });
+      const restricted = !!call.managed || !!call.sandboxEscape;
       try {
         const grant = this.sseGrant(turn, server);
-        const answer = await handlers.permission({ ...request, preview: command ?? displayValue(input, Infinity), detail: displayValue({ ...call, input }, Infinity) });
-        if (!answer?.allow) return false;
+        const answer = await handlers.permission({ ...request, preview: command ?? displayValue(input, Infinity), detail: displayValue({ ...call, input }, Infinity), ...(restricted && { remember: null, managed: !!call.managed, sandboxEscape: !!call.sandboxEscape }) });
+        if (!answer?.allow || !active()) return false;
         return this.grantSse(turn, grant, name, server, input) ? changed : false;
       } catch {
         return false;
@@ -1076,23 +1083,16 @@ class PiSession extends ProviderSession {
   /** Botkins' approval rules and the person, for a call with these arguments. */
   async approve(call, name, server, input) {
     const handlers = this.spec.handlers;
-    const path = typeof input.path === "string" ? input.path : typeof input.file_path === "string" ? input.file_path : "";
-    let request;
-    if (server)
-      request = { kind: "mcp", label: server + " / " + name, title: "Use " + server + " / " + name + "?", preview: displayValue(input, Infinity), remember: ["MCP tool " + server + "/" + name, server, name] };
-    else if (name === "bash") {
-      const command = String(input.command ?? "");
-      request = { kind: "shell", label: "Shell command", title: "Run this command?", preview: command, remember: command ? ["this exact command", command] : null };
-    } else if (WRITES.has(name))
-      request = { kind: "write", label: path || name, title: (name === "edit" ? "Edit" : "Write") + " this file?", preview: String(input.content ?? input.newText ?? (displayValue(input, Infinity) || path)), remember: path ? ["writes to this path", path] : null };
-    else if (READS.has(name)) request = { kind: "read", label: path || name, title: "Read " + (path || "files") + "?", preview: path || displayValue(input, Infinity), remember: path ? ["reads of this path", path] : null };
-    else request = { kind: "custom-tool", label: name, title: "Use " + name + "?", preview: displayValue(input, Infinity), remember: null };
     const turn = this.turn;
-    if (!turn) return false;
+    const active = () => turn && this.turn === turn && !turn.ended && !this.stopRequested && !this.closed;
+    if (!active()) return false;
+    const configured = !!server && Object.hasOwn(this.spec.mcpServers ?? {}, server);
+    // The registry names a plugin's server by its alias; the grant is for Botkins' own name.
+    const registryServer = call.registryServer === undefined ? undefined : this.realServerName(call.registryServer);
     try {
       const grant = this.sseGrant(turn, server);
-      const answer = await handlers.permission({ ...request, toolName: name, detail: displayValue({ ...call, input }, Infinity), readOnly: request.kind === "read", sandboxEscape: false, managed: false });
-      if (!answer?.allow) return false;
+      const answer = await handlers.permission(describeToolCall({ ...call, input, ...(registryServer !== undefined && { registryServer }) }, { name, server, configured }));
+      if (!answer?.allow || !active()) return false;
       return this.grantSse(turn, grant, name, server, input);
     } catch {
       return false;

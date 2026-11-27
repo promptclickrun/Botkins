@@ -78,7 +78,8 @@ async function turn(text) {
     const input = bash ? { command: bash[1] } : mcp ? { id: "x" } : { id: "bot" };
     const server = bash ? undefined : mcp?.[1] ?? "botkins";
     const remoteName = mcp?.[2] ?? own?.[1];
-    const call = { toolCallId, toolName, input, ...(server && { mcpServerName: server, mcpToolName: remoteName }) };
+    const call = { toolCallId, toolName, input, ...(bash && { native: true }),
+      ...(server && { mcpServerName: server, mcpToolName: remoteName, registryServer: server, registryTool: remoteName }) };
     send({ type: "tool_call_pending", toolCallId, toolName });
     const answer = await ask("botkins:permission " + JSON.stringify(call));
     log({ answer });

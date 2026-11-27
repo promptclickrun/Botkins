@@ -8,8 +8,6 @@ export const DETAIL = "botkins:detail";
 export const RESULT = "botkins:result";
 const MAX_RESULT = 200_000;
 export const INVENTORY = "botkins:inventory";
-const OWN = "mcp__botkins__";
-const OMP_OWN = "mcp__botkins_";
 const INVENTORY_POLL_MS = 150;
 const INVENTORY_WATCH_MS = 10000;
 
@@ -124,19 +122,35 @@ export function makeBotkinsExtension(file, { mcp = true } = {}) {
     pi.on("tool_call", async (event, ctx) => {
       const name = String(event.toolName);
       const info = typeof pi.getAllTools === "function" ? pi.getAllTools().find((tool) => tool.name === name) : undefined;
-      const mcpServerName = info?.mcpServerName ?? event.mcpServerName;
+      // Pi publishes the original server as the sole namespace alias, but may sanitize the
+      // tool name. Do not use a display name in place of the original identity for a grant.
+      const source = info?.sourceInfo;
+      const namespace = info?.namespace;
+      const piMcp = source?.path === "builtin:mcp" && source.source === "builtin";
+      const ompMcp = source?.path === `<mcp:${name}>` && source.source === "mcp";
+      const piMcpServer = piMcp && Array.isArray(namespace?.aliases) && namespace.aliases.length === 1
+        ? namespace.aliases[0] : undefined;
+      const registryServer = ((piMcp || ompMcp) ? info.mcpServerName : undefined) ?? piMcpServer;
+      const mcpServerName = registryServer ?? info?.mcpServerName ?? event.mcpServerName;
       const mcpToolName = info?.mcpToolName ?? event.mcpToolName;
-      // Botkins' own tools never ask, unless a plugin's hook is to see each tool call first.
-      const own = mcp
-        ? (mcpServerName ? mcpServerName === "botkins" : name.startsWith(OWN))
-        : mcpServerName === "botkins" || name.startsWith(OWN) || name.startsWith(OMP_OWN);
-      if (own && !(read() ?? first).preToolUse) return undefined;
+      const managed = !!(info?.managedApprovalRequired || event.managedApprovalRequired || event.managedSettingsEnabled);
+      const sandboxEscape = !!(event.requestSandboxBypass || event.requestSandboxPermissive || event.sandboxPathGrant);
+      const readOnly = registryServer && (info.mcpToolName || piMcpServer) && (ompMcp
+        ? info.mcpReadOnlyHint === true
+        : info.annotations?.readOnlyHint === true &&
+          (info.annotations.destructiveHint === undefined || info.annotations.destructiveHint === false));
       const call = {
         toolCallId: event.toolCallId,
         toolName: event.toolName,
         input: event.input,
+        ...(source?.source === "builtin" && source.path === (mcp ? `builtin:${name}` : `<builtin:${name}>`) && { native: true }),
         ...(mcpServerName && { mcpServerName }),
         ...(mcpToolName && { mcpToolName }),
+        ...(registryServer && { registryServer }),
+        ...(registryServer && info.mcpServerName === registryServer && info.mcpToolName && { registryTool: info.mcpToolName }),
+        ...(readOnly && { readOnly: true }),
+        ...(managed && { managed: true }),
+        ...(sandboxEscape && { sandboxEscape: true }),
       };
       const answer = await ctx.ui.select(ASK + " " + JSON.stringify(call), ["allow", "deny", MORE]);
       if (answer === "allow") return undefined;

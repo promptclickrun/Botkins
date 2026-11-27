@@ -27,6 +27,7 @@ process.stdin.on("data", (chunk) => {
             tools: [{
               name: "echo",
               description: "Echo one local value",
+              annotations: { readOnlyHint: true, destructiveHint: false },
               inputSchema: {
                 type: "object",
                 properties: { value: { type: "string" } },
