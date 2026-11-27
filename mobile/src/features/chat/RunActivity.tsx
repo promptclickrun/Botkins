@@ -16,6 +16,8 @@ import { useWatchedReasoning } from "./useWatchedReasoning";
 import { modelName } from "@/state/models";
 import { useApp } from "@/state/store";
 import { compactNumber, duration } from "@/state/time";
+import { InlineMedia } from "@/features/artifacts/ArtifactBits";
+import { useMessageLinks } from "@/features/artifacts/data";
 import { Badge, EmptyState, Group, Label, Markdown, Row, Sheet, space, T, Tap, type Tone, useTheme } from "@/ui";
 import { CommandCard, DiffCard, KindIcon, StepDetailView } from "./ActivityWidgets";
 import { isCodingKind, parseStepInput, stepHeadline, summarizeSteps, visibleSteps } from "./activityModel";
@@ -119,11 +121,18 @@ export function StepRow({ step, chatId, runId, startOpen = false, helperName, fo
 const TEAM_TONE: Record<TeamAsk["status"], Tone> = { waiting: "neutral", working: "accent", answered: "success", failed: "danger", stopped: "neutral" };
 
 /** What the bot wrote before it moved on, where it came: quiet text in a thin frame. */
-function UpdateText({ text, markdown }: { text: string; markdown: boolean }) {
+function UpdateText({ chatId, text, markdown }: { chatId: string; text: string; markdown: boolean }) {
   const { colors } = useTheme();
+  const links = useMessageLinks(chatId, text, !!chatId);
   return (
     <View style={{ borderWidth: StyleSheet.hairlineWidth * 2, borderColor: colors.line, borderRadius: 12, paddingHorizontal: space.md, paddingVertical: space.sm }}>
-      <Markdown text={text} size="small" plain={!markdown} color={colors.ink2} />
+      {links.parts ? (
+        <View style={{ gap: space.md }}>
+          {links.parts.map((part, at) => (part.kind === "text" ? <Markdown key={at} text={part.text} size="small" plain={!markdown} color={colors.ink2} paths={links.paths} /> : <InlineMedia key={part.artifact.id} artifact={part.artifact} />))}
+        </View>
+      ) : (
+        <Markdown text={text} size="small" plain={!markdown} color={colors.ink2} paths={links.paths} />
+      )}
     </View>
   );
 }
@@ -213,7 +222,7 @@ const ChapterView = memo(function ChapterView({ chapter, start, startOpen, stepI
         {open ? (
           <ChapterItems chapter={chapter} stepId={stepId} chatId={chatId} runId={runId} markdown={markdown} />
         ) : (
-          updates.map((update) => <UpdateText key={update.key} text={update.text} markdown={markdown} />)
+          updates.map((update) => <UpdateText key={update.key} chatId={chatId} text={update.text} markdown={markdown} />)
         )}
       </View>
     </View>
@@ -236,7 +245,7 @@ function ChapterItems({ chapter, stepId, chatId, runId, markdown }: { chapter: C
     <View style={{ gap: space.sm }}>
       {runs.map((part) =>
         part.kind === "update" ? (
-          <UpdateText key={part.key} text={part.text} markdown={markdown} />
+          <UpdateText key={part.key} chatId={chatId} text={part.text} markdown={markdown} />
         ) : (
           <Group key={part.key}>
             {part.steps.map((step) => (

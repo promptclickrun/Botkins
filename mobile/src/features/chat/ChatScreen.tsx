@@ -334,7 +334,7 @@ const TimelineRow = memo(function TimelineRow({ item, chatId, group, bot, bots, 
   ) : item.kind === "work" ? (
     <WorkPart chatId={chatId} bot={bot} item={item} />
   ) : item.kind === "text" ? (
-    <TurnText item={item} />
+    <TurnText chatId={chatId} item={item} />
   ) : item.kind === "screen" ? (
     <ScreenCard chatId={chatId} panel={item.panel} inView={inView} onOpen={() => openPanel(item.panel.id)} />
   ) : item.kind === "crew" ? (

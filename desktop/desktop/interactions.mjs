@@ -47,7 +47,11 @@ export class Interactions {
       return Promise.resolve({ action: "cancel" });
     const id = randomUUID();
     const transcript = this.ws.state?.chats.find(c => c.id === chat.id) ?? chat;
-    if (task.run) commitInterim(transcript, task.run, task);
+    if (task.run) {
+      const before = transcript.messages.length;
+      commitInterim(transcript, task.run, task);
+      if (transcript.messages.length > before) this.ws.artifactEvents?.messages(transcript);
+    }
     return new Promise((resolve) => {
       const cancel = () => {
         if (this.entries.has(id)) this.respond(id, { action: "cancel" }, false);

@@ -15,6 +15,7 @@ import { ScreenPanel } from "./ScreenSettings";
 import { ComputerScreenGate } from "./ComputerScreen";
 import { AddToProjectDialog, canAddToProject } from "./ProjectExtras";
 import { ActivityPanel, CrewPanel, canStopHelpers, type InspectTarget } from "./ActivityInspector";
+import type { ChatFiles } from "./ChatFileLink";
 import { crewOf, storySteps, type StoryUpdate } from "./activityStory";
 import { isVoiceTranscriptInterim } from "./chatTimeline";
 import type { Artifact, Bot, Chat, PanePanel, State } from "./types";
@@ -124,6 +125,7 @@ export default function SidePane({
   inspect,
   latestRunId,
   details,
+  files,
 }: {
   state: State;
   chat: Chat;
@@ -148,6 +150,8 @@ export default function SidePane({
   latestRunId?: string;
   /** What Details shows about the chat itself (ChatSide.tsx). */
   details?: ChatDetails;
+  /** Chat artifact resolution context so interim updates in Activity render MEDIA: attachments. */
+  files?: ChatFiles;
 }) {
   const panels = chat.pane?.panels ?? [];
   const active = chat.pane?.active ?? null;
@@ -371,6 +375,7 @@ export default function SidePane({
               key={activityRun.id}
               run={activityRun}
               updates={updates}
+              files={files}
               target={targets.activity?.runId === activityRun.id ? targets.activity : undefined}
               onCrew={crew && crewRun?.id === activityRun.id ? (id) => {
                 if (id) setTargets((old) => ({ ...old, crew: { runId: activityRun.id, select: id, seq: (old.crew?.seq ?? 0) + 1 } }));
