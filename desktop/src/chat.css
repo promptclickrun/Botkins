@@ -9,7 +9,10 @@
   min-height: 56px;
   padding: 8px 12px 8px 14px;
   gap: 10px;
+  background: var(--canvas);
   border-bottom: 1px solid var(--line);
+  position: relative;
+  z-index: 2;
 }
 .chathead .chathead-back,
 .chathead .chathead-icon {
@@ -60,14 +63,6 @@
   font-size: calc(12px * var(--text-scale));
   line-height: 16px;
   color: var(--muted);
-}
-.chathead .chathead-title small.doing {
-  color: var(--success);
-  font-weight: 500;
-}
-.chathead .chathead-title .status-dot {
-  width: 6px;
-  height: 6px;
 }
 .chathead .chathead-tools {
   gap: 6px;
@@ -154,6 +149,78 @@
   max-width: min(80%, 560px);
   font-size: calc(15px * var(--text-scale));
   line-height: 22px;
+}
+
+/* Answer receipt: a quiet right-aligned system line, never a person bubble. */
+.conversation .answer-receipt {
+  align-self: flex-end;
+  max-width: min(80%, 560px);
+  padding: 2px 4px;
+  font-size: calc(12.5px * var(--text-scale));
+  line-height: 17px;
+  color: var(--muted);
+  text-align: right;
+  word-break: break-word;
+}
+
+/* ---- Single quiet turn status line above the composer -------------------------------------- */
+.turn-status-line {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 6px 4px;
+  border: 0;
+  background: transparent;
+  color: var(--ink-2);
+  font: inherit;
+  font-size: calc(13px * var(--text-scale));
+  line-height: 18px;
+  text-align: left;
+  cursor: pointer;
+}
+.turn-status-line:hover {
+  color: var(--ink);
+}
+.turn-status-line:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+.turn-status-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+  flex: none;
+  animation: turn-status-pulse 1.8s ease-in-out infinite;
+}
+.turn-status-line.waiting .turn-status-dot {
+  background: var(--warning);
+  animation: none;
+}
+.turn-status-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 500;
+}
+.turn-status-meta {
+  flex: none;
+  color: var(--muted);
+  font-size: calc(12px * var(--text-scale));
+  font-variant-numeric: tabular-nums;
+}
+@keyframes turn-status-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .turn-status-dot {
+    animation: none;
+  }
 }
 
 /* ---- Message box: the field, then one row of buttons ---------------------------------------- */

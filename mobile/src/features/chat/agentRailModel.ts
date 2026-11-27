@@ -342,3 +342,251 @@ export function groupRailAsks(asks: ReadonlyArray<TeamAsk>): RailAskItem[] {
   flush();
   return items;
 }
+
+export type AskGroupModel = {
+  kind: "ask-group";
+  id: string;
+  asks: TeamAsk[];
+  count: number;
+  answered: number;
+  working: number;
+  failed: number;
+  stopped: number;
+  live: boolean;
+  names: string[];
+  header: string;
+  ariaLabel: string;
+};
+
+export type GroupedRailItem = AskGroupModel | NodeCallGroupModel;
+
+export type TaskHandoffGroupModel = {
+  kind: "task-handoff-group";
+  id: string;
+  items: TaskHandoffRailModel[];
+  count: number;
+  working: number;
+  done: number;
+  blocked: number;
+  live: boolean;
+  names: string[];
+  header: string;
+  ariaLabel: string;
+};
+
+function joinNames(names: string[]): string {
+  if (!names.length) return "teammates";
+  if (names.length === 1) return names[0];
+  if (names.length === 2) return names[0] + " and " + names[1];
+  if (names.length === 3) return names[0] + ", " + names[1] + " and " + names[2];
+  return names[0] + ", " + names[1] + " and " + (names.length - 2) + " more";
+}
+
+function uniqueTargetNames(asks: ReadonlyArray<TeamAsk>, bots: ReadonlyArray<Pick<Bot, "id" | "name">>): string[] {
+  const seen = new Set<string>();
+  const names: string[] = [];
+  for (const ask of asks) {
+    const localBot = ask.remote ? undefined : bots.find((b) => b.id === ask.botId);
+    const name = (ask.remote ? ask.remote.botName : (localBot?.name ?? "a bot")).trim() || "a bot";
+    if (!seen.has(name)) {
+      seen.add(name);
+      names.push(name);
+    }
+  }
+  return names;
+}
+
+/** Summary for a run of teammate asks rendered together in one quiet card. */
+export function buildAskGroup(
+  asks: ReadonlyArray<TeamAsk>,
+  bots: ReadonlyArray<Pick<Bot, "id" | "name">> = [],
+): AskGroupModel {
+  const list = [...asks];
+  const names = uniqueTargetNames(list, bots);
+  const count = list.length;
+  const answered = list.filter((a) => a.status === "answered").length;
+  const working = list.filter((a) => a.status === "waiting" || a.status === "working").length;
+  const failed = list.filter((a) => a.status === "failed").length;
+  const stopped = list.filter((a) => a.status === "stopped").length;
+  const lead = count + (count === 1 ? " ask to " : " asks to ") + joinNames(names);
+  const parts: string[] = [];
+  if (count === 1) {
+    if (answered) parts.push("answered");
+    else if (working) parts.push("working");
+    else if (failed) parts.push("failed");
+    else if (stopped) parts.push("stopped");
+  } else {
+    if (answered) parts.push(answered + " answered");
+    if (working) parts.push(working + " working");
+    if (failed) parts.push(failed + " failed");
+    if (stopped) parts.push(stopped + " stopped");
+  }
+  const header = [lead, ...parts].join(" · ");
+  return {
+    kind: "ask-group",
+    id: "asks-" + (list[0]?.id ?? "empty"),
+    asks: list,
+    count,
+    answered,
+    working,
+    failed,
+    stopped,
+    live: working > 0,
+    names,
+    header,
+    ariaLabel: header,
+  };
+}
+
+/** Groups consecutive teammate asks into one card and consecutive node calls into one node-call card. */
+export function groupAsks(
+  asks: ReadonlyArray<TeamAsk>,
+  bots: ReadonlyArray<Pick<Bot, "id" | "name">> = [],
+): GroupedRailItem[] {
+  const items: GroupedRailItem[] = [];
+  let teamRun: TeamAsk[] = [];
+  let nodeRun: TeamAsk[] = [];
+  const flushTeam = () => {
+    if (!teamRun.length) return;
+    items.push(buildAskGroup(teamRun, bots));
+    teamRun = [];
+  };
+  const flushNode = () => {
+    if (!nodeRun.length) return;
+    items.push(nodeCallGroup(nodeRun));
+    nodeRun = [];
+  };
+  for (const ask of asks) {
+    if (isNodeAsk(ask)) {
+      flushTeam();
+      nodeRun.push(ask);
+    } else {
+      flushNode();
+      teamRun.push(ask);
+    }
+  }
+  flushTeam();
+  flushNode();
+  return items;
+}
+
+/** Groups Task Board handoffs from a turn into one quiet card of expandable rows. */
+export function buildTaskHandoffGroup(
+  handoffs: ReadonlyArray<TaskHandoff>,
+  options: {
+    bots?: ReadonlyArray<Pick<Bot, "id" | "name">>;
+    tasks?: ReadonlyArray<Pick<BotTask, "id" | "status" | "chatId" | "result" | "problem" | "title" | "botId">>;
+  } = {},
+): TaskHandoffGroupModel | null {
+  if (!handoffs.length) return null;
+  const items = handoffs.map((handoff) => buildTaskHandoffRail(handoff, options));
+  const names: string[] = [];
+  const seen = new Set<string>();
+  for (const item of items) {
+    if (!seen.has(item.targetName)) {
+      seen.add(item.targetName);
+      names.push(item.targetName);
+    }
+  }
+  const count = items.length;
+  const working = items.filter((i) => i.live).length;
+  const done = items.filter((i) => i.status === "done" || i.status === "review").length;
+  const blocked = items.filter((i) => i.status === "blocked").length;
+  const queued = count - working - done - blocked;
+  const lead = count + (count === 1 ? " task to " : " tasks to ") + joinNames(names);
+  const parts: string[] = [];
+  if (count === 1) {
+    parts.push(items[0].statusLabel.toLowerCase());
+  } else {
+    if (done) parts.push(done + " done");
+    if (working) parts.push(working + " working");
+    if (blocked) parts.push(blocked + " blocked");
+    if (queued > 0) parts.push(queued + " queued");
+  }
+  const header = [lead, ...parts].join(" · ");
+  return {
+    kind: "task-handoff-group",
+    id: "handoffs-" + items[0].id,
+    items,
+    count,
+    working,
+    done,
+    blocked,
+    live: working > 0,
+    names,
+    header,
+    ariaLabel: header,
+  };
+}
+
+/** Single-line plain summary for a collapsed ask row: reply once answered, error when failed, request otherwise. */
+export function askRowSummary(model: Pick<OutgoingAgentRailModel, "status" | "reply" | "error" | "message">): string {
+  const raw =
+    model.status === "answered" && model.reply?.trim()
+      ? model.reply
+      : model.status === "failed" && model.error?.trim()
+        ? model.error
+        : model.message;
+  const firstLine =
+    String(raw ?? "")
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .find(Boolean) ?? "";
+  return firstLine
+    .replace(/^#{1,6}\s+/, "")
+    .replace(/^([-*+]|\d+[.)])\s+/, "")
+    .replace(/[*_`~]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/** Compact elapsed time for an ask row ("12s", "6m", "1h 4m"). */
+export function formatCompactElapsed(ms: number): string {
+  const seconds = Math.max(0, Math.floor(ms / 1000));
+  if (seconds < 60) return Math.max(1, seconds) + "s";
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return minutes + "m";
+  const hours = Math.floor(minutes / 60);
+  const rem = minutes % 60;
+  return rem ? hours + "h " + rem + "m" : hours + "h";
+}
+
+const KNOWN_RECEIPT_TEXTS = new Set([
+  "Answered",
+  "Allow once",
+  "Allow for this chat",
+  "Always allow",
+  "Deny",
+  "Allow this time",
+  "Allow for today",
+  "Dismissed",
+]);
+
+/**
+ * True when a user-role message is a system receipt for an answered request/permission,
+ * not a message the person typed. Renders as a quiet system line without changing the model transcript.
+ */
+export function isAnswerReceipt(
+  message: Pick<Message, "role" | "text" | "from" | "receipt" | "answer" | "runId"> | null | undefined,
+  previous?: (Pick<Message, "role" | "from" | "receipt" | "answer" | "interim" | "runId"> & { request?: unknown }) | null,
+): boolean {
+  if (!message || message.role !== "user" || message.from?.kind === "bot") return false;
+  if (message.receipt === true || !!message.answer) return true;
+  const text = String(message.text ?? "").trim();
+  if (!KNOWN_RECEIPT_TEXTS.has(text)) return false;
+  if (!previous) return false;
+  return (
+    !!previous.request ||
+    !!previous.interim ||
+    previous.receipt === true ||
+    !!previous.answer ||
+    (!!message.runId && previous.runId === message.runId && previous.role === "assistant")
+  );
+}
+
+/** Quiet system-line wording for an answer receipt ("You answered · Allow once"). */
+export function answerReceiptLabel(message: Pick<Message, "text">): string {
+  const text = String(message.text ?? "").trim();
+  if (!text || text === "Answered") return "You answered";
+  return "You answered · " + text;
+}

@@ -281,6 +281,17 @@ export function crewLine(crew: Crew): string {
   return parts.join(" · ");
 }
 
+/** Finished crew summary folded into a turn's fold/receipt line ("3 helpers finished · 28 commands"). */
+export function finishedCrewLine(crew: Crew): string {
+  const helpers = crew.members.filter((member) => member.kind === "helper").length;
+  const commands = crew.members.length - helpers;
+  const parts: string[] = [];
+  if (helpers) parts.push(helpers + (helpers === 1 ? " helper finished" : " helpers finished"));
+  if (commands) parts.push(commands + (commands === 1 ? " command" : " commands") + (helpers ? "" : " finished"));
+  if (crew.failed) parts.push(crew.failed + " failed");
+  return parts.join(" · ");
+}
+
 // ── Lanes ────────────────────────────────────────────────────────────────────────────────────────
 
 export type LaneSegment = { from: number; to: number; state: "work" | "wait" };

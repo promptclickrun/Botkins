@@ -43,30 +43,28 @@ import { useStableFunctions } from "./stable";
 import type { WindowState } from "./hotState";
 import type { ChatFiles, FilePreview } from "./ChatFileLink";
 import {
-  HelperChip,
   InterimUpdate,
-  LiveLead,
   ReasoningUpdate,
   RunCards,
   TaskChip,
   TaskDrawer,
   TimelineFold,
   WorkSteps,
-  WorkingPill,
   duration,
+  useNow,
 } from "./ChatActivity";
 import { ActivityIsland, IslandReceipt } from "./ActivityIsland";
 import { ChapterSummary, CrewCard, canStopHelpers, crewCardProps } from "./ActivityInspector";
-import { crewOf, storyChapters, storySteps, type StoryUpdate } from "./activityStory";
+import { finishedCrewLine, storyChapters, storySteps, type StoryUpdate } from "./activityStory";
 import { QuoteContext } from "./Composer";
 import { MentionChips } from "./MentionMenu";
 import { AgentMessageRail, IncomingAgentRail } from "./AgentMessageRail";
-import { isAgentMessage } from "./agentRailModel";
+import { answerReceiptLabel, isAgentMessage, isAnswerReceipt } from "./agentRailModel";
 import { isStepCoveredByRail } from "./activityModel";
 import RequestPanel from "./RequestPanel";
 import { LinkPreviewCard, useReadAloud } from "./Extras";
 import { liveTurnDisplay, updateInChat } from "./liveDisplay";
-import type { IslandUpdate } from "./island";
+import { thoughtParts, type IslandUpdate } from "./island";
 import { clearReadingError, readAloud, useReading } from "./voice";
 import ContextDetails from "./ContextDetails";
 import { BotAvatar, activityLabel, botActivity, chatActivity, useOutcome } from "./Avatar";
@@ -380,16 +378,19 @@ function ChatViewBody({
   const turnWaits = requests.some((r) => !r.detached);
   const todos = sessionTodos(latest?.todos, chat.todos ?? chatRuns.find((run) => run.todos)?.todos) ?? [];
   const todoRail = todos.length > 0 && <TaskChip todos={todos} open={drawer === "tasks"} toggle={() => setDrawer(drawer === "tasks" ? "" : "tasks")} />;
-  // The to-do chip rides beside the latest turn's fold whenever that fold is sure to be drawn.
-  const todoBesideFold = latest && !islandMode && (latest.status === "Working" || foldFinishedSteps) &&
+  // The to-do chip rides beside the latest turn's finished fold whenever that fold is drawn.
+  const todoBesideFold = latest && !islandMode && latest.status !== "Working" && foldFinishedSteps &&
     chat.messages.some((message) => message.role === "user" && message.runId === latest.id && !message.steeredRunId && !message.answer);
-  // The latest turn's helpers and background commands, for the chip above the message box.
-  const latestCrew = useMemo(() => (latest ? crewOf(latest) : null), [latest?.steps, latest?.agents]);
   const lastUserRun = [...chat.messages].reverse().find((m) => m.role === "user" && m.runId)?.runId;
   // What the chat's bot is doing now; when a reply ends, the avatar plays how it went once.
   const activity = chatActivity(state, chat.id);
   const face = useOutcome(activity, !!latest && failed.includes(latest.status));
   const doing = activityLabel(activity);
+  // Whether the live ActivityIsland is currently visible in the scroller: when it is, hide the quiet status line above the composer.
+  const [islandVisible, setIslandVisible] = useState(false);
+  useEffect(() => {
+    if (!islandMode || latest?.status !== "Working") setIslandVisible(false);
+  }, [islandMode, latest?.id, latest?.status]);
   // The side pane's open or closed choice is kept per computer, for every chat. In a narrow window
   // the pane is a drawer over the conversation instead, open only when asked for.
   const [sideOpen, setSideOpen] = useState(() => {
@@ -812,6 +813,15 @@ function ChatViewBody({
         openChat={openChat}
         files={files}
       />
+    ) : isAnswerReceipt(m, chat.messages[index - 1]) ? (
+      <div
+        key={`timeline-message-${index}`}
+        id={`message-${chat.id}-${loadedFrom + index}`}
+        className="answer-receipt"
+        role="note"
+      >
+        {answerReceiptLabel(m)}
+      </div>
     ) : (
     <article
       id={`message-${chat.id}-${loadedFrom + index}`}
@@ -890,15 +900,17 @@ function ChatViewBody({
         events.push({ kind: event.kind, at: event.at, order: event.order, key: event.key, body: showStep(event.value) ? body : null, fold: body, details: body });
       }
     }
-    // The crew card: among the events where the first helper or command started while the turn
-    // runs, and right after the receipt or fold once it ended.
+    // The crew card stays in the feed while the turn runs or while any background command is still
+    // running. Once finished, its summary folds into the turn's fold or receipt line.
     const crewInfo = crewCardProps(run);
-    const crewCard = crewInfo && (
+    const crewRunning = !!crewInfo && crewInfo.crew.running > 0;
+    const crewFinished = !live && crewInfo && !crewRunning ? finishedCrewLine(crewInfo.crew) : undefined;
+    const crewCard = crewInfo && (live || crewRunning) ? (
       <CrewCard key={"crew-" + run.id} run={run} line={crewInfo.line} marks={crewInfo.marks} open={crewOpen.has(run.id)} toggle={toggleCrew} openMember={openMember} botName={bot.name} canStop={canStop} />
-    );
-    if (crewInfo && live) {
-      const at = events.findIndex((event) => event.at > crewInfo.crew.at);
-      events.splice(at < 0 ? events.length : at, 0, { kind: "crew", at: crewInfo.crew.at, order: 0, key: "crew-" + run.id, body: crewCard, fold: null, details: null });
+    ) : null;
+    if (crewCard && live) {
+      const at = events.findIndex((event) => event.at > crewInfo!.crew.at);
+      events.splice(at < 0 ? events.length : at, 0, { kind: "crew", at: crewInfo!.crew.at, order: 0, key: "crew-" + run.id, body: crewCard, fold: null, details: null });
     }
     const activityEvents = events.filter((event) => event.kind !== "reply" && event.kind !== "step");
     // Older records can have a summary and distinct tool names without individual call records.
@@ -937,11 +949,12 @@ function ChatViewBody({
     // What the working bot is doing, as the header says it, without the trailing dots: "Coding".
     const doingNow = activityLabel(group && currentBot ? botActivity(state, currentBot.id) : activity).replace(/…$/, "") || "Working";
     const who = currentBot?.name ?? bot.name;
-    const line = live
+    const baseLine = live
       ? doingNow === "Needs you" ? who + " needs you" : who + " is " + doingNow[0].toLowerCase() + doingNow.slice(1)
       : elapsed === undefined ? endingLabel || "Turn activity" : `Worked for ${duration(elapsed)}`;
+    const line = [baseLine, crewFinished].filter(Boolean).join(" · ");
 
-    // Faces in the work log hold still; only the live line's face moves while the turn runs.
+    // Faces in the work log hold still.
     const stillFace = (size: number, moving = false) => <BotAvatar bot={currentBot ?? bot} state={live ? (group && currentBot ? botActivity(state, currentBot.id) : activity) : "idle"} size={size} animated={moving} />;
     const groupFailure = group && run.failures?.length
       ? run.failures.map((failure) => `${state.bots.find((b) => b.id === failure.botId)?.name ?? "A bot"}: ${failure.detail}`).join(" · ")
@@ -963,13 +976,12 @@ function ChatViewBody({
     return (
       <Fragment key={`timeline-${run.id}`}>
         {initial && timelineMessage(initial.message, initial.index)}
-        {live && !islandMode && <LiveLead avatar={stillFace(28, true)} label={doingNow} thought={showUpdates ? liveIntent.trim() || undefined : undefined} shimmer={onIt && doingNow !== "Needs you" && !allSteps.some((step) => !step.agentId && step.status === "Running" && showStep(step))} />}
         {(live || !folded) && stepsMode === "open" && olderWork}
         {group ? groupTranscript : (live || !folded || islandMode) ? events.map((event) => <Fragment key={event.key}>{event.body}</Fragment>) : personBody}
         {/* A finished one-bot turn folds above its answer: the work, then the reply. With the island
             the work folds into a receipt under the answer instead. */}
         {!group && !live && !islandMode && (folded || hasActivity) && fold}
-        {!group && !live && !islandMode && crewCard}
+        {!group && !live && !islandMode && crewRunning && crewCard}
         {/* Botkins gave the bot more turns in this run by itself: said just before the reply it kept going for. */}
         {!group && keptLine(run) && <div className="timeline-kept">{keptLine(run)}</div>}
         {!group && reply.map(({ message, index }) => timelineMessage(message, index))}
@@ -984,8 +996,8 @@ function ChatViewBody({
             <LiveReply updates={updates} files={files} follow={follow} />
           </article>
         )}
-        {islandMode && !live && <IslandReceipt run={orderedRun} thoughts={showThinking} updates={receiptUpdates} onToggle={disclosed} onOpen={openerFor(run.id)} />}
-        {islandMode && !live && crewCard}
+        {islandMode && !live && <IslandReceipt run={orderedRun} thoughts={showThinking} updates={receiptUpdates} extra={crewFinished} onToggle={disclosed} onOpen={openerFor(run.id)} />}
+        {islandMode && !live && crewRunning && crewCard}
         {islandMode && live ? (
           <ActivityIsland
             run={orderedRun}
@@ -998,9 +1010,10 @@ function ChatViewBody({
             thoughts={showThinking}
             onToggle={disclosed}
             onOpen={openerFor(run.id)}
+            onVisibility={setIslandVisible}
           />
-        ) : (live || group) && (live || folded || hasActivity) && fold}
-        {group && !live && crewCard}
+        ) : !live && group && (folded || hasActivity) && fold}
+        {group && !live && crewRunning && crewCard}
         <AgentMessageRail run={run} bots={state.bots} tasks={state.tasks} openChat={openChat} />
         <RunCards run={run} prefill={prefill} pickModel={canManageAgents ? pickModel : undefined} />
         {!live && (failed.includes(run.status) || !!groupFailure) && (
@@ -1073,14 +1086,12 @@ function ChatViewBody({
         )}
         <div className="chathead-title">
           <h2>{group ? chat.title : bot.name}</h2>
-          <small className={doing ? "doing" : undefined}>
-            {doing && <i className="status-dot working" aria-hidden="true" />}
-            {doing || (chat.main && "Main chat") ||
-              (group
-                ? chat.title === members.map((m) => m.name).join(", ")
-                  ? "Group chat · " + members.length + " bots"
-                  : members.map((m) => m.name).join(", ")
-                : bot.role)}
+          <small>
+            {group
+              ? chat.title === members.map((m) => m.name).join(", ")
+                ? "Group chat · " + members.length + " bots"
+                : members.map((m) => m.name).join(", ")
+              : [chat.main && "Main chat", modelLabel(model, models, defaultProvider)].filter(Boolean).join(" · ") || bot.role}
           </small>
         </div>
         <div className="chathead-tools">
@@ -1253,6 +1264,15 @@ function ChatViewBody({
                 openChat={openChat}
                 files={files}
               />
+            ) : isAnswerReceipt(message, historic.messages[i - 1]) ? (
+              <div
+                key={historic.from + i}
+                id={`message-${chat.id}-${historic.from + i}`}
+                className="answer-receipt"
+                role="note"
+              >
+                {answerReceiptLabel(message)}
+              </div>
             ) : (
             <article key={historic.from + i} id={`message-${chat.id}-${historic.from + i}`} className={messageClass(message, historic.messages, i)} onContextMenu={e => messageMenu(e, message, historic.from + i)}>
               {message.role === "user" && personLabel(message, historic.messages, i)}
@@ -1283,6 +1303,14 @@ function ChatViewBody({
                       openChat={openChat}
                       files={files}
                     />
+                  ) : isAnswerReceipt(m, chat.messages[i - 1]) ? (
+                    <div
+                      id={`message-${chat.id}-${loadedFrom + i}`}
+                      className="answer-receipt"
+                      role="note"
+                    >
+                      {answerReceiptLabel(m)}
+                    </div>
                   ) : (
                   <article
                     id={`message-${chat.id}-${loadedFrom + i}`}
@@ -1348,62 +1376,26 @@ function ChatViewBody({
               {renderTimeline(latest)}
             </Fragment>
           )}
-          {busy && !timelineBusy && group && (
+          {busy && !timelineBusy && group && hasText && showUpdates && (
             <article className="assistant live">
-              {hasText && showUpdates ? (
-                <>
-                  {speaker && (
-                    <b className="speaker">
-                      <BotAvatar bot={speaker} state={botActivity(state, speaker.id)} size={22} animated={false} />
-                      <span className="speaker-name">{speaker.name}</span>
-                    </b>
-                  )}
-                  <LiveReply updates={updates} files={files} follow={follow} />
-                </>
-              ) : !turnWaits && !state.settings.foldTools && latest?.status === "Working" ? (
-                <WorkingPill startedAt={latest.time} title={speaker?.name ? speaker.name + " is working" : undefined} />
-              ) : (
-                <>
-                  {speaker && (
-                    <b className="speaker">
-                      <BotAvatar bot={speaker} state={botActivity(state, speaker.id)} size={22} animated={false} />
-                      <span className="speaker-name">{speaker.name}</span>
-                    </b>
-                  )}
-                  <p className={"typing" + (turnWaits ? "" : " shimmer-text")} role="status">
-                    {turnWaits ? "Waiting for your response…" : (speaker?.name ?? "The group") + " is typing…"}
-                  </p>
-                </>
+              {speaker && (
+                <b className="speaker">
+                  <BotAvatar bot={speaker} state={botActivity(state, speaker.id)} size={22} animated={false} />
+                  <span className="speaker-name">{speaker.name}</span>
+                </b>
               )}
+              <LiveReply updates={updates} files={files} follow={follow} />
             </article>
           )}
-          {busy && !timelineBusy && !group && (
+          {busy && !timelineBusy && !group && hasText && showUpdates && (
             <article className="assistant live">
-              {hasText && showUpdates ? (
-                <>
-                  {!(chat.messages.at(-1)?.role === "assistant" && chat.messages.at(-1)?.text) && (
-                    <b className="speaker">
-                      <BotAvatar bot={bot} state={activity} size={22} animated={false} />
-                      <span className="speaker-name">{bot.name}</span>
-                    </b>
-                  )}
-                  <LiveReply updates={updates} files={files} follow={follow} />
-                </>
-              ) : !turnWaits && !state.settings.foldTools && latest?.status === "Working" ? (
-                <WorkingPill startedAt={latest.time} title={liveIntent || undefined} />
-              ) : (
-                <>
-                  {!(chat.messages.at(-1)?.role === "assistant" && chat.messages.at(-1)?.text) && (
-                    <b className="speaker">
-                      <BotAvatar bot={bot} state={activity} size={22} animated={false} />
-                      <span className="speaker-name">{bot.name}</span>
-                    </b>
-                  )}
-                  <p className={"typing" + (turnWaits ? "" : " shimmer-text")} role="status">
-                    {turnWaits ? "Waiting for your response…" : liveIntent || "Working…"}
-                  </p>
-                </>
+              {!(chat.messages.at(-1)?.role === "assistant" && chat.messages.at(-1)?.text) && (
+                <b className="speaker">
+                  <BotAvatar bot={bot} state={activity} size={22} animated={false} />
+                  <span className="speaker-name">{bot.name}</span>
+                </b>
               )}
+              <LiveReply updates={updates} files={files} follow={follow} />
             </article>
           )}
           {panels.filter(panel => panel.kind === "screen").map(panel => (
@@ -1551,15 +1543,13 @@ function ChatViewBody({
             </span>
           </div>
         )}
-        {((todoRail && !todoBesideFold) || !!latestCrew || drawer === "tasks") && (
+        {((todoRail && !todoBesideFold) || drawer === "tasks") && (
           <>
-            <div className="canvas-chips">
-              {/* Composer chips keep the background helpers first. */}
-              {latestCrew && latest && (
-                <HelperChip running={latestCrew.running} total={latestCrew.members.length} onOpen={() => openMember(latest.id, latestCrew.members.find((m) => m.status === "Running")?.id ?? latestCrew.members[0].id)} />
-              )}
-              {!todoBesideFold && todoRail}
-            </div>
+            {!todoBesideFold && todoRail && (
+              <div className="canvas-chips">
+                {todoRail}
+              </div>
+            )}
             {drawer === "tasks" && todos.length > 0 && <TaskDrawer todos={todos} transfer={!busy && todos.some(todo => !closed(todo)) ? () => void window.botkins.send(chat.id, TRANSFER_TODOS).catch(e => setNotice(e.message)) : undefined} />}
           </>
         )}
@@ -1609,6 +1599,24 @@ function ChatViewBody({
             </div>
           );
         })()}
+        {busy && (!islandMode || !islandVisible) && (
+          <TurnStatusLine
+            label={(() => {
+              if (turnWaits) return "Waiting for you";
+              const latestThought = latest?.reasoning?.at(-1)?.text;
+              const stepRunning = latest?.steps?.some((s) => !s.agentId && !s.background && s.status === "Running");
+              if (!stepRunning && latestThought) {
+                const heading = thoughtParts(latestThought).heading;
+                if (heading) return heading;
+              }
+              return liveIntent.trim() || doing || (group && speaker ? `${speaker.name} is working` : "Working…");
+            })()}
+            since={latest?.time ?? Date.now()}
+            steps={latest ? storySteps(latest.steps ?? [], latest).length : 0}
+            waiting={turnWaits}
+            onOpen={latest ? () => inspectNow.current("activity", latest.id) : undefined}
+          />
+        )}
         <QuoteContext.Provider value={{ quote, setQuote }}>{composer}</QuoteContext.Provider>
       </div>
       </div>
@@ -1619,6 +1627,46 @@ function ChatViewBody({
       {computer && !computer.member && computer.state === "online" && onScreen && watching?.hostId === computer.id && watching.chatId === chat.id &&
         <ComputerScreen key={computer.id + "/" + chat.id} host={computer} close={closeComputer} />}
     </div>
+  );
+}
+
+function formatStatusClock(ms: number): string {
+  const total = Math.max(0, Math.floor(ms / 1000));
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const seconds = String(total % 60).padStart(2, "0");
+  return hours ? `${hours}:${String(minutes).padStart(2, "0")}:${seconds}` : `${minutes}:${seconds}`;
+}
+
+/** One quiet status line directly above the composer while a turn runs (and the island is not in view). */
+function TurnStatusLine({
+  label,
+  since,
+  steps,
+  waiting,
+  onOpen,
+}: {
+  label: string;
+  since: number;
+  steps: number;
+  waiting: boolean;
+  onOpen?: () => void;
+}) {
+  const now = useNow(!waiting);
+  const elapsed = formatStatusClock(Math.max(0, now - since));
+  const meta = steps > 0 ? `${elapsed} · ${steps} ${steps === 1 ? "step" : "steps"}` : elapsed;
+  return (
+    <button
+      type="button"
+      className={"turn-status-line" + (waiting ? " waiting" : "")}
+      onClick={onOpen}
+      disabled={!onOpen}
+      aria-label={`${label}, ${meta}. Open turn activity`}
+    >
+      <span className="turn-status-dot" aria-hidden="true" />
+      <span className="turn-status-label">{label}</span>
+      <span className="turn-status-meta">{meta}</span>
+    </button>
   );
 }
 

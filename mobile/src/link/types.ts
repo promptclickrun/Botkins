@@ -361,6 +361,8 @@ export type Message = {
    * without a reply ("turn-timeline-v1", docs/turn-timeline.md). `time` is when its first words came.
    */
   interim?: true;
+  /** True when the message is a system receipt for a request answer (rendered as a muted line, not a person bubble). */
+  receipt?: boolean;
   /** What the person answered to a request in a turn ("turn-timeline-v1"): `text` is the answer in words, never a secret. */
   answer?: { runId: string; requestId: string; kind: AgentRequest["kind"]; title: string };
 };

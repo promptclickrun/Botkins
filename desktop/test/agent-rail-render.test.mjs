@@ -65,13 +65,21 @@ try {
   try { unlinkSync(outFile); } catch {}
 }
 const {
+  answerReceiptLabel,
+  askRowSummary,
   buildIncomingRail,
   buildOutgoingRail,
+  buildTaskHandoffGroup,
   buildTaskHandoffRail,
   foldPreview,
+  formatCompactElapsed,
+  groupAsks,
   isAgentMessage,
+  isAnswerReceipt,
   readableAgentBody,
   isStepCoveredByRail,
+  finishedCrewLine,
+  crewOf,
   storySteps,
   AgentMessageRail,
   IncomingAgentRail,
@@ -190,7 +198,7 @@ test("desktop IncomingAgentRail renders semantic rail card with a11y labels, sou
   assert.equal(html.includes("user-bubble"), false, "never renders as a person bubble");
 });
 
-test("desktop AgentMessageRail renders sender teamwork asks and task handoff cards with reply toggle", () => {
+test("desktop AgentMessageRail renders grouped sender teamwork asks and task handoff rows", () => {
   const html = renderToStaticMarkup(
     React.createElement(AgentMessageRail, {
       run: {
@@ -209,6 +217,14 @@ test("desktop AgentMessageRail renders sender teamwork asks and task handoff car
             started: 1000,
             finished: 2500,
             from: { kind: "bot", botId: "alfie", name: "Alfie", chatId: "c1", via: "teamwork" },
+          },
+          {
+            id: "a2",
+            botId: "alfie",
+            message: "Confirm release date.",
+            status: "working",
+            started: 1100,
+            from: { kind: "bot", botId: "glory", name: "Glory", chatId: "c1", via: "teamwork" },
           },
         ],
         taskHandoffs: [
@@ -229,11 +245,50 @@ test("desktop AgentMessageRail renders sender teamwork asks and task handoff car
       openChat: () => {},
     }),
   );
+  assert.match(html, /2 asks to Glory and Alfie · 1 answered · 1 working/);
   assert.match(html, /aria-label="Message to Glory, Answered"/);
-  assert.match(html, /Reply from Glory/);
+  assert.match(html, /aria-label="Message to Alfie, Working"/);
   assert.match(html, /aria-expanded="false"/);
+  assert.match(html, /Spacing matches #259 tokens\./);
   assert.match(html, /aria-label="Task handed to Glory: Ship rail cards, Ready for review"/);
-  assert.match(html, /Open task/);
+  assert.equal(html.includes("agent-rail-pill"), false, "no status pills in quiet cards");
+});
+
+test("groupAsks, isAnswerReceipt, answerReceiptLabel and finishedCrewLine match across desktop and mobile", () => {
+  const grouped = groupAsks(
+    [
+      { id: "a1", botId: "alfie", message: "First", status: "answered", reply: "Reply one", started: 1000, finished: 2000 },
+      { id: "a2", botId: "glory", message: "Second", status: "failed", error: "Timed out", started: 1100, finished: 2100 },
+    ],
+    bots,
+  );
+  assert.equal(grouped.length, 1);
+  assert.equal(grouped[0].kind, "ask-group");
+  assert.equal(grouped[0].header, "2 asks to Alfie and Glory · 1 answered · 1 failed");
+  assert.equal(askRowSummary(buildOutgoingRail(grouped[0].asks[0], bots)), "Reply one");
+  assert.equal(askRowSummary(buildOutgoingRail(grouped[0].asks[1], bots)), "Timed out");
+  assert.equal(formatCompactElapsed(65_000), "1m");
+
+  const handoffGroup = buildTaskHandoffGroup(
+    [{ id: "t1", taskId: "t1", botId: "glory", fromBotId: "alfie", title: "Ship it", status: "done", started: 1000 }],
+    { bots },
+  );
+  assert.equal(handoffGroup?.header, "1 task to Glory · done");
+
+  assert.equal(isAnswerReceipt({ role: "user", text: "Allow once", receipt: true }), true);
+  assert.equal(answerReceiptLabel({ role: "user", text: "Allow once", receipt: true }), "You answered · Allow once");
+  assert.equal(
+    isAnswerReceipt({ role: "user", text: "Deny" }, { role: "assistant", text: "Run command?", request: { id: "r1" } }),
+    true,
+  );
+  assert.equal(isAnswerReceipt({ role: "user", text: "Deny" }, { role: "assistant", text: "Ordinary reply" }), false);
+
+  const crew = crewOf({
+    status: "Completed",
+    agents: [{ id: "h1", label: "Search", status: "Done", started: 1000, finished: 2000 }],
+    steps: [{ id: "b1", name: "bash", label: "Build", background: true, status: "Done", started: 1000, finished: 2000 }],
+  });
+  assert.equal(finishedCrewLine(crew), "1 helper finished · 1 command");
 });
 
 test("no double rendering: mixed run hides only correlated rail steps and keeps uncovered task_create and failed rows visible", () => {
