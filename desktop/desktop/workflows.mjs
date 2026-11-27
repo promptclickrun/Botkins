@@ -15,6 +15,7 @@ import {
   defaultNodeLabel,
   nodeOutputFields,
   resolveTemplate,
+  parseNeedsYou,
   lookupField,
   evaluateCondition,
   analyzeWorkflowFields,
@@ -237,6 +238,169 @@ function githubUpdateFingerprint(item, labels) {
     item.body || "",
     labels,
   ]);
+}
+
+/** Strips vault references when sending workflows over sync / RPC to remote devices. */
+const CARD_BADGE_TONES = new Set(["neutral", "positive", "warning", "negative", "accent"]);
+
+function safeExternalUrl(raw) {
+  if (typeof raw !== "string") return "";
+  const url = raw.trim();
+  if (!/^https?:\/\//i.test(url)) return "";
+  return url;
+}
+
+function resolveCardBlock(block, context) {
+  if (!block || typeof block !== "object" || typeof block.type !== "string") return null;
+  const r = (v) => (typeof v === "string" ? resolveTemplate(v, context) : v);
+  switch (block.type) {
+    case "markdown": {
+      const text = String(r(block.text ?? "")).trim();
+      return text ? { type: "markdown", text } : null;
+    }
+    case "metric": {
+      const label = String(r(block.label ?? "")).trim();
+      const value = String(r(block.value ?? "")).trim();
+      const note = block.note !== undefined ? String(r(block.note)).trim() : "";
+      if (!label && !value) return null;
+      return { type: "metric", label, value, ...(note ? { note } : {}) };
+    }
+    case "list": {
+      const items = (Array.isArray(block.items) ? block.items : [])
+        .map((it) => String(r(it)).trim())
+        .filter(Boolean);
+      return items.length ? { type: "list", items } : null;
+    }
+    case "table": {
+      const columns = (Array.isArray(block.columns) ? block.columns : []).map((c) => String(r(c)).trim());
+      const rows = (Array.isArray(block.rows) ? block.rows : [])
+        .filter(Array.isArray)
+        .map((row) => row.map((cell) => String(r(cell)).trim()));
+      return columns.length && rows.length ? { type: "table", columns, rows } : null;
+    }
+    case "badges": {
+      const items = (Array.isArray(block.items) ? block.items : [])
+        .map((it) => {
+          if (!it || typeof it !== "object") return null;
+          const label = String(r(it.label ?? "")).trim();
+          if (!label) return null;
+          const tone = CARD_BADGE_TONES.has(it.tone) ? it.tone : undefined;
+          return { label, ...(tone ? { tone } : {}) };
+        })
+        .filter(Boolean);
+      return items.length ? { type: "badges", items } : null;
+    }
+    case "progress": {
+      const label = String(r(block.label ?? "")).trim();
+      const note = block.note !== undefined ? String(r(block.note)).trim() : "";
+      return label ? { type: "progress", label, value: Number(block.value ?? 0), max: Number(block.max ?? 100), ...(note ? { note } : {}) } : null;
+    }
+    default:
+      return null;
+  }
+}
+
+function resolveOutputCard(cardCfg, context, fallbackTitle, fallbackText, ws) {
+  const title = resolveTemplate(cardCfg.title || "", context).trim() || fallbackTitle;
+  const subtitle = typeof cardCfg.subtitle === "string" ? resolveTemplate(cardCfg.subtitle, context).trim() : "";
+  const rawNeedsYou = typeof cardCfg.needsYou === "string" ? resolveTemplate(cardCfg.needsYou, context) : cardCfg.needsYou;
+  const needsYou = parseNeedsYou(rawNeedsYou);
+  const body = typeof cardCfg.body === "string" ? resolveTemplate(cardCfg.body, context).trim() : "";
+
+  const resolvedFields = Array.isArray(cardCfg.fields)
+    ? cardCfg.fields
+        .map((f) => {
+          if (!f || typeof f !== "object") return null;
+          const label = resolveTemplate(String(f.label ?? ""), context).trim();
+          const value = resolveTemplate(String(f.value ?? ""), context).trim();
+          if (!value) return null;
+          const tone = CARD_BADGE_TONES.has(f.tone) ? f.tone : undefined;
+          return { label, value, ...(tone ? { tone } : {}) };
+        })
+        .filter(Boolean)
+    : [];
+
+  let blocks = [];
+  if (Array.isArray(cardCfg.blocks) && cardCfg.blocks.length) {
+    blocks = cardCfg.blocks.map((b) => resolveCardBlock(b, context)).filter(Boolean);
+  } else {
+    if (resolvedFields.length) {
+      blocks.push({
+        type: "badges",
+        items: resolvedFields.map((f) => ({
+          label: f.label ? `${f.label}: ${f.value}` : f.value,
+          ...(f.tone ? { tone: f.tone } : {}),
+        })),
+      });
+    }
+    const md = body || fallbackText;
+    if (md) blocks.push({ type: "markdown", text: md });
+  }
+
+  let link;
+  if (cardCfg.link && typeof cardCfg.link === "object") {
+    const url = safeExternalUrl(resolveTemplate(String(cardCfg.link.url ?? ""), context));
+    if (url) {
+      const label = resolveTemplate(String(cardCfg.link.label ?? ""), context).trim() || "View on GitHub";
+      link = { label, url };
+    }
+  }
+
+  let dispatch;
+  if (cardCfg.dispatch && typeof cardCfg.dispatch === "object") {
+    const prompt = resolveTemplate(String(cardCfg.dispatch.prompt ?? ""), context).trim();
+    if (prompt) {
+      const botIdRaw = typeof cardCfg.dispatch.botId === "string" ? cardCfg.dispatch.botId.trim() : "";
+      const botNameRaw = typeof cardCfg.dispatch.botName === "string" ? resolveTemplate(cardCfg.dispatch.botName, context).trim() : "";
+      const bots = ws?.state?.bots ?? [];
+      const matchedBot =
+        (botIdRaw ? bots.find((b) => b.id === botIdRaw) : null) ??
+        (botNameRaw ? bots.find((b) => b.name.toLowerCase() === botNameRaw.toLowerCase()) : null);
+      const chatTitle =
+        typeof cardCfg.dispatch.chatTitle === "string"
+          ? resolveTemplate(cardCfg.dispatch.chatTitle, context).trim()
+          : "";
+      const label =
+        typeof cardCfg.dispatch.label === "string"
+          ? resolveTemplate(cardCfg.dispatch.label, context).trim()
+          : "";
+      dispatch = {
+        ...(matchedBot ? { botId: matchedBot.id, botName: matchedBot.name } : {}),
+        ...(!matchedBot && botIdRaw ? { botId: botIdRaw } : {}),
+        ...(!matchedBot && botNameRaw ? { botName: botNameRaw } : {}),
+        ...(label ? { label } : {}),
+        ...(chatTitle ? { chatTitle } : {}),
+        prompt,
+      };
+    }
+  }
+
+  const actionCard = {
+    id: `card_${randomUUID().slice(0, 10)}`,
+    title,
+    ...(subtitle ? { subtitle } : {}),
+    blocks,
+    ...(link ? { link } : {}),
+    needsYou,
+    ...(dispatch ? { dispatch } : {}),
+    state: "open",
+  };
+
+  const parts = [`**${title}** — ${needsYou ? "Needs your direction" : "No input needed"}`];
+  if (subtitle) parts.push(subtitle);
+  if (resolvedFields.length) {
+    parts.push(resolvedFields.map((f) => (f.label ? `${f.label}: ${f.value}` : f.value)).join(" · "));
+  }
+  if (body) parts.push(body);
+  else if (!fallbackText) {
+    for (const b of blocks) {
+      if (b.type === "markdown" && b.text) parts.push(b.text);
+      else if (b.type === "list" && b.items?.length) parts.push(b.items.map((x) => `- ${x}`).join("\n"));
+    }
+  }
+  if (link) parts.push(`[${link.label}](${link.url})`);
+
+  return { actionCard, fallbackText: parts.join("\n\n") };
 }
 
 /** Strips vault references when sending workflows over sync / RPC to remote devices. */
@@ -1737,7 +1901,8 @@ export class Workflows {
     const dest = OUTPUT_DESTINATIONS.includes(cfg.destination) ? cfg.destination : "chat";
     const text = resolveTemplate(cfg.template || "", run.context).trim();
     const title = resolveTemplate(cfg.title || wf.name, run.context).trim() || wf.name;
-    if (!text) throw new Error("Output message resolved to empty text.");
+    const hasCard = dest === "chat" && cfg.card && typeof cfg.card === "object" && !Array.isArray(cfg.card);
+    if (!hasCard && !text) throw new Error("Output message resolved to empty text.");
 
     if (dest === "chat") {
       const bot = this.resolveBotForNode(node);
@@ -1752,18 +1917,26 @@ export class Workflows {
         target = this.ws.state.chats.find((c) => c.id === id);
       }
       const now = Date.now();
+      let actionCard;
+      let finalText = text;
+      if (hasCard) {
+        const built = resolveOutputCard(cfg.card, run.context, title, text, this.ws);
+        actionCard = built.actionCard;
+        finalText = text || built.fallbackText;
+      }
       target.messages.push({
         role: "assistant",
-        text,
+        text: finalText,
         time: now,
         fromWorkflow: { workflowId: wf.id, workflowName: wf.name, runId: run.id },
+        ...(actionCard ? { actionCard } : {}),
       });
       target.time = now;
       target.unread = true;
-      (target.posted ??= []).push({ from: wf.name, text, time: now });
+      (target.posted ??= []).push({ from: wf.name, text: finalText, time: now });
       if (target.posted.length > 10) target.posted.splice(0, target.posted.length - 10);
       this.ws.save();
-      this.ws.events?.emit("chat.posted", { chat: target, bot, from: wf.name, text });
+      this.ws.events?.emit("chat.posted", { chat: target, bot, from: wf.name, text: finalText });
       return { chatId: target.id, summary: `Posted to ${target.title || bot.name}` };
     }
 
@@ -1867,7 +2040,7 @@ export class Workflows {
         config: {
           type: "object",
           description:
-            "Step config. Trigger(task): {event,toStatus,fromStatus,botName,taskId,titleContains}. Trigger(schedule): {cadence,time,days,cron,timezone}. Trigger(manual): {inputs}. Trigger(routine): {routineChatId,routineName,botId,onlyOnStatus}. Trigger(chat): {chatId,botId,mentionOnly,textContains}. Trigger(webhook): {fields}. Trigger(github): {repo,events,mentionHandle,branch,author,pollMinutes}. Trigger(channel): {channel,connection,conversation,sender,isDirect,mentionsBot,textContains}. Agent: {botName,botId,prompt,outputKey,outputFields}. Model: {model,prompt,outputKey,outputFields}. Condition: {expression,match,rules}. Approval: {message,noteField}. Output: {destination,chatId,botName,title,template,category}.",
+            "Step config. Trigger(task): {event,toStatus,fromStatus,botName,taskId,titleContains}. Trigger(schedule): {cadence,time,days,cron,timezone}. Trigger(manual): {inputs}. Trigger(routine): {routineChatId,routineName,botId,onlyOnStatus}. Trigger(chat): {chatId,botId,mentionOnly,textContains}. Trigger(webhook): {fields}. Trigger(github): {repo,events,mentionHandle,branch,author,pollMinutes}. Trigger(channel): {channel,connection,conversation,sender,isDirect,mentionsBot,textContains}. Agent: {botName,botId,prompt,outputKey,outputFields}. Model: {model,prompt,outputKey,outputFields}. Condition: {expression,match,rules}. Approval: {message,noteField}. Output: {destination,chatId,botName,title,template,category,card}. Optional card (chat destination only, all string fields support {{field}} templates): {title,subtitle?,needsYou?(boolean or 'yes'/'true'/'no'/'false'),body?,fields?:[{label,value,tone?}],link?:{label?,url},blocks?,dispatch?:{botName?,botId?,label?,chatTitle?,prompt}}.",
         },
       },
       required: ["id", "kind"],

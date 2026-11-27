@@ -22,6 +22,7 @@ import { boardKindLabel, splitBoardQuote } from "./compose";
 import { AlertActions } from "@/features/bots/AlertActions";
 import { ConnectCard } from "./ConnectCard";
 import { McpAppCard } from "./McpAppCard";
+import { WorkflowActionCard } from "./WorkflowActionCard";
 import { IncomingAgentRail } from "./AgentMessageRail";
 import { answerReceiptLabel, isAgentMessage, isAnswerReceipt } from "./agentRailModel";
 import { useChatPeople } from "./ChatPeopleLook";
@@ -441,7 +442,9 @@ export const MessageRow = memo(function MessageRow({ item, chatId, group, bots, 
   return (
     <View ref={replyRef} collapsable={replyRef ? false : undefined} style={{ gap: space.sm }}>
       {group && <Speaker bot={message.botId ? bots.get(message.botId) : undefined} />}
-      {message.voiceCaption ? (
+      {message.actionCard ? (
+        <WorkflowActionCard chatId={chatId} card={message.actionCard} rich={rich} onOpenChat={onOpenChat} />
+      ) : message.voiceCaption ? (
         <Reply message={{ ...message, text: message.voiceCaption }} index={item.index} id={chatId + ":" + item.key} botId={speaker} markdown={markdown} actions={actions} />
       ) : (
         <Reply message={message} index={item.index} id={chatId + ":" + item.key} botId={speaker} markdown={markdown} actions={actions} paths={links.paths} parts={links.parts} />
@@ -449,13 +452,13 @@ export const MessageRow = memo(function MessageRow({ item, chatId, group, bots, 
       <Reactions message={message} />
       {/* A proactive alert: what the bot offers to do, and "Not now". */}
       {!!message.alert && !!speaker && <AlertActions botId={speaker} alert={message.alert} chatId={chatId} />}
-      {!!message.text.trim() && (
+      {!message.actionCard && !!message.text.trim() && (
         <View style={{ flexDirection: "row", alignItems: "center", gap: space.sm }}>
           <ReadAloud id={chatId + ":" + item.key} text={message.text} botId={speaker} />
           {timestamps && <Stamp time={message.time} align="flex-start" />}
         </View>
       )}
-      {!message.text.trim() && timestamps && <Stamp time={message.time} align="flex-start" />}
+      {(message.actionCard || !message.text.trim()) && timestamps && <Stamp time={message.time} align="flex-start" />}
       {end && run && <Cards run={run} latest={latest} rich={rich} onSend={onSend} onDraft={onDraft} />}
     </View>
   );

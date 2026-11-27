@@ -1,0 +1,180 @@
+/* Interactive action cards posted into chat by Workflow Output steps. Colors use tokens.css for light/dark parity. */
+.wf-action-card {
+  margin: 4px 0 6px;
+  padding: 14px 16px;
+  border-radius: var(--radius);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  display: grid;
+  gap: 10px;
+  max-width: 640px;
+}
+
+.wf-action-card.needs-you {
+  border-color: color-mix(in srgb, var(--warning) 35%, var(--line));
+}
+
+.wf-action-card.dismissed {
+  background: color-mix(in srgb, var(--surface) 60%, var(--canvas));
+  opacity: 0.72;
+  padding: 10px 14px;
+  gap: 8px;
+}
+
+.wf-action-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.wf-action-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: calc(12px * var(--text-scale));
+  font-weight: 600;
+  padding: 3px 9px;
+  border-radius: 999px;
+  line-height: 1.3;
+}
+
+.wf-action-badge.warning {
+  background: var(--warning-soft);
+  color: var(--warning);
+}
+
+.wf-action-badge.calm {
+  background: var(--success-soft);
+  color: var(--success);
+}
+
+.wf-action-badge.muted {
+  background: var(--sunken);
+  color: var(--muted);
+}
+
+.wf-action-card-title {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: calc(15.5px * var(--text-scale));
+  font-weight: 700;
+  color: var(--ink);
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.wf-action-card.dismissed .wf-action-card-title {
+  color: var(--muted);
+  font-size: calc(14px * var(--text-scale));
+  font-family: var(--font-body);
+  font-weight: 600;
+}
+
+.wf-action-card-subtitle {
+  font-size: calc(13px * var(--text-scale));
+  color: var(--muted);
+}
+
+.wf-action-card-subtitle p {
+  margin: 0;
+}
+
+.wf-action-card-blocks {
+  display: grid;
+  gap: 8px;
+}
+
+.wf-action-card-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  justify-self: start;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--accent-text);
+  font-size: calc(13px * var(--text-scale));
+  font-weight: 600;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.wf-action-card-link:hover {
+  opacity: 0.82;
+}
+
+.wf-action-card-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+}
+
+.wf-action-card-buttons {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.wf-action-card-buttons button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.wf-action-card-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: calc(13px * var(--text-scale));
+  color: var(--muted);
+}
+
+.wf-action-card-status.dispatched {
+  color: var(--success);
+  font-weight: 600;
+}
+
+.wf-action-card-dismissed-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.wf-action-card-dismissed-main {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  flex: 1;
+}
+
+.wf-action-card-toggle {
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: calc(12px * var(--text-scale));
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+  flex-shrink: 0;
+}
+
+.wf-action-card-toggle:hover {
+  background: var(--sunken);
+  color: var(--ink);
+}
+
+.wf-action-card-error {
+  margin: 0;
+  font-size: calc(12.5px * var(--text-scale));
+  color: var(--danger);
+}

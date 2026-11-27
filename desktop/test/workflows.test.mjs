@@ -8,10 +8,12 @@ import { Workspace } from "./starter.mjs";
 import {
   analyzeWorkflowFields,
   evaluateCondition,
+  parseNeedsYou,
   parseTemplateTokens,
   resolveTemplate,
   validateWorkflow,
 } from "../desktop/workflow-fields.mjs";
+import { authorize } from "../desktop/link/team.mjs";
 import { exportWorkflow, parseImportedWorkflow, WORKFLOW_SCHEMA_VERSION } from "../desktop/workflow-port.mjs";
 import { EventEmitter } from "node:events";
 import {
@@ -984,3 +986,312 @@ test("a channel trigger's Direct messages only and Mentions only filters apply, 
   assert.deepEqual(fire({ isDirect: true, mentionsBot: false }), ["any", "direct", "legacy-direct"]);
   assert.deepEqual(fire({ isDirect: false, mentionsBot: true }), ["any", "legacy-mention", "mention"]);
 });
+
+/* ================================================================
+   Workflow Action Cards: validation, engine output, dispatch/dismiss
+   ================================================================ */
+
+test("parseNeedsYou accepts truthy and falsy string/boolean inputs", () => {
+  for (const v of [true, "true", "TRUE", "yes", "Yes", "1", "on", "y"]) {
+    assert.equal(parseNeedsYou(v), true, `expected ${JSON.stringify(v)} to be true`);
+  }
+  for (const v of [false, "false", "no", "NO", "0", "off", "", "   ", null, undefined]) {
+    assert.equal(parseNeedsYou(v), false, `expected ${JSON.stringify(v)} to be false`);
+  }
+});
+
+test("validateWorkflow validates output.card fields, templates, and chat-only restriction", () => {
+  const baseNodes = (outputConfig) => [
+    {
+      id: "t1",
+      kind: "trigger",
+      triggerKind: "manual",
+      label: "Manual",
+      config: { inputs: [{ name: "title" }, { name: "needs_colt" }, { name: "summary" }, { name: "comment_url" }] },
+    },
+    { id: "o1", kind: "output", label: "Post card", config: outputConfig },
+  ];
+  const edges = [{ id: "e1", from: "t1", to: "o1", branch: "default" }];
+
+  // Valid card with empty template passes
+  const ok = validateWorkflow({
+    nodes: baseNodes({
+      destination: "chat",
+      card: {
+        title: "Botkins: {{title}}",
+        needsYou: "{{needs_colt}}",
+        body: "{{summary}}",
+        fields: [{ label: "Priority", value: "P1", tone: "warning" }],
+        link: { label: "View comment", url: "{{comment_url}}" },
+        dispatch: { botName: "Alfie", prompt: "Fix {{title}}" },
+      },
+    }),
+    edges,
+  });
+  assert.deepEqual(ok.errors, []);
+
+  // Card on non-chat destination fails
+  const wrongDest = validateWorkflow({
+    nodes: baseNodes({ destination: "feed", template: "hi", card: { title: "Hi" } }),
+    edges,
+  });
+  assert.ok(wrongDest.errors.length > 0);
+  assert.ok(wrongDest.errors.some((e) => /chat destination/i.test(e)));
+
+  // Missing card.title fails
+  const noTitle = validateWorkflow({
+    nodes: baseNodes({ destination: "chat", card: { body: "{{summary}}" } }),
+    edges,
+  });
+  assert.ok(noTitle.errors.length > 0);
+  assert.ok(noTitle.errors.some((e) => /title/i.test(e)));
+
+  // Dispatch without prompt fails
+  const noPrompt = validateWorkflow({
+    nodes: baseNodes({ destination: "chat", card: { title: "{{title}}", dispatch: { botName: "Alfie" } } }),
+    edges,
+  });
+  assert.ok(noPrompt.errors.length > 0);
+  assert.ok(noPrompt.errors.some((e) => /prompt/i.test(e)));
+
+  // Unknown {{field}} inside card template fails with strictFields
+  const badRef = validateWorkflow(
+    {
+      nodes: baseNodes({ destination: "chat", card: { title: "{{unknown_var}}" } }),
+      edges,
+    },
+    { strictFields: true },
+  );
+  assert.ok(badRef.errors.length > 0);
+  assert.ok(badRef.errors.some((e) => /unknown_var/.test(e)));
+});
+
+test("workflow chat output with card posts actionCard + plain-text fallback, while plain output stays unchanged", async (t) => {
+  const { ws } = setup(t);
+  const bot = ws.state.bots[0];
+  const targetChatId = ws.createChat(bot.id, "Triage Inbox");
+
+  // 1. Plain-text output (no card) stays unchanged
+  const plainWf = ws.workflows.create({
+    name: "Plain post",
+    nodes: [
+      { id: "t1", kind: "trigger", triggerKind: "manual", label: "Manual", config: { inputs: [{ name: "note" }] } },
+      { id: "o1", kind: "output", label: "Post text", config: { destination: "chat", chatId: targetChatId, template: "Plain: {{note}}" } },
+    ],
+    edges: [{ id: "e1", from: "t1", to: "o1", branch: "default" }],
+  });
+  const plainRun = ws.workflows.runManual(plainWf.id, { inputs: { note: "hello world" } });
+  await waitFor(() => ws.workflows.getRun(plainRun.id)?.status === "completed");
+  const afterPlain = ws.state.chats.find((c) => c.id === targetChatId).messages;
+  assert.equal(afterPlain.length, 1);
+  assert.equal(afterPlain[0].text, "Plain: hello world");
+  assert.equal(afterPlain[0].actionCard, undefined);
+
+  // 2. Action card output attaches resolved actionCard + readable fallback text
+  const cardWf = ws.workflows.create({
+    name: "Issue triage card",
+    nodes: [
+      {
+        id: "t1",
+        kind: "trigger",
+        triggerKind: "manual",
+        label: "Manual",
+        config: {
+          inputs: [
+            { name: "repo" },
+            { name: "number" },
+            { name: "title" },
+            { name: "needs_colt" },
+            { name: "priority" },
+            { name: "summary" },
+            { name: "url" },
+            { name: "comment_url" },
+          ],
+        },
+      },
+      {
+        id: "o1",
+        kind: "output",
+        label: "Post action card",
+        config: {
+          destination: "chat",
+          chatId: targetChatId,
+          card: {
+            title: "Botkins #{{number}}: {{title}}",
+            subtitle: "[{{repo}}#{{number}}]({{url}})",
+            needsYou: "{{needs_colt}}",
+            body: "{{summary}}",
+            fields: [
+              { label: "Priority", value: "{{priority}}", tone: "warning" },
+              { label: "Type", value: "Feature", tone: "accent" },
+            ],
+            link: { label: "View GitHub comment", url: "{{comment_url}}" },
+            dispatch: {
+              botName: bot.name,
+              chatTitle: "Botkins #{{number}}: {{title}}",
+              prompt: "Work on {{repo}}#{{number}} ({{title}}). Context: {{summary}}",
+            },
+          },
+        },
+      },
+    ],
+    edges: [{ id: "e1", from: "t1", to: "o1", branch: "default" }],
+  });
+
+  const cardRun = ws.workflows.runManual(cardWf.id, {
+    inputs: {
+      repo: "promptclickrun/Botkins",
+      number: "336",
+      title: "Mobile parity for channel configuration",
+      needs_colt: "yes",
+      priority: "P1",
+      summary: "Needs a quick architecture choice before coding.",
+      url: "https://github.com/promptclickrun/Botkins/issues/336",
+      comment_url: "https://github.com/promptclickrun/Botkins/issues/336#issuecomment-1",
+    },
+  });
+  await waitFor(() => ws.workflows.getRun(cardRun.id)?.status === "completed");
+
+  const msgs = ws.state.chats.find((c) => c.id === targetChatId).messages;
+  assert.equal(msgs.length, 2);
+  const posted = msgs[1];
+  assert.ok(posted.text.includes("Botkins #336: Mobile parity for channel configuration"));
+  assert.ok(posted.text.includes("Needs your direction"));
+  assert.ok(posted.actionCard, "actionCard attached");
+  assert.equal(posted.actionCard.title, "Botkins #336: Mobile parity for channel configuration");
+  assert.equal(posted.actionCard.needsYou, true);
+  assert.equal(posted.actionCard.state, "open");
+  assert.equal(posted.actionCard.link?.url, "https://github.com/promptclickrun/Botkins/issues/336#issuecomment-1");
+  assert.equal(posted.actionCard.dispatch?.botId, bot.id);
+  assert.equal(posted.actionCard.dispatch?.prompt, "Work on promptclickrun/Botkins#336 (Mobile parity for channel configuration). Context: Needs a quick architecture choice before coding.");
+  assert.equal(posted.actionCard.blocks[0].type, "badges");
+  assert.equal(posted.actionCard.blocks[1].type, "markdown");
+});
+
+test("chatCardAction dispatch creates a titled chat, seeds the prompt, is idempotent, and dismiss marks dismissed", async (t) => {
+  const { ws, prompts } = setup(t);
+  const bot = ws.state.bots[0];
+  const inboxId = ws.createChat(bot.id, "Inbox");
+
+  // Post two cards via workflow
+  const wf = ws.workflows.create({
+    name: "Triage",
+    nodes: [
+      { id: "t1", kind: "trigger", triggerKind: "manual", label: "Manual", config: { inputs: [{ name: "num" }, { name: "needs" }] } },
+      {
+        id: "o1",
+        kind: "output",
+        label: "Card",
+        config: {
+          destination: "chat",
+          chatId: inboxId,
+          card: {
+            title: "Botkins #{{num}}: Mobile parity",
+            needsYou: "{{needs}}",
+            body: "Triage summary for #{{num}}",
+            dispatch: {
+              botName: bot.name,
+              prompt: "Start working on #{{num}}",
+            },
+          },
+        },
+      },
+    ],
+    edges: [{ id: "e1", from: "t1", to: "o1", branch: "default" }],
+  });
+
+  const r1 = ws.workflows.runManual(wf.id, { inputs: { num: "336", needs: "true" } });
+  await waitFor(() => ws.workflows.getRun(r1.id)?.status === "completed");
+  const r2 = ws.workflows.runManual(wf.id, { inputs: { num: "337", needs: "no" } });
+  await waitFor(() => ws.workflows.getRun(r2.id)?.status === "completed");
+
+  const [m1, m2] = ws.state.chats.find((c) => c.id === inboxId).messages;
+  assert.equal(m1.actionCard.needsYou, true);
+  assert.equal(m2.actionCard.needsYou, false);
+
+  // Dispatch first card by cardId
+  const res1 = await ws.chatCardAction(inboxId, m1.actionCard.id, "dispatch");
+  assert.equal(res1.card.state, "dispatched");
+  assert.ok(res1.chatId);
+  assert.equal(res1.card.dispatchedChatId, res1.chatId);
+  assert.equal(res1.card.actedBy, "owner");
+  assert.ok(res1.card.actedAt > 0);
+
+  // Verify the newly created chat has the card title and started a turn with the dispatch prompt
+  const spawned = ws.state.chats.find((c) => c.id === res1.chatId);
+  assert.equal(spawned.title, "Botkins #336: Mobile parity");
+  await waitFor(() => prompts.some((p) => p.includes("Start working on #336")));
+  assert.equal(spawned.messages[0].role, "user");
+  assert.equal(spawned.messages[0].text, "Start working on #336");
+
+  // Idempotent second dispatch returns the SAME chat and does not send another prompt
+  const promptCountBefore = prompts.length;
+  const chatCountBefore = ws.state.chats.length;
+  const res1Again = await ws.chatCardAction(inboxId, 0, "dispatch");
+  assert.equal(res1Again.chatId, res1.chatId);
+  assert.equal(res1Again.alreadyDispatched, true);
+  assert.equal(prompts.length, promptCountBefore);
+  assert.equal(ws.state.chats.length, chatCountBefore);
+
+  // Cannot dismiss an already dispatched card
+  assert.throws(() => ws.chatCardAction(inboxId, m1.actionCard.id, "dismiss"), /already been dispatched/i);
+
+  // Dismiss second card by messageIndex
+  const res2 = await ws.chatCardAction(inboxId, 1, "dismiss");
+  assert.equal(res2.card.state, "dismissed");
+  assert.equal(res2.card.actedBy, "owner");
+
+  // Idempotent second dismiss succeeds cleanly
+  const res2Again = await ws.chatCardAction(inboxId, m2.actionCard.id, "dismiss");
+  assert.equal(res2Again.card.state, "dismissed");
+
+  // Cannot dispatch a dismissed card
+  assert.throws(() => ws.chatCardAction(inboxId, m2.actionCard.id, "dispatch"), /dismissed/i);
+
+  // Link ACL: chat.cardAction is owner-only
+  const ownerCtx = { kind: "owner" };
+  const memberCtx = { kind: "member", memberId: "m-1" };
+  const team = {
+    roles: [{ id: "r-1", name: "Member", permissions: ["chats"] }],
+    members: [{ id: "m-1", name: "Guest", roleId: "r-1", revokedAt: null }],
+  };
+  assert.equal(authorize(ownerCtx, team, "chat.cardAction", [inboxId, m1.actionCard.id, "dismiss"]), "");
+  assert.notEqual(authorize(memberCtx, team, "chat.cardAction", [inboxId, m1.actionCard.id, "dismiss"]), "");
+});
+
+test("exportWorkflow and parseImportedWorkflow preserve card.dispatch bot mapping", async (t) => {
+  const { ws } = setup(t);
+  const bots = ws.state.bots;
+  const bot = bots[0];
+  const wf = ws.workflows.create({
+    name: "Card export",
+    nodes: [
+      { id: "t1", kind: "trigger", triggerKind: "manual", label: "Manual", config: {} },
+      {
+        id: "o1",
+        kind: "output",
+        label: "Card",
+        config: {
+          destination: "chat",
+          botId: bot.id,
+          card: {
+            title: "Hi",
+            dispatch: { botId: bot.id, prompt: "Go" },
+          },
+        },
+      },
+    ],
+    edges: [{ id: "e1", from: "t1", to: "o1", branch: "default" }],
+  });
+
+  const exported = exportWorkflow(wf, bots);
+  const exportedOut = exported.workflow.nodes.find((n) => n.id === "o1");
+  assert.equal(exportedOut.config.card.dispatch.botId, undefined);
+  assert.equal(exportedOut.config.card.dispatch.botName, bot.name);
+
+  const imported = parseImportedWorkflow(exported, bots);
+  const importedOut = imported.draft.nodes.find((n) => n.id === "o1");
+  assert.equal(importedOut.config.card.dispatch.botId, bot.id);
+  assert.equal(importedOut.config.card.dispatch.botName, bot.name);
+});
+

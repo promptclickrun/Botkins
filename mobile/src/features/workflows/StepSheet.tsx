@@ -395,15 +395,95 @@ function OutputEditor({ cfg, setConfig, fields, analysis }: { cfg: Record<string
   const dest = cfg.destination ?? "chat";
   const label = (d: string) => (d === "chat" ? "Chat" : d === "feed" ? "Feed" : d === "idea" ? "Ideas" : d === "goal" ? "Goals" : "Notification");
   const visible = chats.filter((c) => !c.archived).slice(0, 20);
+  const card = dest === "chat" && cfg.card && typeof cfg.card === "object" ? cfg.card : null;
+  const setCard = (patch: Record<string, unknown>) => setConfig({ card: { ...(card ?? {}), ...patch } });
+  const dispatch = card?.dispatch && typeof card.dispatch === "object" ? card.dispatch : null;
+  const setDispatch = (patch: Record<string, unknown>) => setCard({ dispatch: { ...(dispatch ?? {}), ...patch } });
+  const cardFields: { label: string; value: string; tone?: string }[] = Array.isArray(card?.fields) ? card.fields : [];
+  const hasMessageOrCard = !!String(cfg.template ?? "").trim() || !!(card && String(card.title ?? "").trim());
   return (
     <View style={{ gap: space.lg }}>
-      <Choice label="Send to" options={DESTINATIONS.map((d) => ({ value: d, label: label(d) }))} value={dest} onChange={(destination: string) => setConfig({ destination })} />
+      <Choice label="Send to" options={DESTINATIONS.map((d) => ({ value: d, label: label(d) }))} value={dest} onChange={(destination: string) => setConfig({ destination, ...(destination !== "chat" ? { card: undefined } : {}) })} />
       <Choice label="As" options={[{ value: "", label: "First bot" }, ...bots.map((b) => ({ value: b.name, label: b.name }))]} value={cfg.botName ?? ""} onChange={(botName: string) => setConfig({ botName: botName || undefined, botId: undefined })} />
       {dest === "chat" && <Choice label="Chat" options={[{ value: "", label: "The bot's main chat" }, ...visible.map((c) => ({ value: c.id, label: c.title || "Chat" }))]} value={cfg.chatId ?? ""} onChange={(chatId: string) => setConfig({ chatId: chatId || undefined })} />}
+      {dest === "chat" && (
+        <Segmented
+          options={[
+            { value: "text", label: "Plain text" },
+            { value: "card", label: "Action card" },
+          ]}
+          value={card ? "card" : "text"}
+          onChange={(mode) => {
+            if (mode === "card") {
+              setConfig({
+                card: card ?? {
+                  title: cfg.title || "{{title}}",
+                  needsYou: "{{needs_you}}",
+                  body: cfg.template || "",
+                  fields: [],
+                },
+              });
+            } else {
+              setConfig({ card: undefined });
+            }
+          }}
+        />
+      )}
+      {dest === "chat" && card && (
+        <View style={{ gap: space.md, padding: space.md, borderRadius: radius.lg, backgroundColor: colors.sunken, borderWidth: 1, borderColor: colors.line }}>
+          <TemplateField label="Card title" area={false} value={card.title ?? ""} onChange={(title) => setCard({ title })} fields={fields} problems={problemsFor(analysis, "card.title")} placeholder="Botkins #{{number}}: {{title}}" />
+          <TemplateField label="Subtitle (optional)" area={false} value={card.subtitle ?? ""} onChange={(subtitle) => setCard({ subtitle: subtitle || undefined })} fields={fields} problems={problemsFor(analysis, "card.subtitle")} placeholder="[{{repo}}#{{number}}]({{url}})" />
+          <TemplateField label="Needs your direction" area={false} value={typeof card.needsYou === "boolean" ? String(card.needsYou) : (card.needsYou ?? "")} onChange={(needsYou) => setCard({ needsYou })} fields={fields} problems={problemsFor(analysis, "card.needsYou")} placeholder="{{needs_you}} (yes/true or no/false)" />
+          <TemplateField label="Card body (Markdown)" value={card.body ?? ""} onChange={(body) => setCard({ body })} fields={fields} problems={problemsFor(analysis, "card.body")} placeholder="Short summary shown inside the card." />
+          <View style={{ gap: space.sm }}>
+            <T variant="footnote" color="muted" weight="600">
+              Metadata badges
+            </T>
+            {cardFields.map((f, i) => (
+              <View key={i} style={{ flexDirection: "row", gap: space.sm, alignItems: "flex-start" }}>
+                <View style={{ flex: 1, gap: space.xs }}>
+                  <Field value={f.label ?? ""} placeholder="Label" onChangeText={(lbl) => setCard({ fields: cardFields.map((x, j) => (j === i ? { ...x, label: lbl } : x)) })} />
+                  <Field value={f.value ?? ""} placeholder="Value or {{field}}" onChangeText={(val) => setCard({ fields: cardFields.map((x, j) => (j === i ? { ...x, value: val } : x)) })} />
+                </View>
+                <IconButton icon={X} label={`Remove badge ${i + 1}`} onPress={() => setCard({ fields: cardFields.filter((_, j) => j !== i) })} />
+              </View>
+            ))}
+            <Button title="Add badge" variant="secondary" size="sm" icon={Plus} onPress={() => setCard({ fields: [...cardFields, { label: "", value: "" }] })} />
+          </View>
+          <TemplateField label="Link label (optional)" area={false} value={card.link?.label ?? ""} onChange={(lbl) => setCard({ link: lbl || card.link?.url ? { ...(card.link ?? {}), label: lbl } : undefined })} fields={fields} problems={problemsFor(analysis, "card.link.label")} placeholder="View GitHub comment" />
+          <TemplateField label="Link URL (optional)" area={false} value={card.link?.url ?? ""} onChange={(url) => setCard({ link: url || card.link?.label ? { ...(card.link ?? {}), url } : undefined })} fields={fields} problems={problemsFor(analysis, "card.link.url")} placeholder="{{comment_url}}" />
+          <Segmented
+            options={[
+              { value: "off", label: "Dismiss only" },
+              { value: "on", label: "Dispatch + Dismiss" },
+            ]}
+            value={dispatch ? "on" : "off"}
+            onChange={(mode) => {
+              if (mode === "on") {
+                setCard({ dispatch: dispatch ?? { botName: cfg.botName || bots[0]?.name || "", prompt: "" } });
+              } else {
+                setCard({ dispatch: undefined });
+              }
+            }}
+          />
+          {dispatch && (
+            <View style={{ gap: space.md }}>
+              <Choice
+                label="Dispatch bot"
+                options={[{ value: "", label: "Same as output bot" }, ...bots.map((b) => ({ value: b.name, label: b.name }))]}
+                value={dispatch.botName ?? bots.find((b) => b.id === dispatch.botId)?.name ?? ""}
+                onChange={(botName: string) => setDispatch({ botName: botName || undefined, botId: undefined })}
+              />
+              <TemplateField label="Dispatch chat title (optional)" area={false} value={dispatch.chatTitle ?? ""} onChange={(chatTitle) => setDispatch({ chatTitle: chatTitle || undefined })} fields={fields} problems={problemsFor(analysis, "card.dispatch.chatTitle")} placeholder="Defaults to the card title" />
+              <TemplateField label="Dispatch prompt" value={dispatch.prompt ?? ""} onChange={(prompt) => setDispatch({ prompt })} fields={fields} problems={problemsFor(analysis, "card.dispatch.prompt")} placeholder="First user message sent to the new chat." />
+            </View>
+          )}
+        </View>
+      )}
       {dest !== "chat" && <TemplateField label="Title" area={false} value={cfg.title ?? ""} onChange={(title) => setConfig({ title: title || undefined })} fields={fields} problems={problemsFor(analysis, "title")} placeholder="The workflow's name" />}
       {dest === "goal" && <Choice label="Category" options={GOAL_CATEGORIES.map((c) => ({ value: c, label: cap(c) }))} value={cfg.category ?? "other"} onChange={(category: string) => setConfig({ category })} />}
-      <TemplateField label="Message" value={cfg.template ?? ""} onChange={(template) => setConfig({ template })} fields={fields} problems={problemsFor(analysis, "template")} placeholder="What to send. Tap a field to put it in." />
-      {!String(cfg.template ?? "").trim() && <T variant="footnote" style={{ color: colors.warning }}>An empty message fails the run.</T>}
+      <TemplateField label={card ? "Plain-text fallback (optional)" : "Message"} value={cfg.template ?? ""} onChange={(template) => setConfig({ template })} fields={fields} problems={problemsFor(analysis, "template")} placeholder={card ? "Auto-generated from the card when blank." : "What to send. Tap a field to put it in."} />
+      {!hasMessageOrCard && <T variant="footnote" style={{ color: colors.warning }}>An empty message fails the run.</T>}
     </View>
   );
 }
