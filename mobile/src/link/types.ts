@@ -1467,6 +1467,9 @@ export type ProactiveBot = Partial<ProactiveBotSettings> & {
 export type ProactivePart = { chatMode?: "main" | "new"; enabled: boolean; bots: Record<string, ProactiveBot | undefined> };
 export type ProactiveLog = { at: number; reason: "signals" | "sweep" | "check" | "context" | "review"; score?: number; signals: number; outcome: "alerted" | "silent" | "failed"; runId: string; said?: string };
 export type ChannelKind = "slack" | "telegram" | "discord" | "imessage";
+export type ChannelDmPolicy = "pairing" | "allowlist" | "open" | "off";
+export type ChannelGroupMode = "mention" | "all";
+export type ChannelToolProfile = "restricted" | "standard";
 export type ChannelStatusState =
   | "connected"
   | "reconnecting"
@@ -1479,6 +1482,7 @@ export type ChannelStatusState =
 export type ChannelPairing = {
   code: string;
   connectionId?: string;
+  connectionLabel?: string;
   label?: string;
   kind?: ChannelKind;
   senderId: string;
@@ -1486,6 +1490,41 @@ export type ChannelPairing = {
   conversationId: string;
   createdAt: number;
   expiresAt: number;
+};
+
+export type ChannelAllowlistEntry = {
+  senderId: string;
+  display?: string;
+  addedAt?: number;
+  source?: string;
+};
+
+export type ChannelLimits = {
+  senderPerMinute: number;
+  connectionPerMinute: number;
+  maxInboundLength: number;
+  maxAttachmentBytes: number;
+  allowedAttachmentTypes: string[];
+  dailyTurnCap: number;
+};
+
+export type ChannelPolicy = {
+  dm: ChannelDmPolicy;
+  allowlist: ChannelAllowlistEntry[];
+  groups: {
+    enabled: boolean;
+    mode: ChannelGroupMode;
+    channels: string[];
+  };
+  toolProfile: ChannelToolProfile;
+  ignoreBots?: boolean;
+  notifyPhone?: boolean;
+  limits: ChannelLimits;
+};
+
+export type ChannelPolicyPatch = Partial<Omit<ChannelPolicy, "groups" | "limits">> & {
+  groups?: Partial<ChannelPolicy["groups"]>;
+  limits?: Partial<ChannelLimits>;
 };
 
 export type ChannelConnection = {
@@ -1497,17 +1536,46 @@ export type ChannelConnection = {
   paused?: boolean;
   botId: string;
   nodeHostId?: string;
-  policy?: {
-    dm?: string;
-    toolProfile?: string;
-    notifyPhone?: boolean;
-  };
+  webhookRouteId?: string;
+  configuredSecrets?: string[];
+  policy?: Partial<ChannelPolicy>;
   pendingPairings?: ChannelPairing[];
+  dailyUsage?: { date: string; turns: number };
   status?: {
     state: ChannelStatusState;
     detail?: string;
+    backoffMs?: number;
+    nextRetryAt?: number;
+    connectedAt?: number;
+    lastEventAt?: number;
     updatedAt?: number;
   };
+  createdAt?: number;
+  updatedAt?: number;
+};
+
+export type ChannelInput = {
+  kind?: ChannelKind;
+  label?: string;
+  transport?: string;
+  botId?: string | null;
+  nodeHostId?: string | null;
+  enabled?: boolean;
+  policy?: ChannelPolicyPatch;
+  secrets?: Record<string, string>;
+};
+
+export type ChannelAuditEntry = {
+  time: number;
+  connectionId: string;
+  kind: ChannelKind | string;
+  senderId?: string;
+  conversationId?: string;
+  threadId?: string;
+  decision: string;
+  reason?: string;
+  turnId?: string;
+  replyParts?: number;
 };
 
 export type WorkflowTriggerKind = "task" | "schedule" | "manual" | "routine" | "chat" | "webhook" | "github" | "channel";
@@ -2184,13 +2252,18 @@ export type Calls = {
   workflowGithubSignInStart(): WorkflowGithubSignIn;
   workflowGithubSignInCancel(): WorkflowGithubStatus;
   channelsList(): ChannelConnection[];
-  channelSetPolicy(id: string, policy: Record<string, unknown>): ChannelConnection;
+  channelAdd(input: ChannelInput): ChannelConnection;
+  channelUpdate(id: string, patch: ChannelInput): ChannelConnection;
+  channelRemove(id: string): { removed: boolean; id: string };
+  channelBind(id: string, botId: string): ChannelConnection;
+  channelSetPolicy(id: string, policy: ChannelPolicyPatch): ChannelConnection;
   channelPause(id: string): ChannelConnection;
   channelResume(id: string): ChannelConnection;
   channelPairList(id?: string | null): ChannelPairing[];
-  channelPairApprove(code: string, id?: string | null): { approved: boolean; senderId: string; connectionId: string };
+  channelPairApprove(code: string, id?: string | null): { approved: boolean; senderId: string; display?: string; connectionId: string };
   channelPairDeny(code: string, id?: string | null): { denied: boolean; senderId: string; connectionId: string };
   channelTest(id: string): { ok: boolean; state: string; detail: string; identity?: string };
+  channelLogs(id?: string | null, options?: { limit?: number }): ChannelAuditEntry[];
   refreshPanel(id: string): void;
   changePanel(id: string, action: "delete" | "hide" | "show" | "small" | "wide" | "tall" | "earlier" | "later"): void;
   boardAct(id: string, action: "read" | "unread" | "clear" | "done" | "reopen" | "yes" | "goal" | "notToday" | "up" | "down" | "delete", value?: string): string | undefined;

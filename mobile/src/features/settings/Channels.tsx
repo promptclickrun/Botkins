@@ -1,155 +1,302 @@
-// Settings › Channels: owner-only view of external messaging channels (Slack, Telegram, Discord, iMessage),
-// live connection status, pending DM pairing approvals, and pause/resume switches.
-import { useState } from "react";
-import { View } from "react-native";
-import type { ChannelConnection, ChannelPairing } from "@/link/types";
-import { usePart } from "@/state/hooks";
+// Settings › Channels (Screen 1: Channels hub).
+// Owner-only overview: pending pairings & broken connection callouts, connected channels
+// grouped list (no pause switch on the list), and Today activity stats strip linking to Activity.
+import { type Href, router, Stack } from "expo-router";
+import { AlertCircle, Plus, Radio, UserRound } from "lucide-react-native";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { StyleSheet, View } from "react-native";
+import type { ChannelAuditEntry, ChannelConnection } from "@/link/types";
+import { useOnline, usePart } from "@/state/hooks";
 import { api, attempt } from "@/state/link";
-import { Badge, Button, EmptyState, Group, Label, Page, Row, space, T, type Tone } from "@/ui";
+import { usePrefs } from "@/state/prefs";
+import {
+  Button,
+  EmptyState,
+  Group,
+  IconButton,
+  Label,
+  Page,
+  radius,
+  Row,
+  space,
+  T,
+  Tap,
+  useTheme,
+} from "@/ui";
+import {
+  CHANNEL_KIND_SPECS,
+  channelStatusMeta,
+  collectPendingPairings,
+  computeTodayStats,
+  formatShortTime,
+  isBrokenConnection,
+  transportDisplay,
+} from "./channels/logic";
+import { ChannelKindTile, OwnerOnlyPage, StatusPill, SurfaceCard, useIsChannelsOwner } from "./channels/ui";
 
-function statusMeta(conn: ChannelConnection): { label: string; tone: Tone } {
-  const s = conn.status?.state ?? (conn.paused ? "paused" : conn.enabled ? "disconnected" : "disabled");
-  switch (s) {
-    case "connected":
-      return { label: "Connected", tone: "success" };
-    case "reconnecting":
-      return { label: "Reconnecting", tone: "warning" };
-    case "auth_error":
-      return { label: "Auth error", tone: "danger" };
-    case "waiting_permission":
-      return { label: "Waiting for macOS permission", tone: "warning" };
-    case "paused":
-      return { label: "Paused", tone: "neutral" };
-    case "disabled":
-      return { label: "Disabled", tone: "neutral" };
-    default:
-      return { label: "Disconnected", tone: "neutral" };
+function connectionSubtitle(conn: ChannelConnection, botName: string): string {
+  const status = channelStatusMeta(conn);
+  if (status.state === "auth_error") {
+    return `${botName} · ${conn.status?.detail ? conn.status.detail : "auth failed"}`;
   }
+  if (status.state === "waiting_permission") {
+    return `${botName} · ${conn.status?.detail || "waiting for macOS permission"}`;
+  }
+  if (conn.paused) {
+    return `${botName} · ${transportDisplay(conn)}`;
+  }
+  const today = new Date();
+  const todayKey = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+  if (conn.dailyUsage?.date === todayKey && conn.dailyUsage.turns > 0) {
+    return `${botName} · ${conn.dailyUsage.turns} ${conn.dailyUsage.turns === 1 ? "turn" : "turns"} today`;
+  }
+  if (conn.status?.lastEventAt) {
+    return `${botName} · ${formatShortTime(conn.status.lastEventAt)}`;
+  }
+  return `${botName} · ${transportDisplay(conn)}`;
 }
 
 export default function Channels() {
+  const owner = useIsChannelsOwner();
+  const { colors, dark } = useTheme();
+  const hasBackdrop = usePrefs((prefs) => prefs.backdrop !== "clean");
+  const online = useOnline();
   const channels = usePart("channels") ?? [];
   const bots = usePart("bots") ?? [];
-  const [busyId, setBusyId] = useState<string | null>(null);
+  const [logs, setLogs] = useState<ChannelAuditEntry[] | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
 
-  const pairings: Array<ChannelPairing & { connectionId: string; connectionLabel: string; kind: string }> = [];
-  for (const conn of channels) {
-    for (const p of conn.pendingPairings ?? []) {
-      pairings.push({
-        ...p,
-        connectionId: conn.id,
-        connectionLabel: conn.label,
-        kind: conn.kind,
-      });
-    }
-  }
-
-  async function togglePause(conn: ChannelConnection, active: boolean) {
-    setBusyId(conn.id);
+  const loadLogs = useCallback(async () => {
+    if (!owner) return;
     try {
-      if (active) await attempt(api.channelResume(conn.id));
-      else await attempt(api.channelPause(conn.id));
-    } finally {
-      setBusyId(null);
+      const result = await api.channelLogs(null, { limit: 150 });
+      if (Array.isArray(result)) setLogs(result);
+    } catch {
+      // Today stats are optional; fail quietly if logs aren't available yet.
     }
-  }
+  }, [owner]);
 
-  async function toggleNotifyPhone(conn: ChannelConnection, notifyPhone: boolean) {
-    const key = `${conn.id}:notify`;
-    setBusyId(key);
-    try {
-      await attempt(api.channelSetPolicy(conn.id, { notifyPhone }));
-    } finally {
-      setBusyId(null);
-    }
-  }
+  useEffect(() => {
+    if (online && owner) void loadLogs();
+  }, [online, owner, channels.length, loadLogs]);
 
-  async function decidePair(code: string, connectionId: string, approve: boolean) {
-    setBusyId(code);
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true);
     try {
-      if (approve) await attempt(api.channelPairApprove(code, connectionId));
-      else await attempt(api.channelPairDeny(code, connectionId));
+      await Promise.all([attempt(api.channelsList()), loadLogs()]);
     } finally {
-      setBusyId(null);
+      setRefreshing(false);
     }
-  }
+  }, [loadLogs]);
+
+  const pairings = useMemo(() => collectPendingPairings(channels), [channels]);
+  const broken = useMemo(() => channels.filter(isBrokenConnection), [channels]);
+  const stats = useMemo(() => (logs ? computeTodayStats(channels, logs) : null), [channels, logs]);
+
+  if (!owner) return <OwnerOnlyPage title="Channels" />;
+
+  const pairingKinds = [...new Set(pairings.map((p) => CHANNEL_KIND_SPECS[p.kind]?.name ?? p.kind))];
+  const firstPairingConn = pairings[0]?.connectionId;
+  const openAdd = () => router.push("/settings/channels/add" as Href);
+  const openActivity = () => router.push("/settings/channels/activity" as Href);
+
+  const dividerColor = hasBackdrop
+    ? dark
+      ? "rgba(255,255,255,0.12)"
+      : "rgba(15,23,42,0.10)"
+    : colors.line;
 
   return (
-    <Page title="Channels">
-      {pairings.length > 0 && (
-        <View style={{ gap: space.xs }}>
-          <Label>{`Pairing approvals (${pairings.length})`}</Label>
-          <Group>
-            {pairings.map((p) => (
-              <Row
-                key={`${p.connectionId}-${p.code}`}
-                title={`${p.display || p.senderId} · ${p.kind}`}
-                subtitle={`Code ${p.code} · ${p.connectionLabel}`}
-                subtitleLines={2}
-                trailing={
-                  <View style={{ flexDirection: "row", gap: space.xs }}>
-                    <Button
-                      title="Approve"
-                      size="sm"
-                      disabled={busyId === p.code}
-                      onPress={() => void decidePair(p.code, p.connectionId, true)}
-                    />
-                    <Button
-                      title="Deny"
-                      variant="secondary"
-                      size="sm"
-                      disabled={busyId === p.code}
-                      onPress={() => void decidePair(p.code, p.connectionId, false)}
-                    />
-                  </View>
+    <Page
+      title="Channels"
+      caption="Where people reach your bots."
+      onRefresh={onRefresh}
+      refreshing={refreshing}
+    >
+      <Stack.Screen
+        options={{
+          headerRight: () => (
+            <IconButton
+              icon={Plus}
+              label="Add channel"
+              variant={hasBackdrop ? "glass" : "soft"}
+              onPress={openAdd}
+            />
+          ),
+        }}
+      />
+
+      {(pairings.length > 0 || broken.length > 0) && (
+        <View style={{ gap: space.sm }}>
+          {pairings.length > 0 && (
+            <SurfaceCard style={{ padding: space.md, flexDirection: "row", alignItems: "center", gap: space.md }}>
+              <View
+                style={{
+                  width: 38,
+                  height: 38,
+                  borderRadius: 19,
+                  backgroundColor: colors.primary,
+                  alignItems: "center",
+                  justifyContent: "center",
+                }}
+              >
+                <UserRound size={19} color={colors.onPrimary} strokeWidth={2.2} />
+              </View>
+              <View style={{ flex: 1, minWidth: 0, gap: 1 }}>
+                <T variant="callout" weight="600" numberOfLines={1}>
+                  {pairings.length === 1 ? "1 wants to talk" : `${pairings.length} want to talk`}
+                </T>
+                <T variant="footnote" color="muted" numberOfLines={1}>
+                  {pairingKinds.join(" · ")}
+                </T>
+              </View>
+              <Button
+                title="Review"
+                variant="primary"
+                size="sm"
+                style={{ borderRadius: radius.pill }}
+                onPress={() =>
+                  router.push({
+                    pathname: "/settings/channels/who" as any,
+                    params: firstPairingConn ? { id: firstPairingConn } : {},
+                  })
                 }
               />
-            ))}
-          </Group>
-          <T variant="footnote" color="muted" style={{ paddingHorizontal: space.sm }}>
-            Approving adds the sender to that channel's DM allowlist.
-          </T>
+            </SurfaceCard>
+          )}
+
+          {broken.map((conn) => {
+            const status = channelStatusMeta(conn);
+            const kindName = CHANNEL_KIND_SPECS[conn.kind]?.name ?? conn.kind;
+            const shortName =
+              conn.label.length > 14 && conn.label.toLowerCase().includes(kindName.toLowerCase())
+                ? kindName
+                : conn.label;
+            const reason =
+              conn.status?.detail ||
+              (status.state === "auth_error"
+                ? "Token rejected"
+                : status.state === "waiting_permission"
+                  ? "Waiting for macOS permission"
+                  : "Disconnected");
+            return (
+              <SurfaceCard
+                key={conn.id}
+                style={{ padding: space.md, flexDirection: "row", alignItems: "center", gap: space.md }}
+              >
+                <View
+                  style={{
+                    width: 38,
+                    height: 38,
+                    borderRadius: 19,
+                    backgroundColor: status.tone === "warning" ? colors.warningSoft : colors.dangerSoft,
+                    alignItems: "center",
+                    justifyContent: "center",
+                  }}
+                >
+                  <AlertCircle
+                    size={19}
+                    color={status.tone === "warning" ? colors.warning : colors.danger}
+                    strokeWidth={2.2}
+                  />
+                </View>
+                <View style={{ flex: 1, minWidth: 0, gap: 1 }}>
+                  <T variant="callout" weight="600" numberOfLines={1}>
+                    {`${shortName} is offline`}
+                  </T>
+                  <T variant="footnote" color="muted" numberOfLines={1}>
+                    {reason}
+                  </T>
+                </View>
+                <Button
+                  title="Fix"
+                  variant={hasBackdrop ? "glass" : "secondary"}
+                  size="sm"
+                  style={{ borderRadius: radius.pill }}
+                  onPress={() =>
+                    router.push({
+                      pathname: "/settings/channels/[id]" as any,
+                      params: { id: conn.id },
+                    })
+                  }
+                />
+              </SurfaceCard>
+            );
+          })}
         </View>
       )}
 
       {channels.length === 0 ? (
         <EmptyState
+          icon={Radio}
           title="No channels connected"
-          text="Add Slack, Telegram, Discord, or iMessage in Settings › Channels on your computer or via `botkins channels add`."
+          text="Connect Slack, Telegram, Discord, or iMessage so people can reach your bots."
+          action="Add channel"
+          onAction={openAdd}
         />
       ) : (
-        <View style={{ gap: space.sm }}>
-          <Label>Connected channels</Label>
-          {channels.map((conn) => {
-            const badge = statusMeta(conn);
-            const botName = bots.find((b) => b.id === conn.botId)?.name ?? "Unbound";
-            const detail = conn.status?.detail
-              ? `${conn.kind} · ${botName} · ${conn.status.detail}`
-              : `${conn.kind} · ${botName}${conn.nodeHostId ? ` · node ${conn.nodeHostId}` : ""}`;
-            return (
-              <Group key={conn.id}>
+        <View>
+          <Label>Connected</Label>
+          <Group inset={space.lg + 38 + space.md}>
+            {channels.map((conn) => {
+              const status = channelStatusMeta(conn);
+              const botName = bots.find((b) => b.id === conn.botId)?.name ?? "Unbound";
+              return (
                 <Row
+                  key={conn.id}
+                  leading={<ChannelKindTile kind={conn.kind} size={38} />}
                   title={conn.label}
-                  subtitle={detail}
-                  subtitleLines={3}
-                  trailing={<Badge label={badge.label} tone={badge.tone} />}
-                  toggled={conn.enabled && !conn.paused}
-                  disabled={busyId === conn.id}
-                  onToggle={(next) => void togglePause(conn, next)}
+                  subtitle={connectionSubtitle(conn, botName)}
+                  trailing={<StatusPill status={status} />}
+                  chevron
+                  onPress={() =>
+                    router.push({
+                      pathname: "/settings/channels/[id]" as any,
+                      params: { id: conn.id },
+                    })
+                  }
                 />
-                <Row
-                  title="Phone notifications for replies"
-                  subtitle="Off by default"
-                  toggled={Boolean(conn.policy?.notifyPhone)}
-                  disabled={busyId === `${conn.id}:notify`}
-                  onToggle={(next) => void toggleNotifyPhone(conn, next)}
-                />
-              </Group>
-            );
-          })}
-          <T variant="footnote" color="muted" style={{ paddingHorizontal: space.sm }}>
-            Toggle off to pause a channel without removing its credentials. Full setup and other policies are managed on your computer or CLI.
-          </T>
+              );
+            })}
+          </Group>
+        </View>
+      )}
+
+      {stats && channels.length > 0 && (
+        <View>
+          <Label>Today</Label>
+          <Tap
+            onPress={openActivity}
+            feel="select"
+            sink={0.99}
+            accessibilityLabel={`Today: ${stats.turns} turns, ${stats.blocked} blocked, ${stats.newPeople} new people. Open activity`}
+          >
+            <SurfaceCard style={{ flexDirection: "row" }}>
+              {[
+                { value: String(stats.turns), label: "turns" },
+                { value: String(stats.blocked), label: "blocked" },
+                { value: String(stats.newPeople), label: "new people" },
+              ].map((stat, idx) => (
+                <View
+                  key={stat.label}
+                  style={{
+                    flex: 1,
+                    paddingVertical: space.md,
+                    paddingHorizontal: space.lg,
+                    borderLeftWidth: idx > 0 ? StyleSheet.hairlineWidth : 0,
+                    borderLeftColor: dividerColor,
+                  }}
+                >
+                  <T variant="title2" weight="700" numberOfLines={1}>
+                    {stat.value}
+                  </T>
+                  <T variant="footnote" color="muted" numberOfLines={1}>
+                    {stat.label}
+                  </T>
+                </View>
+              ))}
+            </SurfaceCard>
+          </Tap>
         </View>
       )}
     </Page>

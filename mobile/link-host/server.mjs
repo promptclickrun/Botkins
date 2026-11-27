@@ -2464,7 +2464,13 @@ export class LinkHost extends EventEmitter {
     }
     if (!REMOTE_METHODS.has(method)) throw new Error("That can't be done from a phone.");
     // A credential reference is filled in at a few fixed places of three calls, and refused everywhere else.
-    const { args: callArgs, secrets } = await this.credentials.resolve(method, remoteArgs(method, forApp, { deviceId: session.deviceId, uploads: this.uploads }));
+    const { args: callArgs, secrets: resolvedSecrets } = await this.credentials.resolve(method, remoteArgs(method, forApp, { deviceId: session.deviceId, uploads: this.uploads }));
+    // Inline channel secrets (channelAdd/channelUpdate) are scrubbed from responses and errors too.
+    const inlineSecrets =
+      method === "channelAdd" || method === "channelUpdate"
+        ? Object.values((method === "channelAdd" ? callArgs[0] : callArgs[1])?.secrets ?? {}).filter((v) => typeof v === "string" && v.length >= 4)
+        : [];
+    const secrets = inlineSecrets.length ? [...new Set([...resolvedSecrets, ...inlineSecrets])] : resolvedSecrets;
     if (!secrets.length) {
       const answer = await this.backend.call(method, callArgs, { principal });
       // A space a person makes starts pinned for them (the pins are theirs, kept here).
