@@ -1,14 +1,16 @@
 import assert from "node:assert/strict";
-import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { networkInterfaces, tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
-import { PiProvider } from "../desktop/providers/pi/index.mjs";
+import { PiProvider, pluginAlias } from "../desktop/providers/pi/index.mjs";
 import { OmpProvider } from "../desktop/providers/omp/index.mjs";
+import { createRuntime } from "../desktop/runtime.mjs";
+import { headlessHost } from "../desktop/host/headless.mjs";
 import { oauthMcpServer } from "./oauth-server.mjs";
-import { Workspace } from "./starter.mjs";
+import { seedBots, Workspace } from "./starter.mjs";
 import { fakeClient } from "./fake-copilot.mjs";
 import { until } from "./quiet-turns.mjs";
 
@@ -44,7 +46,7 @@ async function setup(t, nativeBinary, Provider = PiProvider) {
 }
 
 // Opt in with a native Pi binary or CLI script. The model speaks Responses SSE on loopback only.
-async function localModel(t, toolName = "mcp__words__secret_word", explicitlyArmed = false) {
+async function localModel(t, toolName = "mcp__words__secret_word", explicitlyArmed = false, args = "{}") {
   const requests = [];
   const missingTool = [];
   let armed = false;
@@ -62,7 +64,7 @@ async function localModel(t, toolName = "mcp__words__secret_word", explicitlyArm
     if (useTool && !name) missingTool.push(requests.length);
     const call = useTool && name;
     const item = call
-      ? { id, type: "function_call", call_id: id, name, arguments: "{}" }
+      ? { id, type: "function_call", call_id: id, name, arguments: args }
       : { id, type: "message", role: "assistant", status: "completed", content: [{ type: "output_text", text: "Done.", annotations: [] }] };
     const frame = (type, data) => "event: " + type + "\ndata: " + JSON.stringify({ type, ...data }) + "\n\n";
     res.writeHead(200, { "content-type": "text/event-stream" });
@@ -70,7 +72,7 @@ async function localModel(t, toolName = "mcp__words__secret_word", explicitlyArm
       frame("response.created", { response: { id, status: "in_progress", output: [] } }) +
       frame("response.output_item.added", { output_index: 0, item: call ? { ...item, arguments: "" } : { ...item, status: "in_progress", content: [] } }) +
       (call
-        ? frame("response.function_call_arguments.delta", { output_index: 0, item_id: id, delta: "{}" })
+        ? frame("response.function_call_arguments.delta", { output_index: 0, item_id: id, delta: args })
         : frame("response.output_text.delta", { output_index: 0, item_id: id, content_index: 0, delta: "Done." })) +
       frame("response.output_item.done", { output_index: 0, item }) +
       frame("response.completed", { response: { id, status: "completed", output: [item], usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 } } }),
@@ -133,6 +135,86 @@ const tokenRequests = (remote) => remote.state.log.filter((entry) => entry.path 
 const upstreamCalls = (remote) => remote.state.log.filter((entry) => entry.path === "/mcp" && entry.body && JSON.parse(entry.body).method === "tools/call");
 
 const ompBinary = process.env.BOTKINS_TEST_OMP;
+for (const [kind, program] of [["pi", binary], ["omp", ompBinary]]) {
+  test(`Workspace ${kind}: installed plugin OAuth renews only its scoped credential`, { skip: !program, timeout: 30000 }, async (t) => {
+    assert.deepEqual(Object.keys(networkInterfaces()), ["lo"]);
+    const home = mkdtempSync(join(tmpdir(), "botkins-workspace-plugin-oauth-"));
+    const remote = await oauthMcpServer({ recordSecrets: false });
+    seedBots(home);
+    const runtime = await createRuntime({ host: headlessHost({ version: "1" }), dataDir: home, trial: true, link: { port: 0, announce: false } });
+    t.after(async () => {
+      await runtime.stop();
+      await remote.close();
+      rmSync(home, { force: true, recursive: true });
+    });
+    const ws = runtime.workspace;
+    const folder = join(home, "plugin-fixture");
+    mkdirSync(folder);
+    writeFileSync(join(folder, "plugin.json"), JSON.stringify({ name: "words-fixture", version: "1.0.0", mcpServers: ".mcp.json", hooks: "hooks.json" }));
+    writeFileSync(join(folder, ".mcp.json"), JSON.stringify({ mcpServers: { words: { type: "http", url: remote.url, oauth: {} } } }));
+    writeFileSync(join(folder, "hooks.json"), JSON.stringify({ hooks: { preToolUse: [{ type: "command", command: `node "\${PLUGIN_ROOT}/hook.mjs"` }] } }));
+    writeFileSync(join(folder, "hook.mjs"), `const chunks = []; for await (const chunk of process.stdin) chunks.push(chunk); const req = JSON.parse(Buffer.concat(chunks)); console.log(JSON.stringify(req.toolName.endsWith("-secret_word") ? { modifiedArgs: { word: "rewritten" } } : {}));`);
+    const plugin = await ws.plugins.addFolder(folder);
+    await ws.plugins.setBots(plugin.id, ["pip"]);
+    await ws.plugins.setEnabled(plugin.id, true, { revision: plugin.revision });
+    const [pluginServer] = ws.plugins.oauthServers(ws.plugins.get(plugin.id));
+    await ws.plugins.signIn(pluginServer.id, { open: remote.browser });
+    const noPlugin = await ws.plugins.session({ id: "scout" }, { id: "other-chat" }, { liveOAuth: true });
+    assert.deepEqual(noPlugin.mcpServers, {});
+    const provider = runtime.providers.require(kind);
+    provider.binary = program;
+    provider.baseEnv = { HOME: home, TMPDIR: home, PATH: process.env.PATH };
+    ws.state.settings.harness = kind;
+    ws.state.settings.approval = "ask";
+    const chat = ws.chat(ws.createChat("pip"));
+    chat.model = { provider: "codex", model: "fixture" };
+    t.mock.method(runtime.providers, "models", async () => [{ provider: "codex", id: "fixture", tools: true }]);
+    const gateway = ws.harness.gateway;
+    gateway.chatgpt = { signIn: () => ({ token: "fixture-model-only" }) };
+    const tool = "mcp__" + pluginAlias(pluginServer.name) + (kind === "pi" ? "__" : "_") + "secret_word";
+    const model = await localModel(t, tool, true, '{"word":"original"}');
+    t.mock.method(gateway, "fetch", (_url, init) => fetch(model.baseUrl + "/responses", { ...init, headers: { "content-type": "application/json" } }));
+    const asks = [];
+    ws.events.on("request", (view) => {
+      asks.push(view);
+      if (view.kind === "permission") ws.interactions.respond(view.id, { action: "approve" });
+    });
+    const run = async () => {
+      model.arm();
+      await ws.submit(chat.id, "Run the fixture tool once.");
+      assert.equal(chat.messages.at(-1)?.text, "Done.");
+    };
+    await run();
+    const [live] = provider.live.values();
+    assert.ok(live?.oauth, "Workspace must project the installed plugin through the OAuth relay");
+    assert.equal(upstreamCalls(remote).length, 1);
+    assert.equal(JSON.parse(upstreamCalls(remote)[0].body).params.arguments.word, "rewritten");
+    assert.ok(asks.some((view) => view.label === pluginServer.name + " / secret_word" && view.preview.includes("rewritten")));
+    remote.state.rejectNextCall = true;
+    await run();
+    assert.equal(remote.state.rejectedEffects, 1);
+    assert.equal(upstreamCalls(remote).length, 2);
+    await run();
+    assert.equal(tokenRequests(remote), 2);
+    assert.equal(upstreamCalls(remote).length, 3);
+    assert.ok([...provider.live.values()].includes(live) && !live.rpc.closed);
+    assert.equal(await ws.plugins.token("scout", { server: pluginServer.name, serverId: pluginServer.id, url: pluginServer.url }), null);
+    assert.equal(await ws.plugins.token("pip", { server: pluginServer.name, serverId: "not-this-plugin", url: pluginServer.url }), null);
+    remote.state.scope = "tools.read tools.write";
+    remote.state.requiredScope = "tools.write";
+    await run();
+    assert.equal(ws.plugins.oauth.status(pluginServer).signedIn, false);
+    remote.state.authorize = "deny";
+    await assert.rejects(ws.plugins.signIn(pluginServer.id, { open: remote.browser }), /cancel|denied/i);
+    assert.equal(await ws.plugins.token("pip", { server: pluginServer.name, serverId: pluginServer.id, url: pluginServer.url }), null);
+    const scopes = [...remote.state.access.values()].map((grant) => grant.scope);
+    assert.ok(scopes.every((scope) => scope === "tools.read"), "cancelled consent did not create a wider token");
+    await run();
+    assert.equal(upstreamCalls(remote).length, 4);
+    withoutCredentials(remote, [model.requests, chat.messages, ...[...provider.live.values()].map((entry) => readFileSync(entry.file, "utf8")), live.rpc.stderr]);
+  });
+}
+
 test("native OMP: relay grants, warm renewal, no replay, and Stop", { skip: !ompBinary && "No native OMP specified", timeout: 30000 }, async (t) => {
   assert.deepEqual(Object.keys(networkInterfaces()), ["lo"], "Run this test in a loopback-only Linux network namespace");
   const { remote, makeSession } = await setup(t, ompBinary, OmpProvider);

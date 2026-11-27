@@ -1929,8 +1929,9 @@ export class Workspace {
     // The harnesses that take a plugin's MCP servers and hooks from Botkins (Pi and OMP run the
     // hooks in Botkins' approval step: providers/pi/index.mjs). The others get its skills only.
     const fullPlugins = PLUGIN_RUNTIMES.has(provider.id);
+    const liveOAuth = provider.id === "pi" || provider.id === "omp";
     const pluginSpec = allowPlugins
-      ? await this.plugins.session(bot, chat, { skillsOnly: !fullPlugins })
+      ? await this.plugins.session(bot, chat, { skillsOnly: !fullPlugins, liveOAuth })
       : { directories: [], mcpServers: {}, hooks: undefined };
     // A subagent_run child runs its plugins' hooks as a child (childHooks); the turn keeps its own
     // for the subagentStart and subagentStop that Botkins runs around each child (desktop/subagents.mjs).
@@ -1949,7 +1950,7 @@ export class Workspace {
     // stays on the side it began the session on: one that doesn't answer now isn't handed to the
     // harness, where its tools would have other names. Its tools say so when they are called.
     const routed = allowMcp ? await (routing ?? this.mcpApps.prepare(bot)) : new Map();
-    const ownServers = allowMcp ? this.integrations.serversFor(bot, { liveOAuth: provider.id === "pi" || provider.id === "omp" }) : {};
+    const ownServers = allowMcp ? this.integrations.serversFor(bot, { liveOAuth }) : {};
     // (A server that isn't Botkins' yet, one that wasn't ready when the session began, goes to the
     // harness until it is; it then stays Botkins', which changes the tool list once.)
     const routes = prompt.record.routes;
