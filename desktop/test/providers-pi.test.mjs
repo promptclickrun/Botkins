@@ -150,11 +150,14 @@ test("Botkins' own tools never ask, and MCP tools ask as MCP tools", { skip }, a
   const asked = [];
   const session = await provider.openSession(spec({ handlers: { permission: async (request) => (asked.push(request), { allow: true }) } }));
   session.turn = {};
-  assert.equal(await session.permission({ toolName: "mcp__botkins__wiki_read", input: {} }), true);
+  assert.equal(await session.permission({ toolName: "mcp__botkins__wiki_read", input: {} }), false, "a name alone is not the bridge");
+  session.bridge = {};
+  assert.equal(await session.permission({ toolName: "mcp__botkins__wiki_read", registryServer: "botkins", input: {} }), true);
+  session.bridge = null;
   assert.equal(asked.length, 0);
-  assert.equal(await session.permission({ toolName: "mcp__files__get", input: { id: 1 } }), true);
+  assert.equal(await session.permission({ toolName: "mcp__files__get", registryServer: "files", registryTool: "get", input: { id: 1 } }), true);
   assert.deepEqual([asked[0].kind, asked[0].label, asked[0].remember], ["mcp", "files / get", ["MCP tool files/get", "files", "get"]]);
-  assert.equal(await session.permission({ toolName: "read", input: { path: "/x" } }), true);
+  assert.equal(await session.permission({ toolName: "read", native: true, input: { path: "/x" } }), true);
   assert.deepEqual([asked[1].kind, asked[1].readOnly], ["read", true]);
   // With no turn, or no one to ask, nothing runs.
   session.turn = null;

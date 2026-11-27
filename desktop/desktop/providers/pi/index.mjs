@@ -28,6 +28,8 @@ import { SessionStore, resumeOrRecover, serversWithTokens, uuidFor } from "../se
 import { skillChoices, skillSupport } from "../skills.mjs";
 import { displayValue } from "../../display.mjs";
 import { PLAN_INSTRUCTIONS, updatePlanTool } from "./plan.mjs";
+import { describeToolCall } from "./permissions.mjs";
+import { permissionName } from "../permission-request.mjs";
 
 export const PI_ID = "pi";
 export const OMP_ID = "omp";
@@ -95,8 +97,6 @@ const MAX_LIVE = 8;
 const piSessionId = (id) => (/^[A-Za-z0-9](?:[A-Za-z0-9._-]{0,126}[A-Za-z0-9])?$/.test(id) ? id : uuidFor(id));
 const hash = (value) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 
-const READS = new Set(["read", "grep", "find", "ls"]);
-const WRITES = new Set(["write", "edit"]);
 /** [tool, MCP server or undefined] for a Pi or OMP MCP tool name. */
 function splitName(name) {
   const match = /^mcp__(.+?)__(.+)$/.exec(String(name ?? "")) ?? /^mcp__([^_]+)_(.+)$/.exec(String(name ?? ""));
@@ -654,28 +654,22 @@ class PiSession extends ProviderSession {
   /** The extension's question before a tool runs: Botkins' rules and the person decide. */
   async permission(call) {
     const handlers = this.spec.handlers;
-    if (!handlers || !this.turn) return false;
+    const turn = this.turn;
+    const active = () => turn && this.turn === turn && !turn.ended && !this.stopRequested && !this.closed;
+    if (!handlers?.permission || !active() || !permissionName(call?.toolName)) return false;
     const { name, server } = toolIdentity(call);
-    this.turn.calls?.set(call.toolCallId, { name, server });
-    if (server === BRIDGE) return true;
+    if (!permissionName(name) || (server !== undefined && !permissionName(server))) return false;
+    turn.calls?.set(call.toolCallId, { name, server });
+    if (server === BRIDGE)
+      return !!this.bridge && call.registryServer === BRIDGE && !call.managed && !call.sandboxEscape;
     // Pi keeps every server Botkins gave it registered, so its tool list stays the same; one this
     // turn doesn't have (the person writing may not use it) does nothing. (A Pi package's own server isn't Botkins'.)
     if (server && this.live?.given?.has(server) && !Object.hasOwn(this.spec.mcpServers ?? {}, server)) return false;
-    const input = call.input && typeof call.input === "object" ? call.input : {};
-    const path = typeof input.path === "string" ? input.path : typeof input.file_path === "string" ? input.file_path : "";
-    let request;
-    if (server)
-      request = { kind: "mcp", label: server + " / " + name, title: "Use " + server + " / " + name + "?", preview: displayValue(input, Infinity), remember: ["MCP tool " + server + "/" + name, server, name] };
-    else if (name === "bash") {
-      const command = String(input.command ?? "");
-      request = { kind: "shell", label: "Shell command", title: "Run this command?", preview: command, remember: command ? ["this exact command", command] : null };
-    } else if (WRITES.has(name))
-      request = { kind: "write", label: path || name, title: (name === "edit" ? "Edit" : "Write") + " this file?", preview: String(input.content ?? input.newText ?? (displayValue(input, Infinity) || path)), remember: path ? ["writes to this path", path] : null };
-    else if (READS.has(name)) request = { kind: "read", label: path || name, title: "Read " + (path || "files") + "?", preview: path || displayValue(input, Infinity), remember: path ? ["reads of this path", path] : null };
-    else request = { kind: "custom-tool", label: name, title: "Use " + name + "?", preview: displayValue(input, Infinity), remember: null };
     try {
-      const answer = await handlers.permission({ ...request, toolName: name, detail: displayValue(call, Infinity), readOnly: request.kind === "read", sandboxEscape: false, managed: false });
-      return !!answer?.allow;
+      const answer = await handlers.permission(describeToolCall(call, {
+        name, server, configured: !!server && Object.hasOwn(this.spec.mcpServers ?? {}, server),
+      }));
+      return !!answer?.allow && !!active();
     } catch {
       return false;
     }

@@ -35,8 +35,8 @@ test("the extension removes OMP's docs and asks Botkins with MCP metadata", asyn
   botkins({
     registerProvider() {},
     getAllTools: () => [
-      { name: "mcp__files_get", mcpServerName: "files", mcpToolName: "get" },
-      { name: "mcp__botkins_wiki_read", mcpServerName: "botkins", mcpToolName: "wiki_read" },
+      { name: "mcp__files_get", mcpServerName: "files", mcpToolName: "get", sourceInfo: { source: "mcp", path: "<mcp:mcp__files_get>" } },
+      { name: "mcp__botkins_wiki_read", mcpServerName: "botkins", mcpToolName: "wiki_read", sourceInfo: { source: "mcp", path: "<mcp:mcp__botkins_wiki_read>" } },
     ],
     on: (name, handler) => (handlers[name] = handler),
   });
@@ -53,9 +53,10 @@ test("the extension removes OMP's docs and asks Botkins with MCP metadata", asyn
   assert.equal(await handlers.tool_call(event, { ui }), undefined);
   assert.match(requests[0], /^botkins:permission /);
   const payload = JSON.parse(requests[0].slice("botkins:permission ".length));
-  assert.deepEqual(payload, { ...event, mcpServerName: "files", mcpToolName: "get" });
+  assert.deepEqual(payload, { ...event, mcpServerName: "files", mcpToolName: "get", registryServer: "files", registryTool: "get" });
 
   assert.equal(await handlers.tool_call({ ...event, toolName: "mcp__botkins_wiki_read" }, { ui }), undefined);
-  assert.equal(requests.length, 1);
+  assert.equal(requests.length, 2);
+  assert.equal(JSON.parse(requests[1].slice("botkins:permission ".length)).registryServer, "botkins");
   assert.equal(botkinsPrompt("No docs."), "No docs.");
 });
