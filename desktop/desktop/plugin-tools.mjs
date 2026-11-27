@@ -9,7 +9,7 @@ const TOO_LARGE =
   "This plugin is too large to look at in a chat. Make this change in Settings, Marketplace, Plugins, or with `botkins plugins` on the command line, where all of it is shown.";
 
 export function pluginTools(ws, bot, chat, run, task) {
-  if (!task || !run || chat.helper || run.scheduleId != null || run.panelId || run.taskId) return [];
+  if (!task || !run || chat.helper || run.scheduleId != null || run.panelId || run.taskId || run.workflowRunId) return [];
   const active = () => {
     if (task.ended || task.stopped || ws.closing || ws.active.get(chat.id) !== task) throw new Error("This turn has ended.");
   };
