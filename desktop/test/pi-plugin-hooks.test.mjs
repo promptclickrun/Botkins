@@ -273,11 +273,12 @@ test("an OMP child whose plugin is switched off before it ends delivers no subag
   let allowed = true;
   const session = pluginSession([plugin.record], { dir: join(root, "warm3"), chatId: "chat-1", botId: "bot-1" });
   const one = await provider.openSession({ ...spec, pluginHooks: session.hooks, pluginAuthorized: () => allowed });
-  await one.send({ prompt: "kids:late:ok@300,early:ok@20" });
-  await settle(() => plugin.events().some((e) => e.event === "subagentStop"));
+  // "late" ends 2 s after it starts, long after "early" (a slow CI runner spawns a hook in hundreds of ms).
+  await one.send({ prompt: "kids:late:ok@2000,early:ok@20" });
+  await settle(() => plugin.events().some((e) => e.event === "subagentStop"), 1800);
   // The plugin is switched off while "late" still runs.
   allowed = false;
-  await new Promise((resolve) => setTimeout(resolve, 500));
+  await settle(() => false, 2500);
   assert.deepEqual(plugin.events().map((e) => [e.event, e.agentId]).sort(), [["subagentStart", "kid-early"], ["subagentStart", "kid-late"], ["subagentStop", "kid-early"]]);
   await one.close();
   await provider.stop();
@@ -296,8 +297,9 @@ async function installedLateChild(name, { update }) {
   assert.deepEqual(held.ids, [{ id: added.id, revision: ws.plugins.records[0].revision }], "the session holds the revision that gave its hooks");
   const { provider, spec } = setup();
   const session = await provider.openSession({ ...spec, pluginHooks: held.hooks, pluginAuthorized: () => ws.plugins.authorizes(bot.id, held.ids) });
-  await session.send({ prompt: "kids:late:ok@400" });
-  await settle(() => plugin.events().some((e) => e.event === "subagentStart"));
+  // The child ends 3 s after it starts: the update below must finish first, also on a slow CI runner.
+  await session.send({ prompt: "kids:late:ok@3000" });
+  await settle(() => plugin.events().some((e) => e.event === "subagentStart"), 2500);
   if (update) {
     const hooks = JSON.parse(readFileSync(join(plugin.record.folder, "hooks.json"), "utf8"));
     for (const list of Object.values(hooks.hooks)) for (const entry of list) entry.command += " v2";
@@ -306,7 +308,9 @@ async function installedLateChild(name, { update }) {
     await ws.plugins.update(added.id, { revision });
     assert.notEqual(ws.plugins.records[0].revision, held.ids[0].revision);
   }
-  await new Promise((resolve) => setTimeout(resolve, 700));
+  // Past the child's end, and its stop hook if it runs.
+  await settle(() => plugin.events().some((e) => e.event === "subagentStop"), 4500);
+  await new Promise((resolve) => setTimeout(resolve, 300));
   await session.close();
   await provider.stop();
   return plugin.events().map((e) => [e.event, e.agentId]);
