@@ -126,6 +126,10 @@ export class DirectMcpOAuth {
         rpc = JSON.parse(body);
         if (rpc?.jsonrpc !== "2.0" || typeof rpc.method !== "string") return send(400);
         const hasId = typeof rpc.id === "string" || Number.isSafeInteger(rpc.id);
+        // OMP tries its optional discovery RPC before MCP initialize. Decline it at the relay
+        // without touching the upstream or vault; OMP falls back to standard MCP discovery.
+        if (hasId && rpc.method === "server/discover")
+          return send(200, JSON.stringify({ jsonrpc: "2.0", id: rpc.id, error: { code: -32601, message: "Method not found" } }));
         if (rpc.method === "tools/call") {
           const { id, params } = rpc;
           const valid = hasId &&

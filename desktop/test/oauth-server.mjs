@@ -183,6 +183,15 @@ export async function oauthMcpServer(options = {}) {
         response.write(": keepalive\r\n\r\nevent: message\r\ndata: " + JSON.stringify(reply) + "\r\n\r\n");
         return; // The relay can return when the result arrives; it need not wait for stream EOF.
       }
+      if (message.method === "tools/call" && state.holdNextCall) {
+        const held = state.holdNextCall;
+        state.holdNextCall = null;
+        response.once("close", held.disconnected);
+        response.writeHead(200, { "content-type": "text/event-stream" });
+        response.write(": waiting\n\n");
+        held.received();
+        return;
+      }
       if (message.id === undefined) {
         response.writeHead(202);
         return response.end();

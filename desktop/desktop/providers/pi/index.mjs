@@ -708,7 +708,7 @@ class PiSession extends ProviderSession {
     // turn doesn't have (the person writing may not use it) does nothing. (A Pi package's own server isn't Botkins'.)
     if (server && this.live?.given?.has(server) && !Object.hasOwn(this.spec.mcpServers ?? {}, server)) return false;
     const input = call.input && typeof call.input === "object" ? call.input : {};
-    const needsGrant = this.provider.runtime === PI_ID && !!this.spec.mcpServers?.[server]?.oauthId;
+    const needsGrant = !!this.spec.mcpServers?.[server]?.oauthId;
     const oauth = needsGrant ? turn.oauth : undefined;
     if (needsGrant && (!oauth || this.stopRequested || this.closed || turn.ended ||
       typeof call.toolCallId !== "string" || !call.toolCallId || oauth.pending.has(call.toolCallId) ||
@@ -1055,7 +1055,7 @@ export class PiProvider extends ModelProvider {
   /** Writes the files the extension and OMP read, each containing session secrets and user-only. */
   async write(live, described) {
     const servers = Object.entries(described.servers);
-    if (this.runtime === PI_ID && servers.some(([, server]) => server.oauthId)) {
+    if (servers.some(([, server]) => server.oauthId)) {
       live.oauth ??= await DirectMcpOAuth.listen();
     }
     if (live.oauth) {

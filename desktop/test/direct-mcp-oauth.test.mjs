@@ -1,17 +1,18 @@
 import assert from "node:assert/strict";
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
-import { tmpdir } from "node:os";
+import { networkInterfaces, tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { PiProvider } from "../desktop/providers/pi/index.mjs";
+import { OmpProvider } from "../desktop/providers/omp/index.mjs";
 import { oauthMcpServer } from "./oauth-server.mjs";
 import { Workspace } from "./starter.mjs";
 import { fakeClient } from "./fake-copilot.mjs";
 import { until } from "./quiet-turns.mjs";
 
-async function setup(t, nativeBinary) {
+async function setup(t, nativeBinary, Provider = PiProvider) {
   const home = mkdtempSync(join(tmpdir(), "botkins-direct-oauth-"));
   t.after(() => rmSync(home, { force: true, recursive: true }));
   const remote = await oauthMcpServer({ recordSecrets: false });
@@ -26,7 +27,7 @@ async function setup(t, nativeBinary) {
     writeFileSync(binary, "#!/bin/sh\nexec " + JSON.stringify(process.execPath) + " " + JSON.stringify(script) + ' "$@"\n');
     chmodSync(binary, 0o700);
   }
-  const provider = new PiProvider({ binary, dataDir: join(home, "harness-data"), env: { HOME: home, TMPDIR: home, XDG_CONFIG_HOME: home, XDG_DATA_HOME: home, PATH: "/usr/bin:/bin" } });
+  const provider = new Provider({ binary, dataDir: join(home, "harness-data"), env: { HOME: home, TMPDIR: home, XDG_CONFIG_HOME: home, XDG_DATA_HOME: home, PATH: "/usr/bin:/bin" } });
   t.after(() => provider.stop());
   const bot = {};
   const makeSession = (extra) => provider.openSession({
@@ -43,17 +44,21 @@ async function setup(t, nativeBinary) {
 }
 
 // Opt in with a native Pi binary or CLI script. The model speaks Responses SSE on loopback only.
-async function localModel(t) {
+async function localModel(t, toolName = "mcp__words__secret_word", explicitlyArmed = false) {
   const requests = [];
   const missingTool = [];
+  let armed = false;
   const model = createServer(async (req, res) => {
     let body = "";
     for await (const chunk of req) body += chunk;
     const input = JSON.parse(body);
     requests.push(input);
     const id = "fixture_" + requests.length;
-    const useTool = requests.length % 2 === 1;
-    const name = input.tools?.find((tool) => tool.name === "mcp__words__secret_word")?.name;
+    const name = input.tools?.find((tool) => tool.name === toolName)?.name;
+    // OMP also makes auxiliary model requests on the configured provider. Only the main
+    // request gets the external MCP schema and should consume the one armed invocation.
+    const useTool = explicitlyArmed ? armed && !!name : requests.length % 2 === 1;
+    if (useTool && explicitlyArmed) armed = false;
     if (useTool && !name) missingTool.push(requests.length);
     const call = useTool && name;
     const item = call
@@ -73,7 +78,7 @@ async function localModel(t) {
   });
   await new Promise((resolve) => model.listen(0, "127.0.0.1", resolve));
   t.after(() => new Promise((resolve) => (model.closeAllConnections(), model.close(resolve))));
-  return { requests, missingTool, baseUrl: "http://127.0.0.1:" + model.address().port + "/v1" };
+  return { requests, missingTool, arm: () => { armed = true; }, baseUrl: "http://127.0.0.1:" + model.address().port + "/v1" };
 }
 
 const binary = process.env.BOTKINS_TEST_PI;
@@ -126,6 +131,80 @@ const withoutCredentials = (remote, value) => {
 };
 const tokenRequests = (remote) => remote.state.log.filter((entry) => entry.path === "/token").length;
 const upstreamCalls = (remote) => remote.state.log.filter((entry) => entry.path === "/mcp" && entry.body && JSON.parse(entry.body).method === "tools/call");
+
+const ompBinary = process.env.BOTKINS_TEST_OMP;
+test("native OMP: relay grants, warm renewal, no replay, and Stop", { skip: !ompBinary && "No native OMP specified", timeout: 30000 }, async (t) => {
+  assert.deepEqual(Object.keys(networkInterfaces()), ["lo"], "Run this test in a loopback-only Linux network namespace");
+  const { remote, makeSession } = await setup(t, ompBinary, OmpProvider);
+  const { baseUrl, requests, arm } = await localModel(t, "mcp__words_secret_word", true);
+  const approvals = [];
+  let allow = true;
+  const session = await makeSession({
+    inference: { providers: [{ name: "fixture", config: {
+      name: "Local fixture", baseUrl, api: "openai-responses", apiKey: "synthetic-model-key", authHeader: true,
+      models: [{ id: "fixture", name: "Local fixture", input: ["text"], contextWindow: 8192, maxTokens: 1024, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }],
+    } }] },
+    handlers: { permission: async (request) => (approvals.push(request), { allow }) },
+  });
+  const events = [];
+  session.on((event) => events.push(event));
+  const { call, config } = await connect(session);
+  const live = session.live;
+  const versionConfig = JSON.parse(readFileSync(join(live.agentDir, "mcp.json"), "utf8"));
+  assert.notEqual(config.servers.words.url, remote.url, "native OMP must receive the host relay URL, not the upstream OAuth address");
+  assert.deepEqual(versionConfig.mcpServers, config.servers);
+  const turn = async () => {
+    arm();
+    assert.equal((await session.send({ prompt: "Use the fixture tool once." }, 5000)).text, "Done.");
+  };
+  try {
+    await until(() => remote.state.log.some((entry) => entry.body && JSON.parse(entry.body).method === "tools/list"), "native OMP MCP discovery");
+  } catch (error) {
+    const methods = remote.state.log.filter((entry) => entry.path === "/mcp").map((entry) => entry.body ? JSON.parse(entry.body).method : entry.method);
+    throw new Error("Native OMP discovery did not list tools; upstream methods: " + methods.join(", "), { cause: error });
+  }
+  assert.equal(remote.state.log.some((entry) => entry.body && JSON.parse(entry.body).method === "server/discover"), false,
+    "the relay must not forward OMP's optional discovery RPC");
+  assert.equal((await call(98765)).result?.isError, true);
+  assert.equal(upstreamCalls(remote).length, 0);
+  await turn();
+  assert.ok(requests.some((request) => request.tools?.some((tool) => tool.name === "mcp__words_secret_word")));
+  assert.ok(JSON.stringify(events).includes(remote.state.word), "native OMP must receive the real relay result");
+  assert.equal(upstreamCalls(remote).length, 1);
+  remote.state.rejectNextCall = true;
+  await turn();
+  assert.equal(remote.state.rejectedEffects, 1);
+  assert.equal(upstreamCalls(remote).length, 2);
+  await turn();
+  assert.equal(upstreamCalls(remote).length, 3);
+  assert.equal(tokenRequests(remote), 2);
+  remote.state.interruptNextCall = true;
+  await turn();
+  assert.equal(remote.state.interruptedEffects, 1);
+  assert.equal(upstreamCalls(remote).length, 4);
+  allow = false;
+  await turn();
+  assert.equal(upstreamCalls(remote).length, 4);
+  allow = true;
+  const received = Promise.withResolvers();
+  const disconnected = Promise.withResolvers();
+  remote.state.holdNextCall = { received: received.resolve, disconnected: disconnected.resolve };
+  arm();
+  const stopping = session.send({ prompt: "Use the fixture tool, then stop." }, 5000);
+  await Promise.race([received.promise, stopping.then(() => assert.fail("OMP finished without opening the held request"))]);
+  await session.abort();
+  await stopping;
+  await disconnected.promise;
+  assert.equal(upstreamCalls(remote).length, 5);
+  assert.equal((await call(98766)).result?.isError, true);
+  assert.equal(upstreamCalls(remote).length, 5);
+  assert.equal(session.live === live && !live.rpc.closed, true, "OMP process should stay warm even after Stop");
+  assert.equal(approvals.length, 6);
+  assert.ok(approvals.every((entry) => entry.kind === "mcp" && entry.label === "words / secret_word"));
+  assert.ok(JSON.stringify(events).includes("not replayed"));
+  withoutCredentials(remote, [versionConfig, requests, events, remote.state.log, live.rpc.stderr]);
+});
+
 async function connect(session) {
   await session.warm();
   const config = JSON.parse(readFileSync(session.live.file, "utf8"));
