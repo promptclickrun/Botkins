@@ -344,6 +344,28 @@ export default function Settings({
           )}
         </div>
         <div className="set-scroll" key={section}>
+          {state.remote?.unified &&
+            (state.remote.unifiedHosts?.length ?? 0) > 1 &&
+            !["computers", "appearance", "sidebar", "profile", "feedback", "about"].includes(section) && (
+              <div className="settings-host-bar">
+                <label htmlFor="settings-target-host">Applying to computer</label>
+                <select
+                  id="settings-target-host"
+                  value={state.remote.settingsHost ?? "local"}
+                  onChange={(e) => {
+                    void api.setSettingsHost(e.target.value).catch(fail);
+                  }}
+                >
+                  {(state.remote.unifiedHosts ?? [])
+                    .filter((h) => h.local || h.state === "online")
+                    .map((h) => (
+                      <option key={h.id} value={h.id}>
+                        {h.local ? h.name + " (this computer)" : h.name}
+                      </option>
+                    ))}
+                </select>
+              </div>
+            )}
           {section === "general" && (
             <>
               <Group

@@ -676,6 +676,10 @@ export const CHANGES = {
   "node.share": (args, value) => levelOf(value?.project?.name ?? args?.[0], (value?.project?.shared ?? args?.[1] !== false) ? "shared" : "unshared"),
   "node.revoke": (args, value) => value?.revoked ?? args?.[0] ?? "all",
   "node.disconnect": null,
+  // ── Connected computers & unified multi-host view (control-hosts.mjs) ──
+  "hosts.unified": (args) => (args?.[0] === true ? "on" : "off"),
+  "hosts.include": (args) => levelOf(args?.[0], args?.[1] === true ? "included" : "excluded"),
+  "hosts.focus": (args) => args?.[0] || "local",
 };
 /** The service's own calls that only read, wait or talk in a chat: no line. Every call is in this list, in CHANGES or in LOGS_ITSELF. */
 export const READS = ["skills.review", "chat.scriptCommand", "skillsCatalog.search", "skillsCatalog.preview", "skillsCatalog.featured", "mcpCatalog.list", "piPackages.browse", "piPackages.preview", "piPackages.list", "status", "logs.read", "doctor", "events.wait", "pair.status", "devices.list", "bots.list", "bots.get", "providers.list", "providers.services", "providers.login.read", "providers.login.input", "providers.login.cancel", "models", "chat.open", "chat.list", "chat.send", "chat.read", "chat.stop", "runs.list", "routines.list", "plugins.list", "plugins.marketplaces", "plugins.refresh", "plugins.browse", "plugins.preview", "config.get", "config.describe", "relay.status", "update.status", "update.check", "methods", "plugins.get", "tools.list", "tools.get", "tools.import.preview", "tools.signIn.read", "tools.signIn.input", "tools.signIn.cancel", "skills.list", "skills.get", "bots.tools", "bots.access", "bots.menu", "folders.list", "gadgets.get", "profile.status", "profile.home"];
@@ -699,6 +703,8 @@ export const MORE_READS = {
   apps: ["apps.list", "apps.connected", "apps.accounts", "apps.card"], // (`apps.card` looks at a chat's Connect card again; when the app is connected, the chat goes on as it would for the window.)
   // (Node host, control-node.mjs)
   node: ["node.status"],
+  // (Connected computers & unified view, control-hosts.mjs)
+  hosts: ["hosts.status"],
 };
 READS.push(...Object.values(MORE_READS).flat());
 

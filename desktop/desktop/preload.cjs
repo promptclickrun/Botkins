@@ -315,6 +315,9 @@ for (const name of [
   "renameTeamMember",
   "setMyAvatar",
   "useRemoteHost",
+  "setUnifiedHosts",
+  "setUnifiedHostIncluded",
+  "setSettingsHost",
   "forgetRemoteHost",
   "renameRemoteHost",
   // Hosted profile identity and its public directory. Tokens/verifiers never reach this bridge.

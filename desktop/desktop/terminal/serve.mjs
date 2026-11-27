@@ -138,6 +138,8 @@ export async function startService({ paths, version, trial = false, reach = !tri
       return originalNodeDisconnect();
     };
     void profile.bindAll().catch((error) => log.error("Profile bind: " + error.message));
+    remote.resume();
+    service.remote = remote;
     service.profile = profile;
     service.runtime = runtime;
     runtime.subscribe(bump);
@@ -192,6 +194,7 @@ export async function startService({ paths, version, trial = false, reach = !tri
   } catch (error) {
     log.error("Botkins could not start: " + (error?.message ?? error));
     await closeSocket().catch(() => {});
+    remote?.stopAll();
     await runtime?.stop().catch(() => {});
     restoreConsole();
     throw error;
@@ -202,6 +205,7 @@ export async function startService({ paths, version, trial = false, reach = !tri
       log.info("Botkins is stopping (" + reason + ").");
       await closeSocket().catch(() => {});
       await signIns?.close().catch(() => {});
+      remote?.stopAll();
       // A provider that doesn't answer must not hold the service past its service manager's patience.
       await Promise.race([runtime.stop(), new Promise((resolve) => setTimeout(resolve, 8000).unref())]);
       log.info("Stopped.");

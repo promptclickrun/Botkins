@@ -6,7 +6,7 @@ import { runDeviceTool } from "@/device/run";
 import { cleanSources, sameSources, toolOf } from "@/device/tools";
 import type { DeviceAnswer, DeviceAsk } from "@/link/types";
 import { loadDevicePrefs, recordActivity, useDevicePrefs } from "./devicePrefs";
-import { api, wake } from "./link";
+import { api, pooledEntries, wake } from "./link";
 import { useApp } from "./store";
 
 /** An ask older than this is left alone: the bot has given up on it, or is about to. */
@@ -16,16 +16,22 @@ const MAX_AGE = 150_000;
 const started = new Set<string>();
 let queue: Promise<unknown> = Promise.resolve();
 
-const deviceId = () => useApp.getState().pairing?.deviceId;
+const deviceIds = () => {
+  const ids = new Set<string>();
+  const me = useApp.getState().pairing?.deviceId;
+  if (me) ids.add(me);
+  for (const entry of pooledEntries()) ids.add(entry.pairing.deviceId);
+  return ids;
+};
 const supported = () => !!useApp.getState().parts.meta?.capabilities?.includes("device-v1");
 
 /** The asks addressed to this phone that no one has started, oldest first. */
 function waiting(now = Date.now()): DeviceAsk[] {
-  const me = deviceId();
-  if (!me) return [];
+  const mine = deviceIds();
+  if (!mine.size) return [];
   const asks = useApp.getState().parts.asks ?? [];
   return asks
-    .filter((ask) => ask && ask.deviceId === me && typeof ask.id === "string" && !started.has(ask.id) && now - ask.at < MAX_AGE)
+    .filter((ask) => ask && mine.has(ask.deviceId) && typeof ask.id === "string" && !started.has(ask.id) && now - ask.at < MAX_AGE)
     // A tool the person finishes on the phone waits for the app to be in front.
     .filter((ask) => !toolOf(ask.tool)?.hands || AppState.currentState === "active")
     .sort((a, b) => a.at - b.at);

@@ -23,8 +23,9 @@ import { hideAction, moveToSection, runSectionAction, runSectionChoice, SECTION_
 import type { Bot, ChatSummary, Section } from "@/link/types";
 import { activityLabel, useBotActivity, useBots, useCan, useChats, usePart, useCanArrange, useMember } from "@/state/hooks";
 import { api, attempt } from "@/state/link";
+import { useApp } from "@/state/store";
 import { ago } from "@/state/time";
-import { BotAvatar, Dot, haptic, HoldMenu, radius, space, T, Tap, useTextPrompt, useTheme } from "@/ui";
+import { Badge, BotAvatar, Dot, haptic, HoldMenu, radius, space, T, Tap, useTextPrompt, useTheme } from "@/ui";
 import { arrangeBots } from "./arrange";
 import { type BoardItem, boardItems, DRAG, pickSlot, restingTop, sectionIdOf, shiftOf, stepSlot, type Zone, zoneOfSection } from "./drag";
 
@@ -90,6 +91,7 @@ type RowActions = { list: { name: string; label: string }[]; run: (name: string)
 /** One bot in the list: its face, its name, one line, and when it last spoke. */
 export function BotRow({ bot, chat, unread, actions }: { bot: Bot; chat?: ChatSummary; unread: boolean; actions?: RowActions }) {
   const state = useBotActivity(bot.id);
+  const unified = useApp((s) => s.unified);
   const canView = useCan("agents", "view");
   const canChat = useCan("agents", "chat");
   const status = activityLabel(state);
@@ -107,7 +109,7 @@ export function BotRow({ bot, chat, unread, actions }: { bot: Bot; chat?: ChatSu
         feel="select"
         sink={0.98}
         hitSlop={0}
-        accessibilityLabel={bot.name + ", " + line + (unread ? ", unread" : "")}
+        accessibilityLabel={bot.name + (unified && bot.hostName ? " on " + bot.hostName : "") + ", " + line + (unread ? ", unread" : "")}
         accessibilityActions={accessibilityActions.length > 0 ? accessibilityActions : undefined}
         onAccessibilityAction={accessibilityActions.length > 0 ? (event) => {
           const name = event.nativeEvent.actionName;
@@ -118,10 +120,12 @@ export function BotRow({ bot, chat, unread, actions }: { bot: Bot; chat?: ChatSu
       >
         <BotAvatar bot={bot} state={state} size={AVATAR} />
         <View style={{ flex: 1, minWidth: 0, gap: 1 }}>
-          <View style={{ flexDirection: "row", alignItems: "baseline", gap: space.sm }}>
-            <T variant="name" numberOfLines={1} style={{ flex: 1 }}>
+          <View style={{ flexDirection: "row", alignItems: "center", gap: space.sm }}>
+            <T variant="name" numberOfLines={1} style={{ flexShrink: 1 }}>
               {bot.name}
             </T>
+            {unified && !!bot.hostName && <Badge label={bot.hostName} tone="neutral" />}
+            <View style={{ flex: 1 }} />
             {!!chat && (
               <T variant="footnote" color="muted">
                 {ago(chat.time)}

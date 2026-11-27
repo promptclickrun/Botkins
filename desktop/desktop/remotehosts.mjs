@@ -23,6 +23,7 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { MAX_MARK_CHATS_READ, REMOTE_METHODS } from "./link/methods.mjs";
 import { cleanBotVoice, effectiveTts } from "./link/voice.mjs";
+import { diffRemoteNotifications, parseScopedId } from "./unified-hosts.mjs";
 
 /** What this app can do as a client, by the name another build would look for. */
 export const REMOTE_HOSTS = "remote-hosts-v1";
@@ -59,6 +60,9 @@ export const HERE = new Set([
   "teamJoins",
   "cancelTeamJoin",
   "useRemoteHost",
+  "setUnifiedHosts",
+  "setUnifiedHostIncluded",
+  "setSettingsHost",
   "forgetRemoteHost",
   "renameRemoteHost",
   // Account profile calls belong to this installation, even while another host is selected.
@@ -187,8 +191,8 @@ export class RemoteHosts {
    * @param options.device   { name, platform } as the host will list this app.
    * @param options.changed  Called when what the window shows changed: a host's state, or which host is in use.
    */
-  constructor({ file = null, protect = null, persistProfileKeys = true, lib, fetch = globalThis.fetch, WebSocket = globalThis.WebSocket, device, changed = () => {}, log = () => {} }) {
-    Object.assign(this, { file, protect, lib, fetch, WebSocket, device, changed, log });
+  constructor({ file = null, protect = null, persistProfileKeys = true, lib, fetch = globalThis.fetch, WebSocket = globalThis.WebSocket, device, changed = () => {}, onEvent = () => {}, log = () => {} }) {
+    Object.assign(this, { file, protect, lib, fetch, WebSocket, device, changed, onEvent, log });
     this.persistProfileKeys = persistProfileKeys && typeof protect?.wrap === "function" && typeof protect?.unwrap === "function";
     this.hosts = [];
     this.current = null;
@@ -197,9 +201,13 @@ export class RemoteHosts {
     this.state = "idle";
     this.route = null;
     this.watching = [];
+    this.unified = false;
+    this.excluded = new Set();
+    this.pool = new Map();
     this.joins = new Map();
     // The host that was in use when the app was last closed (resume() goes back to it).
     this.remembered = null;
+    this.rememberedUnified = false;
     if (!file) return;
     try {
       const saved = JSON.parse(readFileSync(file, "utf8"));
@@ -225,6 +233,10 @@ export class RemoteHosts {
           });
         }
       }
+      if (Array.isArray(saved?.excludedHosts)) {
+        for (const id of saved.excludedHosts) if (typeof id === "string" && id) this.excluded.add(id);
+      }
+      if (saved?.unified === true) this.rememberedUnified = true;
       if (typeof saved?.current === "string" && this.hosts.some((host) => host.id === saved.current)) this.remembered = saved.current;
     } catch {
       // No host paired yet, or a file that can't be read: the person pairs again.
@@ -248,8 +260,11 @@ export class RemoteHosts {
     mkdirSync(dirname(this.file), { recursive: true });
     // `current` is the host in use (its id, which is no secret), or null for this computer.
     const current = this.hosts.some((host) => host.id === this.current) ? this.current : null;
+    const excludedHosts = [...this.excluded].filter((id) => this.hosts.some((host) => host.id === id));
     writeFileSync(this.file, JSON.stringify({
       current,
+      unified: this.unified === true,
+      ...(excludedHosts.length > 0 && { excludedHosts }),
       // Keep profile-obtained private keys in memory when there is no protected store.  Legacy
       // manual pairings retain their existing trial-file behavior for local development.
       hosts: this.hosts.filter((host) => host.profileBound !== true || this.persistProfileKeys).map((host) => ({
@@ -273,9 +288,204 @@ export class RemoteHosts {
    * Called once when the app starts. Returns what is in use, or null for this computer.
    */
   resume() {
+    const wantUnified = this.rememberedUnified;
     const id = this.remembered;
     this.remembered = null;
+    this.rememberedUnified = false;
+    if (wantUnified) {
+      this.setUnified(true);
+      return null;
+    }
     return id && !this.current && this.hosts.some((host) => host.id === id) ? this.use(id) : this.inUse();
+  }
+  /** Whether the person has opted to operate all bots in one unified view. */
+  unifiedEnabled() {
+    return this.unified === true;
+  }
+  /** Paired hosts currently included in the unified view. */
+  includedHosts() {
+    return this.hosts.filter((host) => !this.excluded.has(host.id));
+  }
+  /** True when unified multi-host mode is active with at least one included remote host. */
+  isUnified() {
+    return this.unified === true && this.includedHosts().length > 0;
+  }
+  /** Turns unified multi-host view on or off and reconciles live connections. */
+  setUnified(enabled) {
+    const next = enabled === true;
+    if (next === this.unified) {
+      if (next) this.syncPool();
+      return this.unified;
+    }
+    this.unified = next;
+    if (next) {
+      this.stop();
+      this.current = null;
+      this.syncPool();
+    } else {
+      this.stopPool();
+    }
+    this.save();
+    this.changed();
+    return this.unified;
+  }
+  /** Includes or excludes one paired host from the unified view. */
+  setHostIncluded(id, included) {
+    const host = this.find(id);
+    if (included) this.excluded.delete(host.id);
+    else this.excluded.add(host.id);
+    if (this.unified) this.syncPool();
+    this.save();
+    this.changed();
+    return !this.excluded.has(host.id);
+  }
+  /** Opens/closes pooled LinkClient connections to match all included hosts when unified mode is on. */
+  syncPool() {
+    if (!this.unified) {
+      this.stopPool();
+      return;
+    }
+    const wanted = new Set(this.includedHosts().map((h) => h.id));
+    for (const [id, slot] of this.pool) {
+      if (!wanted.has(id)) {
+        slot.client.stop();
+        this.pool.delete(id);
+      }
+    }
+    for (const host of this.includedHosts()) {
+      const existing = this.pool.get(host.id);
+      if (existing) {
+        if (existing.state !== "online" && existing.state !== "connecting") existing.client.wake("network");
+        continue;
+      }
+      const slot = { host, client: null, parts: {}, state: "connecting", route: null, watching: [], initialized: false };
+      const client = new this.lib.LinkClient(host.pairing, {
+        fetch: this.transport(),
+        onParts: (parts) => {
+          if (this.pool.get(host.id)?.client !== client) return;
+          const prev = slot.initialized ? { live: slot.parts.live, runs: slot.parts.runs } : null;
+          for (const [name, value] of Object.entries(parts)) {
+            if (value === null || value === undefined) delete slot.parts[name];
+            else slot.parts[name] = value;
+          }
+          if (!slot.initialized && (slot.parts.bots || slot.parts.chats || slot.parts.live)) {
+            slot.initialized = true;
+          } else if (slot.initialized) {
+            const hostName = text(slot.parts.meta?.name) || host.name;
+            for (const event of diffRemoteNotifications(prev, slot.parts, { hostId: host.id, hostName })) {
+              try { this.onEvent?.(event); } catch { /* notification listener errors never break sync */ }
+            }
+          }
+          this.changed();
+        },
+        onState: (state) => {
+          if (this.pool.get(host.id)?.client !== client) return;
+          slot.state = state;
+          this.changed();
+        },
+        onHosts: (hosts) => {
+          if (this.pool.get(host.id)?.client !== client || !Array.isArray(hosts)) return;
+          host.pairing = { ...host.pairing, hosts };
+          this.save();
+        },
+        onRoute: (route) => {
+          if (this.pool.get(host.id)?.client !== client) return;
+          slot.route = route;
+          this.changed();
+        },
+      });
+      slot.client = client;
+      this.pool.set(host.id, slot);
+      client.start();
+    }
+  }
+  stopPool() {
+    for (const slot of this.pool.values()) slot.client.stop();
+    this.pool.clear();
+  }
+  stopAll() {
+    this.stop();
+    this.stopPool();
+  }
+  /** Wakes all pooled connections (or the single active connection) to reconnect right away. */
+  retryHost(id) {
+    if (this.unified && id) {
+      const slot = this.pool.get(id);
+      if (slot) {
+        slot.client.wake("network");
+        return;
+      }
+    }
+    this.wake();
+  }
+  /** Per-host snapshots and metadata for unified composition. */
+  unifiedEntries(own) {
+    const entries = [];
+    for (const host of this.includedHosts()) {
+      const slot = this.pool.get(host.id);
+      if (!slot) continue;
+      const name = text(slot.parts.meta?.name) || host.name;
+      const team = text(slot.parts.team?.team?.name) || host.team;
+      entries.push({
+        host: {
+          id: host.id,
+          name,
+          state: slot.state,
+          route: slot.route,
+          version: slot.parts.meta?.version ?? null,
+          capabilities: slot.parts.meta?.capabilities ?? [],
+          ...(host.member && { member: true }),
+          ...(team && { team }),
+        },
+        snapshot: snapshotOf(slot.parts, own),
+      });
+    }
+    return entries;
+  }
+  /** Live status rows for every remote host currently in the unified view. */
+  unifiedHostsStatus() {
+    return this.includedHosts().map((host) => {
+      const slot = this.pool.get(host.id);
+      const team = text(slot?.parts.team?.team?.name) || host.team;
+      return {
+        id: host.id,
+        name: text(slot?.parts.meta?.name) || host.name,
+        state: slot?.state ?? "idle",
+        route: slot?.route ?? null,
+        version: slot?.parts.meta?.version ?? null,
+        capabilities: slot?.parts.meta?.capabilities ?? [],
+        bots: Array.isArray(slot?.parts.bots) ? slot.parts.bots.filter((b) => !b.hidden).length : 0,
+        requests: Array.isArray(slot?.parts.live?.requests) ? slot.parts.live.requests.length : 0,
+        ...(host.member && { member: true }),
+        ...(team && { team }),
+      };
+    });
+  }
+  /** Partitions watched scoped chat IDs across all pooled remote hosts. */
+  watchUnified(chatIds) {
+    const byHost = new Map();
+    for (const id of Array.isArray(chatIds) ? chatIds : []) {
+      const parsed = parseScopedId(id);
+      if (!parsed) continue;
+      const list = byHost.get(parsed.hostId) ?? [];
+      if (!list.includes(parsed.rawId) && list.length < WATCHED) list.push(parsed.rawId);
+      byHost.set(parsed.hostId, list);
+    }
+    for (const [hostId, slot] of this.pool) {
+      const next = byHost.get(hostId) ?? [];
+      if (JSON.stringify(next) === JSON.stringify(slot.watching)) continue;
+      slot.watching = next;
+      slot.client.watch(next);
+    }
+  }
+  /** Tells every online pooled host whether the window is focused and if its chat is on screen. */
+  presenceUnified(front, viewingChat) {
+    const parsed = parseScopedId(viewingChat);
+    for (const [hostId, slot] of this.pool) {
+      if (slot.state !== "online") continue;
+      const chatId = parsed && parsed.hostId === hostId ? parsed.rawId : undefined;
+      void slot.client.call("link.push.presence", front, chatId).catch(() => {});
+    }
   }
   find(id) {
     const host = this.hosts.find((h) => h.id === id);
@@ -290,15 +500,18 @@ export class RemoteHosts {
   /** What Settings and the switcher show. Nothing of a credential is in it. */
   list() {
     return this.hosts.map((host) => {
-      const team = host.id === this.current ? text(this.parts.team?.team?.name) || host.team : host.team;
+      const slot = this.pool.get(host.id);
+      const active = slot ? { parts: slot.parts, state: slot.state, route: slot.route } : host.id === this.current ? { parts: this.parts, state: this.state, route: this.route } : null;
+      const team = active ? text(active.parts.team?.team?.name) || host.team : host.team;
       return {
         id: host.id,
         name: host.name,
         addedAt: host.addedAt,
         ...(host.member && { member: true }),
         ...(team && { team }),
-        current: host.id === this.current,
-        ...(host.id === this.current && { state: this.state, route: this.route, version: this.parts.meta?.version, capabilities: this.parts.meta?.capabilities ?? [] }),
+        current: !this.unified && host.id === this.current,
+        included: !this.excluded.has(host.id),
+        ...(active && { state: active.state, route: active.route, version: active.parts.meta?.version, capabilities: active.parts.meta?.capabilities ?? [] }),
       };
     });
   }
@@ -364,9 +577,15 @@ export class RemoteHosts {
       this.stop();
       this.current = null;
     }
+    const pooled = this.pool.get(host.id);
+    if (pooled) {
+      pooled.client.stop();
+      this.pool.delete(host.id);
+    }
     this.hosts = [...this.hosts.filter((item) => item.id !== host.id), host];
     this.save();
     if (inUse) this.use(host.id);
+    else if (this.unified) this.syncPool();
     this.changed();
     return { id: host.id, name: host.name, ...(host.member && { member: true }) };
   }
@@ -380,6 +599,7 @@ export class RemoteHosts {
     }
     if (this.remembered && removed.some((host) => host.id === this.remembered)) this.remembered = null;
     this.hosts = this.hosts.filter((host) => host.profileBound !== true);
+    if (this.unified) this.syncPool();
     this.save();
     this.changed();
     return removed.length;
@@ -565,11 +785,17 @@ export class RemoteHosts {
       this.stop();
       this.current = null;
     }
+    const pooled = this.pool.get(entry.id);
+    if (pooled) {
+      pooled.client.stop();
+      this.pool.delete(entry.id);
+    }
     // The host is told to drop this app's earlier entry, so it lists this app once.
     if (earlier && earlier.pairing.deviceId !== pairing.deviceId) await this.once(pairing, "link.devices.remove", earlier.pairing.deviceId);
     this.hosts = [...this.hosts.filter((host) => host.id !== entry.id), entry];
     this.save();
     if (inUse) this.use(entry.id);
+    else if (this.unified) this.syncPool();
     this.changed();
     return { id: entry.id, name: entry.name };
   }
@@ -583,11 +809,17 @@ export class RemoteHosts {
   /** Unpairs. The host is told when it can be reached; either way the credential is gone from here. */
   async forget(id) {
     const host = this.find(id);
+    const pooled = this.pool.get(id);
     if (this.current === id) {
       await this.client?.call("link.unpair").catch(() => {});
       this.stop();
       this.current = null;
+    } else if (pooled) {
+      await pooled.client.call("link.unpair").catch(() => {});
+      pooled.client.stop();
+      this.pool.delete(id);
     } else await this.once(host.pairing, "link.unpair");
+    this.excluded.delete(id);
     this.hosts = this.hosts.filter((h) => h !== host);
     this.save();
     this.changed();
@@ -616,6 +848,10 @@ export class RemoteHosts {
   }
   /** Shows a host in the window (its id), or this computer (null). */
   use(id) {
+    if (this.unified) {
+      this.unified = false;
+      this.stopPool();
+    }
     if (id === null || id === undefined || id === "") {
       this.stop();
       this.current = null;
@@ -634,11 +870,21 @@ export class RemoteHosts {
     this.current = host.id;
     this.state = "connecting";
     this.save();
+    let initialized = false;
     const client = (this.client = new this.lib.LinkClient(host.pairing, {
       fetch: this.transport(),
       onParts: (parts) => {
         if (this.client !== client) return;
+        const prev = initialized ? { live: this.parts.live, runs: this.parts.runs } : null;
         for (const [name, value] of Object.entries(parts)) value === null || value === undefined ? delete this.parts[name] : (this.parts[name] = value);
+        if (!initialized && (this.parts.bots || this.parts.chats || this.parts.live)) {
+          initialized = true;
+        } else if (initialized) {
+          const hostName = text(this.parts.meta?.name) || host.name;
+          for (const event of diffRemoteNotifications(prev, this.parts, { hostId: host.id, hostName })) {
+            try { this.onEvent?.(event); } catch { /* ignore */ }
+          }
+        }
         this.changed();
       },
       onState: (state) => {
@@ -664,12 +910,20 @@ export class RemoteHosts {
   }
   /** The chats the window is looking at: the host sends their messages and their running turn. */
   watch(chatIds) {
+    if (this.isUnified()) {
+      this.watchUnified(chatIds);
+      return;
+    }
     const next = [...new Set((Array.isArray(chatIds) ? chatIds : []).filter((id) => typeof id === "string" && id))].slice(0, WATCHED);
     if (JSON.stringify(next) === JSON.stringify(this.watching)) return;
     this.watching = next;
     this.client?.watch(next);
   }
   wake() {
+    if (this.unified) {
+      for (const slot of this.pool.values()) slot.client.wake();
+      return;
+    }
     this.client?.wake();
   }
   /** End only this window's viewer. A later viewer on the same paired device waits for the old stop. */
@@ -687,8 +941,9 @@ export class RemoteHosts {
   }
 
   async screenRequest(hostId, id, operation, ...args) {
-    const client = this.client;
-    if (!client || hostId !== this.current) throw new Error("That computer is no longer selected.");
+    const slot = this.pool.get(hostId);
+    const client = slot ? slot.client : hostId === this.current ? this.client : null;
+    if (!client) throw new Error("That computer is no longer selected.");
     if (this.find(hostId).member) throw new Error("Only an owner device can view this computer.");
     if (typeof id !== "string" || !/^[a-f\d]{8}-(?:[a-f\d]{4}-){3}[a-f\d]{12}$/i.test(id)) throw new Error("Invalid screen viewer.");
     if (operation === "start") {
@@ -728,54 +983,61 @@ export class RemoteHosts {
    * (the link's own list), refused in words otherwise. "revoked" unpairs here too.
    */
   async call(name, args) {
-    if (!this.client) throw new Error("No other computer is in use.");
-    const host = this.find(this.current);
+    if (!this.client || !this.current) throw new Error("No other computer is in use.");
+    return this.callHost(this.current, name, args);
+  }
+  /** Calls a method on a specific connected remote host (either in the unified pool or `this.current`). */
+  async callHost(hostId, name, args = []) {
+    const host = this.find(hostId);
+    const slot = this.pool.get(hostId);
+    const client = slot ? slot.client : this.current === hostId ? this.client : null;
+    const parts = slot ? slot.parts : this.current === hostId ? this.parts : null;
+    const state = slot ? slot.state : this.current === hostId ? this.state : "offline";
+    if (!client || !parts) throw new Error(host.name + " is not connected right now.");
+    const stillActive = () => (slot ? this.pool.get(hostId)?.client === client : this.client === client && this.current === hostId);
     // The people in a chat: the other computer's link keeps them, and each chat it sends says who was invited.
     if (name === "chatPeople") {
-      const chat = (this.parts.chats ?? []).find((item) => item.id === args[0]);
+      const chat = (parts.chats ?? []).find((item) => item.id === args[0]);
       return { createdBy: chat?.createdBy ?? "owner", invited: Array.isArray(chat?.invited) ? [...chat.invited] : [] };
     }
     if (name === "savedCredentials") {
       // The paired host already sends its owner the picker entries over the sealed link.
       // Only that host can resolve a selected reference when it receives the approval.
-      if (host.member || this.state !== "online" || !Array.isArray(this.parts.credentials)) throw new Error("The paired host’s saved credentials are unavailable.");
-      return { entries: this.parts.credentials };
+      if (host.member || state !== "online" || !Array.isArray(parts.credentials)) throw new Error("The paired host’s saved credentials are unavailable.");
+      return { entries: parts.credentials };
     }
     // A bot's own voice ("bot-voice-v1"): the card reads the shared choices the host sends this person (never a key; an owner's
     // device and a role that manages bots get them), and lists voices and reads a sample through the host's providers.
     if (name === "voiceSettings") {
-      const voice = this.parts.voice;
+      const voice = parts.voice;
       if (!voice) throw new Error(host.name + " doesn't share its voice settings with this person.");
       return { ...voice, ready: true, device: { stt: true, tts: true } };
     }
     if (name === "speak") {
       const [text, options = {}] = args;
-      const shared = this.parts.voice;
-      const own = cleanBotVoice((this.parts.bots ?? []).find((bot) => bot.id === options.botId)?.voice)?.tts;
+      const shared = parts.voice;
+      const own = cleanBotVoice((parts.bots ?? []).find((bot) => bot.id === options.botId)?.voice)?.tts;
       // "This computer" is the voice for the bot (or for everyone): the window reads it with its own.
       if (!shared || effectiveTts(shared.tts, own).provider === "device") return { device: true };
-      const spoken = await this.call("link.voice.speak", [{ text, ...options }]);
+      const spoken = await this.callHost(hostId, "link.voice.speak", [{ text, ...options }]);
       return { parts: [{ audio: new Uint8Array(Buffer.from(spoken.audio, "base64")), format: spoken.format }] };
     }
     name = LINK_NAMES[name] ?? name;
     if (!name.startsWith("link.") && !REMOTE_METHODS.has(name)) throw new Error("That can only be done on " + host.name + " itself.");
-    if (this.state === "revoked") throw new Error(host.name + " no longer knows this computer. Pair again to use it.");
+    if (state === "revoked") throw new Error(host.name + " no longer knows this computer. Pair again to use it.");
     if (name === "markChatsRead") {
       const ids = Array.isArray(args[0]) ? [...new Set(args[0].filter((id) => typeof id === "string" && id))] : [];
       if (ids.length === 0) return null;
-      const client = this.client;
-      const hostId = this.current;
-      const stillCurrent = () => this.client === client && this.current === hostId;
       const formatError = (error) => (error?.code === "offline" ? host.name + " can't be reached right now." : String(error?.message ?? error));
       const unknownBatch = /unknown method|not supported|not allowed|unsupported|not a function|can't be done from a phone/i;
-      let useFallback = !(this.parts.meta?.capabilities ?? []).includes("mark-chats-read-v1");
+      let useFallback = !(parts.meta?.capabilities ?? []).includes("mark-chats-read-v1");
       if (!useFallback) {
         for (let i = 0; i < ids.length; i += MAX_MARK_CHATS_READ) {
-          if (!stillCurrent()) return null;
+          if (!stillActive()) return null;
           try {
             await client.call("markChatsRead", ids.slice(i, i + MAX_MARK_CHATS_READ));
           } catch (error) {
-            if (!stillCurrent()) return null;
+            if (!stillActive()) return null;
             const message = formatError(error);
             if (i === 0 && unknownBatch.test(message)) {
               useFallback = true;
@@ -788,11 +1050,11 @@ export class RemoteHosts {
       }
       const errors = [];
       for (const id of ids) {
-        if (!stillCurrent()) return null;
+        if (!stillActive()) return null;
         try {
           await client.call("setChatFlags", id, { unread: false });
         } catch (error) {
-          if (!stillCurrent()) return null;
+          if (!stillActive()) return null;
           const message = formatError(error);
           if (isSkippedMarkReadError(message)) continue;
           errors.push(message);
@@ -806,7 +1068,7 @@ export class RemoteHosts {
       return null;
     }
     try {
-      return await this.client.call(name, ...args);
+      return await client.call(name, ...args);
     } catch (error) {
       if (error?.code === "offline") throw new Error(host.name + " can't be reached right now.");
       throw new Error(String(error?.message ?? error));

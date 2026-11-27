@@ -86,6 +86,11 @@ function NewBotEditor() {
   const canManage = useCan("agents", "manage");
   const teams = useCapability(PROACTIVE_TEAM);
   const saved = usePart("templates");
+  const unified = useApp((s) => s.unified);
+  const unifiedHosts = useApp((s) => s.unifiedHosts);
+  const primaryId = useApp((s) => s.pairing?.serverId ?? null);
+  const includedHosts = unifiedHosts.filter((h) => h.included);
+  const [targetHost, setTargetHost] = useState<string | null>(() => primaryId ?? includedHosts[0]?.id ?? null);
   const [picker, setPicker] = useState<"templates" | "import">();
   const options = useLookOptions();
   const prompt = useTextPrompt();
@@ -167,7 +172,16 @@ function NewBotEditor() {
       if (fields.instructions !== agent.instructions.trim()) patch.instructions = fields.instructions;
       if (id && canManage && Object.keys(patch).length) await attempt(api.updateBot(id, patch));
     } else {
-      const bot: BotInput = { name: fields.name, role: fields.role, instructions: fields.instructions, face: "idle", ...(start?.avatar && { avatar: start.avatar }), ...(fields.summary && { summary: fields.summary }), ...(start?.starter && { starter: start.starter }) };
+      const bot: BotInput = {
+        name: fields.name,
+        role: fields.role,
+        instructions: fields.instructions,
+        face: "idle",
+        ...(start?.avatar && { avatar: start.avatar }),
+        ...(fields.summary && { summary: fields.summary }),
+        ...(start?.starter && { starter: start.starter }),
+        ...(unified && targetHost ? { hostId: targetHost } : {}),
+      };
       id = await attempt(api.addBot(bot));
     }
     if (id) {
@@ -279,6 +293,19 @@ function NewBotEditor() {
         <T variant="footnote" color="muted">
           {"Copied from your " + agent.providerName + " agent " + agent.agent + ". Changes here don't change that agent." + (agent.missingModel ? " Its model, " + agent.missingModel + ", isn't on your account, so the bot uses your default model." : "")}
         </T>
+      )}
+
+      {unified && includedHosts.length > 1 && (
+        <StartRow label="Computer">
+          {includedHosts.map((host) => (
+            <Chip
+              key={host.id}
+              label={host.name}
+              selected={(targetHost ?? primaryId) === host.id}
+              onPress={() => setTargetHost(host.id)}
+            />
+          ))}
+        </StartRow>
       )}
 
       <View style={{ gap: space.lg }}>

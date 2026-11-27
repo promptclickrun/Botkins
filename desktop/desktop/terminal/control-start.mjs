@@ -91,7 +91,7 @@ export const NOT_IN_THE_APP = {
  * @param options.say      (line) → where one line for the person who runs the app goes.
  * @returns { socket, close, changed } or null when the socket did not start (one line is said).
  */
-export async function startAppControl({ runtime, profile = runtime?.profile, root, version, keys = () => null, env = process.env, platform = process.platform, say = (line) => console.error(line) } = {}) {
+export async function startAppControl({ runtime, profile = runtime?.profile, remote = null, root, version, keys = () => null, env = process.env, platform = process.platform, say = (line) => console.error(line) } = {}) {
   if (platform === "win32") return say("Control socket: not available on Windows, so a bot's shell has no `botkins` command here."), null;
   const socket = join(root, "run", SOCKET_NAME);
   // A path that is too long for the system cannot be a socket. One clear line, and the app goes on with no command in a bot's shell.
@@ -119,6 +119,7 @@ export async function startAppControl({ runtime, profile = runtime?.profile, roo
     log,
     runtime,
     profile,
+    remote,
     signIns: runtime.signIns,
     config: () => {
       throw new ControlError(NOT_IN_THE_APP["config.get"], "NOT_IN_THE_APP");

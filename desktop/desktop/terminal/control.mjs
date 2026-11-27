@@ -34,6 +34,8 @@ import { teamApi } from "./control-team.mjs";
 import { appsApi } from "./control-apps.mjs";
 import { profileApi } from "./control-profile.mjs";
 import { nodeApi } from "./control-node.mjs";
+import { hostsApi } from "./control-hosts.mjs";
+import { parseScopedId, scopeId } from "../unified-hosts.mjs";
 import { checkReach } from "./reach.mjs";
 import { normaliseConfig } from "../providers/keyed/config.mjs";
 
@@ -215,12 +217,76 @@ export function controlApi(service) {
     return { changed: keys, restart: keys.filter((key) => SETTINGS[key].restart) };
   };
 
+  const remote = () => service.remote;
+  const isUnified = () => remote()?.isUnified() === true;
+  const localHostName = () => link.status().name || "This computer";
+  const remoteEntries = () => (isUnified() ? remote().unifiedEntries(null) : []);
+  const findRemoteBot = (ref) => {
+    const wanted = String(ref ?? "").trim();
+    const parsed = parseScopedId(wanted);
+    const entries = remoteEntries();
+    if (parsed) {
+      const entry = entries.find((item) => item.host.id === parsed.hostId);
+      const found = entry?.snapshot.bots?.find((b) => b.id === parsed.rawId);
+      return found ? { host: entry.host, bot: found } : null;
+    }
+    const lower = wanted.toLowerCase();
+    const matches = [];
+    for (const entry of entries) {
+      for (const b of entry.snapshot.bots ?? []) {
+        if (b.hidden) continue;
+        if (b.name.toLowerCase() === lower) matches.push({ host: entry.host, bot: b });
+      }
+    }
+    if (matches.length > 1) throw new ControlError("More than one bot is called " + wanted + " across your computers. Use its id (see `botkins bots list`).", "AMBIGUOUS");
+    return matches[0] ?? null;
+  };
+  const remoteChatView = (hostId, rawId, after = 0) => {
+    const entry = remoteEntries().find((item) => item.host.id === hostId);
+    const snap = entry?.snapshot;
+    const chat = snap?.chats?.find((c) => c.id === rawId);
+    if (!entry || !chat) throw new ControlError("No chat " + scopeId(hostId, rawId) + " is available on " + (entry?.host?.name ?? hostId) + ".", "NOT_FOUND");
+    const task = snap.active?.[rawId];
+    const rawMessages = Array.isArray(chat.messages) ? chat.messages : [];
+    const messages = rawMessages
+      .map((message, index) => ({ index, role: message.role, text: message.text ?? "", ...(message.interim && { interim: true }) }))
+      .filter((message) => message.index >= after && !message.interim && !isSilentMessage(message));
+    const request = (snap.requests ?? []).find((r) => r.chatId === rawId);
+    const run = (snap.runs ?? []).find((r) => r.chatId === rawId && (!chat.main || r.forkId === chat.activeFork)) ?? null;
+    return {
+      chatId: scopeId(hostId, rawId),
+      hostId,
+      hostName: entry.host.name,
+      working: !!task,
+      stream: visibleStream(task?.stream),
+      ...(task?.intent && { intent: task.intent }),
+      messages,
+      count: rawMessages.length,
+      ...(request && {
+        request: {
+          id: scopeId(hostId, request.id),
+          kind: request.kind,
+          title: request.title,
+          ...(request.dispatch && { dispatch: true }),
+          ...(request.review && { review: true }),
+          ...((request.dispatch || request.review) && { detail: request.detail, label: request.label }),
+        },
+      }),
+      run,
+    };
+  };
   const api = {
     // ── The service ──────────────────────────────────────────────────────────────────────────
     async status() {
       const status = link.status();
       const memory = process.memoryUsage();
       const keys = service.keys();
+      const unified = isUnified();
+      const entries = unified ? remoteEntries() : [];
+      const remoteBots = entries.reduce((sum, e) => sum + (e.snapshot.bots ?? []).filter((b) => !b.hidden).length, 0);
+      const remoteChats = entries.reduce((sum, e) => sum + (e.snapshot.chats ?? []).filter((c) => !c.temporary).length, 0);
+      const remoteWorking = entries.reduce((sum, e) => sum + Object.keys(e.snapshot.active ?? {}).length, 0);
+      const remoteWaiting = entries.reduce((sum, e) => sum + (e.snapshot.requests ?? []).length, 0);
       return {
         running: true,
         version: service.version,
@@ -246,12 +312,13 @@ export function controlApi(service) {
         },
         relay: relayView(),
         workspace: {
-          bots: state().bots.length,
-          chats: state().chats.filter((chat) => !chat.temporary).length,
+          bots: state().bots.length + remoteBots,
+          chats: state().chats.filter((chat) => !chat.temporary).length + remoteChats,
           routines: routines().list().length,
-          working: workspace.active.size,
-          waiting: workspace.interactions.snapshot().length,
+          working: workspace.active.size + remoteWorking,
+          waiting: workspace.interactions.snapshot().length + remoteWaiting,
         },
+        ...(unified && { unified: true, hosts: remote().unifiedHostsStatus() }),
         secrets: keys ? { source: keys.source, where: keys.where } : { source: "file", where: "key files in the data folder (a trial run)" },
         vault: { locked: workspace.vault.locked === true, entries: workspace.vault.list().length },
         nodeHost: workspace.nodeHost.view(),
@@ -374,7 +441,30 @@ export function controlApi(service) {
     },
 
     // ── Bots ─────────────────────────────────────────────────────────────────────────────────
-    "bots.list": () => state().bots.map(botView),
+    "bots.list": () => {
+      const local = state().bots.map(botView);
+      if (!isUnified()) return local;
+      const localName = localHostName();
+      const rows = local.map((entry) => ({ ...entry, hostId: "local", hostName: localName }));
+      for (const { host, snapshot } of remoteEntries()) {
+        for (const entry of snapshot.bots ?? []) {
+          if (entry.hidden) continue;
+          rows.push({
+            id: scopeId(host.id, entry.id),
+            name: entry.name,
+            role: entry.role ?? "",
+            ...(entry.model && { model: entry.model }),
+            ...(entry.voice && { voice: entry.voice }),
+            ...(entry.primary && { primary: true }),
+            chats: (snapshot.chats ?? []).filter((chat) => chat.botId === entry.id && !chat.temporary).length,
+            working: (snapshot.chats ?? []).some((chat) => chat.botId === entry.id && Boolean(snapshot.active?.[chat.id])),
+            hostId: host.id,
+            hostName: host.name,
+          });
+        }
+      }
+      return rows;
+    },
     "bots.get": ([ref]) => botView(bot(ref)),
     async "bots.add"([data = {}]) {
       const name = text(data.name, 48, "the bot a name");
@@ -491,20 +581,117 @@ export function controlApi(service) {
     },
 
     // ── Chat ─────────────────────────────────────────────────────────────────────────────────
-    "chat.main": ([ref]) => {
+    async "chat.main"([ref]) {
+      if (isUnified()) {
+        const parsed = parseScopedId(String(ref ?? "").trim());
+        const remoteMatch = parsed ? findRemoteBot(ref) : null;
+        if (remoteMatch) {
+          const chatId = await remote().callHost(remoteMatch.host.id, "mainChat", [remoteMatch.bot.id]);
+          return { chatId: scopeId(remoteMatch.host.id, chatId), bot: { id: scopeId(remoteMatch.host.id, remoteMatch.bot.id), name: remoteMatch.bot.name, hostId: remoteMatch.host.id, hostName: remoteMatch.host.name } };
+        }
+        try {
+          const found = bot(ref);
+          return { chatId: handlers.mainChat(found.id), bot: { id: found.id, name: found.name, hostId: "local", hostName: localHostName() } };
+        } catch (error) {
+          if (error?.code !== "NOT_FOUND") throw error;
+          const byName = findRemoteBot(ref);
+          if (!byName) throw error;
+          const chatId = await remote().callHost(byName.host.id, "mainChat", [byName.bot.id]);
+          return { chatId: scopeId(byName.host.id, chatId), bot: { id: scopeId(byName.host.id, byName.bot.id), name: byName.bot.name, hostId: byName.host.id, hostName: byName.host.name } };
+        }
+      }
       const found = bot(ref);
       return { chatId: handlers.mainChat(found.id), bot: { id: found.id, name: found.name } };
     },
-    "chat.open": ([ref]) => {
+    async "chat.open"([ref]) {
+      if (isUnified()) {
+        const parsed = parseScopedId(String(ref ?? "").trim());
+        const remoteMatch = parsed ? findRemoteBot(ref) : null;
+        if (remoteMatch) {
+          const chatId = await remote().callHost(remoteMatch.host.id, "createChat", [remoteMatch.bot.id]);
+          return { chatId: scopeId(remoteMatch.host.id, chatId), bot: { id: scopeId(remoteMatch.host.id, remoteMatch.bot.id), name: remoteMatch.bot.name, hostId: remoteMatch.host.id, hostName: remoteMatch.host.name } };
+        }
+        try {
+          const found = bot(ref);
+          return { chatId: handlers.createChat(found.id), bot: { id: found.id, name: found.name, hostId: "local", hostName: localHostName() } };
+        } catch (error) {
+          if (error?.code !== "NOT_FOUND") throw error;
+          const byName = findRemoteBot(ref);
+          if (!byName) throw error;
+          const chatId = await remote().callHost(byName.host.id, "createChat", [byName.bot.id]);
+          return { chatId: scopeId(byName.host.id, chatId), bot: { id: scopeId(byName.host.id, byName.bot.id), name: byName.bot.name, hostId: byName.host.id, hostName: byName.host.name } };
+        }
+      }
       const found = bot(ref);
       return { chatId: handlers.createChat(found.id), bot: { id: found.id, name: found.name } };
     },
     "chat.list": ([ref]) => {
-      const only = ref ? bot(ref).id : null;
-      return state().chats.filter((chat) => !chat.temporary && (!only || chat.botId === only)).map((chat) => ({ id: chat.id, title: chat.title, botId: chat.botId, bot: state().bots.find((entry) => entry.id === chat.botId)?.name ?? null, messages: chat.messages.length, working: workspace.active.has(chat.id) }));
+      if (!isUnified()) {
+        const only = ref ? bot(ref).id : null;
+        return state().chats.filter((chat) => !chat.temporary && (!only || chat.botId === only)).map((chat) => ({ id: chat.id, title: chat.title, botId: chat.botId, bot: state().bots.find((entry) => entry.id === chat.botId)?.name ?? null, messages: chat.messages.length, working: workspace.active.has(chat.id) }));
+      }
+      const parsed = ref ? parseScopedId(String(ref).trim()) : null;
+      let onlyLocal = null;
+      let onlyRemote = null;
+      if (ref) {
+        if (parsed) {
+          const found = findRemoteBot(ref);
+          if (!found) throw new ControlError("There is no bot called " + ref + ". See `botkins bots list`.", "NOT_FOUND");
+          onlyRemote = { hostId: found.host.id, botId: found.bot.id };
+        } else {
+          try {
+            onlyLocal = bot(ref).id;
+          } catch (error) {
+            if (error?.code !== "NOT_FOUND") throw error;
+            const found = findRemoteBot(ref);
+            if (!found) throw error;
+            onlyRemote = { hostId: found.host.id, botId: found.bot.id };
+          }
+        }
+      }
+      const localName = localHostName();
+      const localRequests = new Set(workspace.interactions.snapshot().map((r) => r.chatId));
+      const rows = onlyRemote
+        ? []
+        : state().chats
+            .filter((chat) => !chat.temporary && (!onlyLocal || chat.botId === onlyLocal))
+            .map((chat) => ({
+              id: chat.id,
+              title: chat.title,
+              botId: chat.botId,
+              bot: state().bots.find((entry) => entry.id === chat.botId)?.name ?? null,
+              messages: chat.messages.length,
+              working: workspace.active.has(chat.id),
+              ...(localRequests.has(chat.id) && { waiting: true }),
+              hostId: "local",
+              hostName: localName,
+            }));
+      if (!onlyLocal) {
+        for (const { host, snapshot } of remoteEntries()) {
+          if (onlyRemote && onlyRemote.hostId !== host.id) continue;
+          const remoteReqs = new Set((snapshot.requests ?? []).map((r) => r.chatId));
+          for (const chat of snapshot.chats ?? []) {
+            if (chat.temporary) continue;
+            if (onlyRemote && chat.botId !== onlyRemote.botId) continue;
+            rows.push({
+              id: scopeId(host.id, chat.id),
+              title: chat.title,
+              botId: scopeId(host.id, chat.botId),
+              bot: (snapshot.bots ?? []).find((entry) => entry.id === chat.botId)?.name ?? null,
+              messages: Array.isArray(chat.messages) ? chat.messages.length : Number(chat.messageCount ?? 0),
+              working: Boolean(snapshot.active?.[chat.id]),
+              ...(remoteReqs.has(chat.id) && { waiting: true }),
+              hostId: host.id,
+              hostName: host.name,
+            });
+          }
+        }
+      }
+      return rows;
     },
     /** The script command that a message would run or set up, { name, args, via? }, or null. The command line shows it to the person before it sends one. */
     "chat.scriptCommand": ([chatId, message]) => {
+      if (parseScopedId(String(chatId))) return null;
       workspace.chat(String(chatId));
       return typeof message === "string" ? workspace.scriptCommandIn(message) : null;
     },
@@ -514,7 +701,15 @@ export function controlApi(service) {
      * `{ agreed: true }` as the last argument: the caller showed the person the command and its words and got a yes (the command
      * line asks at a terminal, or takes --yes). Without it the call is refused. Any other message is plain text and needs no mark.
      */
-    "chat.send": ([chatId, message, mark]) => {
+    async "chat.send"([chatId, message, mark]) {
+      const parsed = parseScopedId(String(chatId));
+      if (parsed && isUnified()) {
+        const entry = remoteEntries().find((item) => item.host.id === parsed.hostId);
+        const existing = entry?.snapshot.chats?.find((c) => c.id === parsed.rawId);
+        const before = Array.isArray(existing?.messages) ? existing.messages.length : 0;
+        await remote().callHost(parsed.hostId, "send", [parsed.rawId, text(message, 200_000, "a message"), { delivery: "queue" }]);
+        return { chatId: String(chatId), after: before };
+      }
       const chat = workspace.chat(String(chatId));
       const before = chat.messages.length;
       const script = typeof message === "string" ? workspace.scriptCommandIn(message) : null;
@@ -526,8 +721,22 @@ export function controlApi(service) {
     },
     /** A chat as it stands. With `wait`, answers when it differs from what the caller has (`seen`: stream length, message count, working), or after a while. */
     async "chat.read"([chatId, options = {}], { signal }) {
-      const chat = workspace.chat(String(chatId));
       const mark = (view) => view.stream.length + ":" + view.count + ":" + view.working + ":" + (view.request?.id ?? "");
+      const parsed = parseScopedId(String(chatId));
+      if (parsed && isUnified()) {
+        remote().watchUnified([String(chatId)]);
+        let view = remoteChatView(parsed.hostId, parsed.rawId, options.after);
+        if (options.wait && typeof options.seen === "string") {
+          const until = Date.now() + WAIT_MS;
+          let revision = service.revision();
+          while (mark(view) === options.seen && Date.now() < until && !signal?.aborted) {
+            ({ revision } = await service.waitForChange({ after: revision, ms: Math.max(1, until - Date.now()), signal }));
+            view = remoteChatView(parsed.hostId, parsed.rawId, options.after);
+          }
+        }
+        return { ...view, seen: mark(view) };
+      }
+      const chat = workspace.chat(String(chatId));
       let view = chatView(chat, options.after);
       if (options.wait && typeof options.seen === "string") {
         const until = Date.now() + WAIT_MS;
@@ -539,24 +748,72 @@ export function controlApi(service) {
       }
       return { ...view, seen: mark(view) };
     },
-    "chat.stop": ([chatId]) => void handlers.stop(String(chatId)),
+    async "chat.stop"([chatId]) {
+      const parsed = parseScopedId(String(chatId));
+      if (parsed && isUnified()) {
+        await remote().callHost(parsed.hostId, "stop", [parsed.rawId]);
+        return;
+      }
+      handlers.stop(String(chatId));
+    },
     /** The latest runs (a turn of a chat, a routine's run), newest first. */
-    "runs.list": ([limit = 20]) =>
-      state()
-        .runs.slice(0, Math.max(1, Math.min(200, Number(limit) || 20)))
+    "runs.list": ([limit = 20]) => {
+      const cap = Math.max(1, Math.min(200, Number(limit) || 20));
+      const localRuns = state()
+        .runs.slice(0, cap)
         .map((run) => {
           const chat = state().chats.find((entry) => entry.id === run.chatId);
-          return { id: run.id, chatId: run.chatId, title: run.title, status: run.status, ...(run.detail && { detail: String(run.detail).slice(0, 300) }), time: run.time ? new Date(run.time).toISOString() : null, bot: state().bots.find((entry) => entry.id === chat?.botId)?.name ?? null, ...(run.scheduleId != null && { routine: true }) };
-        }),
+          return {
+            id: run.id,
+            chatId: run.chatId,
+            title: run.title,
+            status: run.status,
+            ...(run.detail && { detail: String(run.detail).slice(0, 300) }),
+            time: run.time ? new Date(run.time).toISOString() : null,
+            bot: state().bots.find((entry) => entry.id === chat?.botId)?.name ?? null,
+            ...(run.scheduleId != null && { routine: true }),
+            ...(isUnified() && { hostId: "local", hostName: localHostName() }),
+          };
+        });
+      if (!isUnified()) return localRuns;
+      const merged = [...localRuns];
+      for (const { host, snapshot } of remoteEntries()) {
+        for (const run of (snapshot.runs ?? []).slice(0, cap)) {
+          const chat = (snapshot.chats ?? []).find((entry) => entry.id === run.chatId);
+          merged.push({
+            id: scopeId(host.id, run.id),
+            chatId: scopeId(host.id, run.chatId),
+            title: run.title,
+            status: run.status,
+            ...(run.detail && { detail: String(run.detail).slice(0, 300) }),
+            time: run.time ? new Date(run.time).toISOString() : null,
+            bot: (snapshot.bots ?? []).find((entry) => entry.id === chat?.botId)?.name ?? null,
+            ...(run.scheduleId != null && { routine: true }),
+            hostId: host.id,
+            hostName: host.name,
+          });
+        }
+      }
+      return merged.sort((a, b) => Date.parse(b.time || 0) - Date.parse(a.time || 0)).slice(0, cap);
+    },
     // The answer says which chat and which kind of request (never its text or the answer's), for the log line (coverage.mjs). The request is gone once it is answered, so it is read first.
     // A yes to a request (`approve`, `today` or `remember`) needs the mark `{ agreed: true }` as the last argument: a bot's shell must not approve its own request by a quiet call. A no, a cancel and an answer to a question need none.
     "chat.respond": async ([requestId, answer, mark]) => {
       if (["approve", "today", "remember"].includes(answer?.action) && !(mark !== null && typeof mark === "object" && !Array.isArray(mark) && mark.agreed === true))
         throw new ControlError("A yes to a request that waits in a chat needs a yes of the person. Show the request to the person, and give `{ \"agreed\": true }` as the last argument (on the command line, `botkins chat` asks the person at a terminal; no flag gives it).", "NEEDS_YES");
+      const parsed = parseScopedId(String(requestId));
+      const yes = ["approve", "today", "remember"].includes(answer?.action);
+      if (parsed && isUnified()) {
+        const entry = remoteEntries().find((item) => item.host.id === parsed.hostId);
+        const asked = (entry?.snapshot.requests ?? []).find((r) => r.id === parsed.rawId);
+        if (asked?.review && yes && mark.reviewed !== true)
+          throw new ControlError("This request holds a script. Show all of it to the person, and give `{ \"agreed\": true, \"reviewed\": true }` as the last argument (`botkins chats approve` shows it and asks at a terminal).", "NEEDS_YES");
+        await remote().callHost(parsed.hostId, "respond", [parsed.rawId, asked?.review && yes ? { ...answer, reviewed: true } : answer]);
+        return { chatId: asked?.chatId ? scopeId(parsed.hostId, asked.chatId) : null, kind: asked?.kind ?? null, answered: answer?.action === "deny" || answer?.action === "cancel" ? "no" : "yes" };
+      }
       const asked = workspace.interactions.snapshot().find((entry) => entry.id === String(requestId));
       // A request that holds a script (`review`) is answered with a yes only by a caller that showed all of it: `{ agreed: true, reviewed: true }`
       // (the command line's `chats approve` and `chat` print the whole script before they ask at a terminal).
-      const yes = ["approve", "today", "remember"].includes(answer?.action);
       if (asked?.review && yes && mark.reviewed !== true)
         throw new ControlError("This request holds a script. Show all of it to the person, and give `{ \"agreed\": true, \"reviewed\": true }` as the last argument (`botkins chats approve` shows it and asks at a terminal).", "NEEDS_YES");
       await handlers.respond(String(requestId), asked?.review && yes ? { ...answer, reviewed: true } : answer);
@@ -643,6 +900,10 @@ export function controlApi(service) {
     }
   }
   for (const [name, call] of Object.entries(profileApi({ profile: service.profile }))) {
+    if (Object.hasOwn(api, name)) throw new Error("Two control calls have the name " + name + ".");
+    api[name] = call;
+  }
+  for (const [name, call] of Object.entries(hostsApi(service))) {
     if (Object.hasOwn(api, name)) throw new Error("Two control calls have the name " + name + ".");
     api[name] = call;
   }

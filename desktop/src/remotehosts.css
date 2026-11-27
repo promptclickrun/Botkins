@@ -304,3 +304,53 @@
   color: var(--muted);
   font-size: calc(12px * var(--text-scale));
 }
+
+/* Subtle computer origin chip shown in unified multi-host mode. */
+.host-chip {
+  display: inline-flex;
+  align-items: center;
+  max-width: 120px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: calc(11px * var(--text-scale));
+  font-weight: 500;
+  line-height: 1.45;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: middle;
+}
+.host-chip.local {
+  background: var(--sunken);
+  color: var(--muted);
+}
+.settings-host-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 14px;
+  padding: 8px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  font-size: calc(13px * var(--text-scale));
+}
+.settings-host-bar label {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--muted);
+  margin: 0;
+}
+.settings-host-bar select {
+  min-height: 30px;
+  padding: 3px 10px;
+  border-radius: 6px;
+  background: var(--canvas);
+  border: 1px solid var(--line);
+  color: var(--ink);
+  font-size: calc(13px * var(--text-scale));
+}

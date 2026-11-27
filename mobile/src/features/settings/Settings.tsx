@@ -1,15 +1,15 @@
 import { type Href, router } from "expo-router";
-import { AudioLines, Bell, Bug, BookOpen, ChartColumn, Cpu, FlaskConical, FolderLock, Info, KeyRound, LibraryBig, MessagesSquare, Monitor, MonitorSmartphone, ScreenShare, ShieldCheck, SunMoon, UserRound, Users, Wrench } from "lucide-react-native";
-import { Alert, View } from "react-native";
+import { AudioLines, Bell, Bug, BookOpen, ChartColumn, Cpu, FlaskConical, FolderLock, Info, KeyRound, Layers, LibraryBig, MessagesSquare, Monitor, MonitorSmartphone, ScreenShare, ShieldCheck, SunMoon, UserRound, Users, Wrench } from "lucide-react-native";
+import { Alert, ScrollView, View } from "react-native";
 import { describeChoice, useDefaultProvider } from "@/features/models/shared";
 import type { Preferences } from "@/link/types";
 import { useModels, usePart, useSettings, useSkills } from "@/state/hooks";
-import { api, attempt, unpair } from "@/state/link";
+import { api, attempt, setSettingsHost, unpair } from "@/state/link";
 import { usePrefs } from "@/state/prefs";
 import { useApp } from "@/state/store";
 import { useProfile, useProfileHosts } from "@/state/profile";
 import { can } from "@/state/team";
-import { Badge, brand, Group, IconTile, Label, Page, ProviderIcon, Row, useTheme } from "@/ui";
+import { Badge, brand, Chip, Dot, Group, IconTile, Label, Page, ProviderIcon, Row, space, useTheme } from "@/ui";
 import { harnessName } from "./Harness";
 import { linkLabel } from "./shared";
 
@@ -19,6 +19,10 @@ const APPEARANCE: Record<"system" | "light" | "dark", string> = { system: "Syste
 export default function Settings() {
   const { colors } = useTheme();
   const name = useApp((state) => state.pairing?.name) ?? "Your computer";
+  const primaryId = useApp((state) => state.pairing?.serverId);
+  const unified = useApp((state) => state.unified);
+  const unifiedHosts = useApp((state) => state.unifiedHosts);
+  const settingsHostPref = usePrefs((prefs) => prefs.settingsHost);
   const link = useApp((state) => state.link);
   const route = useApp((state) => state.route);
   const localComputers = useApp((state) => state.pairings);
@@ -38,6 +42,10 @@ export default function Settings() {
   const permission = (scope: Parameters<typeof can>[1], action: string) => can({ meta, team }, scope, action);
   const owner = meta?.you?.kind !== "member";
 
+  const includedHosts = unifiedHosts.filter((h) => h.included);
+  const onlineCount = includedHosts.filter((h) => h.state === "online").length;
+  const activeSettingsHost = includedHosts.some((h) => h.id === settingsHostPref) ? settingsHostPref : primaryId ?? includedHosts[0]?.id ?? null;
+
   const model = describeChoice(settings?.model, models, defaultProvider);
   const toolsOn = servers?.filter((server) => server.enabled).length;
   const skillsOn = skills?.filter((skill) => skill.enabled && !skillsOff?.includes(skill.name)).length;
@@ -47,8 +55,18 @@ export default function Settings() {
   return (
     <Page title="Settings">
       <Group>
-        <Row leading={<IconTile icon={Monitor} color={brand.tide} size={36} />} title={name} subtitle={linkLabel(link, route)} chevron onPress={() => router.push("/settings/desktop")} />
-        <Row leading={<IconTile icon={MonitorSmartphone} color={brand.tide} />} title="Computers and teams" value={computers > 1 ? String(computers) : undefined} chevron onPress={() => router.push("/settings/computers")} />
+        {unified ? (
+          <Row
+            leading={<IconTile icon={Layers} color={brand.fern} size={36} />}
+            title="All computers"
+            subtitle={onlineCount + " of " + includedHosts.length + " connected"}
+            chevron
+            onPress={() => router.push("/settings/computers")}
+          />
+        ) : (
+          <Row leading={<IconTile icon={Monitor} color={brand.tide} size={36} />} title={name} subtitle={linkLabel(link, route)} chevron onPress={() => router.push("/settings/desktop")} />
+        )}
+        <Row leading={<IconTile icon={MonitorSmartphone} color={brand.tide} />} title="Computers and teams" value={unified ? "All" : computers > 1 ? String(computers) : undefined} chevron onPress={() => router.push("/settings/computers")} />
         <Row leading={<IconTile icon={UserRound} color={brand.tide} />} title="Botkins profile" subtitle={profile ? profile.email || profile.name : meta?.capabilities.includes("people-avatars-v1") ? "Your picture · your identity on other devices" : "Optional · use your identity on other devices"} chevron onPress={() => router.push("/profile")} />
         {owner && <Row leading={<IconTile icon={ScreenShare} color={brand.tide} />} title="Control computer" subtitle="Open the screen, pointer and keyboard" chevron onPress={() => router.push("/remote")} />}
         {owner && meta?.capabilities.includes("teams-v1") && (
@@ -82,6 +100,23 @@ export default function Settings() {
             }
           />
         </Group>
+      )}
+
+      {unified && includedHosts.length > 1 && (
+        <View>
+          <Label>Settings for computer</Label>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginHorizontal: -space.xl }} contentContainerStyle={{ paddingHorizontal: space.xl, gap: space.sm }}>
+            {includedHosts.map((host) => (
+              <Chip
+                key={host.id}
+                label={host.name}
+                selected={host.id === activeSettingsHost}
+                leading={<Dot tone={host.state === "online" ? "success" : "warning"} size={6} />}
+                onPress={() => setSettingsHost(host.id)}
+              />
+            ))}
+          </ScrollView>
+        </View>
       )}
 
       {(permission("agents", "view") || permission("mcp", "view") || permission("skills", "read") || owner) && (

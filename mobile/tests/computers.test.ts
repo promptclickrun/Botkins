@@ -94,13 +94,21 @@ test("a pairing needs every field, a list has each computer once, and a key is s
 
 test("the switcher lists every computer, ticks the one in use, and ends with a way to add one", () => {
   assert.deepEqual(computerActions([a, b], "bbb"), [
+    { id: "all", title: "All computers", state: "off", image: "square.grid.2x2" },
     { id: "use:aaa", title: "Mac aaa", state: "off" },
     { id: "use:bbb", title: "Mac bbb", state: "on" },
+    { id: "add", title: "Connect a computer…", image: "plus" },
+  ]);
+  assert.deepEqual(computerActions([a, b], "bbb", [], [], true), [
+    { id: "all", title: "All computers", state: "on", image: "square.grid.2x2" },
+    { id: "use:aaa", title: "Mac aaa", state: "off" },
+    { id: "use:bbb", title: "Mac bbb", state: "off" },
     { id: "add", title: "Connect a computer…", image: "plus" },
   ]);
   assert.deepEqual(computerActions([], null), [{ id: "add", title: "Connect a computer…", image: "plus" }]);
   assert.deepEqual(computerActions([{ ...a, name: "" }], null)[0], { id: "use:aaa", title: "Computer", state: "off" });
   assert.deepEqual(computerChoice("use:bbb"), { use: "bbb" });
+  assert.equal(computerChoice("all"), "all");
   assert.equal(computerChoice("add"), "add");
   assert.equal(computerChoice("use:"), null);
   assert.equal(computerChoice("delete"), null);
@@ -142,8 +150,8 @@ test("bringing in agents: what is ticked, what is added, and the words", () => {
 test("the saved order interleaves profile and local computers and keeps the active check", () => {
   const host = { serverId: "remote", serverKey: "key", name: "Office", hosts: ["office"] };
   const order = ["removed", "remote", "bbb"];
-  assert.deepEqual(computerActions([a, b], a.serverId, [host], order).map(row => row.id), ["profile:remote", "use:bbb", "use:aaa", "add"]);
-  assert.equal(computerActions([a, b], a.serverId, [host], order)[2]?.state, "on");
+  assert.deepEqual(computerActions([a, b], a.serverId, [host], order).map(row => row.id), ["all", "profile:remote", "use:bbb", "use:aaa", "add"]);
+  assert.equal(computerActions([a, b], a.serverId, [host], order)[3]?.state, "on");
 });
 
 test("reordering changes the picker without switching hosts or changing the primary", () => {
@@ -156,7 +164,7 @@ test("reordering changes the picker without switching hosts or changing the prim
   assert.equal(currentOf(startupComputers(first, saved.primaryHost)), a);
   assert.equal(currentOf(startupComputers(first, "removed")), b);
   assert.equal(currentOf(startupComputers(first, null)), b);
-  assert.equal(computerActions([a, b], a.serverId, [], saved.computerOrder)[0]?.id, "use:" + b.serverId);
+  assert.equal(computerActions([a, b], a.serverId, [], saved.computerOrder)[1]?.id, "use:" + b.serverId);
 });
 
 test("a manual primary wins over a saved profile selection and a profile primary uses its own pairing", () => {

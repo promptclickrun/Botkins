@@ -297,7 +297,13 @@ export const workspace = {
         summary: "List the bots",
         usage: "botkins bots list",
         async run(context) {
-          context.print(await context.client.call("bots.list"), (bots) => (bots.length ? table(["NAME", "ROLE", "MODEL", "CHATS", "ID"], bots.map((bot) => [bot.name + (bot.working ? " (working)" : ""), bot.role, modelOf(bot), bot.chats, bot.id])) : "There are no bots yet. Add one with `botkins bots add <name>`."));
+          context.print(await context.client.call("bots.list"), (bots) => {
+            if (!bots.length) return "There are no bots yet. Add one with `botkins bots add <name>`.";
+            const unified = bots.some((bot) => bot.hostName);
+            return unified
+              ? table(["NAME", "HOST", "ROLE", "MODEL", "CHATS", "ID"], bots.map((bot) => [bot.name + (bot.working ? " (working)" : ""), bot.hostName ?? "", bot.role, modelOf(bot), bot.chats, bot.id]))
+              : table(["NAME", "ROLE", "MODEL", "CHATS", "ID"], bots.map((bot) => [bot.name + (bot.working ? " (working)" : ""), bot.role, modelOf(bot), bot.chats, bot.id]));
+          });
         },
       },
       add: {

@@ -9,6 +9,7 @@ import { Activities, type QueuedAnswer } from "../../modules/botkins-activity";
 import { answerCall } from "./answerCall";
 import { api, freshSync, restIfAway, switchComputer } from "./link";
 import { useApp } from "./store";
+import { idForHost } from "./unified";
 
 const latestRun = (chatId: string) =>
   (useApp.getState().parts.runs ?? []).filter((run) => run.chatId === chatId).reduce<{ id: string; time: number } | undefined>((latest, run) => (!latest || run.time > latest.time ? run : latest), undefined)?.id;
@@ -20,20 +21,25 @@ async function send(answer: QueuedAnswer) {
   if (sending.has(answer.id) || !Activities?.answered) return;
   sending.add(answer.id);
   try {
-    // An answer to another paired computer's request uses that computer, as a tap on its alert does.
-    const { pairing, pairings } = useApp.getState();
-    if (answer.host && answer.host !== pairing?.serverId && pairings.some((item) => item.serverId === answer.host)) await switchComputer(answer.host);
+    // An answer to another paired computer's request uses that computer, unless it is already live in unified mode.
+    const { pairing, pairings, unified, unifiedHosts } = useApp.getState();
+    const inUnifiedPool = !!unified && !!answer.host && unifiedHosts.some((h) => h.id === answer.host && h.included);
+    if (!inUnifiedPool && answer.host && answer.host !== pairing?.serverId && pairings.some((item) => item.serverId === answer.host)) {
+      await switchComputer(answer.host);
+    }
     // Woken in the background, the link may be at rest: follow until the computer has answered once.
     if (!(await freshSync(15_000))) return; // Not reached: kept for the next time.
-    const call = answerCall(answer, latestRun);
+    const primaryId = useApp.getState().pairing?.serverId ?? null;
+    const scope = (id: string) => (inUnifiedPool && answer.host ? idForHost(answer.host, id, primaryId) : id);
+    const call = answerCall(answer, (cid) => latestRun(scope(cid)));
     if (!call) {
       await Activities.answered(answer.id, false);
       return;
     }
     try {
-      if (call.method === "respond") await api.respond(call.requestId, call.answer);
-      else if (call.method === "stop") await api.stop(call.chatId);
-      else await api.retry(call.runId);
+      if (call.method === "respond") await api.respond(scope(call.requestId), call.answer);
+      else if (call.method === "stop") await api.stop(scope(call.chatId));
+      else await api.retry(scope(call.runId));
       await Activities.answered(answer.id, true);
     } catch {
       // Refused (the request was answered elsewhere, or is gone): the card gets its buttons back,
