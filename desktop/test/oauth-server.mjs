@@ -66,7 +66,10 @@ export async function oauthMcpServer(options = {}) {
       response.end(JSON.stringify(data));
     };
     const text = request.method === "POST" ? await body(request) : "";
-    state.log.push({ method: request.method, path: url.pathname, authorization: request.headers.authorization, body: text });
+    // Direct-harness fixtures can count requests without recording credentials or OAuth inputs.
+    state.log.push(options.recordSecrets === false
+      ? { method: request.method, path: url.pathname, ...(url.pathname === "/mcp" && { body: text }) }
+      : { method: request.method, path: url.pathname, authorization: request.headers.authorization, body: text });
     if (url.pathname === "/.well-known/oauth-protected-resource/mcp" || url.pathname === "/.well-known/oauth-protected-resource")
       return json(200, (state.tweak.resource ?? ((doc) => doc))({ resource: origin + "/mcp", authorization_servers: [origin], scopes_supported: [state.scope] }));
     if (url.pathname === "/.well-known/oauth-authorization-server")
@@ -158,6 +161,14 @@ export async function oauthMcpServer(options = {}) {
         return response.end();
       }
       const message = JSON.parse(text);
+      if (message.method === "tools/call" && state.requiredScope && !grant.scope.split(" ").includes(state.requiredScope))
+        return json(403, { error: "insufficient_scope", ignored: token }, { "www-authenticate": 'Bearer error="insufficient_scope"' });
+      if (message.method === "tools/call" && state.rejectNextCall) {
+        // The call took effect, but the response says to sign in. It must never be replayed.
+        state.rejectedEffects = (state.rejectedEffects ?? 0) + 1;
+        state.rejectNextCall = false;
+        return json(401, { error: "invalid_token", ignored: token }, { "www-authenticate": 'Bearer error="invalid_token"' });
+      }
       if (message.id === undefined) {
         response.writeHead(202);
         return response.end();
@@ -188,7 +199,7 @@ export async function oauthMcpServer(options = {}) {
       const first = await fetch(url, { redirect: "manual" });
       const next = first.headers.get("location");
       if (!next) throw new Error("The sign-in page didn't redirect: " + first.status);
-      state.lastCallback = next;
+      if (options.recordSecrets !== false) state.lastCallback = next;
       await fetch(next);
     },
     close: () => new Promise((resolve) => (server.closeAllConnections?.(), server.close(resolve))),

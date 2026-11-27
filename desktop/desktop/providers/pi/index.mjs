@@ -28,6 +28,7 @@ import { SessionStore, resumeOrRecover, serversWithTokens, uuidFor } from "../se
 import { skillChoices, skillSupport } from "../skills.mjs";
 import { displayValue } from "../../display.mjs";
 import { PLAN_INSTRUCTIONS, updatePlanTool } from "./plan.mjs";
+import { DirectMcpOAuth } from "./direct-mcp-oauth.mjs";
 
 export const PI_ID = "pi";
 export const OMP_ID = "omp";
@@ -348,7 +349,7 @@ class PiSession extends ProviderSession {
     for (const [name, server] of Object.entries(await serversWithTokens(spec))) {
       if (name === BRIDGE) continue;
       const entry = this.provider.serverRecord(server);
-      if (entry) servers[name] = entry;
+      if (entry) servers[name] = server.oauthId ? { ...entry, oauthId: server.oauthId } : entry;
     }
     if (this.bridge) {
       const entry = this.provider.serverRecord({ type: "http", url: this.bridge.url, headers: this.bridge.headers });
@@ -902,6 +903,7 @@ export class PiProvider extends ModelProvider {
     let live = this.live.get(spec.sessionId);
     if (live && (fresh || live.key !== key || live.rpc.closed)) {
       this.live.delete(spec.sessionId);
+      live.oauth?.close();
       await live.rpc.close().catch(() => {});
       live = null;
     }
@@ -943,7 +945,6 @@ export class PiProvider extends ModelProvider {
       session,
       timer: null,
     };
-    await this.write(live, described);
     const wanted = level(session.model.reasoningEffort);
     const args = this.launchArgs(live, spec, target, wanted, packages);
     const env = await cliEnv({
@@ -964,12 +965,19 @@ export class PiProvider extends ModelProvider {
       [this.program.sessionEnv]: live.file,
     }, this.baseEnv);
     const start = launcher(file, args);
-    live.rpc = new PiRpc(start.file, start.args, { env: { ...env, ...start.env }, cwd: launchDir, name: this.name, ...(this.runtime === OMP_ID && { protocolVersion: 2 }) });
+    try {
+      await this.write(live, described);
+      live.rpc = new PiRpc(start.file, start.args, { env: { ...env, ...start.env }, cwd: launchDir, name: this.name, ...(this.runtime === OMP_ID && { protocolVersion: 2 }) });
+    } catch (error) {
+      live.oauth?.close();
+      throw error;
+    }
     live.rpc.on((event) => {
       if (event.type === "extension_ui_request") void this.dialog(live, event);
     });
     live.rpc.exited.then(() => {
       if (this.live.get(spec.sessionId) === live) this.live.delete(spec.sessionId);
+      live.oauth?.close();
       // Its own file only: a process let go a moment ago can exit after the next turn's process
       // started, and that one's file must stay (without it Pi starts with no connections: "Model … not found").
       rmSync(live.file, { force: true });
@@ -994,6 +1002,13 @@ export class PiProvider extends ModelProvider {
   }
   /** Writes the files the extension and OMP read, each containing session secrets and user-only. */
   async write(live, described) {
+    const servers = Object.entries(described.servers);
+    if (this.runtime === PI_ID && servers.some(([, server]) => server.oauthId)) {
+      live.oauth ??= await DirectMcpOAuth.listen();
+    }
+    if (live.oauth) {
+      described = { ...described, servers: live.oauth.project(servers, (request) => live.session?.spec.mcpAuth?.(request)) };
+    }
     // Every server Botkins gave this process (PiSession.permission).
     live.given = new Set([...(live.given ?? []), ...Object.keys(described.servers ?? {})]);
     mkdirSync(live.agentDir, { recursive: true, mode: 0o700 });
@@ -1042,6 +1057,7 @@ export class PiProvider extends ModelProvider {
     if (!live) return;
     this.live.delete(sessionId);
     clearTimeout(live.timer);
+    live.oauth?.close();
     void live.rpc.close().catch(() => {});
   }
   async openSession(spec) {
@@ -1060,7 +1076,11 @@ export class PiProvider extends ModelProvider {
   async stop() {
     const all = [...this.live.values()];
     this.live.clear();
-    await Promise.allSettled(all.map((live) => (clearTimeout(live.timer), live.rpc.close())));
+    await Promise.allSettled(all.map((live) => {
+      clearTimeout(live.timer);
+      live.oauth?.close();
+      return live.rpc.close();
+    }));
   }
   /** Stable ToolBridge key per session. For OMP, rotates when declared bridge tool schemas change so OMP's discovery cache refreshes. */
   bridgeKey(sessionId, shape) {

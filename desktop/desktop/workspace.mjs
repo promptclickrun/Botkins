@@ -1877,7 +1877,7 @@ export class Workspace {
     // stays on the side it began the session on: one that doesn't answer now isn't handed to the
     // harness, where its tools would have other names. Its tools say so when they are called.
     const routed = await (routing ?? (access.mcp ? this.mcpApps.prepare(bot) : new Map()));
-    const ownServers = access.mcp ? this.integrations.serversFor(bot) : {};
+    const ownServers = access.mcp ? this.integrations.serversFor(bot, { liveOAuth: provider.id === "pi" }) : {};
     // (A server that isn't Botkins' yet, one that wasn't ready when the session began, goes to the
     // harness until it is; it then stays Botkins', which changes the tool list once.)
     const routes = prompt.record.routes;

@@ -68,12 +68,13 @@ export function mcpText(result) {
 /**
  * The MCP servers of a session spec, with the sign-in token of a remote server that uses OAuth
  * added as its Authorization header. Botkins keeps those tokens in its vault; a backend that
- * can't ask for one mid-session gets the current one when the session opens.
+ * can't ask for one mid-session gets the current one when the session opens. A server marked
+ * with `oauthId` instead gets host-side authorization at request time.
  */
 export async function serversWithTokens(spec) {
   const out = {};
   for (const [name, server] of Object.entries(spec.mcpServers ?? {})) {
-    if (server.type === "stdio" || !spec.mcpAuth || Object.keys(server.headers ?? {}).some((h) => h.toLowerCase() === "authorization")) {
+    if (server.type === "stdio" || server.oauthId || !spec.mcpAuth || Object.keys(server.headers ?? {}).some((h) => h.toLowerCase() === "authorization")) {
       out[name] = server;
       continue;
     }
