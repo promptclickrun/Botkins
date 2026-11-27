@@ -69,6 +69,36 @@ test("Watch WebRTC sends provider events while feeding the Watch as the peer aud
   assert.equal(rtc.ended, true);
 });
 
+test("Watch WebRTC (Codex) sends no OpenAI GA commands and ends on a realtime stream error", async () => {
+  const rtc = new FakeWatchRTC();
+  const transport = new WatchRTCTransport(
+    rtc,
+    async () => ({ id: "codex-3", kind: "webrtc", sdp: "v=0 codex-answer" }),
+    async () => "tool result",
+    "en-US",
+    "codex",
+  );
+  const errors: string[] = [];
+  transport.on("error", (error) => errors.push(error));
+  transport.setInput("push");
+  await transport.start();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.deepEqual(rtc.sent, [], "Codex v3 must not receive GA session.update");
+
+  rtc.message({ type: "response.created", response: { id: "r1" } });
+  rtc.message({ type: "output_audio_buffer.started" });
+  assert.equal(rtc.inputs.at(-1), false);
+  transport.press();
+  assert.equal(rtc.inputs.at(-1), true);
+  assert.equal(rtc.flushed, 1);
+  transport.release();
+  assert.deepEqual(rtc.sent, [], "no GA control events sent to Codex");
+
+  rtc.message({ type: "error", error: { message: "stream failed" } });
+  assert.equal(transport.status, "ended");
+  assert.deepEqual(errors, ["stream failed"]);
+});
+
 test("Codex selects the Watch native WebRTC endpoint without needing the iPhone microphone", () => {
   const rtc = new FakeWatchRTC();
   assert.equal(planFor("codex", { webrtc: null, duplex: null, watchRtc: rtc }), "offer");

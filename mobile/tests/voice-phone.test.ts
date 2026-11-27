@@ -872,6 +872,42 @@ test("WebRTC: the person's language goes with the transcript request", async () 
   transport.end();
 });
 
+test("WebRTC (Codex): never sends OpenAI GA client commands and ends on a realtime stream error", async () => {
+  const h = harness();
+  const rtc = fakeWebRTC();
+  const transport = new WebRTCTransport(rtc.webrtc, rtc.negotiate, h.tools, async () => {}, "en-US", "codex");
+  const errors: string[] = [];
+  const statuses: string[] = [];
+  transport.on("error", (message) => errors.push(message));
+  transport.on("status", (status) => statuses.push(status));
+  transport.setInput("push");
+  await transport.start();
+  const channel = rtc.channels[0]!;
+  channel.open();
+  assert.deepEqual(channel.sent, [], "Codex v3 rejects OpenAI GA session.update with session.type");
+
+  channel.receive({ type: "session.started" });
+  assert.ok(statuses.includes("listening"));
+
+  // Push-to-talk and interrupt gate the mic locally without sending unsupported GA commands.
+  channel.receive({ type: "response.created", response: { id: "r1" } });
+  channel.receive({ type: "output_audio_buffer.started", response_id: "r1" });
+  assert.ok(!rtc.track.enabled);
+  transport.press();
+  assert.ok(rtc.track.enabled);
+  await tick(MIN_TURN_MS + 20);
+  transport.release();
+  await tick(RELEASE_TAIL_MS + 40);
+  assert.ok(!rtc.track.enabled);
+  transport.interrupt();
+  assert.deepEqual(channel.sent, [], "no session.update, response.cancel, output_audio_buffer.clear, or input_audio_buffer.* for Codex");
+
+  // Any stream error kills Codex app-server's sidechannel, so the phone ends the call rather than staying live without tools.
+  channel.receive({ type: "error", error: { message: "Unknown parameter: 'session.type'." } });
+  assert.equal(transport.status, "ended");
+  assert.deepEqual(errors, ["Unknown parameter: 'session.type'."]);
+});
+
 test("a call reports how loud the sound is: the bot's while it plays, else the microphone's, at a slow pace", async () => {
   const h = harness();
   const c = clock();
