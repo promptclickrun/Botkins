@@ -125,7 +125,7 @@ export class Interactions {
     }
     if (human && entry.task.run && !entry.task.run.noOutput) {
       commitInterim(entry.chat, entry.task.run, entry.task);
-      entry.chat.messages.push({ role: "user", text: answerReceipt(view, answer), time: Date.now(),
+      entry.chat.messages.push({ role: "user", text: answerReceipt(view, answer), time: Date.now(), receipt: true,
         answer: { runId: entry.task.run.id, requestId: id, kind: view.kind, title: view.title } });
       this.ws.save();
     }

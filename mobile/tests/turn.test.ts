@@ -421,10 +421,11 @@ for (const timeline of [true, false]) {
       const steer = kinds.indexOf("user:Skip the docs");
       assert.ok(steer > 1 && kinds.slice(1, steer).some((k) => k.startsWith("work:")), "work before the steer: " + kinds.join(" | "));
       assert.ok(kinds.slice(steer + 1).some((k) => k.startsWith("work:")), "work after it");
-      // The reply, its activity line, then its crew card (the two helpers).
-      assert.ok(kinds.at(-3)?.startsWith("assistant:") && kinds.at(-2) === "activity", kinds.join(" | "));
-      // An older computer doesn't say which steps were a helper's, so it has no count of them.
-      assert.equal(kinds.at(-1), "crew:2 helpers" + (timeline ? " · " + own.length + " steps" : ""));
+      // The reply, then its activity line with the finished helpers folded in.
+      assert.ok(kinds.at(-2)?.startsWith("assistant:") && kinds.at(-1) === "activity", kinds.join(" | "));
+      const activityItem = items.at(-1);
+      assert.equal(activityItem?.kind, "activity");
+      assert.match(activityItem.kind === "activity" ? (activityItem.label ?? "") : "", /2 helpers finished/);
     } finally {
       await d.close();
     }
