@@ -1517,7 +1517,7 @@ export class Workflows {
       let target = cfg.chatId ? this.ws.state.chats.find((c) => c.id === cfg.chatId) : null;
       if (!target) {
         target =
-          this.ws.state.chats.find((c) => c.botId === bot.id && c.main && !c.archived) ??
+          this.ws.state.chats.find((c) => c.botId === bot.id && c.main && !c.createdBy) ??
           this.ws.state.chats.find((c) => c.botId === bot.id && !c.archived && !c.panelId && !c.workflowId && !c.schedules?.some((s) => s.routine));
       }
       if (!target) {

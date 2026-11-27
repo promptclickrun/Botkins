@@ -387,7 +387,7 @@ const approvalHelp: Record<Values["approval"], string> = {
   all: "Approves every request, commands and file changes too. Managed policies still apply.",
 };
 
-export function ChatDisplaySettings({ settings, change, chatMode, fail }: Pick<Props, "settings" | "change" | "fail"> & { chatMode?: "main" | "new" }) {
+export function ChatDisplaySettings({ settings, change, chatMode, mainChats = true, fail }: Pick<Props, "settings" | "change" | "fail"> & { chatMode?: "main" | "new"; mainChats?: boolean }) {
   // With Steps or Thinking Open, a finished turn always folds into the island's receipt.
   const island = settings.steps === "open" || settings.thinking === "open";
   return (
@@ -422,8 +422,8 @@ export function ChatDisplaySettings({ settings, change, chatMode, fail }: Pick<P
         </select>}
       </Row>
       <Row label="When you select a bot">
-        {(id) => <select className="bot-tap" id={id} value={settings.botTap === "main" && !chatMode ? "latest" : settings.botTap ?? (chatMode ? "main" : "latest")} onChange={e => saveChatDisplay({ botTap: e.target.value as Values["botTap"] })}>
-          {chatMode && <option value="main">Open Main chat</option>}
+        {(id) => <select className="bot-tap" id={id} value={settings.botTap === "main" && !mainChats ? "latest" : settings.botTap ?? (mainChats ? "main" : "latest")} onChange={e => saveChatDisplay({ botTap: e.target.value as Values["botTap"] })}>
+          {mainChats && <option value="main">Open Main chat</option>}
           <option value="latest">Open the latest chat</option>
           <option value="new">Start a new chat</option>
         </select>}

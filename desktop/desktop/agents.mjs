@@ -2,7 +2,7 @@
 // How a bot looks is in desktop/looks.mjs.
 import { randomUUID } from "node:crypto";
 import { cpSync, existsSync, lstatSync } from "node:fs";
-import { conversations, makeMainChat } from "./link/main-chat.mjs";
+import { conversations, makeMainChat, retireMainChat } from "./link/main-chat.mjs";
 import { isRoutineChat } from "./link/routine-chat.mjs";
 import { textField } from "./panels.mjs";
 import { nextLook } from "./looks.mjs";
@@ -280,7 +280,11 @@ export class Agents {
       if (typeof value !== "boolean") throw new Error("Invalid chat flag");
       next[key] = value;
     }
-    if (chat.main && next.archived) throw new Error("Main chat stays in your chats.");
+    // Archiving a Main chat retires it: it stays as an ordinary chat, and the next visit to the bot makes a new Main chat.
+    if (chat.main && next.archived) {
+      this.assertIdle([chat], "chat");
+      retireMainChat(chat);
+    }
     if (isRoutineChat(chat) && next.unread) next.unread = false;
     Object.assign(chat, next);
     this.ws.save();
@@ -313,7 +317,7 @@ export class Agents {
   }
   async deleteChat(id) {
     const chat = this.ws.chat(id);
-    if (chat.main) throw new Error("Main chat stays with its bot. Use Reset context to start fresh.");
+    // Deleting a Main chat is allowed: the next visit to the bot makes a new one (workspace.mainChat).
     this.assertIdle([chat], "chat");
     this.state.chats = this.state.chats.filter((c) => c !== chat);
     // A question left waiting in the chat goes with it.

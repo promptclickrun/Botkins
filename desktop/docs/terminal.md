@@ -339,11 +339,12 @@ botkins templates use inbox-sorter@botkins --name Sorter
 
 ### Chats
 
-`botkins chat <bot>` opens your Main chat with that bot. Use `--new` to start a separate chat, or `--chat <id>` to open an existing thread. Each person's Main chat is private and keeps its address, including when its model changes.
+`botkins chat <bot>` opens your Main chat with that bot. Use `--new` to start a separate chat, or `--chat <id>` to open an existing thread. Each person's Main chat is private and keeps its address through model and harness changes, compaction and restarts.
 
 - `botkins chats compact <id>` compacts the active conversation. An ACP model summarizes in a separate session because ACP has no native compact command.
 - `botkins chats fork <id> --at 4 --in-main` continues from message 4 in a new fork of the same Main chat. Without `--in-main`, the command creates a separate thread.
-- `botkins chats reset <id>` starts with empty context. `botkins chats show <id>` lists the saved forks. `botkins chats switch-fork <id> <fork-id>` resumes one, including its previous messages.
+- `botkins chats reset <id>` clears the bot's context in place: the same chat, its messages still shown, and the next reply starts fresh. Typing `/new` or `/clear` in a Main chat does the same. `botkins chats show <id>` lists the saved forks. `botkins chats switch-fork <id> <fork-id>` resumes one, including its previous messages.
+- A Main chat changes only when its person archives or deletes it. The archived one stays as an ordinary chat, and opening the bot again starts a new Main chat.
 - `botkins models --chat <id> --model <provider/model>` selects the chat's model. Use `inherit` to follow the bot again.
 - In Settings › Chat › Proactive signals, **Main chat** is the default. Choose **New chat every time** to receive each chat alert in a new private thread. In the terminal use `botkins preferences set proactive.chatMode new` or `main`. The choice applies to your alerts on this host. Checks still run in their own routines. Taking an offer starts its own work thread.
 

@@ -350,7 +350,7 @@ export class Tasks {
     const workerName = this.botName(task.botId) ?? "Unassigned";
     const targetChat =
       (task.createdChatId && this.ws.state.chats.find((c) => c.id === task.createdChatId && c.botId === creator.id)) ||
-      this.ws.state.chats.find((c) => c.botId === creator.id && c.main) ||
+      this.ws.state.chats.find((c) => c.botId === creator.id && c.main && !c.createdBy) ||
       this.ws.state.chats.find((c) => c.botId === creator.id);
     const chatId = targetChat?.id ?? this.ws.createChat(creator.id, "Task review · " + task.title.slice(0, 70));
     const chat = this.ws.chat(chatId);
