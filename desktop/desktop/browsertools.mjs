@@ -59,7 +59,8 @@ export class BrowserExtensionTools {
           const watch = setInterval(() => !active() && gone.abort(), WATCH_MS);
           try {
             const result = await link.call(tool.name, args && typeof args === "object" ? args : {}, { signal: gone.signal, botId: bot?.id, chatId: chat.id });
-            return typeof result === "string" ? result : JSON.stringify(result ?? null);
+            const raw = typeof result === "string" ? result : JSON.stringify(result ?? null);
+            return this.ws.secureInputs?.scrubRecent ? this.ws.secureInputs.scrubRecent(raw) : raw;
           } finally {
             clearInterval(watch);
           }

@@ -48,6 +48,7 @@ test("OMP's extension registers plans, inventory hooks, and leaves MCP registrat
     "session_start",
     "tool_call",
     "tool_execution_end",
+    "tool_result",
     "turn_end",
     "turn_start",
   ]);

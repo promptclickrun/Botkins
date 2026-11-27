@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { OmpProvider } from "../desktop/providers/omp/index.mjs";
+import { pluginAlias } from "../desktop/providers/pi/index.mjs";
 import { PiPackages } from "../desktop/providers/pi/packages.mjs";
 import { Providers } from "../desktop/providers/index.mjs";
 import { ModelProvider } from "../desktop/providers/provider.mjs";
@@ -326,9 +327,9 @@ test("OMP inventory maps aliased plugin servers across tools and /mcp test probe
   const pluginOk = "plugin_alpha__server_a1b2c3d4";
   const pluginCmd = "plugin_gamma__server_11223344";
   const pluginFail = "plugin_beta__server_e5f6a7b8";
-  const aliasOk = "bkp_aaaaaaaaaaaa";
-  const aliasCmd = "bkp_cccccccccccc";
-  const aliasFail = "bkp_bbbbbbbbbbbb";
+  const aliasOk = pluginAlias(pluginOk);
+  const aliasCmd = pluginAlias(pluginCmd);
+  const aliasFail = pluginAlias(pluginFail);
   const session = await provider.openSession(spec({
     mcpServers: {
       [pluginOk]: { type: "http", url: "http://127.0.0.1:9/alpha" },
@@ -337,11 +338,6 @@ test("OMP inventory maps aliased plugin servers across tools and /mcp test probe
     },
   }));
   const live = await session.start();
-  session.aliases = new Map([
-    [aliasOk, pluginOk],
-    [aliasCmd, pluginCmd],
-    [aliasFail, pluginFail],
-  ]);
   const probed = [];
   const origRequest = live.rpc.request.bind(live.rpc);
   live.rpc.request = async (cmd, timeout) => {

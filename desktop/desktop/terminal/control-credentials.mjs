@@ -160,6 +160,22 @@ export function credentialsApi({ workspace, handlers, signIns }) {
       await handlers.removeSavedCredential(found.id);
       return { removed: found.id, name: found.name };
     },
+    /** Standing bot credential grants (metadata only: bot, credential, pinned destination, level, last used). */
+    "credentials.grants"([filter = {}]) {
+      return handlers.credentialGrants(filter && typeof filter === "object" ? filter : {});
+    },
+    /** Revokes one standing credential grant by id. */
+    async "credentials.revokeGrant"([id, options]) {
+      const grantId = text(id, 120, "a grant id");
+      if (!agreedBy(options)) throw needsYes("Revoking credential grant " + grantId, "botkins credentials revoke");
+      const ok = await handlers.revokeCredentialGrant(grantId);
+      if (!ok) throw new ControlError("No credential grant with id " + grantId + ". See `botkins credentials grants`.", "NOT_FOUND");
+      return { revoked: grantId };
+    },
+    /** Recent credential use audit entries (who, what, where, when, outcome — never values). */
+    "credentials.audit"([options = {}]) {
+      return handlers.credentialAudit(options && typeof options === "object" ? options : {});
+    },
 
     // ── The vault: the keys and sign-ins of tools and providers ──
     /** What the vault holds, without a value, and whether this computer can open it. */

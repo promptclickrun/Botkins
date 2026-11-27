@@ -23,7 +23,7 @@ import { AlertActions } from "@/features/bots/AlertActions";
 import { ConnectCard } from "./ConnectCard";
 import { McpAppCard } from "./McpAppCard";
 import { IncomingAgentRail } from "./AgentMessageRail";
-import { isAgentMessage } from "./agentRailModel";
+import { answerReceiptLabel, isAgentMessage, isAnswerReceipt } from "./agentRailModel";
 import { useChatPeople } from "./ChatPeopleLook";
 import { authorOf, personTag, sideOf } from "./chatSides";
 import { myself } from "./people";
@@ -416,6 +416,16 @@ export const MessageRow = memo(function MessageRow({ item, chatId, group, bots, 
   if (message.role === "user") {
     if (isAgentMessage(message)) {
       return <IncomingAgentRail message={message} bots={bots} onOpenChat={onOpenChat} />;
+    }
+    if (item.receipt || isAnswerReceipt(message)) {
+      const label = answerReceiptLabel(message);
+      return (
+        <View style={{ alignSelf: "flex-end", paddingVertical: 2, paddingHorizontal: 4 }} accessible accessibilityLabel={label}>
+          <T variant="caption" color="muted" numberOfLines={2} style={{ textAlign: "right" }}>
+            {label}
+          </T>
+        </View>
+      );
     }
     const side = sideOf(message, me);
     const author = authorOf(message);

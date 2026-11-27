@@ -1,11 +1,10 @@
 import { randomUUID } from "expo-crypto";
 import { MenuView } from "@react-native-menu/menu";
 import { type Href, router, Stack, useIsFocused, useLocalSearchParams } from "expo-router";
-import { HeaderHeightContext } from "expo-router/react-navigation";
 import { LinearGradient } from "expo-linear-gradient";
 import { ChevronRight, Ellipsis, PanelLeft, Repeat, X } from "lucide-react-native";
-import { type ComponentRef, type ReactNode, type RefObject, memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
-import { ActivityIndicator, Alert, FlatList, Platform, ScrollView, type TextInput, useWindowDimensions, View } from "react-native";
+import { type ComponentRef, type ReactNode, type RefObject, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { ActivityIndicator, Alert, FlatList, Platform, ScrollView, StyleSheet, type TextInput, useWindowDimensions, View } from "react-native";
 import { useKeyboardState, useReanimatedKeyboardAnimation } from "react-native-keyboard-controller";
 import Animated, { FadeIn, useAnimatedStyle, useReducedMotion, useSharedValue, withDelay, withRepeat, withSequence, withTiming } from "react-native-reanimated";
 import { useStore } from "zustand";
@@ -14,14 +13,14 @@ import { useShallow } from "zustand/react/shallow";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import type { Bot, ChatSummary, Message, Preferences, Project, QueuedMessage, Run } from "@/link/types";
 import { useChatPrefs } from "@/state/chatPrefs";
-import { activityLabel, type AvatarState, useBot, useBots, useCan, useCapability, useChat, useChatActivity, useModels, usePart, useSettings, useWatchedChat } from "@/state/hooks";
+import { type AvatarState, useBot, useBots, useCan, useCapability, useChat, useChatActivity, useModels, usePart, useSettings, useWatchedChat } from "@/state/hooks";
 import { api, attempt, loadEarlier, reactToMessage } from "@/state/link";
 import { isRoutineChat } from "../../../link-host/routine-chat.mjs";
 import { effectiveModel, effortLabel, findModel, modelName } from "@/state/models";
 import { type ChatView, pendingSends, showToast, useApp } from "@/state/store";
 import { usePrefs } from "@/state/prefs";
 import { useTurnMarks } from "@/state/turnMarks";
-import { AvatarMotion, BackdropLayer, backdropBaseColor, BotAvatar, Button, Chip, EmptyState, Glass, hasGlass, IconButton, LinkBanner, Loading, radius, space, T, Tap, tint, useOnShow, useShape, useTextPrompt, useTheme } from "@/ui";
+import { AvatarMotion, BackdropLayer, backdropBaseColor, BotAvatar, Button, Chip, EmptyState, Glass, IconButton, LinkBanner, Loading, radius, space, T, Tap, tint, useOnShow, useShape, useTextPrompt, useTheme } from "@/ui";
 import { speakText, stopSpeech } from "@/features/voice/tts";
 import { endTalk, TalkBar, useTalk } from "../voice/api";
 import { useLiveCall } from "../voice/liveCall";
@@ -45,7 +44,6 @@ import { drafts, keepDraft, useChatSplit } from "./split";
 import { closed, sessionTodos, todoLabel, TRANSFER_TODOS } from "../../../link-host/session-todos";
 import { TodoList } from "./TodoList";
 import { latestTurn } from "./helpers";
-import { HelperRail, railShown } from "./HelperRail";
 import { AgentMessageRail } from "./AgentMessageRail";
 import { CrewCard } from "./CrewCard";
 import { LiveTurn, TurnText, WorkPart } from "./LiveTurn";
@@ -122,7 +120,7 @@ function ChatTitle({ chat, bot, bots, state, model, room, docked }: { chat: Chat
   const { width } = useWindowDimensions();
   const group = !!chat.botIds && chat.botIds.length > 1;
   const name = group ? chat.title || "Group chat" : (bot?.name ?? chat.title);
-  const status = activityLabel(state) || [chat.main && "Main chat", model].filter(Boolean).join(" · ");
+  const status = [chat.main && "Main chat", model].filter(Boolean).join(" · ");
   const body = (
     <View style={{ flexDirection: "row", alignItems: "center", gap: space.sm, maxWidth: width - room }}>
       {/* The face of the agent you're with moves (avatarMotion.tsx); the rest of the chat holds still. */}
@@ -131,15 +129,17 @@ function ChatTitle({ chat, bot, bots, state, model, room, docked }: { chat: Chat
         <T variant="name" numberOfLines={1}>
           {name}
         </T>
-        <T variant="caption" color={state === "waiting" ? "warning" : state === "idle" ? "muted" : "accentText"} numberOfLines={1}>
-          {status}
-        </T>
+        {!!status && (
+          <T variant="caption" color="muted" numberOfLines={1}>
+            {status}
+          </T>
+        )}
       </View>
     </View>
   );
   if (group || !bot) return body;
   return (
-    <Tap onPress={() => router.push({ pathname: "/bot/[id]", params: { id: bot.id } })} feel="select" sink={0.98} accessibilityLabel={name + ", " + status + ", bot page"}>
+    <Tap onPress={() => router.push({ pathname: "/bot/[id]", params: { id: bot.id } })} feel="select" sink={0.98} accessibilityLabel={name + (status ? ", " + status : "") + ", bot page"}>
       {body}
     </Tap>
   );
@@ -342,7 +342,7 @@ const TimelineRow = memo(function TimelineRow({ item, chatId, group, bot, bots, 
   ) : item.kind === "agent-rail" ? (
     <AgentMessageRail run={item.run} bots={bots} onOpenChat={openChat} />
   ) : item.kind === "activity" ? (
-    <WorkLine chatId={chatId} runId={item.runId} label="Turn activity" />
+    <WorkLine chatId={chatId} runId={item.runId} label={item.label ?? "Turn activity"} />
   ) : item.kind === "ended" ? (
     <EndedNote run={item.run} ending={item.ending} retry={item.retry} />
   ) : item.kind === "kept" ? (
@@ -351,7 +351,7 @@ const TimelineRow = memo(function TimelineRow({ item, chatId, group, bot, bots, 
     <OpenNote line={item.line} again={item.again} onSend={sendText} />
   ) : item.kind === "fold" && item.island ? (
     <Island chatId={chatId} bot={group ? bots.get(item.run.speakers?.at(-1) ?? "") : bot} group={group} item={item} inView={inView} hold={holdFold} onHeight={item.live ? viewport.islandHeight : undefined} />
-  ) : item.kind === "fold" ? (
+  ) : item.kind === "fold" && item.live ? null : item.kind === "fold" ? (
     <FoldRow chatId={chatId} bot={group ? bots.get(item.run.speakers?.at(-1) ?? "") : bot} group={group} item={item} hold={holdFold} />
   ) : item.kind === "thought" ? (
     <View style={workWidth}>
@@ -990,14 +990,10 @@ function ChatScreenScreen({ pane: paneId, onLeave: leavePane, onList }: { pane?:
   const spacer = useAnimatedStyle(() => ({ height: Math.max(Math.abs(keyboard.height.value), bottomInset) }));
   const backdrop = usePrefs((prefs) => prefs.backdrop);
   const hasBackdrop = backdrop !== "clean";
-  // T3 Code's open chat: on a phone with Liquid Glass (or an active backdrop on iOS) the bar is see-through
-  // and the chat scrolls under it, behind a soft fade, and the message box floats over the chat on glass.
-  const glassBar = !paneId && (hasGlass() || (hasBackdrop && Platform.OS === "ios"));
-  const barHeight = useContext(HeaderHeightContext) ?? 0;
   const [paneBar, setPaneBar] = useState(0);
   const [banners, setBanners] = useState(0);
   const [dock, setDock] = useState(0);
-  const topBar = glassBar ? barHeight : paneId ? paneBar : 0;
+  const topBar = paneId ? paneBar : 0;
 
   if (leaving)
     return (
@@ -1022,9 +1018,8 @@ function ChatScreenScreen({ pane: paneId, onLeave: leavePane, onList }: { pane?:
     </View>
   );
   const header = paneId ? (
-    // Beside the list there is no navigation bar: the pane draws the same title and menu itself.
-    // It floats over the chat as the see-through bar does, with no line under it.
-    <View onLayout={(event) => setPaneBar(Math.round(event.nativeEvent.layout.height))} style={{ position: "absolute", top: 0, left: 0, right: 0, flexDirection: "row", alignItems: "center", gap: space.sm, paddingLeft: onList ? space.sm : space.lg, paddingRight: space.sm, paddingTop: insets.top + space.xs, paddingBottom: space.xs }}>
+    // Beside the list there is no navigation bar: the pane draws its own opaque bar with a hairline edge.
+    <View onLayout={(event) => setPaneBar(Math.round(event.nativeEvent.layout.height))} style={{ position: "absolute", top: 0, left: 0, right: 0, zIndex: 2, backgroundColor: colors.canvas, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.line, flexDirection: "row", alignItems: "center", gap: space.sm, paddingLeft: onList ? space.sm : space.lg, paddingRight: space.sm, paddingTop: insets.top + space.xs, paddingBottom: space.xs }}>
       {onList && <IconButton icon={PanelLeft} label="Chats" onPress={onList} />}
       <View style={{ flex: 1, minWidth: 0, alignItems: "flex-start" }}>
         <ChatTitle chat={chat} bot={bot} bots={bots} state={state} model={model.name} room={260} docked={docked} />
@@ -1036,8 +1031,9 @@ function ChatScreenScreen({ pane: paneId, onLeave: leavePane, onList }: { pane?:
       options={{
         headerTitle: () => <ChatTitle chat={chat} bot={bot} bots={bots} state={state} model={model.name} room={measured ? 206 : 150} docked={docked} />,
         headerRight: () => barEnd,
-        // See-through. The chat's list turns the system's edge effect off (EdgeFree), and the fade under the bar is drawn here (Fade).
-        ...(glassBar && { headerTransparent: true, headerStyle: { backgroundColor: "transparent" } }),
+        headerTransparent: false,
+        headerStyle: { backgroundColor: colors.canvas },
+        headerShadowVisible: false,
       }}
     />
   );
@@ -1047,7 +1043,7 @@ function ChatScreenScreen({ pane: paneId, onLeave: leavePane, onList }: { pane?:
   const project = projects?.find((item) => item.id === chat.projectId);
   const book = shape.pose === "book" && shape.fold && project?.folder && (!paneId || !!onList) ? shape.fold : null;
   const todoRoom = canChat && hasTodos ? CAPSULE + space.sm : 0;
-  const room = { top: topBar + banners, dock: dock + todoRoom, bottom: dock + (working || hasTodos ? CAPSULE + space.sm : 0) };
+  const room = { top: topBar + banners, dock: dock + todoRoom, bottom: dock + todoRoom };
   const column = (
     <MessageLink.Provider value={showPulls ? openMessageLink : openLink}>
     <View style={{ flex: 1, backgroundColor: hasBackdrop ? "transparent" : colors.canvas }}>
@@ -1057,7 +1053,8 @@ function ChatScreenScreen({ pane: paneId, onLeave: leavePane, onList }: { pane?:
         void attempt(reactToMessage(chatId, reaction.index, reaction.time ?? null, emoji));
       }} />}
       {!paneId && header}
-      {/* The chat fills this; the bar, the banners and the message box float over it. */}
+      {!paneId && <View style={{ height: StyleSheet.hairlineWidth, backgroundColor: colors.line }} />}
+      {/* The chat fills this; banners and the message box sit cleanly over it. */}
       <View style={{ flex: 1 }}>
         {!view && !pending.length ? (
           <View style={{ flex: 1, justifyContent: "center" }}>
@@ -1077,7 +1074,6 @@ function ChatScreenScreen({ pane: paneId, onLeave: leavePane, onList }: { pane?:
             />
           </ChatPeopleLook>
         )}
-        {topBar > 0 && <Fade edge="top" cover={topBar} />}
         {paneId && header}
         <View onLayout={(event) => setBanners(Math.round(event.nativeEvent.layout.height))} style={{ position: "absolute", top: topBar, left: 0, right: 0 }}>
           <RoutineBanner chat={chat} />
@@ -1086,21 +1082,19 @@ function ChatScreenScreen({ pane: paneId, onLeave: leavePane, onList }: { pane?:
           </View>
         </View>
         <Fade edge="bottom" cover={dock} />
-        {canChat && (working || hasTodos) && (
+        {canChat && hasTodos && (
           <View pointerEvents="box-none" style={{ position: "absolute", left: space.sm, right: space.sm, bottom: dock + space.sm, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: space.sm }}>
-            {showCapsule && <StatusCapsule chatId={chatId} bot={bot} group={group} bots={bots} run={turnRun} />}
-            {hasTodos && <Chip label={todoLabel(todos)} selected={todoOpen} onPress={() => setTodoDrawerChat(todoOpen ? undefined : chatId)} />}
+            <Chip label={todoLabel(todos)} selected={todoOpen} onPress={() => setTodoDrawerChat(todoOpen ? undefined : chatId)} />
           </View>
         )}
         {/* A touch on the message box or anything beside it ends a text selection in the chat. */}
-        <View onLayout={(event) => setDock(Math.round(event.nativeEvent.layout.height))} style={{ position: "absolute", left: 0, right: 0, bottom: 0, paddingTop: space.xs, paddingBottom: space.sm, gap: space.sm }} onTouchStart={endSelecting}>
+        <View onLayout={(event) => setDock(Math.round(event.nativeEvent.layout.height))} style={{ position: "absolute", left: 0, right: 0, bottom: 0, paddingTop: space.xs, paddingBottom: space.sm, gap: space.xs }} onTouchStart={endSelecting}>
           {canChat && todoOpen && (
             <ScrollView style={{ maxHeight: Math.min(240, requestRoom / 2), marginHorizontal: space.md }} keyboardShouldPersistTaps="handled">
               <TodoList todos={todos} />
               {!working && todos.some(todo => !closed(todo)) && <Chip label="Transfer and continue todos" onPress={() => sendText(TRANSFER_TODOS)} />}
             </ScrollView>
           )}
-          {railShown(newest) && newest && <HelperRail chatId={chatId} run={newest} />}
           {canChat && requests.length > 0 && (
             <View style={{ paddingHorizontal: space.md }}>
               <RequestPanel key={requests[0].id} request={requests[0]} bot={bots.get(requests[0].botId) ?? bot} maxHeight={requestRoom} count={requests.length} />
@@ -1112,6 +1106,7 @@ function ChatScreenScreen({ pane: paneId, onLeave: leavePane, onList }: { pane?:
             </View>
           )}
           {canChat && !!queued?.length && <Queued chatId={chatId} items={queued} steerable={steerable} />}
+          {canChat && showCapsule && <StatusCapsule chatId={chatId} bot={bot} group={group} bots={bots} run={turnRun} />}
           {canChat && chat.hostDispatch ? (
             working && <View style={{ paddingHorizontal: space.md }}><Button title="Stop request" variant="secondary" onPress={() => void attempt(api.stop(chatId))} /></View>
           ) : canChat ? (

@@ -23,6 +23,19 @@ export class LoginLookups {
 
   answer(id, entries) {
     const job = this.#pending.get(id);
-    if (job && Array.isArray(entries)) job.reply.resolve(entries.map(({ name, kind }) => ({ name, kind })));
+    if (job && Array.isArray(entries)) {
+      job.reply.resolve(
+        entries.map((entry) => {
+          const out = {};
+          for (const key of [
+            "id", "name", "kind", "source", "website", "username", "aliases",
+            "hasTotp", "copied", "linked", "manager", "vaultId", "itemId", "fieldId",
+          ]) {
+            if (entry?.[key] !== undefined) out[key] = entry[key];
+          }
+          return out;
+        }),
+      );
+    }
   }
 }

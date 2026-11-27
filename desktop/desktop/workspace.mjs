@@ -155,6 +155,8 @@ export function appendStream(task, data) {
 
 /** How long the turn's hot path waits to write the state (Workspace.saveSoon). */
 const SAVE_SOON_MS = 750;
+/** The harnesses Botkins hands a plugin's MCP servers and hooks to. The others get its skills only. */
+const PLUGIN_RUNTIMES = new Set(["copilot", "pi", "omp"]);
 /** Workspaces with a write waiting, written when the process exits. */
 const unsaved = new Set();
 let exitHooked = false;
@@ -1847,7 +1849,7 @@ export class Workspace {
           preview: request.planContent,
           choices: request.actions,
           freeform: true,
-        });
+        }, undefined, { signal: request.signal });
         return answer.action === "answer" && request.actions.includes(answer.value)
           ? { approved: true, selectedAction: answer.value }
           : { approved: false, feedback: answer.value };
@@ -1871,9 +1873,11 @@ export class Workspace {
       form: (request) =>
         task.stopped ? { action: "cancel" } : this.interactions.elicit(chat, task, request),
     };
-    const copilotPlugins = provider.id === "copilot";
+    // The harnesses that take a plugin's MCP servers and hooks from Botkins (Pi and OMP run the
+    // hooks in Botkins' approval step: providers/pi/index.mjs). The others get its skills only.
+    const fullPlugins = PLUGIN_RUNTIMES.has(provider.id);
     const pluginSpec = access.plugins
-      ? await this.plugins.session(bot, chat, { skillsOnly: !copilotPlugins })
+      ? await this.plugins.session(bot, chat, { skillsOnly: !fullPlugins })
       : { directories: [], mcpServers: {}, hooks: undefined };
     // What the session was told when it began, or what it begins with now (desktop/session-prompts.mjs).
     const prompt = this.sessionPrompt(chat, bot, provider, hosted?.model ?? choice, providerSessionId, providerEstablished);
@@ -1892,7 +1896,7 @@ export class Workspace {
     if (JSON.stringify(routes) !== routesBefore) this.sessionPrompts.save(prompt.key, prompt.record);
     const mcpServers = {
       ...ownServers,
-      ...(access.mcp && copilotPlugins ? pluginSpec.mcpServers : {}),
+      ...(access.mcp && fullPlugins ? pluginSpec.mcpServers : {}),
     };
     if (run && !run.panelId && !chat.helper && !access.member) {
       await this.claudeArtifacts.primeAvailability().catch(() => {});
@@ -1921,13 +1925,14 @@ export class Workspace {
       skills: access.skills ? this.integrations.skillsFor(bot, { member: access.member }) : { directories: [], disabled: [] },
       mcpServers,
       // A remote MCP server that signs in with OAuth gets its token from the vault when it asks.
-      mcpAuth: async (request) => access.mcp && access.plugins && copilotPlugins && Object.hasOwn(pluginSpec.mcpServers, request.server) ? this.plugins.token(bot.id, request) : this.integrations.mcpAuth(request),
+      mcpAuth: async (request) => access.mcp && access.plugins && fullPlugins && Object.hasOwn(pluginSpec.mcpServers, request.server) ? this.plugins.token(bot.id, request) : this.integrations.mcpAuth(request),
       // Only what Botkins itself wrote for the session from installed plugins (desktop/plugin-runtime.mjs).
       // A plugin's own folder is never handed on: the runtime would read its hooks and tools by itself.
       plugins: [...(access.plugins ? pluginSpec.directories : [])],
-      pluginHooks: access.plugins && copilotPlugins ? pluginSpec.hooks : undefined,
+      pluginHooks: access.plugins && fullPlugins ? pluginSpec.hooks : undefined,
       pluginRevision: this.plugins.generation,
       history: () => chat.helper ? (chat.helperMessages ?? []) : (chat.compacted ? chat.messages.slice(chat.compacted.through) : chat.messages ?? []),
+      nativeDialogs: !!run && !chat.helper && !run.scheduleId && !run.taskId && !run.panelId && !run.reaction,
       handlers: handlers || null,
     });
     // For group members, openSession must not pre-populate `through` with chat.messages.length
@@ -3349,7 +3354,7 @@ export const COMPUTER_USE_GUIDANCE =
   "\n4. The person's other computers (node_*): node_exec, the node file tools, node_computer_* by token; node_screen_input only for an app with no other way in." +
   "\n5. Clicking raw screen coordinates is the last resort, after a capture shows exactly where.";
 const SECRETS_GUIDANCE =
-  "\n\n## Secrets\nNever ask for a secret in chat, read a password field back, or pass a credential through a shell command or the clipboard, and never type one with browser_type or computer_act. Use the vault: find_saved_credentials lists names saved for a site; request_secure_input lets the person pick or enter the value (page_fill for a browser tab, browser_form or the desktop side_pane_web viewer; native_fill for an app's password field from computer_observe; https_form, bearer_get or git_read for a request); pass its handles unchanged to use_secure_input.";
+  "\n\n## Secrets\nNever ask for a secret in chat, read a password field back, or pass a credential through a shell command or the clipboard, and never type one with browser_type or computer_act. Use the vault: find_saved_credentials lists names saved for a site; request_secure_input lets the person pick or enter the value (page_fill for a browser tab, browser_form or the desktop side_pane_web viewer; native_fill for an app's password field from computer_observe; https_form, bearer_get or git_read for a request); pass its handles unchanged to use_secure_input. When offered, use_credential uses a saved credential by its ID from find_saved_credentials, after the person's approval or standing grant.";
 const REACTION_GUIDANCE =
   "\n\n## Replies\nAnswer in chat by default. When a thanks or an FYI needs no words, react with one emoji (react). To send nothing, reply with exactly [SILENT]. When the person reacts to your message with an emoji, Botkins gives you a turn that says so; it is not a message from them. Answer only if words add something: each reply is a model turn on their plan. In a chat with more than one person, @Name notifies that person.";
 

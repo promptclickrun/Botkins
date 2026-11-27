@@ -113,7 +113,6 @@ test("a rest pass that starts a little late still plays", (t) => {
 const MOVING_SCREENS = ["src/features/bots/BotPage.tsx"];
 const MOVING_FACES = [
   "src/features/chat/ChatScreen.tsx", // the chat's header face (one bot, or a group's two)
-  "src/features/chat/StatusCapsule.tsx", // the face in the working capsule, shown while a turn runs
   "src/features/voice/VoiceDock.tsx", // live voice
   "src/features/bots/LookStage.tsx", // the look editor's preview: part of the bot's own page, as on the desktop
 ];
@@ -132,7 +131,7 @@ test("only a bot's page wraps itself in AvatarMotion", () => {
   assert.deepEqual(moving, MOVING_SCREENS);
 });
 
-test("in a chat only the header face, the working capsule's face and live voice move", () => {
+test("in a chat only the header face and live voice move", () => {
   const asking = new Map<string, number>();
   for (const file of screens) {
     const text = readFileSync(join(root, file), "utf8");
@@ -144,7 +143,6 @@ test("in a chat only the header face, the working capsule's face and live voice 
   }
   assert.deepEqual([...asking.keys()].sort(), [...MOVING_FACES].sort());
   assert.equal(asking.get("src/features/chat/ChatScreen.tsx"), 2, "the header's group face and single face");
-  assert.equal(asking.get("src/features/chat/StatusCapsule.tsx"), 1);
   assert.equal(asking.get("src/features/voice/VoiceDock.tsx"), 2, "the dock's face and its quiet row");
 });
 

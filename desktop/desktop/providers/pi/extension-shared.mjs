@@ -1,6 +1,12 @@
 import { readFileSync } from "node:fs";
 
 export const ASK = "botkins:permission";
+/** Botkins' answer when the call goes on changed or is refused with a reason (a plugin's hook): the extension then asks for the detail. */
+export const MORE = "more";
+export const DETAIL = "botkins:detail";
+/** The extension's question after a tool ran, when a plugin has a postToolUse or postToolUseFailure hook. Botkins answers the result to use, or cancels. */
+export const RESULT = "botkins:result";
+const MAX_RESULT = 200_000;
 export const INVENTORY = "botkins:inventory";
 const INVENTORY_POLL_MS = 150;
 const INVENTORY_WATCH_MS = 10000;
@@ -146,8 +152,49 @@ export function makeBotkinsExtension(file, { mcp = true } = {}) {
         ...(managed && { managed: true }),
         ...(sandboxEscape && { sandboxEscape: true }),
       };
-      const answer = await ctx.ui.select(ASK + " " + JSON.stringify(call), ["allow", "deny"]);
-      return answer === "allow" ? undefined : { block: true, reason: "The person didn't allow this." };
+      const answer = await ctx.ui.select(ASK + " " + JSON.stringify(call), ["allow", "deny", MORE]);
+      if (answer === "allow") return undefined;
+      if (answer !== MORE) return { block: true, reason: "The person didn't allow this." };
+      let detail = null;
+      try {
+        detail = JSON.parse(String(await ctx.ui.input(DETAIL + " " + JSON.stringify(String(event.toolCallId)))));
+      } catch {
+        // No detail: the call does not run.
+      }
+      if (detail?.deny) return { block: true, reason: String(detail.reason || "A plugin's hook didn't allow this.") };
+      const next = detail?.input;
+      if (!next || typeof next !== "object" || Array.isArray(next)) return { block: true, reason: "Botkins couldn't apply the changed arguments." };
+      // Pi runs the input it passed in (changed in place); OMP runs the `input` a handler returns.
+      if (event.input && typeof event.input === "object") {
+        for (const key of Object.keys(event.input)) delete event.input[key];
+        Object.assign(event.input, next);
+      }
+      return { input: next };
+    });
+    // A plugin's postToolUse / postToolUseFailure hook sees every tool's result, and may change
+    // what the model is told. Botkins runs the hook and answers the text to use (desktop/providers/pi/index.mjs).
+    pi.on("tool_result", async (event, ctx) => {
+      if (!(read() ?? first).postToolUse) return undefined;
+      const text = (Array.isArray(event.content) ? event.content : []).map((part) => (part?.type === "text" ? String(part.text ?? "") : "")).filter(Boolean).join("\n");
+      const name = String(event.toolName);
+      const info = typeof pi.getAllTools === "function" ? pi.getAllTools().find((tool) => tool.name === name) : undefined;
+      const call = {
+        toolCallId: event.toolCallId,
+        toolName: event.toolName,
+        input: event.input,
+        isError: !!event.isError,
+        text: text.slice(0, MAX_RESULT),
+        ...((info?.mcpServerName ?? event.mcpServerName) && { mcpServerName: info?.mcpServerName ?? event.mcpServerName }),
+        ...((info?.mcpToolName ?? event.mcpToolName) && { mcpToolName: info?.mcpToolName ?? event.mcpToolName }),
+      };
+      let answer = null;
+      try {
+        answer = JSON.parse(String(await ctx.ui.input(RESULT + " " + JSON.stringify(call))));
+      } catch {
+        return undefined;
+      }
+      if (!answer || typeof answer.text !== "string") return undefined;
+      return { content: [{ type: "text", text: answer.text }], ...(typeof answer.isError === "boolean" && { isError: answer.isError }) };
     });
   };
 }

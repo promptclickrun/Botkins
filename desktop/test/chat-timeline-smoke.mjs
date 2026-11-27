@@ -113,22 +113,13 @@ try {
   const inOrder = (text, words) => words.map((word) => text.indexOf(word)).every((at, i, all) => at >= 0 && (i === 0 || at > all[i - 1]));
   const seeded = structuredClone(current);
   const chips = await page.locator(".canvas-chips .canvas-chip").allInnerTexts();
-  assert.match(chips[0] ?? "", /In the background/, "the helpers' chip is in the row above the message box");
+  assert.equal(chips.some((c) => /In the background/.test(c)), false, "no background helper bar above the message box");
   const story = await activity.locator(".insp-list").innerText();
-  assert.ok(inOrder(story, ["Read the workspace before writing", "I checked the first file.", "Read file", "Build in background", "Inspect result"]), "the story is in the order it happened: " + story);
-  // The crew card is folded under the fold, and a row opens the Crew tab on that helper.
-  const crewCard = page.getByRole("region", { name: "Crew" });
-  await expect(crewCard.locator(".crew-card-head")).toHaveAttribute("aria-expanded", "false");
-  await expect(crewCard).toContainText("1 helper");
-  await crewCard.locator(".crew-card-head").click();
-  await crewCard.getByRole("button", { name: /^File reader/ }).click();
-  await expect(page.getByRole("tab", { name: "Crew" })).toHaveAttribute("aria-selected", "true");
-  await expect(page.locator(".crew-member")).toContainText("Reads the second file");
-  await crewCard.locator(".crew-card-head").click();
-  // The chip above the message box opens Crew too.
-  await page.getByRole("tab", { name: "Activity" }).click();
-  await page.locator(".canvas-chips .canvas-chip").first().click();
-  await expect(page.getByRole("tab", { name: "Crew" })).toHaveAttribute("aria-selected", "true");
+  assert.ok(inOrder(story, ["Read the workspace before writing", "I checked the first file.", "Read file", "Inspect result"]), "the story is in the order it happened: " + story);
+  assert.doesNotMatch(story, /Build in background/, "a background command belongs to Crew, not Activity");
+  // Once finished, the crew summary is folded into the turn's fold line rather than a separate crew card.
+  await expect(page.getByRole("region", { name: "Crew" })).toHaveCount(0);
+  await expect(page.locator(".timeline-fold-line")).toContainText("1 helper finished");
   const taskRail = page.getByRole("button", { name: /^Todos / });
   await expect(taskRail).toHaveCount(1);
   await expect(taskRail).toHaveText("Todos 1/2");
@@ -138,17 +129,26 @@ try {
   const activeRun = current.runs.find((run) => run.id === runId);
   activeRun.status = "Working";
   await publish();
-  // A live turn's line opens Activity on it, and the story follows new steps.
-  await page.locator(".timeline-fold.live .timeline-fold-line").click();
+  // While the turn runs, the crew card sits in the feed and a row opens the Crew tab on that helper.
+  const crewCard = page.getByRole("region", { name: "Crew" });
+  await expect(crewCard.locator(".crew-card-head")).toHaveAttribute("aria-expanded", "false");
+  await expect(crewCard).toContainText("1 helper");
+  await crewCard.locator(".crew-card-head").click();
+  await crewCard.getByRole("button", { name: /^File reader/ }).click();
+  await expect(page.getByRole("tab", { name: "Crew" })).toHaveAttribute("aria-selected", "true");
+  await expect(page.locator(".crew-member")).toContainText("Reads the second file");
+  await expect(page.getByRole("tabpanel", { name: "Crew" })).toContainText("Build in background");
+  await crewCard.locator(".crew-card-head").click();
+  // A live turn's quiet status line above the message box opens Activity on it, and the story follows new steps.
+  const statusLine = page.locator(".turn-status-line");
+  await expect(statusLine).toBeVisible();
+  await expect(statusLine).not.toContainText("Read the workspace before writing");
+  await statusLine.click();
   await expect(page.getByRole("tab", { name: "Activity" })).toHaveAttribute("aria-selected", "true");
   await expect(activity.locator(".insp-row").last()).toContainText("Inspect result");
   activeRun.steps.push({ id: "live", name: "bash", label: "Check result", status: "Running", started: now + 31 });
   await publish();
   await expect(activity.locator(".insp-row").last()).toContainText("Check result");
-  const workingRail = page.locator(".timeline-fold.live .timeline-fold-line");
-  const left = await workingRail.boundingBox();
-  const right = await taskRail.boundingBox();
-  assert.ok(right.x >= left.x + left.width - 1 && right.y < left.y + left.height, "Todos is to the right of Working");
   const activeChat = current.chats.find((chat) => chat.id === chatId);
   activeRun.status = "Completed";
   activeChat.todos = activeRun.todos;
@@ -161,7 +161,7 @@ try {
   };
   const next = nextTurn();
   await publish();
-  await expect(workingRail.locator("..").getByRole("button", { name: "Todos 1/2" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Todos 1/2" })).toBeVisible();
   next.todos = activeChat.todos = [
     { id: "t1", title: "Done task", status: "done" },
     { id: "t2", title: "Cancelled task", status: "cancelled" },
@@ -201,17 +201,18 @@ try {
   await publish();
   const column = page.locator(".chat-column");
   const rail = column.locator(".timeline-fold-line");
+  const liveStatus = page.locator(".turn-status-line");
   // Assert on the closed canvas first, then open the actual rail to verify each call is accessible.
   // A helper's own step ("Helper search") is the crew's, not the bot's: 5 steps.
-  await expect(rail).toContainText("5 steps");
+  await expect(liveStatus).toContainText("5 steps");
   await expect(column).not.toContainText(titles[0]);
   await expect(column).not.toContainText(firstThought);
   await expect(column).not.toContainText(secondThought);
   // Updates are their own switch: they stay in the chat whatever Steps and Thinking are set to.
   await expect(column).toContainText(interim);
   const ownTitles = titles.filter((title) => title !== "Helper search");
-  // The live rail opens Activity: every step of the bot's, the thinking and the update.
-  await rail.click();
+  // The live status line opens Activity: every step of the bot's, the thinking and the update.
+  await liveStatus.click();
   for (const title of [...ownTitles, "Read the workspace before writing", "Now check the second file", interim]) await expect(activity).toContainText(title);
   // The helper's step is on the Crew tab, under that helper.
   await page.getByRole("tab", { name: "Crew" }).click();
@@ -303,9 +304,8 @@ try {
   groupRun.status = "Working";
   delete groupRun.finished;
   await publish();
-  const groupRail = page.getByRole("region", { name: "Turn status" }).locator(".timeline-fold-line");
-  // A live rail opens the turn's Activity at once.
-  await groupRail.click();
+  // The same quiet status line opens Activity for a group turn.
+  await statusLine.click();
   await expect(page.locator(".activity-inspector")).toContainText("Pip is checking");
   await page.getByRole("button", { name: "Close side pane" }).click();
   groupRun.status = "Completed";

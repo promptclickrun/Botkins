@@ -42,13 +42,16 @@ export class Interactions {
   openFor(task) {
     return [...this.entries.values()].filter((entry) => entry.task === task).map((entry) => entry.view);
   }
-  request(chat, task, view, timeout, { detachAfter } = {}) {
-    if (task.stopped || task.ended || this.ws.closing)
+  request(chat, task, view, timeout, { detachAfter, signal } = {}) {
+    if (task.stopped || task.ended || this.ws.closing || signal?.aborted)
       return Promise.resolve({ action: "cancel" });
     const id = randomUUID();
     const transcript = this.ws.state?.chats.find(c => c.id === chat.id) ?? chat;
     if (task.run) commitInterim(transcript, task.run, task);
     return new Promise((resolve) => {
+      const cancel = () => {
+        if (this.entries.has(id)) this.respond(id, { action: "cancel" }, false);
+      };
       this.entries.set(id, {
         chat: transcript, task,
         view: {
@@ -61,13 +64,17 @@ export class Interactions {
           chatId: chat.id,
         },
         timer: timeout && setTimeout(() => this.respond(id, { action: "cancel" }, false), timeout).unref(),
-        resolve,
+        resolve: answer => {
+          signal?.removeEventListener("abort", cancel);
+          resolve(answer);
+        },
       });
       const entry = this.entries.get(id);
       if (detachAfter) {
         entry.detachTimer = setTimeout(() => this.detach(id), detachAfter);
         entry.detachTimer.unref?.();
       }
+      signal?.addEventListener("abort", cancel, { once: true });
       this.ws.notify();
       this.ws.events?.emit("request", entry.view);
     });
@@ -94,7 +101,9 @@ export class Interactions {
       throw new Error("Only the destination owner can answer this dispatch request.");
     if (
       view.kind === "permission" &&
-      !["approve", "deny", "remember", "cancel"].includes(answer.action) && !(view.dispatch && answer.action === "today")
+      !["approve", "deny", "remember", "cancel"].includes(answer.action) &&
+      !(view.dispatch && answer.action === "today") &&
+      !(view.credentialGrant && answer.action === "deny_always")
     )
       throw new Error("Unknown approval response");
     // A request whose script is the point (a script command, desktop/script-commands.mjs) is approved only by an answer that says its whole text was shown:
@@ -125,7 +134,7 @@ export class Interactions {
     }
     if (human && entry.task.run && !entry.task.run.noOutput) {
       commitInterim(entry.chat, entry.task.run, entry.task);
-      entry.chat.messages.push({ role: "user", text: answerReceipt(view, answer), time: Date.now(),
+      entry.chat.messages.push({ role: "user", text: answerReceipt(view, answer), time: Date.now(), receipt: true,
         answer: { runId: entry.task.run.id, requestId: id, kind: view.kind, title: view.title } });
       this.ws.save();
     }
@@ -202,7 +211,7 @@ export class Interactions {
       title: req.question,
       choices,
       freeform: req.allowFreeform !== false || !choices.length,
-    }, undefined, { detachAfter: this.detachAfter });
+    }, undefined, { detachAfter: this.detachAfter, signal: req.signal });
     if (answer.action === "detached") return { answer: DETACHED_NOTE, wasFreeform: true };
     if (answer.action === "cancel")
       throw new Error("The user dismissed the question.");
@@ -217,7 +226,7 @@ export class Interactions {
       title: req.message,
       schema: req.requestedSchema,
       url: req.mode === "url" ? req.url : undefined,
-    });
+    }, undefined, { signal: req.signal });
     return reply.action === "accept"
       ? { action: "accept", content: reply.content ?? {} }
       : { action: "cancel" };

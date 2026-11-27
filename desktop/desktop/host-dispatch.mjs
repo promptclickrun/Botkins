@@ -128,7 +128,7 @@ export class HostDispatch {
           targetHostName: peer.targetName, label: "Allow today and Always allow apply to future messages from this source bot to this destination bot on these two computers.",
         }));
         if (task.stopped) return;
-        chat.messages.push({ role: "user", text: answerReceipt({ kind: "permission", dispatch: true }, { action }), time: Date.now() });
+        chat.messages.push({ role: "user", text: answerReceipt({ kind: "permission", dispatch: true }, { action }), time: Date.now(), receipt: true });
         this.ws.save();
         if (action === "deny" || action === "cancel") {
           row.status = action === "deny" ? "denied" : "cancelled";
