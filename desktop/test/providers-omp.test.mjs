@@ -95,6 +95,7 @@ test("a turn runs OMP in RPC-UI with isolated config and OMP's session directory
   assert.match(started.overlay, /shared:\s*false/);
   assert.match(started.overlay, /startupTimeoutMs:\s*\d+/);
   assert.match(started.overlay, /tools:\n\s+commands:\s*false/);
+  assert.match(started.overlay, /todo:\n\s+enabled:\s*false\n\s+reminders:\s*false/);
 
   const live = provider.live.get("chat-1");
   assert.equal(statSync(live.file).mode & 0o777, 0o600);

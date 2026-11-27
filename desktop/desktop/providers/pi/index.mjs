@@ -28,7 +28,7 @@ import { SessionStore, resumeOrRecover, serversWithTokens, uuidFor } from "../se
 import { skillChoices, skillSupport } from "../skills.mjs";
 import { displayValue } from "../../display.mjs";
 import { INVENTORY } from "./extension-shared.mjs";
-import { PLAN_INSTRUCTIONS, updatePlanTool } from "./plan.mjs";
+import { PLAN_INSTRUCTIONS, planFromOmpPhases, planSignature, planToOmpPhases, toTodoResult, updatePlanTool } from "./plan.mjs";
 
 export const PI_ID = "pi";
 export const OMP_ID = "omp";
@@ -103,6 +103,9 @@ const OMP_MCP_STARTUP_TIMEOUT_MS = 2000;
  * - `mcp.shared: false`: keep each session's ToolBridge token and MCP catalog out of OMP's shared daemon.
  * - `tools.commands: false`: expose Botkins and MCP tools directly as typed model tool schemas
  *   rather than hiding them behind OMP's bash command wrapper.
+ * - `todo.enabled: false` and `todo.reminders: false`: Botkins owns the chat plan (via `update_plan`
+ *   and `set_todos` sync) and continuation decisions (`keep-moving.mjs`), so disable OMP's competing
+ *   schema-less `todo` tool and internal reminder loop.
  */
 const OMP_CONFIG = [
   "mcp:",
@@ -112,6 +115,9 @@ const OMP_CONFIG = [
   "enabledProviders: []",
   "tools:",
   "  commands: false",
+  "todo:",
+  "  enabled: false",
+  "  reminders: false",
   "",
 ].join("\n");
 const MAX_LIVE = 8;
@@ -413,6 +419,7 @@ class PiSession extends ProviderSession {
     this.mode = "interactive";
     this.turn = null;
     this.lost = "";
+    this.plan = undefined;
   }
   on(handler) {
     this.handlers.add(handler);
@@ -447,9 +454,46 @@ class PiSession extends ProviderSession {
       prompt: (spec.instructions ?? "") + (this.bridge && this.planTools().length ? "\n\n" + PLAN_INSTRUCTIONS + "\n\n" : "") + this.skills.instructions + (spec.context ?? ""),
     };
   }
-  /** Pi's plan, the one tool Botkins adds to Pi itself. Pi has no plan of its own (OMP does), and a plan means nothing in a throwaway session. */
+  /** In-chat progress checklist tool for Pi and OMP; omitted in throwaway or sources-only sessions. */
   planTools() {
-    return this.provider.runtime === PI_ID && !this.spec.temporary && !this.spec.sourcesOnly ? [updatePlanTool(this)] : [];
+    return !this.spec.temporary && !this.spec.sourcesOnly ? [updatePlanTool(this)] : [];
+  }
+  /** The plan currently known for this conversation, from this turn, a warm process, or the persisted session record. */
+  storedPlan() {
+    if (this.plan !== undefined) return this.plan;
+    if (this.spec.temporary) return null;
+    const live = this.provider.live.get(this.spec.sessionId);
+    if (live && live.folder === this.spec.folder && live.plan !== undefined) return live.plan;
+    return this.provider.storedPlan(this.spec.sessionId, this.spec.folder);
+  }
+  /** Records a normalized `{ rows, dependencies }` plan, persists it, optionally mirrors to OMP `set_todos`, and emits `session.todos_changed`. */
+  async setPlan(plan, { syncNative = false, emit = true } = {}) {
+    const normalized = toTodoResult(plan);
+    this.plan = normalized;
+    if (this.live) this.live.plan = normalized;
+    if (!this.spec.temporary) this.provider.savePlan(this.spec.sessionId, this.spec.folder, normalized);
+    if (syncNative && this.provider.runtime === OMP_ID && this.live && !this.live.rpc.closed) {
+      await this.live.rpc.request({ type: "set_todos", phases: planToOmpPhases(normalized) }, 15000).catch(() => {});
+    }
+    if (emit) this.emit("session.todos_changed", {});
+  }
+  /** Reconciles OMP's native `todoPhases` into Botkins' plan without ever inventing dependency edges. */
+  syncFromOmpPhases(phases, { emit = true, allowEmpty = false } = {}) {
+    const current = this.storedPlan();
+    const next = planFromOmpPhases(phases, current, { allowEmpty });
+    if (!next || planSignature(next) === planSignature(current)) return false;
+    this.plan = next;
+    if (this.live) this.live.plan = next;
+    if (!this.spec.temporary) this.provider.savePlan(this.spec.sessionId, this.spec.folder, next);
+    if (emit) this.emit("session.todos_changed", {});
+    return true;
+  }
+  async syncOmpTodos(rpc, { emit = true } = {}) {
+    if (this.provider.runtime !== OMP_ID || !rpc || rpc.closed) return;
+    const state = await rpc.request({ type: "get_state" }, 15000).catch(() => null);
+    if (Array.isArray(state?.todoPhases)) {
+      this.syncFromOmpPhases(state.todoPhases, { emit, allowEmpty: !!this.storedPlan() });
+    }
   }
   /** Starts this conversation's process when its chat opens, so its first message doesn't wait for it (Workspace.prewarm). */
   async warm() {
@@ -482,16 +526,39 @@ class PiSession extends ProviderSession {
       hasRef: !!(known && !folderChanged),
       resume: () => provider.process(this, described, { ref: known.ref }),
       onMissing: () => {
-        if (!spec.temporary) provider.sessions.delete(spec.sessionId);
+        if (!spec.temporary) {
+          provider.sessions.delete(spec.sessionId);
+          provider.clearPlan(spec.sessionId);
+        }
       },
       create: () => provider.process(this, described, { fresh: true }),
     });
     this.live = live;
+    if (recovered) {
+      this.plan = null;
+      live.plan = null;
+      if (folderChanged && !spec.temporary) provider.clearPlan(spec.sessionId);
+    } else {
+      const carried = this.storedPlan();
+      if (carried !== null) {
+        this.plan = carried;
+        live.plan = carried;
+      }
+      if (provider.runtime === OMP_ID) {
+        const phases = live.state?.todoPhases;
+        if (Array.isArray(phases) && phases.some((phase) => Array.isArray(phase?.tasks) && phase.tasks.length)) {
+          this.syncFromOmpPhases(phases, { emit: true });
+        } else if (live.plan?.rows?.length && !live.rpc.closed) {
+          await live.rpc.request({ type: "set_todos", phases: planToOmpPhases(live.plan) }, 15000).catch(() => {});
+        }
+      }
+    }
     // Only inject transcript context when the workspace believed this harness already held the session
     // (or when resuming a stale ref failed). A brand-new session on a fresh chat needs no transcript.
     if (recovered && lost && (spec.established || known)) this.lost = lost;
     if (!spec.temporary && (!known || recovered || known.ref !== this.live.ref || known.folder !== spec.folder)) {
-      provider.sessions.set(spec.sessionId, { ref: this.live.ref, folder: spec.folder });
+      const preservedPlan = !recovered && !folderChanged ? (live.plan ?? known?.plan) : undefined;
+      provider.sessions.set(spec.sessionId, { ref: this.live.ref, folder: spec.folder, ...(preservedPlan !== undefined && preservedPlan !== null && { plan: preservedPlan }) });
     }
     return this.live;
   }
@@ -561,10 +628,11 @@ class PiSession extends ProviderSession {
           live.registeredConfigs ??= new Map();
           for (const [name, serialized] of live.pendingConfigs) live.registeredConfigs.set(name, serialized);
         }
-        // An extension command can finish inside prompt() without starting an agent turn.
-        if (answer?.disposition !== "handled" && this.interruptsForSteering && onReady) {
+        // An extension or built-in slash command (e.g. OMP `/todo`) can finish inside prompt() without starting an agent turn.
+        const handled = answer?.disposition === "handled" || answer?.agentInvoked === false;
+        if (!handled && this.interruptsForSteering && onReady) {
           await this.runSteerablePi(rpc, turn, settled, nextSettle, withFiles, onReady);
-        } else if (answer?.disposition !== "handled") {
+        } else if (!handled) {
           onReady?.(deliver);
           await settled;
           // A steer the harness took as the run was ending, but never delivered, goes as one more
@@ -576,8 +644,11 @@ class PiSession extends ProviderSession {
             if (!pending.length) break;
             settled = nextSettle();
             const again = await rpc.request({ type: "prompt", message: pending.join("\n\n") }, 30000);
-            if (again?.disposition !== "handled") await settled;
+            if (again?.disposition !== "handled" && again?.agentInvoked !== false) await settled;
           }
+        }
+        if (this.provider.runtime === OMP_ID && (handled || turn.ompCommandOutput)) {
+          await this.syncOmpTodos(rpc, { emit: true });
         }
         turn.ended = true;
       } catch (error) {
@@ -726,9 +797,19 @@ class PiSession extends ProviderSession {
         this.toolRow(turn, event.toolCallId, event, event.args);
         return;
       }
+      case "command_output": {
+        if (this.provider.runtime === OMP_ID) turn.ompCommandOutput = true;
+        return;
+      }
       case "tool_execution_end": {
         turn.calls.delete(event.toolCallId);
         turn.rows.delete(event.toolCallId);
+        if (this.provider.runtime === OMP_ID && !event.isError && event.toolName === "todo") {
+          const details = event.result?.details;
+          if (details && details.op !== "view" && Array.isArray(details.phases)) {
+            this.syncFromOmpPhases(details.phases, { emit: true, allowEmpty: true });
+          }
+        }
         const output = textOf(event.result?.content) || (event.result?.details ? displayValue(event.result.details, 12000) : "");
         const success = !event.isError;
         this.emit("tool.execution_complete", { toolCallId: event.toolCallId, success, ...(output && { result: { content: output } }), ...(!success && { error: { message: output || "Failed" } }) });
@@ -833,9 +914,10 @@ class PiSession extends ProviderSession {
     this.mode = mode === "plan" ? "plan" : "interactive";
     return true;
   }
-  /** The plan the model kept with update_plan this turn, or null when it made none. */
+  /** The plan kept on this session (rows + explicit dependencies), or null when none exists. */
   async todos() {
-    return this.plan ? { rows: this.plan, dependencies: [] } : null;
+    const plan = this.storedPlan();
+    return plan ? toTodoResult(plan) : null;
   }
   async compact() {
     const live = await this.start();
@@ -1130,11 +1212,32 @@ export class PiProvider extends ModelProvider {
       baseEnv: env,
     });
     this.sessions = new SessionStore(dataDir && join(this.dataDir, "sessions.json"));
-    // Botkins session id → { rpc, ref, key, file, session, timer }: one process per conversation.
+    // Botkins session id → { folder, plan }: in-memory plan mirror alongside sessions.json.
+    this.plans = new Map();
+    // Botkins session id → { rpc, ref, key, file, folder, session, timer, plan, state }: one process per conversation.
     this.live = new Map();
     // OMP session id → current ToolBridge key (rotated when declared bridge schemas change so OMP refreshes tools/list).
     this.bridgeKeys = new Map();
     this.packages = packages ?? new PiPackages({ dataDir: this.dataDir, install: (source, dir) => this.installPackage(source, dir) });
+  }
+  storedPlan(sessionId, folder) {
+    const record = this.sessions.get(sessionId);
+    if (record && record.folder === folder && record.plan !== undefined) return record.plan;
+    const entry = this.plans.get(sessionId);
+    if (entry && entry.folder === folder) return entry.plan;
+    return null;
+  }
+  savePlan(sessionId, folder, plan) {
+    this.plans.set(sessionId, { folder, plan });
+    this.sessions.update(sessionId, (record) => {
+      if (record.folder === folder) record.plan = plan;
+    });
+  }
+  clearPlan(sessionId) {
+    this.plans.delete(sessionId);
+    this.sessions.update(sessionId, (record) => {
+      delete record.plan;
+    });
   }
   async installPackage(source, dir) {
     const file = await this.locate();
@@ -1238,6 +1341,7 @@ export class PiProvider extends ModelProvider {
       await this.write(live, described);
       clearTimeout(live.timer);
       const state = await live.rpc.request({ type: "get_state" }, 15000).catch(() => null);
+      live.state = state;
       if (state?.model && (state.model.provider !== target.provider || state.model.id !== target.modelId)) await live.rpc.request({ type: "set_model", ...target });
       const wanted = level(session.model.reasoningEffort);
       if (wanted && state?.thinkingLevel !== wanted) await live.rpc.request({ type: "set_thinking_level", level: wanted }).catch(() => {});
@@ -1264,12 +1368,15 @@ export class PiProvider extends ModelProvider {
     live = {
       ref,
       key,
+      folder: spec.folder,
       // A file of this process's own: one let go a moment ago may still be exiting, and removes its own.
       file: join(dir, hash(spec.sessionId).slice(0, 24) + "-" + randomBytes(4).toString("hex") + ".json"),
       config: join(agentDir, "botkins.yml"),
       agentDir,
       session,
       timer: null,
+      plan: undefined,
+      state: null,
       runtime: createRuntimeState(),
       registeredConfigs: new Map(Object.entries(described.servers ?? {}).map(([name, cfg]) => [name, JSON.stringify(cfg)])),
       pendingConfigs: null,
@@ -1316,6 +1423,7 @@ export class PiProvider extends ModelProvider {
     let state;
     try {
       state = await live.rpc.request({ type: "get_state" }, 60000);
+      live.state = state;
       if (this.runtime === OMP_ID && state?.sessionId) live.ref = state.sessionId;
     } catch (error) {
       this.live.delete(spec.sessionId);
@@ -1453,6 +1561,7 @@ export class PiProvider extends ModelProvider {
     this.release(sessionId);
     const prev = this.bridgeKeys.get(sessionId);
     this.bridgeKeys.delete(sessionId);
+    this.plans.delete(sessionId);
     this.bridge?.forget(prev ?? this.id + ":" + sessionId);
     const record = this.sessions.get(sessionId);
     if (!record) return;

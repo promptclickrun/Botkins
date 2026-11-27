@@ -164,6 +164,7 @@ const statusMap = {
   cancelled: "cancelled",
   canceled: "cancelled",
   skipped: "cancelled",
+  abandoned: "cancelled",
 };
 
 /** Maps session.plan.readSqlTodosWithDependencies() to Botkins todos. */
