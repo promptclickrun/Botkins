@@ -162,3 +162,20 @@ test("the phone's field analysis is the computer's, apart from its import", () =
   const computer = readFileSync(new URL("../../desktop/src/workflowAnalysis.ts", import.meta.url), "utf8");
   assert.equal(strip(phone), strip(computer));
 });
+
+test("GitHub trigger exposes mention/issue fields and formats event summaries", () => {
+  const gh = {
+    ...newTrigger("github", "t_gh"),
+    config: { repo: "promptclickrun/Botkins", events: ["issue_opened", "bot_mentioned"], mentionHandle: "@botkins-bot", pollMinutes: 5 },
+  };
+  const out = {
+    ...newStep("output", "o_gh"),
+    config: { destination: "feed", title: "{{event}} {{mention}}", template: "{{item_type}} #{{number}}: {{body}} ({{labels}})" },
+  };
+  const g: Graph = { nodes: [gh, out], edges: [{ id: "e1", from: "t_gh", to: "o_gh", branch: "default" }] };
+  valid(g);
+  const fields = analyzeWorkflowFields({ id: "w", name: "gh", enabled: true, createdAt: 0, updatedAt: 0, ...g });
+  assert.deepEqual(fields.o_gh.problems, []);
+  assert.equal(summary(gh), "promptclickrun/Botkins · Issue opened, Bot mentioned");
+});
+

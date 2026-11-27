@@ -1348,6 +1348,24 @@ export type ProactiveBot = Partial<ProactiveBotSettings> & {
 export type ProactivePart = { chatMode?: "main" | "new"; enabled: boolean; bots: Record<string, ProactiveBot | undefined> };
 export type ProactiveLog = { at: number; reason: "signals" | "sweep" | "check" | "context" | "review"; score?: number; signals: number; outcome: "alerted" | "silent" | "failed"; runId: string; said?: string };
 export type WorkflowTriggerKind = "task" | "schedule" | "manual" | "routine" | "chat" | "webhook" | "github";
+
+export type WorkflowGithubSignIn = {
+  status: "idle" | "starting" | "waiting" | "done" | "failed";
+  code: string | null;
+  url: string | null;
+  error: string | null;
+  login: string | null;
+};
+
+export type WorkflowGithubStatus = {
+  installed: boolean;
+  authenticated: boolean;
+  login: string | null;
+  scopes: string[];
+  repos: string[];
+  installUrl: string;
+  signIn: WorkflowGithubSignIn;
+};
 export type WorkflowNode = {
   id: string;
   kind: "trigger" | "agent" | "model" | "condition" | "approval" | "output";
@@ -1985,6 +2003,9 @@ export type Calls = {
   workflowRespondApproval(runId: string, nodeId: string | null, decision: "approved" | "rejected", note?: string): WorkflowRun;
   workflowCancelRun(runId: string): WorkflowRun;
   workflowDelete(id: string): boolean;
+  workflowGithubStatus(options?: { includeRepos?: boolean }): WorkflowGithubStatus;
+  workflowGithubSignInStart(): WorkflowGithubSignIn;
+  workflowGithubSignInCancel(): WorkflowGithubStatus;
   refreshPanel(id: string): void;
   changePanel(id: string, action: "delete" | "hide" | "show" | "small" | "wide" | "tall" | "earlier" | "later"): void;
   boardAct(id: string, action: "read" | "unread" | "clear" | "done" | "reopen" | "yes" | "goal" | "notToday" | "up" | "down" | "delete", value?: string): string | undefined;

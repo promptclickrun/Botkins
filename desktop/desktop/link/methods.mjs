@@ -80,6 +80,7 @@ export const WORKFLOW_METHODS = [
   "workflowsList", "workflowCreate", "workflowUpdate", "workflowDelete", "workflowPause", "workflowResume",
   "workflowRun", "workflowRetryRun", "workflowRespondApproval", "workflowCancelRun",
   "workflowRotateWebhookSecret", "workflowExportText", "workflowImportText",
+  "workflowGithubStatus", "workflowGithubSignInStart", "workflowGithubSignInCancel",
 ];
 /** How a new panel may start, and the limits of what people write into a space. */
 export const PANEL_STARTS = ["checklist", "tracker", "chart", "table", "notes", "app"];
@@ -516,6 +517,13 @@ export function remoteArgs(method, args, { deviceId, uploads } = {}) {
       : action === "fork" ? Number.isSafeInteger(value) && value >= 0
       : action === "switch" && clean(value);
     if (!clean(id) || !valid || args.length > 4 || (expected != null && !clean(expected))) throw new Error("Choose a Main chat and a fork or reset.");
+  }
+  if (method === "workflowGithubStatus") {
+    const opts = args[0] && typeof args[0] === "object" && !Array.isArray(args[0]) ? args[0] : {};
+    return [{ includeRepos: opts.includeRepos === true }];
+  }
+  if (method === "workflowGithubSignInStart" || method === "workflowGithubSignInCancel") {
+    return [];
   }
   if (method === "regenerateChatTitle") {
     if (args.length !== 1 || !clean(args[0])) throw new Error("Choose a chat to regenerate its title.");
