@@ -765,7 +765,8 @@ class PiSession extends ProviderSession {
     if (!handler) return {};
     let out;
     try {
-      out = await handler({ ...this.hookBase(), toolCallId: call.toolCallId, toolName: server && server !== BRIDGE ? server + "/" + name : name, toolArgs: input }, { sessionId: this.spec.sessionId });
+      // An MCP tool is named "<server>-<tool>", as the Copilot runtime names it to a hook (plugin-harness-parity-live.mjs).
+      out = await handler({ ...this.hookBase(), toolCallId: call.toolCallId, toolName: server && server !== BRIDGE ? server + "-" + name : name, toolArgs: input }, { sessionId: this.spec.sessionId });
     } catch {
       return { deny: true, reason: "A plugin's hook failed, so the tool didn't run." };
     }
