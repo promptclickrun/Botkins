@@ -121,7 +121,7 @@ import { SessionSearch } from "./session-search.mjs";
 import { HowToBotkins } from "./how-to-botkins.mjs";
 import { memberCanSpaces, narrower, personName, speakerContext, speakerPrompt, turnAccess } from "./team-turn.mjs";
 import { Spaces } from "./spaces.mjs";
-import { a2uiTools, attachRunA2uiSurfaces, handleChatA2uiAction } from "./a2ui-host.mjs";
+import { a2uiTools, attachRunA2uiSurfaces, handleChatA2uiAction, handleChatA2uiFunction } from "./a2ui-host.mjs";
 
 // This identifier only correlates a local bubble with its echo. The host still owns every queue and run ID.
 const clientMessageTag = id => typeof id === "string" && /^[A-Za-z0-9_-]{1,80}$/.test(id) ? { clientMessageId: id } : {};
@@ -1496,6 +1496,13 @@ export class Workspace {
    */
   chatA2uiAction(chatId, payload, actor = "owner") {
     return handleChatA2uiAction(this, chatId, payload, actor);
+  }
+  /**
+   * Handles bidirectional A2UI v1.0 function RPC (`callAgentFunction` and `rendererFunctionResponse`)
+   * with correlation IDs, schema validation, timeouts, trigger ACL, and idempotency.
+   */
+  chatA2uiFunction(chatId, payload, actor = "owner") {
+    return handleChatA2uiFunction(this, chatId, payload, actor);
   }
   /**
    * Makes a new chat for the same bot holding the conversation up to `messageIndex`.

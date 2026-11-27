@@ -12,7 +12,7 @@ import { setRandomSource } from "@/link/crypto";
 import type { PairTarget } from "@/link/pairing";
 import type { ProfileHost } from "@/link/profile";
 import { relayFetch } from "@/link/relay";
-import type { A2uiActionPayload, Calls, ChatDetail, ScreenFrame, ScreenInput } from "@/link/types";
+import type { A2uiActionPayload, A2uiFunctionRpcPayload, Calls, ChatDetail, ScreenFrame, ScreenInput } from "@/link/types";
 import { textMode, useChatPrefs } from "./chatPrefs";
 import { loadPrefs, usePrefs } from "./prefs";
 import { newPresenceKey, removePresenceKey } from "./presence";
@@ -607,6 +607,11 @@ export async function chatA2uiAction(chatId: string, payload: A2uiActionPayload)
     return { chats: { ...state.chats, [chatId]: { ...view, messages } } };
   });
   return result;
+}
+
+/** Sends a bidirectional A2UI v1.0 function call or rendererFunctionResponse over Link. */
+export async function chatA2uiFunction(chatId: string, payload: A2uiFunctionRpcPayload) {
+  return api["chat.a2uiFunction"](chatId, payload);
 }
 
 /** Runs a call and shows its failure as a toast. Resolves to undefined when it failed. */

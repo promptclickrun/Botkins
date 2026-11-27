@@ -387,11 +387,40 @@ export type A2uiSurface = {
   dispatchedBotId?: string;
   dispatchedBotName?: string;
   acted?: Record<string, { route?: string; actionName?: string; state?: string; chatId?: string; workflowRunId?: string; actedBy?: string; actedAt?: number }>;
+  allowMembers?: boolean;
+  inlineCatalogs?: Array<Record<string, unknown>>;
+  pendingRendererCalls?: Array<{ surfaceId?: string; functionCallId: string; callFunction: Record<string, unknown>; createdAt?: number }>;
+  functionResults?: Record<string, { functionCallId: string; value?: unknown; error?: { code: string; message: string }; status?: string; updatedAt?: number }>;
   actedBy?: string;
   actedAt?: number;
   deleted?: boolean;
   createdAt?: number;
   updatedAt?: number;
+};
+
+export type A2uiFunctionRpcPayload =
+  | {
+      kind: "callAgentFunction";
+      surfaceId: string;
+      functionCallId: string;
+      callFunction: { "@call": string; catalogId?: string; args?: Record<string, unknown> };
+      timeoutMs?: number;
+      dataModel?: Record<string, unknown>;
+    }
+  | {
+      kind: "rendererFunctionResponse";
+      surfaceId?: string;
+      response: { functionCallId: string; value?: unknown; error?: { code: string; message: string } };
+    };
+
+export type ChatA2uiFunctionResult = {
+  ok: boolean;
+  idempotent: boolean;
+  kind: "callAgentFunction" | "rendererFunctionResponse";
+  functionCallId: string;
+  status?: string;
+  route?: "bot" | "workflow";
+  envelope?: Record<string, unknown>;
 };
 
 export type A2uiActionPayload = {
@@ -1797,6 +1826,7 @@ export type Calls = {
   reactToMessage(chatId: string, index: number, time: number | null, emoji: string): NonNullable<Message["reactions"]>;
   "chat.cardAction"(chatId: string, target: number | string, action: "dispatch" | "dismiss"): ChatCardActionResult;
   "chat.a2uiAction"(chatId: string, payload: A2uiActionPayload): ChatA2uiActionResult;
+  "chat.a2uiFunction"(chatId: string, payload: A2uiFunctionRpcPayload): ChatA2uiFunctionResult;
   forkChat(chatId: string, messageIndex: number): string;
   warmChat(chatId: string): void;
   startProjectChat(botIds: string[], projectId: string, mode?: ChatMode, folder?: string | null): string;

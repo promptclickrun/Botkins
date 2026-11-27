@@ -9,7 +9,7 @@
 // - Desktop React SSR render test (Basic Catalog components, rich-cards-off fallback, unsafe URL blocking)
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync, unlinkSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, rmSync, unlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -19,17 +19,36 @@ import { build } from "esbuild";
 
 import {
   A2UI_BASIC_CATALOG_ID,
+  A2UI_BOTKINS_CATALOG_ID,
+  A2UI_SUPPORTED_CATALOG_IDS,
   A2UI_VERSION,
   applyA2uiMessages,
+  buildCallAgentFunctionEnvelope,
+  buildRendererActionEnvelope,
+  buildRendererFunctionResponseEnvelope,
   evaluateChecks,
+  executeRendererFunctionCall,
+  getA2uiRendererCapabilities,
+  hasUnsupportedA2uiComponent,
+  isSafeA2uiMediaUrl,
   isSafeA2uiUrl,
   resolveDynamicString,
   summarizeA2uiSurface,
   validateA2uiActionPayload,
   validateA2uiMessage,
   validateA2uiMessages,
+  validateCatalogDefinition,
+  validateRendererToAgentMessage,
 } from "../desktop/link/a2ui.mjs";
-import { a2uiTools, applyBotA2uiMessages, attachRunA2uiSurfaces, handleChatA2uiAction } from "../desktop/a2ui-host.mjs";
+import {
+  a2uiTools,
+  applyBotA2uiMessages,
+  attachRunA2uiSurfaces,
+  handleChatA2uiAction,
+  handleChatA2uiFunction,
+  settleAgentFunctionResponse,
+  waitForRendererFunctionResponse,
+} from "../desktop/a2ui-host.mjs";
 import { Workflows } from "../desktop/workflows.mjs";
 import { validateWorkflow } from "../desktop/workflow-fields.mjs";
 import { remoteArgs } from "../desktop/link/methods.mjs";
@@ -37,11 +56,11 @@ import { authorize } from "../desktop/link/team.mjs";
 
 // ── Parity between desktop/link and mobile/link-host ───────────────────────
 
-test("desktop/desktop/link/a2ui.mjs and .d.mts match mobile/link-host byte-for-byte", () => {
-  for (const file of ["a2ui.mjs", "a2ui.d.mts", "methods.mjs", "team.mjs"]) {
-    const d = readFileSync(new URL("../desktop/link/" + file, import.meta.url), "utf8");
-    const m = readFileSync(new URL("../../mobile/link-host/" + file, import.meta.url), "utf8");
-    assert.equal(d, m, `${file} must match between desktop/desktop/link and mobile/link-host`);
+test("mirror drift: desktop/desktop/link and mobile/link-host A2UI & catalog files are byte-identical", () => {
+  for (const file of ["a2ui.mjs", "a2ui.d.mts", "a2ui-botkins-catalog.json", "methods.mjs", "team.mjs", "server.mjs"]) {
+    const d = readFileSync(new URL("../desktop/link/" + file, import.meta.url));
+    const m = readFileSync(new URL("../../mobile/link-host/" + file, import.meta.url));
+    assert.equal(Buffer.compare(d, m), 0, `${file} drifted between desktop/desktop/link and mobile/link-host`);
   }
 });
 
@@ -312,8 +331,9 @@ test("render_ui creates, attaches to message, updates live by same bot, and bloc
   ws.active.set(chat.id, task);
 
   const tools = a2uiTools(ws, bot, chat, run, task);
-  assert.equal(tools.length, 1);
+  assert.equal(tools.length, 2);
   assert.equal(tools[0].name, "render_ui");
+  assert.equal(tools[1].name, "a2ui_respond");
 
   const resRaw = await tools[0].handler({
     messages: [
@@ -640,4 +660,689 @@ test("Desktop A2uiSurface renders Basic Catalog components, rich-cards-off fallb
   assert.match(plainHtml, /a2ui-fallback/);
   assert.match(plainHtml, /Ship 0\.18/);
   assert.match(plainHtml, /Submit Release/);
+
+  // Botkins Catalog surface: BotAvatar, Badge, StatusBadge, Metric, Progress, Chart (bar + line), Table, TaskCard, ApprovalCard
+  const botkinsSurface = {
+    surfaceId: "botkins-ops-1",
+    version: "1.0",
+    catalogId: A2UI_BOTKINS_CATALOG_ID,
+    components: [
+      { id: "root", component: "Column", children: ["av", "badges", "metrics", "prog", "bar", "line", "tbl", "task", "appr"] },
+      { id: "av", component: "BotAvatar", name: "Glory", role: "Coding partner", status: "working" },
+      { id: "badges", component: "Row", children: ["b1", "b2"] },
+      { id: "b1", component: "Badge", label: "PR #346", tone: "accent" },
+      { id: "b2", component: "StatusBadge", label: "CI Green", tone: "positive", pulse: true },
+      { id: "metrics", component: "Row", children: ["m1", "m2"] },
+      { id: "m1", component: "Metric", label: "Tests", value: "1,245", delta: "+31", tone: "positive" },
+      { id: "m2", component: "Metric", label: "Latency", value: "142ms", note: "p95" },
+      { id: "prog", component: "Progress", label: "Rollout", value: 75, max: 100, tone: "positive" },
+      {
+        id: "bar",
+        component: "Chart",
+        kind: "bar",
+        title: "Requests by region",
+        items: [{ label: "US-East", value: 420 }, { label: "EU-West", value: 280 }],
+        unit: "rps",
+      },
+      {
+        id: "line",
+        component: "Chart",
+        kind: "line",
+        title: "Success rate",
+        labels: ["Mon", "Tue", "Wed"],
+        series: [{ name: "API", values: [99.1, 99.6, 99.9] }],
+      },
+      {
+        id: "tbl",
+        component: "Table",
+        title: "Deploy targets",
+        columns: ["Env", "Version", "Status"],
+        rows: [["Staging", "0.18.0", "Healthy"], ["Prod", "0.17.23", "Pending"]],
+      },
+      {
+        id: "task",
+        component: "TaskCard",
+        title: "Cut release tag",
+        summary: "Tag v0.18.0 after approval",
+        priority: "high",
+        status: "Ready",
+        botName: "Alfie",
+        actionLabel: "Start",
+        action: { event: { name: "start_tag" } },
+      },
+      {
+        id: "appr",
+        component: "ApprovalCard",
+        title: "Approve production deploy",
+        summary: "Ships relay + desktop + mobile A2UI v1.0",
+        risk: "medium",
+        status: "pending",
+        approveAction: { event: { name: "approve" } },
+        rejectAction: { event: { name: "reject" } },
+      },
+    ],
+    dataModel: {},
+  };
+  const botkinsHtml = renderToStaticMarkup(React.createElement(mod.A2uiSurface, { chatId: "chat-1", surface: botkinsSurface, rich: true }));
+  assert.match(botkinsHtml, /Glory/);
+  assert.match(botkinsHtml, /CI Green/);
+  assert.match(botkinsHtml, /1,245/);
+  assert.match(botkinsHtml, /Requests by region/);
+  assert.match(botkinsHtml, /<svg/);
+  assert.match(botkinsHtml, /<table/);
+  assert.match(botkinsHtml, /Cut release tag/);
+  assert.match(botkinsHtml, /Approve production deploy/);
+
+  // Inline Video & Audio players (https allowed with controls & no autoplay; data:video blocked to fallback)
+  const mediaSurface = {
+    surfaceId: "media-1",
+    version: "1.0",
+    components: [
+      { id: "root", component: "Column", children: ["vid", "aud", "bad_vid"] },
+      { id: "vid", component: "Video", url: "https://media.botkins.app/demo.mp4", posterUrl: "https://media.botkins.app/poster.png" },
+      { id: "aud", component: "AudioPlayer", url: "https://media.botkins.app/briefing.mp3", description: "Morning brief" },
+      { id: "bad_vid", component: "Video", url: "data:video/mp4;base64,AAAA" },
+    ],
+    dataModel: {},
+  };
+  const mediaHtml = renderToStaticMarkup(React.createElement(mod.A2uiSurface, { chatId: "chat-1", surface: mediaSurface, rich: true }));
+  assert.match(mediaHtml, /<video[^>]*controls/);
+  assert.doesNotMatch(mediaHtml, /<video[^>]*autoplay/i);
+  assert.match(mediaHtml, /<audio[^>]*controls/);
+  assert.match(mediaHtml, /Morning brief/);
+  assert.match(mediaHtml, /Unsupported media URL/);
+  assert.doesNotMatch(mediaHtml, /data:video\/mp4/);
+
+  // Unknown catalog / component gracefully falls back to plain-text + action buttons without crashing
+  const unknownSurface = {
+    surfaceId: "unknown-1",
+    version: "1.0",
+    catalogId: "https://example.com/unknown/catalog.json",
+    components: [
+      { id: "root", component: "Column", "@catalogId": A2UI_BASIC_CATALOG_ID, children: ["w1", "btn"] },
+      { id: "w1", component: "HologramWidget", title: "3D Telemetry" },
+      { id: "btn", component: "Button", "@catalogId": A2UI_BASIC_CATALOG_ID, child: "btn_t", action: { event: { name: "ack" } } },
+      { id: "btn_t", component: "Text", "@catalogId": A2UI_BASIC_CATALOG_ID, text: "Acknowledge" },
+    ],
+    dataModel: {},
+  };
+  assert.equal(hasUnsupportedA2uiComponent(unknownSurface), true);
+  const unknownHtml = renderToStaticMarkup(React.createElement(mod.A2uiSurface, { chatId: "chat-1", surface: unknownSurface, rich: true }));
+  assert.match(unknownHtml, /a2ui-fallback/);
+  assert.match(unknownHtml, /3D Telemetry/);
+  assert.match(unknownHtml, /Acknowledge/);
+});
+
+// ── Round 2: Two-way Function Calls ────────────────────────────────────────
+
+function makeMockWorkspace() {
+  const { ws, submitted } = makeFakeWorkspace();
+  const bot = ws.state.bots[0];
+  const chat = ws.chat("chat-main");
+  const run = { id: "run-r2-1", chatId: chat.id, status: "Working" };
+  ws.state.runs.push(run);
+  ws.submissions = submitted;
+  return { ws, bot, chat, run };
+}
+
+test("two-way function calls: callAgentFunction round trip, timeout, unknown function, invalid response, and replay idempotency", async () => {
+  const { ws, bot, chat, run } = makeMockWorkspace();
+  const customCatalog = {
+    $schema: "https://json-schema.org/draft/2020-12/schema",
+    $id: "https://example.com/a2ui/calc.json",
+    protocolVersion: "1.0",
+    catalogId: "https://example.com/a2ui/calc.json",
+    components: {
+      CalcBox: {
+        type: "object",
+        properties: {
+          component: { const: "CalcBox" },
+          child: { $ref: "common_types.json#/$defs/Child" },
+        },
+        required: ["component"],
+      },
+    },
+    functions: {
+      estimateCost: {
+        type: "object",
+        properties: {
+          "@call": { const: "estimateCost" },
+          args: { type: "object", properties: { units: { type: "number" } } },
+        },
+        required: ["@call"],
+        returnType: "number",
+        allowedCallers: "rendererOrAgent",
+      },
+      localOnlyFn: {
+        type: "object",
+        properties: { "@call": { const: "localOnlyFn" } },
+        required: ["@call"],
+        returnType: "string",
+        allowedCallers: "rendererOnly",
+      },
+    },
+  };
+
+  applyBotA2uiMessages(
+    ws,
+    bot,
+    chat,
+    run,
+    [
+      {
+        version: "1.0",
+        createSurface: {
+          surfaceId: "calc-1",
+          catalogId: A2UI_BOTKINS_CATALOG_ID,
+          sendDataModel: true,
+          components: [
+            { id: "root", component: "Column", children: ["t"] },
+            { id: "t", component: "Text", text: "Calculator" },
+          ],
+          dataModel: { units: 4 },
+        },
+      },
+    ],
+    { inlineCatalogs: [customCatalog] },
+  );
+  attachRunA2uiSurfaces(chat, run, bot.id);
+
+  // 1) Round trip: callAgentFunction -> bot turn with untrusted framing -> a2ui_respond -> settled envelope
+  const call1 = handleChatA2uiFunction(ws, chat.id, {
+    kind: "callAgentFunction",
+    surfaceId: "calc-1",
+    functionCallId: "fn-rt-1",
+    callFunction: { "@call": "estimateCost", catalogId: "https://example.com/a2ui/calc.json", args: { units: 4 } },
+    timeoutMs: 5000,
+  });
+  assert.equal(call1.ok, true);
+  assert.equal(call1.status, "pending");
+  assert.equal(ws.submissions.length, 1);
+  assert.match(ws.submissions[0].prompt, /untrusted user input data/i);
+  assert.match(ws.submissions[0].prompt, /fn-rt-1/);
+
+  // 2) Invalid response type rejected (string instead of declared returnType: "number")
+  assert.throws(
+    () => settleAgentFunctionResponse(ws, chat.id, { functionCallId: "fn-rt-1", value: "not-a-number" }),
+    /INVALID_RESPONSE/,
+  );
+
+  // Valid response settles & matches spec
+  const settled = settleAgentFunctionResponse(ws, chat.id, { functionCallId: "fn-rt-1", value: 42.5 });
+  assert.equal(settled.ok, true);
+  assert.equal(settled.idempotent, false);
+  const waited = await call1.wait();
+  assert.deepEqual(waited, {
+    version: "1.0",
+    agentFunctionResponse: { functionCallId: "fn-rt-1", value: 42.5 },
+  });
+
+  // 3) Replayed functionCallId is idempotent (no second bot turn)
+  const replay = handleChatA2uiFunction(ws, chat.id, {
+    kind: "callAgentFunction",
+    surfaceId: "calc-1",
+    functionCallId: "fn-rt-1",
+    callFunction: { "@call": "estimateCost", catalogId: "https://example.com/a2ui/calc.json", args: { units: 4 } },
+  });
+  assert.equal(replay.idempotent, true);
+  assert.equal(replay.envelope.agentFunctionResponse.value, 42.5);
+  assert.equal(ws.submissions.length, 1);
+
+  // 4) Unknown function returns structured UNKNOWN_FUNCTION error without starting a bot turn
+  const unknownRes = handleChatA2uiFunction(ws, chat.id, {
+    kind: "callAgentFunction",
+    surfaceId: "calc-1",
+    functionCallId: "fn-unk-1",
+    callFunction: { "@call": "doesNotExist", catalogId: A2UI_BASIC_CATALOG_ID },
+  });
+  assert.equal(unknownRes.ok, false);
+  assert.equal(unknownRes.envelope.agentFunctionResponse.error.code, "UNKNOWN_FUNCTION");
+  assert.equal(ws.submissions.length, 1);
+
+  // 5) rendererOnly function refused on agent
+  const authRes = handleChatA2uiFunction(ws, chat.id, {
+    kind: "callAgentFunction",
+    surfaceId: "calc-1",
+    functionCallId: "fn-auth-1",
+    callFunction: { "@call": "localOnlyFn", catalogId: "https://example.com/a2ui/calc.json" },
+  });
+  assert.equal(authRes.ok, false);
+  assert.equal(authRes.envelope.agentFunctionResponse.error.code, "UNAUTHORIZED_CALLER");
+
+  // 6) Timeout settles with TIMEOUT error
+  const timedCall = handleChatA2uiFunction(ws, chat.id, {
+    kind: "callAgentFunction",
+    surfaceId: "calc-1",
+    functionCallId: "fn-to-1",
+    callFunction: { "@call": "estimateCost", catalogId: "https://example.com/a2ui/calc.json", args: { units: 9 } },
+    timeoutMs: 60,
+  });
+  const timeoutEnv = await timedCall.wait();
+  assert.equal(timeoutEnv.agentFunctionResponse.error.code, "TIMEOUT");
+});
+
+test("two-way function calls: callRendererFunction -> rendererFunctionResponse round trip, side-effect confirm, invalid response, timeout, replay", async () => {
+  const { ws, bot, chat, run } = makeMockWorkspace();
+  applyBotA2uiMessages(ws, bot, chat, run, [
+    {
+      version: "1.0",
+      createSurface: {
+        surfaceId: "rf-1",
+        catalogId: A2UI_BOTKINS_CATALOG_ID,
+        components: [
+          { id: "root", component: "Text", text: "Theme check" },
+        ],
+        dataModel: {},
+      },
+    },
+    {
+      version: "1.0",
+      callRendererFunction: {
+        surfaceId: "rf-1",
+        functionCallId: "rcall-1",
+        callFunction: { "@call": "getThemeMode", catalogId: A2UI_BOTKINS_CATALOG_ID },
+      },
+    },
+  ]);
+  attachRunA2uiSurfaces(chat, run, bot.id);
+
+  // Renderer executes declared function and produces spec-compliant rendererFunctionResponse
+  const execEnv = await executeRendererFunctionCall(
+    {
+      version: "1.0",
+      callRendererFunction: {
+        surfaceId: "rf-1",
+        functionCallId: "rcall-1",
+        callFunction: { "@call": "getThemeMode", catalogId: A2UI_BOTKINS_CATALOG_ID },
+      },
+    },
+    { surfaceCatalogId: A2UI_BOTKINS_CATALOG_ID, themeMode: "dark" },
+  );
+  assert.deepEqual(execEnv, { version: "1.0", rendererFunctionResponse: { functionCallId: "rcall-1", value: "dark" } });
+  // Validate emitted envelope against renderer_to_agent.json rules
+  validateRendererToAgentMessage(execEnv);
+
+  // Invalid renderer response type (number when string declared) is rejected
+  assert.throws(
+    () =>
+      handleChatA2uiFunction(ws, chat.id, {
+        kind: "rendererFunctionResponse",
+        surfaceId: "rf-1",
+        response: { functionCallId: "rcall-1", value: 12345 },
+      }),
+    /INVALID_RESPONSE/,
+  );
+
+  // Valid rendererFunctionResponse settles and unblocks waitForRendererFunctionResponse
+  const waiter = waitForRendererFunctionResponse(ws, "rcall-1");
+  const ack = handleChatA2uiFunction(ws, chat.id, {
+    kind: "rendererFunctionResponse",
+    surfaceId: "rf-1",
+    response: execEnv.rendererFunctionResponse,
+  });
+  assert.equal(ack.ok, true);
+  assert.equal(ack.idempotent, false);
+  const resolved = await waiter;
+  assert.equal(resolved.rendererFunctionResponse.value, "dark");
+
+  // Replay of same functionCallId is idempotent
+  const replay = handleChatA2uiFunction(ws, chat.id, {
+    kind: "rendererFunctionResponse",
+    surfaceId: "rf-1",
+    response: execEnv.rendererFunctionResponse,
+  });
+  assert.equal(replay.idempotent, true);
+
+  // Side-effecting function (openUrl) requires confirmation and respects user decline
+  let confirmed = 0;
+  let opened = 0;
+  const declinedEnv = await executeRendererFunctionCall(
+    {
+      version: "1.0",
+      callRendererFunction: {
+        functionCallId: "rcall-open-1",
+        callFunction: { "@call": "openUrl", catalogId: A2UI_BASIC_CATALOG_ID, args: { url: "https://botkins.app" } },
+      },
+    },
+    {
+      handlers: {
+        confirmSideEffect: () => {
+          confirmed++;
+          return false;
+        },
+        openUrl: () => {
+          opened++;
+        },
+      },
+    },
+  );
+  assert.equal(confirmed, 1);
+  assert.equal(opened, 0);
+  assert.equal(declinedEnv.rendererFunctionResponse.error.code, "USER_DECLINED");
+
+  // Unknown renderer function is rejected on host and renderer
+  assert.throws(
+    () =>
+      applyBotA2uiMessages(ws, bot, chat, run, [
+        {
+          version: "1.0",
+          callRendererFunction: {
+            functionCallId: "rcall-bad",
+            callFunction: { "@call": "stealSecrets", catalogId: A2UI_BASIC_CATALOG_ID },
+          },
+        },
+      ]),
+    /Unknown renderer function/,
+  );
+
+  // Renderer call timeout settles with TIMEOUT
+  applyBotA2uiMessages(
+    ws,
+    bot,
+    chat,
+    run,
+    [
+      {
+        version: "1.0",
+        callRendererFunction: {
+          surfaceId: "rf-1",
+          functionCallId: "rcall-timeout",
+          callFunction: { "@call": "getThemeMode", catalogId: A2UI_BOTKINS_CATALOG_ID },
+        },
+      },
+    ],
+    { timeoutMs: 60 },
+  );
+  const timedOut = await waitForRendererFunctionResponse(ws, "rcall-timeout");
+  assert.equal(timedOut.rendererFunctionResponse.error.code, "TIMEOUT");
+});
+
+// ── Round 2: Bot-turn Trigger ACL (owner-default + allowMembers + rate limit) ──
+
+test("bot-turn trigger ACL: owner-only by default, allowMembers opt-in is rate-limited, dispatch/dismiss stay owner-only", () => {
+  const { ws, bot, chat, run } = makeMockWorkspace();
+  ws.memberAuthor = (id) => ({ memberId: id, name: "Sam" });
+
+  // Default surface (allowMembers omitted -> false): owner allowed, member blocked
+  applyBotA2uiMessages(ws, bot, chat, run, [
+    {
+      version: "1.0",
+      createSurface: {
+        surfaceId: "acl-default",
+        components: [
+          { id: "root", component: "Button", child: "lbl", action: { event: { name: "ping" } } },
+          { id: "lbl", component: "Text", text: "Ping" },
+        ],
+        dataModel: {},
+      },
+    },
+  ]);
+  attachRunA2uiSurfaces(chat, run, bot.id);
+
+  assert.throws(
+    () => handleChatA2uiAction(ws, chat.id, { surfaceId: "acl-default", sourceComponentId: "root", name: "ping", actionId: "m-1" }, "member:m1"),
+    /Only the host owner/,
+  );
+  const ownerOk = handleChatA2uiAction(ws, chat.id, { surfaceId: "acl-default", sourceComponentId: "root", name: "ping", actionId: "o-1" }, "owner");
+  assert.equal(ownerOk.route, "bot");
+
+  // Opt-in surface (allowMembers: true): member allowed up to rate limit; dispatch/dismiss still owner-only
+  const run2 = { id: "run-2", chatId: chat.id, status: "Working" };
+  ws.state.runs.push(run2);
+  applyBotA2uiMessages(
+    ws,
+    bot,
+    chat,
+    run2,
+    [
+      {
+        version: "1.0",
+        createSurface: {
+          surfaceId: "acl-shared",
+          components: [
+            { id: "root", component: "Button", child: "lbl", action: { event: { name: "vote" } } },
+            { id: "lbl", component: "Text", text: "Vote" },
+          ],
+          dataModel: {},
+        },
+      },
+    ],
+    { allowMembers: true },
+  );
+  attachRunA2uiSurfaces(chat, run2, bot.id);
+
+  // Dispatch/dismiss remain strictly owner-only even when allowMembers is true
+  assert.throws(
+    () => handleChatA2uiAction(ws, chat.id, { surfaceId: "acl-shared", sourceComponentId: "root", name: "dismiss", actionId: "m-dismiss" }, "member:m1"),
+    /Only the host owner/,
+  );
+
+  // Member triggers succeed up to the per-window cap (6), then hit rate limit on 7th
+  for (let i = 1; i <= 6; i++) {
+    const r = handleChatA2uiAction(
+      ws,
+      chat.id,
+      { surfaceId: "acl-shared", sourceComponentId: "root", name: "vote", actionId: `m-vote-${i}` },
+      "member:m1",
+    );
+    assert.equal(r.route, "bot");
+  }
+  assert.throws(
+    () =>
+      handleChatA2uiAction(
+        ws,
+        chat.id,
+        { surfaceId: "acl-shared", sourceComponentId: "root", name: "vote", actionId: "m-vote-7" },
+        "member:m1",
+      ),
+    /Rate limit exceeded/,
+  );
+});
+
+// ── Round 2: Multi-catalog mixing & capabilities ───────────────────────────
+
+test("catalogs beyond Basic: @catalogId mixing, Botkins catalog schema, inline catalogs, and capability advertisement", () => {
+  const botkinsCat = JSON.parse(readFileSync(new URL("../desktop/link/a2ui-botkins-catalog.json", import.meta.url), "utf8"));
+  const validatedCat = validateCatalogDefinition(botkinsCat);
+  assert.equal(validatedCat.catalogId, A2UI_BOTKINS_CATALOG_ID);
+  assert.ok(validatedCat.components.Chart);
+  assert.ok(validatedCat.components.ApprovalCard);
+
+  // Per-component @catalogId mixing (Basic root + Botkins Metric + Botkins ApprovalCard)
+  const mixed = applyA2uiMessages([], [
+    {
+      version: "1.0",
+      createSurface: {
+        surfaceId: "mixed-1",
+        catalogId: A2UI_BASIC_CATALOG_ID,
+        components: [
+          { id: "root", component: "Column", children: ["hdr", "kpi", "appr"] },
+          { id: "hdr", component: "Text", text: "Release Readiness", variant: "h2" },
+          { id: "kpi", "@catalogId": A2UI_BOTKINS_CATALOG_ID, component: "Metric", label: "Pass Rate", value: "100%", tone: "positive" },
+          {
+            id: "appr",
+            "@catalogId": A2UI_BOTKINS_CATALOG_ID,
+            component: "ApprovalCard",
+            title: "Ship v0.18",
+            approveAction: { event: { name: "approve" } },
+          },
+        ],
+        dataModel: {},
+      },
+    },
+  ]);
+  assert.equal(mixed.createdIds[0], "mixed-1");
+
+  // Inline catalog ComponentId/ChildList & allowedParents/allowedChildren validation
+  const strictCat = {
+    $schema: "https://json-schema.org/draft/2020-12/schema",
+    $id: "https://example.com/a2ui/strict.json",
+    protocolVersion: "1.0",
+    catalogId: "https://example.com/a2ui/strict.json",
+    components: {
+      Board: {
+        type: "object",
+        allowedParents: ["Surface"],
+        allowedChildren: ["Tile"],
+        properties: {
+          component: { const: "Board" },
+          tiles: { $ref: "common_types.json#/$defs/ChildList" },
+        },
+        required: ["component", "tiles"],
+      },
+      Tile: {
+        type: "object",
+        allowedParents: ["Board"],
+        properties: {
+          component: { const: "Tile" },
+          label: { type: "string" },
+        },
+        required: ["component", "label"],
+      },
+    },
+  };
+  assert.doesNotThrow(() =>
+    applyA2uiMessages(
+      [],
+      [
+        {
+          version: "1.0",
+          createSurface: {
+            surfaceId: "strict-ok",
+            catalogId: "https://example.com/a2ui/strict.json",
+            components: [
+              { id: "root", component: "Board", tiles: ["t1"] },
+              { id: "t1", component: "Tile", label: "A" },
+            ],
+          },
+        },
+      ],
+      { inlineCatalogs: [strictCat] },
+    ),
+  );
+  // Missing referenced child ID in custom ChildList slot fails tree check
+  assert.throws(
+    () =>
+      applyA2uiMessages(
+        [],
+        [
+          {
+            version: "1.0",
+            createSurface: {
+              surfaceId: "strict-missing",
+              catalogId: "https://example.com/a2ui/strict.json",
+              components: [{ id: "root", component: "Board", tiles: ["missing-tile"] }],
+            },
+          },
+        ],
+        { inlineCatalogs: [strictCat] },
+      ),
+    /missing tiles/,
+  );
+
+  // Capabilities advertisement per renderer_capabilities.json and render_ui tool description
+  const caps = getA2uiRendererCapabilities();
+  assert.deepEqual(caps["1.0"].supportedCatalogIds, [...A2UI_SUPPORTED_CATALOG_IDS]);
+  const { ws, bot, chat, run } = makeMockWorkspace();
+  const tools = a2uiTools(ws, bot, chat, run, { stopped: false });
+  const renderUi = tools.find((t) => t.name === "render_ui");
+  const respondTool = tools.find((t) => t.name === "a2ui_respond");
+  assert.ok(renderUi && respondTool);
+  assert.ok(renderUi.description.includes(A2UI_BASIC_CATALOG_ID));
+  assert.ok(renderUi.description.includes(A2UI_BOTKINS_CATALOG_ID));
+});
+
+// ── Round 2: Media URL safety & Spec Conformance Fixtures ──────────────────
+
+test("isSafeA2uiMediaUrl allows https and Botkins-served URLs only (rejects data:video, file:, javascript:, arbitrary http)", () => {
+  assert.equal(isSafeA2uiMediaUrl("https://cdn.example.com/demo.mp4"), true);
+  assert.equal(isSafeA2uiMediaUrl("botkins-media://clip-1.mp4"), true);
+  assert.equal(isSafeA2uiMediaUrl("/media/clip-1.mp3"), true);
+  assert.equal(isSafeA2uiMediaUrl("http://127.0.0.1:4123/artifacts/demo.mp4"), true);
+  assert.equal(isSafeA2uiMediaUrl("data:video/mp4;base64,AAAA"), false);
+  assert.equal(isSafeA2uiMediaUrl("data:audio/mpeg;base64,AAAA"), false);
+  assert.equal(isSafeA2uiMediaUrl("file:///etc/passwd"), false);
+  assert.equal(isSafeA2uiMediaUrl("javascript:alert(1)"), false);
+  assert.equal(isSafeA2uiMediaUrl("http://untrusted.example.com/clip.mp4"), false);
+});
+
+test("spec conformance: official v1.0 schemas, all 43 Basic Catalog examples, contact_form_example.jsonl, invalid cases, and emitted renderer_to_agent envelopes", () => {
+  const fixtureRoot = new URL("./fixtures/a2ui-v1_0/", import.meta.url);
+  // 1) Vendored official schemas parse cleanly and carry official v1.0 $ids
+  for (const schemaFile of ["agent_to_renderer.json", "renderer_to_agent.json", "common_types.json", "catalog_definition.json", "renderer_capabilities.json", "catalogs/basic/catalog.json"]) {
+    const schema = JSON.parse(readFileSync(new URL(schemaFile, fixtureRoot), "utf8"));
+    assert.ok(schema.$id && schema.$schema, `${schemaFile} must have $id and $schema`);
+  }
+
+  // 2) Every official Basic Catalog v1 example must pass validation & surface application
+  const examplesDir = new URL("./examples/", fixtureRoot);
+  const exampleFiles = readdirSync(examplesDir).filter((f) => f.endsWith(".json")).sort();
+  assert.ok(exampleFiles.length >= 40, `Expected official Basic examples, got ${exampleFiles.length}`);
+  for (const file of exampleFiles) {
+    const raw = JSON.parse(readFileSync(new URL(file, examplesDir), "utf8"));
+    const msgs = Array.isArray(raw) ? raw : Array.isArray(raw.messages) ? raw.messages : [raw];
+    assert.doesNotThrow(() => applyA2uiMessages([], msgs), `Official example ${file} must pass`);
+  }
+
+  // 3) Official contact_form_example.jsonl must pass
+  const contactLines = readFileSync(new URL("./cases/contact_form_example.jsonl", fixtureRoot), "utf8")
+    .trim()
+    .split("\n")
+    .map((l) => JSON.parse(l));
+  assert.doesNotThrow(() => applyA2uiMessages([], contactLines));
+
+  // 4) Known-invalid v1.0 cases must fail (e.g. v0.9 theme on createSurface, missing catalogId on callRendererFunction)
+  assert.throws(
+    () =>
+      validateA2uiMessage({
+        version: "1.0",
+        createSurface: { surfaceId: "s1", theme: { primaryColor: "#000" }, components: [{ id: "root", component: "Text", text: "hi" }] },
+      }),
+    /theme/,
+  );
+  const callFnCases = JSON.parse(readFileSync(new URL("./cases/call_function_message.json", fixtureRoot), "utf8"));
+  for (const tc of callFnCases.tests) {
+    if (tc.description.includes("missing catalogId")) {
+      assert.throws(() => validateA2uiMessage(tc.data), `Expected invalid case to fail: ${tc.description}`);
+    }
+  }
+
+  // 5) Official renderer_messages.json & function_response.json positive/negative cases match validateRendererToAgentMessage
+  const rendererMsgCases = JSON.parse(readFileSync(new URL("./cases/renderer_messages.json", fixtureRoot), "utf8"));
+  for (const tc of rendererMsgCases.tests) {
+    if (tc.valid) {
+      assert.doesNotThrow(() => validateRendererToAgentMessage(tc.data), `Expected valid renderer msg: ${tc.description}`);
+    } else {
+      assert.throws(() => validateRendererToAgentMessage(tc.data), `Expected invalid renderer msg: ${tc.description}`);
+    }
+  }
+  const fnRespCases = JSON.parse(readFileSync(new URL("./cases/function_response.json", fixtureRoot), "utf8"));
+  for (const tc of fnRespCases.tests) {
+    if (tc.valid) {
+      assert.doesNotThrow(() => validateRendererToAgentMessage(tc.data), `Expected valid function_response: ${tc.description}`);
+    } else {
+      assert.throws(() => validateRendererToAgentMessage(tc.data), `Expected invalid function_response: ${tc.description}`);
+    }
+  }
+
+  // 6) Action and function envelopes we emit conform strictly to renderer_to_agent.json
+  const emittedAction = buildRendererActionEnvelope({
+    name: "deploy",
+    surfaceId: "deploy-confirm",
+    sourceComponentId: "go_btn",
+    userMessage: "Deploy now",
+    context: { service: "relay" },
+  });
+  assert.doesNotThrow(() => validateRendererToAgentMessage(emittedAction));
+  const emittedCall = buildCallAgentFunctionEnvelope({
+    surfaceId: "calc-1",
+    functionCallId: "call-1",
+    callFunction: { "@call": "computeSummary", catalogId: A2UI_BOTKINS_CATALOG_ID, args: { topic: "release" } },
+  });
+  assert.doesNotThrow(() => validateRendererToAgentMessage(emittedCall));
+  const emittedResp = buildRendererFunctionResponseEnvelope({
+    functionCallId: "rcall-1",
+    value: "dark",
+  });
+  assert.doesNotThrow(() => validateRendererToAgentMessage(emittedResp));
 });

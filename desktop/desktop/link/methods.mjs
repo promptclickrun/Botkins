@@ -24,7 +24,7 @@ import { safeName } from "./uploads.mjs";
 import { botVoiceField } from "./voice.mjs";
 import { templateBundle } from "./template-bundle.mjs";
 import { cleanAvatar } from "./team.mjs";
-import { validateA2uiActionPayload } from "./a2ui.mjs";
+import { validateA2uiActionPayload, validateA2uiFunctionRpcPayload } from "./a2ui.mjs";
 
 /**
  * The plugin calls ("plugins-v1"), by their wire names. A rename is a change here and in pluginArgs.
@@ -108,7 +108,7 @@ export const REMOTE_METHODS = new Set([
   "addSection", "renameSection", "deleteSection", "orderSections",
   "saveTemplate", "renameTemplate", "deleteTemplate", "exportTemplateText", "importTemplateText",
   // Chats
-  "mainChat", "changeMainFork", "setProactiveChatMode", "createChat", "createGroupChat", "setChatFlags", "markChatsRead", "renameChat", "regenerateChatTitle", "deleteChat", "forkChat", "reactToMessage", "chat.cardAction", "chat.a2uiAction", "warmChat",
+  "mainChat", "changeMainFork", "setProactiveChatMode", "createChat", "createGroupChat", "setChatFlags", "markChatsRead", "renameChat", "regenerateChatTitle", "deleteChat", "forkChat", "reactToMessage", "chat.cardAction", "chat.a2uiAction", "chat.a2uiFunction", "warmChat",
   "setChatProject", "startProjectChat", "recordVoiceLine",
   "send", "stop", "stopHelper", "unqueue", "sendNow", "retry", "compact", "sideQuestion", "respond", "clearApprovals",
   "mentionables", "catalog", "linkPreview",
@@ -545,6 +545,13 @@ export function remoteArgs(method, args, { deviceId, uploads } = {}) {
       throw new Error("Choose a chat and valid A2UI action payload.");
     }
     return [chatId, validateA2uiActionPayload(payload)];
+  }
+  if (method === "chat.a2uiFunction") {
+    const [chatId, payload] = args;
+    if (args.length !== 2 || !clean(chatId) || !plain(payload)) {
+      throw new Error("Choose a chat and valid A2UI function payload.");
+    }
+    return [chatId, validateA2uiFunctionRpcPayload(payload)];
   }
   if (method === "setProactiveChatMode" && (args.length !== 1 || !["main", "new"].includes(args[0]))) throw new Error("Choose Main chat or New chat every time.");
   if (method === "changeMainFork") {

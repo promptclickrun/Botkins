@@ -23,7 +23,7 @@ const FOR_A_PERSON = {
   changePanel: 2, routine: 2, refreshPanel: 1, boardAct: 3,
   // A bot's Proactive agent is changed, and its alerts are acted on, as the person who calls.
   mainChat: 1, changeMainFork: 4, addBot: 1, duplicateBot: 1, importAgents: 1, setProactiveChatMode: 1,
-  setBotProactive: 2, proactiveAct: 3, reactToMessage: 4, "chat.a2uiAction": 2,
+  setBotProactive: 2, proactiveAct: 3, reactToMessage: 4, "chat.a2uiAction": 2, "chat.a2uiFunction": 2,
 };
 
 /**
