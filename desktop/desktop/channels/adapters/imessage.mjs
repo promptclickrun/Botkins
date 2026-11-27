@@ -54,7 +54,8 @@ export function permissionWaitingDetail(nodeLabel = "") {
 
 /**
  * Normalizes a JSON record emitted by `imsg watch --json` or `imsg rpc` into the Channel Hooks
- * inbound event shape. Returns null for outbound (`is_from_me`) or empty/non-message records.
+ * inbound event shape. Marks outbound (`is_from_me`) records with `isSelf: true` so the channel
+ * pipeline drops them when `ignoreBots` is enabled, and returns null for empty/non-message records.
  */
 export function normalizeImsgEvent(raw, { botHandle = "", botAliases = [] } = {}) {
   if (!raw || typeof raw !== "object") return null;
@@ -146,7 +147,7 @@ export function normalizeImsgEvent(raw, { botHandle = "", botAliases = [] } = {}
     },
     isDirect,
     mentionsBot,
-    isFromSelf: fromMe,
+    ...(fromMe && { isSelf: true }),
     isBot: false,
     text,
     attachments,
