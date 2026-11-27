@@ -11,7 +11,7 @@ import { useBot, useChat, usePart } from "@/state/hooks";
 import { api, attempt } from "@/state/link";
 import { ago } from "@/state/time";
 import { BotAvatar, Button, EmptyState, Group, IconTile, Label, radius, Row, Sheet, space, T, useTheme } from "@/ui";
-import { jobStage, STAGE_LABELS } from "./jobs";
+import { jobStage, STAGE_LABELS } from "./jobLogic";
 
 const plural = (n: number, one: string, many = one + "s") => n + " " + (n === 1 ? one : many);
 const confirm = (title: string, body: string, yes: string, danger = false) =>

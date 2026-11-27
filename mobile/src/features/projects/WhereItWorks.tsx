@@ -9,7 +9,7 @@ import type { Project } from "@/link/types";
 import { usePart } from "@/state/hooks";
 import { api, attempt } from "@/state/link";
 import { Button, EmptyState, Group, Label, Loading, radius, Row, Sheet, space, T, useTheme } from "@/ui";
-import { baseName } from "./jobs";
+import { baseName } from "./jobLogic";
 import { useJobSetup } from "./Jobs";
 
 export default function WhereItWorks() {

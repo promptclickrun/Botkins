@@ -10,7 +10,7 @@ import { jobArgs, JOB_METHODS, REMOTE_METHODS } from "../link-host/methods.mjs";
 import { MockBackend } from "../link-host/mock-backend.mjs";
 import { baseParts } from "../link-host/parts.mjs";
 import { TEAM_METHODS } from "../link-host/team.mjs";
-import { jobCounts, jobStage, launchable, launchLabel, projectJobs, toggleBot } from "../src/features/projects/jobs";
+import { jobCounts, jobStage, launchable, launchLabel, projectJobs, toggleBot } from "../src/features/projects/jobLogic";
 import { firstStage, pipeline, stageOf } from "../src/features/work/overview";
 import { type FetchLike, LinkClient, pair } from "../src/link/client";
 import type { BotTask, ChatSummary, JobSetup, JobStatus } from "../src/link/types";

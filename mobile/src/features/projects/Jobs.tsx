@@ -2,7 +2,7 @@
 // batch of them, pick the bots that can open the project, and each bot gets its own chat on its own branch, in a git
 // worktree made from the checkout. The feed under it is every job, newest first; a job opens its sheet
 // (`/projects/job`), where it is brought back. "Where it works" (`/projects/where`) shows the checkout and the
-// repository's setup commands, which need the person's yes. The plain logic is `jobs.ts`.
+// repository's setup commands, which need the person's yes. The plain logic is `jobLogic.ts`.
 import { router } from "expo-router";
 import { GitBranch, Plus, Rocket, X } from "lucide-react-native";
 import { useCallback, useEffect, useState } from "react";
@@ -13,7 +13,7 @@ import { useBots, useChats, useOnline, usePart } from "@/state/hooks";
 import { api, attempt } from "@/state/link";
 import { BotAvatar, Button, Chip, Field, Group, IconButton, IconTile, Label, Row, Segmented, space, T, useTheme } from "@/ui";
 import { FolderChoice } from "./ProjectFolders";
-import { baseName, jobCounts, jobStage, launchable, launchLabel, projectJobs, STAGE_LABELS, toggleBot, type Draft } from "./jobs";
+import { baseName, jobCounts, jobStage, launchable, launchLabel, projectJobs, STAGE_LABELS, toggleBot, type Draft } from "./jobLogic";
 import { MODES } from "./logic";
 
 const WHERE = [
