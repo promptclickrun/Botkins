@@ -241,8 +241,8 @@ export class LiveSessionController {
           return session;
         };
         const next = this.options.kit.watchRtc
-          ? watchRtcTransport(this.options.kit, negotiate, run, voiceSettings()?.stt.language)
-          : webrtcTransport(this.options.kit, negotiate, run, voiceSettings()?.stt.language);
+          ? watchRtcTransport(this.options.kit, negotiate, run, voiceSettings()?.stt.language, provider)
+          : webrtcTransport(this.options.kit, negotiate, run, voiceSettings()?.stt.language, provider);
         held = next;
         next.setInput(mode);
         this.attach(next, { heard, inputItem });

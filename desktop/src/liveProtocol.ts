@@ -8,6 +8,16 @@ export interface LiveSocketLike {
 
 const SOCKET_OPEN = 1;
 
+/**
+ * Whether a provider speaks OpenAI Realtime GA client events on `oai-events` / WebSocket.
+ * Codex Realtime v3 runs its session over app-server's sidechannel and rejects GA client commands
+ * (`session.update` with `session.type`, `response.cancel`, `output_audio_buffer.clear`,
+ * `input_audio_buffer.*`) with a fatal `invalid_request_error`.
+ */
+export function usesOpenAiRealtimeClientEvents(provider: string): boolean {
+  return provider === "openai" || provider === "azure";
+}
+
 export function openAiManualTurn(turnMs: number): Record<string, unknown>[] {
   return turnMs >= 250
     ? [{ type: "input_audio_buffer.commit" }, { type: "response.create" }]

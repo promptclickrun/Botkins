@@ -34,12 +34,14 @@ test("MicGate closes during bot output, detects intentional barge-in, and suppor
 
 test("manual live voice turns use the provider protocol for OpenAI, Codex and Gemini", () => {
   const script = String.raw`
-    import { openAiManualTurn, geminiManualTurn } from './src/liveProtocol.ts';
+    import { openAiManualTurn, geminiManualTurn, usesOpenAiRealtimeClientEvents } from './src/liveProtocol.ts';
     const long = openAiManualTurn(300);
     if (long.map((message) => message.type).join(',') !== 'input_audio_buffer.commit,response.create') throw new Error('OpenAI manual turn did not commit and create a response');
     if (openAiManualTurn(100)[0].type !== 'input_audio_buffer.clear') throw new Error('short turn was not cleared');
     if (JSON.stringify(geminiManualTurn('start')) !== JSON.stringify({ realtimeInput: { activityStart: {} } })) throw new Error('Gemini activityStart missing');
     if (JSON.stringify(geminiManualTurn('end')) !== JSON.stringify({ realtimeInput: { activityEnd: {} } })) throw new Error('Gemini activityEnd missing');
+    if (!usesOpenAiRealtimeClientEvents('openai') || !usesOpenAiRealtimeClientEvents('azure')) throw new Error('OpenAI and Azure should use GA realtime client events');
+    if (usesOpenAiRealtimeClientEvents('codex') || usesOpenAiRealtimeClientEvents('gemini') || usesOpenAiRealtimeClientEvents('elevenlabs')) throw new Error('Codex, Gemini, and ElevenLabs must not send OpenAI GA client events');
   `;
   const result = spawnSync(process.execPath, ["--experimental-strip-types", "--input-type=module", "-e", script], { encoding: "utf8" });
   assert.equal(result.status, 0, result.stderr || result.stdout);

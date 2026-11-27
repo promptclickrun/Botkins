@@ -7,7 +7,9 @@
 //  2. `thread/start`: an ephemeral thread in an empty folder, with no tools of Codex's own, the
 //     voice's instructions, and the voice's tools as one namespace of dynamic tools.
 //  3. `thread/realtime/start` with `{ transport: { type: "webrtc", sdp }, version: "v3",
-//     outputModality: "audio", voice }`. The answer SDP comes in a `thread/realtime/sdp` notification.
+//     outputModality: "audio", includeStartupContext: false, delegationAckFiller: true,
+//     realtimeStartInstructions, initialItems, voice }`. The answer SDP comes in a
+//     `thread/realtime/sdp` notification.
 //  4. A tool call is the server request `item/tool/call` ({ namespace, tool, arguments }); the
 //     answer is its JSON-RPC result, { contentItems: [{ type: "inputText", text }], success }.
 //  5. `thread/realtime/stop` ends it, and the process is closed.
@@ -48,10 +50,37 @@ const NO_FEATURES = {
   tool_suggest: false,
 };
 
-/** The first message: the voice model on a ChatGPT sign-in reads it as the person's and keeps to it. */
-const firstRule = (name) =>
-  (name ? `You are the voice of my bot "${name}". When I ask who you are, you are ${name}. Never say that you are ChatGPT, Codex or another OpenAI assistant. ` : "") +
-  "Give every request of mine beyond small talk to the bot with the tool, and wait for its answer before you answer. When I stop in the middle of a sentence to think, wait for the rest. Say only what the bot's answer says. Speak the language I speak. Do not reply to this message.";
+/**
+ * Keeps persona, notes and chat context for the realtime v3 voice model while dropping direct-tool
+ * instructions meant for providers whose voice model calls `ask_bot` itself (Codex v3's voice model
+ * has no `ask_bot` tool; it delegates to the backing Codex thread and acknowledges via
+ * `delegationAckFiller`).
+ */
+const voiceContext = (instructions) => {
+  if (typeof instructions !== "string" || !instructions.trim()) return "";
+  return instructions
+    .split(/\n\n+/)
+    .filter((part) => !/\bask_bot\b|Never call a tool silently/i.test(part))
+    .join("\n\n")
+    .trim()
+    .slice(0, 16_000);
+};
+
+/** Developer-role voice prompt included in realtime v3 `initialItems` (no unsolicited startup reply). */
+const voiceRules = (name, instructions) => {
+  const parts = [
+    (name ? `You are the voice of my bot "${name}". When I ask who you are, you are ${name}. Never say that you are ChatGPT, Codex, or another OpenAI assistant. ` : "") +
+      "You have no tools of your own — your backing assistant runs the bot's tools. For every request beyond simple greetings or asking who you are, you MUST delegate to the assistant immediately. Never just say you will check without delegating, and never guess or make up personal details, calendar events, messages, reminders, files, smart-home state, or web facts. When I stop in the middle of a sentence to think, wait for the rest. Say only what the assistant's answer says. Speak the language I speak.",
+  ];
+  const extra = voiceContext(instructions);
+  if (extra) parts.push(extra);
+  return parts.join("\n\n");
+};
+
+/** Developer instructions for the backing Codex model when realtime v3 delegates a turn. */
+const backendRules = (name) =>
+  (name ? `You are the relay for the bot "${name}". ` : "You are the relay for the bot. ") +
+  `For every delegated user request, call the ${NAMESPACE}.ask_bot tool immediately with the person's request in their own words. Do not output filler or commentary before calling the tool (the voice model already acknowledges). Never guess or answer without calling ${NAMESPACE}.ask_bot. After receiving the tool result, return a brief spoken answer containing only what the tool returned.`;
 
 export class CodexVoice {
   /**
@@ -139,7 +168,9 @@ export class CodexVoice {
         if (!method.startsWith("thread/realtime/") || !session.threadId || params?.threadId !== session.threadId) return;
         if (method === "thread/realtime/sdp" && typeof params.sdp === "string") answer.resolve(params.sdp);
         else if (method === "thread/realtime/error") {
-          answer.reject(new Error(String(params.message ?? "Codex reported an error.")));
+          const message = String(params.message ?? "Codex reported an error.");
+          this.log("Codex voice error: " + message);
+          answer.reject(new Error(message));
           this.closed(session, "Codex ended the live voice.");
         } else if (method === "thread/realtime/closed") {
           answer.reject(new Error("Codex closed the live voice."));
@@ -211,6 +242,7 @@ export class CodexVoice {
       const usable = !!voice && Array.isArray(voices?.voices?.v3) && voices.voices.v3.includes(voice);
       session.threadId = started?.thread?.id;
       if (!session.threadId) throw new Error("Codex didn't start a thread.");
+      const resolvedName = botName ?? name ?? this.botName();
       await rpc.request(
         "thread/realtime/start",
         {
@@ -219,13 +251,15 @@ export class CodexVoice {
           transport: { type: "webrtc", sdp },
           version: "v3",
           includeStartupContext: false,
+          delegationAckFiller: true,
+          realtimeStartInstructions: backendRules(resolvedName),
+          initialItems: [{ role: "developer", text: voiceRules(resolvedName, instructions) }],
           ...(usable && { voice }),
         },
         30_000,
       );
       const timer = setTimeout(() => answer.reject(new Error("Codex didn't answer in time.")), ANSWER_MS);
       const remote = await answered.finally(() => clearTimeout(timer));
-      await rpc.request("thread/realtime/appendText", { threadId: session.threadId, text: firstRule(botName ?? name ?? this.botName()), role: "user" }, 15_000).catch((error) => this.log("Codex voice: the first message wasn't taken: " + error.message));
       return { sdp: remote, id };
     } catch (error) {
       this.log("Codex voice: " + (error?.message ?? error));

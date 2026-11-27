@@ -64,6 +64,7 @@ export class OpenAIRealtime {
     const itemId = str(event.item_id);
     switch (type) {
       case "session.created":
+      case "session.started":
       case "session.updated":
         this.hooks.session?.(obj(event.session));
         this.hooks.status("listening");
