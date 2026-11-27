@@ -5,6 +5,7 @@ import { toolKind } from "./canvas.mjs";
 import { memberSessionId } from "./groups.mjs";
 import { helperSessionId } from "./teamwork.mjs";
 import { findPathSpans } from "./path-detector.mjs";
+import { setRawSegmentText } from "./transcript.mjs";
 
 const contained = (root, path) => {
   const r = relative(root, path);
@@ -154,8 +155,9 @@ export class ArtifactEvents {
 
   messages(chat) {
     const start = this.counts.get(chat.messages) ?? 0;
-    // A piece of a reply whose turn still runs is read again once the turn ends: finishReply compares
-    // those pieces with the final text, so they are not rewritten before then. Recording is safe to repeat.
+    // Interim messages whose turn is still Working are normalized and indexed right away (their raw
+    // text is preserved in transcript.mjs so finishReply can still strip cumulative provider prefixes),
+    // and re-scanned once the turn finishes in case a later tool write makes an attachment resolvable.
     let done = chat.messages.length;
     // A chat a team member started is theirs; the owner's has no creator or names the owner.
     const ownerChat = !chat.createdBy || chat.createdBy === "owner";
@@ -164,7 +166,13 @@ export class ArtifactEvents {
       const writing = message.interim && message.role === "assistant" && this.ws.state.runs.some((run) => run.id === message.runId && run.status === "Working");
       if (writing) done = Math.min(done, index);
       const botIds = message.botId ? [message.botId] : message.role === "user" ? chat.botIds ?? [chat.botId] : [chat.botId];
-      if (!writing && message.role === "assistant" && message.text && /media:|!\[/i.test(message.text)) message.text = normalizeMedia(message.text, this.folder(chat, botIds[0]));
+      if (message.role === "assistant" && message.text && /media:|!\[/i.test(message.text)) {
+        const normalized = normalizeMedia(message.text, this.folder(chat, botIds[0]));
+        if (normalized !== message.text) {
+          if (writing) setRawSegmentText(message, message.text);
+          message.text = normalized;
+        }
+      }
       for (const botId of botIds) {
         const context = { botId, chatId: chat.id, messageIndex: index, time: message.time ?? this.ws.state.runs.find((r) => r.id === message.runId)?.time ?? chat.time ?? 0 };
         for (const file of message.attachments ?? []) this.ws.artifacts.record(file.path, { ...context, source: message.role === "user" ? "upload" : "media" });

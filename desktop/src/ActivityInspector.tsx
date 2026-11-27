@@ -11,6 +11,7 @@
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { ArrowLeft, Ban, Brain, Check, ChevronRight, Copy, ExternalLink, ListChecks, MessageSquareText, Square, Terminal, Users, X } from "lucide-react";
 import { StepDetailBody, stepIcon, useNow } from "./ChatActivity";
+import type { ChatFiles } from "./ChatFileLink";
 import { RichText } from "./RichText";
 import { Shimmer } from "./Shimmer";
 import { classifyStep, parseStepInput, stepHeadline, summarizeSteps } from "./activityModel";
@@ -95,7 +96,7 @@ function storyRows(chapters: Chapter<Step>[], filter: Filter): Row[] {
   return rows;
 }
 
-export function ActivityPanel({ run, updates, target, onCrew }: { run: Run; updates: StoryUpdate[]; target?: InspectTarget; /** Opens the Crew tab, on a helper when given its id. */ onCrew?: (id?: string) => void }) {
+export function ActivityPanel({ run, updates, files, target, onCrew }: { run: Run; updates: StoryUpdate[]; files?: ChatFiles; target?: InspectTarget; /** Opens the Crew tab, on a helper when given its id. */ onCrew?: (id?: string) => void }) {
   const chapters = useMemo(() => storyChapters(run, updates), [run.steps, run.reasoning, run.teamwork, run.taskHandoffs, updates]);
   const chips = useMemo(() => filterChips(chapters), [chapters]);
   const [filter, setFilter] = useState<Filter>("all");
@@ -216,7 +217,7 @@ export function ActivityPanel({ run, updates, target, onCrew }: { run: Run; upda
               <ArrowLeft size={14} aria-hidden="true" />
               All steps
             </button>
-            {selected && <Detail row={selected} run={run} onCrew={onCrew} />}
+            {selected && <Detail row={selected} run={run} files={files} onCrew={onCrew} />}
           </div>
         </div>
       )}
@@ -224,7 +225,7 @@ export function ActivityPanel({ run, updates, target, onCrew }: { run: Run; upda
   );
 }
 
-function Detail({ row, run, onCrew }: { row: Row; run: Run; onCrew?: (id?: string) => void }) {
+function Detail({ row, run, files, onCrew }: { row: Row; run: Run; files?: ChatFiles; onCrew?: (id?: string) => void }) {
   const chapter = row.chapter;
   const start = run.time;
   if (row.kind === "chapter") {
@@ -246,7 +247,7 @@ function Detail({ row, run, onCrew }: { row: Row; run: Run; onCrew?: (id?: strin
       <div className="insp-sel">
         <h3 className="insp-sel-title">Update</h3>
         <div className="insp-kv"><span>At {clock(item.at - start)}</span></div>
-        <div className="insp-thought"><RichText text={item.update.text} /></div>
+        <div className="insp-thought"><RichText text={item.update.text} files={files} /></div>
       </div>
     );
   }

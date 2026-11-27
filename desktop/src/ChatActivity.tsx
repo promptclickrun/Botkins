@@ -28,6 +28,7 @@ import {
   X,
 } from "lucide-react";
 import { todoLabel } from "../desktop/link/session-todos";
+import type { ChatFiles } from "./ChatFileLink";
 import { toolKind } from "../desktop/tool-kind.mjs";
 import "./apps.css";
 import { ConnectCard } from "./ConnectCard";
@@ -366,12 +367,12 @@ export function StepList({ steps }: { steps: Step[] }) {
 /** Text the bot wrote while a turn was moving between tools. It reads like a reply (the same
  * Markdown at the same size) in the second ink, with no box, label or mark, and keeps its place
  * in the turn, apart from the bot's thinking. */
-export function InterimUpdate({ text, onToggle }: { text: string; onToggle?: () => void }) {
+export function InterimUpdate({ text, files, onToggle }: { text: string; files?: ChatFiles; onToggle?: () => void }) {
   const value = text.trim();
   if (!value) return null;
   return (
     <article className="assistant interim-update" onClick={onToggle}>
-      <RichText text={value} />
+      <RichText text={value} files={files} />
     </article>
   );
 }

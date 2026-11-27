@@ -891,7 +891,7 @@ function ChatViewBody({
         if (!isReasoning && showUpdates) receiptUpdates.push({ key: event.key, at: event.at, text: event.value.text });
         const update = isReasoning
           ? <ReasoningUpdate text={event.value.text} />
-          : <InterimUpdate text={event.value.text} />;
+          : <InterimUpdate text={event.value.text} files={files} />;
         events.push({
           kind: event.kind, at: event.at, order: event.order, key: event.key,
           body: isReasoning ? (showThinking && thinkingMode === "open" && !islandMode ? update : null) : (updateInChat({ live, showUpdates, showThinking, thinkingMode, islandMode }) ? update : null),
@@ -1339,7 +1339,7 @@ function ChatViewBody({
                     onContextMenu={e => messageMenu(e, m, loadedFrom + i)}
                   >
                     {interim ? (
-                      <InterimUpdate text={m.text} onToggle={disclosed} />
+                      <InterimUpdate text={m.text} files={files} onToggle={disclosed} />
                     ) : m.role === "assistant" ? (
                       // Consecutive replies from one bot share its label: only the first of a run shows it.
                       !samePrevAssistant && (
@@ -1645,7 +1645,7 @@ function ChatViewBody({
       </div>
       {paneShown && narrow && <div className="pane-scrim" aria-hidden="true" onClick={closePane} />}
       {paneShown && (
-        <SidePane key={chat.id} inspect={inspect?.chatId === chat.id ? inspect : undefined} latestRunId={latest?.id} pull={pull?.chatId === chat.id ? pull : undefined} preview={preview?.chatId === chat.id ? preview : undefined} state={state} chat={chat} bot={bot} face={face} group={group} drawer={narrow} close={closePane} openComputer={openComputer} openRoutines={openRoutines} openBot={openBot} openChat={openChat} details={chatDetails} />
+        <SidePane key={chat.id} inspect={inspect?.chatId === chat.id ? inspect : undefined} latestRunId={latest?.id} pull={pull?.chatId === chat.id ? pull : undefined} preview={preview?.chatId === chat.id ? preview : undefined} state={state} chat={chat} bot={bot} face={face} group={group} drawer={narrow} close={closePane} openComputer={openComputer} openRoutines={openRoutines} openBot={openBot} openChat={openChat} details={chatDetails} files={files} />
       )}
       {computer && !computer.member && computer.state === "online" && onScreen && watching?.hostId === computer.id && watching.chatId === chat.id &&
         <ComputerScreen key={computer.id + "/" + chat.id} host={computer} close={closeComputer} />}
