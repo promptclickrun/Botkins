@@ -153,8 +153,14 @@ void Screen::paint(const botkins::View& view, Mode mode, float slider_pos, bool 
     paint_power_off(slider_pos, powering_off);
     return;
   }
+  if (mode == Mode::Wifi) {
+    WifiMenu::draw(*canvas_, wifi_);
+    return;
+  }
   if (mode == Mode::Quick) {
-    botkins::draw_quick(*canvas_, view, faces_);
+    botkins::QuickOptions options;
+    options.wifi = true;  // this board has a local Wi-Fi editor
+    botkins::draw_quick(*canvas_, view, faces_, options);
     return;
   }
   botkins::HomeOptions options;
@@ -166,7 +172,7 @@ void Screen::paint(const botkins::View& view, Mode mode, float slider_pos, bool 
 bool Screen::warm(const botkins::View& shown, Mode shown_mode) {
   using botkins::View;
   if (!canvas_ || shown.stage != View::Stage::Online || !shown.faces || shown.faces->empty()) return false;
-  if (shown_mode == Mode::PowerOff) return false;
+  if (shown_mode == Mode::PowerOff || shown_mode == Mode::Wifi) return false;
   // A new set of faces (another look, or one more pose of it arrived): from the start again. What
   // is drawn already costs a redraw only.
   if (shown.faces.get() != warm_faces_) {

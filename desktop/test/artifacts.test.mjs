@@ -315,3 +315,92 @@ test("a picture that a bot wrote into its own session's folder shows in that cha
   ws = open();
   assert.deepEqual(shown(ws, chatId), []);
 });
+
+test("interim assistant messages record and normalize MEDIA: both during and after a Working run without breaking finishReply or security rules", async (t) => {
+  const { dir, put } = fixture(t);
+  const own = join(dir, "files", "pip");
+  mkdirSync(own, { recursive: true });
+  const shot = join(own, "chart.png");
+  writeFileSync(shot, "png");
+  const elsewhereImage = put("elsewhere.png", "png");
+  const secretDoc = put("secret.txt", "private");
+
+  // 1) Owner chat: relative MEDIA: and an off-folder picture in an interim message are normalized
+  // and indexed while the run is still Working, and finishReply still strips a cumulative provider prefix.
+  let releaseTool;
+  const toolStarted = new Promise((resolve) => { releaseTool = resolve; });
+  let finishTool;
+  const waitTool = new Promise((resolve) => { finishTool = resolve; });
+
+  const ownerFake = fakeClient(async (_id, _message, sdk) => {
+    const interimText = `Here is the first chart:\nMEDIA: chart.png\nMEDIA: ${elsewhereImage}\nMEDIA: ${secretDoc}`;
+    sdk.emit({ type: "assistant.message_delta", data: { messageId: "m1", deltaContent: interimText } });
+    sdk.emit({ type: "tool.execution_start", data: { toolCallId: "t1", toolName: "bash", arguments: { command: "echo ok" } } });
+    releaseTool();
+    await waitTool;
+    sdk.emit({ type: "tool.execution_complete", data: { toolCallId: "t1", success: true } });
+    return { data: { content: `${interimText}\n\nAll done.` } };
+  });
+  const ws = new Workspace(dir, ownerFake.client, () => {});
+  const ownerChat = ws.createChat("pip");
+  const turnPromise = ws.send(ownerChat, "Check and chart");
+  await toolStarted;
+
+  // Trigger checkpoint/indexing while the run is still Working — even before save() runs,
+  // commitInterim at tool.execution_start should already normalize and record MEDIA:.
+  const liveInterim = ws.chat(ownerChat).messages.find((m) => m.interim);
+  assert.ok(liveInterim, "interim message exists while Working");
+  assert.ok(liveInterim.text.includes("MEDIA: " + shot), "relative MEDIA: is normalized while Working: " + liveInterim.text);
+  assert.deepEqual(
+    ws.artifacts.resolve({ chatId: ownerChat, paths: [shot, elsewhereImage, secretDoc] }).items.map((item) => item?.name ?? null),
+    ["chart.png", "elsewhere.png", null],
+    "owner chat indexes bot-folder and MEDIA_KINDS files immediately on commitInterim during Working, and still rejects off-folder non-media docs",
+  );
+  ws.save();
+
+  finishTool();
+  await turnPromise;
+  const msgs = ws.chat(ownerChat).messages.filter((m) => m.role === "assistant");
+  assert.equal(msgs.length, 2, "cumulative provider text did not duplicate the interim message");
+  assert.equal(msgs[0].interim, true);
+  assert.ok(msgs[0].text.includes("MEDIA: " + shot));
+  assert.equal(msgs[1].interim, undefined);
+  assert.equal(msgs[1].text, "All done.");
+  assert.deepEqual(
+    ws.artifacts.resolve({ chatId: ownerChat, paths: [shot, elsewhereImage, secretDoc] }).items.map((item) => item?.name ?? null),
+    ["chart.png", "elsewhere.png", null],
+  );
+
+  // 2) Team member chat: interim MEDIA: only resolves files in the bot's own folders, not off-folder images.
+  const memberElsewhere = put("member-elsewhere.png", "png");
+  let releaseMember;
+  const memberStarted = new Promise((resolve) => { releaseMember = resolve; });
+  let finishMember;
+  const waitMember = new Promise((resolve) => { finishMember = resolve; });
+  const memberFake = fakeClient(async (_id, _message, sdk) => {
+    const interimText = `Preview:\nMEDIA: ${shot}\nMEDIA: ${memberElsewhere}`;
+    sdk.emit({ type: "assistant.message_delta", data: { messageId: "m2", deltaContent: interimText } });
+    sdk.emit({ type: "tool.execution_start", data: { toolCallId: "t2", toolName: "bash", arguments: { command: "echo ok" } } });
+    releaseMember();
+    await waitMember;
+    sdk.emit({ type: "tool.execution_complete", data: { toolCallId: "t2", success: true } });
+    return { data: { content: "Member done." } };
+  });
+  const ws2 = new Workspace(dir, memberFake.client, () => {});
+  const memberChat = ws2.createChat("pip");
+  ws2.chat(memberChat).createdBy = "m_member";
+  const memberTurn = ws2.send(memberChat, "Show preview");
+  await memberStarted;
+  assert.deepEqual(
+    ws2.artifacts.resolve({ chatId: memberChat, paths: [shot, memberElsewhere] }).items.map((item) => item?.name ?? null),
+    ["chart.png", null],
+    "team chat never indexes off-folder images from interim MEDIA:",
+  );
+  ws2.save();
+  finishMember();
+  await memberTurn;
+  assert.deepEqual(
+    ws2.artifacts.resolve({ chatId: memberChat, paths: [shot, memberElsewhere] }).items.map((item) => item?.name ?? null),
+    ["chart.png", null],
+  );
+});

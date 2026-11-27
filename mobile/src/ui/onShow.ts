@@ -20,7 +20,7 @@ export const SHEETS = new Set([
   "chat/new", "chat/model", "node-approval", "chat/activity", "chat/helper", "chat/command", "chat/context", "chat/people", "chat/changes", "chat/pane", "chat/model-info",
   "bot/new", "bot/agents", "bot/[id]/edit", "bot/[id]/look", "bot/[id]/instructions", "bot/[id]/memory", "bot/[id]/voice", "bot/[id]/proactive-setup",
   "today/new", "today/routine", "space/share", "space/new-panel", "space/ask", "space/notes", "routine/[id]", "task/[id]", "tools/[id]", "skills/[name]", "market/app/[slug]", "market/plugin-install", "market/plugin-update", "market/add-marketplace", "market/tool",
-  "settings/bubble", "settings/team/role", "tools/import", "folders", "credentials/[id]", "wiki/edit", "wiki/export", "models/signin", "projects/add-chats", "projects/attach", "projects/job", "projects/where", "pair/index", "pair/manual", "pair/name", "join", "setup",
+  "settings/bubble", "settings/channels/add", "settings/team/role", "tools/import", "folders", "credentials/[id]", "wiki/edit", "wiki/export", "models/signin", "projects/add-chats", "projects/attach", "projects/job", "projects/where", "pair/index", "pair/manual", "pair/name", "join", "setup",
 ]);
 export const isSheet = (name: string) => SHEETS.has(name);
 

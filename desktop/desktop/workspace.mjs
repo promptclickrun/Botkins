@@ -2826,7 +2826,11 @@ export class Workspace {
         const { type, data, agentId } = event;
         this.compacted(session, event);
         if (!event.agentId && !event.data?.parentToolCallId) {
-          if (event.type === "tool.execution_start") commitInterim(chat, run, task);
+          if (event.type === "tool.execution_start") {
+            const before = chat.messages.length;
+            commitInterim(chat, run, task);
+            if (chat.messages.length > before) this.artifactEvents.messages(chat);
+          }
           if (event.type === "assistant.message" && !run.noOutput) {
             wholeMessage(task, event.data);
             if (run.recovery) run.recovery.draft = task.stream;
@@ -3060,8 +3064,11 @@ export class Workspace {
         if (!event.agentId && !event.data?.parentToolCallId) {
           if (event.type === "tool.execution_start") {
             // Text that may still be a [SILENT] answer to a reaction is not kept as a message.
-            if (this.revealReaction(run, task)) commitInterim(chat, run, task);
-            else task.stream = "";
+            if (this.revealReaction(run, task)) {
+              const before = chat.messages.length;
+              commitInterim(chat, run, task);
+              if (chat.messages.length > before) this.artifactEvents.messages(chat);
+            } else task.stream = "";
           }
           if (event.type === "assistant.message" && !run.noOutput) {
             wholeMessage(task, event.data);

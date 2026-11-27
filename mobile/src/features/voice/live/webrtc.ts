@@ -8,7 +8,7 @@
 // sends the bot's sound (`output_audio_buffer.started` to `.stopped`) and for its echo after, the
 // microphone track is off, so the bot can't hear itself; the person stops it with a tap. Push to
 // talk turns turn detection off and the track is on only while the button is held.
-import type { LiveSession } from "@/link/types";
+import type { LiveProvider, LiveSession } from "@/link/types";
 import { MIN_TURN_MS, RELEASE_TAIL_MS } from "./input";
 import { OpenAIRealtime, transcription, turnsByHand } from "./openai";
 import { LiveBase, obj, type ToolRunner } from "./types";
@@ -53,15 +53,21 @@ export class WebRTCTransport extends LiveBase {
     private readonly route: (speaker: boolean) => Promise<void>,
     /** The person's language, a hint for their transcript. */
     private readonly language?: string,
+    /** OpenAI/Azure use GA `oai-events` client commands; Codex Realtime v3 manages its session via app-server. */
+    private readonly provider: LiveProvider = "openai",
   ) {
     super(runTool);
     this.protocol = new OpenAIRealtime({
-      send: (event) => this.send(event),
+      send: (event) => {
+        if (!this.codex) this.send(event);
+      },
       status: (status) => this.setStatus(status),
       inputItem: id => this.emit("inputItem", id),
       line: (id, who, text, options) => this.line(id, who, text, options),
       tool: (name, args) => this.tool(name, args),
-      error: (message) => this.emit("error", message),
+      // Codex app-server drops its realtime sidechannel on any stream error; end the call so the
+      // voice cannot stay open without tools.
+      error: (message) => (this.codex ? this.fail(message) : this.emit("error", message)),
       // The provider cuts the bot's unplayed sound itself when the person talks over it.
       responding: (on) => (this.responding = on),
       playing: (on) => {
@@ -71,6 +77,10 @@ export class WebRTCTransport extends LiveBase {
       },
       session: (session) => (this.manual = turnsByHand(session)),
     });
+  }
+
+  private get codex() {
+    return this.provider === "codex";
   }
 
   /** Turns the microphone track on or off for what the gate says now, and again when that changes by itself. */
@@ -144,10 +154,12 @@ export class WebRTCTransport extends LiveBase {
     channel.addEventListener("open", () => {
       if (this.ended) return;
       void this.route(this.speaker).catch(() => {});
-      // The person's words are written down only when the session asks for it. Push to talk turns
-      // the provider's turn detection off (the Realtime conversations guide, "push-to-talk").
-      const input = { transcription: transcription(this.language), ...(this.input === "push" && { turn_detection: null }) };
-      this.send({ type: "session.update", session: { type: "realtime", audio: { input } } });
+      if (!this.codex) {
+        // The person's words are written down only when the session asks for it. Push to talk turns
+        // the provider's turn detection off (the Realtime conversations guide, "push-to-talk").
+        const input = { transcription: transcription(this.language), ...(this.input === "push" && { turn_detection: null }) };
+        this.send({ type: "session.update", session: { type: "realtime", audio: { input } } });
+      }
       this.setStatus("listening");
       this.meter ??= setInterval(() => void this.readLevels(), METER_MS);
     });
@@ -177,8 +189,11 @@ export class WebRTCTransport extends LiveBase {
   interrupt() {
     if (this.ended) return;
     // Over WebRTC the provider plays the sound: clearing its buffer stops it and cuts the item there.
-    if (this.responding) this.send({ type: "response.cancel" });
-    if (this.sounding) this.send({ type: "output_audio_buffer.clear" });
+    // Codex Realtime v3 rejects GA control commands on `oai-events` and drops its backend on error.
+    if (!this.codex) {
+      if (this.responding) this.send({ type: "response.cancel" });
+      if (this.sounding) this.send({ type: "output_audio_buffer.clear" });
+    }
     this.responding = false;
     this.sounding = false;
     this.gate.cut();
@@ -196,7 +211,7 @@ export class WebRTCTransport extends LiveBase {
       this.turnMs = 0;
       this.startTurn();
       if (this.responding || this.sounding) this.interrupt();
-      this.send({ type: "input_audio_buffer.clear" });
+      if (!this.codex) this.send({ type: "input_audio_buffer.clear" });
     }
     this.gate.press();
     this.apply();
@@ -213,7 +228,7 @@ export class WebRTCTransport extends LiveBase {
       this.sending = null;
       this.apply();
       // Where the provider kept its own turn detection, it hears the silence and answers by itself.
-      if (this.ended || !this.manual) return;
+      if (this.ended || this.codex || !this.manual) return;
       if (held < MIN_TURN_MS || this.quietTurn) {
         this.send({ type: "input_audio_buffer.clear" });
         return;

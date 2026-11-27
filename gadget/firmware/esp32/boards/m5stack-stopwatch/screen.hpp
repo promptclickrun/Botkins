@@ -5,18 +5,19 @@
 #include <cstdint>
 #include <memory>
 
-#include "botkins/draw.hpp"
+#include "wifi_menu.hpp"
 
 namespace stopwatch {
 
 class Screen {
  public:
-  enum class Mode { Home, Dimmed, Quick, PowerOff };
+  enum class Mode { Home, Dimmed, Quick, PowerOff, Wifi };
   /** `frame` is the display's (466x466, byte-swapped RGB565, in PSRAM). False when the fonts can't be read. */
   bool begin(uint16_t* frame, int width, int height);
   /** "Botkins / Starting", before the gadget has a view. */
   void boot();
   void draw(const botkins::View& view, Mode mode, float slider_pos = 0.0f, bool powering_off = false);
+  void set_wifi(const WifiMenu::Shown& wifi) { wifi_ = wifi; }
   /**
    * Draws one screen the gadget hasn't shown yet with the bot's faces (a pose, dimmed, the quick
    * controls) into the frame, then `shown` again over it, so the first time that pose comes up it
@@ -34,6 +35,7 @@ class Screen {
   botkins::Faces faces_;
   const void* warm_faces_ = nullptr;  // the face set drawn ahead
   int warm_next_ = 0;
+  WifiMenu::Shown wifi_;
 };
 
 }  // namespace stopwatch

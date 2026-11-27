@@ -120,3 +120,12 @@ test("dimmed is much darker than ready", () => {
   assert.ok(dimmed < awake * 0.45, `${dimmed} against ${awake}`);
   assert.ok(dimmed > 0, "the Botkin is still there");
 });
+
+test("the quick controls show a Wi-Fi button only on a board that asks for one", () => {
+  const CREAM = hex(0xfff8ea);
+  const CENTRE = [213, 202, 253, 242];
+  assert.equal(count(read("quick"), CREAM, CENTRE), 0, "no button without it");
+  assert.ok(count(read("quick-wifi"), CREAM, CENTRE) > 20, "the Wi-Fi icon at the centre");
+  const rest = [0, 0, 466, 190];
+  assert.equal(brightness(read("quick-wifi"), rest), brightness(read("quick"), rest), "the rest of the panel is the same panel");
+});

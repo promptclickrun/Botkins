@@ -71,10 +71,10 @@ export function WorkPart({ chatId, bot, item }: { chatId: string; bot?: Bot; ite
 }
 
 /** Text the bot wrote before it moved on (an interim message, or a piece noted from an older computer): one of its updates. */
-export function TurnText({ item }: { item: Extract<Item, { kind: "text" }> }) {
+export function TurnText({ chatId, item }: { chatId?: string; item: Extract<Item, { kind: "text" }> }) {
   const showUpdates = useChatPrefs((prefs) => prefs.updates);
   if (!showUpdates) return null;
-  return <Aside kind="update" text={item.text} />;
+  return <Aside kind="update" text={item.text} chatId={chatId} />;
 }
 
 /** The newest part of the turn under way: the bot and what it is doing, its steps, and the reply as it streams in. Rendered only while a reply is under way. */

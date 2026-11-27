@@ -5,10 +5,12 @@
 // beside the word instead of flowing under it, so the word is one line the band can cross.
 import { useEffect, useState } from "react";
 import { View } from "react-native";
+import { InlineMedia } from "@/features/artifacts/ArtifactBits";
+import { useMessageLinks } from "@/features/artifacts/data";
 import type { Bot } from "@/link/types";
 import type { AvatarState } from "@/state/hooks";
 import { useChatPrefs } from "@/state/chatPrefs";
-import { BotAvatar, Markdown, T, Tap, useTheme } from "@/ui";
+import { BotAvatar, Markdown, space, T, Tap, useTheme } from "@/ui";
 import { Shimmer } from "@/ui/Shimmer";
 import { plainPreview } from "./bits";
 import { FACE } from "./WorkRows";
@@ -18,9 +20,11 @@ const TAIL = 150;
 
 const tailOf = (text: string) => (text.length > TAIL ? "…" + text.slice(-TAIL).trimStart() : text);
 
-export function Aside({ kind, text, live, bot, state, label, shimmer = false }: {
+export function Aside({ kind, text, chatId, live, bot, state, label, shimmer = false }: {
   kind: "thinking" | "update";
   text: string;
+  /** The chat this update belongs to, so MEDIA: attachments and known paths resolve in it. */
+  chatId?: string;
   /** Still being thought. */
   live?: boolean;
   /** The bot whose face leads a thought (the one speaking, in a group chat). */
@@ -39,14 +43,23 @@ export function Aside({ kind, text, live, bot, state, label, shimmer = false }: 
   // A setting change must not leave an already-mounted update in its old preview state. Updates
   // open in full when shown; Folded thinking keeps the compact tail until the person expands it.
   useEffect(() => setOpen(kind === "update" ? true : mode === "show"), [kind, mode]);
+  const links = useMessageLinks(chatId ?? "", text, kind === "update" && !!chatId);
   const toggle = () => setOpen(!open);
 
   if (kind === "update") {
     const flat = plainPreview(text);
+    const body = links.parts ? (
+      <View style={{ gap: space.md }}>
+        {links.parts.map((part, at) => (part.kind === "text" ? <Markdown key={at} text={part.text} plain={!markdown} color={colors.ink2} paths={links.paths} /> : <InlineMedia key={part.artifact.id} artifact={part.artifact} />))}
+      </View>
+    ) : (
+      <Markdown text={text} plain={!markdown} color={colors.ink2} paths={links.paths} />
+    );
+    if (open && links.parts) return body;
     return (
       <Tap onPress={toggle} feel="select" sink={0.99} accessibilityLabel={open ? text : "Show the rest of this update: " + text} accessibilityState={{ expanded: open }}>
         {open ? (
-          <Markdown text={text} plain={!markdown} color={colors.ink2} />
+          body
         ) : (
           <T variant="body" color="ink2" numberOfLines={3}>
             {flat}

@@ -11,6 +11,7 @@
 //   * Single press: toggles sleep mode (AMOLED off, M5PM1 green status LED off).
 //   * Hold (~800 ms): opens the "Slide to power off" screen; dragging the slider to the right
 //     powers the board off via M5PM1 (holding/pressing the red button boots it back up).
+// - Wi-Fi in the quick controls opens the touchscreen editor for saved and new networks.
 #include <algorithm>
 #include <atomic>
 #include <cmath>
@@ -19,6 +20,7 @@
 #include <string>
 
 #include "audio.hpp"
+#include "wifi_menu.hpp"
 #include "display.hpp"
 #include "driver/gpio.h"
 #include "driver/i2c_master.h"
@@ -60,6 +62,7 @@ stopwatch::Display g_display;
 stopwatch::Audio g_audio;
 stopwatch::Touch g_touch;
 stopwatch::Screen g_screen;
+stopwatch::WifiMenu g_wifi;
 bool g_power_ok = false, g_display_ok = false, g_audio_ok = false, g_touch_ok = false;
 botkins::Gadget* g_gadget = nullptr;
 TaskHandle_t g_draw_task = nullptr;
@@ -167,6 +170,7 @@ bool same(const botkins::View& a, const botkins::View& b) {
 std::string kind_of(const botkins::View& view, stopwatch::Screen::Mode mode) {
   using Mode = stopwatch::Screen::Mode;
   if (mode == Mode::PowerOff) return g_powering_off.load() ? "powering-off" : "power-off";
+  if (mode == Mode::Wifi) return "wifi";
   if (mode == Mode::Quick) return view.settings.mute ? "quick-muted" : "quick";
   if (mode == Mode::Dimmed) return "dimmed";
   static const char* const stages[] = {"setup", "joining", "no-network", "connecting", "online", "removed"};
@@ -203,6 +207,7 @@ void draw_task(void*) {
   Mode shown_mode = Mode::Home;
   int shown_slider = -1;
   bool shown_powering_off = false;
+  stopwatch::WifiMenu::Shown shown_wifi;
   bool drawn = false, settings_seen = false;
   int64_t active_at = now_ms(), activity_seen = 0;
   std::set<std::string> timed;
@@ -223,6 +228,10 @@ void draw_task(void*) {
     }
     const bool changed = !drawn || !same(view, shown);
     if (!g_manual_sleep.load() && (changed || !idle(view))) active_at = now;
+    // Don't dim the screen while the user is entering Wi-Fi settings.
+    const auto wifi = g_wifi.shown(*g_gadget);
+    const bool wifi_open = wifi.page != stopwatch::WifiMenu::Page::Closed;
+    if (wifi_open) active_at = now;
 
     // The quick controls close by themselves.
     if (g_panel_open) {
@@ -255,16 +264,23 @@ void draw_task(void*) {
       if (want == Light::Dark) set_power_off(false, "sleep");
     }
 
-    const Mode mode = g_power_off_open ? Mode::PowerOff : g_panel_open ? Mode::Quick : want == Light::Dim ? Mode::Dimmed : Mode::Home;
+    const Mode mode = wifi_open && want != Light::Dark ? Mode::Wifi
+                      : g_power_off_open                ? Mode::PowerOff
+                      : g_panel_open                    ? Mode::Quick
+                      : want == Light::Dim              ? Mode::Dimmed
+                                                        : Mode::Home;
+    const bool wifi_changed = mode == Mode::Wifi && wifi != shown_wifi;
+    if (mode == Mode::Wifi && wait_ms > 250) wait_ms = 250;
     const int slider = g_slider_permille.load();
     const bool powering_off = g_powering_off.load();
     const bool overlay_changed = mode == Mode::PowerOff && (slider != shown_slider || powering_off != shown_powering_off);
 
-    if (want != Light::Dark && (changed || mode != shown_mode || overlay_changed || !drawn)) {
+    if (want != Light::Dark && (changed || mode != shown_mode || overlay_changed || wifi_changed || !drawn)) {
       const std::string kind = kind_of(view, mode);
       const size_t faces_before = g_screen.face_memory();
       xSemaphoreTake(g_frame_lock, portMAX_DELAY);
       const int64_t t0 = esp_timer_get_time();
+      g_screen.set_wifi(wifi);
       g_screen.draw(view, mode, slider / 1000.0f, powering_off);
       const int64_t t1 = esp_timer_get_time();
       g_kind = kind;
@@ -282,9 +298,11 @@ void draw_task(void*) {
       shown_mode = mode;
       shown_slider = slider;
       shown_powering_off = powering_off;
+      shown_wifi = wifi;
       drawn = true;
       set_light(want, s, changed ? "the view changed" : why);
       vTaskDelay(pdMS_TO_TICKS(mode == Mode::PowerOff ? kSliderRedrawMs : kRedrawMs));
+      if (mode == Mode::Wifi) wait_ms = 250;
       continue;
     }
     set_light(want, s, want == Light::Bright ? "brightness" : why);
@@ -332,8 +350,10 @@ struct Key {
 void quick_panel_tap(int x, int y) {
   activity();
   g_panel_at = now_ms();
-  const botkins::QuickAction action = botkins::quick_hit(x, y, stopwatch::Display::kWidth, stopwatch::Display::kHeight);
-  static const char* const names[] = {"none", "volume down", "volume up", "mute", "brightness", "new chat", "close"};
+  botkins::QuickOptions options;
+  options.wifi = true;
+  const botkins::QuickAction action = botkins::quick_hit(x, y, stopwatch::Display::kWidth, stopwatch::Display::kHeight, options);
+  static const char* const names[] = {"none", "volume down", "volume up", "mute", "brightness", "new chat", "close", "wi-fi"};
   ESP_LOGI(TAG, "quick tap at %d,%d: %s", x, y, names[(int)action]);
   using A = botkins::QuickAction;
   switch (action) {
@@ -345,6 +365,11 @@ void quick_panel_tap(int x, int y) {
     case A::NewChat:
       g_gadget->new_chat();
       set_panel(false, "New chat");
+      return;
+    case A::Wifi:
+      set_panel(false, "Wi-Fi");
+      g_wifi.open(*g_gadget);
+      wake_draw();
       return;
     default:
       break;
@@ -366,6 +391,11 @@ void quick_panel_tap(int x, int y) {
 bool sleeping() { return (Light)g_light.load() == Light::Dark || g_manual_sleep.load(); }
 
 void tap(int x, int y) {
+  if (g_wifi.is_open()) {
+    g_wifi.tap(x, y, *g_gadget);
+    wake_draw();
+    return;
+  }
   if (sleeping()) {
     ESP_LOGI(TAG, "tap at %d,%d: ignored in sleep mode", x, y);
     return;
@@ -449,7 +479,10 @@ void keys_task(void*) {
 
     // ── Blue key: push-to-talk ──
     if (blue.poll()) {
-      if (blue.down) {
+      if (blue.down && g_wifi.is_open()) {
+        g_wifi.close();
+        activity();
+      } else if (blue.down) {
         begin_talk(TalkSource::Blue, "the blue key");
       } else {
         end_talk(TalkSource::Blue);
@@ -459,7 +492,11 @@ void keys_task(void*) {
     // ── Yellow key: settings (quick controls), or permission approve/deny ──
     if (yellow.poll()) {
       if (yellow.down) {
-        if (sleeping()) {
+        if (g_wifi.is_open()) {
+          g_wifi.close();
+          yellow_ignored = true;
+          activity();
+        } else if (sleeping()) {
           yellow_ignored = true;
         } else {
           yellow_ignored = false;
@@ -485,6 +522,8 @@ void keys_task(void*) {
       }
     }
 
+    if (tick % kRedEvery == 5) g_wifi.expire();
+
     // ── Red power button (M5PM1): single-press = sleep/wake, hold = slide-to-power-off ──
     if (tick % kRedEvery == 0) {
       using RedEvent = stopwatch::Power::RedEvent;
@@ -503,6 +542,11 @@ void keys_task(void*) {
         forced_red_polls = 0;
       }
 
+      if (red != RedEvent::None && g_wifi.is_open()) {
+        g_wifi.close();
+        activity();
+        red = RedEvent::None;
+      }
       if (red == RedEvent::LongHold) {
         ESP_LOGI(TAG, "the red key held: opening power-off slider");
         cancel_active_voice();
@@ -549,7 +593,7 @@ void keys_task(void*) {
           } else if (cdx * cdx + cdy * cdy <= kCancelHitR * kCancelHitR) {
             set_power_off(false, "Cancel");
           }
-        } else if (g_panel_open) {
+        } else if (g_panel_open || g_wifi.is_open()) {
           panel_touch_active = true;
           panel_down_x = x;
           panel_down_y = y;
@@ -591,7 +635,7 @@ void keys_task(void*) {
           }
         } else if (panel_touch_active) {
           panel_touch_active = false;
-          if (g_panel_open) quick_panel_tap(panel_down_x, panel_down_y);
+          if (g_wifi.is_open() || g_panel_open) tap(panel_down_x, panel_down_y);
         } else if (talk_source == TalkSource::Touch) {
           end_talk(TalkSource::Touch);
         }
@@ -729,6 +773,13 @@ bool console(const std::string& line, const std::function<void(const std::string
     ms = ms < 50 ? 50 : ms > 10000 ? 10000 : ms;
     g_forced_until[id] = now_ms() + ms;
     print("@botkins {\"ok\":true}");
+    return true;
+  }
+  if (what == "wifi-menu") {
+    // No names, passwords or keystrokes in diagnostic output.
+    const auto shown = g_wifi.shown(*g_gadget);
+    static const char* const pages[] = {"closed", "networks", "name", "password", "result"};
+    print("@botkins " + botkins::Json::object().set("wifiMenu", pages[(int)shown.page]).set("trial", shown.state).set("fallback", shown.fallback).dump());
     return true;
   }
   if (what == "touch") {

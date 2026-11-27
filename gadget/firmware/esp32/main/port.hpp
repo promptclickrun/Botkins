@@ -36,12 +36,15 @@ class WifiNetwork : public botkins::Network {
   std::string address() override;
   /** The access point's RSSI in dBm while on the network; 0 otherwise. */
   int signal() override;
+  /** The network the address came from, while on one. */
+  std::string joined_ssid() override;
 
  private:
   static void on_event(void* self, const char* base, int32_t id, void* data);
   void retry_later();
   std::mutex mutex_;
   std::string ssid_, password_;
+  std::string connected_;  // the network the station last connected to, from its "connected" event
   std::atomic<int> state_{0};  // 0 off, 1 joining, 2 on, 3 failed
   std::string address_;
   int failures_ = 0;

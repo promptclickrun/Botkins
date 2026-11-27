@@ -29,12 +29,12 @@ export function planFor(provider: LiveProvider, kit: Pick<Kit, "webrtc" | "duple
   return kit.duplex ? "socket" : null;
 }
 
-export function webrtcTransport(kit: Kit, negotiate: Negotiate, tools: ToolRunner, language?: string): WebRTCTransport {
-  return new WebRTCTransport(kit.webrtc!, negotiate, tools, kit.route, language);
+export function webrtcTransport(kit: Kit, negotiate: Negotiate, tools: ToolRunner, language?: string, provider?: LiveProvider): WebRTCTransport {
+  return new WebRTCTransport(kit.webrtc!, negotiate, tools, kit.route, language, provider);
 }
 
-export function watchRtcTransport(kit: Kit, negotiate: Negotiate, tools: ToolRunner, language?: string): WatchRTCTransport {
-  return new WatchRTCTransport(kit.watchRtc!, negotiate, tools, language);
+export function watchRtcTransport(kit: Kit, negotiate: Negotiate, tools: ToolRunner, language?: string, provider?: LiveProvider): WatchRTCTransport {
+  return new WatchRTCTransport(kit.watchRtc!, negotiate, tools, language, provider);
 }
 
 /** The socket transport for a session the computer set up without an offer. */

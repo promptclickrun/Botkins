@@ -19,3 +19,10 @@ ${CXX:-c++} -std=c++17 -O2 -Wall -Wextra -Icore/include \
   core/src/draw.cpp core/src/faces.cpp core/src/home.cpp host/screens.cpp build/fonts.cpp \
   -o build/botkins-gadget-screens
 echo build/botkins-gadget-screens
+
+# The StopWatch's Wi-Fi editor and the core's trial against scripted Wi-Fi.
+${CXX:-c++} -std=c++17 -O2 -Wall -Wextra -pthread -Icore/include -Icore/third_party/monocypher -Iesp32/boards/m5stack-stopwatch \
+  core/src/json.cpp core/src/crypto.cpp core/src/link.cpp core/src/relay.cpp core/src/gadget.cpp core/src/live.cpp core/src/sockets.cpp core/src/draw.cpp \
+  esp32/boards/m5stack-stopwatch/wifi_menu.cpp host/wifi_test.cpp build/monocypher.o \
+  -o build/botkins-gadget-wifi
+echo build/botkins-gadget-wifi
