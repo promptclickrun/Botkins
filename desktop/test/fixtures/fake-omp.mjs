@@ -35,11 +35,12 @@ const resumed = args.includes("--resume") ? args[args.indexOf("--resume") + 1] :
 const sessionId = resumed || "omp-session-1";
 const dialogs = new Map();
 let next = 1;
-const ask = (title) =>
+// As Botkins' extension asks (desktop/providers/pi/extension-shared.mjs): "more" is followed by an input for the detail.
+const ask = (title, method = "select") =>
   new Promise((resolve) => {
     const id = "ui-" + next++;
     dialogs.set(id, resolve);
-    send({ type: "extension_ui_request", id, method: "select", title, options: ["allow", "deny"] });
+    send({ type: "extension_ui_request", id, method, title, ...(method === "select" && { options: ["allow", "deny", "more"] }) });
   });
 let aborted = false;
 
@@ -60,9 +61,19 @@ async function turn(text) {
     send({ type: "tool_call_pending", toolCallId, toolName });
     const answer = await ask("botkins:permission " + JSON.stringify(call));
     log({ answer });
-    const allowed = answer.value === "allow";
-    send({ type: "tool_execution_start", toolCallId, toolName, args: input });
-    send({ type: "tool_execution_end", toolCallId, toolName, isError: !allowed, result: { content: [{ type: "text", text: allowed ? "ran" : "The person didn't allow this." }] } });
+    let allowed = answer.value === "allow";
+    let ran = input;
+    let refused = "The person didn't allow this.";
+    if (answer.value === "more") {
+      const detail = await ask("botkins:detail " + JSON.stringify(toolCallId), "input");
+      log({ detail });
+      const parsed = detail.cancelled ? null : JSON.parse(detail.value);
+      if (parsed?.input) [allowed, ran] = [true, parsed.input];
+      else if (parsed?.deny) refused = parsed.reason;
+    }
+    log({ ran: allowed ? { toolName, input: ran } : null });
+    send({ type: "tool_execution_start", toolCallId, toolName, args: ran });
+    send({ type: "tool_execution_end", toolCallId, toolName, isError: !allowed, result: { content: [{ type: "text", text: allowed ? "ran" : refused }] } });
   }
   if (aborted) {
     send({ type: "agent_end", messages: [], isTerminal: true });

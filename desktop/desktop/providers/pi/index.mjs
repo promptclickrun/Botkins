@@ -27,6 +27,8 @@ import { buildInventory, resolvePrompt } from "../commands.mjs";
 import { SessionStore, resumeOrRecover, serversWithTokens, uuidFor } from "../sessions.mjs";
 import { skillChoices, skillSupport } from "../skills.mjs";
 import { displayValue } from "../../display.mjs";
+import { describeRequest } from "../copilot/permissions.mjs";
+import { DETAIL, MORE } from "./extension-shared.mjs";
 import { PLAN_INSTRUCTIONS, updatePlanTool } from "./plan.mjs";
 
 export const PI_ID = "pi";
@@ -102,9 +104,26 @@ function splitName(name) {
   const match = /^mcp__(.+?)__(.+)$/.exec(String(name ?? "")) ?? /^mcp__([^_]+)_(.+)$/.exec(String(name ?? ""));
   return match ? [match[2], match[1]] : [String(name ?? "tool"), undefined];
 }
-const toolIdentity = (call) => {
-  const [fallbackName, fallbackServer] = splitName(call.toolName);
-  return { name: call.mcpToolName ?? fallbackName, server: call.mcpServerName ?? fallbackServer };
+/**
+ * The name a plugin's MCP server has inside Pi and OMP. Its own name (pluginServerName) is long
+ * and has `__` in it: Pi cuts a tool's name at 64 characters and OMP joins runs of `_`, so the
+ * server could not be read back from a tool's name. Botkins maps this name back to the plugin's
+ * own before anything else sees it (approvals, "Always allow", the activity, revocation).
+ */
+// Lower-case letters only: OMP's name rules can leave out digits.
+export const pluginAlias = (name) => "bkp_" + [...createHash("sha256").update(String(name)).digest().subarray(0, 12)].map((byte) => String.fromCharCode(97 + (byte % 26))).join("");
+const PLUGIN_ALIAS = /^bkp_[a-z]{12}$/;
+const isPluginServer = (name) => String(name).startsWith("plugin_");
+/** `aliases` (harness name → Botkins name) are matched on the tool's name first: Pi's `mcp__<server>__<tool>`, OMP's `mcp__<server>_<tool>`. */
+const toolIdentity = (call, aliases) => {
+  const raw = String(call.toolName ?? "");
+  if (!call.mcpServerName && aliases?.size)
+    for (const [alias, real] of aliases)
+      for (const prefix of ["mcp__" + alias + "__", "mcp__" + alias + "_"])
+        if (raw.startsWith(prefix) && raw.length > prefix.length) return { name: call.mcpToolName ?? raw.slice(prefix.length), server: real };
+  const [fallbackName, fallbackServer] = splitName(raw);
+  const server = call.mcpServerName ?? fallbackServer;
+  return { name: call.mcpToolName ?? fallbackName, server: (server && aliases?.get(server)) ?? server };
 };
 /**
  * Pi's words for a failed request ("402 {…}", "<provider> API error (400): {…}") as the
@@ -135,14 +154,16 @@ const textOf = (content) =>
     .join("\n");
 
 /** A Botkins MCP server record as Pi's, or null for a kind Pi can't connect to (SSE). */
+// A plugin's local tool names its folder `workingDirectory` (the Copilot SDK's word); the person's own, `cwd`.
+const folderOf = (server) => server.cwd ?? server.workingDirectory;
 function piServer(server) {
-  if (server.type === "stdio") return { command: server.command, args: server.args ?? [], ...(server.env && { env: server.env }), ...(server.cwd && { cwd: server.cwd }), exposure: "direct" };
+  if (server.type === "stdio") return { command: server.command, args: server.args ?? [], ...(server.env && { env: server.env }), ...(folderOf(server) && { cwd: folderOf(server) }), exposure: "direct" };
   if (server.type === "sse" || !server.url) return null;
   return { url: server.url, ...(server.headers && { headers: server.headers }), exposure: "direct" };
 }
 /** A Botkins MCP server record in OMP's native mcp.json format. */
 function ompServer(server) {
-  if (server.type === "stdio") return { type: "stdio", command: server.command, ...(server.args?.length && { args: server.args }), ...(server.env && Object.keys(server.env).length && { env: server.env }), ...(server.cwd && { cwd: server.cwd }) };
+  if (server.type === "stdio") return { type: "stdio", command: server.command, ...(server.args?.length && { args: server.args }), ...(server.env && Object.keys(server.env).length && { env: server.env }), ...(folderOf(server) && { cwd: folderOf(server) }) };
   if (!server.url) return null;
   return { type: server.type === "sse" ? "sse" : "http", url: server.url, ...(server.headers && { headers: server.headers }) };
 }
@@ -322,10 +343,15 @@ class PiSession extends ProviderSession {
   async describe() {
     const { spec } = this;
     const servers = {};
+    // Harness name → Botkins name, for the servers of plugins (pluginAlias).
+    this.aliases = new Map();
     for (const [name, server] of Object.entries(await serversWithTokens(spec))) {
       if (name === BRIDGE) continue;
       const entry = this.provider.serverRecord(server);
-      if (entry) servers[name] = entry;
+      if (!entry) continue;
+      const shown = isPluginServer(name) ? pluginAlias(name) : name;
+      if (shown !== name) this.aliases.set(shown, name);
+      servers[shown] = entry;
     }
     if (this.bridge) {
       const entry = this.provider.serverRecord({ type: "http", url: this.bridge.url, headers: this.bridge.headers });
@@ -336,7 +362,18 @@ class PiSession extends ProviderSession {
       providers: (spec.inference?.providers ?? []).map(({ name, config }) => ({ name, config })),
       servers,
       prompt: (spec.instructions ?? "") + (this.bridge && this.planTools().length ? "\n\n" + PLAN_INSTRUCTIONS + "\n\n" : "") + this.skills.instructions + (spec.context ?? ""),
+      // A plugin's preToolUse hook sees every tool call, Botkins' own too, as on Copilot (extension-shared.mjs).
+      ...(this.hook("onPreToolUse") && { preToolUse: true }),
     };
+  }
+  /** The handler Botkins runs for a plugin hook event (plugin-runtime.mjs), or null. */
+  hook(name) {
+    const handler = this.spec.pluginHooks?.handlers?.[name];
+    return typeof handler === "function" ? handler : null;
+  }
+  /** What every hook is told, in the Copilot SDK's words (BaseHookInput). */
+  hookBase() {
+    return { sessionId: this.spec.sessionId, timestamp: new Date(), workingDirectory: this.spec.folder };
   }
   /** Pi's plan, the one tool Botkins adds to Pi itself. Pi has no plan of its own (OMP does), and a plan means nothing in a throwaway session. */
   planTools() {
@@ -395,6 +432,11 @@ class PiSession extends ProviderSession {
     let stop = () => {};
     try {
       const live = await this.start();
+      if (this.stopRequested || this.closed) return { text: "" };
+      // A plugin's prompt hook, once, before the harness sees the message (as on Copilot).
+      const hooked = await this.userPromptSubmitted(message.prompt);
+      if (hooked.block) return { text: "" };
+      message = { ...message, prompt: hooked.prompt };
       if (this.stopRequested || this.closed) return { text: "" };
       const { rpc } = live;
       // `users`: the person's messages the harness took into the run (the prompt, then each steer it
@@ -651,17 +693,91 @@ class PiSession extends ProviderSession {
     }
     return null;
   }
-  /** The extension's question before a tool runs: Botkins' rules and the person decide. */
+  /**
+   * The extension's question before a tool runs: a plugin's preToolUse hook, then Botkins' rules
+   * and the person decide. Answers true (run it as it is), false (don't), or `{ input }` (run it
+   * with these arguments) or `{ deny, reason }` when a plugin's hook changed or refused it.
+   */
   async permission(call) {
     const handlers = this.spec.handlers;
     if (!handlers || !this.turn) return false;
-    const { name, server } = toolIdentity(call);
+    const { name, server } = toolIdentity(call, this.aliases);
     this.turn.calls?.set(call.toolCallId, { name, server });
-    if (server === BRIDGE) return true;
     // Pi keeps every server Botkins gave it registered, so its tool list stays the same; one this
-    // turn doesn't have (the person writing may not use it) does nothing. (A Pi package's own server isn't Botkins'.)
-    if (server && this.live?.given?.has(server) && !Object.hasOwn(this.spec.mcpServers ?? {}, server)) return false;
-    const input = call.input && typeof call.input === "object" ? call.input : {};
+    // turn doesn't have (the person writing may not use it, or its plugin was switched off) does
+    // nothing. (A Pi package's own server isn't Botkins'.)
+    if (server && server !== BRIDGE && this.given(server) && !Object.hasOwn(this.spec.mcpServers ?? {}, server)) return false;
+    // A plugin server this session wasn't given (its plugin was switched off or removed) does nothing either.
+    if (server && PLUGIN_ALIAS.test(server)) return false;
+    const given = call.input && typeof call.input === "object" && !Array.isArray(call.input) ? call.input : {};
+    const hooked = await this.preToolUse(call, name, server, given);
+    if (hooked.deny) return { deny: true, reason: hooked.reason };
+    const input = hooked.input ?? given;
+    const changed = hooked.input ? { input } : true;
+    // Botkins' own tools never ask; a hook's "ask" is the person's to answer, as on Copilot.
+    if (server === BRIDGE && !hooked.ask) return changed;
+    if (hooked.ask) {
+      const command = typeof input.command === "string" ? input.command : null;
+      const request = describeRequest({ kind: "hook", toolName: name, toolArgs: command === null ? input : { ...input, command }, hookMessage: hooked.reason });
+      try {
+        const answer = await handlers.permission({ ...request, preview: command ?? displayValue(input, Infinity), detail: displayValue({ ...call, input }, Infinity) });
+        return answer?.allow ? changed : false;
+      } catch {
+        return false;
+      }
+    }
+    return (await this.approve(call, name, server, input)) ? changed : false;
+  }
+  /**
+   * The plugins' userPromptSubmitted hooks for the person's message: `{ block: true }` (nothing
+   * is sent, and the turn has no reply, as on Copilot), or the prompt to send, changed by a hook
+   * and with what a hook added for the model after it.
+   */
+  async userPromptSubmitted(prompt) {
+    const handler = this.hook("onUserPromptSubmitted");
+    if (!handler) return { prompt };
+    let out;
+    try {
+      out = await handler({ ...this.hookBase(), prompt }, { sessionId: this.spec.sessionId });
+    } catch {
+      return { prompt };
+    }
+    if (!out) return { prompt };
+    if (out.decision === "block") return { block: true };
+    const next = typeof out.modifiedPrompt === "string" ? out.modifiedPrompt : prompt;
+    const added = typeof out.additionalContext === "string" && out.additionalContext.trim() ? "\n\n<plugin_context>\n" + out.additionalContext.trim() + "\n</plugin_context>" : "";
+    return { prompt: next + added };
+  }
+  /** Whether Botkins gave this process the server (by its Botkins name). */
+  given(server) {
+    if (!this.live?.given) return false;
+    if (this.live.given.has(server)) return true;
+    for (const [alias, real] of this.aliases ?? []) if (real === server && this.live.given.has(alias)) return true;
+    return false;
+  }
+  /**
+   * Runs the plugins' preToolUse hooks once for this call (plugin-runtime.mjs merges them):
+   * `{ input }` when a hook changed the arguments, `{ ask, reason }` and `{ deny, reason }`. A
+   * plugin can never grant a permission: "allow" is dropped by the reading of its output.
+   */
+  async preToolUse(call, name, server, input) {
+    const handler = this.hook("onPreToolUse");
+    if (!handler) return {};
+    let out;
+    try {
+      out = await handler({ ...this.hookBase(), toolCallId: call.toolCallId, toolName: server && server !== BRIDGE ? server + "/" + name : name, toolArgs: input }, { sessionId: this.spec.sessionId });
+    } catch {
+      return { deny: true, reason: "A plugin's hook failed, so the tool didn't run." };
+    }
+    if (!out) return {};
+    const reason = typeof out.permissionDecisionReason === "string" ? out.permissionDecisionReason : "";
+    const next = out.modifiedArgs && typeof out.modifiedArgs === "object" && !Array.isArray(out.modifiedArgs) ? out.modifiedArgs : null;
+    if (out.permissionDecision === "deny") return { deny: true, reason: reason || "A plugin's hook didn't allow this." };
+    return { ...(next && { input: next }), ...(out.permissionDecision === "ask" && { ask: true, reason }) };
+  }
+  /** Botkins' approval rules and the person, for a call with these arguments. */
+  async approve(call, name, server, input) {
+    const handlers = this.spec.handlers;
     const path = typeof input.path === "string" ? input.path : typeof input.file_path === "string" ? input.file_path : "";
     let request;
     if (server)
@@ -674,7 +790,7 @@ class PiSession extends ProviderSession {
     else if (READS.has(name)) request = { kind: "read", label: path || name, title: "Read " + (path || "files") + "?", preview: path || displayValue(input, Infinity), remember: path ? ["reads of this path", path] : null };
     else request = { kind: "custom-tool", label: name, title: "Use " + name + "?", preview: displayValue(input, Infinity), remember: null };
     try {
-      const answer = await handlers.permission({ ...request, toolName: name, detail: displayValue(call, Infinity), readOnly: request.kind === "read", sandboxEscape: false, managed: false });
+      const answer = await handlers.permission({ ...request, toolName: name, detail: displayValue({ ...call, input }, Infinity), readOnly: request.kind === "read", sandboxEscape: false, managed: false });
       return !!answer?.allow;
     } catch {
       return false;
@@ -972,25 +1088,47 @@ export class PiProvider extends ModelProvider {
       writeFileSync(live.config, "mcp:\n  enableProjectConfig: false\nenabledProviders: []\n", { mode: 0o600 });
     }
   }
-  /** The extension dialogs. Only Botkins' approval question is answered; any other is cancelled. */
+  /**
+   * The extension dialogs. Only Botkins' approval question is answered, and the detail it asks
+   * for when a plugin's hook changed or refused the call; any other is cancelled.
+   */
   async dialog(live, request) {
     if (!["select", "confirm", "input", "editor"].includes(request.method)) return;
     const title = String(request.title ?? "");
-    let allow = false;
-    if (request.method === "select" && title.startsWith(ASK + " ")) {
-      let call = {};
+    const reply = (body) => {
       try {
-        call = JSON.parse(title.slice(ASK.length + 1));
+        live.rpc.write({ type: "extension_ui_response", id: request.id, ...body });
+      } catch {
+        // Pi has stopped.
+      }
+    };
+    if (request.method === "input" && title.startsWith(DETAIL + " ")) {
+      let id = "";
+      try {
+        id = String(JSON.parse(title.slice(DETAIL.length + 1)));
       } catch {
         // Not Botkins' own question.
       }
-      allow = live.session ? await live.session.permission(call) : false;
+      const detail = live.details?.get(id);
+      live.details?.delete(id);
+      return reply(detail ? { value: JSON.stringify(detail) } : { cancelled: true });
     }
+    if (!(request.method === "select" && title.startsWith(ASK + " "))) return reply({ cancelled: true });
+    let call = {};
     try {
-      live.rpc.write(allow ? { type: "extension_ui_response", id: request.id, value: "allow" } : { type: "extension_ui_response", id: request.id, ...(request.method === "select" && title.startsWith(ASK) ? { value: "deny" } : { cancelled: true }) });
+      call = JSON.parse(title.slice(ASK.length + 1));
     } catch {
-      // Pi has stopped.
+      // Not Botkins' own question.
     }
+    const answer = live.session ? await live.session.permission(call) : false;
+    if (answer === true) return reply({ value: "allow" });
+    // A changed or refused call: the extension asks for the detail at once (extension-shared.mjs).
+    // An extension from before this answer has no "more" and is told no.
+    if (answer && Array.isArray(request.options) && request.options.includes(MORE) && call.toolCallId) {
+      (live.details ??= new Map()).set(String(call.toolCallId), answer.deny ? { deny: true, reason: answer.reason } : { input: answer.input });
+      return reply({ value: MORE });
+    }
+    reply({ value: "deny" });
   }
   touch(sessionId) {
     const live = this.live.get(sessionId);

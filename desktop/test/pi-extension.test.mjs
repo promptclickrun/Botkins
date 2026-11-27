@@ -65,3 +65,30 @@ test("a server a turn leaves out stays registered, and only a changed server is 
   assert.deepEqual(registered.slice(2), [["crm", "Bearer two"]]);
   writeFileSync(file, JSON.stringify({ providers: [], servers: {}, prompt: "You are Testy." }));
 });
+
+test("arguments a plugin's hook changed replace the call's input in place, and a refusal carries its reason", async () => {
+  const handlers = {};
+  botkins({ registerProvider() {}, registerMcpServer() {}, on: (name, handler) => (handlers[name] = handler) });
+  const ui = (choice, detail) => ({ ui: { select: async (_title, options) => (assert.ok(options.includes("more")), choice), input: async (title) => (assert.match(title, /^botkins:detail "c1"$/), JSON.stringify(detail)) } });
+  const event = { toolCallId: "c1", toolName: "bash", input: { command: "ls", timeout: 5 } };
+  // Pi runs the object it passed in; OMP runs the `input` a handler returns. Both are the hook's.
+  const result = await handlers.tool_call(event, ui("more", { input: { command: "ls -la" } }));
+  assert.deepEqual(event.input, { command: "ls -la" });
+  assert.deepEqual(result, { input: { command: "ls -la" } });
+  assert.deepEqual(await handlers.tool_call({ toolCallId: "c1", toolName: "bash", input: {} }, ui("more", { deny: true, reason: "Not rm." })), { block: true, reason: "Not rm." });
+  assert.equal((await handlers.tool_call({ toolCallId: "c1", toolName: "bash", input: {} }, ui("deny"))).block, true);
+  assert.equal(await handlers.tool_call({ toolCallId: "c1", toolName: "bash", input: {} }, ui("allow")), undefined);
+});
+
+test("Botkins' own tools ask only when a plugin's preToolUse hook is to see every call", async () => {
+  const handlers = {};
+  botkins({ registerProvider() {}, registerMcpServer() {}, on: (name, handler) => (handlers[name] = handler) });
+  let asked = 0;
+  const ctx = { ui: { select: async () => (asked++, "allow") } };
+  await handlers.tool_call({ toolCallId: "c1", toolName: "mcp__botkins__wiki_read", input: {} }, ctx);
+  assert.equal(asked, 0);
+  writeFileSync(file, JSON.stringify({ providers: [], servers: {}, prompt: "You are Testy.", preToolUse: true }));
+  await handlers.tool_call({ toolCallId: "c1", toolName: "mcp__botkins__wiki_read", input: {} }, ctx);
+  assert.equal(asked, 1);
+  writeFileSync(file, JSON.stringify({ providers: [], servers: {}, prompt: "You are Testy." }));
+});

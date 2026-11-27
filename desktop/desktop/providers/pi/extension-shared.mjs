@@ -1,6 +1,9 @@
 import { readFileSync } from "node:fs";
 
 export const ASK = "botkins:permission";
+/** Botkins' answer when the call goes on changed or is refused with a reason (a plugin's hook): the extension then asks for the detail. */
+export const MORE = "more";
+export const DETAIL = "botkins:detail";
 const OWN = "mcp__botkins__";
 const OMP_OWN = "mcp__botkins_";
 
@@ -65,7 +68,9 @@ export function makeBotkinsExtension(file, { mcp = true } = {}) {
       const info = typeof pi.getAllTools === "function" ? pi.getAllTools().find((tool) => tool.name === name) : undefined;
       const mcpServerName = info?.mcpServerName ?? event.mcpServerName;
       const mcpToolName = info?.mcpToolName ?? event.mcpToolName;
-      if (mcpServerName === "botkins" || name.startsWith(OWN) || name.startsWith(OMP_OWN)) return undefined;
+      // Botkins' own tools never ask, unless a plugin's hook is to see each tool call first.
+      const own = mcpServerName === "botkins" || name.startsWith(OWN) || name.startsWith(OMP_OWN);
+      if (own && !(read() ?? first).preToolUse) return undefined;
       const call = {
         toolCallId: event.toolCallId,
         toolName: event.toolName,
@@ -73,8 +78,24 @@ export function makeBotkinsExtension(file, { mcp = true } = {}) {
         ...(mcpServerName && { mcpServerName }),
         ...(mcpToolName && { mcpToolName }),
       };
-      const answer = await ctx.ui.select(ASK + " " + JSON.stringify(call), ["allow", "deny"]);
-      return answer === "allow" ? undefined : { block: true, reason: "The person didn't allow this." };
+      const answer = await ctx.ui.select(ASK + " " + JSON.stringify(call), ["allow", "deny", MORE]);
+      if (answer === "allow") return undefined;
+      if (answer !== MORE) return { block: true, reason: "The person didn't allow this." };
+      let detail = null;
+      try {
+        detail = JSON.parse(String(await ctx.ui.input(DETAIL + " " + JSON.stringify(String(event.toolCallId)))));
+      } catch {
+        // No detail: the call does not run.
+      }
+      if (detail?.deny) return { block: true, reason: String(detail.reason || "A plugin's hook didn't allow this.") };
+      const next = detail?.input;
+      if (!next || typeof next !== "object" || Array.isArray(next)) return { block: true, reason: "Botkins couldn't apply the changed arguments." };
+      // Pi runs the input it passed in (changed in place); OMP runs the `input` a handler returns.
+      if (event.input && typeof event.input === "object") {
+        for (const key of Object.keys(event.input)) delete event.input[key];
+        Object.assign(event.input, next);
+      }
+      return { input: next };
     });
   };
 }

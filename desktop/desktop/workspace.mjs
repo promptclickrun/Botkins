@@ -154,6 +154,8 @@ export function appendStream(task, data) {
 
 /** How long the turn's hot path waits to write the state (Workspace.saveSoon). */
 const SAVE_SOON_MS = 750;
+/** The harnesses Botkins hands a plugin's MCP servers and hooks to. The others get its skills only. */
+const PLUGIN_RUNTIMES = new Set(["copilot", "pi", "omp"]);
 /** Workspaces with a write waiting, written when the process exits. */
 const unsaved = new Set();
 let exitHooked = false;
@@ -1866,9 +1868,11 @@ export class Workspace {
       form: (request) =>
         task.stopped ? { action: "cancel" } : this.interactions.elicit(chat, task, request),
     };
-    const copilotPlugins = provider.id === "copilot";
+    // The harnesses that take a plugin's MCP servers and hooks from Botkins (Pi and OMP run the
+    // hooks in Botkins' approval step: providers/pi/index.mjs). The others get its skills only.
+    const fullPlugins = PLUGIN_RUNTIMES.has(provider.id);
     const pluginSpec = access.plugins
-      ? await this.plugins.session(bot, chat, { skillsOnly: !copilotPlugins })
+      ? await this.plugins.session(bot, chat, { skillsOnly: !fullPlugins })
       : { directories: [], mcpServers: {}, hooks: undefined };
     // What the session was told when it began, or what it begins with now (desktop/session-prompts.mjs).
     const prompt = this.sessionPrompt(chat, bot, provider, hosted?.model ?? choice, providerSessionId, providerEstablished);
@@ -1887,7 +1891,7 @@ export class Workspace {
     if (JSON.stringify(routes) !== routesBefore) this.sessionPrompts.save(prompt.key, prompt.record);
     const mcpServers = {
       ...ownServers,
-      ...(access.mcp && copilotPlugins ? pluginSpec.mcpServers : {}),
+      ...(access.mcp && fullPlugins ? pluginSpec.mcpServers : {}),
     };
     if (run && !run.panelId && !chat.helper && !access.member) {
       await this.claudeArtifacts.primeAvailability().catch(() => {});
@@ -1916,11 +1920,11 @@ export class Workspace {
       skills: access.skills ? this.integrations.skillsFor(bot, { member: access.member }) : { directories: [], disabled: [] },
       mcpServers,
       // A remote MCP server that signs in with OAuth gets its token from the vault when it asks.
-      mcpAuth: async (request) => access.mcp && access.plugins && copilotPlugins && Object.hasOwn(pluginSpec.mcpServers, request.server) ? this.plugins.token(bot.id, request) : this.integrations.mcpAuth(request),
+      mcpAuth: async (request) => access.mcp && access.plugins && fullPlugins && Object.hasOwn(pluginSpec.mcpServers, request.server) ? this.plugins.token(bot.id, request) : this.integrations.mcpAuth(request),
       // Only what Botkins itself wrote for the session from installed plugins (desktop/plugin-runtime.mjs).
       // A plugin's own folder is never handed on: the runtime would read its hooks and tools by itself.
       plugins: [...(access.plugins ? pluginSpec.directories : [])],
-      pluginHooks: access.plugins && copilotPlugins ? pluginSpec.hooks : undefined,
+      pluginHooks: access.plugins && fullPlugins ? pluginSpec.hooks : undefined,
       pluginRevision: this.plugins.generation,
       history: () => chat.helper ? (chat.helperMessages ?? []) : (chat.compacted ? chat.messages.slice(chat.compacted.through) : chat.messages ?? []),
       handlers: handlers || null,
