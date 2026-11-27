@@ -255,3 +255,132 @@ test("OMP stays warm when Botkins bridge schemas match and restarts when they ch
   await changed.close();
   assert.equal(seen().filter((entry) => entry.started).length, 2, "new bridge schemas restart OMP so it discovers them");
 });
+
+test("OMP inventory distinguishes direct, indirect, unavailable, unobservable and preserves package commands", { skip }, async (t) => {
+  const { provider } = setup();
+  t.after(() => provider.stop());
+  t.mock.method(provider.packages, "activePaths", () => ["/fixture/pkg"]);
+  const session = await provider.openSession(spec({
+    mcpServers: {
+      ok_srv: { type: "http", url: "http://127.0.0.1:9/ok" },
+      cmd_srv: { type: "http", url: "http://127.0.0.1:9/cmd" },
+      silent_srv: { type: "http", url: "http://127.0.0.1:9/silent" },
+      bad_cfg: { type: "http" },
+    },
+  }));
+  const live = await session.start();
+  // Simulate direct tool in dumpTools, indirect tool via toolCommands notice (with underscore server name), and package commands.
+  const origRequest = live.rpc.request.bind(live.rpc);
+  live.rpc.request = async (cmd, timeout) => {
+    if (cmd.type === "get_state") {
+      return {
+        sessionId: "omp-session-1",
+        isSettled: true,
+        dumpTools: [{ name: "mcp__ok_srv_ping", description: "Direct ping" }],
+      };
+    }
+    if (cmd.type === "get_available_commands") {
+      return {
+        commands: [
+          { name: "model", description: "OMP builtin", source: "builtin" },
+          { name: "autoresearch", description: "OMP builtin ext", source: "extension" },
+          { name: "pkg-cmd", description: "Package command", source: "extension" },
+        ],
+      };
+    }
+    return origRequest(cmd, timeout);
+  };
+  provider.observeRuntime(live, {
+    type: "notice",
+    source: "toolCommands",
+    message: "Tool commands: added mcp__cmd_srv_lookup",
+  });
+
+  // During an active turn, unprobed 0-tool silent_srv is unobservable (distinct from unavailable bad_cfg), and live is not restarted.
+  session.turn = { calls: new Map(), rows: new Map() };
+  const inv = await session.inventory();
+  assert.equal(session.live, live);
+  assert.deepEqual(inv.servers, [
+    { name: "ok_srv", status: "connected" },
+    { name: "cmd_srv", status: "connected" },
+    { name: "silent_srv", status: "unobservable" },
+    { name: "bad_cfg", status: "unavailable" },
+  ]);
+  const direct = inv.choices.find((c) => c.kind === "Tool" && c.source === "ok_srv" && c.name === "ping");
+  const indirect = inv.choices.find((c) => c.kind === "Tool" && c.source === "cmd_srv" && c.name === "lookup");
+  assert.equal(direct?.exposure, "direct");
+  assert.equal(indirect?.exposure, "indirect");
+  assert.ok(inv.choices.some((c) => c.command === "pkg-cmd" && c.native === true), "package command preserved on OMP");
+  assert.ok(!inv.choices.some((c) => c.command === "autoresearch"), "OMP internal autoresearch stays native-only");
+  assert.ok(inv.choices.some((c) => c.command === "help" && c.source === "Botkins"), "Botkins slash commands preserved");
+  session.turn = null;
+  await session.close();
+});
+
+test("OMP inventory maps aliased plugin servers across tools and /mcp test probes", { skip }, async (t) => {
+  const { provider } = setup();
+  t.after(() => provider.stop());
+  const pluginOk = "plugin_alpha__server_a1b2c3d4";
+  const pluginCmd = "plugin_gamma__server_11223344";
+  const pluginFail = "plugin_beta__server_e5f6a7b8";
+  const aliasOk = "bkp_aaaaaaaaaaaa";
+  const aliasCmd = "bkp_cccccccccccc";
+  const aliasFail = "bkp_bbbbbbbbbbbb";
+  const session = await provider.openSession(spec({
+    mcpServers: {
+      [pluginOk]: { type: "http", url: "http://127.0.0.1:9/alpha" },
+      [pluginCmd]: { type: "http", url: "http://127.0.0.1:9/gamma" },
+      [pluginFail]: { type: "http", url: "http://127.0.0.1:9/beta" },
+    },
+  }));
+  const live = await session.start();
+  session.aliases = new Map([
+    [aliasOk, pluginOk],
+    [aliasCmd, pluginCmd],
+    [aliasFail, pluginFail],
+  ]);
+  const probed = [];
+  const origRequest = live.rpc.request.bind(live.rpc);
+  live.rpc.request = async (cmd, timeout) => {
+    if (cmd.type === "get_state") {
+      return {
+        sessionId: "omp-session-alias",
+        isSettled: true,
+        dumpTools: [
+          { name: `mcp__${aliasOk}_ping`, description: "Aliased direct ping" },
+          { name: "mcp__bkp_zzzzzzzzzzzz_revoked", description: "Revoked plugin tool" },
+        ],
+      };
+    }
+    if (cmd.type === "get_available_commands") {
+      return { commands: [{ name: "mcp", description: "Manage MCP", source: "builtin" }] };
+    }
+    if (cmd.type === "prompt" && cmd.message?.startsWith("/mcp test ")) {
+      probed.push(cmd.message);
+      provider.observeRuntime(live, {
+        type: "command_output",
+        text: `Connection to "${aliasFail}" failed: connection refused`,
+      });
+      return { ok: true };
+    }
+    return origRequest(cmd, timeout);
+  };
+  provider.observeRuntime(live, {
+    type: "notice",
+    source: "toolCommands",
+    message: `Tool commands: added mcp__${aliasCmd}_lookup`,
+  });
+
+  const inv = await session.inventory();
+  assert.deepEqual(probed, [`/mcp test ${aliasFail}`], "OMP probes unresolved aliased server by its harness alias");
+  assert.deepEqual(inv.servers, [
+    { name: pluginOk, status: "connected" },
+    { name: pluginCmd, status: "connected" },
+    { name: pluginFail, status: "failed" },
+  ]);
+  assert.equal(inv.choices.find((c) => c.source === pluginOk && c.name === "ping")?.exposure, "direct");
+  assert.equal(inv.choices.find((c) => c.source === pluginCmd && c.name === "lookup")?.exposure, "indirect");
+  assert.ok(!inv.choices.some((c) => c.source?.startsWith("bkp_") || c.name === "revoked"), "internal aliases and revoked tools stay hidden");
+  await session.close();
+});
+

@@ -69,10 +69,24 @@ export function buildInventory({ name, tools = [], servers = [], native = [], co
     });
   }
   for (const tool of tools)
-    choices.push({ name: tool.name, kind: "Tool", command: "tool:" + tool.name, source: "Botkins", description: String(tool.description ?? "").split("\n")[0].slice(0, 300) });
+    choices.push({
+      name: tool.name,
+      kind: "Tool",
+      command: "tool:" + tool.name,
+      source: "Botkins",
+      description: String(tool.description ?? "").split("\n")[0].slice(0, 300),
+      ...(tool.exposure && { exposure: tool.exposure }),
+    });
   for (const server of servers)
     for (const tool of server.tools ?? [])
-      choices.push({ name: tool.name, kind: "Tool", command: "tool:" + tool.name, source: server.name, description: String(tool.description ?? "").split("\n")[0].slice(0, 300) });
+      choices.push({
+        name: tool.name,
+        kind: "Tool",
+        command: "tool:" + tool.name,
+        source: server.name,
+        description: String(tool.description ?? "").split("\n")[0].slice(0, 300),
+        ...(tool.exposure && { exposure: tool.exposure }),
+      });
   choices.sort(
     (a, b) => Number(b.name.startsWith("today")) - Number(a.name.startsWith("today")) || a.kind.localeCompare(b.kind) || a.command.localeCompare(b.command),
   );

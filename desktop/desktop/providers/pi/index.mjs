@@ -27,6 +27,7 @@ import { buildInventory, resolvePrompt } from "../commands.mjs";
 import { SessionStore, resumeOrRecover, serversWithTokens, uuidFor } from "../sessions.mjs";
 import { skillChoices, skillSupport } from "../skills.mjs";
 import { displayValue } from "../../display.mjs";
+import { INVENTORY } from "./extension-shared.mjs";
 import { PLAN_INSTRUCTIONS, updatePlanTool } from "./plan.mjs";
 
 export const PI_ID = "pi";
@@ -120,15 +121,100 @@ const hash = (value) => createHash("sha256").update(JSON.stringify(value)).diges
 
 const READS = new Set(["read", "grep", "find", "ls"]);
 const WRITES = new Set(["write", "edit"]);
+const INVENTORY_WAIT_MS = 1500;
+const INVENTORY_STEP_MS = 100;
+const PI_MCP_PROBE_MS = 700;
+const OMP_MCP_PROBE_MS = 1200;
+const OMP_PROBE_TTL_MS = 5000;
 /** [tool, MCP server or undefined] for a Pi or OMP MCP tool name. */
 function splitName(name) {
   const match = /^mcp__(.+?)__(.+)$/.exec(String(name ?? "")) ?? /^mcp__([^_]+)_(.+)$/.exec(String(name ?? ""));
   return match ? [match[2], match[1]] : [String(name ?? "tool"), undefined];
 }
+/** Resolves an MCP tool's [remoteTool, server] even when an OMP server name contains underscores. */
+function splitMcpTool(name, knownServers = []) {
+  const raw = String(name ?? "");
+  const double = /^mcp__(.+?)__(.+)$/.exec(raw);
+  if (double) return [double[2], double[1]];
+  if (raw.startsWith("mcp__") && knownServers.length) {
+    const sorted = [...knownServers].sort((a, b) => b.length - a.length);
+    for (const server of sorted) {
+      const prefix = "mcp__" + server + "_";
+      if (raw.startsWith(prefix) && raw.length > prefix.length) return [raw.slice(prefix.length), server];
+    }
+  }
+  return splitName(raw);
+}
 const toolIdentity = (call) => {
   const [fallbackName, fallbackServer] = splitName(call.toolName);
   return { name: call.mcpToolName ?? fallbackName, server: call.mcpServerName ?? fallbackServer };
 };
+function normalizeMcpState(raw) {
+  const text = String(raw ?? "").trim().toLowerCase();
+  if (!text) return null;
+  if (/needs?\s+sign[- ]in|\b401\b|unauthorized|oauth|www-authenticate/.test(text)) return "needs-auth";
+  if (text.startsWith("connected")) return "connected";
+  if (text.startsWith("connecting") || text.startsWith("starting") || text.startsWith("pending")) return "pending";
+  if (text.startsWith("disconnected")) return "disconnected";
+  if (text.startsWith("disabled")) return "disabled";
+  if (text.startsWith("failed") || text.startsWith("error")) return "failed";
+  return null;
+}
+/** Parses Pi's `builtin:mcp` notifications (startup problem notices and `/mcp` status lines). */
+export function parsePiMcpNotify(message) {
+  const text = String(message ?? "").trim();
+  if (!text) return null;
+  const states = new Map();
+  let settled = false;
+  if (/^No MCP servers configured\b/i.test(text)) return { states, settled: true };
+  if (/^MCP servers need attention:/i.test(text)) {
+    settled = true;
+    for (const line of text.split("\n").slice(1)) {
+      const match = /^\s+([^\s:]+):\s+(.+)$/.exec(line);
+      if (!match) continue;
+      const status = normalizeMcpState(match[2]);
+      if (status) states.set(match[1], status);
+    }
+    return { states, settled };
+  }
+  for (const line of text.split("\n")) {
+    const match = /^([^\s:]+):\s+(connected|connecting|starting|needs sign-in|failed|disconnected|disabled)\b(.*)$/i.exec(line);
+    if (!match) continue;
+    const status = normalizeMcpState(match[2] + match[3]);
+    if (status) states.set(match[1], status);
+  }
+  return states.size ? { states, settled: true } : null;
+}
+/** Parses OMP's `/mcp test <name>` command_output text. */
+export function parseOmpMcpOutput(text) {
+  const raw = String(text ?? "").trim();
+  if (!raw) return null;
+  const ok = /^Server\s+"([^"]+)"\s+connected\b/i.exec(raw);
+  if (ok) return { name: ok[1], status: "connected" };
+  const fail = /^Connection to\s+"([^"]+)"\s+failed:\s*([\s\S]*)$/i.exec(raw);
+  if (fail) {
+    const reason = fail[2] ?? "";
+    const status = /\b401\b|unauthorized|oauth|sign[- ]in|www-authenticate/i.test(reason) ? "needs-auth" : "failed";
+    return { name: fail[1], status };
+  }
+  const missing = /^Server\s+"([^"]+)"\s+not found\b/i.exec(raw);
+  if (missing) return { name: missing[1], status: "unavailable" };
+  return null;
+}
+function createRuntimeState() {
+  return {
+    startedAt: Date.now(),
+    tools: null,
+    servers: null,
+    mcpStates: new Map(),
+    mcpSettled: false,
+    mcpProbeInFlight: null,
+    toolCommands: new Set(),
+    availableCommands: null,
+    probed: new Map(),
+  };
+}
+const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 /**
  * Pi's words for a failed request ("402 {…}", "<provider> API error (400): {…}") as the
  * provider's own message, which is what a person can act on. Anything else is kept as it is.
@@ -470,6 +556,11 @@ class PiSession extends ProviderSession {
       };
       try {
         const answer = await rpc.request({ type: "prompt", message: text }, 30000);
+        // `before_agent_start` has now registered any pending server config updates on warm Pi.
+        if (live.pendingConfigs) {
+          live.registeredConfigs ??= new Map();
+          for (const [name, serialized] of live.pendingConfigs) live.registeredConfigs.set(name, serialized);
+        }
         // An extension command can finish inside prompt() without starting an agent turn.
         if (answer?.disposition !== "handled" && this.interruptsForSteering && onReady) {
           await this.runSteerablePi(rpc, turn, settled, nextSettle, withFiles, onReady);
@@ -750,19 +841,256 @@ class PiSession extends ProviderSession {
     const live = await this.start();
     await live.rpc.request({ type: "compact" }, 600000);
   }
+  /** Maps a Botkins server name to its harness name when a plugin alias is active (PR #321 compatibility). */
+  harnessServerName(name) {
+    for (const [alias, real] of this.aliases ?? []) if (real === name) return alias;
+    return name;
+  }
+  /** Maps a harness server name (including a plugin alias) back to Botkins' own server name. */
+  realServerName(name) {
+    return (name && this.aliases?.get(name)) ?? name;
+  }
+  /** Classifies live runtime tools into Botkins bridge tools and per-server MCP tools with direct/indirect exposure. */
+  classifyTools(live, state, allowedServers) {
+    const rt = live?.runtime;
+    const isOmp = this.provider.runtime === OMP_ID;
+    const knownServers = [BRIDGE, ...allowedServers, ...(this.aliases?.keys() ?? [])];
+    const directDump = isOmp && Array.isArray(state?.dumpTools) ? new Map(state.dumpTools.filter((t) => t?.name).map((t) => [String(t.name), t])) : null;
+    const byServer = new Map();
+    const record = (server, tool) => {
+      let map = byServer.get(server);
+      if (!map) byServer.set(server, (map = new Map()));
+      const prev = map.get(tool.name);
+      // Direct exposure wins over indirect if seen through multiple channels.
+      if (!prev || (prev.exposure === "indirect" && tool.exposure === "direct")) map.set(tool.name, tool);
+    };
+    for (const tool of rt?.tools ?? []) {
+      if (!tool?.name) continue;
+      const [fallbackName, fallbackServer] = splitMcpTool(tool.name, knownServers);
+      const server = this.realServerName(tool.mcpServerName ?? fallbackServer);
+      if (!server || (server !== BRIDGE && !allowedServers.includes(server))) continue;
+      const name = tool.mcpToolName ?? fallbackName;
+      if (!name) continue;
+      let exposure = null;
+      if (isOmp) {
+        if (directDump) {
+          if (directDump.has(tool.name)) exposure = "direct";
+          else if (tool.active !== false || rt.toolCommands.has(tool.name)) exposure = "indirect";
+        } else if (rt.toolCommands.has(tool.name)) {
+          exposure = "indirect";
+        } else if (tool.active !== false) {
+          exposure = "direct";
+        }
+      } else {
+        if (tool.exposure === "hidden" || tool.active === false) continue;
+        exposure = tool.exposure && tool.exposure !== "direct" ? "indirect" : "direct";
+      }
+      if (!exposure) continue;
+      record(server, { name, description: String(tool.description ?? ""), exposure });
+    }
+    if (directDump) {
+      for (const [fullName, tool] of directDump) {
+        const [name, rawServer] = splitMcpTool(fullName, knownServers);
+        const server = this.realServerName(rawServer);
+        if (!server || (server !== BRIDGE && !allowedServers.includes(server))) continue;
+        record(server, { name, description: String(tool.description ?? ""), exposure: "direct" });
+      }
+    }
+    if (isOmp) {
+      for (const fullName of rt?.toolCommands ?? []) {
+        const [name, rawServer] = splitMcpTool(fullName, knownServers);
+        const server = this.realServerName(rawServer);
+        if (!server || (server !== BRIDGE && !allowedServers.includes(server))) continue;
+        const exposure = directDump?.has(fullName) ? "direct" : "indirect";
+        record(server, { name, description: "", exposure });
+      }
+    }
+    return byServer;
+  }
+  async probePiMcp(live) {
+    const rt = live.runtime;
+    if (rt.mcpProbeInFlight) return rt.mcpProbeInFlight;
+    const before = rt.mcpStates.size;
+    const probe = (async () => {
+      try {
+        await Promise.race([
+          live.rpc.request({ type: "prompt", message: "/mcp" }, PI_MCP_PROBE_MS).catch(() => null),
+          delay(PI_MCP_PROBE_MS),
+        ]);
+        // Give the trailing notify event a tick to arrive after the response.
+        if (rt.mcpStates.size === before) await delay(30);
+      } finally {
+        rt.mcpProbeInFlight = null;
+      }
+    })();
+    rt.mcpProbeInFlight = probe;
+    return probe;
+  }
+  async probeOmpMcp(live, name) {
+    if (!name || /\s/.test(name)) return;
+    const rt = live.runtime;
+    const last = rt.probed.get(name) ?? 0;
+    if (Date.now() - last < OMP_PROBE_TTL_MS) return;
+    rt.probed.set(name, Date.now());
+    let settled = false;
+    const waiter = Promise.withResolvers();
+    const off = live.rpc.on((event) => {
+      if (event.type !== "command_output") return;
+      const parsed = parseOmpMcpOutput(event.text);
+      if (parsed?.name === name) {
+        settled = true;
+        waiter.resolve(parsed.status);
+      }
+    });
+    try {
+      const req = live.rpc.request({ type: "prompt", message: "/mcp test " + name }, OMP_MCP_PROBE_MS).catch(() => null);
+      await Promise.race([waiter.promise, req.then(() => delay(30)), delay(OMP_MCP_PROBE_MS)]);
+      if (!settled && !rt.mcpStates.has(name)) rt.mcpStates.set(name, "pending");
+    } finally {
+      off();
+    }
+  }
   async inventory() {
-    const servers = Object.keys(this.spec.mcpServers ?? {}).map((name) => ({ name, status: "not started" }));
-    const inventory = buildInventory({ name: this.provider.name, tools: this.spec.tools, servers, native: skillChoices(this.skills.list), compact: true });
-    if (this.provider.runtime !== PI_ID || !this.provider.packages.activePaths().length) return inventory;
-    // Asking for the menu during a turn must never restart its process for a changed package.
-    const live = this.turn ? this.live : await this.start();
-    const { commands } = await live.rpc.request({ type: "get_commands" });
-    const taken = new Set(inventory.choices.flatMap((item) => [item.command, ...(item.aliases ?? [])]));
-    for (const cmd of commands ?? []) {
-      if (!cmd.name || taken.has(cmd.name) || cmd.sourceInfo?.path?.startsWith("builtin:")) continue;
-      inventory.choices.push({ name: cmd.name, command: cmd.name, aliases: [], kind: cmd.source === "skill" ? "Skill" : "Command",
-        source: this.provider.name, description: String(cmd.description ?? "").split("\n")[0].slice(0, 300), duringTurn: false, native: true });
-      taken.add(cmd.name);
+    const isOmp = this.provider.runtime === OMP_ID;
+    // Asking for the menu during a turn must never restart its process.
+    const activeTurn = !!this.turn;
+    const live = activeTurn ? this.live : await this.start();
+    const configured = Object.entries(this.spec.mcpServers ?? {}).filter(([name]) => name !== BRIDGE);
+    const configuredNames = configured.map(([name]) => name);
+    const supportedNames = [];
+    const unsupported = new Set();
+    const describedServers = new Map();
+    for (const [name, cfg] of configured) {
+      const entry = this.provider.serverRecord(cfg);
+      if (!entry) unsupported.add(name);
+      else {
+        supportedNames.push(name);
+        describedServers.set(name, JSON.stringify(entry));
+      }
+    }
+    const harnessName = (name) => this.harnessServerName(name);
+    const recordedState = (name) => {
+      const h = harnessName(name);
+      return live?.runtime?.mcpStates.get(h) ?? live?.runtime?.mcpStates.get(name);
+    };
+    const clearPendingState = (name) => {
+      const h = harnessName(name);
+      if (live?.runtime?.mcpStates.get(h) === "pending") live.runtime.mcpStates.delete(h);
+      if (live?.runtime?.mcpStates.get(name) === "pending") live.runtime.mcpStates.delete(name);
+    };
+    const staleConfig = (name) => {
+      if (!live?.registeredConfigs) return false;
+      const current = describedServers.get(name);
+      const h = harnessName(name);
+      const registered = live.registeredConfigs.get(h) ?? live.registeredConfigs.get(name);
+      return registered !== undefined && current !== undefined && registered !== current;
+    };
+    const unregisteredOnWarmPi = (name) => {
+      if (isOmp || !live) return false;
+      const h = harnessName(name);
+      if (Array.isArray(live.runtime?.servers)) return !live.runtime.servers.some((s) => s.name === h || s.name === name);
+      if (live.registeredConfigs) return !live.registeredConfigs.has(h) && !live.registeredConfigs.has(name);
+      return false;
+    };
+    let state = live ? await live.rpc.request({ type: "get_state" }, activeTurn ? 1500 : 10000).catch(() => null) : null;
+    const rawCommands = !live
+      ? null
+      : isOmp
+        ? (await live.rpc.request({ type: "get_available_commands" }, activeTurn ? 1500 : 5000).catch(() => null))?.commands ?? live.runtime?.availableCommands ?? null
+        : (await live.rpc.request({ type: "get_commands" }, activeTurn ? 1500 : 5000).catch(() => null))?.commands ?? null;
+    const commands = Array.isArray(rawCommands) ? rawCommands : [];
+    const hasMcpCommand = commands.some((c) => c?.name === "mcp");
+    const hasTelemetry = () => live?.runtime?.tools !== null || (isOmp && Array.isArray(state?.dumpTools));
+    // Wait briefly after cold start so fast local/HTTP MCP servers and the Botkins bridge settle before returning.
+    if (!activeTurn && live && (supportedNames.length > 0 || (this.provider.bridge && this.spec.tools.length > 0))) {
+      const deadline = Date.now() + INVENTORY_WAIT_MS;
+      while (Date.now() < deadline && !this.turn && !this.closed) {
+        if (!hasTelemetry()) break;
+        const toolsByServer = this.classifyTools(live, state, supportedNames);
+        const bridgeReady = !this.provider.bridge || !this.spec.tools.length || (toolsByServer.get(BRIDGE)?.size ?? 0) > 0 || live.runtime.mcpStates.has(BRIDGE);
+        const serversReady = supportedNames.every((name) =>
+          unregisteredOnWarmPi(name) || staleConfig(name) || (toolsByServer.get(name)?.size ?? 0) > 0 || !!recordedState(name),
+        );
+        if (bridgeReady && serversReady) break;
+        await delay(INVENTORY_STEP_MS);
+        if (isOmp) state = (await live.rpc.request({ type: "get_state" }, 2000).catch(() => null)) ?? state;
+      }
+    }
+    let toolsByServer = live ? this.classifyTools(live, state, supportedNames) : new Map();
+    // When idle, probe unresolved registered servers so 0-tool connected, failed, needs-auth and pending are distinguished.
+    if (!activeTurn && live && hasMcpCommand) {
+      const unresolved = supportedNames.filter(
+        (name) => !unregisteredOnWarmPi(name) && !staleConfig(name) && !(toolsByServer.get(name)?.size > 0) && !recordedState(name),
+      );
+      if (unresolved.length > 0) {
+        if (isOmp) {
+          const probeDeadline = Date.now() + 2500;
+          for (const name of unresolved) {
+            if (this.turn || this.closed || Date.now() >= probeDeadline) break;
+            await this.probeOmpMcp(live, harnessName(name));
+          }
+          state = (await live.rpc.request({ type: "get_state" }, 2000).catch(() => null)) ?? state;
+        } else {
+          await this.probePiMcp(live);
+        }
+        toolsByServer = this.classifyTools(live, state, supportedNames);
+      }
+    }
+    const servers = configuredNames.map((name) => {
+      if (unsupported.has(name)) return { name, status: "unavailable", tools: [] };
+      if (!live) return { name, status: "not started", tools: [] };
+      if (unregisteredOnWarmPi(name) || staleConfig(name)) return { name, status: "configured", tools: [] };
+      const observed = [...(toolsByServer.get(name)?.values() ?? [])];
+      const recorded = recordedState(name);
+      if (observed.length > 0 && (!recorded || recorded === "connected" || recorded === "pending")) {
+        if (recorded === "pending") clearPendingState(name);
+        return { name, status: "connected", tools: observed };
+      }
+      if (recorded && recorded !== "connected") return { name, status: recorded, tools: [] };
+      if (recorded === "connected") return { name, status: "connected", tools: [] };
+      if (!isOmp && hasTelemetry() && !live.runtime.mcpSettled) return { name, status: "pending", tools: [] };
+      if (isOmp && state?.hasPendingAsyncWork) return { name, status: "pending", tools: [] };
+      return { name, status: "unobservable", tools: [] };
+    });
+    // Botkins' own tools: when real runtime telemetry is active on a bridged session, reflect observed exposure and availability.
+    let botkinsTools = this.spec.tools;
+    if (live && this.provider.bridge && hasTelemetry()) {
+      const bridgeTools = toolsByServer.get(BRIDGE);
+      const bridgeState = live.runtime.mcpStates.get(BRIDGE);
+      if (bridgeState && bridgeState !== "connected") {
+        botkinsTools = [];
+      } else if (bridgeTools && bridgeTools.size > 0) {
+        botkinsTools = [];
+        for (const tool of this.spec.tools) {
+          const match = bridgeTools.get(tool.name) ?? bridgeTools.get(tool.name.replace(/[^A-Za-z0-9_]/g, "_"));
+          if (match) botkinsTools.push({ ...tool, exposure: match.exposure });
+        }
+      } else {
+        botkinsTools = [];
+      }
+    }
+    const inventory = buildInventory({ name: this.provider.name, tools: botkinsTools, servers, native: skillChoices(this.skills.list), compact: true });
+    if (this.provider.packages.activePaths().length) {
+      const taken = new Set(inventory.choices.flatMap((item) => [item.command, ...(item.aliases ?? [])]));
+      for (const cmd of commands) {
+        if (!cmd?.name || taken.has(cmd.name)) continue;
+        if (isOmp) {
+          if ((cmd.source !== "extension" && cmd.source !== "skill") || cmd.name === "autoresearch") continue;
+        } else {
+          if (cmd.sourceInfo?.path?.startsWith("builtin:")) continue;
+        }
+        inventory.choices.push({
+          name: cmd.name,
+          command: cmd.name,
+          aliases: [],
+          kind: cmd.source === "skill" ? "Skill" : "Command",
+          source: this.provider.name,
+          description: String(cmd.description ?? "").split("\n")[0].slice(0, 300),
+          duringTurn: false,
+          native: true,
+        });
+        taken.add(cmd.name);
+      }
     }
     return inventory;
   }
@@ -942,6 +1270,9 @@ export class PiProvider extends ModelProvider {
       agentDir,
       session,
       timer: null,
+      runtime: createRuntimeState(),
+      registeredConfigs: new Map(Object.entries(described.servers ?? {}).map(([name, cfg]) => [name, JSON.stringify(cfg)])),
+      pendingConfigs: null,
     };
     await this.write(live, described);
     const wanted = level(session.model.reasoningEffort);
@@ -966,6 +1297,7 @@ export class PiProvider extends ModelProvider {
     const start = launcher(file, args);
     live.rpc = new PiRpc(start.file, start.args, { env: { ...env, ...start.env }, cwd: launchDir, name: this.name, ...(this.runtime === OMP_ID && { protocolVersion: 2 }) });
     live.rpc.on((event) => {
+      this.observeRuntime(live, event);
       if (event.type === "extension_ui_request") void this.dialog(live, event);
     });
     live.rpc.exited.then(() => {
@@ -996,11 +1328,56 @@ export class PiProvider extends ModelProvider {
   async write(live, described) {
     // Every server Botkins gave this process (PiSession.permission).
     live.given = new Set([...(live.given ?? []), ...Object.keys(described.servers ?? {})]);
+    live.pendingConfigs = new Map(Object.entries(described.servers ?? {}).map(([name, cfg]) => [name, JSON.stringify(cfg)]));
     mkdirSync(live.agentDir, { recursive: true, mode: 0o700 });
     writeFileSync(live.file, JSON.stringify(described), { mode: 0o600 });
     if (this.runtime === OMP_ID) {
       writeFileSync(join(live.agentDir, "mcp.json"), JSON.stringify({ mcpServers: described.servers }), { mode: 0o600 });
       writeFileSync(live.config, OMP_CONFIG, { mode: 0o600 });
+    }
+  }
+  /** Passively tracks runtime tool snapshots, MCP notices and command updates from the harness stream. */
+  observeRuntime(live, event) {
+    const rt = live.runtime;
+    if (!rt || !event) return;
+    if (event.type === "extension_ui_request") {
+      if (event.method === "setStatus" && event.statusKey === INVENTORY && typeof event.statusText === "string") {
+        try {
+          const parsed = JSON.parse(event.statusText);
+          if (Array.isArray(parsed?.tools)) rt.tools = parsed.tools;
+          if (Array.isArray(parsed?.servers)) rt.servers = parsed.servers;
+        } catch {
+          // Ignore malformed telemetry payloads.
+        }
+        return;
+      }
+      if (event.method === "notify" && typeof event.message === "string") {
+        const parsed = parsePiMcpNotify(event.message);
+        if (parsed) {
+          if (parsed.settled) rt.mcpSettled = true;
+          for (const [name, status] of parsed.states) rt.mcpStates.set(name, status);
+        }
+      }
+      return;
+    }
+    if (event.type === "notice" && event.source === "toolCommands" && typeof event.message === "string") {
+      const match = /^Tool commands:\s+(added|removed)\s+(.+)$/i.exec(event.message.trim());
+      if (match) {
+        const adding = match[1].toLowerCase() === "added";
+        for (const name of match[2].split(/[\s,]+/).filter(Boolean)) {
+          if (adding) rt.toolCommands.add(name);
+          else rt.toolCommands.delete(name);
+        }
+      }
+      return;
+    }
+    if (event.type === "available_commands_update" && Array.isArray(event.commands)) {
+      rt.availableCommands = event.commands;
+      return;
+    }
+    if (event.type === "command_output" && typeof event.text === "string") {
+      const parsed = parseOmpMcpOutput(event.text);
+      if (parsed) rt.mcpStates.set(parsed.name, parsed.status);
     }
   }
   /** The extension dialogs. Only Botkins' approval question is answered; any other is cancelled. */
