@@ -937,7 +937,7 @@ function ChatViewBody({
     const endingLabel = run.ending === "timed-out" ? "Timed out" : run.ending === "interrupted" ? "Interrupted" : run.ending === "stopped" ? "Stopped" : run.ending === "failed" ? "Needs you" : "";
     const countLabel = count ? count + (count === 1 ? " step" : " steps") : undefined;
     const folded = foldFinishedSteps;
-    const hasActivity = !!olderWork || activityEvents.length > 0 || !!run.agents?.length || !!run.todos?.length;
+    const hasActivity = !!olderWork || !!crewFinished || activityEvents.length > 0 || !!run.agents?.length || !!run.todos?.length;
     const groupTranscript = group
       ? events.map((event) => {
           const visible = event.kind === "reply" || live || !folded || event.kind === "person" || event.kind === "command";
@@ -1599,11 +1599,11 @@ function ChatViewBody({
             </div>
           );
         })()}
-        {busy && (!islandMode || !islandVisible) && (
+        {(busy || latest?.status === "Working") && (!islandMode || !islandVisible) && (
           <TurnStatusLine
             label={(() => {
               if (turnWaits) return "Waiting for you";
-              const latestThought = latest?.reasoning?.at(-1)?.text;
+              const latestThought = showThinking && thinkingMode === "open" ? latest?.reasoning?.at(-1)?.text : undefined;
               const stepRunning = latest?.steps?.some((s) => !s.agentId && !s.background && s.status === "Running");
               if (!stepRunning && latestThought) {
                 const heading = thoughtParts(latestThought).heading;

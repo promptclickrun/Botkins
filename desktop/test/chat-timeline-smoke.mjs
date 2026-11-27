@@ -115,7 +115,8 @@ try {
   const chips = await page.locator(".canvas-chips .canvas-chip").allInnerTexts();
   assert.equal(chips.some((c) => /In the background/.test(c)), false, "no background helper bar above the message box");
   const story = await activity.locator(".insp-list").innerText();
-  assert.ok(inOrder(story, ["Read the workspace before writing", "I checked the first file.", "Read file", "Build in background", "Inspect result"]), "the story is in the order it happened: " + story);
+  assert.ok(inOrder(story, ["Read the workspace before writing", "I checked the first file.", "Read file", "Inspect result"]), "the story is in the order it happened: " + story);
+  assert.doesNotMatch(story, /Build in background/, "a background command belongs to Crew, not Activity");
   // Once finished, the crew summary is folded into the turn's fold line rather than a separate crew card.
   await expect(page.getByRole("region", { name: "Crew" })).toHaveCount(0);
   await expect(page.locator(".timeline-fold-line")).toContainText("1 helper finished");
@@ -136,9 +137,12 @@ try {
   await crewCard.getByRole("button", { name: /^File reader/ }).click();
   await expect(page.getByRole("tab", { name: "Crew" })).toHaveAttribute("aria-selected", "true");
   await expect(page.locator(".crew-member")).toContainText("Reads the second file");
+  await expect(page.getByRole("tabpanel", { name: "Crew" })).toContainText("Build in background");
   await crewCard.locator(".crew-card-head").click();
   // A live turn's quiet status line above the message box opens Activity on it, and the story follows new steps.
   const statusLine = page.locator(".turn-status-line");
+  await expect(statusLine).toBeVisible();
+  await expect(statusLine).not.toContainText("Read the workspace before writing");
   await statusLine.click();
   await expect(page.getByRole("tab", { name: "Activity" })).toHaveAttribute("aria-selected", "true");
   await expect(activity.locator(".insp-row").last()).toContainText("Inspect result");
@@ -300,9 +304,8 @@ try {
   groupRun.status = "Working";
   delete groupRun.finished;
   await publish();
-  const groupRail = page.getByRole("region", { name: "Turn status" }).locator(".timeline-fold-line");
-  // A live rail opens the turn's Activity at once.
-  await groupRail.click();
+  // The same quiet status line opens Activity for a group turn.
+  await statusLine.click();
   await expect(page.locator(".activity-inspector")).toContainText("Pip is checking");
   await page.getByRole("button", { name: "Close side pane" }).click();
   groupRun.status = "Completed";

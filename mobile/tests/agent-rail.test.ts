@@ -408,6 +408,9 @@ test("isAnswerReceipt recognizes receipt marker and legacy receipt after a reque
     false,
     "without receipt flag or preceding request, ordinary message stays a bubble",
   );
+  const steer = { role: "user" as const, text: "Deny", steeredRunId: "r1" };
+  const interim = { role: "assistant" as const, interim: true, runId: "r1" };
+  assert.equal(isAnswerReceipt(steer, interim), false);
   assert.equal(isAnswerReceipt({ role: "assistant", text: "Answered", receipt: true }), false);
 
   // Answer receipts never merge with surrounding user bubbles.

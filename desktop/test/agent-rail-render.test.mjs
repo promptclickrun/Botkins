@@ -282,6 +282,11 @@ test("groupAsks, isAnswerReceipt, answerReceiptLabel and finishedCrewLine match 
     true,
   );
   assert.equal(isAnswerReceipt({ role: "user", text: "Deny" }, { role: "assistant", text: "Ordinary reply" }), false);
+  assert.equal(
+    isAnswerReceipt({ role: "user", text: "Deny", steeredRunId: "r1" }, { role: "assistant", interim: true, runId: "r1" }),
+    false,
+    "a typed steer after an interim update is not a receipt",
+  );
 
   const crew = crewOf({
     status: "Completed",

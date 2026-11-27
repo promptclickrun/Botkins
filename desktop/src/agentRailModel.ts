@@ -567,21 +567,12 @@ const KNOWN_RECEIPT_TEXTS = new Set([
  * not a message the person typed. Renders as a quiet system line without changing the model transcript.
  */
 export function isAnswerReceipt(
-  message: Pick<Message, "role" | "text" | "from" | "receipt" | "answer" | "runId"> | null | undefined,
-  previous?: (Pick<Message, "role" | "from" | "receipt" | "answer" | "interim" | "runId"> & { request?: unknown }) | null,
+  message: Pick<Message, "role" | "text" | "from" | "receipt" | "answer"> | null | undefined,
+  previous?: (Pick<Message, "role"> & { request?: unknown }) | null,
 ): boolean {
   if (!message || message.role !== "user" || message.from?.kind === "bot") return false;
   if (message.receipt === true || !!message.answer) return true;
-  const text = String(message.text ?? "").trim();
-  if (!KNOWN_RECEIPT_TEXTS.has(text)) return false;
-  if (!previous) return false;
-  return (
-    !!previous.request ||
-    !!previous.interim ||
-    previous.receipt === true ||
-    !!previous.answer ||
-    (!!message.runId && previous.runId === message.runId && previous.role === "assistant")
-  );
+  return !!previous?.request && KNOWN_RECEIPT_TEXTS.has(message.text);
 }
 
 /** Quiet system-line wording for an answer receipt ("You answered · Allow once"). */

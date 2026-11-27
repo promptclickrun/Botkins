@@ -39,11 +39,9 @@ export function personTag(
 export function continuingKeys(items: readonly { kind: string; key: string; receipt?: boolean; message?: Pick<Message, "role" | "author" | "from" | "text" | "answer" | "receipt"> }[], me: string): Set<string> {
   const out = new Set<string>();
   let before: string | null = null;
-  let prevMessage: Pick<Message, "role" | "author" | "from" | "text" | "answer" | "receipt"> | undefined;
   for (const item of items) {
     const message = item.kind === "message" ? item.message : undefined;
-    const isReceipt = !!item.receipt || (!!message && isAnswerReceipt(message, prevMessage));
-    if (message) prevMessage = message;
+    const isReceipt = !!item.receipt || isAnswerReceipt(message);
     if (!message || message.role !== "user" || message.from?.kind === "bot" || isReceipt) {
       before = null;
       continue;
