@@ -28,7 +28,8 @@ import { buildInventory, resolvePrompt } from "../commands.mjs";
 import { SessionStore, resumeOrRecover, serversWithTokens, uuidFor } from "../sessions.mjs";
 import { skillChoices, skillSupport } from "../skills.mjs";
 import { displayValue } from "../../display.mjs";
-import { INVENTORY } from "./extension-shared.mjs";
+import { describeRequest } from "../copilot/permissions.mjs";
+import { DETAIL, INVENTORY, MORE, RESULT } from "./extension-shared.mjs";
 import { PLAN_INSTRUCTIONS, planFromOmpPhases, planSignature, planToOmpPhases, toTodoResult, updatePlanTool } from "./plan.mjs";
 import { PiSse } from "./sse.mjs";
 
@@ -139,6 +140,29 @@ function splitName(name) {
   const match = /^mcp__(.+?)__(.+)$/.exec(String(name ?? "")) ?? /^mcp__([^_]+)_(.+)$/.exec(String(name ?? ""));
   return match ? [match[2], match[1]] : [String(name ?? "tool"), undefined];
 }
+/**
+ * The name a plugin's MCP server has inside Pi and OMP. Its own name (pluginServerName) is long
+ * and has `__` in it: Pi cuts a tool's name at 64 characters and OMP joins runs of `_`, so the
+ * server could not be read back from a tool's name. Botkins maps this name back to the plugin's
+ * own before anything else sees it (approvals, "Always allow", the activity, revocation).
+ */
+// Lower-case letters only: OMP's name rules can leave out digits.
+export const pluginAlias = (name) => "bkp_" + [...createHash("sha256").update(String(name)).digest().subarray(0, 12)].map((byte) => String.fromCharCode(97 + (byte % 26))).join("");
+const PLUGIN_ALIAS = /^bkp_[a-z]{12}$/;
+/** More ends of one turn than plugin-runtime.mjs lets plugins block (TURN_STOP_BLOCKS): a guard, never reached. */
+const MAX_STOP_ROUNDS = 8;
+const isPluginServer = (name) => String(name).startsWith("plugin_");
+/** `aliases` (harness name → Botkins name) are matched on the tool's name first: Pi's `mcp__<server>__<tool>`, OMP's `mcp__<server>_<tool>`. */
+const toolIdentity = (call, aliases) => {
+  const raw = String(call.toolName ?? "");
+  if (!call.mcpServerName && aliases?.size)
+    for (const [alias, real] of aliases)
+      for (const prefix of ["mcp__" + alias + "__", "mcp__" + alias + "_"])
+        if (raw.startsWith(prefix) && raw.length > prefix.length) return { name: call.mcpToolName ?? raw.slice(prefix.length), server: real };
+  const [fallbackName, fallbackServer] = splitName(raw);
+  const server = call.mcpServerName ?? fallbackServer;
+  return { name: call.mcpToolName ?? fallbackName, server: (server && aliases?.get(server)) ?? server };
+};
 /** Resolves an MCP tool's [remoteTool, server] even when an OMP server name contains underscores. */
 function splitMcpTool(name, knownServers = []) {
   const raw = String(name ?? "");
@@ -153,10 +177,6 @@ function splitMcpTool(name, knownServers = []) {
   }
   return splitName(raw);
 }
-const toolIdentity = (call) => {
-  const [fallbackName, fallbackServer] = splitName(call.toolName);
-  return { name: call.mcpToolName ?? fallbackName, server: call.mcpServerName ?? fallbackServer };
-};
 function normalizeMcpState(raw) {
   const text = String(raw ?? "").trim().toLowerCase();
   if (!text) return null;
@@ -251,15 +271,17 @@ const textOf = (content) =>
     .filter(Boolean)
     .join("\n");
 
+// A plugin's local tool names its folder `workingDirectory` (the Copilot SDK's word); the person's own, `cwd`.
+const folderOf = (server) => server.cwd ?? server.workingDirectory;
 /** A Botkins MCP server record as Pi's, with SSE adapted when the process is configured. */
 function piServer(server) {
-  if (server.type === "stdio") return { command: server.command, args: server.args ?? [], ...(server.env && { env: server.env }), ...(server.cwd && { cwd: server.cwd }), exposure: "direct" };
+  if (server.type === "stdio") return { command: server.command, args: server.args ?? [], ...(server.env && { env: server.env }), ...(folderOf(server) && { cwd: folderOf(server) }), exposure: "direct" };
   if (!server.url) return null;
   return { ...(server.type === "sse" && { type: "sse" }), url: server.url, ...(server.headers && { headers: server.headers }), exposure: "direct" };
 }
 /** A Botkins MCP server record in OMP's native mcp.json format. */
 function ompServer(server) {
-  if (server.type === "stdio") return { type: "stdio", command: server.command, ...(server.args?.length && { args: server.args }), ...(server.env && Object.keys(server.env).length && { env: server.env }), ...(server.cwd && { cwd: server.cwd }) };
+  if (server.type === "stdio") return { type: "stdio", command: server.command, ...(server.args?.length && { args: server.args }), ...(server.env && Object.keys(server.env).length && { env: server.env }), ...(folderOf(server) && { cwd: folderOf(server) }) };
   if (!server.url) return null;
   return { type: server.type === "sse" ? "sse" : "http", url: server.url, ...(server.headers && { headers: server.headers }) };
 }
@@ -440,10 +462,15 @@ class PiSession extends ProviderSession {
   async describe() {
     const { spec } = this;
     const servers = {};
+    // Harness name → Botkins name, for the servers of plugins (pluginAlias).
+    this.aliases = new Map();
     for (const [name, server] of Object.entries(await serversWithTokens(spec))) {
       if (name === BRIDGE) continue;
       const entry = this.provider.serverRecord(server);
-      if (entry) servers[name] = entry;
+      if (!entry) continue;
+      const shown = isPluginServer(name) ? pluginAlias(name) : name;
+      if (shown !== name) this.aliases.set(shown, name);
+      servers[shown] = entry;
     }
     if (this.bridge) {
       const entry = this.provider.serverRecord({ type: "http", url: this.bridge.url, headers: this.bridge.headers });
@@ -454,7 +481,20 @@ class PiSession extends ProviderSession {
       providers: (spec.inference?.providers ?? []).map(({ name, config }) => ({ name, config })),
       servers,
       prompt: (spec.instructions ?? "") + (this.bridge && this.planTools().length ? "\n\n" + PLAN_INSTRUCTIONS + "\n\n" : "") + this.skills.instructions + (spec.context ?? ""),
+      // A plugin's preToolUse hook sees every tool call, Botkins' own too, as on Copilot (extension-shared.mjs).
+      ...(this.hook("onPreToolUse") && { preToolUse: true }),
+      // And its postToolUse / postToolUseFailure hook every result.
+      ...((this.hook("onPostToolUse") || this.hook("onPostToolUseFailure")) && { postToolUse: true }),
     };
+  }
+  /** The handler Botkins runs for a plugin hook event (plugin-runtime.mjs), or null. */
+  hook(name) {
+    const handler = this.spec.pluginHooks?.handlers?.[name];
+    return typeof handler === "function" ? handler : null;
+  }
+  /** What every hook is told, in the Copilot SDK's words (BaseHookInput). */
+  hookBase() {
+    return { sessionId: this.spec.sessionId, timestamp: new Date(), workingDirectory: this.spec.folder };
   }
   /** In-chat progress checklist tool for Pi and OMP; omitted in throwaway or sources-only sessions. */
   planTools() {
@@ -579,10 +619,19 @@ class PiSession extends ProviderSession {
     try {
       const live = await this.start();
       if (this.stopRequested || this.closed) return { text: "" };
+      // A plugin's session hook once for each harness process, then its prompt hook once, before the
+      // harness sees the message: the Copilot runtime's order (test/hook-events-probe-live.mjs).
+      const started = await this.sessionStart(live, message.prompt);
+      const hooked = await this.userPromptSubmitted(message.prompt);
+      if (hooked.block) return { text: "" };
+      message = { ...message, prompt: (started ? started + "\n\n" : "") + hooked.prompt };
+      if (this.stopRequested || this.closed) return { text: "" };
       const { rpc } = live;
       // `users`: the person's messages the harness took into the run (the prompt, then each steer it
       // delivered); `steered`: the steers it accepted.
-      const turn = (this.turn = { text: "", parts: [], thinking: null, gap: false, error: null, stopReason: null, calls: new Map(), rows: new Map(), users: 0, steered: 0, ended: false });
+      // `pending`: plugin hooks started from an event (errorOccurred), waited for before the turn ends;
+      // `posted` and `refused`: tool calls whose result hook ran, and calls Botkins or a hook turned down.
+      const turn = (this.turn = { text: "", parts: [], thinking: null, gap: false, error: null, stopReason: null, calls: new Map(), rows: new Map(), users: 0, steered: 0, ended: false, pending: [], posted: new Set(), refused: new Set() });
       // One listener for the whole turn; a run started again for a late steer waits on a new settle.
       let settle = () => {};
       let fail = () => {};
@@ -649,6 +698,25 @@ class PiSession extends ProviderSession {
             if (again?.disposition !== "handled" && again?.agentInvoked !== false) await settled;
           }
         }
+        // A plugin's agentStop hook at the natural end of the turn. "block" sends its reason as the
+        // next message and asks again at the next end, as Copilot does; Botkins' limits
+        // (STOP_BLOCKS, TURN_STOP_BLOCKS in plugin-runtime.mjs) end the chain. A stopped or failed turn doesn't ask.
+        for (let active = false, round = 0; round <= MAX_STOP_ROUNDS; round++) {
+          await Promise.all(turn.pending.splice(0));
+          if (this.stopRequested || this.closed || turn.stopReason === "error" || turn.stopReason === "aborted") break;
+          const reason = await this.agentStop(active);
+          if (!reason || this.stopRequested || this.closed) break;
+          // Copilot sends the reason as a user message, and its prompt hook runs on it too (probe case "stop-block").
+          const next = await this.userPromptSubmitted(reason);
+          if (next.block || this.stopRequested || this.closed) break;
+          active = true;
+          this.stopRows(turn);
+          Object.assign(turn, { text: "", gap: false, thinking: null, error: null, stopReason: null });
+          settled = nextSettle();
+          const again = await rpc.request({ type: "prompt", message: next.prompt }, 30000);
+          if (again?.disposition !== "handled" && again?.agentInvoked !== false) await settled;
+        }
+        await Promise.all(turn.pending.splice(0));
         if (this.provider.runtime === OMP_ID && (handled || turn.ompCommandOutput)) {
           await this.syncOmpTodos(rpc, { emit: true });
         }
@@ -786,6 +854,8 @@ class PiSession extends ProviderSession {
         }
         turn.stopReason = message.stopReason ?? null;
         turn.error = message.errorMessage ?? null;
+        // Each failed model request (Pi retries some by itself) is one errorOccurred, as on Copilot.
+        if (message.stopReason === "error" && !this.stopRequested) turn.pending.push(this.errorOccurred(message.errorMessage));
         turn.thinking = null;
         const usage = message.usage;
         if (usage) {
@@ -855,18 +925,154 @@ class PiSession extends ProviderSession {
     }
     return null;
   }
-  /** The extension's question before a tool runs: Botkins' rules and the person decide. */
+  /**
+   * The extension's question before a tool runs: a plugin's preToolUse hook, then Botkins' rules
+   * and the person decide. Answers true (run it as it is), false (don't), or `{ input }` (run it
+   * with these arguments) or `{ deny, reason }` when a plugin's hook changed or refused it.
+   */
   async permission(call) {
     const handlers = this.spec.handlers;
     const turn = this.turn;
     if (!handlers || !turn) return false;
-    const { name, server } = toolIdentity(call);
-    this.turn.calls?.set(call.toolCallId, { name, server });
-    if (server === BRIDGE) return true;
+    const { name, server } = toolIdentity(call, this.aliases);
+    turn.calls?.set(call.toolCallId, { name, server });
     // Pi keeps every server Botkins gave it registered, so its tool list stays the same; one this
-    // turn doesn't have (the person writing may not use it) does nothing. (A Pi package's own server isn't Botkins'.)
-    if (server && this.live?.given?.has(server) && !Object.hasOwn(this.spec.mcpServers ?? {}, server)) return false;
-    const input = call.input && typeof call.input === "object" ? call.input : {};
+    // turn doesn't have (the person writing may not use it, or its plugin was switched off) does
+    // nothing. (A Pi package's own server isn't Botkins'.)
+    if (server && server !== BRIDGE && this.given(server) && !Object.hasOwn(this.spec.mcpServers ?? {}, server)) return false;
+    // A plugin server this session wasn't given (its plugin was switched off or removed) does nothing either.
+    if (server && PLUGIN_ALIAS.test(server)) return false;
+    const given = call.input && typeof call.input === "object" && !Array.isArray(call.input) ? call.input : {};
+    const hooked = await this.preToolUse(call, name, server, given);
+    if (hooked.deny) return { deny: true, reason: hooked.reason };
+    const input = hooked.input ?? given;
+    const changed = hooked.input ? { input } : true;
+    // Botkins' own tools never ask; a hook's "ask" is the person's to answer, as on Copilot.
+    if (server === BRIDGE && !hooked.ask) return changed;
+    if (hooked.ask) {
+      const command = typeof input.command === "string" ? input.command : null;
+      const request = describeRequest({ kind: "hook", toolName: name, toolArgs: command === null ? input : { ...input, command }, hookMessage: hooked.reason });
+      try {
+        const grant = this.sseGrant(turn, server);
+        const answer = await handlers.permission({ ...request, preview: command ?? displayValue(input, Infinity), detail: displayValue({ ...call, input }, Infinity) });
+        if (!answer?.allow) return false;
+        return this.grantSse(turn, grant, name, server, input) ? changed : false;
+      } catch {
+        return false;
+      }
+    }
+    return (await this.approve(call, name, server, input)) ? changed : false;
+  }
+  /**
+   * The plugins' userPromptSubmitted hooks for the person's message: `{ block: true }` (nothing
+   * is sent, and the turn has no reply, as on Copilot), or the prompt to send, changed by a hook
+   * and with what a hook added for the model after it.
+   */
+  async userPromptSubmitted(prompt) {
+    const handler = this.hook("onUserPromptSubmitted");
+    if (!handler) return { prompt };
+    let out;
+    try {
+      out = await handler({ ...this.hookBase(), prompt }, { sessionId: this.spec.sessionId });
+    } catch {
+      return { prompt };
+    }
+    if (!out) return { prompt };
+    if (out.decision === "block") return { block: true };
+    const next = typeof out.modifiedPrompt === "string" ? out.modifiedPrompt : prompt;
+    // Where and how the Copilot runtime puts it (test/hook-events-probe-live.mjs).
+    const added = typeof out.additionalContext === "string" && out.additionalContext.trim() ? "\n\n<system_reminder>\n" + out.additionalContext.trim() + "\n</system_reminder>" : "";
+    return { prompt: next + added };
+  }
+  /** Runs one plugin hook; a hook that fails is as one that said nothing. */
+  async runHook(name, input) {
+    const handler = this.hook(name);
+    if (!handler) return null;
+    try {
+      return (await handler({ ...this.hookBase(), ...input }, { sessionId: this.spec.sessionId })) ?? null;
+    } catch {
+      return null;
+    }
+  }
+  /**
+   * sessionStart, once for each harness process (Copilot: once for each runtime session, before
+   * the first prompt). Answers what it added for the model, to go before the first message, or "".
+   */
+  async sessionStart(live, prompt) {
+    // Which session's hooks end the process: the latest turn's (a turn with no plugin access has none).
+    live.endHook = this.hook("onSessionEnd") ? this : null;
+    if (live.sessionStarted) return "";
+    live.sessionStarted = true;
+    const out = await this.runHook("onSessionStart", { source: live.resumed ? "resume" : "new", initialPrompt: prompt });
+    return typeof out?.additionalContext === "string" ? out.additionalContext.trim() : "";
+  }
+  /** agentStop at a natural end of the turn: the reason to go on with, when a hook blocks; else null. */
+  async agentStop(active) {
+    const out = await this.runHook("onAgentStop", { stopReason: "end_turn", stopHookActive: active });
+    if (out?.decision !== "block") return null;
+    return typeof out.reason === "string" && out.reason.trim() ? out.reason.trim() : "Continue.";
+  }
+  /** errorOccurred for a failed model request. What it answers is not used, as on Copilot (test/hook-events-probe-live.mjs). */
+  async errorOccurred(message) {
+    await this.runHook("onErrorOccurred", { error: errorText(message) || "The model request failed.", errorContext: "model_call", recoverable: true });
+  }
+  /**
+   * postToolUse / postToolUseFailure, once for each call that ran (not one that was refused or
+   * stopped, as on Copilot). Answers `{ text }` for the model in place of the tool's result, or null.
+   */
+  async postToolUse(call) {
+    const turn = this.turn;
+    const id = String(call.toolCallId ?? "");
+    if (!turn || this.stopRequested || !id || turn.posted.has(id) || turn.refused.has(id)) return null;
+    turn.posted.add(id);
+    const { name, server } = toolIdentity(call, this.aliases);
+    const toolName = server && server !== BRIDGE ? server + "-" + name : name;
+    const toolArgs = call.input && typeof call.input === "object" && !Array.isArray(call.input) ? call.input : {};
+    const text = String(call.text ?? "");
+    const extra = (out) => (typeof out?.additionalContext === "string" && out.additionalContext.trim() ? out.additionalContext.trim() : "");
+    if (call.isError) {
+      const added = extra(await this.runHook("onPostToolUseFailure", { toolCallId: id, toolName, toolArgs, error: text }));
+      return added ? { text: text + "\n\nTool " + JSON.stringify(name) + " failed. Additional guidance from postToolUseFailure hooks:\n" + added } : null;
+    }
+    const out = await this.runHook("onPostToolUse", { toolCallId: id, toolName, toolArgs, toolResult: { textResultForLlm: text, resultType: "success" } });
+    if (!out) return null;
+    const changed = out.modifiedResult;
+    let next = typeof changed === "string" ? changed : changed && typeof changed.textResultForLlm === "string" ? changed.textResultForLlm : null;
+    const added = extra(out);
+    if (added) next = (next ?? text) + "\n\nTool " + JSON.stringify(name) + " succeeded. Additional guidance from postToolUse hooks:\n" + added;
+    return next === null ? null : { text: next };
+  }
+  /** Whether Botkins gave this process the server (by its Botkins name). */
+  given(server) {
+    if (!this.live?.given) return false;
+    if (this.live.given.has(server)) return true;
+    for (const [alias, real] of this.aliases ?? []) if (real === server && this.live.given.has(alias)) return true;
+    return false;
+  }
+  /**
+   * Runs the plugins' preToolUse hooks once for this call (plugin-runtime.mjs merges them):
+   * `{ input }` when a hook changed the arguments, `{ ask, reason }` and `{ deny, reason }`. A
+   * plugin can never grant a permission: "allow" is dropped by the reading of its output.
+   */
+  async preToolUse(call, name, server, input) {
+    const handler = this.hook("onPreToolUse");
+    if (!handler) return {};
+    let out;
+    try {
+      // An MCP tool is named "<server>-<tool>", as the Copilot runtime names it to a hook (plugin-harness-parity-live.mjs).
+      out = await handler({ ...this.hookBase(), toolCallId: call.toolCallId, toolName: server && server !== BRIDGE ? server + "-" + name : name, toolArgs: input }, { sessionId: this.spec.sessionId });
+    } catch {
+      return { deny: true, reason: "A plugin's hook failed, so the tool didn't run." };
+    }
+    if (!out) return {};
+    const reason = typeof out.permissionDecisionReason === "string" ? out.permissionDecisionReason : "";
+    const next = out.modifiedArgs && typeof out.modifiedArgs === "object" && !Array.isArray(out.modifiedArgs) ? out.modifiedArgs : null;
+    if (out.permissionDecision === "deny") return { deny: true, reason: reason || "A plugin's hook didn't allow this." };
+    return { ...(next && { input: next }), ...(out.permissionDecision === "ask" && { ask: true, reason }) };
+  }
+  /** Botkins' approval rules and the person, for a call with these arguments. */
+  async approve(call, name, server, input) {
+    const handlers = this.spec.handlers;
     const path = typeof input.path === "string" ? input.path : typeof input.file_path === "string" ? input.file_path : "";
     let request;
     if (server)
@@ -878,19 +1084,29 @@ class PiSession extends ProviderSession {
       request = { kind: "write", label: path || name, title: (name === "edit" ? "Edit" : "Write") + " this file?", preview: String(input.content ?? input.newText ?? (displayValue(input, Infinity) || path)), remember: path ? ["writes to this path", path] : null };
     else if (READS.has(name)) request = { kind: "read", label: path || name, title: "Read " + (path || "files") + "?", preview: path || displayValue(input, Infinity), remember: path ? ["reads of this path", path] : null };
     else request = { kind: "custom-tool", label: name, title: "Use " + name + "?", preview: displayValue(input, Infinity), remember: null };
+    const turn = this.turn;
+    if (!turn) return false;
     try {
-      const sse = server && this.live?.sse?.entries.has(server);
-      const grant = sse ? (turn.sse ??= { controller: new AbortController(), grants: [] }) : null;
-      const answer = await handlers.permission({ ...request, toolName: name, detail: displayValue(call, Infinity), readOnly: request.kind === "read", sandboxEscape: false, managed: false });
+      const grant = this.sseGrant(turn, server);
+      const answer = await handlers.permission({ ...request, toolName: name, detail: displayValue({ ...call, input }, Infinity), readOnly: request.kind === "read", sandboxEscape: false, managed: false });
       if (!answer?.allow) return false;
-      if (grant) {
-        if (this.turn !== turn || turn.ended || this.stopRequested || this.closed || grant.controller.signal.aborted) return false;
-        grant.grants.push({ name, server, input });
-      }
-      return true;
+      return this.grantSse(turn, grant, name, server, input);
     } catch {
       return false;
     }
+  }
+  /** The turn's SSE grants, when this call goes to a legacy SSE server Botkins proxies; else null. */
+  sseGrant(turn, server) {
+    // The SSE adapter knows a plugin's server by its harness name (its alias).
+    const sse = server && this.live?.sse?.entries.has(this.harnessServerName(server));
+    return sse ? (turn.sse ??= { controller: new AbortController(), grants: [] }) : null;
+  }
+  /** Records an allowed SSE call for the proxy to admit; false when the turn moved on meanwhile. */
+  grantSse(turn, grant, name, server, input) {
+    if (!grant) return true;
+    if (this.turn !== turn || turn.ended || this.stopRequested || this.closed || grant.controller.signal.aborted) return false;
+    grant.grants.push({ name, server: this.harnessServerName(server), input });
+    return true;
   }
   takeSseGrant(server, params) {
     const grant = this.turn?.sse;
@@ -1400,6 +1616,8 @@ export class PiProvider extends ModelProvider {
       agentDir,
       session,
       timer: null,
+      // sessionStart says "resume" for a conversation this harness already held.
+      resumed: !fresh && !!this.sessions.get(spec.sessionId),
       plan: undefined,
       state: null,
       runtime: createRuntimeState(),
@@ -1439,6 +1657,7 @@ export class PiProvider extends ModelProvider {
       if (event.type === "extension_ui_request") void this.dialog(live, event);
     });
     live.cleaned = live.rpc.exited.then(async () => {
+      this.sessionEnded(live, "complete");
       if (this.live.get(spec.sessionId) === live) this.live.delete(spec.sessionId);
       // Its own file only: a process let go a moment ago can exit after the next turn's process
       // started, and that one's file must stay (without it Pi starts with no connections: "Model … not found").
@@ -1525,25 +1744,59 @@ export class PiProvider extends ModelProvider {
       if (parsed) rt.mcpStates.set(parsed.name, parsed.status);
     }
   }
-  /** The extension dialogs. Only Botkins' approval question is answered; any other is cancelled. */
+  /**
+   * The extension dialogs. Only Botkins' approval question is answered, and the detail it asks
+   * for when a plugin's hook changed or refused the call; any other is cancelled.
+   */
   async dialog(live, request) {
     if (!["select", "confirm", "input", "editor"].includes(request.method)) return;
     const title = String(request.title ?? "");
-    let allow = false;
-    if (request.method === "select" && title.startsWith(ASK + " ")) {
-      let call = {};
+    const reply = (body) => {
       try {
-        call = JSON.parse(title.slice(ASK.length + 1));
+        live.rpc.write({ type: "extension_ui_response", id: request.id, ...body });
+      } catch {
+        // Pi has stopped.
+      }
+    };
+    if (request.method === "input" && title.startsWith(RESULT + " ")) {
+      let call = null;
+      try {
+        call = JSON.parse(title.slice(RESULT.length + 1));
       } catch {
         // Not Botkins' own question.
       }
-      allow = live.session ? await live.session.permission(call) : false;
+      const out = call && live.session ? await live.session.postToolUse(call).catch(() => null) : null;
+      return reply(out ? { value: JSON.stringify(out) } : { cancelled: true });
     }
+    if (request.method === "input" && title.startsWith(DETAIL + " ")) {
+      let id = "";
+      try {
+        id = String(JSON.parse(title.slice(DETAIL.length + 1)));
+      } catch {
+        // Not Botkins' own question.
+      }
+      const detail = live.details?.get(id);
+      live.details?.delete(id);
+      return reply(detail ? { value: JSON.stringify(detail) } : { cancelled: true });
+    }
+    if (!(request.method === "select" && title.startsWith(ASK + " "))) return reply({ cancelled: true });
+    let call = {};
     try {
-      live.rpc.write(allow ? { type: "extension_ui_response", id: request.id, value: "allow" } : { type: "extension_ui_response", id: request.id, ...(request.method === "select" && title.startsWith(ASK) ? { value: "deny" } : { cancelled: true }) });
+      call = JSON.parse(title.slice(ASK.length + 1));
     } catch {
-      // Pi has stopped.
+      // Not Botkins' own question.
     }
+    const answer = live.session ? await live.session.permission(call) : false;
+    if (answer === true) return reply({ value: "allow" });
+    // A call that doesn't run gets no result hook (Copilot: "rejected" and "denied" results don't).
+    if ((!answer || answer.deny) && call.toolCallId) live.session?.turn?.refused.add(String(call.toolCallId));
+    // A changed or refused call: the extension asks for the detail at once (extension-shared.mjs).
+    // An extension from before this answer has no "more" and is told no.
+    if (answer && Array.isArray(request.options) && request.options.includes(MORE) && call.toolCallId) {
+      (live.details ??= new Map()).set(String(call.toolCallId), answer.deny ? { deny: true, reason: answer.reason } : { input: answer.input });
+      return reply({ value: MORE });
+    }
+    reply({ value: "deny" });
   }
   touch(sessionId) {
     const live = this.live.get(sessionId);
@@ -1564,7 +1817,18 @@ export class PiProvider extends ModelProvider {
     if (!live) return;
     this.live.delete(sessionId);
     clearTimeout(live.timer);
+    this.sessionEnded(live, "user_exit");
     void live.rpc.close().catch(() => {});
+  }
+  /**
+   * A plugin's sessionEnd hook, once for each harness process that ran sessionStart: when Botkins
+   * lets the process go ("user_exit", as when Copilot's session is disconnected) or it ended by itself.
+   */
+  sessionEnded(live, reason) {
+    if (!live.sessionStarted || live.sessionEnded) return;
+    live.sessionEnded = true;
+    const owner = live.endHook;
+    if (owner) live.pending = owner.runHook("onSessionEnd", { reason }).catch(() => null);
   }
   async openSession(spec) {
     return new PiSession(this, spec);
@@ -1582,11 +1846,13 @@ export class PiProvider extends ModelProvider {
   async stop() {
     const all = [...this.live.values()];
     this.live.clear();
+    for (const live of all) this.sessionEnded(live, "user_exit");
     await Promise.allSettled(all.map(async (live) => {
       clearTimeout(live.timer);
       await live.rpc.close();
       await live.cleaned;
     }));
+    await Promise.allSettled(all.map((live) => live.pending));
   }
   /** Stable ToolBridge key per session. For OMP, rotates when declared bridge tool schemas change so OMP's discovery cache refreshes. */
   bridgeKey(sessionId, shape) {

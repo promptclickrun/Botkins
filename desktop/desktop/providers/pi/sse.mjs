@@ -64,7 +64,7 @@ export class PiSse {
         const upstream = new Upstream(config);
         const endpoint = await this.bridge.open([], { dispatch: async (method, params) => {
           const current = session();
-          const admitted = current && current.spec.mcpServers?.[name]?.type === "sse";
+          const admitted = current && current.spec.mcpServers?.[current.realServerName?.(name) ?? name]?.type === "sse";
           const allowed = method === "tools/call" && admitted && current.takeSseGrant(name, params);
           const unavailable = `${name}: legacy SSE connection failed. Check the server and its sign-in.`;
           if (!admitted || (method === "tools/call" && !allowed)) {

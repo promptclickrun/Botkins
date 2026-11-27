@@ -7,7 +7,7 @@ import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, statSync, wri
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { EXTRA_USAGE, PiProvider, PiRpc, bundledPi, errorText, launcher, parseOmpMcpOutput, parsePiMcpNotify } from "../desktop/providers/pi/index.mjs";
+import { EXTRA_USAGE, PiProvider, PiRpc, bundledPi, errorText, launcher, parseOmpMcpOutput, parsePiMcpNotify, pluginAlias } from "../desktop/providers/pi/index.mjs";
 import { INVENTORY } from "../desktop/providers/pi/extension-shared.mjs";
 import { execFileSync } from "node:child_process";
 import { Providers } from "../desktop/providers/index.mjs";
@@ -632,8 +632,8 @@ test("Pi inventory resolves aliased plugin MCP servers back to Botkins server na
   t.after(() => provider.stop());
   const pluginOk = "plugin_alpha__server_a1b2c3d4";
   const pluginFail = "plugin_beta__server_e5f6a7b8";
-  const aliasOk = "bkp_aaaaaaaaaaaa";
-  const aliasFail = "bkp_bbbbbbbbbbbb";
+  const aliasOk = pluginAlias(pluginOk);
+  const aliasFail = pluginAlias(pluginFail);
   const session = await provider.openSession(spec({
     mcpServers: {
       [pluginOk]: { type: "http", url: "http://127.0.0.1:9/alpha" },
@@ -641,15 +641,6 @@ test("Pi inventory resolves aliased plugin MCP servers back to Botkins server na
     },
   }));
   const live = await session.start();
-  // Match PR #321's PiSession.aliases contract (harness alias -> Botkins server name).
-  session.aliases = new Map([
-    [aliasOk, pluginOk],
-    [aliasFail, pluginFail],
-  ]);
-  live.registeredConfigs = new Map([
-    [aliasOk, JSON.stringify(provider.serverRecord(session.spec.mcpServers[pluginOk]))],
-    [aliasFail, JSON.stringify(provider.serverRecord(session.spec.mcpServers[pluginFail]))],
-  ]);
   provider.observeRuntime(live, {
     type: "extension_ui_request",
     method: "setStatus",
