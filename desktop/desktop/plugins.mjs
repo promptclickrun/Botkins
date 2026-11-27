@@ -733,9 +733,13 @@ export class Plugins {
   }
   async token(botId, request) {
     for (const row of this.records.filter((r) => scoped(r, botId))) {
-      const server = this.knownOAuthServers(row).find((s) => s.name === request.server && s.url === request.url);
-      if (server)
-        return this.oauth.token(server, { reason: request.reason, client: server.clientId ? { clientId: server.clientId } : undefined });
+      const server = this.knownOAuthServers(row).find((s) => s.name === request.server && s.url === request.url &&
+        (request.serverId === undefined || request.serverId === s.id));
+      if (server) {
+        if (request.serverId !== undefined && !this.intact(row)) return null;
+        return this.oauth.token(server, { reason: request.reason, client: server.clientId ? { clientId: server.clientId } : undefined,
+          ...(request.serverId !== undefined && { rejectedAccessToken: request.rejectedAccessToken }) });
+      }
     }
     return null;
   }
@@ -767,7 +771,7 @@ export class Plugins {
       return !!row && typeof held.revision === "string" && held.revision === (row.revision ?? basename(row.folder)) && scoped(row, botId) && this.intact(row) && this.public(row).status === "ready";
     });
   }
-  async session(bot, chat, { skillsOnly = false } = {}) {
+  async session(bot, chat, { skillsOnly = false, liveOAuth = false } = {}) {
     // A copy that is no longer the reviewed bytes is not used, and the app shows why.
     const scopedRows = this.records.filter((r) => scoped(r, bot.id));
     const before = scopedRows.map((r) => this.checked.get(r.folder)?.ok);
@@ -776,6 +780,16 @@ export class Plugins {
     const rows = sound.filter((r) => this.public(r).status === "ready");
     if (!rows.length) return { directories: [], mcpServers: {}, hooks: undefined };
     const plugins = rows.map((row) => (skillsOnly ? { id: row.preview.id, folder: row.folder } : this.runtimeRecord(row)));
-    return pluginSession(plugins, { dir: this.ws.dir, botId: bot.id, chatId: chat.id, skillsOnly, note: (line) => this.ws.pluginNote?.(chat.id, line), stops: this.stopsFor(chat.id) });
+    const spec = pluginSession(plugins, { dir: this.ws.dir, botId: bot.id, chatId: chat.id, skillsOnly, note: (line) => this.ws.pluginNote?.(chat.id, line), stops: this.stopsFor(chat.id) });
+    if (liveOAuth && !skillsOnly) {
+      for (const row of rows) {
+        for (const credential of this.knownOAuthServers(row)) {
+          const server = spec.mcpServers[credential.name];
+          if (server?.type === "http" && server.url === credential.url &&
+              !Object.keys(server.headers ?? {}).some((name) => name.toLowerCase() === "authorization")) server.oauthId = credential.id;
+        }
+      }
+    }
+    return spec;
   }
 }
