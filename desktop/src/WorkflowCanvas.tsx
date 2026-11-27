@@ -81,6 +81,8 @@ function triggerMeta(kind?: WorkflowTriggerKind) {
       return { label: "Webhook", icon: Globe };
     case "github":
       return { label: "GitHub", icon: GitPullRequest };
+    case "channel":
+      return { label: "Channel", icon: MessageSquare };
     default:
       return { label: "Trigger", icon: Zap };
   }
@@ -170,6 +172,14 @@ function nodePreview(node: WorkflowNode, bots: Bot[], analysis?: NodeFieldAnalys
         return <span className="wf-node-preview-text">POST /webhooks/{(cfg.routeId || "…").slice(0, 10)}</span>;
       case "github":
         return <span className="wf-node-preview-text">{cfg.repo || "Configure owner/repo"}</span>;
+      case "channel":
+        return (
+          <span className="wf-node-preview-text">
+            {cfg.channel ? `${cfg.channel} channel` : "Any channel"}
+            {cfg.connection ? ` · ${cfg.connection}` : ""}
+            {cfg.textContains ? ` · “${cfg.textContains}”` : ""}
+          </span>
+        );
       default:
         return null;
     }

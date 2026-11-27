@@ -137,6 +137,20 @@ export const WORKSPACE = {
   workflowGithubStatus: no("person"), // checks local gh CLI sign-in state for the Workflow trigger UI; terminal users run `gh auth status`
   workflowGithubSignInStart: no("person"), // interactive browser device-code flow for `gh auth login --web`; terminal users run `gh auth login`
   workflowGithubSignInCancel: no("person"), // cancels an in-progress `gh auth login --web` started from the window or owner phone
+  // ── Channel Hooks ──
+  channelsList: cmd("channels list"),
+  channelAdd: cmd("channels add"),
+  channelUpdate: cmd("channels add"),
+  channelRemove: cmd("channels remove"),
+  channelBind: cmd("channels bind"),
+  channelSetPolicy: cmd("channels policy"),
+  channelPause: cmd("channels pause"),
+  channelResume: cmd("channels resume"),
+  channelPairList: cmd("channels pair list"),
+  channelPairApprove: cmd("channels pair approve"),
+  channelPairDeny: cmd("channels pair deny"),
+  channelTest: cmd("channels test"),
+  channelLogs: cmd("channels logs"),
   // ── Plugins ──
   "skills.upload": cmd("skills upload"),
   // A script command (desktop/script-commands.mjs): `skills add-script` shows the whole script and needs a yes; `skills show` prints it.
@@ -763,6 +777,16 @@ export const CHANGES = {
   "node.convert.run": (args, value) => levelOf(value?.job?.nodeName ?? args?.[0]?.nodeName, value?.job?.status ?? "run"),
   "node.convert.undo": (args, value) => value?.snapshotId ?? args?.[0] ?? "latest",
   "node.remote.control": (args, value) => levelOf(value?.hostName ?? args?.[0], args?.[1]),
+  // Channel Hooks: log connection label/id only, never tokens or message bodies.
+  "channels.add": (args, value) => value?.label ?? args?.[0]?.label ?? args?.[0]?.kind,
+  "channels.update": (args, value) => value?.label ?? args?.[0],
+  "channels.remove": (args, value) => value?.id ?? args?.[0],
+  "channels.bind": (args, value) => value?.label ?? args?.[0],
+  "channels.policy": (args, value) => value?.label ?? args?.[0],
+  "channels.pause": (args, value) => value?.label ?? args?.[0],
+  "channels.resume": (args, value) => value?.label ?? args?.[0],
+  "channels.pair.approve": (args, value) => value?.connectionId ?? args?.[1] ?? "pair",
+  "channels.pair.deny": (args, value) => value?.connectionId ?? args?.[1] ?? "pair",
 };
 /** The service's own calls that only read, wait or talk in a chat: no line. Every call is in this list, in CHANGES or in LOGS_ITSELF. */
 export const READS = ["interactions.list", "skills.review", "chat.scriptCommand", "skillsCatalog.search", "skillsCatalog.preview", "skillsCatalog.featured", "market.catalog", "market.skillImage", "market.skillPreview", "market.packPreview", "market.templatePreview", "mcpCatalog.list", "piPackages.browse", "piPackages.preview", "piPackages.list", "status", "logs.read", "doctor", "events.wait", "pair.status", "devices.list", "bots.list", "bots.get", "providers.list", "providers.services", "providers.login.read", "providers.login.input", "providers.login.cancel", "models", "chat.open", "chat.list", "chat.send", "chat.read", "chat.stop", "runs.list", "routines.list", "plugins.list", "plugins.marketplaces", "plugins.refresh", "plugins.browse", "plugins.preview", "config.get", "config.describe", "relay.status", "update.status", "update.check", "methods", "plugins.get", "tools.list", "tools.get", "tools.import.preview", "tools.signIn.read", "tools.signIn.input", "tools.signIn.cancel", "skills.list", "skills.get", "bots.tools", "bots.access", "bots.menu", "folders.list", "gadgets.get", "profile.status", "profile.home"];
@@ -786,6 +810,8 @@ export const MORE_READS = {
   apps: ["apps.list", "apps.connected", "apps.accounts", "apps.card"], // (`apps.card` looks at a chat's Connect card again; when the app is connected, the chat goes on as it would for the window.)
   // (Node host, control-node.mjs)
   node: ["node.status", "node.approvals", "node.audit", "node.convert.inspect", "node.convert.plan", "node.convert.status", "node.remote.status"],
+  // (Channel Hooks, control-channels.mjs)
+  channels: ["channels.list", "channels.pair.list", "channels.test", "channels.logs"],
 };
 READS.push(...Object.values(MORE_READS).flat());
 

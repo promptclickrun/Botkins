@@ -405,6 +405,20 @@ const POLICY = {
   "claudeArtifacts.setModel": "owner",
   "claudeArtifacts.setBotApproval": "owner",
   "claudeArtifacts.revokeBotApproval": "owner",
+  // Channel Hooks ("channels-v1"): strictly owner-only.
+  channelsList: "owner",
+  channelAdd: "owner",
+  channelUpdate: "owner",
+  channelRemove: "owner",
+  channelBind: "owner",
+  channelSetPolicy: "owner",
+  channelPause: "owner",
+  channelResume: "owner",
+  channelPairList: "owner",
+  channelPairApprove: "owner",
+  channelPairDeny: "owner",
+  channelTest: "owner",
+  channelLogs: "owner",
 };
 
 export const TEAM_METHODS = Object.freeze(Object.fromEntries(Object.entries(POLICY).map(([name, value]) => [name, value === "owner" ? "owner" : Object.freeze(value)])));
@@ -1328,7 +1342,7 @@ export function filterParts(parts, principal, team, extra = {}) {
   const ownChats = new Set(shared.map((chat) => chat.id));
   const out = { ...parts };
   // `sections` are the owner's arrangement of Home; a member arranges their own view (below).
-  for (const name of ["credentials", "phones", "asks", "voice", "host", "projects", "projectPanels", "tasks", "templates", "sections"]) delete out[name];
+  for (const name of ["credentials", "channels", "phones", "asks", "voice", "host", "projects", "projectPanels", "tasks", "templates", "sections"]) delete out[name];
   // A bot as a member sees it: without what the owner wrote for it or where it came from, and with
   // the member's own hidden and pinned marks and order. The owner's marks are the owner's.
   const mayManage = can("agents", "manage");

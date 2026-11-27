@@ -1430,7 +1430,46 @@ export type ProactiveBot = Partial<ProactiveBotSettings> & {
 };
 export type ProactivePart = { chatMode?: "main" | "new"; enabled: boolean; bots: Record<string, ProactiveBot | undefined> };
 export type ProactiveLog = { at: number; reason: "signals" | "sweep" | "check" | "context" | "review"; score?: number; signals: number; outcome: "alerted" | "silent" | "failed"; runId: string; said?: string };
-export type WorkflowTriggerKind = "task" | "schedule" | "manual" | "routine" | "chat" | "webhook" | "github";
+export type ChannelKind = "slack" | "telegram" | "discord" | "imessage";
+export type ChannelStatusState =
+  | "connected"
+  | "reconnecting"
+  | "auth_error"
+  | "disabled"
+  | "paused"
+  | "waiting_permission"
+  | "disconnected";
+
+export type ChannelPairing = {
+  code: string;
+  connectionId?: string;
+  label?: string;
+  kind?: ChannelKind;
+  senderId: string;
+  display?: string;
+  conversationId: string;
+  createdAt: number;
+  expiresAt: number;
+};
+
+export type ChannelConnection = {
+  id: string;
+  kind: ChannelKind;
+  label: string;
+  transport: string;
+  enabled: boolean;
+  paused?: boolean;
+  botId: string;
+  nodeHostId?: string;
+  pendingPairings?: ChannelPairing[];
+  status?: {
+    state: ChannelStatusState;
+    detail?: string;
+    updatedAt?: number;
+  };
+};
+
+export type WorkflowTriggerKind = "task" | "schedule" | "manual" | "routine" | "chat" | "webhook" | "github" | "channel";
 
 export type WorkflowGithubSignIn = {
   status: "idle" | "starting" | "waiting" | "done" | "failed";
@@ -1515,6 +1554,8 @@ export type Parts = {
   /** Event-based workflows and recent runs ("workflows-v1"). */
   workflows?: Workflow[];
   workflowRuns?: WorkflowRun[];
+  /** External messaging Channel Hooks ("channels-v1", owner only). */
+  channels?: ChannelConnection[];
   /** The Proactive agent: the computer's switch and each bot's agent ("proactive-agent-v2"). A member is sent only their own. */
   proactive?: ProactivePart;
   projects: Project[];
@@ -2100,6 +2141,13 @@ export type Calls = {
   workflowGithubStatus(options?: { includeRepos?: boolean }): WorkflowGithubStatus;
   workflowGithubSignInStart(): WorkflowGithubSignIn;
   workflowGithubSignInCancel(): WorkflowGithubStatus;
+  channelsList(): ChannelConnection[];
+  channelPause(id: string): ChannelConnection;
+  channelResume(id: string): ChannelConnection;
+  channelPairList(id?: string | null): ChannelPairing[];
+  channelPairApprove(code: string, id?: string | null): { approved: boolean; senderId: string; connectionId: string };
+  channelPairDeny(code: string, id?: string | null): { denied: boolean; senderId: string; connectionId: string };
+  channelTest(id: string): { ok: boolean; state: string; detail: string; identity?: string };
   refreshPanel(id: string): void;
   changePanel(id: string, action: "delete" | "hide" | "show" | "small" | "wide" | "tall" | "earlier" | "later"): void;
   boardAct(id: string, action: "read" | "unread" | "clear" | "done" | "reopen" | "yes" | "goal" | "notToday" | "up" | "down" | "delete", value?: string): string | undefined;
