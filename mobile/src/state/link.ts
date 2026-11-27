@@ -12,7 +12,7 @@ import { setRandomSource } from "@/link/crypto";
 import type { PairTarget } from "@/link/pairing";
 import type { ProfileHost } from "@/link/profile";
 import { relayFetch } from "@/link/relay";
-import type { Calls, ChatDetail, ScreenFrame, ScreenInput } from "@/link/types";
+import type { A2uiActionPayload, Calls, ChatDetail, ScreenFrame, ScreenInput } from "@/link/types";
 import { textMode, useChatPrefs } from "./chatPrefs";
 import { loadPrefs, usePrefs } from "./prefs";
 import { newPresenceKey, removePresenceKey } from "./presence";
@@ -584,6 +584,26 @@ export async function chatCardAction(chatId: string, target: number | string, ac
     if (offset < 0 || offset >= view.messages.length) return {};
     const messages = view.messages.slice();
     messages[offset] = { ...messages[offset], actionCard: result.card };
+    return { chats: { ...state.chats, [chatId]: { ...view, messages } } };
+  });
+  return result;
+}
+
+/** Sends an A2UI v1.0 surface user action to the host and updates the surface in loaded chat pages. */
+export async function chatA2uiAction(chatId: string, payload: A2uiActionPayload) {
+  const host = client;
+  const result = await api["chat.a2uiAction"](chatId, payload);
+  useApp.setState(state => {
+    const view = state.chats[chatId];
+    if (client !== host || !view || !result?.surface) return {};
+    const offset = view.messages.findIndex(m => m.a2uiSurfaces?.some(s => s.surfaceId === result.surface.surfaceId));
+    if (offset < 0 || offset >= view.messages.length) return {};
+    const messages = view.messages.slice();
+    const prevList = messages[offset].a2uiSurfaces ?? [];
+    messages[offset] = {
+      ...messages[offset],
+      a2uiSurfaces: prevList.map(s => (s.surfaceId === result.surface.surfaceId ? result.surface : s)),
+    };
     return { chats: { ...state.chats, [chatId]: { ...view, messages } } };
   });
   return result;

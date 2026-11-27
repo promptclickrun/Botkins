@@ -23,6 +23,7 @@ import { AlertActions } from "@/features/bots/AlertActions";
 import { ConnectCard } from "./ConnectCard";
 import { McpAppCard } from "./McpAppCard";
 import { WorkflowActionCard } from "./WorkflowActionCard";
+import { A2uiSurface } from "./A2uiSurface";
 import { IncomingAgentRail } from "./AgentMessageRail";
 import { answerReceiptLabel, isAgentMessage, isAnswerReceipt } from "./agentRailModel";
 import { useChatPeople } from "./ChatPeopleLook";
@@ -144,12 +145,16 @@ function Cards({ run, latest, rich, onSend, onDraft }: { run: Run; latest: boole
   const connects = run.connects?.map((card) => <ConnectCard key={card.id} chatId={run.chatId} card={card} />);
   // An MCP App's view; with rich cards off, its saved summary.
   const views = run.mcpApps?.map((card) => <McpAppCard key={card.id} chatId={run.chatId} card={card} rich={rich} />);
+  const a2uiViews = run.a2uiSurfaces?.map((surface) => (
+    <A2uiSurface key={surface.surfaceId} chatId={run.chatId} surface={surface} rich={rich} />
+  ));
   if (!rich)
     return (
       <>
         {claudeArtifacts}
         {connects}
         {views}
+        {a2uiViews}
         {run.cards?.map((card) => (
           <View key={card.id} style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
             <LayoutGrid size={14} color={colors.faint} strokeWidth={2.2} />
@@ -165,6 +170,7 @@ function Cards({ run, latest, rich, onSend, onDraft }: { run: Run; latest: boole
       {claudeArtifacts}
       {connects}
       {views}
+      {a2uiViews}
       {run.cards?.map((card) => (
         <View key={card.id} style={{ gap: space.md }}>
           <View style={{ backgroundColor: colors.surface, borderRadius: radius.lg, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.line, padding: space.lg, gap: space.md }}>
@@ -449,6 +455,16 @@ export const MessageRow = memo(function MessageRow({ item, chatId, group, bots, 
       ) : (
         <Reply message={message} index={item.index} id={chatId + ":" + item.key} botId={speaker} markdown={markdown} actions={actions} paths={links.paths} parts={links.parts} />
       )}
+      {!!message.a2uiSurfaces?.length &&
+        message.a2uiSurfaces.map((surface) => (
+          <A2uiSurface
+            key={surface.surfaceId}
+            chatId={chatId}
+            surface={surface}
+            rich={rich}
+            onOpenChat={onOpenChat}
+          />
+        ))}
       <Reactions message={message} />
       {/* A proactive alert: what the bot offers to do, and "Not now". */}
       {!!message.alert && !!speaker && <AlertActions botId={speaker} alert={message.alert} chatId={chatId} />}

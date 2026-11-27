@@ -1,0 +1,315 @@
+/* A2UI v1.0 interactive surface renderer styled with Botkins tokens.css (light/dark parity). */
+.a2ui-surface {
+  margin: 6px 0;
+  padding: 14px 16px;
+  border-radius: var(--radius);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-width: 680px;
+  color: var(--ink);
+}
+
+.a2ui-surface.dismissed {
+  background: color-mix(in srgb, var(--surface) 60%, var(--canvas));
+  opacity: 0.72;
+  padding: 10px 14px;
+}
+
+.a2ui-row {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.a2ui-column {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.a2ui-list {
+  display: flex;
+  gap: 8px;
+}
+.a2ui-list.vertical {
+  flex-direction: column;
+}
+.a2ui-list.horizontal {
+  flex-direction: row;
+  overflow-x: auto;
+}
+
+.a2ui-card {
+  padding: 12px 14px;
+  border-radius: calc(var(--radius) - 2px);
+  background: color-mix(in srgb, var(--surface) 75%, var(--canvas));
+  border: 1px solid var(--line);
+}
+
+.a2ui-text {
+  margin: 0;
+  font-size: calc(14px * var(--text-scale));
+  line-height: 1.45;
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+.a2ui-text.caption {
+  font-size: calc(12.5px * var(--text-scale));
+  color: var(--muted);
+}
+.a2ui-text.h1 {
+  font-family: var(--font-display);
+  font-size: calc(19px * var(--text-scale));
+  font-weight: 700;
+}
+.a2ui-text.h2 {
+  font-family: var(--font-display);
+  font-size: calc(16.5px * var(--text-scale));
+  font-weight: 700;
+}
+.a2ui-text.h3,
+.a2ui-text.h4,
+.a2ui-text.h5 {
+  font-size: calc(14.5px * var(--text-scale));
+  font-weight: 600;
+}
+
+.a2ui-image {
+  display: block;
+  max-width: 100%;
+  border-radius: 8px;
+}
+.a2ui-image.icon {
+  width: 24px;
+  height: 24px;
+  border-radius: 4px;
+}
+.a2ui-image.avatar {
+  width: 40px;
+  height: 40px;
+  border-radius: 999px;
+}
+.a2ui-image.smallFeature {
+  max-height: 120px;
+}
+.a2ui-image.mediumFeature {
+  max-height: 220px;
+}
+.a2ui-image.largeFeature,
+.a2ui-image.header {
+  width: 100%;
+  max-height: 320px;
+}
+
+.a2ui-divider.horizontal {
+  border: 0;
+  border-top: 1px solid var(--line);
+  margin: 4px 0;
+  width: 100%;
+}
+.a2ui-divider.vertical {
+  border: 0;
+  border-left: 1px solid var(--line);
+  margin: 0 4px;
+  align-self: stretch;
+  min-height: 16px;
+}
+
+.a2ui-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 7px 13px;
+  border-radius: 8px;
+  font-size: calc(13px * var(--text-scale));
+  font-weight: 600;
+  cursor: pointer;
+  border: 1px solid var(--line);
+  background: var(--sunken);
+  color: var(--ink);
+}
+.a2ui-btn.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+.a2ui-btn.borderless {
+  background: transparent;
+  border-color: transparent;
+  color: var(--accent);
+  padding: 4px 6px;
+}
+.a2ui-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.a2ui-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.a2ui-field-label {
+  font-size: calc(12.5px * var(--text-scale));
+  font-weight: 600;
+  color: var(--muted);
+}
+.a2ui-input,
+.a2ui-textarea {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 7px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--canvas);
+  color: var(--ink);
+  font-size: calc(13.5px * var(--text-scale));
+  font-family: inherit;
+}
+.a2ui-textarea {
+  min-height: 76px;
+  resize: vertical;
+}
+
+.a2ui-checkbox {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: calc(13.5px * var(--text-scale));
+  cursor: pointer;
+}
+
+.a2ui-choices {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.a2ui-choices.checkbox {
+  flex-direction: column;
+}
+.a2ui-chip {
+  padding: 5px 11px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--canvas);
+  color: var(--ink);
+  font-size: calc(12.5px * var(--text-scale));
+  font-weight: 500;
+  cursor: pointer;
+}
+.a2ui-chip.selected {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.a2ui-slider-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+.a2ui-slider {
+  width: 100%;
+  accent-color: var(--accent);
+}
+
+.a2ui-tabs-bar {
+  display: flex;
+  gap: 4px;
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 4px;
+  flex-wrap: wrap;
+}
+.a2ui-tab {
+  padding: 5px 10px;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--muted);
+  font-size: calc(13px * var(--text-scale));
+  font-weight: 600;
+  cursor: pointer;
+}
+.a2ui-tab.active {
+  background: var(--sunken);
+  border-color: var(--line);
+  color: var(--ink);
+}
+.a2ui-tab-panel {
+  padding-top: 8px;
+}
+
+.a2ui-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 900;
+  padding: 16px;
+}
+.a2ui-modal-dialog {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 16px;
+  max-width: 520px;
+  width: 100%;
+  max-height: 80vh;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.a2ui-modal-close {
+  align-self: flex-end;
+}
+
+.a2ui-placeholder {
+  font-size: calc(12.5px * var(--text-scale));
+  color: var(--muted);
+  padding: 6px 10px;
+  border-radius: 6px;
+  border: 1px dashed var(--line);
+}
+
+.a2ui-check-error,
+.a2ui-error {
+  margin: 2px 0 0;
+  font-size: calc(12px * var(--text-scale));
+  color: var(--danger);
+}
+
+.a2ui-status-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding-top: 6px;
+  border-top: 1px solid var(--line);
+  font-size: calc(12.5px * var(--text-scale));
+  color: var(--muted);
+}
+
+.a2ui-fallback {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  border-radius: var(--radius);
+  border: 1px solid var(--line);
+  background: var(--sunken);
+}
+.a2ui-fallback-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 4px;
+}

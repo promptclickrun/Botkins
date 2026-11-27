@@ -1058,8 +1058,24 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
     unqueue: (id, itemId) => workspace.unqueue(id, itemId),
     sendNow: (id, itemId) => workspace.sendNow(id, itemId),
     reactToMessage: (id, index, time, emoji, person = "owner") => workspace.reactToMessage(id, index, time, emoji, person === "owner" ? person : "member:" + person),
-    "chat.cardAction": (chatId, target, action, person = "owner") => {
+    "chat.cardAction": (chatId, target, action, payloadOrPerson = "owner", maybePerson = "owner") => {
+      if (action === "a2ui") {
+        const person = typeof maybePerson === "string" ? maybePerson : "owner";
+        const { turn, ...answer } = workspace.chatA2uiAction(
+          chatId,
+          { ...(payloadOrPerson && typeof payloadOrPerson === "object" ? payloadOrPerson : {}), ...(typeof target === "string" && target.trim() && !payloadOrPerson?.surfaceId ? { surfaceId: target.trim() } : {}) },
+          person === "owner" ? person : "member:" + person,
+        );
+        turn?.catch((error) => console.error("Workspace turn:", error.message));
+        return answer;
+      }
+      const person = typeof payloadOrPerson === "string" ? payloadOrPerson : "owner";
       const { turn, ...answer } = workspace.chatCardAction(chatId, target, action, person === "owner" ? person : "member:" + person);
+      turn?.catch((error) => console.error("Workspace turn:", error.message));
+      return answer;
+    },
+    "chat.a2uiAction": (chatId, payload, person = "owner") => {
+      const { turn, ...answer } = workspace.chatA2uiAction(chatId, payload, person === "owner" ? person : "member:" + person);
       turn?.catch((error) => console.error("Workspace turn:", error.message));
       return answer;
     },

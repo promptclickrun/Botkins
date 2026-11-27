@@ -407,6 +407,7 @@ for (const name of [
   "sendNow",
   "reactToMessage",
   "chat.cardAction",
+  "chat.a2uiAction",
   "showEmojiPanel",
   "forkChat",
   "retry",
