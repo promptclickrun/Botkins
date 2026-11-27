@@ -133,6 +133,9 @@ export const WORKSPACE = {
   workflowExport: no("window"), // native save file dialog; `workflows export <id>` prints JSON
   workflowImport: no("window"), // native open file dialog; `workflows import <file>` reads a path
   workflowRotateWebhookSecret: no("person"), // returns a newly generated webhook secret; stays in the window or owner phone
+  workflowGithubStatus: no("person"), // checks local gh CLI sign-in state for the Workflow trigger UI; terminal users run `gh auth status`
+  workflowGithubSignInStart: no("person"), // interactive browser device-code flow for `gh auth login --web`; terminal users run `gh auth login`
+  workflowGithubSignInCancel: no("person"), // cancels an in-progress `gh auth login --web` started from the window or owner phone
   // ── Plugins ──
   "skills.upload": cmd("skills upload"),
   // A script command (desktop/script-commands.mjs): `skills add-script` shows the whole script and needs a yes; `skills show` prints it.

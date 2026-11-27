@@ -1,12 +1,15 @@
 // Edits one trigger or step of a workflow draft. Changes stay in the draft until the designer saves it.
-import { Plus, Trash2, X } from "lucide-react-native";
+import * as Clipboard from "expo-clipboard";
+import { CheckCircle2, Copy, ExternalLink, KeyRound, Plus, RefreshCw, Trash2, X } from "lucide-react-native";
 import { useEffect, useMemo, useState } from "react";
-import { Modal, View } from "react-native";
-import type { WorkflowNode, WorkflowTriggerKind } from "@/link/types";
+import { Linking, Modal, View } from "react-native";
+import type { WorkflowGithubStatus, WorkflowNode, WorkflowTriggerKind } from "@/link/types";
 import { useBots, useChats, useModels, useRoutines } from "@/state/hooks";
-import { Button, Field, Group, IconButton, Row, Segmented, Sheet, space, T, useTheme } from "@/ui";
+import { api } from "@/state/link";
+import { showToast } from "@/state/store";
+import { Button, Field, Group, IconButton, Label, radius, Row, Segmented, Sheet, space, T, useTheme } from "@/ui";
 import type { NodeFieldAnalysis } from "./fields";
-import { CONDITION_OPS, DAYS, DESTINATIONS, GITHUB_EVENTS, GOAL_CATEGORIES, KIND_LABEL, OP_LABEL, OPS_WITHOUT_VALUE, TASK_STATUSES, TRIGGER_KINDS, TRIGGER_LABEL } from "./graph";
+import { CONDITION_OPS, DAYS, DESTINATIONS, GITHUB_EVENT_LABEL, GITHUB_EVENTS, GOAL_CATEGORIES, KIND_LABEL, newTrigger, OP_LABEL, OPS_WITHOUT_VALUE, TASK_STATUSES, TRIGGER_KINDS, TRIGGER_LABEL } from "./graph";
 import { Choice, TemplateField } from "./parts";
 
 type Props = {
@@ -45,7 +48,7 @@ function StepBody({ node: given, analysis, canRemove, onChange, onRemove, onClos
     <Sheet title={title} action="Done" onAction={done} onClose={onClose}>
       <View style={{ gap: space.xl }}>
         <Field label="Name" value={node.label} onChangeText={(label) => set({ label })} maxLength={80} />
-        {node.kind === "trigger" && <TriggerEditor node={node} setConfig={setConfig} setKind={(triggerKind) => set({ triggerKind, label: node.label === TRIGGER_LABEL[node.triggerKind ?? "manual"] ? TRIGGER_LABEL[triggerKind] : node.label, config: {} })} />}
+        {node.kind === "trigger" && <TriggerEditor node={node} setConfig={setConfig} setKind={(triggerKind) => set({ triggerKind, label: node.label === TRIGGER_LABEL[node.triggerKind ?? "manual"] ? TRIGGER_LABEL[triggerKind] : node.label, config: newTrigger(triggerKind, node.id).config })} />}
         {(node.kind === "agent" || node.kind === "model") && <AskEditor node={node} setConfig={setConfig} fields={fields} analysis={analysis} />}
         {node.kind === "condition" && <ConditionEditor cfg={cfg} setConfig={setConfig} fields={fields.map((f) => f.name)} />}
         {node.kind === "approval" && (
@@ -114,14 +117,211 @@ function TriggerEditor({ node, setConfig, setKind }: { node: WorkflowNode; setCo
           {cfg.routeId ? "The computer made this workflow's webhook URL and secret. Copy them from Workflows on the computer." : "The computer makes a webhook URL and secret when you save."} Fields in the posted JSON body become {"{{body.name}}"}.
         </T>
       )}
-      {kind === "github" && (
-        <>
-          <Field label="Repository" placeholder="owner/repo" value={cfg.repo ?? ""} onChangeText={(repo) => setConfig({ repo: repo.trim() })} autoCapitalize="none" autoCorrect={false} />
-          <Choice label="Events" multi options={GITHUB_EVENTS.map((e) => ({ value: e, label: e === "pr_opened" ? "PR opened" : e === "pr_review" ? "PR review" : "CI status" }))} value={cfg.events ?? []} onChange={(events: string[]) => setConfig({ events })} />
-          <Field label="Branch" value={cfg.branch ?? ""} onChangeText={(branch) => setConfig({ branch: branch || undefined })} autoCapitalize="none" autoCorrect={false} />
-          <Field label="Author" value={cfg.author ?? ""} onChangeText={(author) => setConfig({ author: author || undefined })} autoCapitalize="none" autoCorrect={false} />
-        </>
+      {kind === "github" && <GithubTriggerEditor nodeId={node.id} cfg={cfg} setConfig={setConfig} />}
+    </View>
+  );
+}
+
+function GithubTriggerEditor({ nodeId, cfg, setConfig }: { nodeId: string; cfg: Record<string, any>; setConfig: (patch: Record<string, unknown>) => void }) {
+  const { colors } = useTheme();
+  const [status, setStatus] = useState<WorkflowGithubStatus | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const loadStatus = async (includeRepos = true) => {
+    try {
+      const next = await api.workflowGithubStatus({ includeRepos });
+      setStatus(next);
+      setError(null);
+      return next;
+    } catch (err) {
+      setError(err instanceof Error && err.message ? err.message : "Could not check GitHub connection on your computer.");
+      return null;
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    setLoading(true);
+    void loadStatus(true);
+  }, [nodeId]);
+
+  const waiting = status?.signIn?.status === "waiting" || status?.signIn?.status === "starting";
+  useEffect(() => {
+    if (!waiting) return;
+    const timer = setInterval(() => {
+      void loadStatus(true);
+    }, 2500);
+    return () => clearInterval(timer);
+  }, [waiting]);
+
+  const startSignIn = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const signIn = await api.workflowGithubSignInStart();
+      setStatus((prev) =>
+        prev
+          ? { ...prev, signIn }
+          : { installed: true, authenticated: false, login: null, scopes: [], repos: [], installUrl: "https://cli.github.com/", signIn },
+      );
+      if (signIn.status === "done") await loadStatus(true);
+    } catch (err) {
+      const msg = err instanceof Error && err.message ? err.message : "Could not start GitHub sign-in.";
+      setError(msg);
+      showToast(msg, "error");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const cancelSignIn = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const next = await api.workflowGithubSignInCancel();
+      setStatus(next);
+    } catch (err) {
+      const msg = err instanceof Error && err.message ? err.message : "Could not cancel GitHub sign-in.";
+      setError(msg);
+      showToast(msg, "error");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const copyAndOpen = async () => {
+    const code = status?.signIn?.code;
+    const url = status?.signIn?.url || "https://github.com/login/device";
+    if (code) {
+      await Clipboard.setStringAsync(code);
+      showToast("Code copied — paste it on GitHub", "success");
+    }
+    void Linking.openURL(url).catch(() => showToast("Couldn't open GitHub.", "error"));
+  };
+
+  const selectedEvents: string[] = Array.isArray(cfg.events)
+    ? cfg.events.map((e: unknown) => String(e))
+    : typeof cfg.events === "string" && cfg.events.trim()
+      ? cfg.events.split(",").map((s: string) => s.trim()).filter(Boolean)
+      : ["pr_opened"];
+
+  const onEventsChange = (events: string[]) => {
+    const patch: Record<string, unknown> = { events };
+    if (events.includes("bot_mentioned") && !cfg.mentionHandle) {
+      patch.mentionHandle = "@botkins-bot";
+    }
+    setConfig(patch);
+  };
+
+  const signIn = status?.signIn;
+  const repoOptions = (status?.repos ?? []).slice(0, 12).map((r) => ({ value: r, label: r }));
+
+  return (
+    <View style={{ gap: space.lg }}>
+      <View>
+        <Label>GitHub connection</Label>
+        <Group>
+          <View style={{ padding: space.md, gap: space.sm }}>
+            {loading && !status ? (
+              <T variant="footnote" color="muted">Checking GitHub CLI on your computer…</T>
+            ) : !status?.installed ? (
+              <>
+                <T variant="footnote" color="muted">
+                  Install the GitHub CLI (gh) on your computer so Botkins can connect GitHub and poll locally.
+                </T>
+                <View style={{ flexDirection: "row", gap: space.sm, flexWrap: "wrap" }}>
+                  <Button
+                    title="Install GitHub CLI"
+                    size="sm"
+                    icon={ExternalLink}
+                    onPress={() => void Linking.openURL(status?.installUrl || "https://cli.github.com/").catch(() => showToast("Couldn't open that page.", "error"))}
+                  />
+                  <Button title="Refresh" size="sm" variant="secondary" icon={RefreshCw} disabled={loading} onPress={() => void loadStatus(true)} />
+                </View>
+              </>
+            ) : signIn?.status === "waiting" && signIn.code ? (
+              <>
+                <T variant="footnote" color="muted">Copy this one-time code and enter it on GitHub to connect:</T>
+                <View style={{ paddingVertical: space.sm, paddingHorizontal: space.md, borderRadius: radius.md, backgroundColor: colors.sunken, alignSelf: "flex-start" }}>
+                  <T variant="mono" weight="700" style={{ fontSize: 18, letterSpacing: 1.5 }}>{signIn.code}</T>
+                </View>
+                <View style={{ flexDirection: "row", gap: space.sm, flexWrap: "wrap" }}>
+                  <Button title="Copy code & open GitHub" size="sm" icon={Copy} onPress={() => void copyAndOpen()} />
+                  <Button title="Cancel" size="sm" variant="secondary" disabled={busy} onPress={() => void cancelSignIn()} />
+                </View>
+                <T variant="caption" color="muted">Waiting for GitHub sign-in to complete…</T>
+              </>
+            ) : status.authenticated ? (
+              <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: space.sm, flexWrap: "wrap" }}>
+                <View style={{ flexDirection: "row", alignItems: "center", gap: space.xs }}>
+                  <CheckCircle2 size={16} color={colors.success} />
+                  <T variant="subhead">Connected{status.login ? ` as @${status.login}` : ""}</T>
+                </View>
+                <View style={{ flexDirection: "row", gap: space.xs }}>
+                  <Button title="Refresh" size="sm" variant="secondary" disabled={loading || busy} onPress={() => void loadStatus(true)} />
+                  <Button title="Reconnect" size="sm" variant="secondary" disabled={busy} onPress={() => void startSignIn()} />
+                </View>
+              </View>
+            ) : (
+              <>
+                <T variant="footnote" color="muted">
+                  Sign in once with your GitHub account so your computer can poll issues, PRs, comments, and @mentions locally.
+                </T>
+                <View style={{ flexDirection: "row", gap: space.sm }}>
+                  <Button title={busy ? "Starting…" : "Connect GitHub"} size="sm" icon={KeyRound} disabled={busy} onPress={() => void startSignIn()} />
+                  <Button title="Refresh" size="sm" variant="secondary" disabled={loading || busy} onPress={() => void loadStatus(true)} />
+                </View>
+              </>
+            )}
+            {(error || signIn?.status === "failed") && (
+              <T variant="footnote" color="danger">{error || signIn?.error}</T>
+            )}
+          </View>
+        </Group>
+      </View>
+
+      <Field label="Repository" placeholder="owner/repo" value={cfg.repo ?? ""} onChangeText={(repo) => setConfig({ repo: repo.trim() })} autoCapitalize="none" autoCorrect={false} />
+      {repoOptions.length > 0 && (
+        <Choice label="Your repositories" options={repoOptions} value={cfg.repo ?? ""} onChange={(repo: string) => setConfig({ repo })} />
       )}
+
+      <Choice
+        label="Events"
+        multi
+        options={GITHUB_EVENTS.map((e) => ({
+          value: e,
+          label: e === "user_mentioned" && status?.login ? `Mentioned @${status.login}` : GITHUB_EVENT_LABEL[e],
+        }))}
+        value={selectedEvents}
+        onChange={onEventsChange}
+      />
+
+      {selectedEvents.includes("bot_mentioned") && (
+        <Field
+          label="Bot mention handle(s)"
+          hint="Default @botkins-bot. Separate multiple handles with commas."
+          placeholder="@botkins-bot"
+          value={cfg.mentionHandle ?? "@botkins-bot"}
+          onChangeText={(mentionHandle) => setConfig({ mentionHandle })}
+          autoCapitalize="none"
+          autoCorrect={false}
+        />
+      )}
+
+      <Field label="Branch (PRs)" placeholder="Optional, e.g. main" value={cfg.branch ?? ""} onChangeText={(branch) => setConfig({ branch: branch.trim() || undefined })} autoCapitalize="none" autoCorrect={false} />
+      <Field label="Author" placeholder="Optional username" value={cfg.author ?? ""} onChangeText={(author) => setConfig({ author: author.trim().replace(/^@/, "") || undefined })} autoCapitalize="none" autoCorrect={false} />
+      <Field
+        label="Poll every (minutes)"
+        keyboardType="number-pad"
+        value={String(cfg.pollMinutes ?? 5)}
+        onChangeText={(text) => {
+          const n = Number(text.replace(/[^0-9]/g, ""));
+          setConfig({ pollMinutes: n >= 1 ? Math.min(120, n) : 5 });
+        }}
+      />
     </View>
   );
 }

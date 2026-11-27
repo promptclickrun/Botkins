@@ -352,6 +352,24 @@ export type Run = {
 };
 export type WorkflowNodeKind = "trigger" | "agent" | "model" | "condition" | "approval" | "output";
 export type WorkflowTriggerKind = "task" | "schedule" | "manual" | "routine" | "chat" | "webhook" | "github";
+
+export interface WorkflowGithubSignIn {
+  status: "idle" | "starting" | "waiting" | "done" | "failed";
+  code: string | null;
+  url: string | null;
+  error: string | null;
+  login: string | null;
+}
+
+export interface WorkflowGithubStatus {
+  installed: boolean;
+  authenticated: boolean;
+  login: string | null;
+  scopes: string[];
+  repos: string[];
+  installUrl: string;
+  signIn: WorkflowGithubSignIn;
+}
 export type WorkflowOutputDestination = "chat" | "feed" | "idea" | "goal" | "notification";
 
 export interface WorkflowFieldDef {
@@ -1301,6 +1319,9 @@ declare global {
       workflowRespondApproval(runId: string, nodeId: string | null, decision: "approved" | "rejected", note?: string): Promise<WorkflowRun>;
       workflowCancelRun(runId: string): Promise<WorkflowRun>;
       workflowRotateWebhookSecret(workflowId: string, nodeId: string): Promise<{ routeId: string; secret: string }>;
+      workflowGithubStatus(options?: { includeRepos?: boolean }): Promise<WorkflowGithubStatus>;
+      workflowGithubSignInStart(): Promise<WorkflowGithubSignIn>;
+      workflowGithubSignInCancel(): Promise<WorkflowGithubStatus>;
       workflowExport(id: string): Promise<boolean>;
       workflowImport(): Promise<{ workflow: Workflow; unresolvedAgents: string[] } | null>;
       workflowExportText(id: string): Promise<string>;

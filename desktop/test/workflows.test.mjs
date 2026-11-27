@@ -13,6 +13,14 @@ import {
   validateWorkflow,
 } from "../desktop/workflow-fields.mjs";
 import { exportWorkflow, parseImportedWorkflow, WORKFLOW_SCHEMA_VERSION } from "../desktop/workflow-port.mjs";
+import { EventEmitter } from "node:events";
+import {
+  WorkflowGithubAuth,
+  findMentionInText,
+  parseGhAuthStatus,
+  parseGhDeviceOutput,
+  parseMentionHandles,
+} from "../desktop/workflow-github.mjs";
 
 function setup(t, opts = {}) {
   const dir = mkdtempSync(join(tmpdir(), "botkins-workflows-"));
@@ -728,3 +736,221 @@ test("workflows and workflowRuns persist across workspace restart", async (t) =>
   assert.equal(reloaded.workflows.listRuns(wf.id).length, 1);
   assert.equal(reloaded.workflows.listRuns(wf.id)[0].status, "completed");
 });
+
+/* ================================================================
+   6. GitHub issues, comments, mentions & local gh device-code auth
+   ================================================================ */
+
+test("GitHub trigger polls issues, PR updates, comments, user mentions, and @bot mentions", async (t) => {
+  let snapshot = { prs: [], issues: [], comments: [], viewerLogin: "colt" };
+
+  const { ws } = setup(t, {
+    workflows: {
+      githubPoller: async () => snapshot,
+    },
+  });
+
+  const wf = ws.workflows.create({
+    name: "GitHub triage",
+    nodes: [
+      {
+        id: "tg",
+        kind: "trigger",
+        triggerKind: "github",
+        label: "Botkins GitHub",
+        config: {
+          repo: "promptclickrun/Botkins",
+          events: ["issue_opened", "issue_updated", "pr_updated", "issue_comment", "user_mentioned", "bot_mentioned"],
+          mentionHandle: "@botkins-bot, @glory-bot",
+          pollMinutes: 1,
+        },
+      },
+      {
+        id: "o1",
+        kind: "output",
+        label: "Feed",
+        config: {
+          destination: "feed",
+          title: "{{event}}:{{item_type}}#{{number}}:{{mention}}",
+          template: "{{title}} | {{body}} | {{labels}}",
+        },
+      },
+    ],
+    edges: [{ id: "e1", from: "tg", to: "o1" }],
+  });
+
+  const baseNow = Date.UTC(2026, 6, 2, 12, 0, 0);
+  // 1) Initial seed baseline (existing issue #1 should NOT fire)
+  snapshot = {
+    viewerLogin: "colt",
+    prs: [
+      {
+        number: 5,
+        title: "Existing PR",
+        body: "Initial body",
+        url: "https://github.com/promptclickrun/Botkins/pull/5",
+        author: { login: "alice" },
+        state: "OPEN",
+        labels: [{ name: "enhancement" }],
+        updatedAt: "2026-07-02T10:00:00Z",
+      },
+    ],
+    issues: [
+      {
+        number: 1,
+        title: "Old issue",
+        body: "Hello @botkins-bot",
+        url: "https://github.com/promptclickrun/Botkins/issues/1",
+        author: { login: "alice" },
+        state: "OPEN",
+        labels: [{ name: "bug" }],
+        updatedAt: "2026-07-02T10:00:00Z",
+      },
+    ],
+    comments: [],
+  };
+  await ws.workflows.tick(baseNow);
+  assert.equal(ws.workflows.listRuns(wf.id).length, 0);
+
+  // 2) New issue #2 mentioning @botkins-bot + PR #5 updated -> fires issue_opened, bot_mentioned, pr_updated
+  snapshot = {
+    ...snapshot,
+    prs: [
+      {
+        ...snapshot.prs[0],
+        title: "Existing PR (edited)",
+        updatedAt: "2026-07-02T12:01:00Z",
+      },
+    ],
+    issues: [
+      ...snapshot.issues,
+      {
+        number: 2,
+        title: "Crash on watch",
+        body: "Hey @botkins-bot can you investigate?",
+        url: "https://github.com/promptclickrun/Botkins/issues/2",
+        author: { login: "bob" },
+        state: "OPEN",
+        labels: [{ name: "bug" }, { name: "watch" }],
+        updatedAt: "2026-07-02T12:01:30Z",
+      },
+    ],
+  };
+  await ws.workflows.tick(baseNow + 120_000);
+  await waitFor(() => ws.workflows.listRuns(wf.id).length === 3 && ws.workflows.listRuns(wf.id).every((r) => r.status === "completed"));
+  const titlesAfterStep2 = ws.state.board.map((b) => b.title);
+  assert.ok(titlesAfterStep2.includes("issue_opened:issue#2:"));
+  assert.ok(titlesAfterStep2.includes("bot_mentioned:issue#2:@botkins-bot"));
+  assert.ok(titlesAfterStep2.includes("pr_updated:pr#5:"));
+  const botPost = ws.state.board.find((b) => b.title === "bot_mentioned:issue#2:@botkins-bot");
+  assert.ok(botPost.body.includes("bug, watch"));
+
+  // 3) Re-polling unchanged snapshot does NOT duplicate any run
+  await ws.workflows.tick(baseNow + 240_000);
+  assert.equal(ws.workflows.listRuns(wf.id).length, 3);
+
+  // 4) Comment mentioning @colt (signed-in user) and issue #2 updated -> fires issue_updated, issue_comment, user_mentioned
+  snapshot = {
+    ...snapshot,
+    issues: snapshot.issues.map((iss) =>
+      iss.number === 2 ? { ...iss, state: "CLOSED", updatedAt: "2026-07-02T12:05:00Z" } : iss,
+    ),
+    comments: [
+      {
+        id: "issue:9001",
+        number: 2,
+        itemType: "comment",
+        title: "Crash on watch",
+        body: "cc @colt and @glory-bot (ignoring foo@colt.io and @colt2)",
+        author: "carol",
+        url: "https://github.com/promptclickrun/Botkins/issues/2#issuecomment-9001",
+        updatedAt: "2026-07-02T12:05:10Z",
+      },
+    ],
+  };
+  await ws.workflows.tick(baseNow + 360_000);
+  await waitFor(() => ws.workflows.listRuns(wf.id).length === 7 && ws.workflows.listRuns(wf.id).every((r) => r.status === "completed"));
+  const titlesAfterStep4 = ws.state.board.map((b) => b.title);
+  assert.ok(titlesAfterStep4.includes("issue_updated:issue#2:"));
+  assert.ok(titlesAfterStep4.includes("issue_comment:comment#2:"));
+  assert.ok(titlesAfterStep4.includes("user_mentioned:comment#2:@colt"));
+  assert.ok(titlesAfterStep4.includes("bot_mentioned:comment#2:@glory-bot"));
+});
+
+test("workflow-github helpers parse mentions, gh auth status, and device-code sign-in lifecycle", async () => {
+  assert.deepEqual(parseMentionHandles("@botkins-bot, glory-bot"), ["@botkins-bot", "@glory-bot"]);
+  assert.equal(findMentionInText("please help @botkins-bot!", ["@botkins-bot"]), "@botkins-bot");
+  assert.equal(findMentionInText("email@botkins-bot.com and @botkins-bot2", ["@botkins-bot"]), null);
+
+  const parsedAuth = parseGhAuthStatus(`github.com
+  ✓ Logged in to github.com account coltcoan (keyring)
+  - Active account: true
+  - Token scopes: 'gist', 'read:org', 'repo'`);
+  assert.equal(parsedAuth.authenticated, true);
+  assert.equal(parsedAuth.login, "coltcoan");
+  assert.deepEqual(parsedAuth.scopes, ["gist", "read:org", "repo"]);
+  assert.equal(parseGhAuthStatus("You are not logged into any GitHub hosts.").authenticated, false);
+
+  const device = parseGhDeviceOutput("! First copy your one-time code: ABCD-1234\nPress Enter to open https://github.com/login/device in your browser...");
+  assert.equal(device.code, "ABCD-1234");
+  assert.equal(device.url, "https://github.com/login/device");
+
+  // Mock gh spawn to verify WorkflowGithubAuth device sign-in and cancellation
+  let fakeChild = null;
+  let loggedIn = false;
+  const auth = new WorkflowGithubAuth({
+    findGh: () => "/usr/bin/gh",
+    execGh: async (_bin, args) => {
+      if (args[0] === "auth" && args[1] === "status") {
+        return loggedIn
+          ? { ok: true, stdout: "Logged in to github.com account coltcoan\nToken scopes: 'repo'", stderr: "" }
+          : { ok: false, stdout: "", stderr: "You are not logged into any GitHub hosts." };
+      }
+      if (args[0] === "api" && args[1] === "user") {
+        return loggedIn ? { ok: true, stdout: "coltcoan\n", stderr: "" } : { ok: false, stdout: "", stderr: "" };
+      }
+      if (args[0] === "repo") {
+        return { ok: true, stdout: JSON.stringify([{ nameWithOwner: "promptclickrun/Botkins" }]), stderr: "" };
+      }
+      return { ok: true, stdout: "", stderr: "" };
+    },
+    spawnGh: () => {
+      const child = new EventEmitter();
+      child.stdout = new EventEmitter();
+      child.stderr = new EventEmitter();
+      child.stdin = { write: () => {} };
+      child.kill = () => child.emit("close", 1);
+      fakeChild = child;
+      setTimeout(() => {
+        child.stderr.emit("data", "! First copy your one-time code: WXYZ-9876\nPress Enter to open https://github.com/login/device in your browser...\n");
+      }, 15);
+      return child;
+    },
+  });
+
+  const before = await auth.status();
+  assert.equal(before.installed, true);
+  assert.equal(before.authenticated, false);
+
+  const started = await auth.startSignIn();
+  assert.equal(started.status, "waiting");
+  assert.equal(started.code, "WXYZ-9876");
+  assert.equal(started.url, "https://github.com/login/device");
+
+  loggedIn = true;
+  fakeChild.emit("close", 0);
+  await waitFor(() => auth.signInSnapshot().status === "done");
+  assert.equal(auth.signInSnapshot().login, "coltcoan");
+
+  const after = await auth.status({ includeRepos: true });
+  assert.equal(after.authenticated, true);
+  assert.equal(after.login, "coltcoan");
+  assert.deepEqual(after.repos, ["promptclickrun/Botkins"]);
+
+  // Starting another sign-in and cancelling resets signIn to idle
+  await auth.startSignIn();
+  const cancelled = await auth.cancelSignIn();
+  assert.equal(cancelled.signIn.status, "idle");
+  auth.stop();
+});
+

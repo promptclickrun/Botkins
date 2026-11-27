@@ -835,6 +835,9 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
     workflowRespondApproval: (runId, nodeId, decision, note) => workspace.workflows.respondApproval(runId, nodeId ?? null, decision, note ?? ""),
     workflowCancelRun: (runId) => workspace.workflows.cancelRun(runId),
     workflowRotateWebhookSecret: (workflowId, nodeId) => workspace.workflows.rotateWebhookSecret(workflowId, nodeId),
+    workflowGithubStatus: (options) => workspace.workflows.githubStatus(options ?? {}),
+    workflowGithubSignInStart: () => workspace.workflows.githubSignInStart(),
+    workflowGithubSignInCancel: () => workspace.workflows.githubSignInCancel(),
     workflowExportText: (id) => JSON.stringify(workspace.workflows.exportJson(id, host.version), null, 2),
     workflowImportText: (raw, agentMap) => workspace.workflows.importJson(raw, agentMap ?? {}),
     workflowExport: async (id) => {
@@ -1628,6 +1631,7 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
       workspace.interactions.cancel(undefined, { detached: true, keep: true });
       workspace.connects.close();
       workspace.mcpApps.close();
+      workspace.workflows?.githubAuth?.stop();
       clearInterval(timer);
       clearInterval(announcing);
       for (const timer of checking) clearTimeout(timer);

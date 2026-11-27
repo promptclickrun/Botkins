@@ -4,16 +4,18 @@
 // - "Runs" tab: run history with per-step statuses, durations, outputs, Approve/Reject controls,
 //   and Retry from failed step (using the node's current settings).
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   AlertTriangle,
   Check,
   CheckCircle2,
   Clock,
   Copy,
+  ExternalLink,
   KeyRound,
   LoaderCircle,
   Plus,
+  RefreshCw,
   RotateCcw,
   ShieldCheck,
   Trash2,
@@ -29,6 +31,7 @@ import type {
   Workflow,
   WorkflowConditionRule,
   WorkflowFieldDef,
+  WorkflowGithubStatus,
   WorkflowNode,
   WorkflowRun,
   WorkflowTriggerKind,
@@ -54,6 +57,304 @@ const CONDITION_OPS: Array<{ value: WorkflowConditionRule["op"]; label: string }
   { value: "exists", label: "is present" },
   { value: "empty", label: "is empty" },
 ];
+
+const GITHUB_EVENT_OPTIONS: Array<{ value: string; label: string; hint: string }> = [
+  { value: "pr_opened", label: "PR opened", hint: "New pull request" },
+  { value: "pr_updated", label: "PR updated", hint: "PR edited, closed, or merged" },
+  { value: "pr_review", label: "PR review", hint: "Review decision changed" },
+  { value: "ci_status", label: "CI status", hint: "Checks passing/failing changed" },
+  { value: "issue_opened", label: "Issue opened", hint: "New issue" },
+  { value: "issue_updated", label: "Issue updated", hint: "Issue edited, labeled, or closed" },
+  { value: "issue_comment", label: "Comment added", hint: "New issue or PR comment" },
+  { value: "user_mentioned", label: "Mentioned me", hint: "Your GitHub @username mentioned" },
+  { value: "bot_mentioned", label: "Bot mentioned", hint: "Custom @bot handle mentioned" },
+];
+
+function normalizeEventList(raw: unknown): string[] {
+  if (Array.isArray(raw)) return raw.map((s) => String(s).trim().toLowerCase()).filter(Boolean);
+  if (typeof raw === "string" && raw.trim()) {
+    return raw
+      .split(",")
+      .map((s) => s.trim().toLowerCase())
+      .filter(Boolean);
+  }
+  return ["pr_opened", "pr_review", "ci_status"];
+}
+
+function GithubTriggerSettings({
+  nodeId,
+  config,
+  setConfig,
+}: {
+  nodeId: string;
+  config: Record<string, any>;
+  setConfig: (patch: Record<string, any>) => void;
+}) {
+  const [status, setStatus] = useState<WorkflowGithubStatus | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [copiedCode, setCopiedCode] = useState(false);
+
+  const loadStatus = async (includeRepos = true) => {
+    try {
+      const next = await api.workflowGithubStatus({ includeRepos });
+      setStatus(next);
+      setError(null);
+      return next;
+    } catch (err: any) {
+      setError(err?.message || "Could not check GitHub CLI status.");
+      return null;
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    setLoading(true);
+    void loadStatus(true);
+  }, [nodeId]);
+
+  const waiting = status?.signIn?.status === "waiting" || status?.signIn?.status === "starting";
+  useEffect(() => {
+    if (!waiting) return;
+    const timer = setInterval(() => {
+      void loadStatus(true);
+    }, 2500);
+    return () => clearInterval(timer);
+  }, [waiting]);
+
+  const handleStartSignIn = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const signIn = await api.workflowGithubSignInStart();
+      setStatus((prev) =>
+        prev
+          ? { ...prev, signIn }
+          : { installed: true, authenticated: false, login: null, scopes: [], repos: [], installUrl: "https://cli.github.com/", signIn },
+      );
+      if (signIn.status === "done") {
+        await loadStatus(true);
+      }
+    } catch (err: any) {
+      setError(err?.message || "Could not start GitHub sign-in.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleCancelSignIn = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const next = await api.workflowGithubSignInCancel();
+      setStatus(next);
+    } catch (err: any) {
+      setError(err?.message || "Could not cancel GitHub sign-in.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleCopyAndOpen = () => {
+    const code = status?.signIn?.code;
+    const url = status?.signIn?.url || "https://github.com/login/device";
+    if (code) {
+      api.copyText(code);
+      setCopiedCode(true);
+      setTimeout(() => setCopiedCode(false), 1800);
+    }
+    void api.openLink(url);
+  };
+
+  const selectedEvents = normalizeEventList(config.events);
+  const toggleEvent = (ev: string) => {
+    const next = selectedEvents.includes(ev)
+      ? selectedEvents.filter((item) => item !== ev)
+      : [...selectedEvents, ev];
+    const patch: Record<string, any> = { events: next };
+    if (ev === "bot_mentioned" && !selectedEvents.includes(ev) && !config.mentionHandle) {
+      patch.mentionHandle = "@botkins-bot";
+    }
+    setConfig(patch);
+  };
+
+  const repoListId = `wf-gh-repos-${nodeId}`;
+  const signIn = status?.signIn;
+
+  return (
+    <>
+      <div className="wf-subbox wf-gh-auth">
+        <div className="wf-subbox-head">
+          <span className="wf-label">GitHub connection</span>
+          <button
+            type="button"
+            className="wf-mini-btn"
+            disabled={loading || busy}
+            onClick={() => void loadStatus(true)}
+            title="Refresh GitHub status"
+          >
+            <RefreshCw size={12} className={loading ? "wf-spin" : ""} /> Refresh
+          </button>
+        </div>
+
+        {loading && !status ? (
+          <p className="wf-hint">
+            <LoaderCircle size={12} className="wf-spin" /> Checking local GitHub CLI…
+          </p>
+        ) : !status?.installed ? (
+          <div className="wf-gh-auth-body">
+            <p className="wf-hint">
+              Install the GitHub CLI (<code>gh</code>) on this computer to connect GitHub and poll events locally.
+            </p>
+            <button
+              type="button"
+              className="wf-mini-btn"
+              onClick={() => void api.openLink(status?.installUrl || "https://cli.github.com/")}
+            >
+              <ExternalLink size={12} /> Install GitHub CLI
+            </button>
+          </div>
+        ) : signIn?.status === "waiting" && signIn.code ? (
+          <div className="wf-gh-auth-body">
+            <p className="wf-hint">Enter this one-time code on GitHub to finish connecting:</p>
+            <div className="wf-gh-code-row">
+              <code className="wf-gh-code">{signIn.code}</code>
+              <button type="button" className="wf-mini-btn wf-mini-btn-primary" onClick={handleCopyAndOpen}>
+                {copiedCode ? <Check size={12} /> : <Copy size={12} />}
+                {copiedCode ? "Copied · Opening…" : "Copy code & open GitHub"}
+              </button>
+            </div>
+            <div className="wf-gh-waiting-row">
+              <span className="wf-hint">
+                <LoaderCircle size={12} className="wf-spin" /> Waiting for GitHub sign-in…
+              </span>
+              <button type="button" className="wf-mini-btn" disabled={busy} onClick={() => void handleCancelSignIn()}>
+                Cancel
+              </button>
+            </div>
+          </div>
+        ) : status.authenticated ? (
+          <div className="wf-gh-connected-row">
+            <span className="wf-gh-status-ok">
+              <CheckCircle2 size={13} /> Connected{status.login ? ` as @${status.login}` : ""}
+            </span>
+            <button type="button" className="wf-mini-btn" disabled={busy} onClick={() => void handleStartSignIn()}>
+              Reconnect
+            </button>
+          </div>
+        ) : (
+          <div className="wf-gh-auth-body">
+            <p className="wf-hint">Sign in once with your GitHub account so Botkins can poll this repository locally.</p>
+            <button
+              type="button"
+              className="wf-mini-btn wf-mini-btn-primary"
+              disabled={busy}
+              onClick={() => void handleStartSignIn()}
+            >
+              {busy ? <LoaderCircle size={12} className="wf-spin" /> : <KeyRound size={12} />}
+              {busy ? "Starting GitHub sign-in…" : "Connect GitHub"}
+            </button>
+          </div>
+        )}
+
+        {(error || signIn?.status === "failed") && (
+          <p className="wf-gh-error">{error || signIn?.error}</p>
+        )}
+      </div>
+
+      <div className="wf-field-group">
+        <label className="wf-label">Repository (owner/repo)</label>
+        <input
+          type="text"
+          list={status?.repos?.length ? repoListId : undefined}
+          value={config.repo || ""}
+          placeholder="promptclickrun/Botkins"
+          onChange={(e) => setConfig({ repo: e.target.value.trim() })}
+        />
+        {!!status?.repos?.length && (
+          <datalist id={repoListId}>
+            {status.repos.map((r) => (
+              <option key={r} value={r} />
+            ))}
+          </datalist>
+        )}
+      </div>
+
+      <div className="wf-field-group">
+        <label className="wf-label">Events</label>
+        <div className="wf-gh-events">
+          {GITHUB_EVENT_OPTIONS.map((opt) => {
+            const active = selectedEvents.includes(opt.value);
+            const label =
+              opt.value === "user_mentioned" && status?.login
+                ? `Mentioned @${status.login}`
+                : opt.label;
+            return (
+              <button
+                key={opt.value}
+                type="button"
+                className={`wf-gh-event-pill ${active ? "active" : ""}`}
+                title={opt.hint}
+                onClick={() => toggleEvent(opt.value)}
+              >
+                {active && <Check size={11} />}
+                <span>{label}</span>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {selectedEvents.includes("bot_mentioned") && (
+        <div className="wf-field-group">
+          <label className="wf-label">Bot mention handle(s)</label>
+          <input
+            type="text"
+            value={config.mentionHandle ?? "@botkins-bot"}
+            placeholder="@botkins-bot"
+            onChange={(e) => setConfig({ mentionHandle: e.target.value })}
+          />
+          <p className="wf-hint">Triggers when an issue, PR, or comment mentions this handle (comma-separated for multiple).</p>
+        </div>
+      )}
+
+      <div className="wf-two-col">
+        <div className="wf-field-group">
+          <label className="wf-label">Branch filter (PRs)</label>
+          <input
+            type="text"
+            value={config.branch || ""}
+            placeholder="Optional, e.g. main"
+            onChange={(e) => setConfig({ branch: e.target.value.trim() || undefined })}
+          />
+        </div>
+        <div className="wf-field-group">
+          <label className="wf-label">Author filter</label>
+          <input
+            type="text"
+            value={config.author || ""}
+            placeholder="Optional username"
+            onChange={(e) => setConfig({ author: e.target.value.trim().replace(/^@/, "") || undefined })}
+          />
+        </div>
+      </div>
+
+      <div className="wf-field-group">
+        <label className="wf-label">Poll interval (min)</label>
+        <input
+          type="number"
+          min={1}
+          max={120}
+          value={config.pollMinutes ?? 5}
+          onChange={(e) => setConfig({ pollMinutes: Math.max(1, Number(e.target.value) || 5) })}
+        />
+        <p className="wf-hint">Polls via local <code>gh</code> CLI (no inbound tunnel or relay required).</p>
+      </div>
+    </>
+  );
+}
 
 interface Props {
   workflow: Workflow;
@@ -281,7 +582,11 @@ export function WorkflowInspector({
                       value={node.triggerKind || "manual"}
                       onChange={(e) => {
                         const tk = e.target.value as WorkflowTriggerKind;
-                        onChangeNode(node.id, (prev) => ({ ...prev, triggerKind: tk, config: {} }));
+                        onChangeNode(node.id, (prev) => ({
+                          ...prev,
+                          triggerKind: tk,
+                          config: tk === "github" ? { events: ["pr_opened", "pr_review", "ci_status"], pollMinutes: 5 } : {},
+                        }));
                       }}
                     >
                       <option value="task">Task Board (created / status changed)</option>
@@ -290,7 +595,7 @@ export function WorkflowInspector({
                       <option value="routine">Routine finished</option>
                       <option value="chat">Chat message / @mention</option>
                       <option value="webhook">Local webhook (secret protected)</option>
-                      <option value="github">GitHub PR / review / CI (gh polling)</option>
+                      <option value="github">GitHub issues, PRs, reviews &amp; @mentions</option>
                     </select>
                   </div>
 
@@ -516,45 +821,7 @@ export function WorkflowInspector({
                   )}
 
                   {node.triggerKind === "github" && (
-                    <>
-                      <div className="wf-field-group">
-                        <label className="wf-label">Repository (owner/repo)</label>
-                        <input
-                          type="text"
-                          value={node.config.repo || ""}
-                          placeholder="promptclickrun/Botkins"
-                          onChange={(e) => setConfig({ repo: e.target.value.trim() })}
-                        />
-                      </div>
-                      <div className="wf-two-col">
-                        <div className="wf-field-group">
-                          <label className="wf-label">Events</label>
-                          <input
-                            type="text"
-                            value={Array.isArray(node.config.events) ? node.config.events.join(", ") : node.config.events || "pr_opened, pr_review, ci_status"}
-                            onChange={(e) =>
-                              setConfig({
-                                events: e.target.value
-                                  .split(",")
-                                  .map((s) => s.trim())
-                                  .filter(Boolean),
-                              })
-                            }
-                          />
-                        </div>
-                        <div className="wf-field-group">
-                          <label className="wf-label">Poll interval (min)</label>
-                          <input
-                            type="number"
-                            min={1}
-                            max={120}
-                            value={node.config.pollMinutes ?? 5}
-                            onChange={(e) => setConfig({ pollMinutes: Math.max(1, Number(e.target.value) || 5) })}
-                          />
-                        </div>
-                      </div>
-                      <p className="wf-hint">Polls via local <code>gh</code> CLI (no inbound tunnel required).</p>
-                    </>
+                    <GithubTriggerSettings nodeId={node.id} config={node.config} setConfig={setConfig} />
                   )}
 
                   {/* Fixed fields reference */}
