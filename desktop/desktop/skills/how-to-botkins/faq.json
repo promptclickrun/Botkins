@@ -1,0 +1,524 @@
+{
+ "schema": 1,
+ "source": "https://botkins.app/faq",
+ "botkinsVersion": "0.17.21",
+ "built": "2026-11-26T23:48:53.443Z",
+ "sections": [
+  {
+   "id": "basics",
+   "title": "The basics",
+   "items": [
+    {
+     "id": "what-is-botkins",
+     "question": "What is Botkins?",
+     "answer": "An app for building your own team of AI agents. You make a bot for each job (meeting prep, inbox triage, code review, research), give it instructions, memory and tools, and it works in chats, on a task board and on a schedule. The bots run on your computer and use the AI plans you already pay for. A phone app pairs with that computer so the team comes with you.",
+     "url": "https://botkins.app/faq#what-is-botkins"
+    },
+    {
+     "id": "is-botkins-an-ai-model",
+     "question": "Is Botkins an AI model?",
+     "answer": "No. Botkins doesn't train or host a model. It runs the agent tools from the providers you already use (ChatGPT through Codex, Claude through Claude Code, GitHub Copilot and others) and gives them a shared home: bots, memory, a wiki, schedules, approvals and a phone app.",
+     "url": "https://botkins.app/faq#is-botkins-an-ai-model"
+    },
+    {
+     "id": "is-it-a-cloud-service",
+     "question": "Is it a cloud service?",
+     "answer": "No. You don't need a Botkins account, and no server holds your bots. Everything runs on a computer you own or a server you rent. The only parts Botkins hosts are optional: a relay that passes sealed messages to your phone when you're away, and a profile service for signing in across devices.",
+     "url": "https://botkins.app/faq#is-it-a-cloud-service"
+    },
+    {
+     "id": "is-it-free-and-open-source",
+     "question": "Is it free and open source?",
+     "answer": "Yes. The app is MIT licensed and the code is on GitHub. There is no Botkins subscription. You pay only for things you already have or choose to add: your AI plans, your computer or server, and optional services such as Composio or a voice provider.",
+     "url": "https://botkins.app/faq#is-it-free-and-open-source"
+    },
+    {
+     "id": "what-are-the-main-parts-of-the-app",
+     "question": "What are the main parts of the app?",
+     "answer": "- Home and Chats: talk to one bot or a group of up to six.\n- Today: panels your bots keep up to date, plus Feed, Ideas and Goals.\n- Work: routines, projects, the task board and an Activity log.\n- Wiki: shared notes on goals, projects, people, meetings and playbooks.\n- Marketplace: bot templates, skills, plugins and connected apps.",
+     "url": "https://botkins.app/faq#what-are-the-main-parts-of-the-app"
+    },
+    {
+     "id": "is-it-finished",
+     "question": "Is it finished?",
+     "answer": "It's a public beta and ships often, sometimes several releases a day. Expect rough edges, and expect them to get fixed quickly. This page says what works today and is open about what doesn't.",
+     "url": "https://botkins.app/faq#is-it-finished"
+    }
+   ]
+  },
+  {
+   "id": "setup",
+   "title": "Install and platforms",
+   "items": [
+    {
+     "id": "which-computers-does-it-run-on",
+     "question": "Which computers does it run on?",
+     "answer": "- Mac: Apple silicon. The app is signed and notarized. There's no Intel Mac desktop build.\n- Windows: x64, shipped as a ZIP. Extract the whole folder and run Botkins.exe. There's no installer yet.\n- Linux: AppImage or tarball, x64 and arm64.\n Get them on the downloads page.",
+     "url": "https://botkins.app/faq#which-computers-does-it-run-on"
+    },
+    {
+     "id": "can-i-run-it-on-a-server-with-no-screen",
+     "question": "Can I run it on a server with no screen?",
+     "answer": "Yes. botkins serve runs Botkins as a background service on Linux (x64 or arm64, with systemd) or macOS. A small VM with 1 vCPU and 1 GB of memory is enough; the service idles around 105 MB. You manage it from the command line or the botkins tui dashboard, and every command takes --json.\n On Linux the installer also sets up a private virtual desktop with a browser that a paired phone can watch and control. Skip it with --no-screen. There is also a Docker image and a one-click Azure deploy.",
+     "url": "https://botkins.app/faq#can-i-run-it-on-a-server-with-no-screen"
+    },
+    {
+     "id": "what-does-the-server-version-leave-out",
+     "question": "What does the server version leave out?",
+     "answer": "Things that need a window or a person at the keyboard: side panes and HTML apps (a phone still draws its own), file dialogs and the clipboard, desktop notifications, dictation and live voice in the window, unlocking a password manager, wiki export to PDF and file thumbnails. A paired phone fills most of those gaps.",
+     "url": "https://botkins.app/faq#what-does-the-server-version-leave-out"
+    },
+    {
+     "id": "how-do-updates-work",
+     "question": "How do updates work?",
+     "answer": "The desktop app checks for a new release shortly after launch and every six hours. On a Mac, Update and restart installs it in one click, and you can let it install automatically when your bots are idle. On Windows and Linux the app shows you the new download. A server host updates with botkins update, and a Docker container with docker compose pull. Every release ships with checksums and a signature.",
+     "url": "https://botkins.app/faq#how-do-updates-work"
+    },
+    {
+     "id": "do-i-need-an-account-to-start",
+     "question": "Do I need an account to start?",
+     "answer": "No. Install the app, sign in to one AI provider, and make a bot. A Botkins profile is optional. It helps when you use several computers or want to share with a team.",
+     "url": "https://botkins.app/faq#do-i-need-an-account-to-start"
+    }
+   ]
+  },
+  {
+   "id": "models",
+   "title": "AI models and cost",
+   "items": [
+    {
+     "id": "which-ai-providers-can-i-use",
+     "question": "Which AI providers can I use?",
+     "answer": "- Sign in with a plan: ChatGPT (through the Codex CLI), Claude (through Claude Code) and GitHub Copilot, including Copilot Free.\n- More agents: OpenCode, plus Grok, Kiro, Antigravity and fx, which connect through ACP (the Agent Client Protocol, a standard way for apps to drive coding agents).\n- With an API key: OpenRouter, Azure AI Foundry, or any OpenAI-compatible endpoint, such as a local Ollama server.\n One provider is enough. Each bot picks its own model, and a chat can switch models without losing the conversation.",
+     "url": "https://botkins.app/faq#which-ai-providers-can-i-use"
+    },
+    {
+     "id": "do-i-need-a-new-ai-subscription",
+     "question": "Do I need a new AI subscription?",
+     "answer": "No. Botkins uses the plans you already pay for. Each provider's own tool has to be installed and signed in on the computer; the app shows Get it next to any that are missing. Your sign-ins stay inside those tools.",
+     "url": "https://botkins.app/faq#do-i-need-a-new-ai-subscription"
+    },
+    {
+     "id": "what-does-it-cost-to-run",
+     "question": "What does it cost to run?",
+     "answer": "Botkins itself is free. What uses your money or your plan allowance:\n- Model turns. Every chat reply, routine run and panel refresh that uses a model is a turn on your plan. A routine every 15 minutes is about 96 turns a day, so pick the slowest schedule that's still useful.\n- Speed settings. Fast and Ultrafast modes use your allowance much faster.\n- API keys. Billed by use, with no plan limits.\n- Hardware. Your own computer is free to use. A cloud VM costs whatever your cloud charges.\n The Usage page shows each plan's limits as the provider reports them, for example \"62% of weekly left · resets Mon\", plus turns, tokens and cost, with CSV export.",
+     "url": "https://botkins.app/faq#what-does-it-cost-to-run"
+    },
+    {
+     "id": "what-is-a-harness",
+     "question": "What is a harness?",
+     "answer": "The program that actually runs a bot's turn. The default, Copilot SDK, runs every model. Provider default lets each provider's own tool run its chats (Codex, Claude Code or the Copilot runtime). Pi (pi.dev) and OMP (omp.sh), two open-source agent runners, can be installed from the app. ACP agents always run themselves. Change it in Settings › General › Harness.\n Some features depend on the harness. Typing into a reply that's still running steers it only on the Copilot harness or native ChatGPT; elsewhere your message waits for the next turn. Plugin hooks and plugin MCP servers need the Copilot harness.",
+     "url": "https://botkins.app/faq#what-is-a-harness"
+    },
+    {
+     "id": "could-a-provider-stop-this-from-working",
+     "question": "Could a provider stop this from working?",
+     "answer": "Yes, and you should know that up front. Using a ChatGPT plan goes through the endpoint Codex uses, with your Codex sign-in, and a Claude plan goes through the official Claude Code program. Both rely on those vendors continuing to allow it. An API key is the fallback that doesn't depend on a plan.",
+     "url": "https://botkins.app/faq#could-a-provider-stop-this-from-working"
+    }
+   ]
+  },
+  {
+   "id": "bots",
+   "title": "Bots, memory and chats",
+   "items": [
+    {
+     "id": "how-do-i-make-a-bot",
+     "question": "How do I make a bot?",
+     "answer": "Start from a template in the Marketplace, import one (a template file or a GitHub Copilot agent), or fill in a blank form. Give it a name, a job, instructions (up to 30,000 characters), a model and the tools it may use. Bot Studio gives it a look: 30 characters, 7 palettes and 6 eye styles. A new workspace starts with no bots.",
+     "url": "https://botkins.app/faq#how-do-i-make-a-bot"
+    },
+    {
+     "id": "what-are-agents-md-user-md-and-identity-md",
+     "question": "What are AGENTS.md, USER.md and IDENTITY.md?",
+     "answer": "Optional profile files for each bot, in plain Markdown. AGENTS.md holds working habits, USER.md holds what the bot knows about you, and IDENTITY.md holds its role and voice. Each can be up to 64 KB. A bot can edit its own files, and changes apply on its next turn. Instructions on the bot's page win if they disagree.",
+     "url": "https://botkins.app/faq#what-are-agents-md-user-md-and-identity-md"
+    },
+    {
+     "id": "how-does-memory-work",
+     "question": "How does memory work?",
+     "answer": "Each bot keeps a memory file it reads at the start of every chat. You can read, edit or clear it any time. It holds short, lasting facts, not whole conversations: up to 24,000 characters, 600 per entry, and the newest 6,000 characters go into each prompt.\n A bot writes memory only in chats a person is part of. Routines, tasks and helpers can read it but never change it, so nothing running unwatched can rewrite what a bot believes about you.",
+     "url": "https://botkins.app/faq#how-does-memory-work"
+    },
+    {
+     "id": "can-bots-remember-past-conversations",
+     "question": "Can bots remember past conversations?",
+     "answer": "They can search them. Bots have a search across every past chat on every harness, and can open the messages around a match. Results are capped at 30 matches and 40 messages per read.",
+     "url": "https://botkins.app/faq#can-bots-remember-past-conversations"
+    },
+    {
+     "id": "what-is-the-wiki",
+     "question": "What is the wiki?",
+     "answer": "Shared notes for the whole team in plain Markdown files, in sections for Goals, Projects, People, Meetings and Playbooks, with links and backlinks. Each page keeps 20 versions, and deleted pages go to a trash folder. You can export it as a zip, HTML or (on the desktop) PDF. A bot with limited access sees only the pages for its projects.",
+     "url": "https://botkins.app/faq#what-is-the-wiki"
+    },
+    {
+     "id": "how-do-group-chats-and-teamwork-work",
+     "question": "How do group chats and teamwork work?",
+     "answer": "A group chat holds 2 to 6 bots. Mention one with @name, or everyone with @everyone. Outside group chats, a bot can ask a teammate for help up to 8 times per reply. Helpers can't ask more helpers, and any approval they need comes back to your chat. Bots can also start subagents: up to 16 per reply, 8 at once, and those can't start their own.",
+     "url": "https://botkins.app/faq#how-do-group-chats-and-teamwork-work"
+    },
+    {
+     "id": "can-a-bot-work-on-my-code",
+     "question": "Can a bot work on my code?",
+     "answer": "Yes. Attach a project folder to a chat and pick a mode: Default, Plan or YOLO. The Changes view shows diffs, and Commit… lets you commit them. The Commit button never pushes. A bot can still run git push in its shell if you approve it or the chat is in YOLO mode, and force-pushes are flagged as risky.",
+     "url": "https://botkins.app/faq#can-a-bot-work-on-my-code"
+    },
+    {
+     "id": "what-do-the-approval-levels-mean",
+     "question": "What do the approval levels mean?",
+     "answer": "You choose how much a bot may do without asking: per request, read-only, assisted, or approve-all (YOLO). An approval waits as long as it takes, with no timeout. Risky commands need a press and hold on the phone. Turns themselves have no time limit either; Stop ends one.",
+     "url": "https://botkins.app/faq#what-do-the-approval-levels-mean"
+    },
+    {
+     "id": "what-happens-if-the-app-restarts-mid-reply",
+     "question": "What happens if the app restarts mid-reply?",
+     "answer": "Chats resume after a restart. If a bot asks you a question and you don't answer within 10 minutes, it carries on without the answer. The question stays open, and your next message answers it. Approvals never time out.",
+     "url": "https://botkins.app/faq#what-happens-if-the-app-restarts-mid-reply"
+    }
+   ]
+  },
+  {
+   "id": "unattended",
+   "title": "Work that runs without you",
+   "items": [
+    {
+     "id": "what-is-the-task-board",
+     "question": "What is the task board?",
+     "answer": "A board of jobs in lanes: Later, Ready, Working, Needs you, Blocked, Done and Archived. Put a task in Ready with a bot and it starts by itself in its own chat. When it finishes, it waits for you to Approve or Try again. By default two tasks run at once, one per bot. Settings raise that to 16 and 8.",
+     "url": "https://botkins.app/faq#what-is-the-task-board"
+    },
+    {
+     "id": "what-is-a-routine",
+     "question": "What is a routine?",
+     "answer": "A job on a schedule: once, daily, weekdays, weekly or a cron expression, in your time zone. Results can go to the routine's own chat, any chat, Today's Feed, Ideas or Goals, or nowhere. A run that has nothing to say can stay silent, with no message and no notification. A failed run always tells you.",
+     "url": "https://botkins.app/faq#what-is-a-routine"
+    },
+    {
+     "id": "whats-the-difference-between-an-instructions-routine-and-a-scrip",
+     "question": "What's the difference between an instructions routine and a script routine?",
+     "answer": "An instructions routine is a model turn every time it runs. A script routine runs a shell script with no model, so it costs nothing on your plan. The script can wake the bot only when it finds something (a changed status, a new file, a count over a limit), and the bot writes the message from its output. That's the cheap way to build a watcher.\n Scripts stop after 10 minutes. Only you can add or change one: a bot can propose a script, and you see all of it in an approval card before it's saved.",
+     "url": "https://botkins.app/faq#whats-the-difference-between-an-instructions-routine-and-a-scrip"
+    },
+    {
+     "id": "are-there-limits-on-routines",
+     "question": "Are there limits on routines?",
+     "answer": "A bot can make at most 25 routines, none more often than every 15 minutes. Panel refreshes faster than every 15 minutes need an extra confirmation.",
+     "url": "https://botkins.app/faq#are-there-limits-on-routines"
+    },
+    {
+     "id": "what-are-workflows",
+     "question": "What are Workflows?",
+     "answer": "Event-driven automations on a canvas, next to routines. A trigger (a task changing status, a schedule, a routine finishing, a chat message, a webhook, a GitHub event or a manual run) flows through agent, model, condition and approval steps to an output such as a chat, Feed or a notification. Because Botkins sees those events itself, a workflow needs no polling.",
+     "url": "https://botkins.app/faq#what-are-workflows"
+    },
+    {
+     "id": "what-are-today-and-spaces",
+     "question": "What are Today and Spaces?",
+     "answer": "Today is a page of panels your bots keep current: metrics, Markdown, lists, tables, charts, or a custom interactive view. Each panel can refresh on a schedule, and each refresh is one model turn. Today, Feed, Ideas and Goals are built in, and you can add more spaces and share them with people you pick, everyone on your team, or by a view-only link (the link needs the relay on).",
+     "url": "https://botkins.app/faq#what-are-today-and-spaces"
+    },
+    {
+     "id": "unwatched",
+     "question": "What can bots do while I'm not watching?",
+     "answer": "Less than when you're watching, but not nothing. Routines, tasks, panel refreshes and helpers lose a fixed set of tools: they can't write memory or the wiki, can't use phone tools that change things, can't send iMessages or Mac mail, can't create routines and can't show side panes.\n Everything else follows the rules you set. A routine still delivers its result to a chat or the Feed. File, shell and app tools work if you've approved them for that bot, for example with approve-all, YOLO or a remembered approval; otherwise the run waits for your answer in the app or on your phone. A connected browser extension lets bots act in your browser without asking per click. A script routine runs as your user with no sandbox, which is why only you can add or change one.\n The safe default is per-request approvals. Give approve-all only to bots whose job you'd trust to run alone.",
+     "url": "https://botkins.app/faq#unwatched"
+    },
+    {
+     "id": "can-a-bot-speak-up-without-being-asked",
+     "question": "Can a bot speak up without being asked?",
+     "answer": "Yes, with the Proactive agent, which is experimental and switched on under Settings › Experimental. A bot quietly checks for things worth your attention, such as a task waiting too long in Review or a request nobody answered. It sends one suggestion or stays quiet, and learns from how you rate what it sends. The check itself only reads and drafts. If a suggestion offers an action, taking it starts a normal turn in your chat.",
+     "url": "https://botkins.app/faq#can-a-bot-speak-up-without-being-asked"
+    },
+    {
+     "id": "does-my-computer-have-to-stay-on",
+     "question": "Does my computer have to stay on?",
+     "answer": "Yes. Botkins does its work on your computer, so a sleeping or switched-off computer does nothing. Closing the window keeps Botkins running in the tray. Run at startup is off until you turn it on. When the computer wakes, missed checks run once to catch up. For a host that never sleeps, run botkins serve on a small server.",
+     "url": "https://botkins.app/faq#does-my-computer-have-to-stay-on"
+    }
+   ]
+  },
+  {
+   "id": "tools",
+   "title": "Apps, tools and plugins",
+   "items": [
+    {
+     "id": "how-do-bots-use-gmail-slack-github-and-other-apps",
+     "question": "How do bots use Gmail, Slack, GitHub and other apps?",
+     "answer": "Through your own Composio account, which connects more than 1,000 apps. Sign in once under Marketplace › Apps, then connect each app. A bot can show a Connect card in chat when it needs one. Your app connections live in your Composio account, not with Botkins.",
+     "url": "https://botkins.app/faq#how-do-bots-use-gmail-slack-github-and-other-apps"
+    },
+    {
+     "id": "can-i-add-my-own-mcp-servers",
+     "question": "Can I add my own MCP servers?",
+     "answer": "Yes, local or remote, signed in with an API key, OAuth or custom headers. Import… takes an mcpServers JSON block from another tool.",
+     "url": "https://botkins.app/faq#can-i-add-my-own-mcp-servers"
+    },
+    {
+     "id": "what-are-skills",
+     "question": "What are skills?",
+     "answer": "A skill is a folder with a SKILL.md file that teaches a bot how to do one kind of job. Skills work for every bot, and you can turn one off for a single bot. Botkins ships with one that teaches bots its own command line.",
+     "url": "https://botkins.app/faq#what-are-skills"
+    },
+    {
+     "id": "what-are-plugins-and-the-marketplace",
+     "question": "What are plugins and the Marketplace?",
+     "answer": "Plugins bundle skills, hooks and MCP servers. The built-in marketplaces are Botkins', github/awesome-copilot and github/copilot-plugins, and you can add more. Before you install, Botkins shows every command the plugin will start. It warns about risky plugins but leaves the decision to you.\n Hooks and plugin MCP servers run only on the Copilot harness. On direct Claude, Codex, OpenCode or ACP sessions a plugin contributes its skills only.",
+     "url": "https://botkins.app/faq#what-are-plugins-and-the-marketplace"
+    },
+    {
+     "id": "what-are-script-commands",
+     "question": "What are script commands?",
+     "answer": "Your own slash commands that run a script with no model, for workflows you repeat. Type /name and you get the script's output. Botkins pins each script by its hash, so one edited outside the app won't run until you approve it again.",
+     "url": "https://botkins.app/faq#what-are-script-commands"
+    },
+    {
+     "id": "can-a-bot-use-my-web-browser",
+     "question": "Can a bot use my web browser?",
+     "answer": "With the Botkins extension for Chrome and Edge, yes. Bots can open tabs, click, type, read pages and take screenshots, even while you're away. You choose all tabs or only a Botkins tab group, and incognito and browser pages are always off limits. For logins, the bot asks for a saved credential, you approve it, and the extension fills it in. The bot never sees the password.\n The extension isn't in the Chrome or Edge stores yet. You load it unpacked in developer mode. The desktop app has no browser of its own for bots to drive; the server version includes one on its virtual desktop.",
+     "url": "https://botkins.app/faq#can-a-bot-use-my-web-browser"
+    },
+    {
+     "id": "how-are-passwords-and-api-keys-handled",
+     "question": "How are passwords and API keys handled?",
+     "answer": "They go into an encrypted vault on your computer, guarded by your system keychain, and are never shown again once saved. A bot never asks for a secret in chat. It asks for secure input, and you pick a saved entry or type the value into a private field. The bot gets a one-time handle that works only for the destination you approved and expires in five minutes. 1Password, Bitwarden and Proton Pass work through their own command-line tools.",
+     "url": "https://botkins.app/faq#how-are-passwords-and-api-keys-handled"
+    },
+    {
+     "id": "can-bots-read-and-send-imessages-and-mail",
+     "question": "Can bots read and send iMessages and Mail?",
+     "answer": "On a Mac, yes, if you allow it. Each can be off, read-only, or read and interact. Every send asks you first, with at most five per reply. It needs Full Disk Access, Automation permission and the separate imsg tool. Reactions, deletes, forwards and attachments aren't supported. This is new and has been tested only against stand-ins so far.",
+     "url": "https://botkins.app/faq#can-bots-read-and-send-imessages-and-mail"
+    },
+    {
+     "id": "can-i-talk-to-my-bots-by-voice",
+     "question": "Can I talk to my bots by voice?",
+     "answer": "Yes: dictation, read-aloud and live voice, through OpenAI, Azure, ElevenLabs, Gemini or your own speech server. Botkins has no speech engine of its own, so you bring a provider. So far only live voice with a ChatGPT sign-in has been used against a real service.",
+     "url": "https://botkins.app/faq#can-i-talk-to-my-bots-by-voice"
+    },
+    {
+     "id": "can-my-bots-use-another-computer",
+     "question": "Can my bots use another computer?",
+     "answer": "Yes. Make that computer a Node Host and your bots can use its files, shell, screen and notifications. The node keeps its own rules and audit log. Shell commands ask by default, whole-computer file access is off by default, and Pause stops everything at once. Both computers must belong to the same owner. When a node needs your approval, the card shows up in the chat that asked, on your computer or your phone. The node still checks its own rules before it runs anything.",
+     "url": "https://botkins.app/faq#can-my-bots-use-another-computer"
+    }
+   ]
+  },
+  {
+   "id": "phone",
+   "title": "Phone, Watch and away from home",
+   "items": [
+    {
+     "id": "what-does-the-phone-app-do",
+     "question": "What does the phone app do?",
+     "answer": "Almost everything the computer app does: chat with streaming replies, answer approvals and questions, talk by voice, check usage, connect apps, and watch or control your computer's screen. You can also manage bots, routines, the task board, the wiki, tools and credentials. The phone doesn't run bots itself. It's a remote for your computer.",
+     "url": "https://botkins.app/faq#what-does-the-phone-app-do"
+    },
+    {
+     "id": "which-phones-are-supported",
+     "question": "Which phones are supported?",
+     "answer": "- iPhone: the main phone app, in beta on TestFlight.\n- Android: in beta through Firebase App Distribution, with fewer features than iPhone. Chat, approvals, voice and managing your bots work. Not yet: push notifications, finding the computer on your network by itself (scan the QR code instead), turning on screen sharing for a server host, Lock Screen Live Activities and widgets, Apple Music and Apple Health.\n- Apple Watch: a companion app that shows your main bot's latest chat and does live voice. It needs your iPhone nearby.\n Neither phone app is in the public app stores yet. Join from the downloads page.",
+     "url": "https://botkins.app/faq#which-phones-are-supported"
+    },
+    {
+     "id": "how-do-i-pair-my-phone",
+     "question": "How do I pair my phone?",
+     "answer": "On the computer, open Settings › Phone, turn on phone access and scan the QR code with the phone app. The code works once and lasts five minutes. On the same network you can type a short code instead. A computer keeps up to 20 paired devices, and you can rename or remove any of them.\n A paired phone can do anything you can do at the computer, so pair only your own. People on your team join with an invite and get the role you give them.",
+     "url": "https://botkins.app/faq#how-do-i-pair-my-phone"
+    },
+    {
+     "id": "can-i-reach-my-bots-away-from-home",
+     "question": "Can I reach my bots away from home?",
+     "answer": "Yes, two ways. Turn on the relay in Settings › Phone (it's off by default) and your phone reaches the computer from anywhere, with nothing to open on your router. Or put both devices on the same Tailscale network and the phone connects directly. Scanning a QR code works through the relay; a typed code needs the same network or Tailscale.",
+     "url": "https://botkins.app/faq#can-i-reach-my-bots-away-from-home"
+    },
+    {
+     "id": "what-can-the-relay-see",
+     "question": "What can the relay see?",
+     "answer": "Not your messages. Every message is sealed end to end between your phone and your computer. The relay sees a room name (a hash of your computer's public key), the size and timing of messages, and connection addresses. It can't read contents, pairing codes or keys. It could delay or drop traffic, but it can't pair a phone or act as you. You can also run your own relay.\n One exception isn't sealed: signing in to a tool from your phone. When a server you're adding asks you to sign in (OAuth), the sign-in page sends you back through relay.botkins.app/mcp-auth, which redirects straight to the Botkins app. That one-time sign-in code passes through the relay in the address. The relay keeps no logs of it, and the code is useless without a secret that only your computer holds. Your tokens never pass through the relay or the phone.",
+     "url": "https://botkins.app/faq#what-can-the-relay-see"
+    },
+    {
+     "id": "can-bots-use-my-phones-calendar-contacts-and-photos",
+     "question": "Can bots use my phone's calendar, contacts and photos?",
+     "answer": "If you allow it. Under Tools › Device access, each source (Calendar, Contacts, Health, Location, Photos, Music, Mail) is off until you set it to read or to read and interact, and the phone asks for its own permission too. Data a tool reads goes to the bot and the AI provider it uses. It isn't logged or kept on the phone. Routines and tasks get only the read-only tools.",
+     "url": "https://botkins.app/faq#can-bots-use-my-phones-calendar-contacts-and-photos"
+    },
+    {
+     "id": "why-cant-a-bot-read-my-email-on-iphone",
+     "question": "Why can't a bot read my email on iPhone?",
+     "answer": "iOS doesn't let apps read Mail. A bot can write an email and open it on your phone for you to send, but it can't read your inbox. To give a bot your inbox, connect Gmail or Outlook through Composio.",
+     "url": "https://botkins.app/faq#why-cant-a-bot-read-my-email-on-iphone"
+    },
+    {
+     "id": "what-do-notifications-show",
+     "question": "What do notifications show?",
+     "answer": "On iPhone, the text of a notification is sealed for your phone, so Apple and the relay see only a generic line like \"New message\" or \"A bot needs you\". Live Activities on the Lock Screen are the exception: their short status isn't sealed, and step names show there only when previews are on.",
+     "url": "https://botkins.app/faq#what-do-notifications-show"
+    },
+    {
+     "id": "can-i-control-my-computers-screen-from-the-phone",
+     "question": "Can I control my computer's screen from the phone?",
+     "answer": "Yes, behind Face ID, Touch ID or your passcode. Screen sharing is off until you turn it on, and while it's on every paired phone can see the screen. It tries live video first. When video isn't available, for example over some relay connections, it falls back to a few still frames a second, which is fine for checking on things but isn't smooth. Screen control on Windows and Linux is written but hasn't run on real machines yet.",
+     "url": "https://botkins.app/faq#can-i-control-my-computers-screen-from-the-phone"
+    }
+   ]
+  },
+  {
+   "id": "privacy",
+   "title": "Privacy and security",
+   "items": [
+    {
+     "id": "where-is-my-data",
+     "question": "Where is my data?",
+     "answer": "On your computer, as plain files you can read: bots, chats, memory, the wiki and settings. Your prompts, and anything a tool reads for a bot, go to the AI provider that bot uses, the same as using that provider directly. The privacy page has the full detail.",
+     "url": "https://botkins.app/faq#where-is-my-data"
+    },
+    {
+     "id": "does-botkins-collect-analytics",
+     "question": "Does Botkins collect analytics?",
+     "answer": "No. The apps send no analytics or usage data, and have no ads or tracking. The connections Botkins does make are ones you can see: your AI providers, update checks, catalogs of skills and plugins, the relay and push notifications if you turn them on, Composio if you connect it, and feedback you choose to send.",
+     "url": "https://botkins.app/faq#does-botkins-collect-analytics"
+    },
+    {
+     "id": "can-a-bot-made-page-or-chat-message-phone-home",
+     "question": "Can a bot-made page or chat message phone home?",
+     "answer": "Not through what the app draws. Pages and apps a bot makes run in a sandbox with no network and no file access, and links ask before they open. In chat, HTML shows as text and images show as links, so nothing remote loads just because a bot wrote it. Link previews are off by default and never reach private networks.\n That sandbox covers only what's drawn on screen. A bot can still send data out through the tools you've let it use, such as your browser, the shell or a connected app.",
+     "url": "https://botkins.app/faq#can-a-bot-made-page-or-chat-message-phone-home"
+    },
+    {
+     "id": "who-can-i-let-into-my-botkins",
+     "question": "Who can I let into my Botkins?",
+     "answer": "You can invite people to your team with codes, approve them, and give them roles and groups. A team member's bot runs commands as your computer's user, so invite only people you'd trust at your keyboard.",
+     "url": "https://botkins.app/faq#who-can-i-let-into-my-botkins"
+    },
+    {
+     "id": "whats-the-most-a-compromised-piece-could-do",
+     "question": "What's the most a compromised piece could do?",
+     "answer": "A paired phone, browser extension or voice gadget has full trust, so treat losing one like losing a key and remove it from Settings. A plugin or Pi package can run code on your computer, which is why Botkins shows its commands before install. The relay can only see metadata (sizes, timing and addresses) and delay or drop messages.\n The bot itself is the biggest risk. A web page, email or file a bot reads can carry hidden instructions (prompt injection). Bots are told to treat that content as information, not orders, but nothing in Botkins blocks a tricked bot from using the tools you've approved. Keep approve-all and the browser extension for bots that don't read untrusted content, or watch what they do.",
+     "url": "https://botkins.app/faq#whats-the-most-a-compromised-piece-could-do"
+    }
+   ]
+  },
+  {
+   "id": "limits",
+   "title": "What Botkins can't do",
+   "items": [
+    {
+     "id": "the-short-list",
+     "question": "The short list",
+     "answer": "- It can't work while your computer is off or asleep. Use an always-on server if you need that.\n- It doesn't include AI. You need at least one provider plan or API key.\n- Unwatched runs can't touch memory, the wiki or your messages. Routines and tasks can't change what a bot remembers, edit the wiki, send iMessages or Mac mail, or use phone tools that change things. Other tools follow your approval settings. More on this.\n- The Commit button never pushes. Pushing is up to you, unless you let a bot run git push in its shell.\n- It can't read your iPhone's Mail. Use Gmail or Outlook through Composio.\n- It won't show remote images in chat. They appear as links, on purpose.",
+     "url": "https://botkins.app/faq#the-short-list"
+    },
+    {
+     "id": "platform-gaps",
+     "question": "Platform gaps",
+     "answer": "- No Intel Mac desktop build. The server version does run on Intel Macs.\n- No Windows installer, and no background service on Windows. Servers are Linux or macOS.\n- Android has no push notifications, network auto-discovery, server screen-sharing switch, Live Activities, widgets, Apple Music or Health yet.\n- Neither phone app is in the public app stores yet.\n- The browser extension isn't in the Chrome or Edge stores yet.\n- In-app dictation works only on macOS.\n- iMessage and Mail tools are Mac only.\n- Proton Pass's managed tool doesn't work on Alpine Linux or Windows on Arm.",
+     "url": "https://botkins.app/faq#platform-gaps"
+    },
+    {
+     "id": "built-in-limits",
+     "question": "Built-in limits",
+     "answer": "- Group chats: 2 to 6 bots.\n- Teammate asks: 8 per reply. Subagents: 16 per reply, 8 at once.\n- Tasks at once: 2 by default, up to 16.\n- Bot instructions: 30,000 characters. Profile files: 64 KB each. Memory: 24,000 characters.\n- Routines a bot can make: 25, no more often than every 15 minutes.\n- Script routines: 10 minutes per run.\n- Paired devices: 20 per computer.\n- Side panes: 8 per chat.\n- iMessage or Mail sends: 5 per reply, each confirmed.",
+     "url": "https://botkins.app/faq#built-in-limits"
+    },
+    {
+     "id": "what-hasnt-been-tested-for-real-yet",
+     "question": "What hasn't been tested for real yet?",
+     "answer": "A few features are written and tested against stand-ins but haven't been proven on real services or devices yet. They may have rough edges:\n- iMessage and Mail tools on the Mac.\n- Speech providers other than live voice with a ChatGPT sign-in.\n- Screen control on Windows and Linux.\n- The Botkins gadget (a small voice device), which can't use the relay or live voice yet.",
+     "url": "https://botkins.app/faq#what-hasnt-been-tested-for-real-yet"
+    },
+    {
+     "id": "whats-planned-but-not-built",
+     "question": "What's planned but not built?",
+     "answer": "For Node Hosts: pairing a node by QR code, setting up a background service from the setup wizard, moving vault secrets between computers, and creating tasks on another computer. For gadgets: Bluetooth setup, the relay, live voice and over-the-air updates.",
+     "url": "https://botkins.app/faq#whats-planned-but-not-built"
+    }
+   ]
+  },
+  {
+   "id": "fixes",
+   "title": "Troubleshooting",
+   "items": [
+    {
+     "id": "codex-cli-isnt-installed-or-claude-code-isnt-installed",
+     "question": "\"Codex CLI isn't installed\" or \"Claude Code isn't installed\"",
+     "answer": "Install the provider's tool from the link in the message and sign in to it. On a server, make sure the tool is on the service's PATH, then run botkins providers list --refresh. If Claude Code doesn't say whether it's signed in, update it.",
+     "url": "https://botkins.app/faq#codex-cli-isnt-installed-or-claude-code-isnt-installed"
+    },
+    {
+     "id": "my-plan-limits-say-not-available",
+     "question": "My plan limits say \"Not available\"",
+     "answer": "That provider doesn't report its limits, so there's nothing to show. API keys have no plan limits at all. It isn't an error.",
+     "url": "https://botkins.app/faq#my-plan-limits-say-not-available"
+    },
+    {
+     "id": "the-phone-cant-reach-the-computer",
+     "question": "The phone can't reach the computer",
+     "answer": "Keep the Botkins app open (or the server running) with phone access on. At home, put both on the same network or Tailscale and check that your firewall allows port 47610. On a Mac, allow Local Network access for Botkins. Away from home, turn on the relay in Settings › Phone. A computer that's asleep can't answer.",
+     "url": "https://botkins.app/faq#the-phone-cant-reach-the-computer"
+    },
+    {
+     "id": "pairing-fails-or-says-to-wait",
+     "question": "Pairing fails or says to wait",
+     "answer": "Codes work once and last five minutes, so make a new one. After eight wrong codes the computer stops accepting tries for that code; make a fresh one and scan it instead of typing.",
+     "url": "https://botkins.app/faq#pairing-fails-or-says-to-wait"
+    },
+    {
+     "id": "the-relay-wont-connect-or-says-another-computer-is-using-it",
+     "question": "The relay won't connect, or says another computer is using it",
+     "answer": "The computer needs outbound HTTPS to relay.botkins.app. If it says another computer has taken its place, you probably copied Botkins' data to a second machine. Choose Reset in Settings › Phone, then bring your phones home once to reconnect.",
+     "url": "https://botkins.app/faq#the-relay-wont-connect-or-says-another-computer-is-using-it"
+    },
+    {
+     "id": "no-notifications-on-my-phone",
+     "question": "No notifications on my phone",
+     "answer": "On iPhone, turn them on in the app's Settings › Notifications and allow them in the phone's own settings. Android doesn't get push notifications yet.",
+     "url": "https://botkins.app/faq#no-notifications-on-my-phone"
+    },
+    {
+     "id": "a-bot-cant-use-my-calendar-contacts-or-photos",
+     "question": "A bot can't use my calendar, contacts or photos",
+     "answer": "Each source is off until you turn it on in the phone app under Tools › Device access, and the phone asks for its own permission too. Routines and tasks only get the read-only tools.",
+     "url": "https://botkins.app/faq#a-bot-cant-use-my-calendar-contacts-or-photos"
+    },
+    {
+     "id": "a-routine-ran-but-i-heard-nothing",
+     "question": "A routine ran but I heard nothing",
+     "answer": "New routines on the desktop don't deliver anywhere until you pick a place. Open the routine and choose its chat, another chat or Feed. A run that finds nothing to say can also stay silent on purpose. Failures always notify.",
+     "url": "https://botkins.app/faq#a-routine-ran-but-i-heard-nothing"
+    },
+    {
+     "id": "credentials-are-locked-after-updating-on-a-mac",
+     "question": "Credentials are locked after updating on a Mac",
+     "answer": "macOS asks once for access to the older keychain entry. Allow it and the vault opens again.",
+     "url": "https://botkins.app/faq#credentials-are-locked-after-updating-on-a-mac"
+    },
+    {
+     "id": "couldnt-reach-composio",
+     "question": "\"Couldn't reach Composio\"",
+     "answer": "Check your connection, then sign in again under Marketplace › Apps.",
+     "url": "https://botkins.app/faq#couldnt-reach-composio"
+    },
+    {
+     "id": "no-connected-botkins-chromium-extension",
+     "question": "\"No connected Botkins Chromium extension\"",
+     "answer": "Install the extension in Chrome or Edge, sign in with your Botkins profile or a pairing link, and keep that browser open.",
+     "url": "https://botkins.app/faq#no-connected-botkins-chromium-extension"
+    },
+    {
+     "id": "a-server-install-or-update-fails",
+     "question": "A server install or update fails",
+     "answer": "Run botkins doctor first. If it says a folder doesn't belong to root alone, run the commands it prints. If GitHub doesn't answer an update check, it's rate-limiting your address; try again later.",
+     "url": "https://botkins.app/faq#a-server-install-or-update-fails"
+    },
+    {
+     "id": "still-stuck",
+     "question": "Still stuck?",
+     "answer": "Write to support@botkins.app or report a bug. A person reads every message.",
+     "url": "https://botkins.app/faq#still-stuck"
+    }
+   ]
+  }
+ ]
+}
