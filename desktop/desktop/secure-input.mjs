@@ -860,7 +860,7 @@ export class SecureInputs {
   }
 
   tools(bot, chat, run, task) {
-    if (!task || !run || chat.helper || run.panelId || run.scheduleId != null || run.taskId) return [];
+    if (!task || !run || chat.helper || run.panelId || run.scheduleId != null || run.taskId || run.workflowRunId) return [];
     const active = () => {
       if (task.stopped || task.ended || this.ws.closing || this.ws.active.get(chat.id) !== task) throw new Error("This turn has ended.");
     };

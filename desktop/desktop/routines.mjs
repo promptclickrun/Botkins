@@ -806,7 +806,7 @@ export class Routines {
     };
     /** A routine that invokes a script command: a card read in the app, and a yes (desktop/script-commands.mjs). Throws when nobody is there. */
     const approved = async (invocation, about) => {
-      if (run?.scheduleId != null || run?.taskId || run?.panelId) throw new Error("A routine that runs a script command can only be made or changed with the person there. Ask them to.");
+      if (run?.scheduleId != null || run?.taskId || run?.panelId || run?.workflowRunId) throw new Error("A routine that runs a script command can only be made or changed with the person there. Ask them to.");
       const yes = await askToSchedule(ws, { bot, chat, task, invocation, what: "Let a routine run the script command /" + invocation.name + "?", about });
       stillActive();
       return yes;
@@ -829,7 +829,7 @@ export class Routines {
     /** A script a bot proposes for a routine: a card with the whole script, when it runs and what follows, read in the app. Resolves true on a yes. */
     const approveScript = async (fields, about) => {
       if (people.people.some((person) => person !== "owner")) throw new Error("Only the computer's owner can add a script to a routine.");
-      if (run?.scheduleId != null || run?.taskId || run?.panelId) throw new Error("A routine's script can only be added or changed with the person there. Ask them to.");
+      if (run?.scheduleId != null || run?.taskId || run?.panelId || run?.workflowRunId) throw new Error("A routine's script can only be added or changed with the person there. Ask them to.");
       const decision = await ws.interactions.request(chat, task, {
         botId: bot.id,
         kind: "permission",

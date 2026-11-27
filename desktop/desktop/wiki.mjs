@@ -1057,7 +1057,7 @@ export class Wiki {
    * text with nobody watching, so they can't write what every bot will read later.
    */
   tools(bot, chat, run, task) {
-    const readOnly = !!(chat.helper || run?.panelId || run?.scheduleId || run?.taskId);
+    const readOnly = !!(chat.helper || run?.panelId || run?.scheduleId || run?.taskId || run?.workflowRunId);
     const bots = [bot];
     let changes = 0;
     const tool = (name, description, properties, required, handler) =>

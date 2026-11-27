@@ -118,3 +118,11 @@ test("a name and a label from the plugin are safe and bounded in every request",
     assert.equal(calls[0][0], action);
   }
 });
+
+test("a workflow step's turn gets no plugin tools, like a routine or a task", () => {
+  const ws = { closing: false, active: new Map([["c1", {}]]), state: { bots: [] }, plugins: { list: () => [] } };
+  const chat = { id: "c1" };
+  const bot = { id: "b1", name: "Pip" };
+  assert.ok(pluginTools(ws, bot, chat, { id: "run" }, {}).length > 0);
+  assert.deepEqual(pluginTools(ws, bot, chat, { id: "run", workflowRunId: "wr1" }, {}), []);
+});
