@@ -90,7 +90,8 @@ export function headerLabel(request: AgentRequest, { bot, danger, count }: { bot
 export const foldHint = (open: boolean) => (open ? "Folds the request so you can read the chat" : "Opens the request");
 
 /** The buttons' words. `quiet` is Deny or Dismiss, `main` the card's one main action. */
-export function wordsFor(kind: AgentRequest["kind"], dispatch = false, artifactGrant = false, botName?: string): { quiet: string; main: string; remember?: string } {
+export function wordsFor(kind: AgentRequest["kind"], dispatch = false, artifactGrant = false, botName?: string, credentialGrant = false): { quiet: string; main: string; remember?: string } {
+  if (credentialGrant && kind === "permission") return { quiet: "Deny", main: "Allow this time", remember: "Always allow for this site" };
   if (dispatch && kind === "permission") return { quiet: "Deny", main: "Allow this time", remember: "Always allow" };
   if (artifactGrant && kind === "permission") return { quiet: "Deny", main: "Allow for this chat", remember: botName ? "Always allow for " + botName : "Always allow" };
   if (kind === "permission") return { quiet: "Deny", main: "Allow once", remember: "Allow for this chat" };

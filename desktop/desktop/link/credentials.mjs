@@ -19,18 +19,20 @@ import { createCipheriv, createDecipheriv } from "node:crypto";
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { b64u, random, unb64u } from "./crypto.mjs";
+import { extractSiteList, siteMatchScore } from "./domain-match.mjs";
 import { drivers } from "./managers.mjs";
 import { PROTON_CALLS, ProtonSetup } from "./proton-setup.mjs";
+import { generateTotp, parseTotpSpec } from "./totp.mjs";
 import { Failure, searchDirs } from "./tools.mjs";
 
-const KINDS = ["api-key", "login", "note"];
+const KINDS = ["api-key", "login", "note", "totp"];
 const MAX_ENTRIES = 300;
 const MAX_VALUE = 16_000;
 const MAX_READ = 64 * 1024;
 const STATUS_TTL = 10_000;
 const LOCKED = "The saved credentials are locked on this computer.";
 
-const PUBLIC = ["id", "name", "kind", "username", "website", "notes", "source", "reference", "createdAt", "updatedAt"];
+const PUBLIC = ["id", "name", "kind", "username", "website", "aliases", "notes", "source", "reference", "copied", "copiedFrom", "hasTotp", "createdAt", "updatedAt"];
 
 class Vault {
   constructor(dir, { protect, reveal } = {}) {
@@ -89,16 +91,24 @@ class Vault {
     const sealed = Buffer.concat([cipher.update(value, "utf8"), cipher.final()]);
     return b64u(Buffer.concat([nonce, sealed, cipher.getAuthTag()]));
   }
-  open(entry) {
+  open(entry, field = "secret", aadSuffix = "") {
     if (!this.key) throw new Failure(LOCKED);
+    const cipherText = entry?.[field];
+    if (typeof cipherText !== "string" || !cipherText) throw new Failure("The saved value can't be opened.");
+    let bytes;
+    let plain;
     try {
-      const bytes = unb64u(entry.secret);
+      bytes = unb64u(cipherText);
       const decipher = createDecipheriv("aes-256-gcm", this.key, bytes.subarray(0, 12), { authTagLength: 16 });
-      decipher.setAAD(Buffer.from(entry.id, "utf8"));
+      decipher.setAAD(Buffer.from(entry.id + aadSuffix, "utf8"));
       decipher.setAuthTag(bytes.subarray(bytes.length - 16));
-      return Buffer.concat([decipher.update(bytes.subarray(12, bytes.length - 16)), decipher.final()]).toString("utf8");
+      plain = Buffer.concat([decipher.update(bytes.subarray(12, bytes.length - 16)), decipher.final()]);
+      return plain.toString("utf8");
     } catch {
       throw new Failure("The saved value can't be opened.");
+    } finally {
+      if (plain) plain.fill(0);
+      if (bytes) bytes.fill(0);
     }
   }
 }
@@ -159,7 +169,7 @@ function places(method, args) {
 }
 const at = (root, path) => path.reduce((value, key) => (value !== null && typeof value === "object" && Object.hasOwn(value, key) ? value[key] : undefined), root);
 
-/** How a secret may be written when it is echoed: as it is, inside JSON, and inside a web address. Longest first. */
+/** How a secret may be written when it is echoed: as it is, inside JSON, URL-encoded, and base64-encoded. Longest first. */
 function forms(secrets) {
   const out = new Set();
   for (const secret of secrets) {
@@ -168,6 +178,13 @@ function forms(secrets) {
     out.add(secret);
     out.add(JSON.stringify(secret).slice(1, -1));
     out.add(encodeURIComponent(secret));
+    const buf = Buffer.from(secret, "utf8");
+    try {
+      out.add(buf.toString("base64"));
+      out.add(buf.toString("base64url"));
+    } finally {
+      buf.fill(0);
+    }
   }
   return [...out].sort((a, b) => b.length - a.length);
 }
@@ -229,7 +246,11 @@ export class Credentials {
   }
   /** What every phone sees: no values, and no ids inside a password manager. */
   list() {
-    return this.vault.entries.map((entry) => Object.fromEntries(PUBLIC.filter((key) => entry[key] !== undefined).map((key) => [key, entry[key]])));
+    return this.vault.entries.map((entry) => {
+      const out = Object.fromEntries(PUBLIC.filter((key) => entry[key] !== undefined).map((key) => [key, entry[key]]));
+      if (entry.totpSecret || entry.kind === "totp" || entry.ref?.totp || entry.ref?.fieldId === "totp") out.hasTotp = true;
+      return out;
+    });
   }
   find(id) {
     const entry = this.vault.entries.find((e) => e.id === id);
@@ -279,6 +300,26 @@ export class Credentials {
       if (next === undefined) delete entry[key];
       else entry[key] = next;
     }
+    if (input.aliases !== undefined) {
+      const cleaned = extractSiteList(input.aliases).slice(0, 20).map((s) => s.slice(0, 300));
+      if (cleaned.length) entry.aliases = cleaned;
+      else delete entry.aliases;
+    }
+    if (input.totpSecret !== undefined) {
+      if (before && before.source !== "vault") throw new Failure("A linked credential is read from its password manager. Change it there.");
+      if (input.totpSecret === null || input.totpSecret === "") {
+        delete entry.totpSecret;
+      } else if (typeof input.totpSecret === "string") {
+        try {
+          parseTotpSpec(input.totpSecret);
+        } catch (error) {
+          throw new Failure(error.message || "Invalid TOTP secret.");
+        }
+        entry.totpSecret = this.vault.seal(entry.id + ":totp", input.totpSecret.trim());
+      } else {
+        throw new Failure("That TOTP secret can't be saved.");
+      }
+    }
     if (before && before.source !== "vault") {
       if (value != null) throw new Failure("A linked credential is read from its password manager. Change it there.");
     } else if (typeof value === "string") {
@@ -306,6 +347,115 @@ export class Credentials {
     if (typeof value !== "string" || !value) throw new Failure("The value is empty.");
     if (value.length > MAX_READ) throw new Failure("The value is too long to use.");
     return value;
+  }
+  /** Generate or fetch a live TOTP code for a vault or linked credential. Value is never logged. */
+  async readTotp(id, { now = this.now() } = {}) {
+    const entry = this.find(id);
+    if (entry.source === "vault") {
+      const secret = entry.totpSecret ? this.vault.open(entry, "totpSecret", ":totp") : entry.kind === "totp" ? this.vault.open(entry) : null;
+      if (!secret) throw new Failure("That credential does not have a TOTP secret.");
+      return generateTotp(secret, { now });
+    }
+    const ref = entry.ref ?? {};
+    const raw = await this.driver(entry.source).read({ ...ref, totp: true });
+    return generateTotp(raw, { now, allowCodePassthrough: true });
+  }
+  /**
+   * Unified resolver across the Botkins vault, linked manager entries, and optionally ready
+   * password managers. Matches by registrable domain (eTLD+1), saved URL aliases, and query text.
+   * Returns metadata only — never secret values.
+   */
+  async findForSite({ url = "", query = "", includeManagers = false } = {}) {
+    const cleanUrl = String(url ?? "").trim();
+    const cleanQuery = String(query ?? "").trim().toLowerCase();
+    const results = [];
+
+    for (const entry of this.vault.entries) {
+      const sites = [entry.website, ...(Array.isArray(entry.aliases) ? entry.aliases : [])].filter(Boolean);
+      const siteScore = cleanUrl ? siteMatchScore(cleanUrl, sites) : 0;
+      const hay = [entry.name, entry.username, entry.website, ...(entry.aliases ?? []), entry.reference, entry.notes]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase();
+      const queryHit = cleanQuery ? hay.includes(cleanQuery) : false;
+
+      if (cleanUrl && cleanQuery) {
+        if (!siteScore && !queryHit) continue;
+      } else if (cleanUrl) {
+        if (!siteScore) continue;
+      } else if (cleanQuery) {
+        if (!queryHit) continue;
+      }
+
+      results.push({
+        id: entry.id,
+        name: entry.name,
+        kind: entry.kind,
+        source: entry.source,
+        linked: entry.source !== "vault",
+        ...(entry.copied && { copied: true, copiedFrom: entry.copiedFrom }),
+        ...(entry.username && { username: entry.username }),
+        ...(entry.website && { website: entry.website }),
+        ...(entry.aliases?.length && { aliases: [...entry.aliases] }),
+        ...(entry.reference && { reference: entry.reference }),
+        ...((entry.totpSecret || entry.kind === "totp" || entry.ref?.totp || entry.ref?.fieldId === "totp") && { hasTotp: true }),
+        _score: siteScore * 10 + (queryHit ? 3 : 0),
+      });
+    }
+
+    if (includeManagers && (cleanUrl || cleanQuery)) {
+      const linkedKeys = new Set(
+        this.vault.entries
+          .filter((e) => e.ref?.manager && e.ref?.vaultId && e.ref?.itemId)
+          .map((e) => `${e.ref.manager}:${e.ref.vaultId}:${e.ref.itemId}`),
+      );
+      const statuses = await this.managers(false).catch(() => []);
+      for (const status of statuses) {
+        if (status?.state !== "ready") continue;
+        const driver = this.drivers.get(status.id);
+        if (!driver) continue;
+        let vaults = [];
+        try {
+          vaults = await this.guard(driver, (d) => d.vaults());
+        } catch {
+          continue;
+        }
+        for (const vault of vaults.slice(0, 10)) {
+          let items = [];
+          try {
+            items = await this.guard(driver, (d) => d.items(vault.id, ""));
+          } catch {
+            continue;
+          }
+          for (const item of items) {
+            const siteScore = cleanUrl ? siteMatchScore(cleanUrl, item.urls ?? []) : 0;
+            const hay = [item.title, item.subtitle, ...(item.urls ?? [])].filter(Boolean).join(" ").toLowerCase();
+            const queryHit = cleanQuery ? hay.includes(cleanQuery) : false;
+            if (cleanUrl && !siteScore && !queryHit) continue;
+            if (!cleanUrl && cleanQuery && !queryHit) continue;
+            const key = `${status.id}:${vault.id}:${item.id}`;
+            if (linkedKeys.has(key)) continue;
+            results.push({
+              id: null,
+              name: item.title,
+              kind: "login",
+              source: status.id,
+              linked: false,
+              ...(item.subtitle && { username: item.subtitle }),
+              ...(item.urls?.[0] && { website: item.urls[0] }),
+              ...(item.urls?.length > 1 && { aliases: item.urls.slice(1) }),
+              reference: [vault.name, item.title].join(" / ").slice(0, 300),
+              managerRef: { manager: status.id, vaultId: vault.id, itemId: item.id },
+              _score: siteScore * 10 + (queryHit ? 2 : 0) - 1,
+            });
+          }
+        }
+      }
+    }
+
+    return results
+      .sort((a, b) => b._score - a._score || a.name.localeCompare(b.name))
+      .map(({ _score, ...rest }) => rest);
   }
   /** Whether a credential can be read right now. The value is dropped. */
   async check(id) {
@@ -419,19 +569,78 @@ export class Credentials {
     if (this.vault.entries.length >= MAX_ENTRIES) throw new Failure("Too many saved credentials. Remove one first.");
     const { vaultId, itemId, fieldId } = input;
     if (typeof fieldId !== "string" || !fieldId || fieldId.length > 200) throw new Failure("That field isn't valid.");
+    const kind = input.kind && KINDS.includes(input.kind) ? input.kind : "api-key";
     // Asking the manager proves the place exists and gives the text the phone shows.
     const vault = (await this.guard(driver, (d) => d.vaults())).find((v) => v.id === vaultId);
     if (!vault) throw new Failure("That vault isn't there.");
     const item = await this.guard(driver, (d) => d.item(vaultId, itemId));
     const field = item.fields.find((f) => f.id === fieldId);
     if (!field) throw new Failure("That field isn't on the item.");
+    const isTotp = Boolean(field.totp || fieldId === "totp");
+    const website = optional(input, "website", item.urls?.[0], 300, "website");
+    const username = optional(input, "username", undefined, 200, "username");
+    const aliases = input.aliases !== undefined
+      ? extractSiteList(input.aliases).slice(0, 20).map((s) => s.slice(0, 300))
+      : (item.urls?.length > 1 ? item.urls.slice(1) : []);
     const entry = {
       id: "cred-" + b64u(random(9)),
       name,
-      kind: "api-key",
+      kind: isTotp ? "totp" : kind,
       source: driver.id,
+      ...(username && { username }),
+      ...(website && { website }),
+      ...(aliases.length > 0 && { aliases }),
       reference: [vault.name, item.title, field.label].join(" / ").slice(0, 300),
-      ref: { manager: driver.id, vaultId, itemId, fieldId },
+      ref: { manager: driver.id, vaultId, itemId, fieldId, ...(isTotp && { totp: true }) },
+      createdAt: this.now(),
+      updatedAt: this.now(),
+    };
+    this.commit([...this.vault.entries, entry]);
+    return entry.id;
+  }
+
+  /**
+   * Explicitly copy a field from a password manager into the Botkins encrypted vault.
+   * Linking (`link()`) is preferred so values stay in the source manager; copies are always
+   * explicitly marked with `copied: true` and `copiedFrom`.
+   */
+  async copyFromManager(input) {
+    this.writable();
+    if (!input || typeof input !== "object") throw new Failure("That field isn't valid.");
+    const driver = this.driver(input.manager);
+    const name = typeof input.name === "string" ? input.name.trim() : "";
+    if (!name || name.length > 80) throw new Failure("Give the credential a name of up to 80 characters.");
+    if (this.vault.entries.length >= MAX_ENTRIES) throw new Failure("Too many saved credentials. Remove one first.");
+    const { vaultId, itemId, fieldId } = input;
+    if (typeof fieldId !== "string" || !fieldId || fieldId.length > 200) throw new Failure("That field isn't valid.");
+    const vault = (await this.guard(driver, (d) => d.vaults())).find((v) => v.id === vaultId);
+    if (!vault) throw new Failure("That vault isn't there.");
+    const item = await this.guard(driver, (d) => d.item(vaultId, itemId));
+    const field = item.fields.find((f) => f.id === fieldId);
+    if (!field) throw new Failure("That field isn't on the item.");
+    const rawValue = await this.guard(driver, (d) => d.read({ vaultId, itemId, fieldId }));
+    if (typeof rawValue !== "string" || !rawValue || rawValue.length > MAX_VALUE) {
+      throw new Failure("That value can't be copied.");
+    }
+    const kind = input.kind && KINDS.includes(input.kind) ? input.kind : (field.totp ? "totp" : "login");
+    const website = optional(input, "website", item.urls?.[0], 300, "website");
+    const username = optional(input, "username", undefined, 200, "username");
+    const aliases = input.aliases !== undefined
+      ? extractSiteList(input.aliases).slice(0, 20).map((s) => s.slice(0, 300))
+      : (item.urls?.length > 1 ? item.urls.slice(1) : []);
+    const id = "cred-" + b64u(random(9));
+    const entry = {
+      id,
+      name,
+      kind,
+      source: "vault",
+      copied: true,
+      copiedFrom: driver.id,
+      ...(username && { username }),
+      ...(website && { website }),
+      ...(aliases.length > 0 && { aliases }),
+      reference: [vault.name, item.title, field.label].join(" / ").slice(0, 300),
+      secret: this.vault.seal(id, rawValue),
       createdAt: this.now(),
       updatedAt: this.now(),
     };

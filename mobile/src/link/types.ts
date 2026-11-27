@@ -848,8 +848,8 @@ export type SecureField = {
   hint?: string;
   optional?: true;
 };
-/** A cross-host permission is scoped to the source and target bots and hosts shown on the card. */
-export type DispatchAction = "approve" | "today" | "remember" | "deny";
+/** A cross-host or credential permission is scoped to the bot, credential and destination shown on the card. */
+export type DispatchAction = "approve" | "today" | "remember" | "deny" | "deny_always";
 export type RequestAnswer = {
   action: DispatchAction | "cancel" | "answer" | "accept";
   /** A saved credential's reference instead of text: the computer puts the value in. */
@@ -858,8 +858,43 @@ export type RequestAnswer = {
   /** Only the in-app request panel sends it, after it showed a `review` request whole (a script command's script). The computer refuses a yes to one without it. */
   reviewed?: true;
 };
+export type CredentialGrantLevel = "ask" | "today" | "always" | "deny";
+export type CredentialGrant = {
+  id: string;
+  botId: string;
+  botName?: string;
+  credentialId: string;
+  credentialName?: string;
+  destination: string;
+  destinationLabel?: string;
+  operation: string;
+  level: CredentialGrantLevel;
+  createdAt: number;
+  updatedAt: number;
+  expiresAt?: number | null;
+  lastUsedAt?: number | null;
+};
+export type CredentialAuditEntry = {
+  id: string;
+  at: number;
+  botId: string;
+  botName?: string;
+  credentialId?: string;
+  credentialName?: string;
+  source?: string;
+  destination?: string;
+  operation: string;
+  outcome: string;
+  grantLevel?: string;
+  reason?: string;
+};
 export type AgentRequest = {
   dispatch?: true;
+  /** True on a bot credential-use approval card (scoped to bot, credential, destination and operation). */
+  credentialGrant?: true;
+  credentialName?: string;
+  credentialSource?: string;
+  destination?: string;
   artifactGrant?: true;
   rememberScope?: "bot";
   botName?: string;
@@ -2334,6 +2369,16 @@ export type Calls = {
   "link.credentials.item"(manager: PasswordManagerId, vaultId: string, itemId: string): PasswordManagerItem;
   /** Links a field of a password manager item as a credential. Returns the new credential's id. */
   "link.credentials.link"(input: { manager: PasswordManagerId; vaultId: string; itemId: string; fieldId: string; name: string }): string;
+  /** Explicitly copies a field from a password manager into the Botkins vault. */
+  "link.credentials.copy"(input: { manager: PasswordManagerId; vaultId: string; itemId: string; fieldId: string; name: string }): string;
+  /** Lists standing bot credential grants (metadata only; never values). */
+  "link.credentials.grants"(filter?: { botId?: string; credentialId?: string }): CredentialGrant[];
+  /** Creates or updates a standing bot credential grant. */
+  "link.credentials.setGrant"(input: { botId: string; botName?: string; credentialId: string; credentialName?: string; destination: string; operation: string; level: CredentialGrantLevel }): CredentialGrant;
+  /** Revokes one standing credential grant. */
+  "link.credentials.revokeGrant"(id: string): boolean;
+  /** Lists recent credential use audit entries (never values). */
+  "link.credentials.audit"(options?: { limit?: number }): CredentialAuditEntry[];
   "link.screen.video.open"(id: string, options: { display: string; maxWidth: number; fps: number; mimeTypes: string[] }): { mimeType: string };
   "link.screen.video.read"(id: string, sequence: number): string;
   "link.screen.video.close"(id: string): void;

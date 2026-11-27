@@ -86,7 +86,15 @@ test("the split workspace gets only the matching vault names for a private owner
     await refresh();
     return result;
   };
-  assert.deepEqual(await lookup("chat"), [{ name: "Work login", kind: "login" }]);
+  const hits = await lookup("chat");
+  assert.equal(hits.length, 1);
+  assert.equal(hits[0].name, "Work login");
+  assert.equal(hits[0].kind, "login");
+  assert.equal(hits[0].source, "vault");
+  assert.equal(hits[0].website, "https://example.org/login");
+  assert.equal(hits[0].linked, false);
+  assert.match(hits[0].id, /^cred-/);
+  assert.ok(!JSON.stringify(hits).includes("fixture-private"));
   assert.deepEqual(await lookup("missing"), []);
   host.store.data.team.chats.chat = ["a-member"];
   assert.deepEqual(await lookup("chat"), []);

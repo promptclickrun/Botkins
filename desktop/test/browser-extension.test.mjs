@@ -384,6 +384,7 @@ async function runExtensionSecureFillE2E(t, { viaRelay }) {
             result: {
               filled: ask.args.fields.map((f) => f.key),
               missing: [],
+              ...(ask.args.submit && { submitted: true }),
               leakedFieldIgnoredByHost: "should-be-stripped",
             },
           });
@@ -449,6 +450,7 @@ async function runExtensionSecureFillE2E(t, { viaRelay }) {
     applied: true,
     filled: ["LoginModel.Email", "LoginModel.Password"],
     missing: [],
+    submitted: true,
   });
   assert.equal(Object.hasOwn(parsedUse, "leakedFieldIgnoredByHost"), false);
 
@@ -495,4 +497,12 @@ test("secure.fill works end-to-end over direct Link with dotted field keys and z
 
 test("secure.fill works end-to-end sealed over the Botkins Relay with zero sentinel leakage", async (t) => {
   await runExtensionSecureFillE2E(t, { viaRelay: true });
+});
+
+test("the browser link has exactly one secureFill method, and its desktop and link-host copies are identical", () => {
+  // A class with two secureFill methods keeps only the last one, silently dropping the other's checks.
+  const desktop = readFileSync(new URL("../desktop/link/browser.mjs", import.meta.url), "utf8");
+  const linkHost = readFileSync(new URL("../../mobile/link-host/browser.mjs", import.meta.url), "utf8");
+  assert.equal(desktop.match(/^\s*(?:async\s+)?secureFill\s*\(/gm)?.length, 1);
+  assert.equal(desktop, linkHost, "mobile/link-host/browser.mjs must match desktop/desktop/link/browser.mjs byte for byte");
 });

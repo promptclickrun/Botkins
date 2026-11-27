@@ -3,7 +3,9 @@
 // containing other extensions' iframes (Proton Pass, 1Password, Bitwarden, Grammarly, etc.)
 // work normally.
 
-export const DRIVER_VERSION = "0.2.1";
+import { isSameSite } from "./site.mjs";
+
+export const DRIVER_VERSION = "0.3.0";
 
 const BLOCKED_IFRAME_SCHEMES = [
   "chrome-extension:",
@@ -1537,24 +1539,128 @@ export function createDomDriver(win = globalThis) {
     return tag === "textarea" || (tag === "input" && ["text", "email", "tel", "search", "url", "number"].includes(inputType));
   }
 
-  function findFormSubmitControl(form, frameWin) {
-    if (!form) return null;
-    const controls = form.querySelectorAll?.('button[type="submit"], button:not([type]), input[type="submit"], input[type="image"]') || [];
-    for (const ctrl of controls) {
-      if (ctrl.disabled) continue;
-      if (!isElementVisible(ctrl, frameWin)) continue;
-      return ctrl;
+  const isLoopbackHost = (host) => host === "localhost" || host === "127.0.0.1" || host === "[::1]";
+
+  // The approved origin must hold for this frame AND the top frame, over HTTPS
+  // (loopback HTTP only when the host opted in with allowLocalHttp).
+  function secureFrameOriginOk(expectedOrigin, allowLocalHttp) {
+    try {
+      const loc = win.location;
+      if (!loc || String(loc.origin || "") !== expectedOrigin) return false;
+      if (loc.username || loc.password) return false;
+      if (loc.protocol !== "https:" && !(allowLocalHttp && loc.protocol === "http:" && isLoopbackHost(loc.hostname))) return false;
+      if (win !== win.top && String(win.top.location.origin || "") !== expectedOrigin) return false;
+      return true;
+    } catch {
+      return false;
     }
-    return null;
+  }
+
+  // Read attributes and form ownership through the prototypes so a page cannot clobber
+  // `form.action` (e.g. with <input name="action">) to hide an off-site destination.
+  const secureGetAttr = (el, name) => (el ? Element.prototype.getAttribute.call(el, name) : null);
+  const secureHasAttr = (el, name) => Boolean(el && Element.prototype.hasAttribute.call(el, name));
+  const secureTagOf = (el) => {
+    if (!el) return "";
+    const getter = Object.getOwnPropertyDescriptor(Element.prototype, "tagName")?.get;
+    return String(getter ? getter.call(el) : el.tagName || "").toLowerCase();
+  };
+
+  function isSameSiteSubmitDestination(rawAttr, targetDoc, expectedOrigin) {
+    try {
+      const trimmed = rawAttr === null || rawAttr === undefined ? "" : String(rawAttr).trim();
+      const docUrl = targetDoc?.URL || "";
+      // Per HTML, a missing or empty action/formaction submits to the document URL (not <base href>).
+      const resolvedUrl = trimmed ? new URL(trimmed, targetDoc?.baseURI || docUrl) : new URL(docUrl);
+      return isSameSite(resolvedUrl, expectedOrigin);
+    } catch {
+      return false;
+    }
+  }
+
+  function secureFormOf(el, targetDoc, targetWin) {
+    if (!el) return null;
+    if (secureHasAttr(el, "form")) {
+      const formId = secureGetAttr(el, "form");
+      if (!formId) return null;
+      const byId = targetDoc?.getElementById?.(formId);
+      return byId && secureTagOf(byId) === "form" ? byId : null;
+    }
+    const tag = secureTagOf(el);
+    const proto = tag === "input" ? targetWin?.HTMLInputElement?.prototype
+      : tag === "button" ? targetWin?.HTMLButtonElement?.prototype
+      : tag === "textarea" ? targetWin?.HTMLTextAreaElement?.prototype
+      : tag === "select" ? targetWin?.HTMLSelectElement?.prototype
+      : null;
+    const getter = proto ? Object.getOwnPropertyDescriptor(proto, "form")?.get : null;
+    if (getter) {
+      const own = getter.call(el);
+      if (own && secureTagOf(own) === "form") return own;
+    }
+    const closest = Element.prototype.closest.call(el, "form");
+    return closest && secureTagOf(closest) === "form" ? closest : null;
+  }
+
+  function isSecureSubmitControl(el) {
+    const tag = secureTagOf(el);
+    const t = (secureGetAttr(el, "type") || "").trim().toLowerCase();
+    if (tag === "button") return !t || (t !== "button" && t !== "reset");
+    if (tag === "input") return t === "submit" || t === "image";
+    return false;
+  }
+
+  // The form's submitters, including external `form=` ones, in document order.
+  function secureSubmittersOf(form, elDoc, elWin) {
+    const controls = elDoc?.querySelectorAll ? elDoc.querySelectorAll("button, input") : [];
+    const out = [];
+    for (const ctrl of controls) {
+      if (isSecureSubmitControl(ctrl) && secureFormOf(ctrl, elDoc, elWin) === form) out.push(ctrl);
+    }
+    return out;
+  }
+
+  // Where submitting the filled field would send it must be on the approved page's site
+  // (same scheme and registrable domain): the form's action and every submitter's formaction.
+  // No form or no action submits to the page itself, which passes.
+  function secureSubmitDestinationOk(el, expectedOrigin) {
+    const elDoc = el.ownerDocument;
+    const elWin = getWin(el, win);
+    if (secureHasAttr(el, "form") && !secureFormOf(el, elDoc, elWin)) return false;
+    const form = secureFormOf(el, elDoc, elWin);
+    if (!form) return isSameSiteSubmitDestination(null, elDoc, expectedOrigin);
+    if (!isSameSiteSubmitDestination(secureGetAttr(form, "action"), elDoc, expectedOrigin)) return false;
+    for (const ctrl of secureSubmittersOf(form, elDoc, elWin)) {
+      if (secureHasAttr(ctrl, "formaction") &&
+          !isSameSiteSubmitDestination(secureGetAttr(ctrl, "formaction"), elDoc, expectedOrigin)) return false;
+    }
+    return true;
+  }
+
+  function secureSubmit(lastEl) {
+    const elDoc = lastEl.ownerDocument;
+    const elWin = getWin(lastEl, win);
+    const form = secureFormOf(lastEl, elDoc, elWin);
+    const submitBtn = form
+      ? secureSubmittersOf(form, elDoc, elWin).find((c) => !c.disabled && isElementVisible(c, elWin))
+      : null;
+    if (submitBtn) {
+      dispatchPointerClickSequence(submitBtn, elWin, null, false);
+      return;
+    }
+    const enterInit = { key: "Enter", code: "Enter", keyCode: 13, which: 13, bubbles: true, cancelable: true, composed: true };
+    const notPrevented = lastEl.dispatchEvent(makeKeyboardEvent(elWin, "keydown", enterInit));
+    lastEl.dispatchEvent(makeKeyboardEvent(elWin, "keypress", { ...enterInit, charCode: 13 }));
+    if (notPrevented && secureTagOf(lastEl) !== "textarea") dispatchSubmitOnForm(lastEl);
+    lastEl.dispatchEvent(makeKeyboardEvent(elWin, "keyup", enterInit));
   }
 
   function secureFill(opts = {}) {
     const fields = Array.isArray(opts.fields) ? opts.fields : [];
     const expectedOrigin = String(opts.origin || "").trim();
+    const allowLocalHttp = opts.allowLocalHttp === true;
     const resolved = [];
     try {
-      const currentOrigin = String(win.location?.origin || "");
-      if (!expectedOrigin || currentOrigin !== expectedOrigin) {
+      if (!expectedOrigin || !secureFrameOriginOk(expectedOrigin, allowLocalHttp)) {
         return {
           ok: false,
           code: "origin_mismatch",
@@ -1619,8 +1725,8 @@ export function createDomDriver(win = globalThis) {
         resolved.push({ key, kind, value, el: compatible.el, ownerDoc: compatible.ownerDoc });
       }
 
-      // Re-verify top-level origin immediately before writing values.
-      if (String(win.location?.origin || "") !== expectedOrigin) {
+      // Re-verify this frame's and the top frame's origin immediately before writing values.
+      if (!secureFrameOriginOk(expectedOrigin, allowLocalHttp)) {
         return {
           ok: false,
           code: "origin_mismatch",
@@ -1667,35 +1773,22 @@ export function createDomDriver(win = globalThis) {
         filled.push(item.key);
       }
 
+      let submitted = false;
+      let submitRefused = "";
       if (opts.submit === true && resolved.length > 0) {
         const lastEl = resolved[resolved.length - 1].el;
-        const elWin = getWin(lastEl, win);
-        const form = lastEl.form || lastEl.closest?.("form");
-        const submitBtn = findFormSubmitControl(form, elWin);
-        if (submitBtn) {
-          dispatchPointerClickSequence(submitBtn, elWin, null, false);
+        if (!secureFrameOriginOk(expectedOrigin, allowLocalHttp)) {
+          submitRefused = "origin_changed";
+        } else if (!resolved.every((item) => secureSubmitDestinationOk(item.el, expectedOrigin))) {
+          submitRefused = "cross_site_action";
         } else {
-          const enterInit = {
-            key: "Enter",
-            code: "Enter",
-            keyCode: 13,
-            which: 13,
-            bubbles: true,
-            cancelable: true,
-            composed: true,
-          };
-          const kd = makeKeyboardEvent(elWin, "keydown", enterInit);
-          const notPrevented = lastEl.dispatchEvent(kd);
-          lastEl.dispatchEvent(makeKeyboardEvent(elWin, "keypress", { ...enterInit, charCode: 13 }));
-          if (notPrevented && lastEl.tagName.toLowerCase() !== "textarea") {
-            dispatchSubmitOnForm(lastEl);
-          }
-          lastEl.dispatchEvent(makeKeyboardEvent(elWin, "keyup", enterInit));
+          secureSubmit(lastEl);
+          submitted = true;
         }
       }
 
       const secretActive = filled.length > 0 ? hasActiveSecretFields() : false;
-      return { ok: true, filled, missing, docToken, secretActive };
+      return { ok: true, filled, missing, docToken, secretActive, submitted, ...(submitRefused && { submitRefused }) };
     } finally {
       for (const item of resolved) {
         item.value = "";
