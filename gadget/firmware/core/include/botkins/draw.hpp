@@ -132,11 +132,17 @@ struct HomeOptions {
 /** The home screen for every stage and phase of `view`. */
 void draw_home(Canvas& canvas, const View& view, Faces& faces, const HomeOptions& options = {});
 
+/** What a board adds to the quick controls. Left as it is, the panel is as it always was. */
+struct QuickOptions {
+  /** A small round Wi-Fi button at the centre, between the four: the board has a Wi-Fi editor. */
+  bool wifi = false;
+};
+
 /** The quick-controls panel. */
-enum class QuickAction { None, VolumeDown, VolumeUp, Mute, Brightness, NewChat, Close };
-void draw_quick(Canvas& canvas, const View& view, Faces& faces);
-/** What a touch at (x, y) on a `width` by `height` screen showing the panel does. */
-QuickAction quick_hit(int x, int y, int width, int height);
+enum class QuickAction { None, VolumeDown, VolumeUp, Mute, Brightness, NewChat, Close, Wifi };
+void draw_quick(Canvas& canvas, const View& view, Faces& faces, const QuickOptions& options = {});
+/** What a touch at (x, y) on a `width` by `height` screen showing the panel (drawn with `options`) does. */
+QuickAction quick_hit(int x, int y, int width, int height, const QuickOptions& options = {});
 /**
  * The settings after `action`: volume in steps of 10 (0 to 100), the microphone muted or not,
  * brightness 40, 70, 100 and round. Hand the change to Gadget::change_settings.

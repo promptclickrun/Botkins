@@ -74,6 +74,11 @@ struct Network {
   virtual std::string address() = 0;
   /** The signal of the network in use, in dBm (-30 is strong, -85 weak). 0 when it isn't known. */
   virtual int signal() { return 0; }
+  /**
+   * The name of the network the address came from, while "on"; "" when the board can't tell. A network
+   * a person is trying is kept only once the address is its own, not one from the network being left.
+   */
+  virtual std::string joined_ssid() { return ""; }
 };
 
 /** The speaker: 16-bit mono samples. `write` returns when they are queued to play, so it paces the reader. */

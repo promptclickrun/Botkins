@@ -72,6 +72,7 @@ struct Case {
   View view;
   HomeOptions options;
   bool quick = false;
+  QuickOptions quick_options = {};
   int width = 466, height = 466;
 };
 
@@ -178,8 +179,12 @@ int main(int argc, char** argv) {
   cases.back().quick = true;
   add("quick-muted", [](View& v) { v.settings.volume = 0; v.settings.mute = true; v.settings.brightness = 100; });
   cases.back().quick = true;
+  // A board that changes its Wi-Fi from a phone nearby: the Wi-Fi button at the centre.
+  add("quick-wifi", [](View& v) { v.settings.volume = 60; v.settings.brightness = 70; });
+  cases.back().quick = true;
+  cases.back().quick_options.wifi = true;
   // Other screens: 240 round, 320 by 240.
-  for (const char* name : {"ready", "speaking", "needs-permission", "working", "quick"})
+  for (const char* name : {"ready", "speaking", "needs-permission", "working", "quick", "quick-wifi"})
     for (const Case& c : std::vector<Case>(cases))
       if (c.name == name) {
         Case small = c;
@@ -213,7 +218,7 @@ int main(int argc, char** argv) {
     double ms[2];
     for (int round = 0; round < 2; round++) {  // the first draws faces and glyphs; the second is a redraw
       const auto start = std::chrono::steady_clock::now();
-      if (c.quick) draw_quick(canvas, c.view, faces);
+      if (c.quick) draw_quick(canvas, c.view, faces, c.quick_options);
       else draw_home(canvas, c.view, faces, c.options);
       ms[round] = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
     }
@@ -238,11 +243,27 @@ int main(int argc, char** argv) {
       {233, 233, 466, 466, QuickAction::None},     {10, 10, 466, 466, QuickAction::None},         {74, 197, 240, 240, QuickAction::VolumeDown},
       {166, 197, 240, 240, QuickAction::VolumeUp}, {160 + 74, 197, 320, 240, QuickAction::None},  {40 + 74, 197, 320, 240, QuickAction::VolumeDown},
   };
-  for (const Hit& h : hits)
+  for (const Hit& h : hits) {
     if (quick_hit(h.x, h.y, h.w, h.h) != h.want) {
       std::printf("quick_hit(%d, %d, %dx%d) is %d, not %d\n", h.x, h.y, h.w, h.h, (int)quick_hit(h.x, h.y, h.w, h.h), (int)h.want);
       failed++;
     }
+  }
+  // With the Wi-Fi button: the centre is Wi-Fi, the four around it are theirs still, and a touch just
+  // outside the button is nothing.
+  QuickOptions wifi;
+  wifi.wifi = true;
+  const Hit wifi_hits[] = {
+      {233, 222, 466, 466, QuickAction::Wifi},   {233, 240, 466, 466, QuickAction::Wifi},       {159, 156, 466, 466, QuickAction::Mute},
+      {307, 288, 466, 466, QuickAction::Close},  {233, 120, 466, 466, QuickAction::None},       {120, 115, 240, 240, QuickAction::Wifi},
+      {233, 262, 466, 466, QuickAction::None},
+  };
+  for (const Hit& h : wifi_hits) {
+    if (quick_hit(h.x, h.y, h.w, h.h, wifi) != h.want) {
+      std::printf("with Wi-Fi, quick_hit(%d, %d, %dx%d) is %d, not %d\n", h.x, h.y, h.w, h.h, (int)quick_hit(h.x, h.y, h.w, h.h, wifi), (int)h.want);
+      failed++;
+    }
+  }
   View::Settings s;
   s.volume = 65, s.brightness = 80, s.mute = false;
   const int volumes[] = {quick_apply(QuickAction::VolumeDown, s).volume, quick_apply(QuickAction::VolumeUp, s).volume};

@@ -280,6 +280,12 @@ These do nothing a person holding the gadget can't do: whoever has the cable has
 
 Setup over Bluetooth carries the same objects. It is not built yet.
 
+## Changing Wi-Fi on a gadget
+
+A board can call `Gadget::saved_networks` to list only the saved network names and `Gadget::try_network` to try one. Pass no password to reuse a saved password or an empty password for an open network. A trial does not use the computer link or alter the gadget's identity. The StopWatch does this from its touchscreen Wi-Fi editor.
+
+A successful trial requires the station to get an IP address on the requested network. The core moves that network to the front of the existing list (up to eight), including across reboot. On failure it leaves the store unchanged, rejoins the previous network if saved, and reports whether it could get back online. USB setup supersedes an in-progress trial. `Gadget::network_trial` reports `trying`, `joined`, `rolling-back`, `rolled-back` or `cancelled`; the rollback result includes its fallback state. Reports never include a password.
+
 ## Limits
 
 - A gadget counts as one of the computer's paired owner devices (20 at most).
