@@ -121,6 +121,14 @@ export function exportWorkflow(workflow, bots = [], appVersion = "0.17.17") {
     }
     if (node.kind === "output") {
       delete cfg.chatId;
+      if (cfg.card?.dispatch?.botId) {
+        const dName = botNameById.get(cfg.card.dispatch.botId) ?? cfg.card.dispatch.botName ?? null;
+        if (dName) {
+          cfg.card.dispatch.botName = dName;
+          agents.add(dName);
+        }
+        delete cfg.card.dispatch.botId;
+      }
     }
     return {
       id: node.id,
@@ -219,6 +227,13 @@ export function parseImportedWorkflow(raw, bots = [], agentMap = {}) {
         unresolvedAgents.push(cfg.botName);
         if (fallbackBot && node.kind === "agent") cfg.botId = fallbackBot.id;
       }
+    }
+    if (node.kind === "output" && cfg.card?.dispatch?.botName) {
+      const dName = cfg.card.dispatch.botName;
+      const mapped = agentMap[dName];
+      const match = mapped ? bots.find((b) => b.id === mapped) : byLowerName.get(String(dName).toLowerCase());
+      if (match) cfg.card.dispatch.botId = match.id;
+      else if (!unresolvedAgents.includes(dName)) unresolvedAgents.push(dName);
     }
     // Never accept imported secrets or route IDs
     if (node.kind === "trigger" && node.triggerKind === "webhook") {

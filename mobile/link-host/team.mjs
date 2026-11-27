@@ -71,6 +71,7 @@ const POLICY = {
   regenerateChatTitle: ["agents", "chat"],
   deleteChat: ["agents", "chat"],
   reactToMessage: ["agents", "chat"],
+  "chat.cardAction": "owner",
   forkChat: ["agents", "chat"],
   warmChat: ["agents", "chat"],
   setChatProject: "owner",
