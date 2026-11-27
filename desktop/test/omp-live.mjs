@@ -131,6 +131,10 @@ try {
   assert.deepEqual([approvals[0].kind, approvals[0].toolName, approvals[0].preview], ["shell", "bash", "printf omp-tool"]);
   assert.deepEqual([approvals[1].kind, approvals[1].label, approvals[1].toolName], ["mcp", "fixture / echo", "echo"]);
   assert.ok(requests.length >= 5);
+  assert.ok(
+    requests.every((request) => Array.isArray(request.tools) && request.tools.some((tool) => tool.name === "mcp__fixture_echo" && tool.parameters?.properties?.value)),
+    "OMP should expose configured MCP tools directly as typed schemas",
+  );
   const prompts = requests.map((request) => {
     const at = typeof request.instructions === "string" ? request.instructions.indexOf("omp://: harness docs") : -1;
     return {

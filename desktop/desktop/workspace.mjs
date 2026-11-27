@@ -114,6 +114,7 @@ import { currentBotBundle, templateBundle } from "./link/template-bundle.mjs";
 import { readWorkspace, WorkspaceWriter } from "./workspace-file.mjs";
 import { Access } from "./access.mjs";
 import { SessionSearch } from "./session-search.mjs";
+import { HowToBotkins } from "./how-to-botkins.mjs";
 import { memberCanSpaces, narrower, personName, speakerContext, speakerPrompt, turnAccess } from "./team-turn.mjs";
 import { Spaces } from "./spaces.mjs";
 
@@ -339,6 +340,8 @@ export class Workspace {
     this.wiki = new Wiki(this);
     // Searching past chats, across every harness (desktop/session-search.mjs)
     this.sessionSearch = new SessionSearch(this);
+    // How Botkins works, from the live FAQ at botkins.app/faq (desktop/how-to-botkins.mjs). Tests pass stand-ins in options.howTo.
+    this.howTo = new HowToBotkins(this, options?.howTo);
     // iMessage and Mail for bots, on a Mac (desktop/mactools.mjs). Tests pass stand-ins in options.macTools.
     this.mac = new MacTools(this, options?.macTools);
     // Tools a bot runs on a paired phone, through the phone link (desktop/phonetools.mjs).
@@ -1495,7 +1498,7 @@ export class Workspace {
       fixed: {
         head,
         group: chat.groupInstructions || "",
-        sessions: this.sessionSearch.context(),
+        sessions: this.sessionSearch.context() + this.howTo.context(),
         extra: chat.extraInstructions || "",
         profile: this.profileContext(bot.id),
         own:
@@ -1532,6 +1535,8 @@ export class Workspace {
       ...this.wiki.tools(bot, chat, run, task),
       // Past chats, from every harness (desktop/session-search.mjs). Read-only.
       ...this.sessionSearch.tools(bot, chat, run, task),
+      // How Botkins works, from its live FAQ (desktop/how-to-botkins.mjs). Read-only.
+      ...this.howTo.tools(bot, chat, run, task),
     ];
     // A helping teammate reads records and keeps its memory; it changes nothing else in the app.
     if (chat.helper) return records;

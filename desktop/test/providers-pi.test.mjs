@@ -7,7 +7,8 @@ import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, statSync, wri
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { EXTRA_USAGE, PiProvider, PiRpc, bundledPi, errorText, launcher } from "../desktop/providers/pi/index.mjs";
+import { EXTRA_USAGE, PiProvider, PiRpc, bundledPi, errorText, launcher, parseOmpMcpOutput, parsePiMcpNotify, pluginAlias } from "../desktop/providers/pi/index.mjs";
+import { INVENTORY } from "../desktop/providers/pi/extension-shared.mjs";
 import { execFileSync } from "node:child_process";
 import { Providers } from "../desktop/providers/index.mjs";
 import { ModelProvider } from "../desktop/providers/provider.mjs";
@@ -357,11 +358,12 @@ test("a package change refreshes the next Pi turn and its slash commands", { ski
   assert.equal(resolved.kind, "agent-prompt");
   // A handled extension command has no model turn and no agent_settled event.
   assert.deepEqual(await session.send({ prompt: resolved.prompt }, 100), { text: "" });
+  const withPackage = session.live;
   enabled = false;
   assert.ok(!(await session.inventory()).choices.some((c) => c.command === "show-garden"));
-  const withPackage = session.live;
-  await session.send({ prompt: "after" });
   assert.ok(withPackage.rpc.closed);
+  assert.equal(session.live.ref, before.ref);
+  await session.send({ prompt: "after" });
   assert.equal(session.live.ref, before.ref);
 });
 
@@ -507,3 +509,165 @@ test("a chat warmed before its first message still gives Pi every Botkins tool",
   assert.equal(ran, 1);
   await turn.close();
 });
+
+test("MCP status parsers distinguish connected, pending, failed, needs-auth, disconnected and disabled", () => {
+  const attention = parsePiMcpNotify("MCP servers need attention:\n  down: failed: HTTP 500\n  mail: needs sign-in\nRun /mcp to fix.");
+  assert.equal(attention.settled, true);
+  assert.deepEqual(Object.fromEntries(attention.states), { down: "failed", mail: "needs-auth" });
+
+  const status = parsePiMcpNotify(
+    "ok: connected, 2 tools (direct)\nempty: connected, 0 tools (direct)\npend: connecting (direct)\ndisc: disconnected, reconnects on next call (direct)\ndis: disabled (direct)\nauth: needs sign-in, run /mcp login auth (direct)\nbad: failed (direct)",
+  );
+  assert.deepEqual(Object.fromEntries(status.states), {
+    ok: "connected",
+    empty: "connected",
+    pend: "pending",
+    disc: "disconnected",
+    dis: "disabled",
+    auth: "needs-auth",
+    bad: "failed",
+  });
+
+  assert.deepEqual(parseOmpMcpOutput('Server "empty" connected (0 tools).'), { name: "empty", status: "connected" });
+  assert.deepEqual(parseOmpMcpOutput('Connection to "auth" failed: HTTP 401: unauthorized [WWW-Authenticate: Bearer]'), { name: "auth", status: "needs-auth" });
+  assert.deepEqual(parseOmpMcpOutput('Connection to "down" failed: HTTP 500: boom'), { name: "down", status: "failed" });
+  assert.deepEqual(parseOmpMcpOutput('Server "gone" not found.'), { name: "gone", status: "unavailable" });
+});
+
+test("Pi inventory reflects runtime connection states, direct vs indirect exposure, changed access and active turns", { skip }, async (t) => {
+  const { provider } = setup();
+  t.after(() => provider.stop());
+  const session = await provider.openSession(spec({
+    mcpServers: {
+      direct_srv: { type: "http", url: "http://127.0.0.1:9/direct" },
+      indirect_srv: { type: "http", url: "http://127.0.0.1:9/indirect" },
+      pend_srv: { type: "http", url: "http://127.0.0.1:9/pend" },
+      fail_srv: { type: "http", url: "http://127.0.0.1:9/fail" },
+      auth_srv: { type: "http", url: "http://127.0.0.1:9/auth" },
+      sse_srv: { type: "sse", url: "http://127.0.0.1:9/sse" },
+    },
+  }));
+  const live = await session.start();
+  // Simulate live telemetry emitted by extension-shared.mjs and builtin:mcp.
+  provider.observeRuntime(live, {
+    type: "extension_ui_request",
+    method: "setStatus",
+    statusKey: INVENTORY,
+    statusText: JSON.stringify({
+      tools: [
+        { name: "mcp__direct_srv__search", description: "Search directly", active: true, exposure: "direct" },
+        { name: "mcp__indirect_srv__query", description: "Query via codemode", active: true, exposure: "codemode" },
+        { name: "mcp__indirect_srv__secret", description: "Hidden tool", active: true, exposure: "hidden" },
+        { name: "mcp__stale_srv__old", description: "Removed server tool", active: true, exposure: "direct" },
+      ],
+      servers: [
+        { name: "direct_srv", enabled: true, exposure: "direct" },
+        { name: "indirect_srv", enabled: true, exposure: "codemode" },
+        { name: "pend_srv", enabled: true, exposure: "direct" },
+        { name: "fail_srv", enabled: true, exposure: "direct" },
+        { name: "auth_srv", enabled: true, exposure: "direct" },
+        { name: "stale_srv", enabled: true, exposure: "direct" },
+      ],
+    }),
+  });
+  provider.observeRuntime(live, {
+    type: "extension_ui_request",
+    method: "notify",
+    message: "direct_srv: connected, 1 tools (direct)\nindirect_srv: connected, 1 tools (codemode)\npend_srv: connecting (direct)\nfail_srv: failed (direct)\nauth_srv: needs sign-in, run /mcp login auth_srv (direct)",
+  });
+
+  const inv = await session.inventory();
+  assert.deepEqual(inv.servers, [
+    { name: "direct_srv", status: "connected" },
+    { name: "indirect_srv", status: "connected" },
+    { name: "pend_srv", status: "pending" },
+    { name: "fail_srv", status: "failed" },
+    { name: "auth_srv", status: "needs-auth" },
+    { name: "sse_srv", status: "unavailable" },
+  ]);
+  const direct = inv.choices.find((c) => c.kind === "Tool" && c.name === "search" && c.source === "direct_srv");
+  const indirect = inv.choices.find((c) => c.kind === "Tool" && c.name === "query" && c.source === "indirect_srv");
+  assert.equal(direct?.exposure, "direct");
+  assert.equal(indirect?.exposure, "indirect");
+  assert.ok(!inv.choices.some((c) => c.name === "secret"), "hidden tools are not presented as callable");
+  assert.ok(!inv.choices.some((c) => c.name === "old" || c.source === "stale_srv"), "removed servers never leak stale tools");
+
+  // Pending server transitioning to connected exposes its tools immediately.
+  provider.observeRuntime(live, {
+    type: "extension_ui_request",
+    method: "setStatus",
+    statusKey: INVENTORY,
+    statusText: JSON.stringify({
+      tools: [
+        { name: "mcp__direct_srv__search", description: "Search directly", active: true, exposure: "direct" },
+        { name: "mcp__pend_srv__ready", description: "Now ready", active: true, exposure: "direct" },
+      ],
+      servers: live.runtime.servers,
+    }),
+  });
+  const afterReady = await session.inventory();
+  assert.equal(afterReady.servers.find((s) => s.name === "pend_srv")?.status, "connected");
+  assert.ok(afterReady.choices.some((c) => c.source === "pend_srv" && c.name === "ready"));
+
+  // Changed access during an active turn filters stale tools and never restarts the process.
+  session.turn = { calls: new Map(), rows: new Map() };
+  session.spec = spec({
+    mcpServers: {
+      newly_added: { type: "http", url: "http://127.0.0.1:9/new" },
+    },
+  });
+  const activeInv = await session.inventory();
+  assert.equal(session.live, live, "active turn does not restart Pi");
+  assert.ok(!live.rpc.closed);
+  assert.deepEqual(activeInv.servers, [{ name: "newly_added", status: "configured" }]);
+  assert.ok(!activeInv.choices.some((c) => c.source === "direct_srv" || c.source === "pend_srv"), "removed tools disappear immediately");
+  session.turn = null;
+  await session.close();
+});
+
+test("Pi inventory resolves aliased plugin MCP servers back to Botkins server names", { skip }, async (t) => {
+  const { provider } = setup();
+  t.after(() => provider.stop());
+  const pluginOk = "plugin_alpha__server_a1b2c3d4";
+  const pluginFail = "plugin_beta__server_e5f6a7b8";
+  const aliasOk = pluginAlias(pluginOk);
+  const aliasFail = pluginAlias(pluginFail);
+  const session = await provider.openSession(spec({
+    mcpServers: {
+      [pluginOk]: { type: "http", url: "http://127.0.0.1:9/alpha" },
+      [pluginFail]: { type: "http", url: "http://127.0.0.1:9/beta" },
+    },
+  }));
+  const live = await session.start();
+  provider.observeRuntime(live, {
+    type: "extension_ui_request",
+    method: "setStatus",
+    statusKey: INVENTORY,
+    statusText: JSON.stringify({
+      tools: [
+        { name: `mcp__${aliasOk}__search`, description: "Plugin search", active: true, exposure: "direct" },
+        { name: "mcp__bkp_zzzzzzzzzzzz__stale", description: "Revoked plugin tool", active: true, exposure: "direct" },
+      ],
+      servers: [
+        { name: aliasOk, enabled: true, exposure: "direct" },
+        { name: aliasFail, enabled: true, exposure: "direct" },
+      ],
+    }),
+  });
+  provider.observeRuntime(live, {
+    type: "extension_ui_request",
+    method: "notify",
+    message: `${aliasOk}: connected, 1 tools (direct)\n${aliasFail}: failed (direct)`,
+  });
+
+  const inv = await session.inventory();
+  assert.deepEqual(inv.servers, [
+    { name: pluginOk, status: "connected" },
+    { name: pluginFail, status: "failed" },
+  ]);
+  const tool = inv.choices.find((c) => c.kind === "Tool" && c.source === pluginOk && c.name === "search");
+  assert.equal(tool?.exposure, "direct");
+  assert.ok(!inv.choices.some((c) => c.source?.startsWith("bkp_") || c.name === "stale"), "internal aliases and revoked plugin tools stay hidden");
+  await session.close();
+});
+
