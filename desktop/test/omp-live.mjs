@@ -154,6 +154,10 @@ try {
     assert.deepEqual([approvals[2].kind, approvals[2].preview, approvals[2].remember], ["write", patch, null]);
   }
   assert.ok(requests.length >= 5);
+  assert.ok(
+    requests.every((request) => Array.isArray(request.tools) && request.tools.some((tool) => tool.name === "mcp__fixture_echo" && tool.parameters?.properties?.value)),
+    "OMP should expose configured MCP tools directly as typed schemas",
+  );
   const prompts = requests.map((request) => {
     if (pi) return JSON.stringify(request.input ?? []);
     const at = typeof request.instructions === "string" ? request.instructions.indexOf("omp://: harness docs") : -1;
