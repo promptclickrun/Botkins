@@ -24,6 +24,7 @@ import { clockOffset, countWords, failedTail, openChapters } from "./crew";
 import { TodoList } from "./TodoList";
 import { StepMark } from "./bits";
 import { commandSheet, helperSheet } from "./HelperRail";
+import { isVoiceTranscriptInterim } from "./turn";
 
 const STATUS_TONE: Record<string, Tone> = { Working: "accent", Completed: "success", "Needs you": "danger", Stopped: "neutral", Interrupted: "warning" };
 
@@ -287,7 +288,7 @@ export default function RunActivity() {
     (): StoryUpdate[] =>
       !showUpdates || !run
         ? []
-        : (messages ?? []).flatMap((message, i) => (message.interim && message.runId === runId && message.text.trim() ? [{ key: (message.time ?? 0) + ":" + i, at: message.time ?? run.time, text: message.text.trim() }] : [])),
+        : (messages ?? []).flatMap((message, i) => (message.interim && !isVoiceTranscriptInterim(message) && message.runId === runId && message.text.trim() ? [{ key: (message.time ?? 0) + ":" + i, at: message.time ?? run.time, text: message.text.trim() }] : [])),
     [messages, runId, showUpdates, run],
   );
   const chapters = useMemo(() => (run ? storyChapters(run, updates) : []), [run, updates]);

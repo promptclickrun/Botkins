@@ -79,10 +79,7 @@ export function recordVoiceLine(chat, id, text, final, author, { role = "user", 
   } else {
     const time = Date.now();
     message = { role, voiceId: id, time, ...(author && { author }) };
-    if (role === "assistant" && validId(afterVoiceId)) {
-      message.afterVoiceId = afterVoiceId;
-      if (user?.runId && !written) Object.assign(message, { runId: user.runId, interim: true });
-    }
+    if (role === "assistant" && validId(afterVoiceId)) message.afterVoiceId = afterVoiceId;
     const before = role === "user" ? chat.messages.findIndex(item => item.afterVoiceId === id && own(item, author)) : -1;
     if (before < 0) chat.messages.push(message);
     else chat.messages.splice(before, 0, message);
@@ -104,11 +101,6 @@ export function addUserMessage(chat, message, voiceId) {
     const heard = chat.messages.findLast(item => item.voiceId === voiceId);
     if (!heard || heard.role === "user" && own(heard, message.author) && !heard.runId && !heard.steeredRunId) {
       const before = chat.messages.findIndex(item => item.afterVoiceId === voiceId && own(item, message.author));
-      if (message.runId && before >= 0) {
-        for (const item of chat.messages.slice(before)) {
-          if (item.afterVoiceId === voiceId && own(item, message.author)) Object.assign(item, { runId: message.runId, interim: true });
-        }
-      }
       if (heard) {
         const { time, text, ...turn } = message;
         return Object.assign(heard, turn);
