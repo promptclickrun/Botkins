@@ -105,11 +105,15 @@ test("native Pi: warm approved calls renew without replay or token leakage", { s
   await turn();
   assert.equal(upstreamCalls(remote).length, 3);
   assert.equal(tokenRequests(remote), 2);
+  remote.state.interruptNextCall = true;
+  await turn();
+  assert.equal(remote.state.interruptedEffects, 1);
+  assert.equal(upstreamCalls(remote).length, 4);
   allow = false;
   await turn();
-  assert.equal(upstreamCalls(remote).length, 3, "denied tool requests must not reach the MCP server");
+  assert.equal(upstreamCalls(remote).length, 4, "denied tool requests must not reach the MCP server");
   assert.equal(session.live === live, true);
-  assert.equal(approvals.length, 4);
+  assert.equal(approvals.length, 5);
   assert.ok(approvals.every((approval) => approval.kind === "mcp" && approval.label === "words / secret_word"));
   assert.ok(JSON.stringify(events).includes("not replayed"));
   withoutCredentials(remote, [requests, events, remote.state.log, live.rpc.stderr]);
@@ -126,29 +130,152 @@ async function connect(session) {
   await session.warm();
   const config = JSON.parse(readFileSync(session.live.file, "utf8"));
   const server = config.servers.words;
-  const call = async (id) => {
-    const response = await fetch(server.url, {
-      method: "POST",
-      headers: { ...server.headers, "content-type": "application/json", accept: "application/json, text/event-stream" },
-      body: JSON.stringify({ jsonrpc: "2.0", id, method: "tools/call", params: { name: "secret_word" } }),
-    });
+  const request = (rpc) => fetch(server.url, {
+    method: "POST",
+    headers: { ...server.headers, "content-type": "application/json", accept: "application/json, text/event-stream" },
+    body: JSON.stringify({ jsonrpc: "2.0", ...rpc }),
+  });
+  const call = async (id, args, name = "secret_word") => {
+    const response = await request({ id, method: "tools/call", params: { name, arguments: args } });
     assert.equal(response.status, 200);
     return response.json();
   };
-  return { call, config, endpoint: server.url };
+  return { call, request, config, endpoint: server.url };
 }
 
 const skip = process.platform === "win32" && "The harness fixtures use a POSIX launcher";
+
+// Hold a real fake-Pi RPC turn at its shell approval while the test drives the relay.
+async function heldTurn(session, onReady) {
+  const entered = Promise.withResolvers();
+  const resume = Promise.withResolvers();
+  session.spec.handlers = { permission: (req) => {
+    if (req.kind !== "shell") return { allow: true };
+    entered.resolve();
+    return resume.promise;
+  } };
+  const done = session.send({ prompt: "bash:fixture" }, 10000, onReady);
+  done.catch(entered.reject);
+  await entered.promise;
+  const release = () => resume.resolve({ allow: false });
+  return { release, finish: async () => { release(); await done; } };
+}
+
+async function approval(session, id, input = {}, server = "words", name = "secret_word") {
+  return session.permission({ toolCallId: String(id), toolName: "mcp__" + server + "__" + name, mcpServerName: server, mcpToolName: name, input });
+}
+
+async function approvedCall(session, call, id) {
+  const turn = await heldTurn(session);
+  try {
+    assert.equal(await approval(session, id), true);
+    return await call(id);
+  } finally {
+    await turn.finish();
+  }
+}
+
+test("Pi's relay refuses a fixture tool invocation without a host approval", { skip }, async (t) => {
+  const { remote, ws, makeSession } = await setup(t);
+  ws.integrations.saveServer({ name: "other_words", type: "http", url: remote.url, oauth: {} });
+  const session = await makeSession();
+  const { call } = await connect(session);
+  const reply = await call(1);
+  assert.equal(reply.result?.isError, true);
+  assert.equal(upstreamCalls(remote).length, 0);
+  const turn = await heldTurn(session);
+  try {
+    assert.equal((await call(2)).result?.isError, true);
+    assert.equal(upstreamCalls(remote).length, 0);
+    assert.equal(await approval(session, "other-server", { text: "approved" }, "other_words"), true);
+    assert.equal((await call(20, { text: "approved" })).result?.isError, true);
+    assert.equal(await approval(session, "first", { text: "approved" }), true);
+    assert.equal((await call(3, { text: "different" })).result?.isError, true);
+    assert.equal((await call(4, { text: "approved" }, "other_tool")).result?.isError, true);
+    assert.equal(upstreamCalls(remote).length, 0);
+    assert.equal((await call(5, { text: "approved" })).result?.content[0]?.text, remote.state.word);
+    assert.equal(await approval(session, "first", { text: "approved" }), false);
+    assert.equal((await call(6, { text: "approved" })).result?.isError, true);
+    assert.equal(upstreamCalls(remote).length, 1);
+  } finally {
+    await turn.finish();
+  }
+});
+
+test("the relay passes discovery but rejects unsupported messages and HTTP DELETE", { skip }, async (t) => {
+  const { remote, makeSession } = await setup(t);
+  const { request, endpoint } = await connect(await makeSession());
+  const listed = await request({ id: 1, method: "tools/list" });
+  assert.equal((await listed.json()).result.tools[0].name, "secret_word");
+  assert.equal((await request({ id: 2, method: "prompts/get", params: { name: "fixture" } })).status, 403);
+  assert.equal((await request({ method: "notifications/cancelled", params: { requestId: 1 } })).status, 403);
+  assert.equal((await request({ id: 3, method: "notifications/initialized" })).status, 403);
+  assert.equal((await fetch(endpoint, { method: "DELETE" })).status, 405);
+  assert.equal(remote.state.log.filter((entry) => entry.path === "/mcp").length, 2, "only browser discovery and the allowed request reached MCP");
+});
+
+test("an interrupted tool response returns an error without replaying even with an identical pending approval", { skip }, async (t) => {
+  const { remote, makeSession } = await setup(t);
+  const session = await makeSession();
+  const { call } = await connect(session);
+  const turn = await heldTurn(session);
+  try {
+    assert.equal(await approval(session, "first"), true);
+    assert.equal(await approval(session, "second"), true);
+    remote.state.interruptNextCall = true;
+    assert.match((await call(1)).result?.content[0]?.text ?? "", /not replayed/i);
+    assert.equal((await call(1)).result?.isError, true);
+    assert.equal(remote.state.interruptedEffects, 1);
+    assert.equal(upstreamCalls(remote).length, 1);
+    remote.state.streamNextCall = true;
+    assert.equal((await call(2)).result?.content[0]?.text, remote.state.word);
+  } finally {
+    await turn.finish();
+  }
+});
+
+for (const end of ["Stop", "steer", "finish"]) {
+  test(end + " revokes unused approval and cannot admit a late approval", { skip }, async (t) => {
+    const { remote, makeSession } = await setup(t);
+    const session = await makeSession();
+    const { call } = await connect(session);
+    const ready = Promise.withResolvers();
+    const turn = await heldTurn(session, ready.resolve);
+    const answer = Promise.withResolvers();
+    const asked = Promise.withResolvers();
+    let steering;
+    try {
+      assert.equal(await approval(session, "unused"), true);
+      session.spec.handlers.permission = () => { asked.resolve(); return answer.promise; };
+      const late = approval(session, "late", { late: true });
+      await asked.promise;
+      if (end === "Stop") await session.abort();
+      else if (end === "steer") steering = (await ready.promise)({ prompt: "replacement" });
+      else await turn.finish();
+      assert.equal((await call(1)).result?.isError, true);
+      answer.resolve({ allow: true });
+      assert.equal(await late, false);
+      assert.equal((await call(2, { late: true })).result?.isError, true);
+      assert.equal(upstreamCalls(remote).length, 0);
+    } finally {
+      answer.resolve({ allow: false });
+      turn.release();
+      if (steering) await steering;
+      await turn.finish();
+    }
+  });
+}
+
 test("Pi renews a rejected vault token for the next call on the same process", { skip }, async (t) => {
   const { remote, makeSession } = await setup(t);
   const session = await makeSession();
   const { config, call } = await connect(session);
   const live = session.live;
-  const result = await call(1);
+  const result = await approvedCall(session, call, 1);
   assert.equal(result.result?.content[0]?.text, remote.state.word);
   withoutCredentials(remote, config);
   remote.state.rejectNextCall = true;
-  const refused = await call(2);
+  const refused = await approvedCall(session, call, 2);
   assert.equal(refused.result?.isError, true);
   assert.equal(remote.state.rejectedEffects, 1);
   assert.equal(upstreamCalls(remote).filter((entry) => JSON.parse(entry.body).id === 2).length, 1);
@@ -157,7 +284,7 @@ test("Pi renews a rejected vault token for the next call on the same process", {
   const next = await makeSession();
   await next.warm();
   assert.equal(next.live === live, true, "OAuth renewal replaced the harness process");
-  assert.equal((await call(3)).result?.content[0]?.text, remote.state.word);
+  assert.equal((await approvedCall(next, call, 3)).result?.content[0]?.text, remote.state.word);
   assert.equal(tokenRequests(remote), 2);
 });
 
@@ -168,10 +295,10 @@ test("a scope challenge stops warm calls until a person consents, even after can
   const live = session.live;
   remote.state.requiredScope = "tools.write";
   remote.state.scope = "tools.read tools.write";
-  const denied = await call(1);
+  const denied = await approvedCall(session, call, 1);
   assert.match(denied.result?.content[0]?.text ?? "", /sign.in/i);
   assert.equal(ws.integrations.publicServers()[0].auth.needsSignIn, true);
-  assert.equal((await call(2)).result?.isError, true);
+  assert.equal((await approvedCall(session, call, 2)).result?.isError, true);
   assert.equal(upstreamCalls(remote).length, 1, "no tool call advances without consent");
   assert.equal(tokenRequests(remote), 1, "no unattended refresh or new grant");
   assert.equal(remote.state.log.filter((r) => r.path === "/authorize").length, 1, "no unattended browser launch");
@@ -181,7 +308,7 @@ test("a scope challenge stops warm calls until a person consents, even after can
   assert.equal(await opened.promise, "tools.read tools.write");
   ws.integrations.cancelSignIn(id);
   await assert.rejects(pending, /cancel/i);
-  assert.equal((await call(3)).result?.isError, true);
+  assert.equal((await approvedCall(session, call, 3)).result?.isError, true);
   assert.equal(session.live === live && !live.rpc.closed, true);
   assert.equal(tokenRequests(remote), 1);
   withoutCredentials(remote, [denied, ws.snapshot()]);
@@ -195,12 +322,12 @@ test("the first warm call after vault expiry uses the renewed grant", { skip }, 
   const { remote, makeSession, ws, id } = await setup(t);
   const session = await makeSession();
   const { call } = await connect(session);
-  await call(1);
+  await approvedCall(session, call, 1);
   const record = ws.integrations.server(id);
   const oauth = ws.integrations.oauth;
   oauth.write(record, { ...oauth.read(record), expiresAt: Date.now() - 1 });
   remote.state.access.clear();
-  assert.equal((await call(2)).result?.content[0]?.text, remote.state.word);
+  assert.equal((await approvedCall(session, call, 2)).result?.content[0]?.text, remote.state.word);
   assert.equal(tokenRequests(remote), 2);
   assert.equal(upstreamCalls(remote).length, 2, "expiry does not send a request with a stale token");
 });
@@ -232,7 +359,7 @@ test("a late renewal cannot overwrite a warm scope refusal", { skip }, async (t)
   const renewal = ws.integrations.mcpAuth({ server: "words", url: remote.url, reason: "refresh" });
   await sent.promise;
   remote.state.requiredScope = "tools.write";
-  await call(1);
+  await approvedCall(session, call, 1);
   assert.equal(ws.integrations.publicServers()[0].auth.needsSignIn, true);
   release.resolve();
   assert.equal((await renewal) === null, true, "the outstanding renewal cannot erase the consent requirement");

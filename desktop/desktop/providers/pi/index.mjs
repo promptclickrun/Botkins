@@ -21,6 +21,7 @@ import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
+import { isDeepStrictEqual } from "node:util";
 import { ModelProvider, ProviderSession, usageData } from "../provider.mjs";
 import { cliEnv, findBinary, run, versionOf } from "../cli.mjs";
 import { buildInventory, resolvePrompt } from "../commands.mjs";
@@ -86,6 +87,8 @@ export function launcher(file, args) {
 }
 /** Pi's thinking levels. Botkins' efforts are the same words. */
 const LEVELS = new Set(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
+const OAUTH_ASKING = Symbol("pending OAuth tool approval");
+const oauthCalls = () => ({ controller: new AbortController(), pending: new Map(), requests: new Map() });
 const level = (effort) => (effort === "none" ? "off" : LEVELS.has(effort) ? effort : null);
 /** A conversation lets go of its Pi after this long unused; the next turn starts it again on the same session. */
 const IDLE_MS = 15 * 60 * 1000;
@@ -429,6 +432,7 @@ class PiSession extends ProviderSession {
       // `users`: the person's messages the harness took into the run (the prompt, then each steer it
       // delivered); `steered`: the steers it accepted.
       const turn = (this.turn = { text: "", parts: [], thinking: null, gap: false, error: null, stopReason: null, calls: new Map(), rows: new Map(), users: 0, steered: 0, ended: false });
+      if (live.oauth) turn.oauth = oauthCalls();
       // One listener for the whole turn; a run started again for a late steer waits on a new settle.
       let settle = () => {};
       let fail = () => {};
@@ -443,10 +447,19 @@ class PiSession extends ProviderSession {
       let settled = nextSettle();
       const timer = timeoutMs > 0 && setTimeout(() => fail(new Error(this.provider.name + " took too long to answer.")), timeoutMs);
       const off = rpc.on((event) => {
-        if (event.type === "botkins_exit") return fail(event.error);
+        if (event.type === "botkins_exit") {
+          this.cancelOAuthCalls();
+          return fail(event.error);
+        }
+        if (event.type === "agent_end") this.cancelOAuthCalls();
+        if (event.type === "tool_execution_end" && turn.oauth?.pending.has(event.toolCallId))
+          turn.oauth.pending.set(event.toolCallId, null);
         if (turn.buffer) turn.buffer.push(event);
         else this.event(event);
-        if (this.provider.settled(event) || (event.type === "prompt_result" && event.agentInvoked === false)) settle(event);
+        if (this.provider.settled(event) || (event.type === "prompt_result" && event.agentInvoked === false)) {
+          this.cancelOAuthCalls();
+          settle(event);
+        }
       });
       stop = () => {
         clearTimeout(timer);
@@ -506,6 +519,7 @@ class PiSession extends ProviderSession {
       return { text: reply };
     } finally {
       // A call that never ran (stopped, or the process went away) must not stay Running.
+      this.cancelOAuthCalls();
       if (this.turn) this.stopRows(this.turn);
       stop();
       this.turn = null;
@@ -526,6 +540,7 @@ class PiSession extends ProviderSession {
       // A refused abort leaves the original operation running. Preserve the input for the
       // workspace's ordinary queue. A dead RPC also rejects the outstanding settle.
       turn.redirected = true;
+      this.cancelOAuthCalls();
       aborting = rpc.request({ type: "abort" }, 0).catch(error => {
         for (const item of pending.splice(0)) item.ack.reject(error);
         aborting = null;
@@ -552,6 +567,7 @@ class PiSession extends ProviderSession {
         // A fast Pi can send the new prompt acknowledgement and reply in a single stdout
         // chunk. Let the workspace commit the user's message before surfacing those deltas.
         turn.buffer = [];
+        if (this.live?.oauth) turn.oauth = oauthCalls();
         const answer = await rpc.request({ type: "prompt", message: current.text }, 0);
         current.ack.resolve(true);
         current = null;
@@ -683,14 +699,22 @@ class PiSession extends ProviderSession {
   /** The extension's question before a tool runs: Botkins' rules and the person decide. */
   async permission(call) {
     const handlers = this.spec.handlers;
-    if (!handlers || !this.turn) return false;
+    const turn = this.turn;
+    if (!handlers || !turn) return false;
     const { name, server } = toolIdentity(call);
-    this.turn.calls?.set(call.toolCallId, { name, server });
+    turn.calls?.set(call.toolCallId, { name, server });
     if (server === BRIDGE) return true;
     // Pi keeps every server Botkins gave it registered, so its tool list stays the same; one this
     // turn doesn't have (the person writing may not use it) does nothing. (A Pi package's own server isn't Botkins'.)
     if (server && this.live?.given?.has(server) && !Object.hasOwn(this.spec.mcpServers ?? {}, server)) return false;
     const input = call.input && typeof call.input === "object" ? call.input : {};
+    const needsGrant = this.provider.runtime === PI_ID && !!this.spec.mcpServers?.[server]?.oauthId;
+    const oauth = needsGrant ? turn.oauth : undefined;
+    if (needsGrant && (!oauth || this.stopRequested || this.closed || turn.ended ||
+      typeof call.toolCallId !== "string" || !call.toolCallId || oauth.pending.has(call.toolCallId) ||
+      (call.input !== undefined && (!call.input || typeof call.input !== "object" || Array.isArray(call.input))))) return false;
+    // Reserve the tool call ID before asking; repeated UI requests cannot mint extra grants.
+    if (needsGrant) oauth.pending.set(call.toolCallId, OAUTH_ASKING);
     const path = typeof input.path === "string" ? input.path : typeof input.file_path === "string" ? input.file_path : "";
     let request;
     if (server)
@@ -704,12 +728,40 @@ class PiSession extends ProviderSession {
     else request = { kind: "custom-tool", label: name, title: "Use " + name + "?", preview: displayValue(input, Infinity), remember: null };
     try {
       const answer = await handlers.permission({ ...request, toolName: name, detail: displayValue(call, Infinity), readOnly: request.kind === "read", sandboxEscape: false, managed: false });
-      return !!answer?.allow;
+      if (!answer?.allow) return false;
+      if (needsGrant) {
+        if (this.turn !== turn || turn.oauth !== oauth || turn.ended || this.stopRequested || this.closed ||
+          oauth.pending.get(call.toolCallId) !== OAUTH_ASKING) return false;
+        oauth.pending.set(call.toolCallId, { server, name, input });
+      }
+      return true;
     } catch {
       return false;
     }
   }
+  takeOAuthGrant(server, { name, arguments: input = {} }, requestId) {
+    const turn = this.turn;
+    const oauth = turn?.oauth;
+    if (!oauth || turn.ended || this.stopRequested || this.closed) return null;
+    let requests = oauth.requests.get(server);
+    if (requests?.has(requestId)) return null;
+    for (const [id, grant] of oauth.pending) {
+      if (grant?.server !== server || grant.name !== name || !isDeepStrictEqual(grant.input, input)) continue;
+      oauth.pending.set(id, null);
+      if (!requests) oauth.requests.set(server, requests = new Set());
+      requests.add(requestId);
+      return oauth.controller.signal;
+    }
+    return null;
+  }
+  cancelOAuthCalls() {
+    const oauth = this.turn?.oauth;
+    if (!oauth) return;
+    this.turn.oauth = null;
+    oauth.controller.abort();
+  }
   interrupt() {
+    this.cancelOAuthCalls();
     try {
       this.live?.rpc.write({ type: "abort" });
     } catch {
@@ -1007,7 +1059,10 @@ export class PiProvider extends ModelProvider {
       live.oauth ??= await DirectMcpOAuth.listen();
     }
     if (live.oauth) {
-      described = { ...described, servers: live.oauth.project(servers, (request) => live.session?.spec.mcpAuth?.(request)) };
+      described = { ...described, servers: live.oauth.project(servers, {
+        auth: (request) => live.session?.spec.mcpAuth?.(request),
+        takeGrant: (server, params, id) => live.session?.takeOAuthGrant(server, params, id),
+      }) };
     }
     // Every server Botkins gave this process (PiSession.permission).
     live.given = new Set([...(live.given ?? []), ...Object.keys(described.servers ?? {})]);

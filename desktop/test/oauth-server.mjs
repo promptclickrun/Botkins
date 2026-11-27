@@ -169,6 +169,20 @@ export async function oauthMcpServer(options = {}) {
         state.rejectNextCall = false;
         return json(401, { error: "invalid_token", ignored: token }, { "www-authenticate": 'Bearer error="invalid_token"' });
       }
+      if (message.method === "tools/call" && state.interruptNextCall) {
+        state.interruptNextCall = false;
+        state.interruptedEffects = (state.interruptedEffects ?? 0) + 1;
+        response.writeHead(200, { "content-type": "text/event-stream" });
+        response.write('event: message\ndata: {"jsonrpc":"2.0"', () => response.destroy());
+        return;
+      }
+      if (message.method === "tools/call" && state.streamNextCall) {
+        state.streamNextCall = false;
+        response.writeHead(200, { "content-type": "text/event-stream" });
+        const reply = { jsonrpc: "2.0", id: message.id, result: { content: [{ type: "text", text: state.word }] } };
+        response.write(": keepalive\r\n\r\nevent: message\r\ndata: " + JSON.stringify(reply) + "\r\n\r\n");
+        return; // The relay can return when the result arrives; it need not wait for stream EOF.
+      }
       if (message.id === undefined) {
         response.writeHead(202);
         return response.end();

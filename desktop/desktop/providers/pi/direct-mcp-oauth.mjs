@@ -8,9 +8,52 @@ import { challengeParam } from "../../oauth.mjs";
 
 const MCP_HEADERS = ["accept", "content-type", "mcp-protocol-version", "mcp-session-id", "last-event-id"];
 const MAX_BODY = 8_000_000;
+const PASSIVE_REQUESTS = new Set(["initialize", "ping", "tools/list", "resources/list", "resources/templates/list", "prompts/list"]);
 const signIn = "This MCP tool needs sign-in. Use the tool's sign-in controls, not the chat.";
 const rejected = "The MCP server rejected this call's sign-in. The call was not replayed. Check whether it took effect before trying again.";
-const failed = "The MCP request failed. The call was not replayed.";
+const failed = "The MCP request failed. The call was not replayed. Check whether it took effect before trying again.";
+
+/** Hold the tool POST response until a complete result arrives, not a partial response a client may retry. */
+async function toolReply(response, id) {
+  const mime = response.headers.get("content-type")?.split(";")[0].trim().toLowerCase();
+  if (!response.body || !["application/json", "text/event-stream"].includes(mime)) {
+    await response.body?.cancel();
+    return null;
+  }
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "", data = [], bytes = 0;
+  const result = (text) => {
+    const reply = JSON.parse(text);
+    return reply?.jsonrpc === "2.0" && reply.id === id && reply.result && typeof reply.result === "object" && !Array.isArray(reply.result)
+      ? { jsonrpc: "2.0", id, result: reply.result } : null;
+  };
+  try {
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (value && (bytes += value.byteLength) > MAX_BODY) return null;
+      buffer += decoder.decode(value, { stream: !done });
+      if (mime === "application/json") {
+        if (done) return result(buffer);
+        continue;
+      }
+      for (let at; (at = buffer.search(/[\r\n]/)) !== -1;) {
+        if (!done && buffer[at] === "\r" && at === buffer.length - 1) break;
+        const line = buffer.slice(0, at);
+        buffer = buffer.slice(at + (buffer.startsWith("\r\n", at) ? 2 : 1));
+        if (line === "" && data.length) {
+          const reply = result(data.join("\n"));
+          if (reply) return reply;
+          data = [];
+        } else if (line === "data") data.push("");
+        else if (line.startsWith("data:")) data.push(line.slice(5).replace(/^ /, ""));
+      }
+      if (done) return null;
+    }
+  } finally {
+    await reader.cancel().catch(() => {});
+  }
+}
 
 export class DirectMcpOAuth {
   static async listen() {
@@ -28,7 +71,7 @@ export class DirectMcpOAuth {
     this.server = createServer((request, response) => void this.handle(request, response));
   }
 
-  project(servers, auth) {
+  project(servers, { auth, takeGrant }) {
     const old = new Map([...this.entries.values()].map((entry) => [entry.key, entry]));
     this.entries.clear();
     return Object.fromEntries(servers.map(([name, config]) => {
@@ -37,6 +80,7 @@ export class DirectMcpOAuth {
       const key = JSON.stringify([name, oauthId, url, headers]);
       const entry = old.get(key) ?? { key, path: "/mcp/" + randomBytes(32).toString("hex"), url, headers };
       entry.auth = (reason, rejectedAccessToken) => auth({ server: name, serverId: oauthId, url, reason, rejectedAccessToken });
+      entry.takeGrant = (params, id) => takeGrant(name, params, id);
       this.entries.set(entry.path, entry);
       return [name, { ...native, url: "http://127.0.0.1:" + this.server.address().port + entry.path }];
     }));
@@ -52,15 +96,17 @@ export class DirectMcpOAuth {
 
   async handle(request, response) {
     const send = (status, body = "") => {
+      if (response.destroyed) return;
       response.writeHead(status, { "cache-control": "no-store", ...(body && { "content-type": "application/json" }) });
       response.end(body);
     };
     const entry = this.entries.get(request.url);
     if (!entry || request.headers.origin || request.headers.host !== "127.0.0.1:" + this.server.address()?.port) return send(403);
     const method = request.method;
-    if (!["POST", "GET", "DELETE"].includes(method)) return send(405);
+    if (!["POST", "GET"].includes(method)) return send(405);
     let body, rpc;
     const abort = new AbortController();
+    let signal = abort.signal;
     response.once("close", () => abort.abort());
     const refused = (status, text) => {
       // A valid tool result, rather than an HTTP 401 or a disconnected socket, keeps the native
@@ -78,16 +124,32 @@ export class DirectMcpOAuth {
           if (body.length > MAX_BODY) return send(413);
         }
         rpc = JSON.parse(body);
-        if (!rpc || Array.isArray(rpc) || typeof rpc !== "object") return send(400);
+        if (rpc?.jsonrpc !== "2.0" || typeof rpc.method !== "string") return send(400);
+        const hasId = typeof rpc.id === "string" || Number.isSafeInteger(rpc.id);
+        if (rpc.method === "tools/call") {
+          const { id, params } = rpc;
+          const valid = hasId &&
+            typeof params?.name === "string" && (params.arguments === undefined || (params.arguments && typeof params.arguments === "object" && !Array.isArray(params.arguments)));
+          if (!valid) return send(400);
+          const grant = entry.takeGrant(params, id);
+          if (!grant) return refused(403, "This MCP tool call was not approved for this turn.");
+          signal = AbortSignal.any([abort.signal, grant]);
+          // Forward only what was approved, not extra parameters or another interpretation of the wire JSON.
+          body = JSON.stringify({ jsonrpc: "2.0", id, method: rpc.method, params: { name: params.name, arguments: params.arguments ?? {} } });
+        } else {
+          const initialized = rpc.method === "notifications/initialized" && !Object.hasOwn(rpc, "id");
+          if (!initialized && !(hasId && PASSIVE_REQUESTS.has(rpc.method))) return send(403);
+          body = JSON.stringify({ jsonrpc: "2.0", id: rpc.id, method: rpc.method, params: rpc.params });
+        }
       }
       let token = await entry.auth("initial");
       if (token?.accessToken && token.accessToken === entry.rejected) token = await entry.auth("reauth", entry.rejected);
-      if (abort.signal.aborted || this.entries.get(request.url) !== entry) return send(403);
+      if (signal.aborted || this.entries.get(request.url) !== entry) return refused(403, failed);
       if (!token?.accessToken || token.accessToken === entry.rejected) return refused(403, signIn);
       const headers = new Headers(entry.headers);
       for (const name of MCP_HEADERS) if (request.headers[name]) headers.set(name, request.headers[name]);
       headers.set("Authorization", (token.tokenType || "Bearer") + " " + token.accessToken);
-      const upstream = await fetch(entry.url, { method, headers, body, redirect: "error", signal: abort.signal });
+      const upstream = await fetch(entry.url, { method, headers, body, redirect: "error", signal });
       if (!upstream.ok) {
         await upstream.body?.cancel().catch(() => {});
         const challenge = upstream.headers.get("www-authenticate");
@@ -100,6 +162,10 @@ export class DirectMcpOAuth {
           return refused(403, rejected);
         }
         return refused(upstream.status, failed);
+      }
+      if (rpc?.method === "tools/call") {
+        const reply = await toolReply(upstream, rpc.id);
+        return reply ? send(200, JSON.stringify(reply)) : refused(502, failed);
       }
       const out = { "cache-control": "no-store" };
       for (const name of ["content-type", "mcp-session-id", "mcp-protocol-version"]) {
