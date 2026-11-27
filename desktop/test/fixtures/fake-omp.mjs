@@ -43,11 +43,12 @@ if (resumed && process.env.FAKE_OMP_RESUMED_PHASES) {
 }
 const dialogs = new Map();
 let next = 1;
-const ask = (title) =>
+// As Botkins' extension asks (desktop/providers/pi/extension-shared.mjs): "more" is followed by an input for the detail.
+const ask = (title, method = "select") =>
   new Promise((resolve) => {
     const id = "ui-" + next++;
     dialogs.set(id, resolve);
-    send({ type: "extension_ui_request", id, method: "select", title, options: ["allow", "deny"] });
+    send({ type: "extension_ui_request", id, method, title, ...(method === "select" && { options: ["allow", "deny", "more"] }) });
   });
 let aborted = false;
 
@@ -77,20 +78,43 @@ async function turn(text) {
     const input = bash ? { command: bash[1] } : mcp ? { id: "x" } : { id: "bot" };
     const server = bash ? undefined : mcp?.[1] ?? "botkins";
     const remoteName = mcp?.[2] ?? own?.[1];
-    const call = { toolCallId, toolName, input, ...(server && { mcpServerName: server, mcpToolName: remoteName }) };
+    const call = { toolCallId, toolName, input, ...(bash && { native: true }),
+      ...(server && { mcpServerName: server, mcpToolName: remoteName, registryServer: server, registryTool: remoteName }) };
     send({ type: "tool_call_pending", toolCallId, toolName });
     const answer = await ask("botkins:permission " + JSON.stringify(call));
     log({ answer });
-    const allowed = answer.value === "allow";
-    send({ type: "tool_execution_start", toolCallId, toolName, args: input });
-    send({ type: "tool_execution_end", toolCallId, toolName, isError: !allowed, result: { content: [{ type: "text", text: allowed ? "ran" : "The person didn't allow this." }] } });
+    let allowed = answer.value === "allow";
+    let ran = input;
+    let refused = "The person didn't allow this.";
+    if (answer.value === "more") {
+      const detail = await ask("botkins:detail " + JSON.stringify(toolCallId), "input");
+      log({ detail });
+      const parsed = detail.cancelled ? null : JSON.parse(detail.value);
+      if (parsed?.input) [allowed, ran] = [true, parsed.input];
+      else if (parsed?.deny) refused = parsed.reason;
+    }
+    log({ ran: allowed ? { toolName, input: ran } : null });
+    send({ type: "tool_execution_start", toolCallId, toolName, args: ran });
+    if (text.includes("slowtool")) await new Promise((resolve) => setTimeout(resolve, 300));
+    const failed = allowed && text.includes("badtool");
+    let result = { text: !allowed ? refused : failed ? "tool broke" : "ran", isError: !allowed || failed };
+    // As the extension does after a tool runs (extension-shared.mjs, tool_result), when a plugin has a result hook.
+    const now = JSON.parse(readFileSync(process.env.BOTKINS_OMP_SESSION, "utf8"));
+    if (now.postToolUse && !aborted) {
+      const answer = await ask("botkins:result " + JSON.stringify({ toolCallId, toolName, input: ran, isError: result.isError, text: result.text, ...(server && { mcpServerName: server, mcpToolName: remoteName }) }), "input");
+      if (!answer.cancelled) result = { ...result, ...JSON.parse(answer.value) };
+    }
+    log({ result });
+    send({ type: "tool_execution_end", toolCallId, toolName, isError: result.isError, result: { content: [{ type: "text", text: result.text }] } });
   }
   if (aborted) {
     send({ type: "agent_end", messages: [], isTerminal: true });
     send({ type: "session_settled" });
     return;
   }
-  const reply = text.includes("fail") || text.includes("extra") ? "" : "echo: " + text;
+  const reply = (text.includes("fail") && !text.includes("failonce")) || text.includes("extra") ? "" : "echo: " + text;
+  // A model request that fails once, then works (as Pi's own retry does).
+  if (text.includes("failonce")) send({ type: "message_end", message: { role: "assistant", content: [], stopReason: "error", errorMessage: "502 {\"error\":{\"message\":\"flaky\"}}" } });
   const error = text.includes("extra")
     ? '402 {"type":"error","error":{"type":"billing_error","message":"API Error: 400 You\'re out of extra usage. Add more at claude.ai/settings/usage and keep going."}}'
     : "The plan said no.";

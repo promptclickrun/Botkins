@@ -7,9 +7,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { OmpProvider } from "../desktop/providers/omp/index.mjs";
+import { pluginAlias } from "../desktop/providers/pi/index.mjs";
 import { PiPackages } from "../desktop/providers/pi/packages.mjs";
 import { Providers } from "../desktop/providers/index.mjs";
 import { ModelProvider } from "../desktop/providers/provider.mjs";
+import { ToolBridge } from "../desktop/providers/toolbridge.mjs";
 
 const skip = process.platform === "win32" && "The stand-in is a shell script.";
 const FIXTURE = fileURLToPath(new URL("./fixtures/fake-omp.mjs", import.meta.url));
@@ -20,10 +22,10 @@ writeFileSync(binary, "#!/bin/sh\nexec " + JSON.stringify(process.execPath) + " 
 chmodSync(binary, 0o755);
 
 let n = 0;
-function setup() {
+function setup(bridge) {
   const dir = join(root, "case-" + ++n);
   const logFile = join(dir, "log.jsonl");
-  const provider = new OmpProvider({ dataDir: dir, binary, env: { ...process.env, OMP_PROFILE: "personal", PI_CONFIG_FILES: "/personal.yml", FAKE_OMP_LOG: logFile } });
+  const provider = new OmpProvider({ dataDir: dir, binary, bridge, env: { ...process.env, OMP_PROFILE: "personal", PI_CONFIG_FILES: "/personal.yml", FAKE_OMP_LOG: logFile } });
   const seen = () => (existsSync(logFile) ? readFileSync(logFile, "utf8").trim().split("\n").map((line) => JSON.parse(line)) : []);
   return { provider, dir, seen };
 }
@@ -124,8 +126,10 @@ test("OMP's generated session id is resumed by the next process", { skip }, asyn
   await provider.stop();
 });
 
-test("Botkins approvals keep OMP's own tools, MCP metadata and shell names", { skip }, async () => {
-  const { provider, seen } = setup();
+test("Botkins approvals distinguish the bridge from direct MCP tools and shell commands", { skip }, async (t) => {
+  const bridge = new ToolBridge();
+  const { provider, seen } = setup(bridge);
+  t.after(async () => { await provider.stop(); await bridge.stop(); });
   const asked = [];
   const session = await provider.openSession(spec({ handlers: { permission: async (request) => (asked.push(request), { allow: true }) } }));
   const events = [];
@@ -145,7 +149,6 @@ test("Botkins approvals keep OMP's own tools, MCP metadata and shell names", { s
   await session.send({ prompt: "run bash:ls" });
   assert.deepEqual([asked[1].kind, asked[1].toolName, asked[1].preview], ["shell", "bash", "ls"]);
   await session.close();
-  await provider.stop();
 });
 
 test("OMP settlement and errors finish a turn through the same provider interface", { skip }, async () => {
@@ -324,9 +327,9 @@ test("OMP inventory maps aliased plugin servers across tools and /mcp test probe
   const pluginOk = "plugin_alpha__server_a1b2c3d4";
   const pluginCmd = "plugin_gamma__server_11223344";
   const pluginFail = "plugin_beta__server_e5f6a7b8";
-  const aliasOk = "bkp_aaaaaaaaaaaa";
-  const aliasCmd = "bkp_cccccccccccc";
-  const aliasFail = "bkp_bbbbbbbbbbbb";
+  const aliasOk = pluginAlias(pluginOk);
+  const aliasCmd = pluginAlias(pluginCmd);
+  const aliasFail = pluginAlias(pluginFail);
   const session = await provider.openSession(spec({
     mcpServers: {
       [pluginOk]: { type: "http", url: "http://127.0.0.1:9/alpha" },
@@ -335,11 +338,6 @@ test("OMP inventory maps aliased plugin servers across tools and /mcp test probe
     },
   }));
   const live = await session.start();
-  session.aliases = new Map([
-    [aliasOk, pluginOk],
-    [aliasCmd, pluginCmd],
-    [aliasFail, pluginFail],
-  ]);
   const probed = [];
   const origRequest = live.rpc.request.bind(live.rpc);
   live.rpc.request = async (cmd, timeout) => {

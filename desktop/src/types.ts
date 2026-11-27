@@ -201,6 +201,7 @@ export type Message = {
   text: string;
   interim?: boolean;
   steeredRunId?: string;
+  receipt?: boolean;
   answer?: { runId: string; requestId: string; kind: string; title: string };
   /** A proactive alert the bot sent on its own: the run that made it, and its actions ("proactive-team-v1"). */
   proactiveRunId?: string;
@@ -353,7 +354,7 @@ export type Run = {
   taskHandoffs?: TaskHandoff[];
 };
 export type WorkflowNodeKind = "trigger" | "agent" | "model" | "condition" | "approval" | "output";
-export type WorkflowTriggerKind = "task" | "schedule" | "manual" | "routine" | "chat" | "webhook" | "github";
+export type WorkflowTriggerKind = "task" | "schedule" | "manual" | "routine" | "chat" | "webhook" | "github" | "channel";
 
 export interface WorkflowGithubSignIn {
   status: "idle" | "starting" | "waiting" | "done" | "failed";
@@ -895,6 +896,90 @@ export type NodeHostState = {
     snapshot: NodeConversionSnapshotSummary | null;
   };
 };
+export type ChannelKind = "slack" | "telegram" | "discord" | "imessage";
+export type ChannelDmPolicy = "pairing" | "allowlist" | "open" | "off";
+export type ChannelGroupMode = "mention" | "all";
+export type ChannelToolProfile = "restricted" | "standard";
+export type ChannelStatusState =
+  | "connected"
+  | "reconnecting"
+  | "auth_error"
+  | "disabled"
+  | "paused"
+  | "waiting_permission"
+  | "disconnected";
+
+export interface ChannelPolicy {
+  dm: ChannelDmPolicy;
+  allowlist: string[];
+  groups: {
+    enabled: boolean;
+    mode: ChannelGroupMode;
+    channels: string[];
+  };
+  toolProfile: ChannelToolProfile;
+  ignoreBots?: boolean;
+  limits?: {
+    senderPerMinute?: number;
+    connectionPerMinute?: number;
+    maxInboundLength?: number;
+    maxAttachmentBytes?: number;
+    dailyTurnCap?: number;
+  };
+}
+
+export interface ChannelConnection {
+  id: string;
+  kind: ChannelKind;
+  label: string;
+  transport: string;
+  enabled: boolean;
+  paused?: boolean;
+  botId: string;
+  nodeHostId?: string;
+  policy: ChannelPolicy;
+  configuredSecrets?: string[];
+  pendingPairings?: Array<{
+    code: string;
+    senderId: string;
+    display: string;
+    conversationId: string;
+    createdAt: number;
+    expiresAt: number;
+  }>;
+  status?: {
+    state: ChannelStatusState;
+    detail?: string;
+    updatedAt?: number;
+  };
+  createdAt?: number;
+  updatedAt?: number;
+}
+
+export interface ChannelPairing {
+  code: string;
+  connectionId: string;
+  label?: string;
+  kind?: ChannelKind;
+  channel?: ChannelKind;
+  senderId: string;
+  display?: string;
+  senderDisplay?: string;
+  conversationId: string;
+  createdAt: number;
+  expiresAt: number;
+}
+
+export interface ChannelAuditEntry {
+  at: string;
+  connectionId: string;
+  channel: string;
+  senderId: string;
+  conversationId: string;
+  decision: string;
+  reason?: string;
+}
+
 export type State = {
   /** Which computer's workspace this is: null for this one, else the paired computer in use. */
   remote?: {
@@ -905,6 +990,8 @@ export type State = {
   profile?: ProfileState;
   /** Local node host role, shared folders, active job grants, and last completed request. */
   nodeHost?: NodeHostState;
+  /** Published external messaging channels (owner view only). */
+  channels?: ChannelConnection[];
   bots: Bot[];
   /** Full team management data for this computer's owner, or this member's filtered identity. */
   team?: OwnerTeam | MemberTeam;
@@ -1339,6 +1426,29 @@ declare global {
       workflowImport(): Promise<{ workflow: Workflow; unresolvedAgents: string[] } | null>;
       workflowExportText(id: string): Promise<string>;
       workflowImportText(raw: string, agentMap?: Record<string, string>): Promise<{ workflow: Workflow; unresolvedAgents: string[] }>;
+      // Channel Hooks (owner-only)
+      channelsList(): Promise<ChannelConnection[]>;
+      channelAdd(input: {
+        kind: ChannelKind;
+        label?: string;
+        transport?: string;
+        botId?: string;
+        nodeHostId?: string;
+        secrets?: Record<string, string>;
+        policy?: Partial<ChannelPolicy>;
+        enabled?: boolean;
+      }): Promise<ChannelConnection>;
+      channelUpdate(ref: string, patch: Record<string, unknown>): Promise<ChannelConnection>;
+      channelRemove(ref: string): Promise<{ removed: boolean }>;
+      channelBind(ref: string, botId: string): Promise<ChannelConnection>;
+      channelSetPolicy(ref: string, patch: Record<string, unknown>): Promise<ChannelConnection>;
+      channelPause(ref: string): Promise<ChannelConnection>;
+      channelResume(ref: string): Promise<ChannelConnection>;
+      channelPairList(ref?: string | null): Promise<ChannelPairing[]>;
+      channelPairApprove(code: string, ref?: string | null): Promise<{ approved: boolean; senderId: string; connectionId: string }>;
+      channelPairDeny(code: string, ref?: string | null): Promise<{ denied: boolean; senderId: string; connectionId: string }>;
+      channelTest(ref: string): Promise<{ ok: boolean; state: string; detail: string; identity?: string }>;
+      channelLogs(ref?: string | null, options?: { limit?: number }): Promise<ChannelAuditEntry[]>;
       onPrefill(fn: (data: { chatId?: string; text: string; panelId?: string; spaceId?: string }) => void): () => void;
       /** The person really clicked or pressed a key inside a custom view (its id). Missing on an older main process. */
       onFrameGesture?(fn: (data: { frame: string }) => void): () => void;
@@ -1413,6 +1523,24 @@ declare global {
       passwordManagerItem(manager: PasswordManagerId, vaultId: string, itemId: string): Promise<PasswordManagerItem>;
       /** Saves a field of a manager's item as a credential that is read from there each time. Returns its id. */
       linkPasswordManagerField(input: { manager: PasswordManagerId; vaultId: string; itemId: string; fieldId: string; name: string }): Promise<string>;
+      /** Explicitly copies a field from a password manager into the Botkins vault (marked as a copy). Returns its id. */
+      copyPasswordManagerField(input: { manager: PasswordManagerId; vaultId: string; itemId: string; fieldId: string; name: string }): Promise<string>;
+      /** Lists standing bot credential grants (metadata only; never values). */
+      credentialGrants(filter?: { botId?: string; credentialId?: string }): Promise<CredentialGrant[]>;
+      /** Creates or updates a standing bot credential grant (owner only). */
+      setCredentialGrant(input: {
+        botId: string;
+        botName?: string;
+        credentialId: string;
+        credentialName?: string;
+        destination: string;
+        operation: string;
+        level: CredentialGrantLevel;
+      }): Promise<CredentialGrant>;
+      /** Revokes one standing credential grant by id. */
+      revokeCredentialGrant(id: string): Promise<boolean>;
+      /** Recent credential use audit entries (who, what, where, when, outcome — never values). */
+      credentialAudit(options?: { limit?: number; botId?: string; credentialId?: string }): Promise<CredentialAuditEntry[]>;
       /** Adds the servers in pasted MCP JSON ({ "mcpServers": { … } }). */
       importMcpServers(json: string): Promise<{ added: string[]; skipped: string[] }>;
       /** Asks for a JSON file and adds its servers. null when the person cancels. */
@@ -1869,23 +1997,69 @@ export type Credential = {
 // Saved credentials (the phone link's store, desktop/link/credentials.mjs), shown in Settings ›
 // Credentials and offered where a bot asks for a secret. Not the MCP vault above. Never a value.
 export type CredentialSource = "vault" | "onepassword" | "bitwarden" | "protonpass";
-export type CredentialKind = "api-key" | "login" | "note";
+export type CredentialKind = "api-key" | "login" | "note" | "totp";
+export type CredentialGrantLevel = "ask" | "today" | "always" | "deny";
+export type CredentialGrant = {
+  id: string;
+  botId: string;
+  botName?: string;
+  credentialId: string;
+  credentialName?: string;
+  destination: string;
+  destinationLabel?: string;
+  operation: string;
+  level: CredentialGrantLevel;
+  createdAt: number;
+  updatedAt: number;
+  expiresAt?: number | null;
+  lastUsedAt?: number | null;
+};
+export type CredentialAuditEntry = {
+  id: string;
+  at: number;
+  botId: string;
+  botName?: string;
+  credentialId?: string;
+  credentialName?: string;
+  source?: string;
+  destination?: string;
+  operation: string;
+  outcome: string;
+  grantLevel?: string;
+  reason?: string;
+};
 export type SavedCredential = {
   id: string;
   name: string;
   kind: CredentialKind;
   username?: string;
   website?: string;
+  aliases?: string[];
   notes?: string;
   /** "vault": typed in and kept encrypted on this computer. Otherwise the password manager it is read from each time. */
   source: CredentialSource;
   /** For a linked one: what is read, as text ("Work / GitHub / token"). Never the value. */
   reference?: string;
+  /** True when this entry has an associated TOTP secret for 2FA code generation. */
+  hasTotp?: boolean;
+  /** True when this entry was explicitly copied into the Botkins vault from a password manager. */
+  copied?: boolean;
+  copiedFrom?: { manager: string; reference: string };
   createdAt: number;
   updatedAt: number;
 };
 /** `value: null` (or none) keeps the saved value. */
-export type SavedCredentialInput = { id?: string; name: string; kind?: CredentialKind; username?: string; website?: string; notes?: string; value?: string | null };
+export type SavedCredentialInput = {
+  id?: string;
+  name: string;
+  kind?: CredentialKind;
+  username?: string;
+  website?: string;
+  aliases?: string[];
+  notes?: string;
+  value?: string | null;
+  totpSecret?: string | null;
+};
 export type PasswordManagerId = Exclude<CredentialSource, "vault">;
 export type PasswordManagerStatus = ProtonStatusFields & {
   id: PasswordManagerId;
@@ -2676,8 +2850,8 @@ export type FormField = {
   maxLength?: number;
   format?: string;
 };
-/** A cross-host permission is scoped to the source and target bots and hosts shown on the card. */
-export type DispatchAction = "approve" | "today" | "remember" | "deny";
+/** A cross-host or credential permission is scoped to the bot, credential and destination shown on the card. */
+export type DispatchAction = "approve" | "today" | "remember" | "deny" | "deny_always";
 export type RequestAnswer = {
   action: DispatchAction | "cancel" | "answer" | "accept";
   /** A saved credential's reference instead of text: the computer puts the value in. */
@@ -2688,6 +2862,11 @@ export type RequestAnswer = {
 };
 export type AgentRequest = {
   dispatch?: true;
+  /** True on a bot credential-use approval card (scoped to bot, credential, destination and operation). */
+  credentialGrant?: true;
+  credentialName?: string;
+  credentialSource?: string;
+  destination?: string;
   artifactGrant?: true;
   rememberScope?: "bot";
   botName?: string;

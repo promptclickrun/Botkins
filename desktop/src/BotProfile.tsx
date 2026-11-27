@@ -10,6 +10,7 @@ import {
   Pin,
   PinOff,
   Puzzle,
+  Radio,
   Star,
   Trash2,
   BookmarkPlus,
@@ -110,6 +111,13 @@ export default function BotProfile({
   /** Opens the Routines page on a routine, a bot's routines or a new routine. */
   routines?: (target: { id?: string; botId?: string; create?: boolean }) => void;
 }) {
+  const publishedChannels = (state.channels ?? []).filter(
+    (c) => c.botId === bot.id && c.enabled && !c.paused,
+  );
+  const publishedKinds = Array.from(new Set(publishedChannels.map((c) => c.kind)));
+  const publishedLabel = publishedKinds
+    .map((k) => (k === "imessage" ? "iMessage" : k.charAt(0).toUpperCase() + k.slice(1)))
+    .join(", ");
   const initial = {
     name: bot.name,
     role: bot.role,
@@ -178,7 +186,7 @@ export default function BotProfile({
         <div className="profile-title">
           <h1>{bot.name}</h1>
           <p className="profile-role">{bot.role}</p>
-          {(primary || bot.pinned || bot.hidden || status) && (
+          {(primary || bot.pinned || bot.hidden || status || publishedLabel) && (
             <span className="profile-badges">
               {status && (
                 <small className={"botstatus " + activity}>
@@ -187,6 +195,11 @@ export default function BotProfile({
                 </small>
               )}
               {primary && <span className="botbadge">Primary</span>}
+              {publishedLabel && (
+                <span className="botbadge" title={`Published to ${publishedLabel}`}>
+                  <Radio size={12} /> Published to {publishedLabel}
+                </span>
+              )}
               {bot.pinned && !primary && <span className="botbadge plain"><Pin size={12} /> Pinned</span>}
               {bot.hidden && <span className="botbadge plain"><EyeOff size={12} /> Hidden</span>}
             </span>

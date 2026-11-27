@@ -45,6 +45,10 @@ import { Vault } from "./vault.mjs";
 import { Frames } from "./frames.mjs";
 import { ClaudeArtifacts } from "./claude-artifacts.mjs";
 import { Workflows } from "./workflows.mjs";
+import { ChannelManager } from "./channels/index.mjs";
+import { effectiveChannelApproval } from "./channels/security.mjs";
+import { registerBuiltInAdapters } from "./channels/adapters/index.mjs";
+import { createNodeChannelBridge } from "./channels/adapters/imessage.mjs";
 
 import {
   defaultSettings,
@@ -155,6 +159,8 @@ export function appendStream(task, data) {
 
 /** How long the turn's hot path waits to write the state (Workspace.saveSoon). */
 const SAVE_SOON_MS = 750;
+/** The harnesses Botkins hands a plugin's MCP servers and hooks to. The others get its skills only. */
+const PLUGIN_RUNTIMES = new Set(["copilot", "pi", "omp"]);
 /** Workspaces with a write waiting, written when the process exits. */
 const unsaved = new Set();
 let exitHooked = false;
@@ -412,6 +418,13 @@ export class Workspace {
     }
     this.tasks = new Tasks(this);
     this.workflows = new Workflows(this, options?.workflows);
+    this.channels = new ChannelManager({
+      workspace: this,
+      vault: this.vault,
+      nodeBridge: options?.channels?.nodeBridge ?? createNodeChannelBridge(this),
+      ...(options?.channels ?? {}),
+    });
+    registerBuiltInAdapters(this.channels);
     this.proactive = new Proactive(this);
     // One plain nudge for what is left waiting on a person, with no model (desktop/reminders.mjs).
     this.reminders = new Reminders(this);
@@ -502,6 +515,8 @@ export class Workspace {
       projects: this.projects.listed(),
       workflows: this.workflows.list(),
       workflowRuns: this.workflows.listRuns(null, 100),
+      // Channel Hooks: sanitized connections only (never vault refs or raw tokens).
+      channels: this.channels.list(),
       // The Proactive agent: the computer's switch, and each proactive bot's settings and log, without the keys of what it raised.
       proactive: this.proactive.views(),
       // The reminders sent in the last few minutes, for the link to pass to that person's phones (desktop/link/push.mjs). No app is sent this.
@@ -732,6 +747,17 @@ export class Workspace {
     this.claudeArtifacts.clearGrants(chatId);
     this.save();
   }
+  /**
+   * Effective approval level for a chat. Channel chats never inherit "all" (or "assisted"):
+   * restricted channel chats are forced to "ask" (keeping Codex in its read-only sandbox),
+   * and standard-profile channel chats are capped at "ask" (preserving "read" if set).
+   */
+  effectiveApproval(chat) {
+    const raw = chat?.approval ?? this.state.settings.approval;
+    if (!chat?.channel) return raw;
+    const profile = this.channels?.toolProfileForChat(chat) ?? "restricted";
+    return effectiveChannelApproval(raw, profile);
+  }
   async sideQuestion(id, question) {
     const chat = this.chat(id),
       bot = this.bot(chat.botId);
@@ -955,7 +981,7 @@ export class Workspace {
     if (!keepPosted) delete chat.posted;
     const extra = [posted, where].filter(Boolean).join("\n\n");
     const first = !chat.messages.length;
-    if (first && !chat.main && !context.panelId && !isGroup(chat))
+    if (first && !chat.main && !context.panelId && !isGroup(chat) && !chat.channel)
       chat.title = prompt.slice(0, 80);
     chat.time = Date.now();
 
@@ -1498,6 +1524,7 @@ export class Workspace {
         group: chat.groupInstructions || "",
         sessions: this.sessionSearch.context() + this.howTo.context(),
         extra: chat.extraInstructions || "",
+        channel: this.channels?.systemInstructionsForChat(chat) || "",
         profile: this.profileContext(bot.id),
         own:
           "\n\nThe user's custom instructions for this bot take precedence over Botkins defaults and editable profile notes. Use the tools and permissions available for this turn.\n" +
@@ -1517,7 +1544,7 @@ export class Workspace {
   }
   /** The instructions a session is given, from instructionParts (without the memory, which is the session's `context`). */
   composeInstructions({ fixed, live }) {
-    return fixed.head + live.project + live.space + fixed.group + live.team + live.subagents + live.wiki + (fixed.sessions ?? "") + fixed.extra + fixed.profile + fixed.own;
+    return fixed.head + live.project + live.space + fixed.group + live.team + live.subagents + live.wiki + (fixed.sessions ?? "") + fixed.extra + (fixed.channel ?? "") + fixed.profile + fixed.own;
   }
   /** What a bot is told at the start of a conversation, as it is now. */
   instructionsFor(chat, bot) {
@@ -1538,7 +1565,7 @@ export class Workspace {
     ];
     // A helping teammate reads records and keeps its memory; it changes nothing else in the app.
     if (chat.helper) return records;
-    return [
+    const all = [
       ...(access.plugins ? pluginTools(this, bot, chat, run, task) : []),
       // A script command that a bot proposes: the person is shown the whole script (desktop/script-commands.mjs). The owner's alone.
       ...(access.member ? [] : scriptCommandTools(this, bot, chat, run, task)),
@@ -1574,6 +1601,7 @@ export class Workspace {
             ...this.subagents.tools(bot, chat, run, task),
           ]),
     ];
+    return chat.channel ? this.channels.filterToolsForChat(chat, all) : all;
   }
   /**
    * The people a bot's turn works for, as far as spaces go: the chat's starter, and whoever wrote
@@ -1830,13 +1858,20 @@ export class Workspace {
       }
     }
     if (catchUpContext) chat.forkContext = catchUpContext;
+    const channelRestricted = !!chat.channel && (this.channels?.toolProfileForChat(chat) ?? "restricted") === "restricted";
     const handlers = run && {
       cancelForSteer: () => this.interactions.cancel(chat.id),
-      permission: (request) => this.interactions.permission(chat, task, request),
+      permission: (request) => {
+        const channelDecision = this.channels?.evaluatePermissionForChat(chat, request);
+        if (channelDecision) return channelDecision;
+        return this.interactions.permission(chat, task, request);
+      },
       question: (request) => {
         if (task.stopped) throw new Error("No active turn");
         if (chat.helper)
           throw new Error("You can't ask the person from here. Say what you need in your reply to your teammate.");
+        if (chat.channel)
+          throw new Error("External channel turns cannot prompt inside the channel. Ask your question in your reply text.");
         return this.interactions.question(chat, task, request);
       },
       planExit: async (request) => {
@@ -1847,7 +1882,7 @@ export class Workspace {
           preview: request.planContent,
           choices: request.actions,
           freeform: true,
-        });
+        }, undefined, { signal: request.signal });
         return answer.action === "answer" && request.actions.includes(answer.value)
           ? { approved: true, selectedAction: answer.value }
           : { approved: false, feedback: answer.value };
@@ -1871,9 +1906,14 @@ export class Workspace {
       form: (request) =>
         task.stopped ? { action: "cancel" } : this.interactions.elicit(chat, task, request),
     };
-    const copilotPlugins = provider.id === "copilot";
-    const pluginSpec = access.plugins
-      ? await this.plugins.session(bot, chat, { skillsOnly: !copilotPlugins })
+    const allowMcp = access.mcp && !channelRestricted;
+    const allowPlugins = access.plugins && !channelRestricted;
+    const allowSkills = access.skills && !channelRestricted;
+    // The harnesses that take a plugin's MCP servers and hooks from Botkins (Pi and OMP run the
+    // hooks in Botkins' approval step: providers/pi/index.mjs). The others get its skills only.
+    const fullPlugins = PLUGIN_RUNTIMES.has(provider.id);
+    const pluginSpec = allowPlugins
+      ? await this.plugins.session(bot, chat, { skillsOnly: !fullPlugins })
       : { directories: [], mcpServers: {}, hooks: undefined };
     // What the session was told when it began, or what it begins with now (desktop/session-prompts.mjs).
     const prompt = this.sessionPrompt(chat, bot, provider, hosted?.model ?? choice, providerSessionId, providerEstablished);
@@ -1881,8 +1921,8 @@ export class Workspace {
     // come with Botkins' own below, and the harness doesn't get them (desktop/mcp-apps.mjs). Each
     // stays on the side it began the session on: one that doesn't answer now isn't handed to the
     // harness, where its tools would have other names. Its tools say so when they are called.
-    const routed = await (routing ?? (access.mcp ? this.mcpApps.prepare(bot) : new Map()));
-    const ownServers = access.mcp ? this.integrations.serversFor(bot, { liveOAuth: provider.id === "pi" || provider.id === "omp" }) : {};
+    const routed = allowMcp ? await (routing ?? this.mcpApps.prepare(bot)) : new Map();
+    const ownServers = allowMcp ? this.integrations.serversFor(bot, { liveOAuth: provider.id === "pi" || provider.id === "omp" }) : {};
     // (A server that isn't Botkins' yet, one that wasn't ready when the session began, goes to the
     // harness until it is; it then stays Botkins', which changes the tool list once.)
     const routes = prompt.record.routes;
@@ -1892,12 +1932,16 @@ export class Workspace {
     if (JSON.stringify(routes) !== routesBefore) this.sessionPrompts.save(prompt.key, prompt.record);
     const mcpServers = {
       ...ownServers,
-      ...(access.mcp && copilotPlugins ? pluginSpec.mcpServers : {}),
+      ...(allowMcp && fullPlugins ? pluginSpec.mcpServers : {}),
     };
-    if (run && !run.panelId && !chat.helper && !access.member) {
+    if (run && !run.panelId && !chat.helper && !access.member && !channelRestricted) {
       await this.claudeArtifacts.primeAvailability().catch(() => {});
     }
-    const tools = this.stableTools(prompt, [...this.sessionTools(bot, chat, run, task), ...this.mcpApps.tools(bot, chat, run, task, routed)], access.mcp);
+    const tools = this.stableTools(
+      prompt,
+      [...this.sessionTools(bot, chat, run, task), ...(allowMcp ? this.mcpApps.tools(bot, chat, run, task, routed) : [])],
+      allowMcp,
+    );
     const session = await provider.openSession({
       sessionId: providerSessionId,
       established: providerEstablished,
@@ -1905,11 +1949,12 @@ export class Workspace {
       // isn't to tell it again from the history.
       hasReplies: !chat.forkContext && (chat.helper ? !!(chat.helperMessages?.length) : !!chat.messages?.some((m) => m.role === "assistant")),
       temporary: !!chat.temporary,
+      ...(channelRestricted && { sourcesOnly: true }),
       folder,
-      coding: !!projectFolder,
+      coding: !!projectFolder && !channelRestricted,
       model: hosted?.model ?? choice,
       ...(hosted && { inference: hosted.inference }),
-      approval: chat.approval ?? this.state.settings.approval,
+      approval: this.effectiveApproval(chat),
       // How long a provider that can choose keeps the prompt cache (Settings › General › Keep prompt cache longer).
       cacheRetention: this.state.settings.longPromptCache === false ? "short" : "long",
       // The same on every turn of the session; what changed since is told in the turn's message (tellSession).
@@ -1918,16 +1963,17 @@ export class Workspace {
       context: prompt.record.parts.memory,
       tools,
       // Skills and MCP servers come from Settings and apply to every bot (desktop/integrations.mjs).
-      skills: access.skills ? this.integrations.skillsFor(bot, { member: access.member }) : { directories: [], disabled: [] },
+      skills: allowSkills ? this.integrations.skillsFor(bot, { member: access.member }) : { directories: [], disabled: [] },
       mcpServers,
       // A remote MCP server that signs in with OAuth gets its token from the vault when it asks.
-      mcpAuth: async (request) => access.mcp && access.plugins && copilotPlugins && Object.hasOwn(pluginSpec.mcpServers, request.server) ? this.plugins.token(bot.id, request) : this.integrations.mcpAuth(request),
+      mcpAuth: async (request) => allowMcp && allowPlugins && fullPlugins && Object.hasOwn(pluginSpec.mcpServers, request.server) ? this.plugins.token(bot.id, request) : this.integrations.mcpAuth(request),
       // Only what Botkins itself wrote for the session from installed plugins (desktop/plugin-runtime.mjs).
       // A plugin's own folder is never handed on: the runtime would read its hooks and tools by itself.
-      plugins: [...(access.plugins ? pluginSpec.directories : [])],
-      pluginHooks: access.plugins && copilotPlugins ? pluginSpec.hooks : undefined,
+      plugins: [...(allowPlugins ? pluginSpec.directories : [])],
+      pluginHooks: allowPlugins && fullPlugins ? pluginSpec.hooks : undefined,
       pluginRevision: this.plugins.generation,
       history: () => chat.helper ? (chat.helperMessages ?? []) : (chat.compacted ? chat.messages.slice(chat.compacted.through) : chat.messages ?? []),
+      nativeDialogs: !!run && !chat.helper && !run.scheduleId && !run.taskId && !run.panelId && !run.reaction,
       handlers: handlers || null,
     });
     // For group members, openSession must not pre-populate `through` with chat.messages.length
@@ -1969,6 +2015,8 @@ export class Workspace {
       parts.fixed, provider.id, model?.model ?? "", model?.source ?? "",
       // A space's panels are listed as the turn's people may see them: other people, another prompt.
       chat.spaceId ? this.turnPeople(chat).people.toSorted() : null,
+      // Channel tool profile changes must always open a fresh session with the new tool list.
+      chat.channel ? this.channels?.toolProfileForChat(chat) ?? "restricted" : null,
     ]);
     let record = this.sessionPrompts.get(key);
     const begins = chat.temporary ? !record : !established;
@@ -2600,6 +2648,7 @@ export class Workspace {
       botId: bot.id,
       title: chat.title,
       approval: chat.approval,
+      ...(chat.channel && { channel: chat.channel }),
       messages: member.restartSession ? chat.messages : chat.messages.filter((m) => m.botId === bot.id),
       fastMode: chat.fastMode,
       groupInstructions: groupInstructions(bot, members),
@@ -3289,10 +3338,17 @@ export class Workspace {
   }
 
   commitAssistantReply(chat, run, task, final, bot) {
+    const safeFinal = chat?.channel && typeof final === "string" ? this.channels.scrub(final) : final;
     const beforeLen = chat.messages.length;
     const beforeLast = chat.messages.at(-1);
     const wasInterim = !!beforeLast?.interim;
-    finishReply(chat, run, task, final);
+    finishReply(chat, run, task, safeFinal);
+    if (chat?.channel) {
+      const committedMsg = chat.messages.at(-1);
+      if (committedMsg?.role === "assistant" && typeof committedMsg.text === "string") {
+        committedMsg.text = this.channels.scrub(committedMsg.text);
+      }
+    }
     if (run.noOutput || run.proactive || chat.temporary || chat.helper) return;
     const last = chat.messages.at(-1);
     const committed =
@@ -3349,7 +3405,7 @@ export const COMPUTER_USE_GUIDANCE =
   "\n4. The person's other computers (node_*): node_exec, the node file tools, node_computer_* by token; node_screen_input only for an app with no other way in." +
   "\n5. Clicking raw screen coordinates is the last resort, after a capture shows exactly where.";
 const SECRETS_GUIDANCE =
-  "\n\n## Secrets\nNever ask for a secret in chat, read a password field back, or pass a credential through a shell command or the clipboard, and never type one with browser_type or computer_act. Use the vault: find_saved_credentials lists names saved for a site; request_secure_input lets the person pick or enter the value (page_fill for a browser tab, browser_form or the desktop side_pane_web viewer; native_fill for an app's password field from computer_observe; https_form, bearer_get or git_read for a request); pass its handles unchanged to use_secure_input.";
+  "\n\n## Secrets\nNever ask for a secret in chat, read a password field back, or pass a credential through a shell command or the clipboard, and never type one with browser_type or computer_act. Use the vault: find_saved_credentials lists names saved for a site; request_secure_input lets the person pick or enter the value (page_fill for a browser tab, browser_form or the desktop side_pane_web viewer; native_fill for an app's password field from computer_observe; https_form, bearer_get or git_read for a request); pass its handles unchanged to use_secure_input. When offered, use_credential uses a saved credential by its ID from find_saved_credentials, after the person's approval or standing grant.";
 const REACTION_GUIDANCE =
   "\n\n## Replies\nAnswer in chat by default. When a thanks or an FYI needs no words, react with one emoji (react). To send nothing, reply with exactly [SILENT]. When the person reacts to your message with an emoji, Botkins gives you a turn that says so; it is not a message from them. Answer only if words add something: each reply is a model turn on their plan. In a chat with more than one person, @Name notifies that person.";
 

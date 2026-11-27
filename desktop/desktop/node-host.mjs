@@ -30,6 +30,11 @@ import {
 } from "./node-exec.mjs";
 import { nodeScreenCapture, nodeScreenInfo, nodeScreenInput } from "./node-screen.mjs";
 import { formatVisibleText } from "./computer-use.mjs";
+import {
+  permissionWaitingDetail,
+  runImsgSend,
+  startImsgWatcherProcess,
+} from "./channels/adapters/imessage.mjs";
 
 export const CAPABILITIES_VERSION = 1;
 export const LIST_FILES_OPERATION = "project.list_files";
@@ -64,6 +69,8 @@ export const NODE_OPERATIONS = Object.freeze([
   "computer.observe",
   "computer.act",
   "node.notify",
+  "channel.imessage.watch",
+  "channel.imessage.send",
 ]);
 
 const FILE_OPERATIONS = new Set([
@@ -78,11 +85,13 @@ const FILE_OPERATIONS = new Set([
 const SCREEN_OPERATIONS = new Set(["screen.info", "screen.capture", "screen.input"]);
 const COMPUTER_OPERATIONS = new Set(["computer.apps", "computer.observe", "computer.act"]);
 const SYSTEM_OPERATIONS = new Set(["system.run", "system.which"]);
+const IMESSAGE_CHANNEL_OPERATIONS = new Set(["channel.imessage.watch", "channel.imessage.send"]);
 const ALL_OPERATIONS = new Set(NODE_OPERATIONS);
 const SYSTEM_RESOURCE = "@system";
 const SCREEN_RESOURCE = "@screen";
 const COMPUTER_RESOURCE = "@computer-use";
 const NOTIFY_RESOURCE = "@notify";
+const IMESSAGE_RESOURCE = "@imessage";
 
 const WEEK = 7 * 24 * 60 * 60 * 1000;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -326,6 +335,8 @@ function summarizeArgs(operation, params = {}, extra = {}) {
     return base;
   }
   if (operation === "node.notify") return safeText(params.title || "", 120);
+  if (operation === "channel.imessage.watch") return safeText(`iMessage watch (${params.action || "poll"})`, 120);
+  if (operation === "channel.imessage.send") return safeText(`iMessage send chat ${params.chatId || ""}`, 120);
   return "";
 }
 
@@ -428,6 +439,22 @@ function describeApproval(row, nodeLabel) {
       label: "Allow for today and Always allow apply only to notifications for this source bot on these two computers.",
     };
   }
+  if (row.operation === "channel.imessage.watch") {
+    return {
+      title: `${who} wants to watch incoming iMessages on ${nodeLabel}`,
+      preview: `Channel connection ${row.params?.connectionId || ""}`.trim(),
+      detail: `Operation: channel.imessage.watch\nAction: ${row.params?.action || "start"}`,
+      label: "Allow for today and Always allow apply only to watching iMessage channel events for this source bot on these two computers.",
+    };
+  }
+  if (row.operation === "channel.imessage.send") {
+    return {
+      title: `${who} wants to send an iMessage reply on ${nodeLabel}`,
+      preview: `Chat ${row.params?.chatId || ""}`.trim(),
+      detail: `Operation: channel.imessage.send\nChat: ${row.params?.chatId || ""}`,
+      label: "Allow for today and Always allow apply only to sending iMessage channel replies for this source bot on these two computers.",
+    };
+  }
   return {
     title: `${who} wants to run ${row.operation} on ${nodeLabel}`,
     detail: `Operation: ${row.operation}`,
@@ -482,6 +509,7 @@ export class NodeHost {
       data?.imports && typeof data.imports === "object" && !Array.isArray(data.imports)
         ? { ...data.imports }
         : {};
+    this.imessageWatchers = new Map();
     // A job that was working when the host shut down must never silently run twice on restart.
     for (const row of this.records) {
       if (row.status === "working") {
@@ -683,6 +711,12 @@ export class NodeHost {
         );
       }
       operations.push({ id: "node.notify", version: 1, readOnly: false });
+      if (this.execPolicy.mode !== "deny" && (process.platform === "darwin" || this.adapters().imessage)) {
+        operations.push(
+          { id: "channel.imessage.watch", version: 1, readOnly: true },
+          { id: "channel.imessage.send", version: 1, readOnly: false },
+        );
+      }
     }
     return {
       version: CAPABILITIES_VERSION,
@@ -835,6 +869,7 @@ export class NodeHost {
     for (const row of this.records) {
       if (row !== excludeRow && active(row)) this.cancel(row, "Node host disconnected.");
     }
+    this.stopIMessageWatchers();
     this.enabled = false;
     this.paused = false;
     this.ws.save();
@@ -845,6 +880,18 @@ export class NodeHost {
     for (const row of this.records) {
       if (active(row)) this.cancel(row, "Node host closed.");
     }
+    this.stopIMessageWatchers();
+  }
+
+  stopIMessageWatchers() {
+    for (const entry of this.imessageWatchers.values()) {
+      try {
+        entry.handle?.stop?.();
+      } catch {
+        // Already stopped.
+      }
+    }
+    this.imessageWatchers.clear();
   }
 
   cancel(row, reason = "Cancelled.") {
@@ -1102,6 +1149,56 @@ export class NodeHost {
           body: safeText(notifyParams.body ?? "", 400),
         },
         scope: digest(["node-job", ...identity, sourceBotId, "node.notify", NOTIFY_RESOURCE]),
+      };
+    }
+
+    if (IMESSAGE_CHANNEL_OPERATIONS.has(jobOp)) {
+      if (this.execPolicy.mode === "deny") {
+        this.recordAudit(
+          {
+            sourceHostName: peer.hostName || "Other computer",
+            sourceBotId,
+            sourceBotName,
+            operation: jobOp,
+            resourceId: IMESSAGE_RESOURCE,
+            resourceName: "iMessage channel",
+            params: params && typeof params === "object" ? params : {},
+          },
+          { status: "denied", error: "Node exec policy denies iMessage channel operations." },
+        );
+        this.ws.save();
+        throw new Error("Node exec policy denies iMessage channel operations.");
+      }
+      if (process.platform !== "darwin" && !this.adapters().imessage) {
+        throw new Error("iMessage channel operations are only available on a Mac node host.");
+      }
+      const p = params && typeof params === "object" ? params : {};
+      if (jobOp === "channel.imessage.watch") {
+        const action = ["start", "poll", "stop"].includes(p.action) ? p.action : "poll";
+        const connectionId = safeText(p.connectionId || "default", 80) || "default";
+        const cursor = Number.isFinite(Number(p.cursor)) ? Math.max(0, Math.floor(Number(p.cursor))) : 0;
+        return {
+          grantOperation: "channel.imessage.watch",
+          resourceId: IMESSAGE_RESOURCE,
+          resourceName: "iMessage channel",
+          params: { action, connectionId, cursor },
+          scope: digest(["node-job", ...identity, sourceBotId, "channel.imessage.watch", IMESSAGE_RESOURCE]),
+        };
+      }
+      const chatId = safeText(String(p.chatId ?? ""), 120);
+      if (!chatId) throw new Error("iMessage send requires chatId.");
+      const text = typeof p.text === "string" ? p.text.slice(0, 4000) : "";
+      if (!text.trim()) throw new Error("iMessage send requires text.");
+      return {
+        grantOperation: "channel.imessage.send",
+        resourceId: IMESSAGE_RESOURCE,
+        resourceName: "iMessage channel",
+        params: {
+          connectionId: safeText(p.connectionId || "", 80),
+          chatId,
+          text,
+        },
+        scope: digest(["node-job", ...identity, sourceBotId, "channel.imessage.send", IMESSAGE_RESOURCE]),
       };
     }
 
@@ -1443,6 +1540,95 @@ export class NodeHost {
           await notify({ title: row.params.title, body: row.params.body });
         }
         row.result = { delivered: true, title: row.params.title };
+      } else if (row.operation === "channel.imessage.watch") {
+        if (this.execPolicy.mode === "deny") {
+          throw new Error("Node exec policy denies iMessage channel operations.");
+        }
+        const imsgAdapter = this.adapters().imessage;
+        const nodeName = this.name || this.ws.hostName?.() || "node";
+        const { action, connectionId, cursor } = row.params;
+        if (action === "stop") {
+          const existing = this.imessageWatchers.get(connectionId);
+          if (existing) {
+            existing.handle?.stop?.();
+            this.imessageWatchers.delete(connectionId);
+          }
+          row.result = { running: false, nodeName, events: [], cursor };
+        } else {
+          let entry = this.imessageWatchers.get(connectionId);
+          if (!entry) {
+            entry = { seq: 0, buffer: [], waitingForPermission: false, detail: "", handle: null };
+            const pushEvent = (event) => {
+              entry.seq += 1;
+              entry.buffer.push({ seq: entry.seq, event });
+              if (entry.buffer.length > 500) entry.buffer.splice(0, entry.buffer.length - 500);
+            };
+            if (typeof imsgAdapter?.startWatch === "function") {
+              entry.handle = await imsgAdapter.startWatch({
+                connectionId,
+                onEvent: pushEvent,
+                onPermissionWaiting: (detail) => {
+                  entry.waitingForPermission = true;
+                  entry.detail = detail || permissionWaitingDetail(nodeName);
+                },
+              });
+            } else {
+              entry.handle = startImsgWatcherProcess({
+                findImsg: imsgAdapter?.findImsg,
+                spawnProcess: imsgAdapter?.spawnProcess,
+                nodeLabel: nodeName,
+                onEvent: pushEvent,
+                onPermissionWaiting: (detail) => {
+                  entry.waitingForPermission = true;
+                  entry.detail = detail || permissionWaitingDetail(nodeName);
+                },
+                onExit: () => {
+                  this.imessageWatchers.delete(connectionId);
+                },
+              });
+            }
+            this.imessageWatchers.set(connectionId, entry);
+          }
+          const events = entry.buffer.filter((item) => item.seq > cursor).map((item) => item.event);
+          row.result = {
+            running: true,
+            nodeName,
+            cursor: entry.seq,
+            events,
+            ...(entry.waitingForPermission && {
+              waitingForPermission: true,
+              detail: entry.detail || permissionWaitingDetail(nodeName),
+            }),
+          };
+        }
+      } else if (row.operation === "channel.imessage.send") {
+        if (this.execPolicy.mode === "deny") {
+          throw new Error("Node exec policy denies iMessage channel operations.");
+        }
+        const imsgAdapter = this.adapters().imessage;
+        const nodeName = this.name || this.ws.hostName?.() || "node";
+        if (typeof imsgAdapter?.send === "function") {
+          const sent = await imsgAdapter.send({
+            chatId: row.params.chatId,
+            text: row.params.text,
+            nodeName,
+          });
+          row.result = {
+            nodeName,
+            ...(sent && typeof sent === "object" ? sent : { ok: true }),
+            ...(sent?.waitingForPermission && !sent?.detail ? { detail: permissionWaitingDetail(nodeName) } : {}),
+          };
+        } else {
+          const sent = await runImsgSend({
+            chatId: row.params.chatId,
+            text: row.params.text,
+            findImsg: imsgAdapter?.findImsg,
+            launch: imsgAdapter?.launch,
+            timeout: imsgAdapter?.sendTimeoutMs ?? 15000,
+            nodeLabel: nodeName,
+          });
+          row.result = { nodeName, ...sent };
+        }
       } else {
         throw new Error("Unsupported node operation.");
       }

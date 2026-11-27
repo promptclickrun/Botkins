@@ -122,7 +122,12 @@ async function browserLogin(t, split) {
   await assert.rejects(browser.bind(chat.id, url + "other"));
   await assert.rejects(browser.fill(plan, { password: canary }, AbortSignal.abort()));
   const credential = await phone.call("link.credentials.save", { name: "Fixture login", kind: "login", website: url, value: canary });
-  assert.deepEqual(await invoke("find_saved_credentials", { url }), [{ name: "Fixture login", kind: "login" }]);
+  const found = await invoke("find_saved_credentials", { url });
+  assert.equal(found.length, 1);
+  assert.equal(found[0].id, credential);
+  assert.equal(found[0].name, "Fixture login");
+  assert.equal(found[0].kind, "login");
+  assert.equal(found[0].source, "vault");
   const asked = invoke("request_secure_input", { title: "Sign in", operation: "page_fill", url: page.url,
     fields: [{ key: "password", label: "Password", kind: "password" }] });
   const request = await pending.promise;

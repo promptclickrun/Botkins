@@ -954,3 +954,33 @@ test("workflow-github helpers parse mentions, gh auth status, and device-code si
   auth.stop();
 });
 
+
+test("a channel trigger's Direct messages only and Mentions only filters apply, including what the window saved before", async (t) => {
+  const { ws } = setup(t);
+  const started = [];
+  const original = ws.workflows.startRun.bind(ws.workflows);
+  ws.workflows.startRun = (wf, node, context) => started.push({ name: wf.name, context });
+  t.after(() => (ws.workflows.startRun = original));
+  const make = (name, config) =>
+    ws.workflows.create({
+      name,
+      nodes: [
+        { id: "t1", kind: "trigger", triggerKind: "channel", label: "Channel", config },
+        { id: "o1", kind: "output", label: "Feed", config: { destination: "feed", title: "x", template: "y" } },
+      ],
+      edges: [{ id: "e1", from: "t1", to: "o1", branch: "default" }],
+    });
+  make("direct", { isDirect: true });
+  make("mention", { mentionsBot: true });
+  make("legacy-direct", { directOnly: true });
+  make("legacy-mention", { mentionOnly: true });
+  make("any", {});
+  const fire = (event) => {
+    started.length = 0;
+    ws.workflows.onChannelMessage({ channel: "slack", connection: "c1", conversation: "g", sender: "u", text: "hi", ...event });
+    return started.map((s) => s.name).sort();
+  };
+  assert.deepEqual(fire({ isDirect: false, mentionsBot: false }), ["any"]);
+  assert.deepEqual(fire({ isDirect: true, mentionsBot: false }), ["any", "direct", "legacy-direct"]);
+  assert.deepEqual(fire({ isDirect: false, mentionsBot: true }), ["any", "legacy-mention", "mention"]);
+});

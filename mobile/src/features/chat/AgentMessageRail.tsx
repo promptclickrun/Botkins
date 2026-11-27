@@ -1,22 +1,25 @@
-// T3 Code-style vertical accent rail cards for bot-to-bot messages on phone (incoming, outgoing, task handoff).
-import { ArrowRight, ArrowUpRight, Bot as BotIcon, ChevronDown, ChevronRight, CircleAlert, ClipboardList, Globe } from "lucide-react-native";
-import { memo, useMemo, useState } from "react";
+// Quiet hairline cards for bot-to-bot messages on phone (incoming, grouped outgoing asks,
+// grouped task handoffs, and folded node calls).
+import { ArrowUpRight, Bot as BotIcon, Check, ChevronDown, ChevronRight, CircleAlert, Globe, X as XIcon } from "lucide-react-native";
+import { memo, useEffect, useMemo, useState } from "react";
 import { StyleSheet, View } from "react-native";
-import type { Bot, BotTask, Message, Run, TaskHandoff, TeamAsk } from "@/link/types";
+import Animated, { useAnimatedStyle, useReducedMotion, useSharedValue, withRepeat, withSequence, withTiming } from "react-native-reanimated";
+import type { Bot, Message, Run, TeamAsk } from "@/link/types";
 import { useChats, usePart } from "@/state/hooks";
-import { BotAvatar, Markdown, radius, space, T, Tap, useTheme } from "@/ui";
+import { BotAvatar, Markdown, space, T, Tap, useOnShow, useTheme } from "@/ui";
 import {
+  askRowSummary,
   buildIncomingRail,
   buildOutgoingRail,
-  buildTaskHandoffRail,
-  foldPreview,
-  groupRailAsks,
+  buildTaskHandoffGroup,
+  formatCompactElapsed,
+  groupAsks,
+  type AskGroupModel,
   type NodeCallGroupModel,
-  type AgentRailStatus,
-  type AgentRailTone,
+  type TaskHandoffGroupModel,
+  type TaskHandoffRailModel,
 } from "./agentRailModel";
 import { openChat as openChatRoute } from "./navigate";
-import { spentTime } from "./fold";
 import { useElapsedClock } from "./useElapsedClock";
 
 function clock(time?: number): string {
@@ -28,35 +31,26 @@ function clock(time?: number): string {
   }
 }
 
-function railAccent(
-  colors: ReturnType<typeof useTheme>["colors"],
-  via: "teamwork" | "task" | "remote",
-  status?: AgentRailStatus,
-): string {
-  if (status === "answered" || status === "done" || status === "review") return colors.success;
-  if (status === "failed") return colors.danger;
-  if (status === "blocked") return colors.warning;
-  if (via === "task") return colors.warning;
-  if (via === "remote") return colors.accentText;
-  return colors.info;
+function PulseDot({ color, size = 6 }: { color: string; size?: number }) {
+  const reduced = useReducedMotion();
+  const visible = useOnShow();
+  const opacity = useSharedValue(reduced ? 0.85 : 0.4);
+  useEffect(() => {
+    if (reduced || !visible) {
+      opacity.value = 0.85;
+      return;
+    }
+    opacity.value = withRepeat(
+      withSequence(withTiming(1, { duration: 700 }), withTiming(0.35, { duration: 700 })),
+      -1,
+      false,
+    );
+  }, [reduced, visible, opacity]);
+  const anim = useAnimatedStyle(() => ({ opacity: opacity.value }));
+  return <Animated.View style={[{ width: size, height: size, borderRadius: size / 2, backgroundColor: color }, anim]} />;
 }
 
-function toneColors(colors: ReturnType<typeof useTheme>["colors"], tone: AgentRailTone): { bg: string; fg: string } {
-  switch (tone) {
-    case "accent":
-      return { bg: colors.infoSoft, fg: colors.info };
-    case "success":
-      return { bg: colors.successSoft, fg: colors.success };
-    case "warning":
-      return { bg: colors.warningSoft, fg: colors.warning };
-    case "danger":
-      return { bg: colors.dangerSoft, fg: colors.danger };
-    default:
-      return { bg: colors.sunken, fg: colors.muted };
-  }
-}
-
-function RailFace({ bot, remote, size = 20 }: { bot?: Bot; remote?: boolean; size?: number }) {
+function RailFace({ bot, remote, size = 18 }: { bot?: Bot; remote?: boolean; size?: number }) {
   const { colors } = useTheme();
   if (bot) return <BotAvatar bot={bot} size={size} />;
   return (
@@ -80,33 +74,9 @@ function RailFace({ bot, remote, size = 20 }: { bot?: Bot; remote?: boolean; siz
   );
 }
 
-function StatusPill({ label, tone, live }: { label: string; tone: AgentRailTone; live?: boolean }) {
-  const { colors } = useTheme();
-  const palette = toneColors(colors, tone);
-  return (
-    <View
-      style={{
-        flexDirection: "row",
-        alignItems: "center",
-        gap: 5,
-        paddingHorizontal: 7,
-        paddingVertical: 2,
-        borderRadius: radius.pill,
-        backgroundColor: palette.bg,
-        maxWidth: "100%",
-      }}
-    >
-      {live && <View style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: palette.fg }} />}
-      <T variant="caption" numberOfLines={1} style={{ color: palette.fg, fontSize: 11, lineHeight: 15 }}>
-        {label}
-      </T>
-    </View>
-  );
-}
-
 /**
  * Recipient-side card on phone: renders an incoming bot-to-bot message (task handoff, remote dispatch,
- * or teamwork) with a vertical left accent rail, sender identity, collapsible body, and source chat link.
+ * or teamwork) with a quiet hairline border, muted "from X" header, collapsible body, and source chat link.
  */
 export const IncomingAgentRail = memo(function IncomingAgentRail({
   message,
@@ -130,67 +100,55 @@ export const IncomingAgentRail = memo(function IncomingAgentRail({
   if (!model) return null;
 
   const senderBot = bots.get(model.senderBotId);
-  const accent = railAccent(colors, model.via);
   const stamp = clock(model.time);
+  const meta = [model.viaLabel, stamp].filter(Boolean).join(" · ");
 
   return (
     <View
       accessible={false}
       accessibilityLabel={model.ariaLabel}
       style={[
-        styles.card,
+        styles.incomingCard,
         {
           backgroundColor: colors.surface,
           borderColor: colors.line,
-          borderLeftColor: accent,
         },
       ]}
     >
       <View style={styles.head} accessible accessibilityLabel={model.ariaLabel}>
         <RailFace bot={senderBot} remote={model.via === "remote"} />
         <View style={styles.identity}>
-          <T variant="footnote" color="muted" numberOfLines={1}>
+          <T variant="footnote" color="muted" numberOfLines={1} style={{ flexShrink: 1 }}>
             from{" "}
-            <T variant="footnote" weight="700" color="ink">
+            <T variant="footnote" weight="600" color="ink">
               {model.senderName}
             </T>
+            {meta ? " · " + meta : ""}
           </T>
-          <View style={[styles.viaChip, { backgroundColor: colors.sunken }]}>
-            {model.via === "task" && <ClipboardList size={11} color={colors.muted} strokeWidth={2.2} />}
-            {model.via === "remote" && <Globe size={11} color={colors.muted} strokeWidth={2.2} />}
-            <T variant="caption" color="muted" style={{ fontSize: 11, lineHeight: 15 }}>
-              {model.viaLabel}
-            </T>
-          </View>
-          {!!stamp && (
-            <T variant="caption" color="faint" style={{ fontSize: 11, lineHeight: 15 }}>
-              {stamp}
-            </T>
-          )}
         </View>
         {!!model.sourceChatId && (
           <Tap
             onPress={() => onOpenChat(model.sourceChatId!)}
             feel="select"
             accessibilityLabel={"Open chat with " + model.senderName}
-            style={[styles.linkButton, { backgroundColor: colors.canvas, borderColor: colors.line }]}
+            style={styles.linkButton}
           >
-            <T variant="caption" color="ink2" style={{ fontSize: 11, lineHeight: 15 }}>
+            <T variant="caption" color="muted">
               Source chat
             </T>
-            <ArrowUpRight size={12} color={colors.ink2} strokeWidth={2.2} />
+            <ArrowUpRight size={12} color={colors.muted} strokeWidth={2.2} />
           </Tap>
         )}
       </View>
 
       {!!model.taskTitle && (
-        <T variant="subhead" weight="700" color="ink">
+        <T variant="footnote" weight="600" color="ink">
           {model.taskTitle}
         </T>
       )}
 
       {model.collapsible && !expanded ? (
-        <T variant="subhead" color="ink2" numberOfLines={2}>
+        <T variant="footnote" color="ink2" numberOfLines={2}>
           {model.preview}
         </T>
       ) : (
@@ -207,9 +165,9 @@ export const IncomingAgentRail = memo(function IncomingAgentRail({
           style={styles.toggle}
         >
           {expanded ? (
-            <ChevronDown size={14} color={colors.muted} strokeWidth={2.2} />
+            <ChevronDown size={13} color={colors.muted} strokeWidth={2.2} />
           ) : (
-            <ChevronRight size={14} color={colors.muted} strokeWidth={2.2} />
+            <ChevronRight size={13} color={colors.muted} strokeWidth={2.2} />
           )}
           <T variant="caption" color="muted">
             {expanded ? "Show less" : "Show full message"}
@@ -220,134 +178,79 @@ export const IncomingAgentRail = memo(function IncomingAgentRail({
   );
 });
 
-const OutgoingAskCard = memo(function OutgoingAskCard({ ask, bots }: { ask: TeamAsk; bots: Map<string, Bot> }) {
+const AskRow = memo(function AskRow({ ask, bots }: { ask: TeamAsk; bots: Map<string, Bot> }) {
   const { colors } = useTheme();
-  const [replyOpen, setReplyOpen] = useState(false);
-  const [messageOpen, setMessageOpen] = useState(false);
+  const [expanded, setExpanded] = useState(false);
 
   const botList = useMemo(() => [...bots.values()], [bots]);
   const model = useMemo(() => buildOutgoingRail(ask, botList), [ask, botList]);
   const now = useElapsedClock(model.live);
   const targetBot = ask.remote ? undefined : bots.get(ask.botId);
-  const accent = railAccent(colors, model.via, model.status);
-  const msgFold = useMemo(() => foldPreview(model.message), [model.message]);
-  const took = model.durationMs ?? (model.live ? Math.max(0, now - ask.started) : undefined);
-  const hasReplyOrError = !!(model.reply || model.error);
-  const snippet = (model.error ?? model.reply ?? "").replace(/\s+/g, " ").trim();
+  const summary = useMemo(() => askRowSummary(model), [model]);
+  const liveElapsed = model.live ? formatCompactElapsed(Math.max(0, now - ask.started)) : "";
 
   return (
-    <View
-      accessible={false}
-      accessibilityLabel={model.ariaLabel}
-      style={[
-        styles.card,
-        {
-          backgroundColor: colors.surface,
-          borderColor: colors.line,
-          borderLeftColor: accent,
-        },
-      ]}
-    >
-      <View style={styles.head} accessible accessibilityLabel={model.ariaLabel}>
-        <RailFace bot={targetBot} remote={model.via === "remote"} />
-        <View style={styles.identity}>
-          <View style={{ flexDirection: "row", alignItems: "center", gap: 4, flexShrink: 1 }}>
-            <ArrowRight size={12} color={colors.muted} strokeWidth={2.2} />
-            <T variant="footnote" color="muted" numberOfLines={1}>
-              to{" "}
-              <T variant="footnote" weight="700" color="ink">
-                {model.targetName}
-              </T>
-              {model.hostLabel ? " on " + model.hostLabel : ""}
+    <View style={[styles.rowWrap, { borderTopColor: colors.line }]}>
+      <Tap
+        onPress={() => setExpanded((v) => !v)}
+        feel="select"
+        sink={0.99}
+        accessibilityRole="button"
+        accessibilityState={{ expanded }}
+        accessibilityLabel={model.ariaLabel}
+        style={styles.rowButton}
+      >
+        <RailFace bot={targetBot} remote={model.via === "remote"} size={18} />
+        <T variant="footnote" weight="600" color="ink" numberOfLines={1} style={styles.rowName}>
+          {model.targetName}
+        </T>
+        <T variant="footnote" color="muted" numberOfLines={1} style={styles.rowSummary}>
+          {summary}
+        </T>
+        <View style={styles.rowTrail}>
+          {model.status === "answered" ? (
+            <Check size={14} color={colors.success} strokeWidth={2.4} />
+          ) : model.live ? (
+            <T variant="caption" color="accentText" style={styles.tabular}>
+              {liveElapsed}
             </T>
-          </View>
-          <StatusPill label={model.statusLabel} tone={model.statusTone} live={model.live} />
-          {took !== undefined && took > 0 && (
-            <T variant="caption" color="faint" style={{ fontSize: 11, lineHeight: 15 }}>
-              {spentTime(took)}
+          ) : model.status === "failed" ? (
+            <XIcon size={14} color={colors.danger} strokeWidth={2.4} />
+          ) : (
+            <T variant="caption" color="muted">
+              stopped
             </T>
           )}
         </View>
-      </View>
+      </Tap>
 
-      {msgFold.collapsible && !messageOpen ? (
-        <T variant="subhead" color="ink2" numberOfLines={2}>
-          {msgFold.preview}
-        </T>
-      ) : (
-        <T variant="subhead" color="ink2">
-          {model.message}
-        </T>
-      )}
-
-      {!!model.expecting && (
-        <T variant="caption" color="muted">
-          Needs: {model.expecting}
-        </T>
-      )}
-
-      {msgFold.collapsible && (
-        <Tap
-          onPress={() => setMessageOpen((v) => !v)}
-          feel="select"
-          accessibilityRole="button"
-          accessibilityState={{ expanded: messageOpen }}
-          accessibilityLabel={messageOpen ? "Hide full request" : "Show full request"}
-          style={styles.toggle}
-        >
-          {messageOpen ? (
-            <ChevronDown size={13} color={colors.muted} strokeWidth={2.2} />
-          ) : (
-            <ChevronRight size={13} color={colors.muted} strokeWidth={2.2} />
-          )}
-          <T variant="caption" color="muted">
-            {messageOpen ? "Hide full request" : "Show full request"}
+      {expanded && (
+        <View style={[styles.rowBody, { borderTopColor: colors.line }]}>
+          <T variant="footnote" color="ink2">
+            {model.message}
           </T>
-        </Tap>
-      )}
-
-      {hasReplyOrError && (
-        <View style={[styles.replyWrap, { borderTopColor: colors.line }]}>
-          <Tap
-            onPress={() => setReplyOpen((v) => !v)}
-            feel="select"
-            accessibilityRole="button"
-            accessibilityState={{ expanded: replyOpen }}
-            accessibilityLabel={(model.error ? "Error" : "Reply from " + model.targetName) + (replyOpen ? ", collapse" : ", expand")}
-            style={styles.replyToggle}
-          >
-            {replyOpen ? (
-              <ChevronDown size={14} color={colors.muted} strokeWidth={2.2} />
-            ) : (
-              <ChevronRight size={14} color={colors.muted} strokeWidth={2.2} />
-            )}
-            <T variant="footnote" weight="600" color="ink2">
-              {model.error ? "Error" : "Reply from " + model.targetName}
+          {!!model.expecting && (
+            <T variant="caption" color="muted">
+              Needs: {model.expecting}
             </T>
-            {!replyOpen && !!snippet && (
-              <T variant="caption" color="muted" numberOfLines={1} style={{ flex: 1 }}>
-                {snippet}
-              </T>
-            )}
-          </Tap>
-          {replyOpen && (
-            <View style={[styles.replyBody, { backgroundColor: colors.canvas, borderColor: colors.line }]}>
-              {model.reply ? (
-                <Markdown text={model.reply} />
-              ) : (
-                <View style={{ flexDirection: "row", alignItems: "flex-start", gap: 6 }}>
-                  <CircleAlert size={14} color={colors.danger} strokeWidth={2.2} />
-                  <T variant="footnote" color="danger" style={{ flex: 1 }}>
-                    {model.error}
-                  </T>
-                </View>
-              )}
-              {model.stepCount > 0 && (
-                <T variant="caption" color="muted" style={{ marginTop: space.xs }}>
-                  {model.stepCount === 1 ? "1 tool step" : model.stepCount + " tool steps"}
-                </T>
-              )}
+          )}
+          {!!model.reply && (
+            <View style={[styles.replyBox, { backgroundColor: colors.canvas, borderColor: colors.line }]}>
+              <Markdown text={model.reply} />
             </View>
+          )}
+          {!model.reply && !!model.error && (
+            <View style={{ flexDirection: "row", alignItems: "flex-start", gap: 6 }}>
+              <CircleAlert size={14} color={colors.danger} strokeWidth={2.2} />
+              <T variant="footnote" color="danger" style={{ flex: 1 }}>
+                {model.error}
+              </T>
+            </View>
+          )}
+          {model.stepCount > 0 && (
+            <T variant="caption" color="muted">
+              {model.stepCount === 1 ? "1 tool step" : model.stepCount + " tool steps"}
+            </T>
           )}
         </View>
       )}
@@ -355,171 +258,166 @@ const OutgoingAskCard = memo(function OutgoingAskCard({ ask, bots }: { ask: Team
   );
 });
 
-/** Back-to-back node calls folded into one card; tap to see each call's own card. */
-const NodeCallGroupCard = memo(function NodeCallGroupCard({ group, bots }: { group: NodeCallGroupModel; bots: Map<string, Bot> }) {
+const AskGroupCard = memo(function AskGroupCard({ group, bots }: { group: AskGroupModel; bots: Map<string, Bot> }) {
   const { colors } = useTheme();
-  const [open, setOpen] = useState(false);
-  const status = group.live ? group.running + " running" : group.failed ? group.failed + " failed" : "Done";
-  const accent = group.failed ? colors.danger : group.live ? colors.accentText : colors.success;
   return (
     <View
       accessible={false}
-      style={[styles.card, { backgroundColor: colors.surface, borderColor: colors.line, borderLeftColor: accent }]}
+      style={[
+        styles.groupCard,
+        {
+          backgroundColor: colors.surface,
+          borderColor: colors.line,
+        },
+      ]}
+    >
+      <View style={styles.groupHead}>
+        {group.live && <PulseDot color={colors.accent} size={6} />}
+        <T variant="footnote" color="muted" numberOfLines={1} style={{ flex: 1 }}>
+          {group.header}
+        </T>
+      </View>
+      {group.asks.map((ask) => (
+        <AskRow key={ask.id} ask={ask} bots={bots} />
+      ))}
+    </View>
+  );
+});
+
+/** Back-to-back node calls folded into one quiet card; tap to see each call row. */
+const NodeCallGroupCard = memo(function NodeCallGroupCard({ group, bots }: { group: NodeCallGroupModel; bots: Map<string, Bot> }) {
+  const { colors } = useTheme();
+  const [open, setOpen] = useState(false);
+  return (
+    <View
+      accessible={false}
+      style={[styles.groupCard, { backgroundColor: colors.surface, borderColor: colors.line }]}
     >
       <Tap
         onPress={() => setOpen((v) => !v)}
         feel="select"
+        sink={0.99}
         accessibilityRole="button"
         accessibilityState={{ expanded: open }}
         accessibilityLabel={group.ariaLabel + (open ? ", collapse" : ", expand")}
-        style={styles.head}
+        style={styles.groupHead}
       >
         {open ? (
-          <ChevronDown size={14} color={colors.muted} strokeWidth={2.2} />
+          <ChevronDown size={13} color={colors.muted} strokeWidth={2.2} />
         ) : (
-          <ChevronRight size={14} color={colors.muted} strokeWidth={2.2} />
+          <ChevronRight size={13} color={colors.muted} strokeWidth={2.2} />
         )}
-        <RailFace remote />
-        <View style={styles.identity}>
-          <T variant="footnote" weight="700" color="ink" numberOfLines={1}>
-            {group.title}
+        <RailFace remote size={18} />
+        <T variant="footnote" weight="600" color="ink" numberOfLines={1}>
+          {group.title}
+        </T>
+        {!open && (
+          <T variant="footnote" color="muted" numberOfLines={1} style={styles.rowSummary}>
+            {group.summary.replace(/\s+/g, " ").trim()}
           </T>
-          <StatusPill label={status} tone={group.statusTone} live={group.live} />
+        )}
+        <View style={styles.rowTrail}>
+          {group.live ? (
+            <T variant="caption" color="accentText" style={styles.tabular}>
+              {group.running + " running"}
+            </T>
+          ) : group.failed ? (
+            <XIcon size={14} color={colors.danger} strokeWidth={2.4} />
+          ) : (
+            <Check size={14} color={colors.success} strokeWidth={2.4} />
+          )}
         </View>
       </Tap>
-      {!open && (
-        <T variant="caption" color="muted" numberOfLines={1}>
-          {group.summary.replace(/\s+/g, " ").trim()}
-        </T>
-      )}
-      {open && (
-        <View style={{ gap: space.sm }}>
-          {group.asks.map((ask) => (
-            <OutgoingAskCard key={ask.id} ask={ask} bots={bots} />
-          ))}
-        </View>
-      )}
+      {open && group.asks.map((ask) => <AskRow key={ask.id} ask={ask} bots={bots} />)}
     </View>
   );
 });
 
-const TaskHandoffCard = memo(function TaskHandoffCard({
-  handoff,
+const TaskHandoffRow = memo(function TaskHandoffRow({
+  model,
   bots,
-  tasks,
   onOpenChat = openChatRoute,
 }: {
-  handoff: TaskHandoff;
+  model: TaskHandoffRailModel;
   bots: Map<string, Bot>;
-  tasks?: BotTask[];
   onOpenChat?: (chatId: string) => void;
 }) {
   const { colors } = useTheme();
   const [expanded, setExpanded] = useState(false);
 
-  const botList = useMemo(() => [...bots.values()], [bots]);
-  const model = useMemo(() => buildTaskHandoffRail(handoff, { bots: botList, tasks }), [handoff, botList, tasks]);
   const targetBot = bots.get(model.targetBotId);
-  const accent = railAccent(colors, "task", model.status);
-  const hasExpandable = !!(model.details || model.result || model.problem);
-  const snippet = (model.problem ?? model.result ?? model.details ?? "").replace(/\s+/g, " ").trim();
+  const done = model.status === "done" || model.status === "review";
 
   return (
-    <View
-      accessible={false}
-      accessibilityLabel={model.ariaLabel}
-      style={[
-        styles.card,
-        {
-          backgroundColor: colors.surface,
-          borderColor: colors.line,
-          borderLeftColor: accent,
-        },
-      ]}
-    >
-      <View style={styles.head} accessible accessibilityLabel={model.ariaLabel}>
-        <RailFace bot={targetBot} />
-        <View style={styles.identity}>
-          <View style={{ flexDirection: "row", alignItems: "center", gap: 4, flexShrink: 1 }}>
-            <ClipboardList size={12} color={colors.muted} strokeWidth={2.2} />
-            <T variant="footnote" color="muted" numberOfLines={1}>
-              task for{" "}
-              <T variant="footnote" weight="700" color="ink">
-                {model.targetName}
-              </T>
+    <View style={[styles.rowWrap, { borderTopColor: colors.line }]}>
+      <Tap
+        onPress={() => setExpanded((v) => !v)}
+        feel="select"
+        sink={0.99}
+        accessibilityRole="button"
+        accessibilityState={{ expanded }}
+        accessibilityLabel={model.ariaLabel}
+        style={styles.rowButton}
+      >
+        <RailFace bot={targetBot} size={18} />
+        <T variant="footnote" weight="600" color="ink" numberOfLines={1} style={styles.rowName}>
+          {model.targetName}
+        </T>
+        <T variant="footnote" color="muted" numberOfLines={1} style={styles.rowSummary}>
+          {model.title}
+        </T>
+        <View style={styles.rowTrail}>
+          {done ? (
+            <Check size={14} color={colors.success} strokeWidth={2.4} />
+          ) : model.status === "blocked" ? (
+            <XIcon size={14} color={colors.danger} strokeWidth={2.4} />
+          ) : (
+            <T variant="caption" color={model.live ? "accentText" : "muted"}>
+              {model.statusLabel.toLowerCase()}
             </T>
-          </View>
-          <StatusPill label={model.statusLabel} tone={model.statusTone} live={model.live} />
+          )}
         </View>
-        {!!model.taskChatId && (
-          <Tap
-            onPress={() => onOpenChat(model.taskChatId!)}
-            feel="select"
-            accessibilityLabel={"Open task chat: " + model.title}
-            style={[styles.linkButton, { backgroundColor: colors.canvas, borderColor: colors.line }]}
-          >
-            <T variant="caption" color="ink2" style={{ fontSize: 11, lineHeight: 15 }}>
-              Open task
+      </Tap>
+
+      {expanded && (
+        <View style={[styles.rowBody, { borderTopColor: colors.line }]}>
+          <View style={styles.head}>
+            <T variant="footnote" weight="600" color="ink" style={{ flex: 1 }}>
+              {model.title}
             </T>
-            <ArrowUpRight size={12} color={colors.ink2} strokeWidth={2.2} />
-          </Tap>
-        )}
-      </View>
-
-      <T variant="subhead" weight="700" color="ink">
-        {model.title}
-      </T>
-
-      {hasExpandable && (
-        <View style={[styles.replyWrap, { borderTopColor: colors.line }]}>
-          <Tap
-            onPress={() => setExpanded((v) => !v)}
-            feel="select"
-            accessibilityRole="button"
-            accessibilityState={{ expanded }}
-            accessibilityLabel={(model.problem ? "Blocked reason" : model.result ? "Result" : "Details") + (expanded ? ", collapse" : ", expand")}
-            style={styles.replyToggle}
-          >
-            {expanded ? (
-              <ChevronDown size={14} color={colors.muted} strokeWidth={2.2} />
-            ) : (
-              <ChevronRight size={14} color={colors.muted} strokeWidth={2.2} />
+            {!!model.taskChatId && (
+              <Tap
+                onPress={() => onOpenChat(model.taskChatId!)}
+                feel="select"
+                accessibilityLabel={"Open task chat: " + model.title}
+                style={styles.linkButton}
+              >
+                <T variant="caption" color="muted">
+                  Open task
+                </T>
+                <ArrowUpRight size={12} color={colors.muted} strokeWidth={2.2} />
+              </Tap>
             )}
-            <T variant="footnote" weight="600" color="ink2">
-              {model.problem ? "Blocked reason" : model.result ? "Result" : "Details"}
-            </T>
-            {!expanded && !!snippet && (
-              <T variant="caption" color="muted" numberOfLines={1} style={{ flex: 1 }}>
-                {snippet}
+          </View>
+          {!!model.details && (
+            <View style={{ gap: 2 }}>
+              <T variant="caption" color="muted">
+                Task brief
               </T>
-            )}
-          </Tap>
-          {expanded && (
-            <View style={[styles.replyBody, { backgroundColor: colors.canvas, borderColor: colors.line, gap: space.sm }]}>
-              {!!model.details && (
-                <View style={{ gap: 2 }}>
-                  <T variant="label" color="muted" style={{ fontSize: 10 }}>
-                    TASK BRIEF
-                  </T>
-                  <Markdown text={model.details} />
-                </View>
-              )}
-              {!!model.result && (
-                <View style={{ gap: 2 }}>
-                  <T variant="label" color="muted" style={{ fontSize: 10 }}>
-                    RESULT FROM {model.targetName.toUpperCase()}
-                  </T>
-                  <Markdown text={model.result} />
-                </View>
-              )}
-              {!!model.problem && (
-                <View style={{ flexDirection: "row", alignItems: "flex-start", gap: 6 }}>
-                  <CircleAlert size={14} color={colors.danger} strokeWidth={2.2} />
-                  <T variant="footnote" color="danger" style={{ flex: 1 }}>
-                    {model.problem}
-                  </T>
-                </View>
-              )}
+              <Markdown text={model.details} />
+            </View>
+          )}
+          {!!model.result && (
+            <View style={[styles.replyBox, { backgroundColor: colors.canvas, borderColor: colors.line }]}>
+              <Markdown text={model.result} />
+            </View>
+          )}
+          {!!model.problem && (
+            <View style={{ flexDirection: "row", alignItems: "flex-start", gap: 6 }}>
+              <CircleAlert size={14} color={colors.danger} strokeWidth={2.2} />
+              <T variant="footnote" color="danger" style={{ flex: 1 }}>
+                {model.problem}
+              </T>
             </View>
           )}
         </View>
@@ -528,7 +426,41 @@ const TaskHandoffCard = memo(function TaskHandoffCard({
   );
 });
 
-/** Sender-side stack of agent-message rail cards for one turn on phone. */
+const TaskHandoffGroupCard = memo(function TaskHandoffGroupCard({
+  group,
+  bots,
+  onOpenChat,
+}: {
+  group: TaskHandoffGroupModel;
+  bots: Map<string, Bot>;
+  onOpenChat?: (chatId: string) => void;
+}) {
+  const { colors } = useTheme();
+  return (
+    <View
+      accessible={false}
+      style={[
+        styles.groupCard,
+        {
+          backgroundColor: colors.surface,
+          borderColor: colors.line,
+        },
+      ]}
+    >
+      <View style={styles.groupHead}>
+        {group.live && <PulseDot color={colors.accent} size={6} />}
+        <T variant="footnote" color="muted" numberOfLines={1} style={{ flex: 1 }}>
+          {group.header}
+        </T>
+      </View>
+      {group.items.map((model) => (
+        <TaskHandoffRow key={model.id} model={model} bots={bots} onOpenChat={onOpenChat} />
+      ))}
+    </View>
+  );
+});
+
+/** Sender-side stack of quiet grouped agent cards for one turn on phone. */
 export const AgentMessageRail = memo(function AgentMessageRail({
   run,
   bots,
@@ -541,35 +473,79 @@ export const AgentMessageRail = memo(function AgentMessageRail({
   const tasks = usePart("tasks");
   const asks = run.teamwork ?? [];
   const handoffs = run.taskHandoffs ?? [];
-  if (!asks.length && !handoffs.length) return null;
+  const botList = useMemo(() => [...bots.values()], [bots]);
+  const groupedAsks = useMemo(() => groupAsks(asks, botList), [asks, botList]);
+  const handoffGroup = useMemo(() => buildTaskHandoffGroup(handoffs, { bots: botList, tasks }), [handoffs, botList, tasks]);
+  if (!groupedAsks.length && !handoffGroup) return null;
 
   return (
     <View style={{ gap: space.sm }} accessibilityLabel="Agent messages">
-      {groupRailAsks(asks).map((item) =>
-        item.kind === "ask" ? (
-          <OutgoingAskCard key={item.ask.id} ask={item.ask} bots={bots} />
+      {groupedAsks.map((item) =>
+        item.kind === "ask-group" ? (
+          <AskGroupCard key={item.id} group={item} bots={bots} />
         ) : (
           <NodeCallGroupCard key={item.id} group={item} bots={bots} />
         ),
       )}
-      {handoffs.map((handoff) => (
-        <TaskHandoffCard key={handoff.id} handoff={handoff} bots={bots} tasks={tasks} onOpenChat={onOpenChat} />
-      ))}
+      {handoffGroup && <TaskHandoffGroupCard group={handoffGroup} bots={bots} onOpenChat={onOpenChat} />}
     </View>
   );
 });
 
 const styles = StyleSheet.create({
-  card: {
+  groupCard: {
     borderWidth: StyleSheet.hairlineWidth,
-    borderLeftWidth: 3,
-    borderTopLeftRadius: 6,
-    borderBottomLeftRadius: 6,
-    borderTopRightRadius: radius.md,
-    borderBottomRightRadius: radius.md,
+    borderRadius: 14,
+    overflow: "hidden",
+  },
+  groupHead: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    paddingHorizontal: 12,
     paddingVertical: 10,
-    paddingLeft: 12,
-    paddingRight: 12,
+  },
+  rowWrap: {
+    borderTopWidth: StyleSheet.hairlineWidth,
+  },
+  rowButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
+  rowName: {
+    flexShrink: 0,
+  },
+  rowSummary: {
+    flex: 1,
+    minWidth: 0,
+  },
+  rowTrail: {
+    marginLeft: 4,
+    flexShrink: 0,
+    alignItems: "flex-end",
+    justifyContent: "center",
+  },
+  tabular: {
+    fontVariant: ["tabular-nums"],
+  },
+  rowBody: {
+    borderTopWidth: StyleSheet.hairlineWidth,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    gap: 8,
+  },
+  replyBox: {
+    padding: 10,
+    borderRadius: 10,
+    borderWidth: StyleSheet.hairlineWidth,
+  },
+  incomingCard: {
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: 14,
+    padding: 12,
     gap: 6,
   },
   head: {
@@ -582,25 +558,12 @@ const styles = StyleSheet.create({
     minWidth: 0,
     flexDirection: "row",
     alignItems: "center",
-    flexWrap: "wrap",
-    gap: 6,
-  },
-  viaChip: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 4,
-    paddingHorizontal: 7,
-    paddingVertical: 2,
-    borderRadius: radius.pill,
   },
   linkButton: {
     flexDirection: "row",
     alignItems: "center",
     gap: 3,
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 8,
-    borderWidth: StyleSheet.hairlineWidth,
+    paddingVertical: 2,
   },
   toggle: {
     flexDirection: "row",
@@ -608,22 +571,5 @@ const styles = StyleSheet.create({
     gap: 4,
     alignSelf: "flex-start",
     paddingVertical: 2,
-  },
-  replyWrap: {
-    marginTop: 2,
-    paddingTop: 6,
-    borderTopWidth: StyleSheet.hairlineWidth,
-  },
-  replyToggle: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 6,
-    paddingVertical: 2,
-  },
-  replyBody: {
-    marginTop: 6,
-    padding: 10,
-    borderRadius: radius.sm,
-    borderWidth: StyleSheet.hairlineWidth,
   },
 });

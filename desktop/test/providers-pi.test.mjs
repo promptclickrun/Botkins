@@ -7,7 +7,7 @@ import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, statSync, wri
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { EXTRA_USAGE, PiProvider, PiRpc, bundledPi, errorText, launcher, parseOmpMcpOutput, parsePiMcpNotify } from "../desktop/providers/pi/index.mjs";
+import { EXTRA_USAGE, PiProvider, PiRpc, bundledPi, errorText, launcher, parseOmpMcpOutput, parsePiMcpNotify, pluginAlias } from "../desktop/providers/pi/index.mjs";
 import { INVENTORY } from "../desktop/providers/pi/extension-shared.mjs";
 import { execFileSync } from "node:child_process";
 import { Providers } from "../desktop/providers/index.mjs";
@@ -81,7 +81,9 @@ test("a turn starts Pi in RPC mode on Botkins' own folder, streams the reply, an
   assert.equal(started.args[started.args.indexOf("--session-id") + 1], "chat-1");
   // The extension is given the connection, the servers Pi can reach, and the bot's instructions.
   assert.deepEqual(started.described.providers, [CONNECTION]);
-  assert.deepEqual(started.described.servers, { files: { url: "https://mcp.example/x", headers: { A: "b" }, exposure: "direct" } }, "an SSE server is left out");
+  assert.deepEqual(started.described.servers.files, { url: "https://mcp.example/x", headers: { A: "b" }, exposure: "direct" });
+  assert.match(started.described.servers.old.url, /^http:\/\/127\.0\.0\.1:\d+\/mcp\//);
+  assert.match(started.described.servers.old.headers.Authorization, /^Bearer /);
   assert.equal(started.described.prompt, "You are Testy.");
   await session.close();
   await provider.stop();
@@ -151,11 +153,14 @@ test("Botkins' own tools never ask, and MCP tools ask as MCP tools", { skip }, a
   const asked = [];
   const session = await provider.openSession(spec({ handlers: { permission: async (request) => (asked.push(request), { allow: true }) } }));
   session.turn = {};
-  assert.equal(await session.permission({ toolName: "mcp__botkins__wiki_read", input: {} }), true);
+  assert.equal(await session.permission({ toolName: "mcp__botkins__wiki_read", input: {} }), false, "a name alone is not the bridge");
+  session.bridge = {};
+  assert.equal(await session.permission({ toolName: "mcp__botkins__wiki_read", registryServer: "botkins", input: {} }), true);
+  session.bridge = null;
   assert.equal(asked.length, 0);
-  assert.equal(await session.permission({ toolName: "mcp__files__get", input: { id: 1 } }), true);
+  assert.equal(await session.permission({ toolName: "mcp__files__get", registryServer: "files", registryTool: "get", input: { id: 1 } }), true);
   assert.deepEqual([asked[0].kind, asked[0].label, asked[0].remember], ["mcp", "files / get", ["MCP tool files/get", "files", "get"]]);
-  assert.equal(await session.permission({ toolName: "read", input: { path: "/x" } }), true);
+  assert.equal(await session.permission({ toolName: "read", native: true, input: { path: "/x" } }), true);
   assert.deepEqual([asked[1].kind, asked[1].readOnly], ["read", true]);
   // With no turn, or no one to ask, nothing runs.
   session.turn = null;
@@ -583,7 +588,7 @@ test("Pi inventory reflects runtime connection states, direct vs indirect exposu
     { name: "pend_srv", status: "pending" },
     { name: "fail_srv", status: "failed" },
     { name: "auth_srv", status: "needs-auth" },
-    { name: "sse_srv", status: "unavailable" },
+    { name: "sse_srv", status: "configured" },
   ]);
   const direct = inv.choices.find((c) => c.kind === "Tool" && c.name === "search" && c.source === "direct_srv");
   const indirect = inv.choices.find((c) => c.kind === "Tool" && c.name === "query" && c.source === "indirect_srv");
@@ -630,8 +635,8 @@ test("Pi inventory resolves aliased plugin MCP servers back to Botkins server na
   t.after(() => provider.stop());
   const pluginOk = "plugin_alpha__server_a1b2c3d4";
   const pluginFail = "plugin_beta__server_e5f6a7b8";
-  const aliasOk = "bkp_aaaaaaaaaaaa";
-  const aliasFail = "bkp_bbbbbbbbbbbb";
+  const aliasOk = pluginAlias(pluginOk);
+  const aliasFail = pluginAlias(pluginFail);
   const session = await provider.openSession(spec({
     mcpServers: {
       [pluginOk]: { type: "http", url: "http://127.0.0.1:9/alpha" },
@@ -639,15 +644,6 @@ test("Pi inventory resolves aliased plugin MCP servers back to Botkins server na
     },
   }));
   const live = await session.start();
-  // Match PR #321's PiSession.aliases contract (harness alias -> Botkins server name).
-  session.aliases = new Map([
-    [aliasOk, pluginOk],
-    [aliasFail, pluginFail],
-  ]);
-  live.registeredConfigs = new Map([
-    [aliasOk, JSON.stringify(provider.serverRecord(session.spec.mcpServers[pluginOk]))],
-    [aliasFail, JSON.stringify(provider.serverRecord(session.spec.mcpServers[pluginFail]))],
-  ]);
   provider.observeRuntime(live, {
     type: "extension_ui_request",
     method: "setStatus",

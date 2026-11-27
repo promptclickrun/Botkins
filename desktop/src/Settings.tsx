@@ -15,6 +15,7 @@ import {
   MonitorSmartphone,
   PanelLeft,
   Palette,
+  Radio,
   Server,
   Store,
   Smartphone,
@@ -54,6 +55,7 @@ import TeamSettings, { type TeamView } from "./TeamSettings";
 import ExperimentalSettings from "./ExperimentalSettings";
 import ProfileSettings from "./ProfileSettings";
 import NodeHostSettings from "./NodeHostSettings";
+import ChannelsSettings from "./ChannelsSettings";
 import { ClaudeArtifactsSettings } from "./ClaudeArtifactsSettings";
 import { memberTeam, teamCan } from "./teamAccess";
 import "./settings.css";
@@ -68,6 +70,7 @@ export type SectionId =
   | "chats"
   | "notifications"
   | "bots"
+  | "channels"
   | "skills"
   | "marketplace"
   | "mcp"
@@ -90,7 +93,7 @@ type BotView = "profile" | "model" | "capabilities" | "memory";
 type SectionGroup = { title?: string; tile?: string; rule?: boolean; ids: SectionId[] };
 const GROUPS: SectionGroup[] = [
   { tile: "tide", ids: ["general", "profile", "computers", "team", "phone", "node"] },
-  { title: "Your bots\u2019 toolbox", tile: "clay", ids: ["account", "bots", "mcp", "skills", "marketplace", "credentials"] },
+  { title: "Your bots\u2019 toolbox", tile: "clay", ids: ["account", "bots", "channels", "mcp", "skills", "marketplace", "credentials"] },
   { title: "How bots work", tile: "fern", ids: ["chats", "access", "teamwork", "voice", "notifications"] },
   { title: "This computer", tile: "rose", ids: ["appearance", "sidebar", "storage"] },
   { rule: true, ids: ["usage", "experimental", "feedback", "about"] },
@@ -103,6 +106,7 @@ const SECTIONS: { id: SectionId; label: string; icon: LucideIcon; about: string;
   { id: "chats", label: "Chat", icon: MessageSquareMore, about: "How chats look, how they are summed up, and when bots ask first.", words: "thinking tool calls summary approvals clarification completion bubble" },
   { id: "notifications", label: "Notifications", icon: Bell, about: "What alerts you, and when Botkins stays quiet.", words: "replies routines questions reminders quiet hours test" },
   { id: "bots", label: "Bots & capabilities", icon: BotIcon, about: "Each bot\u2019s model, profile, tools and memory.", words: "model profile instructions role capabilities memory integrations inspect" },
+  { id: "channels", label: "Channels", icon: Radio, about: "Publish bots to Slack, Telegram, Discord and iMessage.", words: "channel hooks slack telegram discord imessage pairing allowlist publish" },
   { id: "skills", label: "Skills", icon: Sparkles, about: "Know-how your bots can use, from you, plugins and catalogs.", words: "skill scripts commands" },
   { id: "marketplace", label: "Marketplace", icon: Store, about: "Apps, bots, plugins, Pi packages and skills to add.", words: "market apps plugins agents bots pi packages composio" },
   { id: "mcp", label: "MCP servers", icon: Server, about: "Tools your bots reach through the Model Context Protocol.", words: "server tools oauth catalog" },
@@ -162,6 +166,8 @@ export function sectionFor(tab: string): { section: SectionId; view?: BotView; t
     "join a team": { section: "computers" },
     node: { section: "node" },
     "node host": { section: "node" },
+    channels: { section: "channels" },
+    "channel hooks": { section: "channels" },
     speech: { section: "voice" },
     "live voice": { section: "voice" },
   };
@@ -230,7 +236,7 @@ export default function Settings({
     // A computer reached over the link may be older than this window: it says so in its capabilities.
     if (item.id === "experimental" && state.remote?.using && !state.remote.using.capabilities?.includes("proactive-agent-v2")) return false;
     if (!memberHost) return true;
-    if (item.id === "experimental" || item.id === "node" ||
+    if (item.id === "experimental" || item.id === "node" || item.id === "channels" ||
       item.id === "team" || item.id === "credentials" || item.id === "teamwork" || item.id === "access" || item.id === "usage" || item.id === "storage" || item.id === "account" || item.id === "voice") return false;
     if (item.id === "bots") return teamCan(state, "agents");
     if (item.id === "skills") return teamCan(state, "skills");
@@ -610,6 +616,7 @@ export default function Settings({
             ))}
           {section === "computers" && <ComputersAndTeams state={state} initialJoin={initialJoin} />}
           {section === "node" && <NodeHostSettings state={state} fail={fail} />}
+          {section === "channels" && <ChannelsSettings state={state} />}
           {section === "voice" && <VoiceSettings state={state} />}
           {section === "usage" && <Usage runCount={runCount} />}
           {section === "storage" && (

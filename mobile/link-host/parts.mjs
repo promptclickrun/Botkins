@@ -143,6 +143,7 @@ export function baseParts(state, info, looks = {}, link = {}) {
     tasks: state.tasks ?? [],
     workflows: state.workflows ?? [],
     workflowRuns: (state.workflowRuns ?? []).slice(0, RUN_LIST),
+    channels: state.channels ?? [],
     projects: state.projects ?? [],
     mcp: state.mcpServers ?? [],
     skills: state.skills ?? { folders: [], plugins: [], disabled: [] },

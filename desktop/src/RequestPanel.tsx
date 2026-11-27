@@ -225,12 +225,49 @@ export default function RequestPanel({
               command or a plugin's own message cannot look like another one (src/pluginStarts.ts). */}
           <p className="request-title">{shown(req.title)}</p>
           {req.label && <small className="request-label">{shown(req.label)}</small>}
-          {req.preview && <pre>{shown(req.preview)}</pre>}
+          {req.credentialGrant && (
+            <dl className="scred-approval-meta" aria-label="Credential request details">
+              <div>
+                <dt>Bot</dt>
+                <dd>{shown(req.sourceBotName || bot)}</dd>
+              </div>
+              {req.credentialName && (
+                <div>
+                  <dt>Credential</dt>
+                  <dd>{shown(req.credentialName)}</dd>
+                </div>
+              )}
+              {req.credentialSource && (
+                <div>
+                  <dt>Source vault</dt>
+                  <dd>{shown(req.credentialSource)}</dd>
+                </div>
+              )}
+              {req.destination && (
+                <div>
+                  <dt>Destination</dt>
+                  <dd className="scred-mono">{shown(req.destination)}</dd>
+                </div>
+              )}
+              {req.operation && (
+                <div>
+                  <dt>Operation</dt>
+                  <dd className="scred-mono">{shown(req.operation)}</dd>
+                </div>
+              )}
+            </dl>
+          )}
+          {req.credentialGrant && (
+            <small className="scred-pin-note">
+              Destination is pinned. Standing approval never fills on a different origin or cross-origin frame, and the secret value never enters the chat.
+            </small>
+          )}
+          {req.preview && !req.credentialGrant && <pre>{shown(req.preview)}</pre>}
           {secure && <p className="secure-destination">{req.detail}</p>}
           {req.detail && !secure && (
             <details
               className="request-raw"
-              open={req.preview && !req.dispatch && !req.review ? undefined : true}
+              open={req.preview && !req.dispatch && !req.review ? undefined : req.credentialGrant ? undefined : true}
             >
               <summary>Full request</summary>
               <pre>{shown(req.detail)}</pre>
@@ -367,6 +404,15 @@ export default function RequestPanel({
           </button>
           {req.kind === "permission" ? (
             <>
+              {req.credentialGrant && (
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => reply({ action: "deny_always" })}
+                >
+                  Always deny
+                </button>
+              )}
               {req.dispatch && (
                 <button type="button" disabled={busy} onClick={() => reply({ action: "today" })}>
                   Allow for today
@@ -379,11 +425,13 @@ export default function RequestPanel({
                   title={req.dispatch || req.artifactGrant ? undefined : "Remember for " + req.remember}
                   onClick={() => reply({ action: "remember" })}
                 >
-                  {req.dispatch
-                    ? "Always allow"
-                    : req.artifactGrant
-                      ? `Always allow${req.botName ? " for " + req.botName : ""}`
-                      : "Allow for this chat"}
+                  {req.credentialGrant
+                    ? "Always allow for this site"
+                    : req.dispatch
+                      ? "Always allow"
+                      : req.artifactGrant
+                        ? `Always allow${req.botName ? " for " + req.botName : ""}`
+                        : "Allow for this chat"}
                 </button>
               )}
               <button

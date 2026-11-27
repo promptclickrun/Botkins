@@ -207,12 +207,15 @@ A **tool** is something a bot can call. One that you add is an MCP server: a pro
 ```sh
 botkins tools add files --command npx --env API_KEY -- -y @example/files-mcp
 botkins tools add search --url https://mcp.example.com/v1 --header Authorization
+botkins tools add legacy --url https://mcp.example.com/sse --sse
 botkins tools list
 botkins tools test files
 botkins skills add weekly-report --description "Use for the Friday report." --instructions-file report.md
 botkins bots tools Nova --off search
 botkins bots skills Nova --off weekly-report
 ```
+
+Use `--sse` only for servers that use the older MCP SSE transport. Pi connects through a local Botkins adapter, under the configured server name and the same per-call approval rules. This does not change how you configure the server on a paired phone.
 
 - **A program's own arguments come last, after `--`.** Thus an argument can start with a dash, and no word of the program is taken as an option of Botkins. `--yes` has no short form in these commands: `-y` is `npx`'s own.
 - **A value is never a word on the command line.** Name each environment value or header (`--env API_KEY`, `--header Authorization`). The command then asks for each value and does not show what you type. From a script, give the values in a JSON file: `--secrets values.json`, or `--secrets -` to read the file from standard input. The file is `{ "env": { "API_KEY": "…" }, "headers": { "Authorization": "…" }, "clientSecret": "…" }`. No command prints a value: `botkins tools show` gives the names that have one.
@@ -354,6 +357,10 @@ botkins templates use inbox-sorter@botkins --name Sorter
 `botkins chat <bot>` talks to a bot. `botkins chats` keeps the chats that the Chats page of the window shows.
 
 When the bot asks for an approval in `botkins chat`, the command shows the request on standard error and asks at a terminal. With no terminal it refuses the request: no flag approves one. A person approves a request at a terminal, in the app's window or on a phone. The service's call `chat.respond` refuses a yes (`approve`, `remember`) without the mark `{ "agreed": true }`. A no, a cancel and an answer to a question need none. A bot must never answer a request that waits in a chat: the person does.
+
+Pi, OMP and Copilot show the target of a file read or write. An edit preview shows the proposed removals and additions when the harness supplies them. OMP's hashline edits show the patch itself and cannot be remembered: a patch can touch several paths. In **Read** mode, a direct MCP call counts as a read only when the harness supplies trusted read-only metadata. Signing in to a server or naming a tool `read` does not make it read-only.
+
+An approval can be remembered only for the scope shown on the card, such as an absolute file path or an exact MCP server and tool. Pi's built-in MCP registry can report the server and read-only hint without reporting the original tool name. In that case Botkins does not offer to remember the approval. Managed requests still require a person's answer. **Assisted** review is provided by the Copilot runtime; Pi and OMP still ask when Botkins' existing rules do not settle the call.
 
 ```sh
 botkins chats list
@@ -508,6 +515,7 @@ botkins mac-tools set mail read --yes
 - **`cache show` and `cache clear`.** The cache holds the bot menus that a chat offers when you type `/`, and the window's cache. This host has no window, so its cache is 0 bytes. `cache clear` asks first, and needs `--yes` with no terminal. The menus are built again at their next use.
 - **`mac-tools` lets bots use iMessage and Mail, on a Mac only.** `botkins mac-tools status` shows the level of each tool (`off`, `read` or `interact`), whether the `imsg` program is installed, and which permissions macOS has given. `botkins mac-tools set <tool> <level>` changes one level. `on` is the same as `read`. A level that gives bots more than the one now shows what it gives first, on standard error also with `--yes` and with `--json` (the tools that bots get, and the program that Botkins runs: `imsg` for iMessage, `/usr/bin/osascript` for Mail), and needs your yes. With no terminal it fails and names `--yes`. The call `macTools.set` refuses such a level unless it carries `{ "agreed": true }` after the level, as `preferences.set` does. Off, and a lower level, need no yes. On a computer that is not a Mac the app's own answer is passed on as it is: `status` says that the tools work on a Mac only, and a level above `off` is refused with that sentence, with no question first.
 - **`preferences harnesses` shows what can run a bot's turn.** The choice is the preference `harness`: `copilot` (one harness for every plan, the usual choice), `provider` (each provider's own tool), `pi` (the Pi program) or `omp` (the OMP program). The command shows each choice and which one is set, and for each program that is a harness of its own (Pi and OMP) whether it is installed. Change the choice with `botkins preferences set harness <choice>`; `botkins providers install pi` and `botkins providers install omp` install the programs. Botkins isolates OMP's config and MCP catalog per session (`mcp.shared: false`) and sets `tools.commands: false` so Botkins and configured MCP tools are exposed directly as typed schemas to models.
+- Pi and OMP extension questions and supported OMP forms appear as ordinary chat requests on the window and paired phone. Stop cancels pending requests. Secret input still requires Botkins' secure input flow. OMP forms show supported text and choice fields only; the host never runs form HTML.
 - **The Proactive agent** is experimental. The computer switch (`botkins preferences set proactive.enabled on|off`) is on from the start and pauses all bots when off. A bot does nothing until it is set up: `botkins bots proactive <bot> on` finishes its setup, as the setup steps in the app do, and looks out for the owner when it looks out for nobody yet. The command shows what background checks allow and accepts `--yes` for unattended use. Each bot also has its own switch in its profile.
 - **Several people.** One bot looks out for several people: the owner, and team members whose role sees the bot. `--add <person>` and `--remove <person>` say who (`owner`, or a member's name or id). Each person has their own check, with only what they may see, and an alert goes only to the person it is about. `--person <person> --alerts off` turns one person's check off, and `--notify off` still delivers their alerts but with no notification. Without `--person` these two are for the owner. Botkins keeps one routine for each person, named "<bot> looks out for <person>".
 - **Offers.** An alert may offer one thing the bot can do. `botkins bots alert <bot>` lists your alerts, `botkins bots alert <bot> <alert> take` takes the offer as a normal turn in your chat (nothing is approved ahead of time), and `later` brings it up again after a day.
@@ -984,6 +992,29 @@ Use `BOTKINS_DESKTOP=managed` to give a service with a personal display its own 
 
 In a private owner chat, ask the bot to open the login page and use a saved credential. When a Botkins Chromium browser extension is connected, `request_secure_input` (`operation: "page_fill"`) can fill a tab there directly (with optional `target: { browser, tabId }`, or auto-picked when one tab matches the origin) over the sealed Link channel without ever showing the secret to the bot. Otherwise, its `browser_form` tool opens or inspects the page on the host screen and returns the site, path and visible field keys. The secure request lets you pick the saved password and approve the destination. Botkins fills the fields in that browser. You can finish the login on the screen and close the browser from the same chat. The browser uses a temporary profile and a private pipe. The bot needs no Python environment, pip package or WebSocket script.
 
+
+## Channels
+
+Publish a bot to external messaging channels (**Slack** Socket Mode, **Telegram** long polling, **Discord** Gateway, or **iMessage** via local `imsg` or a paired Mac node host). All transports connect outbound with no public URL. See `docs/channels.md` for setup steps and the security model.
+
+```sh
+botkins channels list --json
+botkins channels add slack --bot Nova --label "Support Slack"
+botkins channels add imessage --bot Nova --node <mac-node-id>
+botkins channels bind <connection> <bot>
+botkins channels policy <connection> --dm pairing --groups off --tool-profile restricted
+botkins channels pair list --json
+botkins channels pair approve <CODE>
+botkins channels pause <connection>
+botkins channels resume <connection>
+botkins channels test <connection>
+botkins channels logs <connection> --limit 25 --json
+botkins channels remove <connection> --yes
+```
+
+- **Owner-only.** Only the owner configures channels (Desktop **Settings › Channels**, the owner's Phone for status/pairings/pause/resume, or the CLI at a terminal). No bot tool can create, re-bind, approve pairings for, or widen a channel.
+- **Secrets never go on the command line.** `botkins channels add` reads tokens from a hidden prompt at a terminal, or from standard input (`--secrets -` as JSON, e.g. `{"appToken":"…","botToken":"…"}`). Tokens are stored in the encrypted vault and never appear in `workspace.json`, logs, tool results, or transcripts.
+- **Safe defaults.** Every new channel starts with `--dm pairing` (strangers get a one-time code and no bot turn until approved), `--groups off`, and `--tool-profile restricted` (read-only knowledge tools only).
 
 ## Scripts and JSON
 
