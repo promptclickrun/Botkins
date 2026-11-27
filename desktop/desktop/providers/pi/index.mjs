@@ -813,11 +813,20 @@ class PiSession extends ProviderSession {
     const live = await this.start();
     await live.rpc.request({ type: "compact" }, 600000);
   }
+  /** Maps a Botkins server name to its harness name when a plugin alias is active (PR #321 compatibility). */
+  harnessServerName(name) {
+    for (const [alias, real] of this.aliases ?? []) if (real === name) return alias;
+    return name;
+  }
+  /** Maps a harness server name (including a plugin alias) back to Botkins' own server name. */
+  realServerName(name) {
+    return (name && this.aliases?.get(name)) ?? name;
+  }
   /** Classifies live runtime tools into Botkins bridge tools and per-server MCP tools with direct/indirect exposure. */
   classifyTools(live, state, allowedServers) {
     const rt = live?.runtime;
     const isOmp = this.provider.runtime === OMP_ID;
-    const knownServers = [BRIDGE, ...allowedServers];
+    const knownServers = [BRIDGE, ...allowedServers, ...(this.aliases?.keys() ?? [])];
     const directDump = isOmp && Array.isArray(state?.dumpTools) ? new Map(state.dumpTools.filter((t) => t?.name).map((t) => [String(t.name), t])) : null;
     const byServer = new Map();
     const record = (server, tool) => {
@@ -830,7 +839,7 @@ class PiSession extends ProviderSession {
     for (const tool of rt?.tools ?? []) {
       if (!tool?.name) continue;
       const [fallbackName, fallbackServer] = splitMcpTool(tool.name, knownServers);
-      const server = tool.mcpServerName ?? fallbackServer;
+      const server = this.realServerName(tool.mcpServerName ?? fallbackServer);
       if (!server || (server !== BRIDGE && !allowedServers.includes(server))) continue;
       const name = tool.mcpToolName ?? fallbackName;
       if (!name) continue;
@@ -853,14 +862,16 @@ class PiSession extends ProviderSession {
     }
     if (directDump) {
       for (const [fullName, tool] of directDump) {
-        const [name, server] = splitMcpTool(fullName, knownServers);
+        const [name, rawServer] = splitMcpTool(fullName, knownServers);
+        const server = this.realServerName(rawServer);
         if (!server || (server !== BRIDGE && !allowedServers.includes(server))) continue;
         record(server, { name, description: String(tool.description ?? ""), exposure: "direct" });
       }
     }
     if (isOmp) {
       for (const fullName of rt?.toolCommands ?? []) {
-        const [name, server] = splitMcpTool(fullName, knownServers);
+        const [name, rawServer] = splitMcpTool(fullName, knownServers);
+        const server = this.realServerName(rawServer);
         if (!server || (server !== BRIDGE && !allowedServers.includes(server))) continue;
         const exposure = directDump?.has(fullName) ? "direct" : "indirect";
         record(server, { name, description: "", exposure });
@@ -929,16 +940,28 @@ class PiSession extends ProviderSession {
         describedServers.set(name, JSON.stringify(entry));
       }
     }
+    const harnessName = (name) => this.harnessServerName(name);
+    const recordedState = (name) => {
+      const h = harnessName(name);
+      return live?.runtime?.mcpStates.get(h) ?? live?.runtime?.mcpStates.get(name);
+    };
+    const clearPendingState = (name) => {
+      const h = harnessName(name);
+      if (live?.runtime?.mcpStates.get(h) === "pending") live.runtime.mcpStates.delete(h);
+      if (live?.runtime?.mcpStates.get(name) === "pending") live.runtime.mcpStates.delete(name);
+    };
     const staleConfig = (name) => {
       if (!live?.registeredConfigs) return false;
       const current = describedServers.get(name);
-      const registered = live.registeredConfigs.get(name);
+      const h = harnessName(name);
+      const registered = live.registeredConfigs.get(h) ?? live.registeredConfigs.get(name);
       return registered !== undefined && current !== undefined && registered !== current;
     };
     const unregisteredOnWarmPi = (name) => {
       if (isOmp || !live) return false;
-      if (Array.isArray(live.runtime?.servers)) return !live.runtime.servers.some((s) => s.name === name);
-      if (live.registeredConfigs) return !live.registeredConfigs.has(name);
+      const h = harnessName(name);
+      if (Array.isArray(live.runtime?.servers)) return !live.runtime.servers.some((s) => s.name === h || s.name === name);
+      if (live.registeredConfigs) return !live.registeredConfigs.has(h) && !live.registeredConfigs.has(name);
       return false;
     };
     let state = live ? await live.rpc.request({ type: "get_state" }, activeTurn ? 1500 : 10000).catch(() => null) : null;
@@ -958,7 +981,7 @@ class PiSession extends ProviderSession {
         const toolsByServer = this.classifyTools(live, state, supportedNames);
         const bridgeReady = !this.provider.bridge || !this.spec.tools.length || (toolsByServer.get(BRIDGE)?.size ?? 0) > 0 || live.runtime.mcpStates.has(BRIDGE);
         const serversReady = supportedNames.every((name) =>
-          unregisteredOnWarmPi(name) || staleConfig(name) || (toolsByServer.get(name)?.size ?? 0) > 0 || live.runtime.mcpStates.has(name),
+          unregisteredOnWarmPi(name) || staleConfig(name) || (toolsByServer.get(name)?.size ?? 0) > 0 || !!recordedState(name),
         );
         if (bridgeReady && serversReady) break;
         await delay(INVENTORY_STEP_MS);
@@ -969,14 +992,14 @@ class PiSession extends ProviderSession {
     // When idle, probe unresolved registered servers so 0-tool connected, failed, needs-auth and pending are distinguished.
     if (!activeTurn && live && hasMcpCommand) {
       const unresolved = supportedNames.filter(
-        (name) => !unregisteredOnWarmPi(name) && !staleConfig(name) && !(toolsByServer.get(name)?.size > 0) && !live.runtime.mcpStates.has(name),
+        (name) => !unregisteredOnWarmPi(name) && !staleConfig(name) && !(toolsByServer.get(name)?.size > 0) && !recordedState(name),
       );
       if (unresolved.length > 0) {
         if (isOmp) {
           const probeDeadline = Date.now() + 2500;
           for (const name of unresolved) {
             if (this.turn || this.closed || Date.now() >= probeDeadline) break;
-            await this.probeOmpMcp(live, name);
+            await this.probeOmpMcp(live, harnessName(name));
           }
           state = (await live.rpc.request({ type: "get_state" }, 2000).catch(() => null)) ?? state;
         } else {
@@ -990,9 +1013,9 @@ class PiSession extends ProviderSession {
       if (!live) return { name, status: "not started", tools: [] };
       if (unregisteredOnWarmPi(name) || staleConfig(name)) return { name, status: "configured", tools: [] };
       const observed = [...(toolsByServer.get(name)?.values() ?? [])];
-      const recorded = live.runtime.mcpStates.get(name);
+      const recorded = recordedState(name);
       if (observed.length > 0 && (!recorded || recorded === "connected" || recorded === "pending")) {
-        if (recorded === "pending") live.runtime.mcpStates.delete(name);
+        if (recorded === "pending") clearPendingState(name);
         return { name, status: "connected", tools: observed };
       }
       if (recorded && recorded !== "connected") return { name, status: recorded, tools: [] };

@@ -624,3 +624,59 @@ test("Pi inventory reflects runtime connection states, direct vs indirect exposu
   session.turn = null;
   await session.close();
 });
+
+test("Pi inventory resolves aliased plugin MCP servers back to Botkins server names", { skip }, async (t) => {
+  const { provider } = setup();
+  t.after(() => provider.stop());
+  const pluginOk = "plugin_alpha__server_a1b2c3d4";
+  const pluginFail = "plugin_beta__server_e5f6a7b8";
+  const aliasOk = "bkp_aaaaaaaaaaaa";
+  const aliasFail = "bkp_bbbbbbbbbbbb";
+  const session = await provider.openSession(spec({
+    mcpServers: {
+      [pluginOk]: { type: "http", url: "http://127.0.0.1:9/alpha" },
+      [pluginFail]: { type: "http", url: "http://127.0.0.1:9/beta" },
+    },
+  }));
+  const live = await session.start();
+  // Match PR #321's PiSession.aliases contract (harness alias -> Botkins server name).
+  session.aliases = new Map([
+    [aliasOk, pluginOk],
+    [aliasFail, pluginFail],
+  ]);
+  live.registeredConfigs = new Map([
+    [aliasOk, JSON.stringify(provider.serverRecord(session.spec.mcpServers[pluginOk]))],
+    [aliasFail, JSON.stringify(provider.serverRecord(session.spec.mcpServers[pluginFail]))],
+  ]);
+  provider.observeRuntime(live, {
+    type: "extension_ui_request",
+    method: "setStatus",
+    statusKey: INVENTORY,
+    statusText: JSON.stringify({
+      tools: [
+        { name: `mcp__${aliasOk}__search`, description: "Plugin search", active: true, exposure: "direct" },
+        { name: "mcp__bkp_zzzzzzzzzzzz__stale", description: "Revoked plugin tool", active: true, exposure: "direct" },
+      ],
+      servers: [
+        { name: aliasOk, enabled: true, exposure: "direct" },
+        { name: aliasFail, enabled: true, exposure: "direct" },
+      ],
+    }),
+  });
+  provider.observeRuntime(live, {
+    type: "extension_ui_request",
+    method: "notify",
+    message: `${aliasOk}: connected, 1 tools (direct)\n${aliasFail}: failed (direct)`,
+  });
+
+  const inv = await session.inventory();
+  assert.deepEqual(inv.servers, [
+    { name: pluginOk, status: "connected" },
+    { name: pluginFail, status: "failed" },
+  ]);
+  const tool = inv.choices.find((c) => c.kind === "Tool" && c.source === pluginOk && c.name === "search");
+  assert.equal(tool?.exposure, "direct");
+  assert.ok(!inv.choices.some((c) => c.source?.startsWith("bkp_") || c.name === "stale"), "internal aliases and revoked plugin tools stay hidden");
+  await session.close();
+});
+

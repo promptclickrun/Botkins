@@ -288,3 +288,71 @@ test("OMP inventory distinguishes direct, indirect, unavailable, unobservable an
   session.turn = null;
   await session.close();
 });
+
+test("OMP inventory maps aliased plugin servers across tools and /mcp test probes", { skip }, async (t) => {
+  const { provider } = setup();
+  t.after(() => provider.stop());
+  const pluginOk = "plugin_alpha__server_a1b2c3d4";
+  const pluginCmd = "plugin_gamma__server_11223344";
+  const pluginFail = "plugin_beta__server_e5f6a7b8";
+  const aliasOk = "bkp_aaaaaaaaaaaa";
+  const aliasCmd = "bkp_cccccccccccc";
+  const aliasFail = "bkp_bbbbbbbbbbbb";
+  const session = await provider.openSession(spec({
+    mcpServers: {
+      [pluginOk]: { type: "http", url: "http://127.0.0.1:9/alpha" },
+      [pluginCmd]: { type: "http", url: "http://127.0.0.1:9/gamma" },
+      [pluginFail]: { type: "http", url: "http://127.0.0.1:9/beta" },
+    },
+  }));
+  const live = await session.start();
+  session.aliases = new Map([
+    [aliasOk, pluginOk],
+    [aliasCmd, pluginCmd],
+    [aliasFail, pluginFail],
+  ]);
+  const probed = [];
+  const origRequest = live.rpc.request.bind(live.rpc);
+  live.rpc.request = async (cmd, timeout) => {
+    if (cmd.type === "get_state") {
+      return {
+        sessionId: "omp-session-alias",
+        isSettled: true,
+        dumpTools: [
+          { name: `mcp__${aliasOk}_ping`, description: "Aliased direct ping" },
+          { name: "mcp__bkp_zzzzzzzzzzzz_revoked", description: "Revoked plugin tool" },
+        ],
+      };
+    }
+    if (cmd.type === "get_available_commands") {
+      return { commands: [{ name: "mcp", description: "Manage MCP", source: "builtin" }] };
+    }
+    if (cmd.type === "prompt" && cmd.message?.startsWith("/mcp test ")) {
+      probed.push(cmd.message);
+      provider.observeRuntime(live, {
+        type: "command_output",
+        text: `Connection to "${aliasFail}" failed: connection refused`,
+      });
+      return { ok: true };
+    }
+    return origRequest(cmd, timeout);
+  };
+  provider.observeRuntime(live, {
+    type: "notice",
+    source: "toolCommands",
+    message: `Tool commands: added mcp__${aliasCmd}_lookup`,
+  });
+
+  const inv = await session.inventory();
+  assert.deepEqual(probed, [`/mcp test ${aliasFail}`], "OMP probes unresolved aliased server by its harness alias");
+  assert.deepEqual(inv.servers, [
+    { name: pluginOk, status: "connected" },
+    { name: pluginCmd, status: "connected" },
+    { name: pluginFail, status: "failed" },
+  ]);
+  assert.equal(inv.choices.find((c) => c.source === pluginOk && c.name === "ping")?.exposure, "direct");
+  assert.equal(inv.choices.find((c) => c.source === pluginCmd && c.name === "lookup")?.exposure, "indirect");
+  assert.ok(!inv.choices.some((c) => c.source?.startsWith("bkp_") || c.name === "revoked"), "internal aliases and revoked tools stay hidden");
+  await session.close();
+});
+
