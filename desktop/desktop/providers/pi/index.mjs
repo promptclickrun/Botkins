@@ -28,6 +28,7 @@ import { SessionStore, resumeOrRecover, serversWithTokens, uuidFor } from "../se
 import { skillChoices, skillSupport } from "../skills.mjs";
 import { displayValue } from "../../display.mjs";
 import { PLAN_INSTRUCTIONS, updatePlanTool } from "./plan.mjs";
+import { NativeDialogs } from "./dialogs.mjs";
 
 export const PI_ID = "pi";
 export const OMP_ID = "omp";
@@ -477,6 +478,7 @@ class PiSession extends ProviderSession {
       return { text: reply };
     } finally {
       // A call that never ran (stopped, or the process went away) must not stay Running.
+      if (this.live) this.provider.cancelDialogs(this.live);
       if (this.turn) this.stopRows(this.turn);
       stop();
       this.turn = null;
@@ -497,6 +499,7 @@ class PiSession extends ProviderSession {
       // A refused abort leaves the original operation running. Preserve the input for the
       // workspace's ordinary queue. A dead RPC also rejects the outstanding settle.
       turn.redirected = true;
+      this.provider.cancelDialogs(this.live);
       aborting = rpc.request({ type: "abort" }, 0).catch(error => {
         for (const item of pending.splice(0)) item.ack.reject(error);
         aborting = null;
@@ -681,6 +684,7 @@ class PiSession extends ProviderSession {
     }
   }
   interrupt() {
+    if (this.live) this.provider.cancelDialogs(this.live);
     try {
       this.live?.rpc.write({ type: "abort" });
     } catch {
@@ -972,10 +976,16 @@ export class PiProvider extends ModelProvider {
       writeFileSync(live.config, "mcp:\n  enableProjectConfig: false\nenabledProviders: []\n", { mode: 0o600 });
     }
   }
-  /** The extension dialogs. Only Botkins' approval question is answered; any other is cancelled. */
+  cancelDialogs(live) {
+    live?.dialogs?.stop();
+  }
+  /** Route native extension dialogs separately from Botkins' per-tool permission selector. */
   async dialog(live, request) {
-    if (!["select", "confirm", "input", "editor"].includes(request.method)) return;
     const title = String(request.title ?? "");
+    if (request.method !== "select" || !title.startsWith(ASK + " ")) {
+      live.dialogs ??= new NativeDialogs();
+      return live.dialogs.handle(live, request);
+    }
     let allow = false;
     if (request.method === "select" && title.startsWith(ASK + " ")) {
       let call = {};

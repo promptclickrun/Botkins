@@ -1842,7 +1842,7 @@ export class Workspace {
           preview: request.planContent,
           choices: request.actions,
           freeform: true,
-        });
+        }, undefined, { signal: request.signal });
         return answer.action === "answer" && request.actions.includes(answer.value)
           ? { approved: true, selectedAction: answer.value }
           : { approved: false, feedback: answer.value };
@@ -1923,6 +1923,7 @@ export class Workspace {
       pluginHooks: access.plugins && copilotPlugins ? pluginSpec.hooks : undefined,
       pluginRevision: this.plugins.generation,
       history: () => chat.helper ? (chat.helperMessages ?? []) : (chat.compacted ? chat.messages.slice(chat.compacted.through) : chat.messages ?? []),
+      nativeDialogs: !!run && !chat.helper && !run.scheduleId && !run.taskId && !run.panelId && !run.reaction,
       handlers: handlers || null,
     });
     // For group members, openSession must not pre-populate `through` with chat.messages.length
