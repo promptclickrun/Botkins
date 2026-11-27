@@ -1,0 +1,294 @@
+/* A project's Jobs (src/ProjectJobs.tsx). Colors come from the tokens in tokens.css. */
+.job-checkout-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 60%;
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: var(--sunken);
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: calc(11.5px * var(--text-scale));
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.job-checkout-chip.warn {
+  background: var(--warning-soft);
+  color: var(--ink);
+}
+.job-composer {
+  display: grid;
+  gap: 12px;
+}
+.job-draft {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+.job-draft + .job-draft {
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+.job-draft-n {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  margin-top: 8px;
+  border-radius: 999px;
+  background: var(--sunken);
+  color: var(--muted);
+  font-size: calc(12px * var(--text-scale));
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+.job-draft-body {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  gap: 8px;
+}
+.job-draft textarea {
+  width: 100%;
+  min-width: 0;
+  resize: vertical;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: 9px 11px;
+  background: var(--surface);
+  font: inherit;
+  color: inherit;
+}
+.job-bots {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.job-bot {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px 3px 4px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--muted);
+  font-size: calc(13px * var(--text-scale));
+}
+.job-bot[aria-pressed="true"] {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--ink);
+  font-weight: 600;
+}
+.job-options {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 10px;
+}
+.job-options .spacer {
+  flex: 1 1 auto;
+}
+.job-seg {
+  display: inline-flex;
+  padding: 3px;
+  gap: 2px;
+  border-radius: var(--radius-sm);
+  background: var(--sunken);
+}
+.job-seg button {
+  padding: 5px 11px;
+  min-height: 28px;
+  border-radius: calc(var(--radius-sm) - 2px);
+  font-size: calc(13px * var(--text-scale));
+  color: var(--muted);
+}
+.job-seg button[aria-checked="true"] {
+  background: var(--surface);
+  color: var(--ink);
+  font-weight: 600;
+  box-shadow: 0 0 0 1px var(--line);
+}
+.job-carry {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: calc(13px * var(--text-scale));
+}
+.job-empty,
+.job-muted {
+  color: var(--muted);
+  font-size: calc(13px * var(--text-scale));
+}
+.job-counts {
+  text-transform: none;
+  letter-spacing: 0;
+  font-weight: 500;
+}
+
+/* "Where it works" */
+.job-facts {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 8px 16px;
+  margin: 0;
+  font-size: calc(13px * var(--text-scale));
+}
+.job-facts dt {
+  color: var(--muted);
+}
+.job-facts dd {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.job-commands {
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--sunken);
+  font-family: var(--font-mono);
+  font-size: calc(12px * var(--text-scale));
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.job-allow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 12px;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--warning-soft);
+  font-size: calc(13px * var(--text-scale));
+}
+.job-allow span {
+  flex: 1;
+}
+
+/* The feed */
+.job-item + .job-item {
+  border-top: 1px solid var(--line);
+}
+.job-item.open {
+  background: color-mix(in srgb, var(--ink) 2.5%, transparent);
+}
+.job-row .row-main {
+  align-items: flex-start;
+  border: 0;
+  background: transparent;
+  text-align: left;
+  padding: 0;
+  font: inherit;
+  color: inherit;
+}
+.job-row .row-title,
+.job-row .row-sub {
+  max-width: 100%;
+}
+.job-stage {
+  flex: none;
+  padding: 2px 9px;
+  border-radius: 999px;
+  background: var(--sunken);
+  color: var(--muted);
+  font-size: calc(11.5px * var(--text-scale));
+  font-weight: 600;
+  white-space: nowrap;
+}
+.job-stage.working,
+.job-stage.setting-up {
+  background: var(--info-soft);
+  color: var(--info);
+}
+.job-stage.needs-you,
+.job-stage.setup-failed {
+  background: var(--warning-soft);
+  color: var(--ink);
+}
+.job-stage.finished {
+  background: var(--success-soft);
+  color: var(--success);
+}
+.job-detail {
+  display: grid;
+  gap: 10px;
+  padding: 2px 16px 14px 60px;
+  font-size: calc(13px * var(--text-scale));
+}
+.job-prompt {
+  margin: 0;
+  color: var(--muted);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.job-line {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 0;
+}
+.job-line code,
+.job-facts code,
+.job-muted code {
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+}
+.job-files {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border-radius: var(--radius-sm);
+  background: var(--sunken);
+}
+.job-files li {
+  display: flex;
+  gap: 10px;
+  padding: 5px 10px;
+  font-family: var(--font-mono);
+  font-size: calc(12px * var(--text-scale));
+}
+.job-files li + li {
+  border-top: 1px solid var(--line);
+}
+.job-file {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.job-diff em {
+  font-style: normal;
+}
+.job-diff .plus {
+  color: var(--success);
+}
+.job-diff .minus {
+  color: var(--danger);
+}
+.job-note {
+  padding: 9px 11px;
+  border-radius: var(--radius-sm);
+  background: var(--sunken);
+  overflow-wrap: anywhere;
+}
+.job-note.warn {
+  background: var(--warning-soft);
+}
+.job-note.danger {
+  background: var(--danger-soft);
+}
+.job-actions {
+  margin: 2px 0 0;
+  flex-wrap: wrap;
+}
+.job-actions .danger {
+  color: var(--danger);
+}

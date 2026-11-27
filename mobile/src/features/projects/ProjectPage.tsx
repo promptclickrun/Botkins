@@ -10,12 +10,13 @@ import { PanelCard as SpacePanelCard } from "@/features/spaces/SpaceView";
 import { PanelCard } from "@/features/today/Today";
 import { ArtifactRow } from "@/features/artifacts/ArtifactBits";
 import type { Artifact, ChatMode, Panel, Project, ProjectColor, ProjectTodo } from "@/link/types";
-import { useBots, useCan, useCapability, useChats, useOnline, usePart } from "@/state/hooks";
+import { useBots, useCan, useCapability, useChats, useMember, useOnline, usePart } from "@/state/hooks";
 import { api, attempt } from "@/state/link";
 import { useApp } from "@/state/store";
 import { ago } from "@/state/time";
 import { BotAvatar, Button, Chip, EmptyState, Field, Group, HoldMenu, IconButton, IconTile, Label, Loading, Page, Row, Segmented, space, T, Tap, useTheme } from "@/ui";
 import { CloneForm, FolderChoice } from "./ProjectFolders";
+import { Jobs } from "./Jobs";
 import { PROJECT_COLORS, projectColor } from "./colors";
 import { canUseProject, globalAccess, grantOf, toggleProject } from "@/features/bots/projectAccess";
 import { ACCESS_REASON, accessVia, artifactCount, folderLabel, MODES, moveSteps, orderedTodos } from "./logic";
@@ -43,6 +44,10 @@ function BarButton({ title, onPress }: { title: string; onPress: () => void }) {
 /** Under the name: the to-dos' progress, the project's folders, and its one main action, a new chat in it. */
 function Summary({ project }: { project: Project }) {
   const theme = useTheme();
+  // With Jobs, Start job is the page's one main action, and a plain chat is the quieter one.
+  const jobsOn = useCapability("project-jobs-v1");
+  const member = useMember();
+  const jobs = jobsOn && !member;
   const { colors } = theme;
   const canChat = useCan("agents", "chat");
   const color = projectColor(project.color, theme);
@@ -65,7 +70,7 @@ function Summary({ project }: { project: Project }) {
           {folders.length > 1 && <Chip label={"+" + (folders.length - 1) + (folders.length === 2 ? " folder" : " folders")} />}
         </View>
       )}
-      {canChat && <Button title="New chat in this project" icon={SquarePen} wide onPress={() => router.push({ pathname: "/chat/new", params: { project: project.id } } as unknown as Href)} />}
+      {canChat && <Button title="New chat in this project" icon={SquarePen} variant={jobs ? "secondary" : "primary"} wide onPress={() => router.push({ pathname: "/chat/new", params: { project: project.id } } as unknown as Href)} />}
     </View>
   );
 }
@@ -73,10 +78,15 @@ function Summary({ project }: { project: Project }) {
 function ProjectDetail({ project }: { project: Project }) {
   const theme = useTheme();
   const [editing, setEditing] = useState(false);
+  // Jobs are the owner's ("project-jobs-v1"): the page opens on them, as the computer's does.
+  const jobsOn = useCapability("project-jobs-v1");
+  const member = useMember();
+  const jobs = jobsOn && !member;
   return (
     <Page title={editing ? undefined : project.name} caption={editing ? undefined : project.description} keyboard>
       <Stack.Screen options={{ headerRight: () => <BarButton title={editing ? "Cancel" : "Edit"} onPress={() => setEditing(!editing)} /> }} />
       {editing ? <EditProject project={project} onDone={() => setEditing(false)} /> : <Summary project={project} />}
+      {jobs && <Jobs project={project} />}
       <Todos project={project} />
       <Chats project={project} />
       <Artifacts project={project} />

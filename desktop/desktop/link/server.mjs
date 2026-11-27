@@ -1898,7 +1898,6 @@ export class LinkHost extends EventEmitter {
   memberView(principal, method, args, state) {
     const team = this.store.data.team;
     let view = viewOf(team, principal.memberId);
-    if (method === "setChatFlags" && args[1]?.archived && state.chats?.some(c => c.id === args[0] && c.main)) throw new Failure("Main chat stays in your chats.");
     if (method === "setBotFlags") view = withBotFlags(view, String(args[0]), args[1]);
     else if (method === "reorderBots") view = { ...view, order: (Array.isArray(args[0]) ? args[0] : []).filter((id) => typeof id === "string").slice(0, 500) };
     else if (method === "setChatFlags") {
@@ -2343,7 +2342,9 @@ export class LinkHost extends EventEmitter {
     }
     if (principal.kind === "member") {
       // A member's own view: kept here, not in the workspace, so it is nobody else's.
-      if (method === "setChatFlags" || method === "markChatsRead" || method === "reorderBots") return this.memberView(principal, method, args, state);
+      // Archiving their own Main chat retires it for everyone it belongs to (only them): the app does that.
+      const retiring = method === "setChatFlags" && args[1]?.archived === true && state.chats?.some(c => c.id === args[0] && c.main && c.createdBy === principal.memberId);
+      if (!retiring && (method === "setChatFlags" || method === "markChatsRead" || method === "reorderBots")) return this.memberView(principal, method, args, state);
       if (method === "setPreferences" && args[0] && typeof args[0] === "object" && !Array.isArray(args[0]) && Object.hasOwn(args[0], "showRoutineChats")) {
         if (typeof args[0].showRoutineChats !== "boolean") throw new Failure("Choose on or off");
         this.memberView(principal, method, [{ showRoutineChats: args[0].showRoutineChats }], state);

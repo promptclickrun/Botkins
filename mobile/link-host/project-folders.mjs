@@ -6,6 +6,8 @@ export function folderFor(project, chat) {
     try { return path && statSync(path).isDirectory(); }
     catch { return false; }
   };
+  // A job in its own worktree works there until it is brought in or its worktree removed (desktop/jobs.mjs).
+  if (chat?.job?.where === "worktree" && chat.job.state === "open" && exists(chat.job.path)) return chat.job.path;
   if (project?.folders?.includes(chat?.folder) && exists(chat.folder)) return chat.folder;
   return exists(project?.folder) ? project.folder : null;
 }

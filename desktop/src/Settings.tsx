@@ -468,7 +468,7 @@ export default function Settings({
           )}
           {section === "sidebar" && <SidebarSettings settings={state.settings} spaces={hasSpaces(state)} fail={fail} />}
           {section === "chats" && <>
-            <ChatDisplaySettings settings={{ ...settings, showUpdates: preferences.showUpdates, showRoutineChats: preferences.showRoutineChats }} change={changePreferences} chatMode={state.proactive?.chatMode} fail={fail} />
+            <ChatDisplaySettings settings={{ ...settings, showUpdates: preferences.showUpdates, showRoutineChats: preferences.showRoutineChats }} change={changePreferences} chatMode={state.proactive?.chatMode} mainChats={!state.remote?.using || state.remote.using.capabilities.includes("main-chat-v1")} fail={fail} />
             {(!memberHost || teamCan(state, "settings", "manage")) && <>
               <SummarySettings settings={preferences} change={changePreferences} fail={fail} />
               <BehaviorSettings settings={preferences} change={changePreferences} fail={fail} />
@@ -568,7 +568,7 @@ export default function Settings({
                           <summary>Commands, skills and tools</summary>
                           {catalog.choices.map((c) => (
                             <small key={c.command}>
-                              /{c.command} · {c.source}
+                              /{c.command} · {c.source}{c.exposure === "indirect" ? " · indirect" : ""}
                             </small>
                           ))}
                         </details>

@@ -2,11 +2,9 @@
 // Workflows live beside existing Routines in workspace state (`state.workflows` and `state.workflowRuns`),
 // so existing cron routines keep working unchanged with zero data loss.
 
-import { execFile } from "node:child_process";
 import { createHmac, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
-import { promisify } from "node:util";
 import { defineTool } from "./providers/provider.mjs";
 import { nextTime } from "./panels.mjs";
 import { compileCadence, describeCadence, localZone } from "./routines.mjs";
@@ -23,9 +21,13 @@ import {
   validateWorkflow,
   isValidFieldName,
 } from "./workflow-fields.mjs";
+import {
+  WorkflowGithubAuth,
+  createDefaultGithubPoller,
+  findMentionInText,
+  parseMentionHandles,
+} from "./workflow-github.mjs";
 import { exportWorkflow, parseImportedWorkflow } from "./workflow-port.mjs";
-
-const execFileAsync = promisify(execFile);
 
 const MAX_RUNS = 200;
 const MAX_WEBHOOK_BYTES = 64 * 1024;
@@ -218,25 +220,23 @@ function summarizeCiRollup(rollup) {
   return "mixed";
 }
 
-async function defaultGithubPoller(repo) {
-  const { stdout } = await execFileAsync(
-    "gh",
-    [
-      "pr",
-      "list",
-      "--repo",
-      repo,
-      "--state",
-      "open",
-      "--limit",
-      "25",
-      "--json",
-      "number,title,author,url,headRefName,state,reviewDecision,statusCheckRollup,createdAt,updatedAt",
-    ],
-    { timeout: 20000, maxBuffer: 1024 * 1024 },
-  );
-  const parsed = JSON.parse(stdout || "[]");
-  return Array.isArray(parsed) ? parsed : [];
+function formatGithubLabels(labels) {
+  if (typeof labels === "string") return labels;
+  if (!Array.isArray(labels)) return "";
+  return labels
+    .map((l) => (typeof l === "string" ? l : l?.name || ""))
+    .filter(Boolean)
+    .join(", ");
+}
+
+function githubUpdateFingerprint(item, labels) {
+  return JSON.stringify([
+    item.updatedAt || item.updated_at || "",
+    String(item.state || "").toLowerCase(),
+    item.title || "",
+    item.body || "",
+    labels,
+  ]);
 }
 
 /** Strips vault references when sending workflows over sync / RPC to remote devices. */
@@ -255,16 +255,32 @@ export function sanitizeWorkflow(wf) {
 export class Workflows {
   constructor(ws, options = {}) {
     this.ws = ws;
-    this.githubPoller = options.githubPoller ?? defaultGithubPoller;
+    this.githubAuth = options.githubAuth ?? new WorkflowGithubAuth();
+    this.githubPoller = options.githubPoller ?? createDefaultGithubPoller(this.githubAuth);
     this.modelRunner = options.modelRunner ?? null;
     this.waitingTurns = new Map(); // turnRunId -> { resolve, reject, workflowRunId, nodeId, structuredAnswer }
     this.activeExecutions = new Map(); // workflowRunId -> Promise
     this.githubPolling = new Set(); // `${workflowId}:${nodeId}`
     this.githubLastPoll = new Map(); // `${workflowId}:${nodeId}` -> ms
-    this.githubCursors = new Map(); // `${workflowId}:${nodeId}` -> { initialized, prs: Map<number, { review, ci }> }
+    this.githubCursors = new Map(); // `${workflowId}:${nodeId}` -> { initialized, prs, issues, comments }
 
     this.ensureState();
     this.bindEvents();
+  }
+
+  /** Local GitHub CLI auth status for Workflow GitHub triggers. */
+  async githubStatus(options = {}) {
+    return await this.githubAuth.status({ includeRepos: options?.includeRepos === true });
+  }
+
+  /** Starts an interactive `gh auth login --web` device-code sign-in on this host. */
+  async githubSignInStart() {
+    return await this.githubAuth.startSignIn();
+  }
+
+  /** Cancels an in-progress `gh auth login` device-code sign-in on this host. */
+  async githubSignInCancel() {
+    return await this.githubAuth.cancelSignIn();
   }
 
   ensureState() {
@@ -659,56 +675,229 @@ export class Workflows {
     if (dirty) this.ws.save();
   }
 
-  /** Polls GitHub PRs via `gh` CLI (or injected poller) and fires matching events. */
+  /** Polls GitHub PRs, issues, comments, and mentions via `gh` CLI (or injected poller) and fires matching events. */
   async pollGithubTrigger(wf, node, key) {
     if (this.githubPolling.has(key)) return;
     this.githubPolling.add(key);
     try {
       const repo = clampStr(node.config?.repo, 160);
       if (!repo || !/^[\w.-]+\/[\w.-]+$/.test(repo)) return;
-      const prs = await this.githubPoller(repo, node.config);
+      const rawBatch = await this.githubPoller(repo, node.config);
+      const batch = Array.isArray(rawBatch)
+        ? { prs: rawBatch, issues: [], comments: [], viewerLogin: "" }
+        : {
+            prs: Array.isArray(rawBatch?.prs) ? rawBatch.prs : [],
+            issues: Array.isArray(rawBatch?.issues) ? rawBatch.issues : [],
+            comments: Array.isArray(rawBatch?.comments) ? rawBatch.comments : [],
+            viewerLogin: typeof rawBatch?.viewerLogin === "string" ? rawBatch.viewerLogin.trim().replace(/^@/, "") : "",
+          };
+
       let cursor = this.githubCursors.get(key);
       const eventsFilter = normalizeStatusList(node.config?.events);
       const wants = (ev) => !eventsFilter.length || eventsFilter.includes(ev);
       const branchFilter = clampStr(node.config?.branch, 120).toLowerCase();
       const authorFilter = clampStr(node.config?.author, 80).toLowerCase();
+      const botHandles = parseMentionHandles(node.config?.mentionHandle);
+      const userHandles = batch.viewerLogin ? parseMentionHandles(batch.viewerLogin, "") : [];
+      const checkUserMention = (text) => (wants("user_mentioned") && userHandles.length ? findMentionInText(text, userHandles) : null);
+      const checkBotMention = (text) => (wants("bot_mentioned") && botHandles.length ? findMentionInText(text, botHandles) : null);
 
       if (!cursor) {
         // First poll seeds current state unless `fireInitial` is explicitly set (useful in tests).
-        cursor = { initialized: true, prs: new Map() };
-        for (const pr of prs) {
+        cursor = { initialized: true, prs: new Map(), issues: new Map(), comments: new Map() };
+        for (const pr of batch.prs) {
           const ci = summarizeCiRollup(pr.statusCheckRollup);
           const review = String(pr.reviewDecision || "NONE").toLowerCase();
-          cursor.prs.set(pr.number, { review, ci });
-          if (node.config?.fireInitial && wants("pr_opened")) {
-            this.fireGithubEvent(wf, node, repo, "pr_opened", pr, review, ci, branchFilter, authorFilter);
+          const labels = formatGithubLabels(pr.labels);
+          const fp = githubUpdateFingerprint(pr, labels);
+          const text = `${pr.title || ""}\n${pr.body || ""}`;
+          const userMatch = checkUserMention(text);
+          const botMatch = checkBotMention(text);
+          cursor.prs.set(pr.number, { review, ci, fp, userMentioned: Boolean(userMatch), botMentioned: Boolean(botMatch) });
+          if (node.config?.fireInitial) {
+            if (wants("pr_opened")) {
+              this.fireGithubEvent(wf, node, repo, "pr_opened", pr, { itemType: "pr", review, ci, labels, branchFilter, authorFilter });
+            }
+            if (userMatch) {
+              this.fireGithubEvent(wf, node, repo, "user_mentioned", pr, { itemType: "pr", review, ci, labels, mention: userMatch, branchFilter, authorFilter });
+            }
+            if (botMatch) {
+              this.fireGithubEvent(wf, node, repo, "bot_mentioned", pr, { itemType: "pr", review, ci, labels, mention: botMatch, branchFilter, authorFilter });
+            }
+          }
+        }
+        for (const issue of batch.issues) {
+          const labels = formatGithubLabels(issue.labels);
+          const fp = githubUpdateFingerprint(issue, labels);
+          const text = `${issue.title || ""}\n${issue.body || ""}`;
+          const userMatch = checkUserMention(text);
+          const botMatch = checkBotMention(text);
+          cursor.issues.set(issue.number, { fp, userMentioned: Boolean(userMatch), botMentioned: Boolean(botMatch) });
+          if (node.config?.fireInitial) {
+            if (wants("issue_opened")) {
+              this.fireGithubEvent(wf, node, repo, "issue_opened", issue, { itemType: "issue", labels, branchFilter, authorFilter });
+            }
+            if (userMatch) {
+              this.fireGithubEvent(wf, node, repo, "user_mentioned", issue, { itemType: "issue", labels, mention: userMatch, branchFilter, authorFilter });
+            }
+            if (botMatch) {
+              this.fireGithubEvent(wf, node, repo, "bot_mentioned", issue, { itemType: "issue", labels, mention: botMatch, branchFilter, authorFilter });
+            }
+          }
+        }
+        for (const comment of batch.comments) {
+          const cid = String(comment.id ?? comment.url ?? "");
+          if (!cid) continue;
+          const labels = formatGithubLabels(comment.labels);
+          const fp = githubUpdateFingerprint(comment, labels);
+          const userMatch = checkUserMention(comment.body || "");
+          const botMatch = checkBotMention(comment.body || "");
+          cursor.comments.set(cid, { fp, userMentioned: Boolean(userMatch), botMentioned: Boolean(botMatch) });
+          if (node.config?.fireInitial) {
+            if (wants("issue_comment")) {
+              this.fireGithubEvent(wf, node, repo, "issue_comment", comment, { itemType: "comment", labels, branchFilter, authorFilter });
+            }
+            if (userMatch) {
+              this.fireGithubEvent(wf, node, repo, "user_mentioned", comment, { itemType: "comment", labels, mention: userMatch, branchFilter, authorFilter });
+            }
+            if (botMatch) {
+              this.fireGithubEvent(wf, node, repo, "bot_mentioned", comment, { itemType: "comment", labels, mention: botMatch, branchFilter, authorFilter });
+            }
           }
         }
         this.githubCursors.set(key, cursor);
         return;
       }
 
-      for (const pr of prs) {
+      // 1. Pull requests
+      for (const pr of batch.prs) {
         const ci = summarizeCiRollup(pr.statusCheckRollup);
         const review = String(pr.reviewDecision || "NONE").toLowerCase();
+        const labels = formatGithubLabels(pr.labels);
+        const fp = githubUpdateFingerprint(pr, labels);
+        const text = `${pr.title || ""}\n${pr.body || ""}`;
+        const userMatch = checkUserMention(text);
+        const botMatch = checkBotMention(text);
         const prev = cursor.prs.get(pr.number);
         if (!prev) {
-          cursor.prs.set(pr.number, { review, ci });
+          cursor.prs.set(pr.number, { review, ci, fp, userMentioned: Boolean(userMatch), botMentioned: Boolean(botMatch) });
           if (wants("pr_opened")) {
-            this.fireGithubEvent(wf, node, repo, "pr_opened", pr, review, ci, branchFilter, authorFilter);
+            this.fireGithubEvent(wf, node, repo, "pr_opened", pr, { itemType: "pr", review, ci, labels, branchFilter, authorFilter });
+          }
+          if (userMatch) {
+            this.fireGithubEvent(wf, node, repo, "user_mentioned", pr, { itemType: "pr", review, ci, labels, mention: userMatch, branchFilter, authorFilter });
+          }
+          if (botMatch) {
+            this.fireGithubEvent(wf, node, repo, "bot_mentioned", pr, { itemType: "pr", review, ci, labels, mention: botMatch, branchFilter, authorFilter });
           }
         } else {
           if (prev.review !== review) {
             prev.review = review;
             if (wants("pr_review")) {
-              this.fireGithubEvent(wf, node, repo, "pr_review", pr, review, ci, branchFilter, authorFilter);
+              this.fireGithubEvent(wf, node, repo, "pr_review", pr, { itemType: "pr", review, ci, labels, branchFilter, authorFilter });
             }
           }
           if (prev.ci !== ci) {
             prev.ci = ci;
             if (wants("ci_status")) {
-              this.fireGithubEvent(wf, node, repo, "ci_status", pr, review, ci, branchFilter, authorFilter);
+              this.fireGithubEvent(wf, node, repo, "ci_status", pr, { itemType: "pr", review, ci, labels, branchFilter, authorFilter });
             }
+          }
+          if (prev.fp !== fp) {
+            prev.fp = fp;
+            if (wants("pr_updated")) {
+              this.fireGithubEvent(wf, node, repo, "pr_updated", pr, { itemType: "pr", review, ci, labels, branchFilter, authorFilter });
+            }
+          }
+          if (userMatch && !prev.userMentioned) {
+            prev.userMentioned = true;
+            this.fireGithubEvent(wf, node, repo, "user_mentioned", pr, { itemType: "pr", review, ci, labels, mention: userMatch, branchFilter, authorFilter });
+          } else if (!userMatch) {
+            prev.userMentioned = false;
+          }
+          if (botMatch && !prev.botMentioned) {
+            prev.botMentioned = true;
+            this.fireGithubEvent(wf, node, repo, "bot_mentioned", pr, { itemType: "pr", review, ci, labels, mention: botMatch, branchFilter, authorFilter });
+          } else if (!botMatch) {
+            prev.botMentioned = false;
+          }
+        }
+      }
+
+      // 2. Issues
+      for (const issue of batch.issues) {
+        const labels = formatGithubLabels(issue.labels);
+        const fp = githubUpdateFingerprint(issue, labels);
+        const text = `${issue.title || ""}\n${issue.body || ""}`;
+        const userMatch = checkUserMention(text);
+        const botMatch = checkBotMention(text);
+        const prev = cursor.issues.get(issue.number);
+        if (!prev) {
+          cursor.issues.set(issue.number, { fp, userMentioned: Boolean(userMatch), botMentioned: Boolean(botMatch) });
+          if (wants("issue_opened")) {
+            this.fireGithubEvent(wf, node, repo, "issue_opened", issue, { itemType: "issue", labels, branchFilter, authorFilter });
+          }
+          if (userMatch) {
+            this.fireGithubEvent(wf, node, repo, "user_mentioned", issue, { itemType: "issue", labels, mention: userMatch, branchFilter, authorFilter });
+          }
+          if (botMatch) {
+            this.fireGithubEvent(wf, node, repo, "bot_mentioned", issue, { itemType: "issue", labels, mention: botMatch, branchFilter, authorFilter });
+          }
+        } else {
+          if (prev.fp !== fp) {
+            prev.fp = fp;
+            if (wants("issue_updated")) {
+              this.fireGithubEvent(wf, node, repo, "issue_updated", issue, { itemType: "issue", labels, branchFilter, authorFilter });
+            }
+          }
+          if (userMatch && !prev.userMentioned) {
+            prev.userMentioned = true;
+            this.fireGithubEvent(wf, node, repo, "user_mentioned", issue, { itemType: "issue", labels, mention: userMatch, branchFilter, authorFilter });
+          } else if (!userMatch) {
+            prev.userMentioned = false;
+          }
+          if (botMatch && !prev.botMentioned) {
+            prev.botMentioned = true;
+            this.fireGithubEvent(wf, node, repo, "bot_mentioned", issue, { itemType: "issue", labels, mention: botMatch, branchFilter, authorFilter });
+          } else if (!botMatch) {
+            prev.botMentioned = false;
+          }
+        }
+      }
+
+      // 3. Issue & PR comments
+      for (const comment of batch.comments) {
+        const cid = String(comment.id ?? comment.url ?? "");
+        if (!cid) continue;
+        const labels = formatGithubLabels(comment.labels);
+        const fp = githubUpdateFingerprint(comment, labels);
+        const userMatch = checkUserMention(comment.body || "");
+        const botMatch = checkBotMention(comment.body || "");
+        const prev = cursor.comments.get(cid);
+        if (!prev) {
+          cursor.comments.set(cid, { fp, userMentioned: Boolean(userMatch), botMentioned: Boolean(botMatch) });
+          if (wants("issue_comment")) {
+            this.fireGithubEvent(wf, node, repo, "issue_comment", comment, { itemType: "comment", labels, branchFilter, authorFilter });
+          }
+          if (userMatch) {
+            this.fireGithubEvent(wf, node, repo, "user_mentioned", comment, { itemType: "comment", labels, mention: userMatch, branchFilter, authorFilter });
+          }
+          if (botMatch) {
+            this.fireGithubEvent(wf, node, repo, "bot_mentioned", comment, { itemType: "comment", labels, mention: botMatch, branchFilter, authorFilter });
+          }
+        } else {
+          if (prev.fp !== fp) prev.fp = fp;
+          if (userMatch && !prev.userMentioned) {
+            prev.userMentioned = true;
+            this.fireGithubEvent(wf, node, repo, "user_mentioned", comment, { itemType: "comment", labels, mention: userMatch, branchFilter, authorFilter });
+          } else if (!userMatch) {
+            prev.userMentioned = false;
+          }
+          if (botMatch && !prev.botMentioned) {
+            prev.botMentioned = true;
+            this.fireGithubEvent(wf, node, repo, "bot_mentioned", comment, { itemType: "comment", labels, mention: botMatch, branchFilter, authorFilter });
+          } else if (!botMatch) {
+            prev.botMentioned = false;
           }
         }
       }
@@ -719,23 +908,28 @@ export class Workflows {
     }
   }
 
-  fireGithubEvent(wf, node, repo, event, pr, review, ci, branchFilter, authorFilter) {
+  fireGithubEvent(wf, node, repo, event, item, opts = {}) {
     if (!wf.enabled) return;
-    const author = typeof pr.author === "string" ? pr.author : pr.author?.login || "";
-    const branch = pr.headRefName || pr.branch || "";
-    if (branchFilter && !branch.toLowerCase().includes(branchFilter)) return;
-    if (authorFilter && author.toLowerCase() !== authorFilter) return;
+    const itemType = opts.itemType || "pr";
+    const author = typeof item.author === "string" ? item.author : item.author?.login || item.user?.login || "";
+    const branch = item.headRefName || item.branch || "";
+    if (opts.branchFilter && itemType === "pr" && !branch.toLowerCase().includes(opts.branchFilter)) return;
+    if (opts.authorFilter && author.toLowerCase() !== opts.authorFilter) return;
     this.startRun(wf, node, {
       repo,
       event,
-      number: pr.number,
-      title: pr.title || "",
+      number: Number(item.number) || 0,
+      title: item.title || "",
+      body: item.body || "",
       author,
-      url: pr.url || "",
+      url: item.url || item.html_url || "",
       branch,
-      state: String(pr.state || "OPEN").toLowerCase(),
-      review_state: review,
-      ci_status: ci,
+      state: String(item.state || "OPEN").toLowerCase(),
+      review_state: opts.review ?? "none",
+      ci_status: opts.ci ?? "none",
+      item_type: itemType,
+      mention: opts.mention ?? "",
+      labels: opts.labels ?? formatGithubLabels(item.labels),
     });
   }
 
@@ -1548,7 +1742,7 @@ export class Workflows {
       let target = cfg.chatId ? this.ws.state.chats.find((c) => c.id === cfg.chatId) : null;
       if (!target) {
         target =
-          this.ws.state.chats.find((c) => c.botId === bot.id && c.main && !c.archived) ??
+          this.ws.state.chats.find((c) => c.botId === bot.id && c.main && !c.createdBy) ??
           this.ws.state.chats.find((c) => c.botId === bot.id && !c.archived && !c.panelId && !c.workflowId && !c.schedules?.some((s) => s.routine));
       }
       if (!target) {
@@ -1671,7 +1865,7 @@ export class Workflows {
         config: {
           type: "object",
           description:
-            "Step config. Trigger(task): {event,toStatus,fromStatus,botName,taskId,titleContains}. Trigger(schedule): {cadence,time,days,cron,timezone}. Trigger(manual): {inputs}. Trigger(routine): {routineChatId,routineName,botId,onlyOnStatus}. Trigger(chat): {chatId,botId,mentionOnly,textContains}. Trigger(webhook): {fields}. Trigger(github): {repo,events,branch,author,pollMinutes}. Trigger(channel): {channel,connection,conversation,sender,isDirect,mentionsBot,textContains}. Agent: {botName,botId,prompt,outputKey,outputFields}. Model: {model,prompt,outputKey,outputFields}. Condition: {expression,match,rules}. Approval: {message,noteField}. Output: {destination,chatId,botName,title,template,category}.",
+            "Step config. Trigger(task): {event,toStatus,fromStatus,botName,taskId,titleContains}. Trigger(schedule): {cadence,time,days,cron,timezone}. Trigger(manual): {inputs}. Trigger(routine): {routineChatId,routineName,botId,onlyOnStatus}. Trigger(chat): {chatId,botId,mentionOnly,textContains}. Trigger(webhook): {fields}. Trigger(github): {repo,events,mentionHandle,branch,author,pollMinutes}. Trigger(channel): {channel,connection,conversation,sender,isDirect,mentionsBot,textContains}. Agent: {botName,botId,prompt,outputKey,outputFields}. Model: {model,prompt,outputKey,outputFields}. Condition: {expression,match,rules}. Approval: {message,noteField}. Output: {destination,chatId,botName,title,template,category}.",
         },
       },
       required: ["id", "kind"],
@@ -1726,7 +1920,7 @@ export class Workflows {
       }),
       defineTool("workflow_create", {
         description:
-          "Create an event-based Workflow graph and show it live on the Routines › Workflows canvas. Rejects invalid graphs or broken/ambiguous {{field}} references; trigger fields are fixed per trigger kind (task: id,title,bot,from,to,result,problem,priority; schedule: local_date,local_time,weekday,run_time,timezone; manual: run_time,triggered_by; routine: routine_id,routine_name,bot,status,result,run_id,finished_at; chat: chat_id,chat_title,bot,sender,text,time; webhook: body,payload,method,received_at; github: repo,event,number,title,author,url,branch,state,review_state,ci_status).",
+          "Create an event-based Workflow graph and show it live on the Routines › Workflows canvas. Rejects invalid graphs or broken/ambiguous {{field}} references; trigger fields are fixed per trigger kind (task: id,title,bot,from,to,result,problem,priority; schedule: local_date,local_time,weekday,run_time,timezone; manual: run_time,triggered_by; routine: routine_id,routine_name,bot,status,result,run_id,finished_at; chat: chat_id,chat_title,bot,sender,text,time; webhook: body,payload,method,received_at; github: repo,event,number,title,body,author,url,branch,state,review_state,ci_status,item_type,mention,labels).",
         parameters: {
           type: "object",
           properties: {

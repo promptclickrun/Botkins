@@ -14,6 +14,22 @@ const RUN_LIST = 80;
 
 const clip = (text, limit) => (typeof text === "string" && text.length > limit ? text.slice(0, limit) + "…" : text);
 
+/** A job's facts for a phone (desktop/jobs.mjs): never a path on the computer. */
+function jobSummary(job) {
+  return {
+    where: job.where,
+    state: job.state,
+    ...(job.branch && { branch: job.branch }),
+    ...(job.base && { base: job.base }),
+    ...(job.baseSha && { baseSha: job.baseSha.slice(0, 7) }),
+    ...(job.setup && { setup: job.setup }),
+    ...(job.setupError && { setupError: clip(job.setupError, 600) }),
+    ...(job.mergedSha && { mergedSha: job.mergedSha }),
+    ...(job.carryFailed && { carryFailed: true }),
+    createdAt: job.createdAt,
+  };
+}
+
 /** A chat without its messages: what lists and headers need. */
 function chatSummary(chat) {
   const messages = chat.messages ?? [];
@@ -32,6 +48,7 @@ function chatSummary(chat) {
     ...(chat.projectId && { projectId: chat.projectId }),
     ...(chat.folder && { folder: chat.folder }),
     ...(chat.mode && { mode: chat.mode }),
+    ...(chat.job && { job: jobSummary(chat.job) }),
     ...(chat.panelId && { panelId: chat.panelId }),
     // How many tabs the chat's side pane has; the tabs themselves come with the chat's detail.
     ...(Array.isArray(chat.pane?.panels) && chat.pane.panels.length > 0 && { panes: chat.pane.panels.length }),

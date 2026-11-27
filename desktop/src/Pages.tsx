@@ -369,13 +369,16 @@ const run = (actions: PageActions, p: Promise<unknown>) => void p.catch(actions.
 const runSection = (actions: PageActions, p: Promise<unknown>) =>
   void p.catch((e: unknown) => actions.fail((e instanceof Error ? e.message : String(e)).replace(/^Error invoking remote method '[^']+':\s*(Error:\s*)?/, "")));
 
+/** Whether the computer in use keeps a Main chat for each bot (every current one does). */
+export const keepsMainChats = (state: State) => !state.remote?.using || state.remote.using.capabilities.includes("main-chat-v1");
+
 /** The bot ⋯ menu, shared by bot cards, the sidebar and the bot page. */
 export function botMenuItems(state: State, b: Bot, actions: PageActions, ask: AskFn): MenuItem[] {
   const primary = state.bots[0]?.id === b.id;
   const sections = state.sections ?? [];
   const hasUnread = botUnreadChats(state.chats, b.id).length > 0;
   const items: MenuItem[] = [
-    ...(state.proactive?.chatMode ? [{ label: "Main chat", icon: MessageSquarePlus, run: () => actions.mainChat(b.id) }] : []),
+    ...(keepsMainChats(state) ? [{ label: "Main chat", icon: MessageSquarePlus, run: () => actions.mainChat(b.id) }] : []),
     { label: "New chat", icon: MessageSquarePlus, run: () => actions.newChatWith(b.id) },
     { label: "Bot page", icon: UserRound, run: () => actions.botPage(b.id) },
     ...(hasUnread ? [{ label: "Mark as read", icon: MailOpen, run: () => actions.markBotRead(b.id) }] : []),
@@ -528,7 +531,7 @@ function sectionMenuItems(sections: Section[], section: Section, actions: PageAc
  * side menu, so a bot's row says the same thing in both places.
  */
 function botLatest(state: State) {
-  const showMain = state.proactive?.chatMode && (state.settings.botTap ?? "main") === "main";
+  const showMain = keepsMainChats(state) && (state.settings.botTap ?? "main") === "main";
   const creator = memberTeam(state)?.me.memberId;
   const latest = new Map<string, Chat>();
   for (const c of state.chats) {
@@ -829,7 +832,7 @@ export function SidebarBots({ state, actions, compact, selectedBotId }: { state:
   // One walk over the chats for each bot's latest preview: the conversation the default bot
   // selection opens (its Main chat, when that is the choice). The shared helper owns the unread
   // dot, which can come from any of the bot's chats.
-  const showMain = state.proactive?.chatMode && (state.settings.botTap ?? "main") === "main";
+  const showMain = keepsMainChats(state) && (state.settings.botTap ?? "main") === "main";
   const creator = memberTeam(state)?.me.memberId;
   const latest = new Map<string, Chat>();
   for (const c of state.chats) {
@@ -1035,7 +1038,30 @@ function chatMenuItems(state: State, chat: Chat, actions: PageActions, ask: AskF
         ]
       : []),
   ];
-  if (chat.main) return common;
+  // A Main chat can be archived or deleted, never renamed: the bot's next visit makes a new one.
+  if (chat.main) return [
+    ...common,
+    { label: "Archive", icon: Archive, run: () => run(actions, api().setChatFlags(chat.id, { archived: true })) },
+    "separator",
+    {
+      label: "Delete…",
+      icon: Trash2,
+      danger: true,
+      run: () =>
+        run(
+          actions,
+          (async () => {
+            const ok = await ask({
+              title: "Delete this Main chat?",
+              body: "This removes the chat and its history. Opening the bot again starts a new Main chat. You can't undo this.",
+              confirm: "Delete chat",
+              danger: true,
+            });
+            if (ok) await api().deleteChat(chat.id);
+          })(),
+        ),
+    },
+  ];
   return [
     ...common,
     {

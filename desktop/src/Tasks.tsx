@@ -8,14 +8,16 @@ import { Folded, WorkBar, WorkNeeds, type WorkNav } from "./WorkBar";
 import "./tasks.css";
 
 const api = window.botkins;
-// The phone's sections, top to bottom. Needs you (person review or stuck) is drawn by WorkNeeds above them.
+// The board's columns, left to right: the phone's pipeline (Later and Ready, Working, Reviewing, Done). Needs you (person
+// review or stuck) is drawn by WorkNeeds above them.
 // Orchestrated bot-reviewed tasks (status === "review" with reviewerBotId) show in a Reviewing section so the person sees them without being asked to approve.
+// The names and the empty lines are the phone's (its overview.ts, STAGES).
 const lanes: { status: TaskStatus; label: string; hint: string }[] = [
-  { status: "review", label: "Reviewing", hint: "Waiting for the creating bot to review." },
-  { status: "working", label: "Working", hint: "A bot is on it." },
-  { status: "ready", label: "Ready", hint: "Starts when its bot is free." },
-  { status: "later", label: "Later", hint: "Not scheduled yet." },
-  { status: "done", label: "Done", hint: "Approved." },
+  { status: "later", label: "Later", hint: "Nothing put off" },
+  { status: "ready", label: "Ready", hint: "Nothing waiting for a bot" },
+  { status: "working", label: "Working", hint: "No bot is on a task" },
+  { status: "review", label: "Review", hint: "Nothing in review" },
+  { status: "done", label: "Done", hint: "Nothing done yet" },
 ];
 const priorities: TaskPriority[] = ["low", "normal", "high", "urgent"];
 
@@ -62,115 +64,96 @@ export default function TasksPage({
       fail(e);
     }
   }
-  const row = (t: BotTask) => {
+  const card = (t: BotTask) => {
     const bot = state.bots.find((b) => b.id === t.botId);
     const reviewer = t.status === "review" && t.reviewerBotId ? botName(t.reviewerBotId) : null;
     return (
-      <div
+      <article
         key={t.id}
-        className={"group-row task-card priority-" + t.priority + (t.status === "blocked" ? " blocked" : "")}
+        className={"task-tile priority-" + t.priority + (dragged === t.id ? " dragging" : "")}
         draggable={t.status !== "working"}
-        onDragStart={() => setDragged(t.id)}
+        onDragStart={(e) => {
+          e.dataTransfer.effectAllowed = "move";
+          setDragged(t.id);
+        }}
         onDragEnd={() => setDragged("")}
       >
-        {bot ? <BotAvatar bot={bot} size={36} state={t.status === "working" ? "thinking" : "idle"} /> : <span className="work-avatar-blank" aria-hidden="true" />}
-        <button type="button" className="row-main work-needs-open" onClick={() => openTask(t)}>
-          <span className="row-title">{t.title}</span>
-          <span className="row-sub task-meta">
-            {bot?.name ?? "Anyone"}
-            {reviewer && (
-              <>
-                {" · "}
-                <span className="task-reviewer-badge">Reviewing: {reviewer}</span>
-              </>
-            )}
-            {t.priority !== "normal" && (
-              <>
-                {" · "}
-                <em>{t.priority}</em>
-              </>
-            )}
+        <button type="button" className="task-tile-open" onClick={() => openTask(t)}>
+          <span className="task-tile-title">{t.title}</span>
+          <span className="task-meta">
+            {bot ? <BotAvatar bot={bot} size={20} badge={false} state={t.status === "working" ? "thinking" : "idle"} /> : <span className="work-avatar-blank small" aria-hidden="true" />}
+            <small>{bot?.name ?? "Anyone"}</small>
+            {reviewer && <span className="task-reviewer-badge">Reviewing: {reviewer}</span>}
+            {t.priority !== "normal" && <em>{t.priority}</em>}
           </span>
         </button>
         {t.status === "done" ? (
-          <button
-            type="button"
-            className="btn soft small"
-            aria-label={"Reopen " + t.title}
-            onClick={() => void act(() => api.moveTask(t.id, "ready"))}
-          >
-            Reopen
-          </button>
+          <div className="task-tile-actions">
+            <button type="button" className="btn soft small" aria-label={"Reopen " + t.title} onClick={() => void act(() => api.moveTask(t.id, "ready"))}>
+              Reopen
+            </button>
+          </div>
         ) : reviewer ? (
-          <div className="work-needs-actions">
-            <button
-              type="button"
-              className="btn soft small"
-              aria-label={"Request changes for " + t.title}
-              onClick={() => openTask(t, true)}
-            >
+          <div className="task-tile-actions">
+            <button type="button" className="btn soft small" aria-label={"Request changes for " + t.title} onClick={() => openTask(t, true)}>
               Request changes
             </button>
-            <button
-              type="button"
-              className="btn soft small"
-              aria-label={"Approve " + t.title}
-              onClick={() => void act(() => api.moveTask(t.id, "done"))}
-            >
+            <button type="button" className="btn soft small" aria-label={"Approve " + t.title} onClick={() => void act(() => api.moveTask(t.id, "done"))}>
               Approve
             </button>
           </div>
-        ) : (
-          <ChevronRight size={15} className="row-chevron" aria-hidden="true" />
-        )}
-      </div>
+        ) : null}
+      </article>
     );
   };
+  const counted = lanes.map((lane) => ({
+    ...lane,
+    items: tasks
+      .filter((t) => (lane.status === "review" ? t.status === "review" && Boolean(t.reviewerBotId) : t.status === lane.status))
+      .sort((a, b) => (lane.status === "done" ? b.updatedAt - a.updatedAt : 0)),
+  }));
   return (
     <div className="page work-page tasks-page">
       <WorkBar work={work} tab="Tasks" add={{ label: "New task", run: () => { setChanging(false); setChangeNote(""); setEditing({ status: "ready" }); } }} lede="A Ready task starts when its bot is free. Finished ones wait here for you." />
       <WorkNeeds state={state} openChat={openChat} openTask={(t) => openTask(t)} requestChanges={(t) => openTask(t, true)} fail={fail} />
-      {lanes.map((lane) => {
-        const items = tasks
-          .filter((t) =>
-            lane.status === "review"
-              ? t.status === "review" && Boolean(t.reviewerBotId)
-              : t.status === lane.status,
-          )
-          .sort((a, b) => (lane.status === "done" ? b.updatedAt - a.updatedAt : 0));
-        const droppable = ["later", "ready", "done"].includes(lane.status);
-        const adds = lane.status === "later" || lane.status === "ready";
-        // Reviewing, Working, and Done show only when they hold something, or Done while a task is dragged to it.
-        if (!items.length && !adds && !(dragged && droppable)) return null;
-        return (
-          <section
-            key={lane.status}
-            className={"page-section task-lane" + (dragged && droppable ? " drop" : "")}
-            aria-label={lane.label}
-            onDragOver={(e) => droppable && dragged && e.preventDefault()}
-            onDrop={(e) => {
-              e.preventDefault();
-              if (droppable && dragged) void act(() => api.moveTask(dragged, lane.status));
-              setDragged("");
-            }}
-          >
-            <h2 className="group-label">
-              {lane.label} · {items.length}
-            </h2>
-            <div className="group work-avatars">
-              {/* Done keeps its newest few in view; the rest fold away, as the phone's done toggle does. */}
-              <Folded rows={items.map(row)} limit={lane.status === "done" ? 3 : 8} />
-              {adds && (
-                <button type="button" className="group-row work-more" onClick={() => { setChanging(false); setChangeNote(""); setEditing({ status: lane.status as "later" | "ready" }); }}>
-                  <Plus size={15} aria-hidden="true" />
-                  Add task
-                </button>
-              )}
-            </div>
-            <p className="group-foot">{lane.hint}</p>
-          </section>
-        );
-      })}
+      {/* The pipeline, left to right: each column is a stage, and a task moves along it. Drag a task to Later, Ready or Done. */}
+      <div className="task-board" role="list" aria-label="Tasks by stage">
+        {counted.map((lane, index) => {
+          const droppable = ["later", "ready", "done"].includes(lane.status);
+          const adds = lane.status === "later" || lane.status === "ready";
+          return (
+            <section
+              key={lane.status}
+              role="listitem"
+              className={"task-col stage-" + lane.status + (dragged && droppable ? " drop" : "")}
+              aria-label={lane.label + ", " + lane.items.length}
+              onDragOver={(e) => droppable && dragged && e.preventDefault()}
+              onDrop={(e) => {
+                e.preventDefault();
+                if (droppable && dragged) void act(() => api.moveTask(dragged, lane.status));
+                setDragged("");
+              }}
+            >
+              <header className="task-col-head">
+                <span className="task-col-count">{lane.items.length}</span>
+                <strong>{lane.label}</strong>
+                {index < counted.length - 1 && <ChevronRight size={14} className="task-col-next" aria-hidden="true" />}
+              </header>
+              <div className="task-col-cards">
+                {/* Done keeps its newest few in view; the rest fold away, as the phone's done toggle does. */}
+                <Folded rows={lane.items.map(card)} limit={lane.status === "done" ? 4 : 12} />
+                {!lane.items.length && !adds && <p className="task-col-empty">{dragged && droppable ? "Drop here" : lane.hint}</p>}
+                {adds && (
+                  <button type="button" className="task-col-add" onClick={() => { setChanging(false); setChangeNote(""); setEditing({ status: lane.status as "later" | "ready" }); }}>
+                    <Plus size={14} aria-hidden="true" />
+                    Add task
+                  </button>
+                )}
+              </div>
+            </section>
+          );
+        })}
+      </div>
       <dialog ref={dialog} onCancel={closeDialog} className="task-dialog">
         {editing && (
           <form

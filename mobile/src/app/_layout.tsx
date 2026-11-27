@@ -169,6 +169,8 @@ export default function RootLayout() {
               <Stack.Screen name="projects/[id]" />
               <Stack.Screen name="projects/add-chats" options={tall} />
               <Stack.Screen name="projects/attach" options={tall} />
+              <Stack.Screen name="projects/job" options={tall} />
+              <Stack.Screen name="projects/where" options={half} />
               <Stack.Screen name="market/app/[slug]" options={half} />
               <Stack.Screen name="market/category/[id]" />
               <Stack.Screen name="market/plugin" />

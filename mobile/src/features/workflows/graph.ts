@@ -340,8 +340,10 @@ export function summary(node: WorkflowNode, botName?: (id?: string, name?: strin
           return c.routineName ? `After ${c.routineName}` : "After any routine";
         case "webhook":
           return c.routeId ? "Webhook URL ready" : "URL made when saved";
-        case "github":
-          return c.repo ? `${c.repo} · ${(c.events ?? []).join(", ") || "no events"}` : "Choose a repository";
+        case "github": {
+          const evs = Array.isArray(c.events) ? c.events.map((e: string) => GITHUB_EVENT_LABEL[e as (typeof GITHUB_EVENTS)[number]] ?? e) : [];
+          return c.repo ? `${c.repo} · ${evs.join(", ") || "no events"}` : "Choose a repository";
+        }
         default:
           return "Run now, from here or the computer";
       }
@@ -385,5 +387,27 @@ export const OP_LABEL: Record<string, string> = {
 export const DESTINATIONS = ["chat", "feed", "idea", "goal", "notification"] as const;
 export const GOAL_CATEGORIES = ["health", "relationships", "finance", "career", "interests", "productivity", "other"] as const;
 export const DAYS = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"] as const;
-export const GITHUB_EVENTS = ["pr_opened", "pr_review", "ci_status"] as const;
+export const GITHUB_EVENTS = [
+  "pr_opened",
+  "pr_updated",
+  "pr_review",
+  "ci_status",
+  "issue_opened",
+  "issue_updated",
+  "issue_comment",
+  "user_mentioned",
+  "bot_mentioned",
+] as const;
+
+export const GITHUB_EVENT_LABEL: Record<(typeof GITHUB_EVENTS)[number], string> = {
+  pr_opened: "PR opened",
+  pr_updated: "PR updated",
+  pr_review: "PR review",
+  ci_status: "CI status",
+  issue_opened: "Issue opened",
+  issue_updated: "Issue updated",
+  issue_comment: "Comment added",
+  user_mentioned: "Mentioned me",
+  bot_mentioned: "Bot mentioned",
+};
 export const TASK_STATUSES = ["later", "ready", "working", "review", "done", "blocked"] as const;

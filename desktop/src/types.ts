@@ -241,6 +241,8 @@ export type Chat = {
   invited?: string[];
   /** The project folder this chat works in, and how freely its bot acts there. */
   projectId?: string;
+  /** Set on a chat that a job started (desktop/jobs.mjs). */
+  job?: Job;
   folder?: string;
   mode?: ChatMode;
   panelId?: string;
@@ -352,6 +354,24 @@ export type Run = {
 };
 export type WorkflowNodeKind = "trigger" | "agent" | "model" | "condition" | "approval" | "output";
 export type WorkflowTriggerKind = "task" | "schedule" | "manual" | "routine" | "chat" | "webhook" | "github" | "channel";
+
+export interface WorkflowGithubSignIn {
+  status: "idle" | "starting" | "waiting" | "done" | "failed";
+  code: string | null;
+  url: string | null;
+  error: string | null;
+  login: string | null;
+}
+
+export interface WorkflowGithubStatus {
+  installed: boolean;
+  authenticated: boolean;
+  login: string | null;
+  scopes: string[];
+  repos: string[];
+  installUrl: string;
+  signIn: WorkflowGithubSignIn;
+}
 export type WorkflowOutputDestination = "chat" | "feed" | "idea" | "goal" | "notification";
 
 export interface WorkflowFieldDef {
@@ -1357,6 +1377,17 @@ declare global {
       chooseProjectFolder(id: string, append?: boolean): Promise<string | null>;
       /** A new chat in a project with one bot, or 2 to 6 for a group. Every bot needs access. */
       startProjectChat(botIds: string[], projectId: string, mode?: ChatMode, folder?: string | null): Promise<string>;
+      /** Jobs (desktop/jobs.mjs): where a project's jobs start, and the setup commands of its repository. */
+      projectJobSetup(projectId: string, folder?: string): Promise<JobSetup>;
+      /** The person saw the setup commands (`hash` is from projectJobSetup) and said yes. */
+      approveJobSetup(projectId: string, folder: string | undefined, hash: string): Promise<string>;
+      /** One job per bot: a chat, a worktree (unless where is "checkout"), the setup, then the prompt. The chats' ids. */
+      startProjectJob(projectId: string, options: JobStart): Promise<string[]>;
+      projectJobStatus(chatId: string): Promise<JobStatus>;
+      bringInJob(chatId: string, message?: string): Promise<{ ok: true; commit: string } | { ok: false; conflicts: string[] }>;
+      catchUpJob(chatId: string): Promise<void>;
+      removeJobWorktree(chatId: string): Promise<void>;
+      startJobTurn(chatId: string): Promise<void>;
       /** Attaches an artifact to a project; one already there moves to the front. Answers the project's list afterwards. */
       addProjectArtifact(projectId: string, artifactId: string): Promise<string[]>;
       removeProjectArtifact(projectId: string, artifactId: string): Promise<string[]>;
@@ -1387,6 +1418,9 @@ declare global {
       workflowRespondApproval(runId: string, nodeId: string | null, decision: "approved" | "rejected", note?: string): Promise<WorkflowRun>;
       workflowCancelRun(runId: string): Promise<WorkflowRun>;
       workflowRotateWebhookSecret(workflowId: string, nodeId: string): Promise<{ routeId: string; secret: string }>;
+      workflowGithubStatus(options?: { includeRepos?: boolean }): Promise<WorkflowGithubStatus>;
+      workflowGithubSignInStart(): Promise<WorkflowGithubSignIn>;
+      workflowGithubSignInCancel(): Promise<WorkflowGithubStatus>;
       workflowExport(id: string): Promise<boolean>;
       workflowImport(): Promise<{ workflow: Workflow; unresolvedAgents: string[] } | null>;
       workflowExportText(id: string): Promise<string>;
@@ -2248,6 +2282,8 @@ export type Capability = {
   command: string;
   source: string;
   description: string;
+  /** How a Tool is offered to the model: directly in its tool schemas, or indirectly (e.g. codemode/tool commands). */
+  exposure?: "direct" | "indirect";
 };
 export type Catalog = {
   choices: Capability[];
@@ -2835,6 +2871,46 @@ export type Project = {
   artifacts?: string[];
   lastUsed: number;
   createdAt: number;
+};
+/** A job: a prompt that started its own chat, in a git worktree of its own or in the checkout. */
+export type Job = {
+  prompt?: string;
+  where: "worktree" | "checkout";
+  state: "open" | "brought-in" | "removed";
+  createdAt: number;
+  branch?: string;
+  base?: string;
+  baseSha?: string;
+  setup?: "waiting" | "running" | "done" | "failed" | "skipped" | "none";
+  setupError?: string;
+  mergedSha?: string;
+  carryFailed?: true;
+};
+export type JobStart = { botIds: string[]; prompt: string; where?: "worktree" | "checkout"; folder?: string; mode?: ChatMode; carry?: boolean };
+export type JobSetup =
+  | { repo: false; folder?: string }
+  | { repo: true; folder: string; root: string; base: string | null; sha: string | null; short: string | null; changed: number; setup: string[]; branch: string; file: boolean; hash: string; error?: string; approved: boolean };
+export type JobStatus = {
+  where: "worktree" | "checkout";
+  state: Job["state"];
+  working: boolean;
+  canBringIn: boolean;
+  reason: string;
+  branch?: string;
+  base?: string;
+  baseSha?: string;
+  exists?: boolean;
+  ahead?: number;
+  behind?: number;
+  uncommitted?: number;
+  files?: { path: string; added: number; removed: number; new?: true }[];
+  added?: number;
+  removed?: number;
+  conflicts?: string[];
+  conflictsUnknown?: true;
+  checkout?: string | null;
+  checkoutChanged?: number;
+  mergedSha?: string;
 };
 export type ProjectInput = { name?: string; description?: string; color?: ProjectColor | null; folder?: string };
 export type BotAccessGrant = { all: boolean; projects: string[] };

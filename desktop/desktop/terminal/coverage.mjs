@@ -40,6 +40,7 @@ export const WORKSPACE = {
   updateBot: cmd("bots edit"),
   deleteBot: cmd("bots remove"),
   duplicateBot: cmd("bots duplicate"),
+  reloadBotTools: cmd("bots reload-tools"),
   reorderBots: cmd("bots order"),
   makePrimary: cmd("bots primary"),
   setBotFlags: cmd("bots flags"),
@@ -133,6 +134,9 @@ export const WORKSPACE = {
   workflowExport: no("window"), // native save file dialog; `workflows export <id>` prints JSON
   workflowImport: no("window"), // native open file dialog; `workflows import <file>` reads a path
   workflowRotateWebhookSecret: no("person"), // returns a newly generated webhook secret; stays in the window or owner phone
+  workflowGithubStatus: no("person"), // checks local gh CLI sign-in state for the Workflow trigger UI; terminal users run `gh auth status`
+  workflowGithubSignInStart: no("person"), // interactive browser device-code flow for `gh auth login --web`; terminal users run `gh auth login`
+  workflowGithubSignInCancel: no("person"), // cancels an in-progress `gh auth login --web` started from the window or owner phone
   // ── Channel Hooks ──
   channelsList: cmd("channels list"),
   channelAdd: cmd("channels add"),
@@ -240,6 +244,14 @@ export const WORKSPACE = {
   projectDiff: cmd("projects diff"),
   projectCommit: cmd("projects commit"),
   startProjectChat: cmd("projects chat"),
+  projectJobSetup: cmd("jobs setup"),
+  approveJobSetup: cmd("jobs allow-setup"),
+  startProjectJob: cmd("jobs start"),
+  projectJobStatus: cmd("jobs status"),
+  bringInJob: cmd("jobs bring-in"),
+  catchUpJob: cmd("jobs catch-up"),
+  removeJobWorktree: cmd("jobs remove"),
+  startJobTurn: cmd("jobs start-anyway"),
   addTodo: cmd("todos add"),
   updateTodo: cmd("todos edit"),
   moveTodo: cmd("todos move"),
@@ -534,6 +546,7 @@ export const CHANGES = {
   // ── More of a bot, and templates (control-bots.mjs) ──
   // (By the name of the bot, the section or the template, as the answer has it. The text of a memory, an agent's instructions and a template's words are never in a line.)
   "bots.duplicate": (args, value) => value?.name ?? args?.[0],
+  "bots.reloadTools": (args, value) => value?.name ?? args?.[0],
   "bots.order": null,
   "bots.primary": (args, value) => value?.name ?? args?.[0],
   "bots.flags.set": (args, value) => value?.name ?? args?.[0],
@@ -615,6 +628,13 @@ export const CHANGES = {
     if ((value ? value.mode : args?.[1]?.mode) !== "yolo") return name;
     return thingForLog(name) && name.length <= 73 ? name + " (yolo)" : "(yolo)";
   },
+  // A job is in the log by its project (setup, start) or by its chat's id: never its prompt, its setup's commands or a branch.
+  "jobs.allowSetup": (args, value) => value?.project?.name ?? args?.[0],
+  "jobs.start": (args, value) => value?.project?.name ?? args?.[0],
+  "jobs.bringIn": (_args, value) => value?.job?.id,
+  "jobs.catchUp": (_args, value) => value?.job?.id,
+  "jobs.remove": (_args, value) => value?.job?.id,
+  "jobs.startAnyway": (_args, value) => value?.job?.id,
   // A to-do is a person's own text: its line names the project.
   "todos.add": (args, value) => value?.project?.name ?? args?.[0],
   "todos.edit": (args, value) => value?.project?.name ?? args?.[0],
@@ -771,7 +791,7 @@ export const MORE_READS = {
   bots: ["bots.flags", "bots.proactive", "bots.memory", "bots.sections", "bots.sections.get", "bots.importable", "bots.import.preview", "templates.list", "templates.get", "templates.import.preview", "templates.browse", "templates.market"],
   chats: ["chats.list", "chats.get", "chats.search", "chats.queue", "chats.helpers", "chats.mentions", "chats.aside", "chats.sections", "chats.projectLook", "chats.messages"], // (`chats.aside` asks the chat's model a question that the chat does not keep.)
   routines: ["routines.get", "routines.runs", "routines.review", "routines.when", "routines.schedules", "workflows.list", "workflows.export"],
-  projects: ["projects.list", "projects.get", "projects.artifacts", "projects.changes", "projects.diff", "todos.list", "todos.get", "tasks.list", "tasks.get", "artifacts.list", "artifacts.read", "artifacts.resolve"],
+  projects: ["projects.list", "projects.get", "projects.artifacts", "projects.changes", "projects.diff", "jobs.list", "jobs.setup", "jobs.status", "todos.list", "todos.get", "tasks.list", "tasks.get", "artifacts.list", "artifacts.read", "artifacts.resolve"],
   wiki: ["wiki.tree", "wiki.find", "wiki.page", "wiki.search", "wiki.history", "wiki.version", "wiki.exportPlan"],
   prefs: ["preferences.get", "preferences.harnesses", "usage.report", "usage.export", "cache.info", "macTools.status"],
   credentials: ["credentials.list", "credentials.vault", "credentials.managers", "protonPass.installPlan", "protonPass.signInRead", "providers.usage", "providers.installPlan", "providers.install.read", "providers.install.input", "providers.install.cancel"],

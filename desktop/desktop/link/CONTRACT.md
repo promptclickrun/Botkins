@@ -554,3 +554,23 @@ These calls are owner-only. A computer advertising `project-folders-v1` sends `p
 With `project-mode-v1`, `updateProject(id, { mode })` saves Plan or YOLO and clears the preference for Default. Starting or assigning a chat inherits the preference when the caller omits the mode. Changing a started chat's project or working folder carries its transcript into a fresh provider session. A reply in progress must finish first. Group chats use folderless projects.
 
 With `project-clone-v1`, `cloneProjectRepository(repository, parent?, projectId?, { name?, description? }?)` returns the project ID after the computer has cloned the repository. Omitting the project ID creates a project. The destination is the repository name under the supplied parent or the host user's home directory. It must be new or empty. The computer uses its signed-in GitHub CLI for private repositories and falls back to HTTPS Git for public ones. The link validates a supplied parent through its folder browser.
+
+## Project jobs (`project-jobs-v1`)
+
+A job is a prompt that starts its own chat in a project. By default it works in a git worktree of its own: a new branch (`botkins/<topic>`, from the prompt's first words) made from the commit the checkout is on, in a folder that the computer keeps outside the repository. Jobs that run side by side don't touch the checkout or each other. A finished job is brought into the checkout with a merge. These calls are owner-only, and the capability is advertised only when the link carries all eight.
+
+| Call | Answer |
+| --- | --- |
+| `projectJobSetup(id, folder?)` | `{ repo: false }`, or `{ repo: true, folder, root, base, sha, short, changed, setup, branch, file, hash, error?, approved }`: the checkout's branch and commit, how many tracked files aren't committed, and the setup commands from `.botkins/worktrees.json` |
+| `approveJobSetup(id, folder, hash)` | The repository's root. The person saw `setup` and said yes; `hash` must be the one `projectJobSetup` gave, or it fails with "The setup commands changed" |
+| `startProjectJob(id, { botIds, prompt, where?, folder?, mode?, carry? })` | The new chats' IDs, one per bot (1 to 6). `where` is `"worktree"` (the default) or `"checkout"`. `carry: true` takes the checkout's uncommitted changes into each worktree |
+| `projectJobStatus(chatId)` | `{ where, state, working, branch, base, baseSha, exists, ahead, behind, uncommitted, files, added, removed, conflicts, checkout, checkoutChanged, canBringIn, reason, mergedSha? }`. `reason` says in words why it can't be brought in yet |
+| `bringInJob(chatId, message?)` | `{ ok: true, commit }`, or `{ ok: false, conflicts }` when the branches clash (nothing changes then) |
+| `catchUpJob(chatId)` | Void. Sends the job's bot a message to merge the checkout's branch into its own, in its worktree |
+| `removeJobWorktree(chatId)` | Void. What wasn't committed is committed on the job's branch first; the branch stays |
+| `startJobTurn(chatId)` | Void. "Start anyway": sends the prompt of a job whose setup failed |
+
+- **Setup commands run only with a yes.** `.botkins/worktrees.json` is `{ "setup": ["npm ci", "cp $BOTKINS_CHECKOUT/.env .env"], "branch": "botkins/{topic}" }` (Cursor's `setup-worktree` works too). The commands come from the repository and run on the computer in each new worktree, so a job in a worktree is refused until `approveJobSetup` was called for that exact list; a changed list needs a yes again. They run with `BOTKINS_CHECKOUT` (and `ROOT_WORKTREE_PATH`) set to the checkout and `BOTKINS_WORKTREE` to the worktree, and each stops after 10 minutes. One that fails stops the job before its prompt: the chat's `job.setup` is `"failed"` with `job.setupError`.
+- **Bringing in checks first.** The checkout must be on the branch the job started from, with nothing tracked left uncommitted. `git merge-tree` checks for conflicts before anything changes (git 2.38 or newer). Then what the worktree had uncommitted is committed on the job's branch, the branch is merged with `--no-ff`, and the worktree goes. Git hooks don't run.
+- **In the checkout, one at a time.** `where: "checkout"` takes one bot, and is refused while another checkout job of the same folder works.
+- A chat that a job started carries `job: { where, state ("open" | "brought-in" | "removed"), branch?, base?, baseSha?, setup?, setupError?, mergedSha?, carryFailed?, createdAt }` in its summary. A job's path on the computer is never sent.
