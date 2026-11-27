@@ -1497,6 +1497,11 @@ export type ChannelConnection = {
   paused?: boolean;
   botId: string;
   nodeHostId?: string;
+  policy?: {
+    dm?: string;
+    toolProfile?: string;
+    notifyPhone?: boolean;
+  };
   pendingPairings?: ChannelPairing[];
   status?: {
     state: ChannelStatusState;
@@ -2179,6 +2184,7 @@ export type Calls = {
   workflowGithubSignInStart(): WorkflowGithubSignIn;
   workflowGithubSignInCancel(): WorkflowGithubStatus;
   channelsList(): ChannelConnection[];
+  channelSetPolicy(id: string, policy: Record<string, unknown>): ChannelConnection;
   channelPause(id: string): ChannelConnection;
   channelResume(id: string): ChannelConnection;
   channelPairList(id?: string | null): ChannelPairing[];

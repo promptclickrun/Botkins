@@ -54,6 +54,16 @@ export default function Channels() {
     }
   }
 
+  async function toggleNotifyPhone(conn: ChannelConnection, notifyPhone: boolean) {
+    const key = `${conn.id}:notify`;
+    setBusyId(key);
+    try {
+      await attempt(api.channelSetPolicy(conn.id, { notifyPhone }));
+    } finally {
+      setBusyId(null);
+    }
+  }
+
   async function decidePair(code: string, connectionId: string, approve: boolean) {
     setBusyId(code);
     try {
@@ -108,18 +118,17 @@ export default function Channels() {
           text="Add Slack, Telegram, Discord, or iMessage in Settings › Channels on your computer or via `botkins channels add`."
         />
       ) : (
-        <View style={{ gap: space.xs }}>
+        <View style={{ gap: space.sm }}>
           <Label>Connected channels</Label>
-          <Group>
-            {channels.map((conn) => {
-              const badge = statusMeta(conn);
-              const botName = bots.find((b) => b.id === conn.botId)?.name ?? "Unbound";
-              const detail = conn.status?.detail
-                ? `${conn.kind} · ${botName} · ${conn.status.detail}`
-                : `${conn.kind} · ${botName}${conn.nodeHostId ? ` · node ${conn.nodeHostId}` : ""}`;
-              return (
+          {channels.map((conn) => {
+            const badge = statusMeta(conn);
+            const botName = bots.find((b) => b.id === conn.botId)?.name ?? "Unbound";
+            const detail = conn.status?.detail
+              ? `${conn.kind} · ${botName} · ${conn.status.detail}`
+              : `${conn.kind} · ${botName}${conn.nodeHostId ? ` · node ${conn.nodeHostId}` : ""}`;
+            return (
+              <Group key={conn.id}>
                 <Row
-                  key={conn.id}
                   title={conn.label}
                   subtitle={detail}
                   subtitleLines={3}
@@ -128,11 +137,18 @@ export default function Channels() {
                   disabled={busyId === conn.id}
                   onToggle={(next) => void togglePause(conn, next)}
                 />
-              );
-            })}
-          </Group>
+                <Row
+                  title="Phone notifications for replies"
+                  subtitle="Off by default"
+                  toggled={Boolean(conn.policy?.notifyPhone)}
+                  disabled={busyId === `${conn.id}:notify`}
+                  onToggle={(next) => void toggleNotifyPhone(conn, next)}
+                />
+              </Group>
+            );
+          })}
           <T variant="footnote" color="muted" style={{ paddingHorizontal: space.sm }}>
-            Toggle off to pause a channel without removing its credentials. Full setup and policies are managed on your computer or CLI.
+            Toggle off to pause a channel without removing its credentials. Full setup and other policies are managed on your computer or CLI.
           </T>
         </View>
       )}

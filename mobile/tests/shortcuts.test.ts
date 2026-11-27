@@ -53,3 +53,31 @@ test("a wait returns only the requested run's final text and reports a failed tu
   assert.equal(shortcutReply({ ...detail, runs: [] } as any, "r"), undefined);
   assert.throws(() => shortcutReply({ ...detail, runs: [{ id: "r", status: "Failed", detail: "Provider offline" }] } as any, "r"), /Provider offline/);
 });
+
+test("Push.kindOf suppresses channel chat reply pushes unless the connection's notifyPhone policy is true", async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "botkins-channel-push-"));
+  const backend = new MockBackend({ speed: 0.03 }) as any;
+  const host = new LinkHost({ backend, dir, relay: false, port: 0, extraHosts: ["127.0.0.1"] });
+  t.after(async () => { await host.stop(); rmSync(dir, { recursive: true, force: true }); });
+
+  backend.state.channels = [
+    { id: "ch_quiet", kind: "telegram", label: "Quiet", policy: { dm: "pairing", notifyPhone: false } },
+    { id: "ch_legacy", kind: "slack", label: "Legacy", policy: { dm: "pairing" } },
+    { id: "ch_loud", kind: "telegram", label: "Loud", policy: { dm: "pairing", notifyPhone: true } },
+  ];
+
+  const run = { id: "run-1", chatId: "chat-1", status: "Completed", time: 1 };
+  const scheduledRun = { id: "run-2", chatId: "chat-1", status: "Completed", trigger: "scheduled", time: 2 };
+  const normalChat = { id: "chat-normal", botId: backend.state.bots[0].id, title: "Normal" };
+  const quietChat = { id: "chat-1", botId: backend.state.bots[0].id, title: "Quiet: Alice", channel: { connectionId: "ch_quiet", kind: "telegram" } };
+  const legacyChat = { id: "chat-2", botId: backend.state.bots[0].id, title: "Legacy: Bob", channel: { connectionId: "ch_legacy", kind: "slack" } };
+  const loudChat = { id: "chat-3", botId: backend.state.bots[0].id, title: "Loud: Cara", channel: { connectionId: "ch_loud", kind: "telegram" } };
+  const missingChat = { id: "chat-4", botId: backend.state.bots[0].id, title: "Removed: Dan", channel: { connectionId: "ch_gone", kind: "discord" } };
+
+  assert.equal(host.push.kindOf(run, quietChat), null);
+  assert.equal(host.push.kindOf(run, legacyChat), null);
+  assert.equal(host.push.kindOf(run, missingChat), null);
+  assert.equal(host.push.kindOf(run, loudChat), "replies");
+  assert.equal(host.push.kindOf(scheduledRun, quietChat), "routines");
+  assert.equal(host.push.kindOf(run, normalChat), "replies");
+});

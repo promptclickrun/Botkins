@@ -7,6 +7,8 @@ import { Workspace } from "./starter.mjs";
 import { authorize, filterParts } from "../desktop/link/team.mjs";
 import { baseParts } from "../desktop/link/parts.mjs";
 import { CHANNEL_METHODS, remoteArgs } from "../desktop/link/methods.mjs";
+import { Push } from "../desktop/link/push.mjs";
+import { defaultPolicy, normalizePolicy } from "../desktop/channels/types.mjs";
 import { formatForChannel, splitMessage } from "../desktop/channels/format.mjs";
 import { Providers } from "../desktop/providers/index.mjs";
 import { CodexProvider } from "../desktop/providers/codex/index.mjs";
@@ -975,6 +977,115 @@ test("Approval capping: standard-profile channel turn is capped at 'ask' on a ho
   assert.ok(!openedSpecs[0].sourcesOnly, "Standard-profile channel turn does not force sourcesOnly");
   assert.equal(ownerRequests.length, 1, "Approval-gated tool on standard channel must route to owner approval");
   assert.equal(permDecision.allow, false);
+
+  await ws.channels.stopAll();
+});
+
+test("Phone notifications policy defaults off, normalizes legacy records, persists across updates, and gates Push.kindOf/look", async (t) => {
+  // Policy defaults & normalization for existing/legacy records without notifyPhone.
+  assert.equal(defaultPolicy().notifyPhone, false);
+  assert.equal(normalizePolicy({}).notifyPhone, false);
+  assert.equal(normalizePolicy({ dm: "open" }, { ...defaultPolicy(), notifyPhone: undefined }).notifyPhone, false);
+  assert.equal(normalizePolicy({ notifyPhone: true }).notifyPhone, true);
+  assert.equal(normalizePolicy({ dm: "allowlist" }, normalizePolicy({ notifyPhone: true })).notifyPhone, true);
+
+  const { ws, botId } = setupWorkspace(t, { replyFn: () => "Channel reply!" });
+  const fake = makeFakeAdapter();
+  ws.channels.registerAdapter("telegram", fake.factory);
+
+  const conn = await ws.channels.add({
+    kind: "telegram",
+    label: "Quiet Telegram",
+    botId,
+    policy: { dm: "open" },
+    secrets: { botToken: "444:QUIET_NOTIFY" },
+  });
+  assert.equal(conn.policy.notifyPhone, false);
+
+  // Trigger a channel chat creation and completed turn.
+  await fake.deliver({
+    conversationId: "tg-100",
+    sender: { id: "u-tg", display: "Sam" },
+    isDirect: true,
+    text: "Hello from Telegram",
+  });
+  await waitFor(() => fake.sent.length === 1);
+
+  const channelChat = ws.state.chats.find((c) => c.channel?.connectionId === conn.id);
+  const channelRun = ws.state.runs.find((r) => r.chatId === channelChat.id);
+  assert.ok(channelChat && channelRun);
+
+  const normalChat = ws.createChat(botId, "Normal chat");
+  const normalChatObj = typeof normalChat === "string" ? ws.chat(normalChat) : normalChat;
+
+  const sent = [];
+  const record = {
+    token: "a".repeat(64),
+    env: "production",
+    prefs: { replies: true, requests: true, routines: true, previews: true, activities: true, updates: true, spaces: true },
+    activities: {},
+  };
+  const store = {
+    data: { devices: [{ id: "dev-owner", name: "iPhone" }], team: { roles: [], groups: [], members: [] }, looks: {} },
+    push: (id) => (id === "dev-owner" ? record : null),
+  };
+  const push = new Push({
+    store,
+    deviceKey: () => new Uint8Array(32),
+    relayUrl: () => "https://relay.example",
+    snapshot: () => ws.snapshot(),
+    people: () => true,
+  });
+  push.alert = (deviceId, _rec, body) => ({ deviceId, body });
+  push.send = async (items) => {
+    sent.push(...items);
+  };
+
+  // Channel chat with notifyPhone off (default) -> kindOf returns null; non-channel chat unchanged.
+  assert.equal(push.kindOf(channelRun, channelChat), null);
+  assert.equal(push.kindOf({ id: "r-norm", chatId: normalChatObj.id, status: "Completed", time: 1 }, normalChatObj), "replies");
+
+  // Scheduled routines on a channel chat are NOT suppressed when notifyPhone is off.
+  assert.equal(push.kindOf({ id: "r-sched", chatId: channelChat.id, status: "Completed", trigger: "scheduled", time: 1 }, channelChat), "routines");
+
+  // Unknown/deleted connection fails closed to null.
+  assert.equal(push.kindOf(channelRun, { ...channelChat, channel: { ...channelChat.channel, connectionId: "ch_missing" } }), null);
+
+  // End-to-end Push.look() sends no reply alert while notifyPhone is off.
+  push.look();
+  await fake.deliver({
+    conversationId: "tg-100",
+    sender: { id: "u-tg", display: "Sam" },
+    isDirect: true,
+    text: "Second quiet turn",
+  });
+  await waitFor(() => fake.sent.length === 2);
+  push.look();
+  assert.equal(sent.length, 0, "No phone push should fire while notifyPhone is false");
+
+  // Enable notifyPhone via setPolicy and verify partial update preserves it.
+  const enabled = ws.channels.setPolicy(conn.id, { notifyPhone: true });
+  assert.equal(enabled.policy.notifyPhone, true);
+  const stillEnabled = await ws.channels.update(conn.id, { policy: { dm: "open" } });
+  assert.equal(stillEnabled.policy.notifyPhone, true);
+  assert.equal(push.kindOf(channelRun, channelChat), "replies");
+
+  // End-to-end Push.look() now sends the reply alert when notifyPhone is true.
+  await fake.deliver({
+    conversationId: "tg-100",
+    sender: { id: "u-tg", display: "Sam" },
+    isDirect: true,
+    text: "Loud turn",
+  });
+  await waitFor(() => fake.sent.length === 3);
+  push.look();
+  assert.equal(sent.length, 1, "Phone push should fire when notifyPhone is true");
+  assert.equal(sent[0].body.k, "reply");
+
+  // Disabling via update() turns it back off cleanly.
+  const disabled = await ws.channels.update(conn.id, { policy: { notifyPhone: false } });
+  assert.equal(disabled.policy.notifyPhone, false);
+  assert.equal(push.kindOf(channelRun, channelChat), null);
 
   await ws.channels.stopAll();
 });
