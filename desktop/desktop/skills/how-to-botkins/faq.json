@@ -2,7 +2,7 @@
  "schema": 1,
  "source": "https://botkins.app/faq",
  "botkinsVersion": "0.17.23",
- "built": "2026-11-27T16:25:53.271Z",
+ "built": "2026-11-27T16:27:29.973Z",
  "sections": [
   {
    "id": "basics",
@@ -449,7 +449,7 @@
     {
      "id": "whats-planned-but-not-built",
      "question": "What's planned but not built?",
-     "answer": "For Node Hosts: pairing a node by QR code, setting up a background service from the setup wizard, moving vault secrets between computers, and creating tasks on another computer. For gadgets: Bluetooth setup, the relay, live voice and over-the-air updates.",
+     "answer": "For Node Hosts: pairing a node by QR code, setting up a background service from the setup wizard, moving vault secrets between computers, and creating tasks on another computer.",
      "url": "https://botkins.app/faq#whats-planned-but-not-built"
     }
    ]
