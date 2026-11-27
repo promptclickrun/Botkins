@@ -22,6 +22,7 @@ try {
     pkg.build.directories.output,
     "windows",
   );
+  pkg.build.afterPack = join(root, "scripts/after-pack.mjs");
   pkg.build.npmRebuild = false;
   // Signs with Azure Artifact Signing (scripts/sign-windows.cjs). BOTKINS_SIGN=off builds unsigned.
   if (process.env.BOTKINS_SIGN !== "off") {

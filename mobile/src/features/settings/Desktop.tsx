@@ -21,17 +21,31 @@ import { capitalize, InfoRow, LINK_STATUS, linkLabel, useHeld } from "./shared";
 function Background({ name }: { name: string }) {
   const { colors } = useTheme();
   const online = useOnline();
-  const [background, hold] = useHeld(useSettings()?.background);
+  const settings = useSettings();
+  const [background, hold] = useHeld(settings?.background);
+  const [computerUse, setComputerUseBusy] = useState<boolean | null>(null);
+  const computerUseOn = computerUse ?? settings?.computerUse === true;
   // An older computer has no such setting.
   if (!background) return null;
   // The computer puts a choice back when the system refuses it, and says why; the switch then shows what it kept.
   const set = (patch: Partial<typeof background>) => void hold(patch, () => api.setPreferences({ background: { ...background, ...patch } }));
+  const toggleComputerUse = async (next: boolean) => {
+    setComputerUseBusy(next);
+    try {
+      await api.setPreferences({ computerUse: next });
+    } catch {
+      // Revert optimistic state on failure
+    } finally {
+      setComputerUseBusy(null);
+    }
+  };
   return (
     <View>
       <Label>{"Botkins on " + name}</Label>
       <Group>
         <Row leading={<IconTile icon={MonitorCog} color={colors.ink2} />} title="Keep running with its window closed" titleLines={2} subtitle="Routines keep running, and your phones can reach it" subtitleLines={2} toggled={background.keepRunning} disabled={!online} onToggle={(keepRunning) => set({ keepRunning })} />
         <Row leading={<IconTile icon={LogIn} color={colors.ink2} />} title="Start when the computer starts" titleLines={2} subtitle="Opens quietly when you sign in to it" subtitleLines={2} toggled={background.runAtStartup} disabled={!online} onToggle={(runAtStartup) => set({ runAtStartup })} />
+        <Row leading={<IconTile icon={ScreenShare} color={colors.ink2} />} title="Computer use on this computer" titleLines={2} subtitle="Let bots inspect and click native apps (background mode by default; permissions are granted on the computer)" subtitleLines={3} toggled={computerUseOn} disabled={!online || computerUse !== null} onToggle={(next) => void toggleComputerUse(next)} />
       </Group>
       <T variant="footnote" color="muted" style={{ paddingHorizontal: space.xs, paddingTop: space.sm }}>
         These change the app on your computer, not on this phone.

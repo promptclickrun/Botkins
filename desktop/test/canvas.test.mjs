@@ -368,8 +368,8 @@ test("work summaries use tool names only", () => {
 
 test("todo statuses map to Botkins' set", () => {
   assert.deepEqual(
-    mapTodos({ rows: [{ id: "1", title: "a", status: "completed" }, { id: "2", status: "blocked", title: "b" }, { id: "3", title: "c", status: "weird" }, { id: "4", title: "d", status: "failed" }] }).map((t) => t.status),
-    ["done", "blocked", "pending", "failed"],
+    mapTodos({ rows: [{ id: "1", title: "a", status: "completed" }, { id: "2", status: "blocked", title: "b" }, { id: "3", title: "c", status: "weird" }, { id: "4", title: "d", status: "failed" }, { id: "5", title: "e", status: "abandoned" }] }).map((t) => t.status),
+    ["done", "blocked", "pending", "failed", "cancelled"],
   );
   assert.deepEqual(mapTodos(undefined), []);
 });

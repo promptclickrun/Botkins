@@ -470,29 +470,38 @@ test("use_credential: approval flow, Always allow, Always deny, origin pinning, 
     },
   };
 
-  const secureInputs = new SecureInputs(
-    fakeWs,
-    (plan, values, opts) => performSecureUse(plan, values, {
-      ...opts,
-      extensionFill: async (args) => {
-        fillCalls.push({
-          ...args,
-          fields: args.fields.map((f) => ({
-            selector: f.selector,
-            len: f.value.length,
-            matchedSecret: f.value === secretValue,
-            valuePreview: f.value.length === 6 ? "totp" : "pw",
-          })),
-        });
-        return { ok: true, filled: args.fields.length, submitted: !!args.submit, note: `filled ${args.fields[0]?.value}` };
-      },
-    }),
-    {
-      credentials: () => creds,
-      credentialGrants: grants,
-      savedLogins: (_chatId, origin, opts) => creds.findForSite({ url: opts?.url ?? origin, query: opts?.query }),
+  // The one extension path: main's sealed secure.fill transport (deviceId + payload) to a live device.
+  let nextSubmitOutcome = { submitted: true };
+  const browserTools = {
+    devices: () => [{ id: "dev-1", name: "Chrome", connected: true, enabled: true }],
+    call: async (name) => {
+      assert.equal(name, "browser_tabs");
+      return { tabs: [
+        { id: 11, title: "Sign in", url: "https://scissorsscotch.com/login" },
+        { id: 12, title: "Look-alike", url: "https://evil-scissorsscotch.com/login" },
+      ] };
     },
-  );
+    secureFill: async (deviceId, payload) => {
+      fillCalls.push({
+        deviceId,
+        ...payload,
+        fields: payload.fields.map((f) => ({
+          key: f.key,
+          kind: f.kind,
+          len: f.value.length,
+          matchedSecret: f.value === secretValue,
+          valuePreview: f.value.length === 6 ? "totp" : "pw",
+        })),
+      });
+      return { filled: payload.fields.map((f) => f.key), missing: [], note: `filled ${payload.fields[0]?.value}`, ...(payload.submit && nextSubmitOutcome) };
+    },
+  };
+  const secureInputs = new SecureInputs(fakeWs, performSecureUse, {
+    credentials: () => creds,
+    credentialGrants: grants,
+    browserTools,
+    savedLogins: (_chatId, origin, opts) => creds.findForSite({ url: opts?.url ?? origin, query: opts?.query }),
+  });
 
   const toolList = secureInputs.tools(bot, chat, run, task);
   const tools = new Map(toolList.map((tool) => [tool.name, tool.handler]));
@@ -505,36 +514,66 @@ test("use_credential: approval flow, Always allow, Always deny, origin pinning, 
   assert.equal(hits[0].hasTotp, true);
   assert.ok(!JSON.stringify(hits).includes(secretValue));
 
-  // 1b) extension_fill auto-submit fails closed (Chrome MV3 cannot enforce submit destinations at browser network boundary)
+  // 1b) Extension tabs match by input name: a selector-only field fails closed before prompting
   await assert.rejects(
     () => tools.get("use_credential")({
       credentialId: credId,
       operation: "extension_fill",
       destination: "https://scissorsscotch.com/login",
       fields: [{ selector: "#password" }],
-      submit: true,
     }),
-    /auto-submit is disabled/i,
+    /fields\[\]\.name/,
   );
-  assert.equal(cards.length, 0, "auto-submit rejection must fail closed before prompting");
+  assert.equal(cards.length, 0, "a field the extension cannot match fails closed before prompting");
   assert.equal(fillCalls.length, 0);
 
-  // 2) use_credential under default Ask -> raises card -> Approve -> fill-only and scrubs echoed secret
+  // 2) use_credential under default Ask -> raises card -> Approve -> fills the pinned tab and scrubs echoed secret
   nextCardAction = "approve";
   const res1 = JSON.parse(await tools.get("use_credential")({
     credentialId: credId,
     operation: "extension_fill",
     destination: "https://scissorsscotch.com/login",
-    fields: [{ selector: "#password" }],
+    fields: [{ name: "password" }],
   }));
   assert.equal(cards.length, 1);
   assert.equal(res1.applied, true);
-  assert.equal(res1.submitted, false);
+  assert.deepEqual(res1.filled, ["password"]);
+  assert.equal(res1.submitted, undefined, "no submit was asked for");
   assert.equal(fillCalls.length, 1);
+  assert.equal(fillCalls[0].deviceId, "dev-1");
+  assert.equal(fillCalls[0].tabId, 11);
   assert.equal(fillCalls[0].submit, false);
-  assert.equal(fillCalls[0].expectedOrigin, "https://scissorsscotch.com");
+  assert.equal(fillCalls[0].origin, "https://scissorsscotch.com");
+  assert.equal(fillCalls[0].fields[0].kind, "password");
   assert.equal(fillCalls[0].fields[0].matchedSecret, true);
   assert.ok(!JSON.stringify(res1).includes(secretValue), "secret value must never appear in tool result");
+
+  // 2b) submit: true reaches the extension; a same-site submit is reported, a cross-site action is filled but refused
+  nextCardAction = "approve";
+  nextSubmitOutcome = { submitted: true };
+  const resSubmit = JSON.parse(await tools.get("use_credential")({
+    credentialId: credId,
+    operation: "extension_fill",
+    destination: "https://scissorsscotch.com/login",
+    fields: [{ name: "password" }],
+    submit: true,
+  }));
+  assert.equal(fillCalls.at(-1).submit, true);
+  assert.equal(resSubmit.submitted, true);
+  nextSubmitOutcome = { submitted: false, submitRefused: "cross_site_action" };
+  const resRefused = JSON.parse(await tools.get("use_credential")({
+    credentialId: credId,
+    operation: "extension_fill",
+    destination: "https://scissorsscotch.com/login",
+    fields: [{ name: "password" }],
+    submit: true,
+  }));
+  assert.equal(resRefused.applied, true);
+  assert.deepEqual(resRefused.filled, ["password"]);
+  assert.equal(resRefused.submitted, false);
+  assert.equal(resRefused.submitRefused, "cross_site_action");
+  assert.match(resRefused.message, /different site/);
+  cards.length = 1;
 
   // 3) Owner chooses "remember" (Always allow for this site) -> next call runs with NO card!
   nextCardAction = "remember";
@@ -542,7 +581,7 @@ test("use_credential: approval flow, Always allow, Always deny, origin pinning, 
     credentialId: credId,
     operation: "extension_fill",
     destination: "https://scissorsscotch.com/login",
-    fields: [{ selector: "#password" }],
+    fields: [{ name: "password" }],
   });
   assert.equal(cards.length, 2);
 
@@ -551,7 +590,7 @@ test("use_credential: approval flow, Always allow, Always deny, origin pinning, 
     credentialId: credId,
     operation: "extension_fill",
     destination: "https://scissorsscotch.com/account",
-    fields: [{ selector: "#password" }],
+    fields: [{ name: "password" }],
   }));
   assert.equal(cards.length, 2, "standing grant must execute without raising a new approval card");
   assert.equal(res3.applied, true);
@@ -563,7 +602,7 @@ test("use_credential: approval flow, Always allow, Always deny, origin pinning, 
     credentialId: credId,
     operation: "extension_fill",
     destination: "https://evil-scissorsscotch.com/login",
-    fields: [{ selector: "#password" }],
+    fields: [{ name: "password" }],
   }));
   assert.equal(cards.length, 3, "different origin must NOT reuse pinned grant");
   assert.equal(resOther.applied, false);
@@ -575,7 +614,7 @@ test("use_credential: approval flow, Always allow, Always deny, origin pinning, 
     credentialId: credId,
     operation: "extension_fill",
     destination: "https://evil-scissorsscotch.com/login",
-    fields: [{ selector: "#password" }],
+    fields: [{ name: "password" }],
   }));
   assert.equal(cards.length, 4);
   assert.equal(resDenyAlways.standingDeny, true);
@@ -584,7 +623,7 @@ test("use_credential: approval flow, Always allow, Always deny, origin pinning, 
       credentialId: credId,
       operation: "extension_fill",
       destination: "https://evil-scissorsscotch.com/login",
-      fields: [{ selector: "#password" }],
+      fields: [{ name: "password" }],
     }),
     /denied/i,
   );
@@ -595,7 +634,7 @@ test("use_credential: approval flow, Always allow, Always deny, origin pinning, 
     credentialId: credId,
     operation: "extension_fill",
     destination: "https://scissorsscotch.com/2fa",
-    fields: [{ selector: "#otp" }],
+    fields: [{ name: "otp" }],
     totp: true,
   }));
   assert.equal(totpRes.applied, true);
@@ -609,7 +648,7 @@ test("use_credential: approval flow, Always allow, Always deny, origin pinning, 
       credentialId: credId,
       operation: "extension_fill",
       destination: "https://scissorsscotch.com/login",
-      fields: [{ selector: "#password" }],
+      fields: [{ name: "password" }],
     }),
     /private/i,
   );
@@ -631,7 +670,7 @@ test("use_credential: approval flow, Always allow, Always deny, origin pinning, 
       credentialId: credId,
       operation: "extension_fill",
       destination: "https://scissorsscotch.com/login",
-      fields: [{ selector: "#password" }],
+      fields: [{ name: "password" }],
     }),
     /locked/i,
   );
@@ -652,9 +691,10 @@ test("use_credential: approval flow, Always allow, Always deny, origin pinning, 
     () =>
       reqTool({
         title: "Login",
-        operation: "extension_fill",
-        url: "https://app.scissorsscotch.com/login",
+        operation: "page_fill",
+        url: "https://scissorsscotch.com/login",
         fields: [{ key: "password", label: "Password", kind: "password" }],
+        target: { tabId: 11 },
       }),
     /private/i,
   );

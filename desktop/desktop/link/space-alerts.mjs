@@ -112,7 +112,7 @@ export class SpaceAlerts {
    * @param names     () => person id → name
    * @param wants     (device) => whether that device's notifications are on and its "Spaces" choice is
    * @param previews  (device) => whether that device shows what was written
-   * @param send      (device, content, { group }) => sends one sealed alert
+   * @param send      (device, content) => sends one sealed alert
    */
   constructor({ spaces, team, setTeam, devices, shown, context, records, titles, names, wants, previews, send, now = Date.now }) {
     Object.assign(this, { spaces, team, setTeam, devices, shown, context, records, titles, names, wants, previews, send, now });
@@ -144,7 +144,7 @@ export class SpaceAlerts {
       if (event.kind === "change" && !told.has(key) && now - (this.last.get(key) ?? 0) < SPACE_ALERTS.throttleMs) continue;
       told.add(key);
       const content = eventAlert(event, space, byName, panelTitle, this.previews(device));
-      if (this.send(device, { ...content, k: "space", s: event.spaceId, ...(event.panelId && { p: event.panelId }) }, { group: "space:" + event.spaceId })) sent++;
+      if (this.send(device, { ...content, k: "space", s: event.spaceId, ...(event.panelId && { p: event.panelId }) })) sent++;
     }
     if (event.kind === "change") for (const key of told) this.last.set(key, now);
     return sent;
@@ -187,7 +187,7 @@ export class SpaceAlerts {
       const content = digestAlert(news, this.previews(device));
       if (!content) continue;
       // One space: a tap opens it. Several: the list of spaces.
-      if (this.send(device, { ...content, k: "space", ...(news.length === 1 && { s: news[0].space.id }) }, { group: "spaces" })) sent++;
+      if (this.send(device, { ...content, k: "space", ...(news.length === 1 && { s: news[0].space.id }) })) sent++;
     }
     // The day is marked whether or not anything was sent: tomorrow's alert tells of what changes from now.
     this.setTeam({ ...this.team(), spaceDigest: { day, at: now } });

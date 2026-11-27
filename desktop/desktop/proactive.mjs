@@ -85,7 +85,8 @@ export function signals(state, requests, watch, now, scope, keep = new Set()) {
   }
   if (watch.includes("tasks"))
     for (const task of state.tasks ?? []) {
-      if (!["review", "blocked"].includes(task.status) || now - (task.updatedAt ?? 0) < TASK_WAIT || !scope.task(task)) continue;
+      const needsPerson = task.status === "blocked" || (task.status === "review" && !task.reviewerBotId);
+      if (!needsPerson || now - (task.updatedAt ?? 0) < TASK_WAIT || !scope.task(task)) continue;
       out.push({ key: "task:" + task.id + ":" + task.status + ":" + task.updatedAt, text: "Task “" + task.title.slice(0, 100) + "” has waited in " + (task.status === "review" ? "Review" : "Blocked") + " since " + new Date(task.updatedAt).toISOString() + (task.problem ? " (" + String(task.problem).slice(0, 200) + ")" : "") + "." });
     }
   if (watch.includes("requests"))

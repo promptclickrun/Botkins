@@ -2,7 +2,7 @@
   "license": "MIT",
   "name": "botkins-desktop",
   "productName": "Botkins",
-  "version": "0.17.17",
+  "version": "0.17.22",
   "private": true,
   "type": "module",
   "main": "desktop/start.mjs",
@@ -27,6 +27,7 @@
   "build": {
     "appId": "app.botkins.desktop",
     "asar": false,
+    "afterPack": "scripts/after-pack.mjs",
     "files": [
       "dist/**",
       "desktop/**",
@@ -84,6 +85,7 @@
     "cron-parser": "5.10.6",
     "electron-updater": "6.8.11",
     "glisse": "^0.6.0",
+    "hazeglow": "0.6.1",
     "mime": "2.6.0",
     "semver": "7.8.6",
     "yauzl": "^3.4.0",

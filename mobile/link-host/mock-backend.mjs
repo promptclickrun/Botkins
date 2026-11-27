@@ -19,6 +19,7 @@ import { parseSkill } from "./skill-format.mjs";
 import { botVoiceField } from "./voice.mjs";
 import { currentBotBundle, templateBundle, templateFileBundle, templateForReader } from "./template-bundle.mjs";
 import { hasAction, roleOfMember } from "./team.mjs";
+import { isRoutineChat } from "./routine-chat.mjs";
 import { proactiveChats, proactivePatch, proactiveSees, proactiveStart } from "./proactive-rules.mjs";
 import { findMainChat, makeMainChat, migrateMainChats, changeMainContext, visibleChat } from "./main-chat.mjs";
 import { Failure } from "./tools.mjs";
@@ -224,6 +225,14 @@ const MADE_UP_CHANGES = [
   { path: "docs/old-pricing.md", kind: "deleted", staged: false, added: 0, removed: 21 },
   { path: "src/hero/Hero.tsx", from: "src/Hero.tsx", kind: "renamed", staged: true, added: 2, removed: 2 },
 ];
+// Jobs (project-jobs-v1): the checkout's commit, the setup list the demo repository has, and what a finished job changed.
+const DEMO_SHA = "6bff0b4c2a1e9d8f7b6a5c4d3e2f1a0b9c8d7e6f";
+const DEMO_SETUP = ["npm ci", "cp $BOTKINS_CHECKOUT/.env .env"];
+const DEMO_SETUP_HASH = "5d1c0e2b7a9f3c48";
+const MADE_UP_JOB_FILES = [
+  { path: "src/pricing/Plans.tsx", added: 22, removed: 7 },
+  { path: "src/pricing/Plans.test.tsx", added: 31, removed: 0, new: true },
+];
 const MADE_UP_DIFFS = {
   "src/pricing/Plans.tsx": [
     "--- a/src/pricing/Plans.tsx",
@@ -409,6 +418,17 @@ export function seed() {
       lastScheduleId: 1,
       schedules: [{ id: 1, routine: true, enabled: false, name: "Friday digest", prompt: "Collect this week's industry news in five bullets.", cadence: { kind: "weekly", time: "16:00", days: [5] }, cron: "0 16 * * 5", timezone: "America/Chicago", recurring: true, nextAt: t + 2 * 24 * HOUR, createdAt: t - 20 * 24 * HOUR }],
     },
+    // Two jobs on the Website project (project-jobs-v1): one finished and ready to bring in, one that clashes with main.
+    {
+      id: "chat-job-plans", botId: "bot-patch", title: "Add tests for the pricing plans", time: t - 40 * MIN, projectId: "p1", mode: "default",
+      job: { prompt: "Add tests for the pricing plans", where: "worktree", state: "open", createdAt: t - 52 * MIN, branch: "botkins/add-tests-for-the-pricing", base: "main", baseSha: "6bff0b4c2a1e9d8f7b6a5c4d3e2f1a0b9c8d7e6f", setup: "done" },
+      messages: [message("user", "Add tests for the pricing plans", 52), message("assistant", "Added Plans.test.tsx with a case for each plan, and fixed the yearly price rounding it caught. Both pass.", 40)],
+    },
+    {
+      id: "chat-job-lockfile", botId: "bot-mira", title: "Update the lockfile (clashes with main)", time: t - 25 * MIN, projectId: "p1", mode: "default",
+      job: { prompt: "Update the lockfile (clashes with main)", where: "worktree", state: "open", createdAt: t - 30 * MIN, branch: "botkins/update-the-lockfile", base: "main", baseSha: "6bff0b4c2a1e9d8f7b6a5c4d3e2f1a0b9c8d7e6f", setup: "done" },
+      messages: [message("user", "Update the lockfile (clashes with main)", 30), message("assistant", "Updated the lockfile and checked the build.", 25)],
+    },
   ];
   const run = (id, chatId, title, minutesAgo, extra = {}) => ({ id, chatId, title, time: t - minutesAgo * MIN, status: "Completed", detail: "", finished: t - minutesAgo * MIN + 9000, summary: "Worked for 9s · 2 steps", ...extra });
   const runs = [
@@ -484,6 +504,7 @@ export function seed() {
       showUpdates: true,
       linkPreviews: false,
       readAloud: false,
+      showRoutineChats: false,
       onboarded: true,
       approval: "ask",
       clarify: ["missing"],
@@ -1497,6 +1518,8 @@ export class MockBackend {
     // "artifacts-v1": what the bots made or were given, from an index the app keeps (here: made up).
     this.capabilities = ["main-chat-v1", "message-reactions-v1", "client-message-id-v1", "voice-turns-v1", "voice-history-v1", "quiet-replies-v1", "routine-delivery-v1", "routine-owner-v1", ...(process.env.BOTKINS_DEV_NO_OUTPUT === "off" ? [] : ["routine-no-output-v1"]), "routine-scripts-v1", "routine-models-v1", "routine-silent-v1", "routine-notify-targets-v1", "proactive-agent-v2", "proactive-learning-v1", "proactive-team-v1", "models-v2", "fast-mode-v1", "side-pane-v1", "files-v1", "folders-v1", "project-artifacts-v1", "artifacts-v1", "secure-input-v1", "chat-title-regeneration-v1", ...(process.env.BOTKINS_DEV_USAGE === "off" ? [] : ["provider-usage-v1"])];
     this.capabilities.push("project-folders-v1", "project-mode-v1", "project-clone-v1", "mark-chats-read-v1", "stop-helper-v1");
+    // "project-jobs-v1": BOTKINS_DEV_JOBS=off is a computer from before jobs.
+    if (process.env.BOTKINS_DEV_JOBS !== "off") this.capabilities.push("project-jobs-v1");
     if (this.timeline) this.capabilities.push("turn-timeline-v1");
     // "bot-voice-v1": a bot may have a voice of its own. BOTKINS_DEV_BOT_VOICE=off is an older computer.
     this.botVoice = process.env.BOTKINS_DEV_BOT_VOICE !== "off";
@@ -2179,7 +2202,7 @@ export class MockBackend {
     for (const key of ["streams", "thinking", "intents", "steerable"]) delete this.state[key][id];
     this.turns.delete(id);
     chat.time = finished;
-    chat.unread = true;
+    if (!isRoutineChat(chat)) chat.unread = true;
     this.changed();
     const next = this.state.queued[id]?.shift();
     if (next) {
@@ -2370,7 +2393,7 @@ export class MockBackend {
     else Object.assign(run, { status: "Completed", finished, summary: "Worked for " + Math.max(1, Math.round((finished - run.time) / 1000)) + "s · " + (run.steps?.length ?? 0) + " step", usage: { input: 1800, output: 240 } });
     if (said) chat.messages.push({ role: "assistant", text: said, runId: run.id, time: finished });
     chat.time = finished;
-    chat.unread = true;
+    if (!isRoutineChat(chat)) chat.unread = true;
     // Auto-summarize, as the desktop does it: every few completed turns a chat the person didn't name gets a new title.
     const every = this.state.settings.autoSummarize;
     if (run.status === "Completed" && every && !chat.main && !chat.titleSet && (chat.titleTurns = (chat.titleTurns ?? 0) + 1) >= every) {
@@ -2427,6 +2450,7 @@ export class MockBackend {
       if ("showThinking" in rest && typeof rest.showThinking !== "boolean") throw new Error("Choose whether to show thinking");
       if ("foldThinking" in rest && typeof rest.foldThinking !== "boolean") throw new Error("Choose a thinking display preference");
       if ("showUpdates" in rest && typeof rest.showUpdates !== "boolean") throw new Error("Choose whether to show updates");
+      if ("showRoutineChats" in rest && typeof rest.showRoutineChats !== "boolean") throw new Error("Choose on or off");
       if (typeof rest.clarificationInstructions === "string" && rest.clarificationInstructions.length > 4000) throw new Error("Keep the instructions under 4,000 characters.");
       if (appearance?.bubble !== undefined && !(appearance.bubble === "theme" || /^#[0-9a-f]{6}$/i.test(appearance.bubble))) throw new Error("Invalid appearance choice");
       if (appearance?.avatarAnimations !== undefined && typeof appearance.avatarAnimations !== "boolean") throw new Error("Invalid appearance choice");
@@ -2613,6 +2637,10 @@ export class MockBackend {
     deleteSection(id) {
       this.state.sections = this.state.sections.filter((s) => s.id !== id);
     },
+    orderSections(ids) {
+      const named = ids.map((id) => this.state.sections.find((s) => s.id === id)).filter(Boolean);
+      this.state.sections = [...named, ...this.state.sections.filter((s) => !named.includes(s))];
+    },
     saveTemplate(botId, name) {
       const bot = this.bot(botId);
       const bundle = currentBotBundle(bot, this.state.chats);
@@ -2687,8 +2715,9 @@ export class MockBackend {
       return chat.id;
     },
     setChatFlags(id, flags) {
-      if (flags.archived && this.chat(id).main) throw new Error("Main chat stays in your chats.");
-      Object.assign(this.chat(id), flags);
+      const chat = this.chat(id);
+      if (flags.archived && chat.main) throw new Error("Main chat stays in your chats.");
+      Object.assign(chat, isRoutineChat(chat) && flags.unread ? { ...flags, unread: false } : flags);
     },
     markChatsRead(ids) {
       if (!Array.isArray(ids)) throw new Error("Choose valid chats to mark as read.");
@@ -2707,7 +2736,7 @@ export class MockBackend {
     },
     regenerateChatTitle(id) {
       const chat = this.chat(id);
-      if (chat.main || chat.temporary || chat.panelId || chat.schedules?.some((entry) => entry.routine)) throw new Error("This chat's title can't be regenerated.");
+      if (chat.main || chat.temporary || chat.panelId || isRoutineChat(chat)) throw new Error("This chat's title can't be regenerated.");
       const opening = chat.messages.find((message) => message.role === "user" && message.text?.trim());
       if (!opening) throw new Error("Send a message before regenerating the title.");
       return (chat.title = opening.text.trim().replace(/\s+/g, " ").slice(0, 80));
@@ -3215,8 +3244,16 @@ export class MockBackend {
       this.state.tasks.unshift(task);
       return task.id;
     },
-    moveTask(id, status) {
-      Object.assign(this.state.tasks.find((t) => t.id === id) ?? {}, { status, updatedAt: now() });
+    moveTask(id, status, options = {}) {
+      const task = this.state.tasks.find((t) => t.id === id);
+      if (!task) return;
+      const from = task.status;
+      const ts = now();
+      Object.assign(task, { status, updatedAt: ts });
+      if (status === "ready" || status === "later" || status === "done" || status === "archived") delete task.reviewerBotId;
+      if (status === "ready" || status === "later") delete task.problem;
+      task.history ??= [];
+      task.history.push({ at: ts, by: "person", byName: "Person", from, to: status, ...(options?.note ? { note: String(options.note) } : {}) });
     },
     startTask(id) {
       Object.assign(this.state.tasks.find((t) => t.id === id) ?? {}, { status: "working", updatedAt: now() });
@@ -3646,6 +3683,109 @@ export class MockBackend {
       this.state.chats.unshift(chat);
       project.lastUsed = now();
       return chat.id;
+    },
+    // "project-jobs-v1": jobs, made up (no git runs and nothing on disk is touched). A job is a chat with `job`;
+    // its worktree's changes come from MADE_UP_JOB_FILES once its turn ended, and a prompt that says "conflict" or
+    // "clash" clashes with main until the bot caught up. The setup list needs a yes, as the real one does.
+    projectJobSetup(id, folder) {
+      const project = this.state.projects.find((p) => p.id === id);
+      if (!project) throw new Error("This project no longer exists.");
+      if (!project.folder) return { repo: false };
+      folder ??= project.folder;
+      if (!project.folders.includes(folder)) throw new Error("Choose a folder in this project.");
+      const changed = this.handlers.projectChanges.call(this, id, folder).files.filter((file) => file.kind !== "untracked").length;
+      return { repo: true, folder, root: folder, base: "main", sha: DEMO_SHA, short: DEMO_SHA.slice(0, 7), changed, setup: DEMO_SETUP, branch: "botkins/{topic}", file: true, hash: DEMO_SETUP_HASH, approved: project.jobSetup?.[folder] === DEMO_SETUP_HASH };
+    },
+    approveJobSetup(id, folder, hash) {
+      const info = this.handlers.projectJobSetup.call(this, id, folder);
+      if (!info.repo) throw new Error("This project's folder is not a git repository.");
+      if (hash !== info.hash) throw new Error("The setup commands changed. Look at them again.");
+      const project = this.state.projects.find((p) => p.id === id);
+      project.jobSetup = { ...project.jobSetup, [info.root]: hash };
+      return info.root;
+    },
+    startProjectJob(id, options = {}) {
+      const prompt = text(options?.prompt, 32000, "prompt");
+      const botIds = [...new Set(Array.isArray(options?.botIds) ? options.botIds : [])];
+      if (!botIds.length || botIds.length > 6) throw new Error("Choose 1 to 6 bots.");
+      const project = this.state.projects.find((p) => p.id === id);
+      if (!project) throw new Error("This project no longer exists.");
+      for (const botId of botIds) {
+        const bot = this.bot(botId);
+        if (this.state.settings?.access?.allBots === false && !bot.access?.all && !bot.access?.projects?.includes(id)) throw new Error(bot.name + " doesn't have access to the project “" + project.name + "”.");
+      }
+      const where = options.where === "checkout" ? "checkout" : "worktree";
+      if (where === "worktree") {
+        const info = this.handlers.projectJobSetup.call(this, id, options.folder);
+        if (!info.repo) throw new Error("This project's folder is not a git repository. Choose “Your checkout”.");
+        if (!info.approved) throw new Error("Look at this project's setup commands and allow them first.");
+      } else {
+        if (botIds.length > 1) throw new Error("Jobs in your checkout go one at a time. Choose one bot, or give each its own worktree.");
+        if (this.state.chats.some((c) => c.projectId === id && c.job?.where === "checkout" && c.job.state === "open" && this.turns.has(c.id))) throw new Error("A job is working in your checkout. Give this one its own worktree, or wait for it.");
+      }
+      const ids = [];
+      for (const botId of botIds) {
+        const chatId = this.handlers.startProjectChat.call(this, [botId], id, options.mode, options.folder);
+        const chat = this.chat(chatId);
+        chat.title = prompt.split("\n")[0].slice(0, 80);
+        const taken = new Set(this.state.chats.map((c) => c.job?.branch).filter(Boolean));
+        let branch = "botkins/" + (slug(prompt).split("-").slice(0, 5).join("-").slice(0, 32) || "job");
+        if (taken.has(branch)) branch += "-" + chatId.slice(5, 11);
+        chat.job = { prompt, where, state: "open", createdAt: now(), ...(where === "worktree" && { branch, base: "main", baseSha: DEMO_SHA, setup: "running" }) };
+        ids.push(chatId);
+        const go = () => {
+          if (chat.job.setup === "running") chat.job.setup = "done";
+          this.handlers.send.call(this, chatId, prompt);
+          this.changed();
+        };
+        if (where === "worktree") setTimeout(go, 1200 * this.speed);
+        else go();
+      }
+      return ids;
+    },
+    projectJobStatus(chatId) {
+      const chat = this.chat(chatId);
+      const job = chat.job;
+      if (!job) throw new Error("This chat is not a job.");
+      const working = this.turns.has(chatId);
+      if (job.where !== "worktree") return { where: job.where, state: job.state, working, canBringIn: false, reason: "Its changes are in your checkout already." };
+      const replied = chat.messages.some((m) => m.role === "assistant");
+      const files = replied ? MADE_UP_JOB_FILES.map((file) => ({ ...file })) : [];
+      const clashes = job.state === "open" && /conflict|clash/i.test(job.prompt) && !job.caughtUp ? ["mobile/package.json", "mobile/package-lock.json"] : [];
+      const open = job.state === "open";
+      const reason = job.state === "brought-in" ? "Brought in." : job.state === "removed" ? "Its worktree was removed." : working ? "The bot is still working." : !files.length ? "Nothing changed yet." : clashes.length ? "It clashes with main in " + clashes.length + " files." : "";
+      return { where: job.where, state: job.state, working, branch: job.branch, base: job.base, baseSha: DEMO_SHA.slice(0, 7), exists: open, ahead: files.length ? 1 : 0, behind: clashes.length ? 2 : 0, uncommitted: 0, files, added: files.reduce((n, f) => n + f.added, 0), removed: files.reduce((n, f) => n + f.removed, 0), conflicts: clashes, checkout: "main", checkoutChanged: 0, canBringIn: open && !reason, reason, ...(job.mergedSha && { mergedSha: job.mergedSha }) };
+    },
+    bringInJob(chatId) {
+      const status = this.handlers.projectJobStatus.call(this, chatId);
+      const job = this.chat(chatId).job;
+      if (this.turns.has(chatId)) throw new Error("Wait for the job to finish first.");
+      if (job.where !== "worktree") throw new Error("This job worked in your checkout: its changes are there already.");
+      if (job.state !== "open") throw new Error(job.state === "brought-in" ? "This job was brought in already." : "This job's worktree was removed.");
+      if (status.conflicts.length) return { ok: false, conflicts: status.conflicts };
+      if (!status.files.length) throw new Error("Nothing changed yet.");
+      job.mergedSha = randomUUID().replace(/-/g, "").slice(0, 7);
+      job.state = "brought-in";
+      return { ok: true, commit: job.mergedSha };
+    },
+    catchUpJob(chatId) {
+      const chat = this.chat(chatId);
+      if (this.turns.has(chatId)) throw new Error("Wait for the job to finish first.");
+      if (chat.job?.where !== "worktree" || chat.job.state !== "open") throw new Error("Only an open job in its own worktree can catch up.");
+      chat.job.caughtUp = true;
+      this.handlers.send.call(this, chatId, "The branch main moved on since this job started. In your worktree, merge main into " + chat.job.branch + ", resolve any conflicts, check that it still works, and commit the result.");
+    },
+    removeJobWorktree(chatId) {
+      const chat = this.chat(chatId);
+      if (this.turns.has(chatId)) throw new Error("Wait for the job to finish first.");
+      if (chat.job?.where !== "worktree" || chat.job.state !== "open") throw new Error("This job has no worktree to remove.");
+      chat.job.state = "removed";
+    },
+    startJobTurn(chatId) {
+      const chat = this.chat(chatId);
+      if (chat.job?.setup !== "failed" && chat.job?.setup !== "waiting") throw new Error("This job has started already.");
+      chat.job.setup = "skipped";
+      this.handlers.send.call(this, chatId, chat.job.prompt);
     },
     renameProject(id, name) {
       Object.assign(this.state.projects.find((p) => p.id === id) ?? {}, { name });

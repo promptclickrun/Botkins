@@ -703,4 +703,364 @@ test("BrowserController discards screenshot on window focus change or tabs.onUpd
   assert.equal(events.onUpdated.size(), 0);
 });
 
+test("BrowserController.runSecureFill enforces origin/pendingUrl, refuses bot run(), and zeroes values", async () => {
+  const tab = {
+    id: 55,
+    windowId: 1,
+    title: "Sign In",
+    url: "https://app.example.test/login",
+    pendingUrl: "https://redirect.example.test/next",
+    active: true,
+    pinned: false,
+    groupId: -1,
+    incognito: false,
+    status: "complete",
+  };
+  let executeScriptCalls = 0;
+  let debuggerCalls = 0;
+
+  globalThis.chrome = {
+    tabs: { query: async () => [tab], get: async () => tab },
+    windows: { update: async () => ({}) },
+    tabGroups: { query: async () => [] },
+    scripting: {
+      executeScript: async () => {
+        executeScriptCalls++;
+        return [{ frameId: 0, result: { ok: true, filled: [], missing: [] } }];
+      },
+    },
+    debugger: {
+      onDetach: { addListener: () => {} },
+      attach: async () => { debuggerCalls++; },
+      detach: async () => {},
+      sendCommand: async () => { debuggerCalls++; },
+    },
+  };
+
+  const ctrl = new BrowserController({
+    getSettings: async () => ({ enabled: true, mode: "all", groupName: "Botkins", groupColor: "orange", pausedTabIds: [] }),
+  });
+
+  // secure.fill must not be callable via the bot-facing run() dispatcher
+  await assert.rejects(() => ctrl.run("secure.fill", { tabId: 55 }), /Unsupported browser tool/);
+
+  // pendingUrl to a different origin must refuse immediately without calling scripting or debugger
+  const pendingField = { key: "LoginModel.Password", kind: "password", value: "SENTINEL_PENDING_URL" };
+  const fields = [pendingField];
+  await assert.rejects(
+    () => ctrl.runSecureFill({ tabId: 55, origin: "https://app.example.test", fields }),
+    (err) => err.secureCode === "origin_mismatch",
+  );
+  assert.equal(pendingField.value, "");
+  assert.equal(fields.length, 0);
+  assert.equal(executeScriptCalls, 0);
+  assert.equal(debuggerCalls, 0);
+});
+
+test("browser_snapshot on a background strict-CSP tab falls back to top frame and recovers from transient debugger detach", async () => {
+  const tab = {
+    id: 77,
+    windowId: 1,
+    title: "Strict CSP Background Tab",
+    url: "https://strict.example.test/app",
+    active: false,
+    pinned: false,
+    groupId: -1,
+    incognito: false,
+    status: "complete",
+  };
+
+  // Case 1: allFrames probe finds frames [0, 9] needing install, multi-frame install fails on strict-CSP subframe,
+  // execDriver falls back to top frame [0] and runs snapshot with traverseSameOriginIframes: true (zero CDP calls).
+  let debuggerAttaches = 0;
+  let installedTop = false;
+  const driverCalls = [];
+  globalThis.chrome = {
+    tabs: { query: async () => [tab], get: async () => tab },
+    windows: { update: async () => ({}) },
+    tabGroups: { query: async () => [] },
+    scripting: {
+      executeScript: async (injection) => {
+        const frames = injection.target?.frameIds || [];
+        if (injection.files) {
+          if (frames.length > 1) throw new Error("Blocked by subframe CSP");
+          installedTop = true;
+          return [{ frameId: 0, result: undefined }];
+        }
+        if (injection.target?.allFrames && !installedTop) {
+          return [
+            { frameId: 0, result: { __needInstall: true } },
+            { frameId: 9, result: { __needInstall: true } },
+          ];
+        }
+        const args = injection.args || [];
+        if (args[0] === "snapshot") {
+          driverCalls.push(args[1]);
+          return [{
+            frameId: 0,
+            result: {
+              ok: true,
+              version: "0.2.1",
+              title: tab.title,
+              url: tab.url,
+              text: "Strict CSP body",
+              elements: [{ ref: "e1", tag: "button", role: "button", name: "Continue", selector: "#go" }],
+              totalElements: 1,
+            },
+          }];
+        }
+        return [{ frameId: 0, result: { ok: true, version: "0.2.1" } }];
+      },
+    },
+    debugger: {
+      onDetach: { addListener: () => {} },
+      attach: async () => { debuggerAttaches++; },
+      detach: async () => {},
+      sendCommand: async () => ({}),
+    },
+  };
+
+  const ctrl1 = new BrowserController({
+    getSettings: async () => ({ enabled: true, mode: "all", groupName: "Botkins", groupColor: "orange", pausedTabIds: [] }),
+  });
+  const snap1 = await ctrl1.run("browser_snapshot", { tabId: 77 });
+  assert.equal(snap1.title, "Strict CSP Background Tab");
+  assert.equal(snap1.elements.length, 1);
+  assert.equal(debuggerAttaches, 0, "top-frame fallback should avoid CDP when subframe scripting fails");
+  assert.equal(driverCalls.some((c) => c?.traverseSameOriginIframes === true), true);
+
+  // Case 2: scripting fails on top frame too -> CDP fallback hits transient "Debugger is not attached" on background tab -> re-attaches once and succeeds.
+  let attachCalls = 0;
+  let sendAttempts = 0;
+  globalThis.chrome.scripting.executeScript = async () => {
+    throw new Error("Cannot inject script on strict CSP page");
+  };
+  globalThis.chrome.debugger = {
+    onDetach: { addListener: () => {} },
+    attach: async () => { attachCalls++; },
+    detach: async () => {},
+    sendCommand: async (_target, method) => {
+      if (method === "Runtime.evaluate") {
+        sendAttempts++;
+        if (sendAttempts === 1) {
+          throw new Error("Debugger is not attached to the tab with id: 77.");
+        }
+        return {
+          result: {
+            value: {
+              title: tab.title,
+              url: tab.url,
+              text: "CDP recovered background snapshot",
+              elements: [],
+              totalElements: 0,
+            },
+          },
+        };
+      }
+      return {};
+    },
+  };
+
+  const ctrl2 = new BrowserController({
+    getSettings: async () => ({ enabled: true, mode: "all", groupName: "Botkins", groupColor: "orange", pausedTabIds: [] }),
+  });
+  const snap2 = await ctrl2.run("browser_snapshot", { tabId: 77 });
+  assert.equal(snap2.text, "CDP recovered background snapshot");
+  assert.equal(attachCalls, 2, "should attach, recover once from transient detach, and succeed");
+
+  // Case 3: "Another debugger is already attached" is NOT silently swallowed as our own attachment.
+  globalThis.chrome.debugger = {
+    onDetach: { addListener: () => {} },
+    attach: async () => {
+      throw new Error("Another debugger is already attached to the tab with id: 77.");
+    },
+    detach: async () => {},
+    sendCommand: async () => {
+      throw new Error("should not call sendCommand when another debugger holds the tab");
+    },
+  };
+  const ctrl3 = new BrowserController({
+    getSettings: async () => ({ enabled: true, mode: "all", groupName: "Botkins", groupColor: "orange", pausedTabIds: [] }),
+  });
+  await assert.rejects(
+    () => ctrl3.run("browser_snapshot", { tabId: 77 }),
+    /Another debugger is already attached/,
+  );
+});
+
+test("browser_open with active: false waits past initial about:blank while pendingUrl is navigating", async () => {
+  const listeners = new Set();
+  const createdTab = {
+    id: 88,
+    windowId: 1,
+    title: "",
+    url: "about:blank",
+    pendingUrl: "https://target.example.test/login",
+    active: false,
+    pinned: false,
+    groupId: -1,
+    incognito: false,
+    status: "complete",
+  };
+  globalThis.chrome = {
+    tabs: {
+      create: async () => {
+        setTimeout(() => {
+          createdTab.url = "https://target.example.test/login";
+          createdTab.pendingUrl = undefined;
+          createdTab.title = "Target Login";
+          createdTab.status = "complete";
+          for (const fn of listeners) fn(88, { status: "complete" }, createdTab);
+        }, 25);
+        return createdTab;
+      },
+      get: async () => createdTab,
+      query: async () => [createdTab],
+      onUpdated: {
+        addListener: (fn) => listeners.add(fn),
+        removeListener: (fn) => listeners.delete(fn),
+      },
+    },
+    windows: { update: async () => ({}) },
+    tabGroups: { query: async () => [] },
+    scripting: { executeScript: async () => [] },
+    debugger: { onDetach: { addListener: () => {} } },
+  };
+
+  const ctrl = new BrowserController({
+    getSettings: async () => ({ enabled: true, mode: "all", groupName: "Botkins", groupColor: "orange", pausedTabIds: [] }),
+  });
+  const opened = await ctrl.run("browser_open", { url: "https://target.example.test/login", active: false });
+  assert.equal(opened.url, "https://target.example.test/login");
+  assert.equal(opened.title, "Target Login");
+  assert.equal(listeners.size, 0);
+});
+
+test("BrowserController secret-bearing guard persists via session storage, fails closed on scripting errors, and clears on reload/onUpdated/close", async () => {
+  const sessionStore = new Map();
+  const updatedListeners = new Set();
+  const removedListeners = new Set();
+  const tab = {
+    id: 91,
+    windowId: 1,
+    title: "Login",
+    url: "https://portal.example.test/login",
+    active: true,
+    pinned: false,
+    groupId: -1,
+    incognito: false,
+    status: "complete",
+  };
+  let driverThrows = false;
+  let cdpCalls = 0;
+
+  globalThis.chrome = {
+    storage: {
+      session: {
+        get: async (key) => ({ [key]: sessionStore.get(key) }),
+        set: async (obj) => {
+          for (const [k, v] of Object.entries(obj)) sessionStore.set(k, v);
+        },
+      },
+    },
+    tabs: {
+      query: async () => [tab],
+      get: async () => tab,
+      reload: async () => {},
+      remove: async (id) => {
+        for (const fn of removedListeners) fn(id);
+      },
+      onUpdated: {
+        addListener: (fn) => updatedListeners.add(fn),
+        removeListener: (fn) => updatedListeners.delete(fn),
+      },
+      onRemoved: {
+        addListener: (fn) => removedListeners.add(fn),
+        removeListener: (fn) => removedListeners.delete(fn),
+      },
+    },
+    windows: { update: async () => ({}) },
+    tabGroups: { query: async () => [] },
+    scripting: {
+      executeScript: async (injection) => {
+        if (driverThrows) throw new Error("Transient scripting error");
+        if (injection.world === "MAIN") return [{ frameId: 0, result: { ok: true, value: "eval-ok" } }];
+        const [action] = injection.args || [];
+        if (action === "secureFill") {
+          return [{ frameId: 0, result: { ok: true, filled: ["password"], missing: [], docToken: "doc-1", secretActive: true } }];
+        }
+        if (action === "secretStatus") {
+          return [{ frameId: 0, result: { ok: true, sameDoc: true, active: true, docToken: "doc-1" } }];
+        }
+        return [{ frameId: 0, result: { ok: true } }];
+      },
+    },
+    debugger: {
+      onDetach: { addListener: () => {} },
+      attach: async () => {},
+      detach: async () => {},
+      sendCommand: async () => {
+        cdpCalls++;
+        return { result: { value: "cdp-ok" } };
+      },
+    },
+  };
+
+  const makeCtrl = () =>
+    new BrowserController({
+      getSettings: async () => ({ enabled: true, mode: "all", groupName: "Botkins", groupColor: "orange", pausedTabIds: [] }),
+    });
+
+  const ctrl1 = makeCtrl();
+  const sentinel = "SENTINEL_SW_RESTART_PW";
+  await ctrl1.runSecureFill({
+    tabId: 91,
+    origin: "https://portal.example.test",
+    fields: [{ key: "password", kind: "password", value: sentinel }],
+  });
+  // Session storage records only tab metadata, never secret values.
+  assert.equal(JSON.stringify([...sessionStore.entries()]).includes(sentinel), false);
+
+  // Fresh controller (simulating MV3 service worker restart) hydrates mark and still blocks eval/cdp.
+  const ctrl2 = makeCtrl();
+  await assert.rejects(() => ctrl2.run("browser_eval", { tabId: 91, expression: "1+1" }), /securely filled value/i);
+  await assert.rejects(() => ctrl2.run("browser_cdp", { tabId: 91, method: "Runtime.evaluate" }), /securely filled value/i);
+  assert.equal(cdpCalls, 0);
+
+  // Transient scripting failure fails closed (still blocks eval/cdp and CDP snapshot fallback).
+  driverThrows = true;
+  await assert.rejects(() => ctrl2.run("browser_eval", { tabId: 91, expression: "1+1" }), /securely filled value/i);
+  await assert.rejects(() => ctrl2.run("browser_cdp", { tabId: 91, method: "Runtime.evaluate" }), /securely filled value/i);
+  await assert.rejects(() => ctrl2.run("browser_snapshot", { tabId: 91 }), /securely filled value/i);
+  assert.equal(cdpCalls, 0);
+  driverThrows = false;
+
+  // Loading -> complete navigation via tabs.onUpdated clears the mark.
+  for (const fn of updatedListeners) fn(91, { status: "loading" }, tab);
+  for (const fn of updatedListeners) fn(91, { status: "complete" }, tab);
+  const evalAfterUpdate = await ctrl2.run("browser_eval", { tabId: 91, expression: "1+1" });
+  assert.equal(evalAfterUpdate.result, "eval-ok");
+
+  // Re-mark and verify browser_navigate reload clears the mark.
+  await ctrl2.runSecureFill({
+    tabId: 91,
+    origin: "https://portal.example.test",
+    fields: [{ key: "password", kind: "password", value: sentinel }],
+  });
+  await assert.rejects(() => ctrl2.run("browser_eval", { tabId: 91, expression: "1+1" }), /securely filled value/i);
+  await ctrl2.run("browser_navigate", { tabId: 91, action: "reload" });
+  const evalAfterReload = await ctrl2.run("browser_eval", { tabId: 91, expression: "1+1" });
+  assert.equal(evalAfterReload.result, "eval-ok");
+
+  // Re-mark and verify close clears the mark.
+  await ctrl2.runSecureFill({
+    tabId: 91,
+    origin: "https://portal.example.test",
+    fields: [{ key: "password", kind: "password", value: sentinel }],
+  });
+  await ctrl2.run("browser_close_tab", { tabId: 91 });
+  assert.equal(ctrl2.secretTabs.has(91), false);
+});
+
+
 

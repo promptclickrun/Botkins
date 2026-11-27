@@ -20,7 +20,7 @@ const operations = {
   https_header: "Send this value in an HTTPS request header to",
   page_fill: "Fill the named inputs on the open browser page at",
   page_fill_submit: "Fill and submit the named inputs on the open browser page at",
-  extension_fill: "Fill inputs in the connected browser extension on",
+  native_fill: "Fill the secure field in the native desktop app",
   git_read: "Check read access to this Git repository using its HTTPS refs endpoint and a bearer token at",
 };
 
@@ -35,8 +35,12 @@ const CREDENTIAL_OPS = [
   "app_fill",
 ];
 
-const EXTENSION_AUTO_SUBMIT_ERROR =
-  "Auto-submit is disabled for extension_fill because Chrome MV3 extensions cannot enforce submit destinations at the browser network boundary. Fill without submit and let the person submit, or use page_fill_submit in the host screen browser.";
+export const FIELD_KEY_RE = /^[A-Za-z](?:[A-Za-z0-9_-]|\.(?=[A-Za-z0-9_-])){0,127}$/;
+
+const SUBMIT_REFUSED_MESSAGES = {
+  cross_site_action: "The form was filled but not submitted: its action posts to a different site than the approved page. Submit it yourself only if you trust that destination.",
+  origin_changed: "The form was filled but not submitted: the tab left the approved page before submit.",
+};
 
 const SAFE_CHILD_ENV_KEYS = [
   "PATH", "HOME", "USER", "LOGNAME", "LANG", "LC_ALL", "LC_CTYPE", "TERM",
@@ -92,6 +96,20 @@ const submitSchema = {
   ],
 };
 
+const targetSchema = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    browser: text,
+    tabId: { type: "integer", minimum: 1 },
+    pid: { type: "integer", minimum: 1 },
+    window_id: text,
+    element_token: text,
+    app: text,
+    window_title: text,
+  },
+};
+
 function label(s, limit) {
   if (typeof s !== "string" || !s.trim() || s.length > limit || /[\p{Cc}\p{Cf}]/u.test(s))
     throw new Error("Use a short, single-line label.");
@@ -108,6 +126,62 @@ function cleanSubmit(submit) {
   if (submit.buttonText !== undefined) out.buttonText = label(submit.buttonText, 100);
   if (submit.pressEnter === true) out.pressEnter = true;
   return out;
+}
+
+function cleanLine(s, limit = 140) {
+  if (typeof s !== "string") return "";
+  return s.replace(/[\p{Cc}\p{Cf}]+/gu, " ").trim().slice(0, limit);
+}
+function urlOrigin(url) {
+  if (typeof url !== "string" || !url) return "";
+  try { return new URL(url).origin; } catch { return ""; }
+}
+function browserLabel(device) {
+  const name = cleanLine(device?.name, 80);
+  if (name) return name;
+  const parts = [cleanLine(device?.browser, 40), cleanLine(device?.profile, 60)].filter(Boolean);
+  return parts.join(" ") || cleanLine(device?.id, 40) || "Connected browser";
+}
+function pickBrowser(browsers, selector) {
+  const query = cleanLine(selector, 120);
+  if (!query) return null;
+  const byId = browsers.find((d) => d.id === query);
+  if (byId) return byId;
+  const lower = query.toLowerCase();
+  const exact = browsers.filter((d) => (d.name || "").toLowerCase() === lower || (d.profile || "").toLowerCase() === lower);
+  if (exact.length === 1) return exact[0];
+  const partial = browsers.filter((d) => (d.name || "").toLowerCase().includes(lower) || (d.profile || "").toLowerCase().includes(lower));
+  if (partial.length === 1) return partial[0];
+  return null;
+}
+function parseTarget(target, operation) {
+  if (operation === "native_fill") {
+    if (!target || typeof target !== "object" || Array.isArray(target)) {
+      throw new Error("native_fill requires target: { pid, element_token, window_id?, app?, window_title? }.");
+    }
+    if (!Number.isInteger(target.pid) || target.pid < 1) {
+      throw new Error("target.pid must be a positive integer for native_fill.");
+    }
+    const elementToken = label(target.element_token, 120);
+    const out = { pid: target.pid, element_token: elementToken };
+    if (target.window_id !== undefined) out.window_id = label(String(target.window_id), 120);
+    if (target.app !== undefined) out.app = label(target.app, 120);
+    if (target.window_title !== undefined) out.window_title = label(target.window_title, 160);
+    return out;
+  }
+  if (target === undefined) return null;
+  if (operation !== "page_fill") throw new Error("target is only supported for page_fill and native_fill.");
+  if (!target || typeof target !== "object" || Array.isArray(target)) throw new Error("target must be an object with browser and/or tabId.");
+  const out = {};
+  if (target.browser !== undefined) {
+    const b = label(target.browser, 120);
+    out.browser = b;
+  }
+  if (target.tabId !== undefined) {
+    if (!Number.isInteger(target.tabId) || target.tabId < 1) throw new Error("target.tabId must be a positive integer.");
+    out.tabId = target.tabId;
+  }
+  return Object.keys(out).length ? out : null;
 }
 
 export function validateEnvExec({ command, args = [], envVar, cwd, timeoutMs, resolvedPath, exeSha256 } = {}, { trustedDirs } = {}) {
@@ -218,30 +292,40 @@ export function validateHttpsHeader({ header = "Authorization", prefix = "", met
   return { header: hdr, prefix: pre, method: upperMethod, body: cleanBody, extraHeaders: cleanExtra };
 }
 
-function describe({ operation, url, title, fields, submit, header, prefix, method, body, extraHeaders, browser, tabId }, { allowLocalHttp = false } = {}) {
+function describe({ operation, url, title, fields, submit, header, prefix, method, body, extraHeaders }, { allowLocalHttp = false } = {}) {
   if (!Object.hasOwn(operations, operation)) throw new Error("Choose a supported secure operation.");
-  let address;
-  try {
-    address = new URL(url);
-  } catch {
-    throw new Error("Provide the full HTTPS destination.");
+  let address = null;
+  const checkAddress = () => {
+    const localHttpOk = allowLocalHttp && address.protocol === "http:" && ["localhost", "127.0.0.1", "[::1]"].includes(address.hostname);
+    if ((address.protocol !== "https:" && !localHttpOk) || address.username || address.password || address.search || address.hash || address.href.length > 2048)
+      throw new Error("Use an HTTPS address without credentials, a query or a fragment.");
+  };
+  if (operation === "native_fill") {
+    if (url !== undefined && url !== "") {
+      try { address = new URL(url); } catch { throw new Error("Provide a valid HTTPS destination or omit url for native_fill."); }
+      checkAddress();
+    }
+  } else {
+    try {
+      address = new URL(url);
+    } catch {
+      throw new Error("Provide the full HTTPS destination.");
+    }
+    checkAddress();
   }
-  const localHttpOk = allowLocalHttp && address.protocol === "http:" && ["localhost", "127.0.0.1", "[::1]"].includes(address.hostname);
-  if ((address.protocol !== "https:" && !localHttpOk) || address.username || address.password || address.search || address.hash || address.href.length > 2048)
-    throw new Error("Use an HTTPS address without credentials, a query or a fragment.");
   if (
     !Array.isArray(fields) ||
     !fields.length ||
     fields.length > 8 ||
-    (["bearer_get", "git_read", "https_header"].includes(operation) && fields.length !== 1)
+    (["bearer_get", "git_read", "https_header", "native_fill"].includes(operation) && fields.length !== 1)
   )
-    throw new Error("Request one token for this operation, or one to eight fields for a form.");
+    throw new Error("Request one token or field for this operation, or one to eight fields for a form.");
   const keys = new Set();
   const clean = fields.map((f) => {
     if (
       !f ||
       typeof f.key !== "string" ||
-      !/^[A-Za-z][A-Za-z0-9_-]{0,63}$/.test(f.key) ||
+      !FIELD_KEY_RE.test(f.key) ||
       f.key in Object.prototype ||
       keys.has(f.key) ||
       !fieldSchema.properties.kind.enum.includes(f.kind)
@@ -259,18 +343,12 @@ function describe({ operation, url, title, fields, submit, header, prefix, metho
   const plan = {
     title: label(title, 150),
     operation,
-    url: address.href,
-    origin: address.origin,
+    ...(address ? { url: address.href, origin: address.origin } : {}),
     fields: clean,
   };
+  if (address?.protocol === "http:") plan.allowLocalHttp = true;
   if (operation === "page_fill_submit") {
     plan.submit = cleanSubmit(submit ?? true);
-  } else if (operation === "extension_fill") {
-    if (cleanSubmit(submit)) throw new Error(EXTENSION_AUTO_SUBMIT_ERROR);
-    plan.submit = null;
-    if (typeof browser === "string" && browser.trim()) plan.browser = browser.trim().slice(0, 120);
-    if (typeof tabId === "number" && Number.isInteger(tabId)) plan.tabId = tabId;
-    if (allowLocalHttp) plan.allowLocalHttp = true;
   } else if (operation === "https_header") {
     plan.http = validateHttpsHeader({ header, prefix, method, body, extraHeaders });
   }
@@ -438,54 +516,24 @@ export async function performSecureUse(plan, values, adapters = {}) {
   const signal = adapters.signal ?? AbortSignal.timeout(30_000);
   const secrets = Object.values(values ?? {}).filter((v) => typeof v === "string" && v.length > 0);
 
-  if (plan.operation === "page_fill" || plan.operation === "page_fill_submit") {
-    if (!adapters.fillPage) throw new Error("Open the target page in the desktop chat's side pane first.");
-    const pagePlan = plan.operation === "page_fill_submit" ? { ...plan, submit: plan.submit ?? {} } : plan;
-    return adapters.fillPage(pagePlan, values);
+  if (plan.operation === "native_fill") {
+    if (!adapters.fillNative) throw new Error("Native computer use is not enabled on this computer.");
+    return adapters.fillNative(plan, values, signal);
   }
 
   if (plan.operation === "extension_fill") {
-    if (!adapters.extensionFill) {
-      throw new Error("No connected Chromium browser extension is available for extension_fill.");
+    if (!plan.extension || !adapters.fillExtension) throw new Error("No connected browser extension tab is available for this fill.");
+    return adapters.fillExtension(plan, values, signal);
+  }
+
+  if (plan.operation === "page_fill" || plan.operation === "page_fill_submit") {
+    if (plan.extension && adapters.fillExtension) {
+      return adapters.fillExtension(plan, values, signal);
     }
-    if (plan.submit) {
-      throw new Error(EXTENSION_AUTO_SUBMIT_ERROR);
-    }
-    const expectedOrigin = pinOrigin(plan.origin ?? plan.url, { allowLocalHttp: Boolean(plan.allowLocalHttp) });
-    if (!expectedOrigin) throw new Error("Invalid origin for extension_fill.");
-    const mappedFields = (plan.fields ?? [])
-      .filter((f) => Object.hasOwn(values, f.key ?? f.name))
-      .map((f) => {
-        const src = f.source || f.kind || "value";
-        const kind = src === "username" ? "username" : src === "totp" ? "totp" : f.kind === "password" || (src === "value" && plan.credentialKind === "login") ? "password" : "secret";
-        return {
-          ...(f.ref && { ref: f.ref }),
-          ...(f.selector && { selector: f.selector }),
-          ...(f.name && { name: f.name }),
-          ...(!f.ref && !f.selector && !f.name && f.key && { name: f.key }),
-          kind,
-          secret: src !== "username",
-          value: values[f.key ?? f.name],
-        };
-      });
-    if (!mappedFields.length) throw new Error("No values to fill.");
-    const res = await adapters.extensionFill(
-      {
-        expectedOrigin,
-        allowLocalHttp: Boolean(plan.allowLocalHttp),
-        fields: mappedFields,
-        submit: false,
-        ...(plan.browser && { browser: plan.browser }),
-        ...(plan.tabId !== undefined && { tabId: plan.tabId }),
-      },
-      { signal, botId: plan.botId, chatId: plan.chatId },
-    );
-    return {
-      filled: true,
-      filledCount: Number(res?.filledCount ?? mappedFields.length),
-      submitted: false,
-      origin: res?.origin || expectedOrigin,
-    };
+    if (plan.extension) throw new Error("The approved browser extension is no longer available.");
+    if (!adapters.fillPage) throw new Error("Open the target page in a connected browser extension tab or the desktop chat's side pane first.");
+    const pagePlan = plan.operation === "page_fill_submit" ? { ...plan, submit: plan.submit ?? {} } : plan;
+    return adapters.fillPage(pagePlan, values);
   }
 
   if (plan.operation === "env_exec") {
@@ -550,6 +598,33 @@ export async function performSecureUse(plan, values, adapters = {}) {
   if (!response.ok) throw new Error("The destination declined the request.");
 }
 
+// Only allowed keys and known outcome codes cross back to the model, never values.
+function extensionOutcome(outcome, keys, submitRequested) {
+  const allowed = new Set(keys);
+  const filled = Array.isArray(outcome?.filled) ? outcome.filled.filter((k) => typeof k === "string" && allowed.has(k)) : [];
+  const missing = Array.isArray(outcome?.missing) ? outcome.missing.filter((k) => typeof k === "string" && allowed.has(k)) : [];
+  const out = { applied: true, filled, missing };
+  if (submitRequested) {
+    out.submitted = outcome?.submitted === true;
+    const reason = Object.hasOwn(SUBMIT_REFUSED_MESSAGES, outcome?.submitRefused) ? outcome.submitRefused : null;
+    if (reason) {
+      out.submitRefused = reason;
+      out.message = SUBMIT_REFUSED_MESSAGES[reason];
+    }
+  }
+  return out;
+}
+
+function secureRefusal(err) {
+  switch (err?.secureCode) {
+    case "origin_mismatch": return "Refused secure fill: the tab navigated to a different origin after approval. Nothing was filled.";
+    case "password_type_mismatch": return "Refused secure fill: a password value can only be filled into a password input. Nothing was filled.";
+    case "type_mismatch": return "Refused secure fill: the target input type does not match the requested field kind. Nothing was filled.";
+    case "native_target_mismatch": return "Refused secure fill: the native target field is no longer a secure/password field in the approved window. Nothing was filled.";
+    default: return null;
+  }
+}
+
 function sanitizeCredentialHit(entry) {
   if (!entry || typeof entry !== "object") return null;
   const out = {};
@@ -576,7 +651,7 @@ export class SecureInputs {
       pageUnavailable,
       credentials,
       credentialGrants,
-      extensionFill,
+      browserTools,
       appFill,
       allowLocalHttp = false,
       trustedExecDirs = null,
@@ -589,7 +664,7 @@ export class SecureInputs {
       pageUnavailable,
       credentials,
       credentialGrants,
-      extensionFill,
+      browserTools,
       appFill,
       allowLocalHttp,
       trustedExecDirs,
@@ -605,6 +680,144 @@ export class SecureInputs {
 
   getStandingGrants() {
     return typeof this.credentialGrants === "function" ? this.credentialGrants() : this.credentialGrants ?? null;
+  }
+
+  #browserBridge() {
+    return typeof this.browserTools === "function" ? this.browserTools() : this.browserTools ?? null;
+  }
+  async #liveBrowsers(bridge) {
+    if (!bridge) return [];
+    if (typeof bridge.devices === "function") {
+      const list = bridge.devices() || [];
+      return list.filter((d) => d && d.connected && d.enabled !== false);
+    }
+    if (typeof bridge.tools === "function" && bridge.tools().length > 0 && typeof bridge.call === "function") {
+      try {
+        const res = await bridge.call("browser_list", {});
+        return (res?.browsers || []).filter((d) => d && d.connected && d.enabled !== false);
+      } catch {
+        return [];
+      }
+    }
+    return [];
+  }
+  async #resolveExtensionTarget(plan, target, { botId, chatId }) {
+    const bridge = this.#browserBridge();
+    const live = await this.#liveBrowsers(bridge);
+    if (!live.length) {
+      if (target) {
+        throw new Error("No connected Botkins Chromium extension is enabled on this host. Connect the extension and try again.");
+      }
+      return null;
+    }
+    let browsers = live;
+    if (target?.browser) {
+      const picked = pickBrowser(live, target.browser);
+      if (!picked) {
+        const available = live.map((d) => `${browserLabel(d)} (${d.id})`).join(", ");
+        throw new Error(`Could not match browser "${target.browser}". Connected browsers: ${available}.`);
+      }
+      browsers = [picked];
+    }
+
+    const tabsByBrowser = [];
+    for (const b of browsers) {
+      try {
+        const res = await bridge.call("browser_tabs", { browser: b.id }, { botId, chatId });
+        const tabs = Array.isArray(res?.tabs) ? res.tabs : [];
+        tabsByBrowser.push({ browser: b, tabs });
+      } catch {
+        if (target?.browser) {
+          throw new Error(`Could not list tabs in browser "${browserLabel(b)}". Check that the extension is connected.`);
+        }
+      }
+    }
+
+    if (target?.tabId != null) {
+      const hits = [];
+      for (const { browser, tabs } of tabsByBrowser) {
+        for (const tab of tabs) {
+          if (tab.id === target.tabId) hits.push({ browser, tab });
+        }
+      }
+      if (hits.length === 0) {
+        throw new Error(`Tab ${target.tabId} is not open or not eligible in the connected browser.`);
+      }
+      if (hits.length > 1) {
+        const choices = hits.map(({ browser }) => `${browserLabel(browser)} (${browser.id})`).join(", ");
+        throw new Error(`Tab ${target.tabId} matches more than one browser (${choices}). Specify target.browser as well.`);
+      }
+      const { browser, tab } = hits[0];
+      const tabOrigin = urlOrigin(tab.url);
+      if (tabOrigin !== plan.origin) {
+        throw new Error(`Tab ${tab.id} is on ${tabOrigin || "another page"}, not ${plan.origin}.`);
+      }
+      return {
+        deviceId: browser.id,
+        browserLabel: browserLabel(browser),
+        tabId: tab.id,
+        tabTitle: cleanLine(tab.title, 140),
+        origin: plan.origin,
+      };
+    }
+
+    const matches = [];
+    for (const { browser, tabs } of tabsByBrowser) {
+      for (const tab of tabs) {
+        if (urlOrigin(tab.url) === plan.origin) matches.push({ browser, tab });
+      }
+    }
+    if (matches.length === 1) {
+      const { browser, tab } = matches[0];
+      return {
+        deviceId: browser.id,
+        browserLabel: browserLabel(browser),
+        tabId: tab.id,
+        tabTitle: cleanLine(tab.title, 140),
+        origin: plan.origin,
+      };
+    }
+    if (matches.length > 1) {
+      const choices = matches
+        .slice(0, 6)
+        .map(({ browser, tab }) => `browser: "${browserLabel(browser)}", tabId: ${tab.id}${tab.title ? ` (${cleanLine(tab.title, 60)})` : ""}`)
+        .join("; ");
+      throw new Error(`Multiple open browser tabs match ${plan.origin}. Pass target: { browser, tabId } to choose one: ${choices}.`);
+    }
+    if (target?.browser) {
+      throw new Error(`No open tab on ${plan.origin} in ${browserLabel(browsers[0])}.`);
+    }
+    return null;
+  }
+
+  // The one browser-extension fill path: main's sealed `secure.fill` ask to an enabled, live
+  // device. Values go only to the tab and origin pinned at approval time.
+  #extensionFiller() {
+    const bridge = this.#browserBridge();
+    if (typeof bridge?.secureFill !== "function") return undefined;
+    return (p, vals, signal) => {
+      const fields = p.fields
+        .filter((f) => Object.hasOwn(vals, f.key))
+        .map((f) => ({ key: f.name || f.key, kind: f.kind, value: vals[f.key] }));
+      return bridge.secureFill(p.extension.deviceId, {
+        tabId: p.extension.tabId,
+        origin: p.extension.origin,
+        fields,
+        submit: Boolean(p.submit),
+        ...(p.allowLocalHttp === true && { allowLocalHttp: true }),
+      }, { signal });
+    };
+  }
+
+  #nativeFiller(bot) {
+    if (typeof this.ws.computerUse?.secureSetValue !== "function") return undefined;
+    return (p, vals, signal) => {
+      const value = Object.values(vals)[0];
+      return this.ws.computerUse.secureSetValue(
+        { ...p.native, value },
+        { botId: bot.id, botName: bot.name, signal },
+      );
+    };
   }
 
   cancel(chatId) {
@@ -669,36 +882,90 @@ export class SecureInputs {
 
     const request = defineTool("request_secure_input", {
       description:
-        "Ask the person to enter a new or unsaved secret (or pick one manually) for an HTTPS destination; returns one-time handles for use_secure_input. For credentials already in the Botkins vault or a linked password manager, prefer find_saved_credentials + use_credential. Never request secrets in chat.",
+        "Ask the person to pick a saved credential from the Botkins vault or enter a private value for this HTTPS destination or native desktop field; returns one-time handles for use_secure_input. For credentials already in the Botkins vault or a linked password manager, prefer find_saved_credentials + use_credential. For page_fill, targets an open tab in a connected Botkins browser extension (pass optional target: { browser, tabId }, or omit target when no screen browser is open and exactly one connected extension tab matches the origin), a screen browser opened with browser_form, or the desktop chat’s side_pane_web viewer. For native_fill, pass target: { pid, element_token, window_id?, app?, window_title? } from computer_observe (url optional) to fill one native secure/password field through the vault without exposing the secret. https_form posts keyed fields. bearer_get and git_read take one bearer token. Never request secrets in chat.",
       parameters: {
         type: "object",
         additionalProperties: false,
-        required: ["title", "operation", "url", "fields"],
+        required: ["title", "operation", "fields"],
         properties: {
           title: text,
           operation: { type: "string", enum: Object.keys(operations) },
           url: text,
           fields: { type: "array", minItems: 1, maxItems: 8, items: fieldSchema },
+          target: targetSchema,
           submit: submitSchema,
           header: text,
           prefix: text,
           method: { type: "string", enum: ["GET", "POST", "PUT", "PATCH", "DELETE"] },
           body: {},
-          browser: text,
-          tabId: { type: "number" },
         },
       },
       handler: async (args) => {
         active();
         const plan = describe(args, { allowLocalHttp: this.allowLocalHttp });
-        if (plan.operation === "extension_fill") checkPrivate();
-        if ((plan.operation === "page_fill" || plan.operation === "page_fill_submit") && this.pageUnavailable)
-          throw new Error(this.pageUnavailable);
-        if ((plan.operation === "page_fill" || plan.operation === "page_fill_submit") && this.formBrowser) {
+        const target = parseTarget(args.target, plan.operation);
+        if (plan.operation === "native_fill") {
           checkPrivate();
-          plan.document = await this.formBrowser.bind(chat.id, plan.url);
-          checkPrivate();
+          if (typeof this.ws.computerUse?.resolveCachedSecureTarget !== "function") {
+            throw new Error("Native secure fill is unavailable on this computer.");
+          }
+          plan.native = this.ws.computerUse.resolveCachedSecureTarget(target);
         }
+        if (plan.operation === "page_fill") {
+          if (target) {
+            checkPrivate();
+            plan.extension = await this.#resolveExtensionTarget(plan, target, { botId: bot.id, chatId: chat.id });
+            checkPrivate();
+          } else {
+            const screenOpen = Boolean(
+              this.formBrowser &&
+                (typeof this.formBrowser.hasOpenPage === "function" ? this.formBrowser.hasOpenPage(chat.id) : true),
+            );
+            if (screenOpen) {
+              checkPrivate();
+              plan.document = await this.formBrowser.bind(chat.id, plan.url);
+              checkPrivate();
+            } else {
+              const extTarget = privateChat()
+                ? await this.#resolveExtensionTarget(plan, null, { botId: bot.id, chatId: chat.id })
+                : null;
+              if (extTarget) {
+                checkPrivate();
+                plan.extension = extTarget;
+              } else if (this.formBrowser) {
+                checkPrivate();
+                plan.document = await this.formBrowser.bind(chat.id, plan.url);
+                checkPrivate();
+              } else if (this.pageUnavailable) {
+                throw new Error(this.pageUnavailable);
+              }
+            }
+          }
+        }
+        if (plan.operation === "page_fill_submit") {
+          if (this.pageUnavailable) throw new Error(this.pageUnavailable);
+          if (this.formBrowser) {
+            checkPrivate();
+            plan.document = await this.formBrowser.bind(chat.id, plan.url);
+            checkPrivate();
+          }
+        }
+        const detail = plan.native
+          ? [
+              `${operations.native_fill}${cleanLine(plan.native.app, 120) ? ` (${cleanLine(plan.native.app, 120)})` : ""}`,
+              ...(cleanLine(plan.native.window_title, 160) ? [`Window: ${cleanLine(plan.native.window_title, 160)}`] : []),
+              `PID: ${plan.native.pid} · Element: ${plan.native.element_token}`,
+              ...plan.fields.map(f => `${f.label} → ${f.key}`),
+            ].join("\n")
+          : plan.extension
+          ? [
+              `${operations.page_fill} ${plan.origin}`,
+              `Browser: ${plan.extension.browserLabel}`,
+              ...(plan.extension.tabTitle ? [`Tab: ${plan.extension.tabTitle}`] : []),
+              `URL: ${plan.url}`,
+              ...plan.fields.map(f => `${f.label} → ${f.key}`),
+            ].join("\n")
+          : operations[plan.operation] + " " + plan.url + "\n" + plan.fields.map((f) => f.label + " → " + f.key).join("\n");
         const answer = await this.ws.interactions.request(
           chat,
           task,
@@ -707,7 +974,7 @@ export class SecureInputs {
             title: plan.title,
             fields: plan.fields,
             botId: bot.id,
-            detail: operations[plan.operation] + " " + plan.url + "\n" + plan.fields.map((f) => f.label + " → " + f.key).join("\n"),
+            detail,
           },
           ttl,
         );
@@ -727,7 +994,7 @@ export class SecureInputs {
 
     const use = defineTool("use_secure_input", {
       description:
-        "Pass the handles object from request_secure_input unchanged to apply the operation the person approved. Consumes the handles once and returns completion only.",
+        "Pass the handles object from request_secure_input unchanged to apply the operation the person approved. Optional submit: true (for page_fill on a browser extension tab) submits the form after filling; a form whose action posts to a different site than the approved page is filled but not submitted, and the result says why. Consumes the handles once and returns completion only (never values).",
       parameters: {
         type: "object",
         additionalProperties: false,
@@ -739,10 +1006,12 @@ export class SecureInputs {
               { type: "array", items: text, minItems: 1, maxItems: 8 },
             ],
           },
+          submit: { type: "boolean" },
         },
       },
-      handler: async ({ handles }) => {
+      handler: async ({ handles, submit }) => {
         active();
+        if (submit !== undefined && typeof submit !== "boolean") throw new Error("submit must be a boolean.");
         const list = Array.isArray(handles);
         const ids = handles && typeof handles === "object" ? Object.values(handles) : [];
         const grant = this.#grants.get(ids[0]);
@@ -755,33 +1024,42 @@ export class SecureInputs {
           !Object.entries(grant.handles).every(([key, id]) => (list ? ids.includes(id) : Object.hasOwn(handles, key) && handles[key] === id))
         )
           throw new Error("These handles are incomplete, expired or unavailable for this turn.");
-        if ((grant.plan.document || grant.plan.operation === "extension_fill") && !privateChat())
-          throw new Error("This secure browser operation is only available in a private owner chat.");
+        if (grant.plan.document && !privateChat()) throw new Error("Open the screen browser in a private owner chat.");
+        if (grant.plan.extension && !privateChat()) throw new Error("Use a private owner chat to fill a connected browser tab.");
+        if (grant.plan.native && !privateChat()) throw new Error("Use a private owner chat to fill a native desktop field.");
         const values = { ...grant.values };
         const secrets = Object.values(values).filter((v) => typeof v === "string" && v.length > 0);
-        if (grant.plan.operation === "extension_fill" || grant.plan.operation === "page_fill" || grant.plan.operation === "page_fill_submit") {
+        if (grant.plan.operation === "page_fill" || grant.plan.operation === "page_fill_submit") {
           this.rememberSecrets(secrets);
         }
         this.#forget(grant); // Reserve before awaiting. An ambiguous network failure must never replay a submission.
         const controller = new AbortController();
         this.#inFlight.set(controller, chat.id);
+        const execPlan = { ...grant.plan, chatId: chat.id, botId: bot.id, ...(submit === true && { submit: true }) };
+        const fillExtension = grant.plan.extension ? this.#extensionFiller() : undefined;
+        const fillNative = grant.plan.native ? this.#nativeFiller(bot) : undefined;
         try {
-          const result = await this.use(
-            { ...grant.plan, chatId: chat.id, botId: bot.id },
-            values,
-            {
-              signal: AbortSignal.any([controller.signal, AbortSignal.timeout(30_000)]),
-              extensionFill: this.extensionFill,
-              appFill: this.appFill,
-              settings: typeof this.settings === "function" ? this.settings() : this.settings,
-            },
-          );
+          const result = await this.use(execPlan, values, {
+            signal: AbortSignal.any([controller.signal, AbortSignal.timeout(30_000)]),
+            ...(fillExtension && { fillExtension }),
+            ...(fillNative && { fillNative }),
+            appFill: this.appFill,
+            settings: typeof this.settings === "function" ? this.settings() : this.settings,
+          });
+          if (grant.plan.native) {
+            return JSON.stringify({ applied: true, ...(result?.effect !== undefined && { effect: result.effect }) });
+          }
+          if (grant.plan.extension) {
+            return JSON.stringify(extensionOutcome(result, Object.keys(grant.handles), submit === true));
+          }
           if (result && typeof result === "object") {
             const safe = JSON.parse(scrub(JSON.stringify(result), secrets));
             return JSON.stringify({ applied: true, ...safe });
           }
           return JSON.stringify({ applied: true });
-        } catch {
+        } catch (err) {
+          const refusal = secureRefusal(err);
+          if (refusal) throw new Error(refusal);
           throw new Error("Botkins could not apply the secure input. Check the destination and request fresh input to retry.");
         } finally {
           wipeValues(values);
@@ -871,7 +1149,7 @@ export class SecureInputs {
         tools.push(
           defineTool("use_credential", {
             description:
-              "Use a saved credential by ID for an origin-pinned browser fill (page_fill, page_fill_submit with browser-boundary origin enforcement, or fill-only extension_fill), HTTPS request (https_form, bearer_get, https_header), verified trusted-executable CLI env_exec (absolute path, output suppressed), or TOTP code without exposing values. Runs immediately under an owner standing grant; otherwise raises an owner approval card first.",
+              "Use a saved credential by ID for an origin-pinned browser fill (page_fill, page_fill_submit with browser-boundary origin enforcement, or extension_fill into a connected browser extension tab matched by input name; submit: true submits it, but a form whose action posts to a different site is filled and not submitted), HTTPS request (https_form, bearer_get, https_header), verified trusted-executable CLI env_exec (absolute path, output suppressed), or TOTP code without exposing values. Runs immediately under an owner standing grant; otherwise raises an owner approval card first.",
             parameters: {
               type: "object",
               additionalProperties: false,
@@ -978,6 +1256,7 @@ export class SecureInputs {
               let httpSpec = null;
               let boundDoc = null;
               let submitSpec = null;
+              let extensionTarget = null;
 
               if (webOps.includes(operation)) {
                 const parsed = parseWebUrl(destination, { allowLocalHttp: this.allowLocalHttp });
@@ -1009,10 +1288,17 @@ export class SecureInputs {
                   }
                   if (operation === "page_fill_submit") submitSpec = cleanSubmit(rawArgs.submit ?? true);
                 } else if (operation === "extension_fill") {
-                  if (cleanSubmit(rawArgs.submit)) {
-                    throw new Error(EXTENSION_AUTO_SUBMIT_ERROR);
-                  }
-                  submitSpec = null;
+                  // Same path as request_secure_input page_fill + target: resolve one live tab on the pinned origin.
+                  const target = parseTarget(
+                    rawArgs.browser !== undefined || rawArgs.tabId !== undefined
+                      ? { ...(rawArgs.browser !== undefined && { browser: rawArgs.browser }), ...(rawArgs.tabId !== undefined && { tabId: rawArgs.tabId }) }
+                      : undefined,
+                    "page_fill",
+                  );
+                  extensionTarget = await this.#resolveExtensionTarget({ origin: pinnedDest }, target, { botId: bot.id, chatId: chat.id });
+                  checkPrivate();
+                  if (!extensionTarget) throw new Error(`No connected browser extension tab is open on ${pinnedDest}.`);
+                  submitSpec = cleanSubmit(rawArgs.submit) ? true : null;
                 } else if (operation === "https_header") {
                   httpSpec = validateHttpsHeader({
                     header: rawArgs.header,
@@ -1064,6 +1350,10 @@ export class SecureInputs {
                     };
                   })
                 : [{ key: operation === "env_exec" ? execSpec.envVar : "value", source: defaultSource }];
+
+              if (operation === "extension_fill" && fieldPlan.some((f) => !f.name && (f.selector || f.ref))) {
+                throw new Error("Browser extension tabs match fields by input name or id; pass fields[].name instead of a selector or ref.");
+              }
 
               const usesTotp = Boolean(rawArgs.totp) || fieldPlan.some((f) => f.source === "totp");
               const needsSecret = fieldPlan.some((f) => f.source === "value");
@@ -1283,20 +1573,34 @@ export class SecureInputs {
                   submit: submitSpec ?? undefined,
                   http: httpSpec ?? undefined,
                   exec: execSpec ?? undefined,
-                  browser: typeof rawArgs.browser === "string" ? rawArgs.browser : undefined,
-                  tabId: typeof rawArgs.tabId === "number" ? rawArgs.tabId : undefined,
+                  extension: extensionTarget ?? undefined,
                   allowLocalHttp: this.allowLocalHttp,
                   chatId: chat.id,
                   botId: bot.id,
                 };
+                if (extensionTarget) {
+                  // Main's driver matches inputs by name or id and checks each value's kind.
+                  plan.fields = fieldPlan.map((f) => {
+                    const kind = f.source === "username" ? "text"
+                      : f.source === "totp" ? "code"
+                      : entry.kind === "login" || entry.kind === "password" ? "password" : "secret";
+                    return { key: f.key, ...(f.name && { name: f.name }), kind };
+                  });
+                }
+                const fillExtension = extensionTarget ? this.#extensionFiller() : undefined;
+                if (extensionTarget && !fillExtension) throw new Error("The browser extension bridge is not ready.");
 
-                const result = await this.use(plan, values, {
+                let result = await this.use(plan, values, {
                   signal: AbortSignal.any([controller.signal, AbortSignal.timeout(execSpec?.timeoutMs ?? 30_000)]),
-                  extensionFill: this.extensionFill,
+                  ...(fillExtension && { fillExtension }),
                   appFill: this.appFill,
                   trustedExecDirs: this.trustedExecDirs,
                   settings: typeof this.settings === "function" ? this.settings() : this.settings,
                 });
+                if (extensionTarget) {
+                  const { applied: _applied, ...outcome } = extensionOutcome(result, plan.fields.map((f) => f.name || f.key), Boolean(submitSpec));
+                  result = outcome;
+                }
 
                 if (activeGrant) grants?.recordUse(activeGrant.id);
                 grants?.recordAudit({

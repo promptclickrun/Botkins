@@ -7,18 +7,24 @@ import type { BotTask, Project, TaskStatus } from "@/link/types";
 export type TaskView = "active" | "later" | "done";
 
 const VIEW_OF: Record<TaskStatus, TaskView> = { review: "active", blocked: "active", working: "active", ready: "active", later: "later", done: "done" };
-/** Within Active: what needs the person first, then what is working, then what is ready to start. */
-const STATUS_RANK: Record<TaskStatus, number> = { review: 0, blocked: 0, working: 1, ready: 2, later: 3, done: 4 };
+/** Within Active: what needs the person first, then bot-reviewed tasks, then working, then ready. */
+const STATUS_RANK: Record<TaskStatus, number> = { review: 0, blocked: 0, working: 2, ready: 3, later: 4, done: 5 };
 const PRIORITY_RANK = { urgent: 0, high: 1, normal: 2, low: 3 } as const;
 
-type TaskLike = Pick<BotTask, "id" | "status" | "priority" | "updatedAt">;
+type TaskLike = Pick<BotTask, "id" | "status" | "priority" | "updatedAt" | "reviewerBotId">;
+
+const rankOf = (task: TaskLike) => (task.status === "review" && task.reviewerBotId ? 1 : STATUS_RANK[task.status as TaskStatus]);
+
+/** Whether a task waits for the person rather than an orchestrating creator bot. */
+export const taskNeedsPerson = (task: Pick<BotTask, "status" | "reviewerBotId">) =>
+  task.status === "blocked" || (task.status === "review" && !task.reviewerBotId);
 
 /** The tasks a chip shows, in order. Archived tasks show under none. Done is newest first; the others go by status, then priority, then the latest change. */
 export function tasksIn<T extends TaskLike>(tasks: T[], view: TaskView): T[] {
   const shown = tasks.filter((task) => task.status !== "archived" && VIEW_OF[task.status as TaskStatus] === view);
   if (view === "done") return shown.sort((a, b) => b.updatedAt - a.updatedAt);
   return shown.sort(
-    (a, b) => STATUS_RANK[a.status as TaskStatus] - STATUS_RANK[b.status as TaskStatus] || PRIORITY_RANK[a.priority] - PRIORITY_RANK[b.priority] || b.updatedAt - a.updatedAt,
+    (a, b) => rankOf(a) - rankOf(b) || PRIORITY_RANK[a.priority] - PRIORITY_RANK[b.priority] || b.updatedAt - a.updatedAt,
   );
 }
 
@@ -29,14 +35,51 @@ export function taskCounts(tasks: TaskLike[]): Record<TaskView, number> {
   return counts;
 }
 
-/** The Tasks page's Active chip in its three groups, each already in order. */
-export function activeGroups<T extends TaskLike>(tasks: T[]): { title: "Needs you" | "Working" | "Ready"; tasks: T[] }[] {
+/** The Tasks page's Active chip in its groups, each already in order. */
+export function activeGroups<T extends TaskLike>(tasks: T[]): { title: "Needs you" | "Reviewing" | "Working" | "Ready"; tasks: T[] }[] {
   const active = tasksIn(tasks, "active");
   return [
-    { title: "Needs you" as const, tasks: active.filter((task) => task.status === "review" || task.status === "blocked") },
+    { title: "Needs you" as const, tasks: active.filter((task) => taskNeedsPerson(task)) },
+    { title: "Reviewing" as const, tasks: active.filter((task) => task.status === "review" && Boolean(task.reviewerBotId)) },
     { title: "Working" as const, tasks: active.filter((task) => task.status === "working") },
     { title: "Ready" as const, tasks: active.filter((task) => task.status === "ready") },
   ].filter((group) => group.tasks.length);
+}
+
+/**
+ * The Tasks page as a pipeline, left to right, the columns of the computer's board: what was put off, what
+ * starts when its bot is free, what a bot is on, what its creator bot reviews, and what is done. A task that
+ * waits on the person (blocked, or in review for them) is in none: it is in Needs you, above the stages.
+ */
+export type TaskStage = "later" | "ready" | "working" | "reviewing" | "done";
+export const STAGES: { id: TaskStage; label: string; empty: string }[] = [
+  { id: "later", label: "Later", empty: "Nothing put off" },
+  { id: "ready", label: "Ready", empty: "Nothing waiting for a bot" },
+  { id: "working", label: "Working", empty: "No bot is on a task" },
+  { id: "reviewing", label: "Review", empty: "Nothing in review" },
+  { id: "done", label: "Done", empty: "Nothing done yet" },
+];
+export function stageOf(task: Pick<BotTask, "status" | "reviewerBotId">): TaskStage | null {
+  if (taskNeedsPerson(task)) return null;
+  if (task.status === "review") return "reviewing";
+  return task.status === "later" || task.status === "ready" || task.status === "working" || task.status === "done" ? task.status : null;
+}
+/** Needs you, and each stage's tasks in order: by priority then the latest change, Done newest first. */
+export function pipeline<T extends TaskLike>(tasks: T[]): { needs: T[]; stages: Record<TaskStage, T[]> } {
+  const live = tasks.filter((task) => task.status !== "archived");
+  const stages: Record<TaskStage, T[]> = { later: [], ready: [], working: [], reviewing: [], done: [] };
+  for (const task of live) {
+    const stage = stageOf(task);
+    if (stage) stages[stage].push(task);
+  }
+  for (const id of Object.keys(stages) as TaskStage[])
+    stages[id].sort((a, b) => (id === "done" ? b.updatedAt - a.updatedAt : PRIORITY_RANK[a.priority] - PRIORITY_RANK[b.priority] || b.updatedAt - a.updatedAt));
+  const needs = live.filter((task) => taskNeedsPerson(task)).sort((a, b) => PRIORITY_RANK[a.priority] - PRIORITY_RANK[b.priority] || b.updatedAt - a.updatedAt);
+  return { needs, stages };
+}
+/** The stage the page opens on: where something moves (Working, then Ready, Review, Later), else Done. */
+export function firstStage(stages: Record<TaskStage, unknown[]>): TaskStage {
+  return (["working", "ready", "reviewing", "later"] as const).find((id) => stages[id].length) ?? "done";
 }
 
 /** The routines that run next: on, with a next run, soonest first; at most `count`. */

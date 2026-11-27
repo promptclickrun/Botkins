@@ -172,7 +172,7 @@ export default function SidePane({
     () => (activityRun ? chat.messages.flatMap((m, i) => (m.interim && m.runId === activityRun.id && m.text.trim() ? [{ key: "interim-" + i, at: m.time ?? activityRun.time, text: m.text }] : [])) : []),
     [chat.messages, activityRun?.id],
   );
-  const hasActivity = !!activityRun && (storySteps(activityRun.steps).length > 0 || !!activityRun.reasoning?.some((t) => t.text.trim()) || updates.length > 0);
+  const hasActivity = !!activityRun && (storySteps(activityRun.steps, activityRun).length > 0 || !!activityRun.reasoning?.some((t) => t.text.trim()) || updates.length > 0);
   const wanted = picked !== undefined ? picked : active;
   // A chat-path preview is an explicit navigation request from ChatView. Keep this
   // local to the pane so it does not mutate the bot's persisted pane selection.
@@ -427,7 +427,7 @@ export default function SidePane({
 }
 
 const artifactIcon = (item: Artifact) => item.kind === "folder" ? Folder : item.kind === "image" ? FileImage : item.kind === "video" ? FileVideo : item.kind === "audio" ? FileAudio : item.mime === "application/pdf" || item.mime.startsWith("text/") ? FileText : File;
-const artifactSourceLabel: Record<Artifact["source"], string> = { tool: "Written", media: "Sent", upload: "Uploaded", export: "Exported" };
+const artifactSourceLabel: Record<Artifact["source"], string> = { tool: "Written", media: "Sent", upload: "Uploaded", export: "Exported", claude: "Claude artifact" };
 const readableSize = (size: number | null) => size == null ? "" : size < 1024 ? `${size} B` : size < 1024 * 1024 ? `${Math.round(size / 102.4) / 10} KB` : `${Math.round(size / 104857.6) / 10} MB`;
 const readableTime = (time: number) => Number.isFinite(time) && time > 0 ? new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(time) : "";
 const artifactApi = () => window.botkins;
@@ -487,7 +487,7 @@ function ArtifactsPanel({ bot, chat, state, openChat, preview }: { bot: Bot; cha
     for (const item of items.filter((i) => (i.kind === "image" || i.kind === "video" || i.mime === "application/pdf") && !thumbs[i.id])) artifactThumbnail(item.id, { size: 160 }).then((image) => image && setThumbs((old) => ({ ...old, [item.id]: `data:${image.mime};base64,${image.data}` }))).catch(() => {});
   }, [items]);
   const enterFolder = (item: Artifact) => { setSelected(item); setSelectedLocal(false); setFolder(item); };
-  const open = (item: Artifact) => void artifactApi().openChatPath(item.path, "open").catch(() => {});
+  const open = (item: Artifact) => void (item.url ? artifactApi().openLink(item.url) : artifactApi().openChatPath(item.path, "open")).catch(() => {});
   const reveal = (item: Artifact) => void artifactApi().openChatPath(item.path, "reveal").catch(() => {});
   const hasMore = botIds.some((botId) => !!nextCursors[botId]);
   const rows = items.map((item) => (
@@ -559,7 +559,7 @@ function ArtifactRow({ item, selected, thumbnail, onSelect, onOpen, onReveal, on
         <small>{[artifactSourceLabel[item.source], readableSize(item.size), readableTime(item.time), item.chatTitle].filter(Boolean).join(" · ")}</small>
       </span>
     </button>
-    {selected && <div className="artifact-actions"><button type="button" onClick={onOpen}>Open</button><button type="button" onClick={onReveal}>Show in folder</button>{onChat && <button type="button" onClick={onChat}>Go to message</button>}{onProject && <button type="button" onClick={onProject}>Add to a project…</button>}</div>}
+    {selected && <div className="artifact-actions"><button type="button" onClick={onOpen}>{item.url ? "Open on claude.ai" : "Open"}</button><button type="button" onClick={onReveal}>Show in folder</button>{onChat && <button type="button" onClick={onChat}>Go to message</button>}{onProject && <button type="button" onClick={onProject}>Add to a project…</button>}</div>}
   </li>;
 }
 

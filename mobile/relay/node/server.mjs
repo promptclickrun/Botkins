@@ -55,6 +55,7 @@ import {
   checkSpaceDelete,
   checkSpacePut,
   joinPage,
+  mcpAuthRedirect,
   plain,
   prefixed,
   readCappedText,
@@ -814,6 +815,7 @@ export function createRelay({ dataDir, pushUpstream = DEFAULT_PUSH_UPSTREAM, cli
     if (url.pathname === "/") return plain("Botkins relay. Messages pass through sealed.");
     if (url.pathname === "/v1/health") return Response.json({ ok: true });
     if (url.pathname === "/join") return joinPage();
+    if (url.pathname === "/mcp-auth") return mcpAuthRedirect(url);
     if (url.pathname === "/pair") return pairPage(qrSource);
     if (url.pathname === "/s/frame") return spaceFrame(spaceFrameScript);
     if (url.pathname.startsWith("/s/botkin/")) return picture(url.pathname.slice("/s/botkin/".length));

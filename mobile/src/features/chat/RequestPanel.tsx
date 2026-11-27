@@ -98,7 +98,7 @@ function Detail({ request }: { request: AgentRequest }) {
 
 function Permission({ request, danger, room }: { request: AgentRequest; danger: boolean; room: number }) {
   const { busy, respond } = useRespond(request);
-  const words = wordsFor("permission", request.dispatch, request.credentialGrant);
+  const words = wordsFor("permission", request.dispatch, request.artifactGrant, request.botName, request.credentialGrant);
   const approve = () => void respond({ action: "approve" }, "approve");
   const always = () => void respond({ action: "remember" }, "remember");
   return (
@@ -158,7 +158,7 @@ function Permission({ request, danger, room }: { request: AgentRequest; danger: 
       {!!request.url && <LinkLine url={request.url} />}
       {!!request.remember && !request.dispatch && (
         <T variant="footnote" color="muted">
-          {rememberNote(request.remember)}
+          {rememberNote(request.remember, request.artifactGrant, request.botName)}
         </T>
       )}
     </Frame>

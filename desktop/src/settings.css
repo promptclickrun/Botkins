@@ -122,6 +122,38 @@ input.switch:focus-visible {
   margin: 0;
   min-width: 0;
 }
+
+/* Standing per-bot grant rows inside Settings › General › Claude artifacts. */
+.set-grant-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+  margin-top: 6px;
+}
+.set-grant-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--ink) 4%, transparent);
+}
+.set-grant-name {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.set-grant-name strong {
+  font-size: calc(13px * var(--text-scale));
+  font-weight: 600;
+}
+.set-grant-name small {
+  color: var(--muted);
+  font-size: calc(12px * var(--text-scale));
+}
 .set-group > h3 {
   margin: 0 4px;
   font-size: calc(12px * var(--text-scale));

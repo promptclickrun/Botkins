@@ -7,3 +7,4 @@ export { DEFAULT_PORT } from "./store.mjs";
 export { GRANT_CAPABILITY, GRANT_LEVELS, grantMessage } from "./grant.mjs";
 export { DEFAULT_RELAY_URL, RelayLink } from "./relay.mjs";
 export { BUILTIN_ROLES, EVERYONE_GROUP, MEMBER_PREFERENCE_FIELDS, TEAM_METHODS, authorize, cleanGroup, cleanRole, filterParts, formatCode, normalizeCode, teamPart } from "./team.mjs";
+export { isRoutineChat } from "./routine-chat.mjs";

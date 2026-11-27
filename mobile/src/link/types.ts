@@ -319,6 +319,16 @@ export type Mention =
   | { kind: "project"; id: string; label: string }
   | { kind: "file" | "wiki"; path: string; label: string }
   | { kind: "board"; id: string; label: string; board?: BoardItem["kind"]; body?: string; links?: { url: string; title?: string }[] };
+/** Structured sender metadata for bot-to-bot messages (teamwork, task handoffs, remote dispatches). */
+export type MessageFrom = {
+  kind: "bot";
+  botId: string;
+  name: string;
+  hostId?: string;
+  hostName?: string;
+  chatId?: string;
+  via: "teamwork" | "task" | "remote";
+};
 export type Message = {
   reactions?: { actor: string; emoji: string }[];
   clientMessageId?: string;
@@ -338,6 +348,8 @@ export type Message = {
   botId?: string;
   /** The team member who sent this user message. Missing on the owner's messages. */
   author?: { memberId: string; name: string };
+  /** Structured sender metadata when another bot sent this message. */
+  from?: MessageFrom;
   /** A person's message delivered into a turn that was under way (a steer): that turn's run. The desktop app records it today. */
   steeredRunId?: string;
   /** A proactive alert the bot sent on its own: the run that made it (a 👍 or 👎 on it teaches the bot). */
@@ -453,8 +465,22 @@ export type ScreenInfo = {
   /** The host's explanation when viewing or input is unavailable. */
   problem?: string;
 };
+/** Live bot action marker piggybacked on ScreenFrame while native computer use runs. */
+export type ScreenBotActivity = {
+  at: number;
+  botId?: string;
+  botName?: string;
+  action: string;
+  app?: string;
+  windowTitle?: string;
+  elementToken?: string;
+  deliveryMode?: "background" | "foreground";
+  pointerUntouched?: boolean;
+  effect?: unknown;
+  escalation?: unknown;
+};
 /** One picture of a display. `jpeg` (base64) is left out when nothing changed since frame `after`. */
-export type ScreenFrame = { seq: number; display: string; width: number; height: number; jpeg?: string };
+export type ScreenFrame = { seq: number; display: string; width: number; height: number; jpeg?: string; activity?: ScreenBotActivity };
 /** Positions are fractions (0 to 1) of the display, so the picture's size doesn't matter. */
 export type ScreenInput =
   | { type: "move" | "down" | "up" | "click" | "doubleClick" | "rightClick"; x: number; y: number }
@@ -493,6 +519,8 @@ export type ChatSchedule = {
   script?: string;
   /** On a script routine: after the script, the bot follows `prompt` with the script's output. */
   followUp?: boolean;
+  /** Owner-approved opt-in: lets this routine create Ready tasks assigned to a bot. */
+  allowReadyTasks?: boolean;
 };
 /** Explicit routine notification targets ("routine-notify-targets-v1"). Absent means everyone allowed. */
 export type RoutineNotifyTargets = { people?: string[]; devices?: string[] };
@@ -522,6 +550,8 @@ export type RoutineInput = {
   script?: string | null;
   followUp?: boolean;
   /** The routine's own model, kept on its chat ("routine-models-v1"). null on an edit goes back to the Default routines model. */
+  /** Owner-approved opt-in: lets this routine create Ready tasks assigned to a bot. */
+  allowReadyTasks?: boolean;
   model?: ModelChoice | null;
 };
 export type ChatContext = { current: number; limit: number; system?: number; tools?: number; conversation?: number; messages?: number; updatedAt?: number };
@@ -552,6 +582,8 @@ export type ChatSummary = {
   projectId?: string;
   folder?: string;
   mode?: ChatMode;
+  /** Set on a chat that a job started ("project-jobs-v1"). */
+  job?: JobSummary;
   panelId?: string;
   model?: ModelChoice;
   forkedFrom?: { chatId: string; messageIndex: number };
@@ -559,6 +591,49 @@ export type ChatSummary = {
   schedules?: ChatSchedule[];
   count: number;
   last?: { role: Message["role"]; text: string; time?: number; botId?: string };
+};
+/** A job ("project-jobs-v1"): a prompt that started its own chat, on its own branch in a git worktree, or in the checkout. Never a path on the computer. */
+export type JobSummary = {
+  where: "worktree" | "checkout";
+  state: "open" | "brought-in" | "removed";
+  createdAt: number;
+  branch?: string;
+  base?: string;
+  /** 7 characters. */
+  baseSha?: string;
+  setup?: "waiting" | "running" | "done" | "failed" | "skipped" | "none";
+  setupError?: string;
+  mergedSha?: string;
+  carryFailed?: true;
+};
+export type JobStart = { botIds: string[]; prompt: string; where?: "worktree" | "checkout"; folder?: string; mode?: ChatMode; carry?: boolean };
+/** Where a project's jobs start: the checkout's branch and commit, and the setup commands from .botkins/worktrees.json. */
+export type JobSetup =
+  | { repo: false; folder?: string }
+  | { repo: true; folder: string; root: string; base: string | null; sha: string | null; short: string | null; changed: number; setup: string[]; branch: string; file: boolean; hash: string; error?: string; approved: boolean };
+/** What a job changed, how far the checkout's branch moved since, what clashes, and whether it can be brought in. */
+export type JobStatus = {
+  where: "worktree" | "checkout";
+  state: JobSummary["state"];
+  working: boolean;
+  canBringIn: boolean;
+  /** Why it can't be brought in yet, in words; "" when it can. */
+  reason: string;
+  branch?: string;
+  base?: string;
+  baseSha?: string;
+  exists?: boolean;
+  ahead?: number;
+  behind?: number;
+  uncommitted?: number;
+  files?: { path: string; added: number; removed: number; new?: true }[];
+  added?: number;
+  removed?: number;
+  conflicts?: string[];
+  conflictsUnknown?: true;
+  checkout?: string | null;
+  checkoutChanged?: number;
+  mergedSha?: string;
 };
 export type Step = {
   background?: boolean;
@@ -600,10 +675,13 @@ export type Subagent = { id: string; name: string; description?: string; status:
 export type Usage = { input: number; output: number; cacheRead?: number; cacheWrite?: number; cost?: number; model?: string; durationMs?: number };
 export type TeamAsk = {
   id: string;
+  toolCallId?: string;
   botId: string;
   fromBotId: string;
+  from?: MessageFrom;
   remote?: { hostId: string; hostName: string; botName: string };
   message: string;
+  expecting?: string;
   status: "waiting" | "working" | "answered" | "failed" | "stopped";
   started: number;
   finished?: number;
@@ -611,6 +689,20 @@ export type TeamAsk = {
   error?: string;
   intent?: string;
   steps?: Step[];
+};
+export type TaskHandoff = {
+  id: string;
+  taskId: string;
+  toolCallId?: string;
+  botId: string;
+  fromBotId: string;
+  from?: MessageFrom;
+  title: string;
+  details?: string;
+  priority?: TaskPriority;
+  status: TaskStatus | "archived";
+  chatId?: string;
+  started: number;
 };
 export type PanelBlock =
   | { type: "markdown"; text: string }
@@ -676,6 +768,8 @@ export type Run = RunSummary & {
   connects?: ConnectCard[];
   /** Tools with an MCP App view that ran in this turn. */
   mcpApps?: McpAppCard[];
+  /** Private Claude artifacts published or updated in this turn. */
+  claudeArtifacts?: { id: string; title: string; url: string; size?: number; action?: "publish" | "update"; time: number; private?: boolean }[];
   options?: { label: string; prompt: string; description?: string }[];
   /** The active run has reasoning available when its detail is opened. */
   hasReasoning?: boolean;
@@ -685,6 +779,7 @@ export type Run = RunSummary & {
   speakers?: string[];
   failures?: { botId: string; detail: string }[];
   teamwork?: TeamAsk[];
+  taskHandoffs?: TaskHandoff[];
   /** How a turn ended without finishing ("turn-timeline-v1"). Missing: the phone reads it from `status` and `detail`. */
   ending?: "failed" | "timed-out" | "interrupted" | "stopped";
   /** The turn's plan when it ended: how many steps are open, of how many. Older computers send none. */
@@ -798,6 +893,9 @@ export type AgentRequest = {
   credentialName?: string;
   credentialSource?: string;
   destination?: string;
+  artifactGrant?: true;
+  rememberScope?: "bot";
+  botName?: string;
   /** Raised by this computer's node host for an incoming remote node operation (not backed by a chat). */
   nodeJob?: true;
   operation?: string;
@@ -955,6 +1053,15 @@ export type BoardItem = {
 };
 export type TaskStatus = "later" | "ready" | "working" | "review" | "blocked" | "done";
 export type TaskPriority = "low" | "normal" | "high" | "urgent";
+export type TaskReviewMode = "person" | "creator" | "auto";
+export type TaskHistoryEntry = {
+  at: number;
+  by: string;
+  byName?: string;
+  from: TaskStatus | "archived";
+  to: TaskStatus | "archived";
+  note?: string;
+};
 export type BotTask = {
   id: string;
   title: string;
@@ -963,14 +1070,19 @@ export type BotTask = {
   priority: TaskPriority;
   status: TaskStatus | "archived";
   createdBy: string;
+  createdChatId?: string;
+  review?: TaskReviewMode;
+  reviewerBotId?: string;
   createdAt: number;
   updatedAt: number;
   chatId?: string;
   runId?: string;
   result?: string;
   problem?: string;
+  pendingNote?: { text: string; by: string; byName?: string; from: TaskStatus | "archived"; at: number };
+  history?: TaskHistoryEntry[];
 };
-export type TaskInput = { id?: string; title: string; body?: string; botId?: string | null; priority?: TaskPriority; status?: "later" | "ready" };
+export type TaskInput = { id?: string; title: string; body?: string; botId?: string | null; priority?: TaskPriority; status?: "later" | "ready"; review?: TaskReviewMode };
 export type ProjectTodo = { id: string; text: string; done: boolean; createdAt: number; doneAt?: number };
 export type ProjectColor = "coral" | "amber" | "green" | "teal" | "blue" | "violet" | "pink" | "gray";
 export type Project = {
@@ -1072,12 +1184,16 @@ export type Preferences = {
   /** The Default routines model ("routine-models-v1"): routines without their own use it before their bot's. */
   routineModel?: ModelChoice;
   appearance: Appearance;
+  /** Off by default: lets bots in owner chats inspect and click native apps on this computer via CUA driver. */
+  computerUse?: boolean;
   foldTools: boolean;
   showThinking: boolean;
   foldThinking?: boolean;
   showUpdates?: boolean;
   linkPreviews?: boolean;
   readAloud?: boolean;
+  /** Show routine-owned chats in the chat list (off by default; per person). */
+  showRoutineChats?: boolean;
   onboarded?: boolean;
   /** ask: every request. read: reads are allowed. assisted: the model decides. all: nothing asks. */
   approval: "ask" | "read" | "assisted" | "all";
@@ -1105,6 +1221,8 @@ export type Preferences = {
   longPromptCache?: boolean;
   /** Tools that run in Botkins on a Mac, switched there only: iMessage and Mail. Missing on an older computer or one that isn't a Mac. */
   macTools?: { imessage?: DeviceLevel; mail?: DeviceLevel };
+  /** Model used by headless Claude Code artifact sub-runs. */
+  claudeArtifactModel?: "haiku" | "sonnet" | "opus";
 };
 /**
  * One limit of a provider's plan, as the provider reports it. `percentRemaining` is 0 to 100 and is
@@ -1176,7 +1294,8 @@ export type Artifact = {
   mime: string;
   size: number | null;
   time: number;
-  source: "tool" | "media" | "upload" | "export";
+  source: "tool" | "media" | "upload" | "export" | "claude";
+  url?: string;
   messageIndex?: number;
 };
 /** A page of artifacts, newest first. `nextCursor` asks for the page after it; null at the end. */
@@ -1230,6 +1349,7 @@ export type UsageReport = {
  * "member-rename-v1" (the owner renames a member: `link.team.renameMember`).
  * "project-folders-v1" (ordered folders and chat folder choice), "project-mode-v1" (saved project mode),
  * "project-clone-v1" (clone from GitHub on the computer),
+ * "project-jobs-v1" (a project's jobs: a prompt per bot, each in its own chat and git worktree; `ChatSummary.job` and eight calls),
  * "project-artifacts-v1" (artifacts attached to a project: `Project.artifacts` and three calls).
  * "sync-push-v1" (sealed sync updates on an open relay request),
  * "stream-appends-v1" (boolean indicators and cursor-based text), "text-chunks-v1" (word chunks), and
@@ -1308,10 +1428,29 @@ export type ProactiveBot = Partial<ProactiveBotSettings> & {
 };
 export type ProactivePart = { chatMode?: "main" | "new"; enabled: boolean; bots: Record<string, ProactiveBot | undefined> };
 export type ProactiveLog = { at: number; reason: "signals" | "sweep" | "check" | "context" | "review"; score?: number; signals: number; outcome: "alerted" | "silent" | "failed"; runId: string; said?: string };
+export type WorkflowTriggerKind = "task" | "schedule" | "manual" | "routine" | "chat" | "webhook" | "github";
+
+export type WorkflowGithubSignIn = {
+  status: "idle" | "starting" | "waiting" | "done" | "failed";
+  code: string | null;
+  url: string | null;
+  error: string | null;
+  login: string | null;
+};
+
+export type WorkflowGithubStatus = {
+  installed: boolean;
+  authenticated: boolean;
+  login: string | null;
+  scopes: string[];
+  repos: string[];
+  installUrl: string;
+  signIn: WorkflowGithubSignIn;
+};
 export type WorkflowNode = {
   id: string;
   kind: "trigger" | "agent" | "model" | "condition" | "approval" | "output";
-  triggerKind?: "task" | "schedule" | "manual" | "routine" | "chat" | "webhook" | "github";
+  triggerKind?: WorkflowTriggerKind;
   label: string;
   position: { x: number; y: number };
   config: Record<string, any>;
@@ -1863,6 +2002,17 @@ export type Calls = {
   forkChat(chatId: string, messageIndex: number): string;
   warmChat(chatId: string): void;
   startProjectChat(botIds: string[], projectId: string, mode?: ChatMode, folder?: string | null): string;
+  /** Jobs ("project-jobs-v1", owner only; docs/link-contract.md). */
+  projectJobSetup(projectId: string, folder?: string): JobSetup;
+  /** The person saw the setup commands and said yes: `hash` is from projectJobSetup. */
+  approveJobSetup(projectId: string, folder: string | undefined, hash: string): string;
+  /** One job per bot (1 to 6): the new chats' ids. */
+  startProjectJob(projectId: string, options: JobStart): string[];
+  projectJobStatus(chatId: string): JobStatus;
+  bringInJob(chatId: string, message?: string): { ok: true; commit: string } | { ok: false; conflicts: string[] };
+  catchUpJob(chatId: string): void;
+  removeJobWorktree(chatId: string): void;
+  startJobTurn(chatId: string): void;
   /** While the chat works, `delivery: "steer"` hands the message to the turn under way where the provider can take it (the desktop app's default), and "queue" keeps it for after. */
   recordVoiceLine(chatId: string, id: string, text: string, final: boolean, options?: { role: "assistant"; sessionId: string; afterVoiceId?: string }): void;
   send(chatId: string, text: string, options?: { clientMessageId?: string; voiceId?: string; notify?: false; quote?: string; mentions?: MentionInput[]; attachments?: { name: string; path: string }[]; delivery?: "steer" | "queue" }): void;
@@ -1887,6 +2037,10 @@ export type Calls = {
   providers(refresh?: boolean): ProviderStatus[];
   /** The program harnesses (Pi and OMP): installed, version, and how to install. Unknown on an older computer. */
   harnesses(): HarnessStatus[];
+  "claudeArtifacts.status"(refresh?: boolean): { available: boolean; installed: boolean; signedIn: boolean; subscription: boolean; version?: string; account?: string; plan?: string; reason?: string; model: "haiku" | "sonnet" | "opus"; models: ("haiku" | "sonnet" | "opus")[]; grants: { botId: string; botName: string; grantedAt: number }[] };
+  "claudeArtifacts.setModel"(model: "haiku" | "sonnet" | "opus"): { available: boolean; installed: boolean; signedIn: boolean; subscription: boolean; version?: string; account?: string; plan?: string; reason?: string; model: "haiku" | "sonnet" | "opus"; models: ("haiku" | "sonnet" | "opus")[]; grants: { botId: string; botName: string; grantedAt: number }[] };
+  "claudeArtifacts.setBotApproval"(botId: string, allowed: boolean): { available: boolean; installed: boolean; signedIn: boolean; subscription: boolean; version?: string; account?: string; plan?: string; reason?: string; model: "haiku" | "sonnet" | "opus"; models: ("haiku" | "sonnet" | "opus")[]; grants: { botId: string; botName: string; grantedAt: number }[] };
+  "claudeArtifacts.revokeBotApproval"(botId: string): { available: boolean; installed: boolean; signedIn: boolean; subscription: boolean; version?: string; account?: string; plan?: string; reason?: string; model: "haiku" | "sonnet" | "opus"; models: ("haiku" | "sonnet" | "opus")[]; grants: { botId: string; botName: string; grantedAt: number }[] };
   setProviderEnabled(id: string, enabled: boolean): void;
   signIn(providerId?: string): void;
   cancelSignIn(providerId?: string): void;
@@ -1928,10 +2082,12 @@ export type Calls = {
   duplicateRoutine(id: string, botId: string): string;
   previewCadence(cadence: Cadence, timezone?: string): { nextAt: number | null; summary: string; timezone: string };
   saveTask(task: TaskInput): string;
-  moveTask(id: string, status: TaskStatus | "archived"): void;
+  moveTask(id: string, status: TaskStatus | "archived", options?: { note?: string }): void;
   startTask(id: string): void;
   deleteTask(id: string): void;
   workflowsList(): { workflows: Workflow[]; runs: WorkflowRun[] };
+  workflowCreate(data: { name: string; description?: string; enabled?: boolean; nodes: WorkflowNode[]; edges: WorkflowEdge[] }): Workflow;
+  workflowUpdate(id: string, patch: { name?: string; description?: string; enabled?: boolean; nodes?: WorkflowNode[]; edges?: WorkflowEdge[] }): Workflow;
   workflowPause(id: string): Workflow;
   workflowResume(id: string): Workflow;
   workflowRun(id: string, options?: { triggerNodeId?: string; inputs?: Record<string, unknown> }): WorkflowRun;
@@ -1939,6 +2095,9 @@ export type Calls = {
   workflowRespondApproval(runId: string, nodeId: string | null, decision: "approved" | "rejected", note?: string): WorkflowRun;
   workflowCancelRun(runId: string): WorkflowRun;
   workflowDelete(id: string): boolean;
+  workflowGithubStatus(options?: { includeRepos?: boolean }): WorkflowGithubStatus;
+  workflowGithubSignInStart(): WorkflowGithubSignIn;
+  workflowGithubSignInCancel(): WorkflowGithubStatus;
   refreshPanel(id: string): void;
   changePanel(id: string, action: "delete" | "hide" | "show" | "small" | "wide" | "tall" | "earlier" | "later"): void;
   boardAct(id: string, action: "read" | "unread" | "clear" | "done" | "reopen" | "yes" | "goal" | "notToday" | "up" | "down" | "delete", value?: string): string | undefined;
@@ -1991,6 +2150,8 @@ export type Calls = {
   addSection(name: string): string;
   renameSection(id: string, name: string): void;
   deleteSection(id: string): void;
+  /** Puts the bot sections on Home in this order. */
+  orderSections(ids: string[]): void;
   renameTemplate(id: string, name: string): void;
   /** Changes a chat's project or mode. Moving a started chat carries its transcript into the next session. */
   setChatProject(chatId: string, projectId: string | null, mode?: ChatMode, folder?: string | null): void;
@@ -2276,6 +2437,10 @@ export type Calls = {
   "link.voice.endLive"(id: string): void;
   /** Hands the desktop a sign-in the phone finished, for an MCP server that signs in with OAuth. */
   "link.adoptMcpSignIn"(serverId: string, grant: { clientId: string; accessToken: string; refreshToken?: string; expiresIn?: number; scope?: string; redirectUri: string }): { status: string; tools: string[] };
+  /** Starts a tool's OAuth sign-in for the phone's own browser (capability "startMcpSignIn"): the page to open and the app address it comes back to. */
+  "link.startMcpSignIn"(serverId: string): { url: string; redirect: string };
+  /** The address the phone's browser came back to. Answers the tool's sign-in state once the computer keeps the tokens. */
+  "link.finishMcpSignIn"(serverId: string, address: string): McpAuth | undefined;
   // ---- The wiki. Paths are relative to the wiki and use "/". Every change bumps revs.wiki.
   wikiTree(): WikiTree;
   /** What an export of the whole wiki, or of one page and the pages around it, would hold. Needs "files-v1". */

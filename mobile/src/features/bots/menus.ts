@@ -54,14 +54,31 @@ export function hideAction(bot: Bot, primary: boolean): MenuAction {
 
 export const toggleHidden = (bot: Bot) => void attempt(api.setBotFlags(bot.id, { hidden: !bot.hidden }), bot.hidden ? bot.name + " is shown" : bot.name + " is hidden");
 
-/** A section's own menu: Rename… and Delete section…. */
-export const SECTION_ACTIONS: MenuAction[] = [
-  { id: "rename", title: "Rename…", image: "pencil" },
-  { id: "delete", title: "Delete section…", image: "trash", attributes: { destructive: true } },
-];
+/** The section order with `id` one place up (-1) or down (1), or null when it is already at that end. */
+export function movedSection(sections: readonly Section[], id: string, by: -1 | 1): string[] | null {
+  const ids = sections.map((section) => section.id);
+  const at = ids.indexOf(id);
+  const to = at + by;
+  if (at < 0 || to < 0 || to >= ids.length) return null;
+  [ids[at], ids[to]] = [ids[to]!, ids[at]!];
+  return ids;
+}
 
-export function runSectionAction(section: Section, event: string, ask: Ask) {
-  if (event === "rename")
+/** A section's own menu: Rename…, Move up, Move down, Delete section…. */
+export function sectionActions(sections: readonly Section[], section: Section): MenuAction[] {
+  return [
+    { id: "rename", title: "Rename…", image: "pencil" },
+    { id: "up", title: "Move up", image: "arrow.up", attributes: { disabled: !movedSection(sections, section.id, -1) } },
+    { id: "down", title: "Move down", image: "arrow.down", attributes: { disabled: !movedSection(sections, section.id, 1) } },
+    { id: "delete", title: "Delete section…", image: "trash", attributes: { destructive: true } },
+  ];
+}
+
+export function runSectionAction(sections: readonly Section[], section: Section, event: string, ask: Ask) {
+  if (event === "up" || event === "down") {
+    const ids = movedSection(sections, section.id, event === "up" ? -1 : 1);
+    if (ids) void attempt(api.orderSections(ids));
+  } else if (event === "rename")
     ask({
       title: "Rename section",
       value: section.name,

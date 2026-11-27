@@ -28,7 +28,8 @@ A Node Host advertises a versioned capability document (`version: 2`) over the e
 
 Approval decisions always stay on the node host, and pending node-job requests are reachable from every trusted surface of the owner's profile:
 
-- **Desktop window** on the node host: shows the permission card with the requesting bot, source host, operation, and exact command/path details.
+- **In the chat that asked** (the default): the source host sends `relayApproval: true` with `job.submit`, and the node hands its approval back in the pending `job.status` reply as `ask` (title, exact command or path, scope label) instead of raising it on its own screen. The source shows it as a dispatch permission card in the bot's chat, so the owner answers it where they are: that chat in the desktop window, or the phone paired to the source host (its normal request push and request panel, with **Allow this time**, **Allow for today**, **Always allow** and **Deny**). The answer goes back with `job.answer { id, askId, action }`. The node accepts it only for its current `ask.id` and a known action, then applies it exactly as a local answer: grants, exec policy and the exact `system.run` binding stay on the node and are checked there. Stopping the turn withdraws the card and cancels the job; a node restart drops the old ask and the job asks again with a new id. A source on an older version sends no `relayApproval`, and the node asks on its own surfaces below.
+- **Desktop window** on the node host: shows the permission card with the requesting bot, source host, operation, and exact command/path details (for requests from an older source host, and for remote node control).
 - **Paired phones** (even when currently viewing a different host): node-job pushes carry `nodeJob` (`nj: true`), bypass chat presence / Live Activity holds, and open the dedicated **Node Approval Sheet** (`/node-approval`) directly — never routing to a nonexistent `/chat/node-job-*` screen — with **Allow once**, **Allow for today**, **Always allow**, and **Deny** choices.
 - **CLI** on the node host:
   - `botkins node approvals` lists all pending node-job requests (via `node.approvals` / `interactions.list`).
@@ -99,4 +100,5 @@ Another computer signed in to the **same owner profile** can inspect and manage 
 - Dedicated QR/short-code node enrollment flow directly inside the **Set Up as Node Host** wizard (today a node enrolls through the existing profile / phone-link pairing flow).
 - Offering OS startup / background service installation directly inside the desktop Node Host setup step.
 - Encrypted cross-host vault secret migration (currently vault entries stay encrypted on the original computer with a clear note).
+- Cross-host Task Board creation & creator-bot identity: today's `teamwork-peers` RPC supports `ask_teammate` conversations and `node_*` operations, not remote `task_create`. When a task is dispatched onto a remote host via local CLI/SSH, the local board records `createdBy: "person"` rather than the remote orchestrator bot ID; carrying cross-host creator bot identity (`{ hostId, botId }`) awaits a dedicated cross-host task RPC.
 

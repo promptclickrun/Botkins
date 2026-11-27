@@ -8,6 +8,7 @@
 // ended they fold into the receipt with the thinking, in the order they came.
 // No React Native imports, so tests/island.test.ts runs it. Island.tsx draws it.
 import type { Reasoning, Run, Step } from "@/link/types";
+import { isStepCoveredByRail } from "./activityModel";
 import { spentTime, stepCount } from "./fold";
 
 type IslandPrefs = { steps: string; thinking: string };
@@ -46,10 +47,13 @@ export function thoughtParts(text: string): { heading: string; snippet: string }
  * Every line of a turn in the order it happened. `steps`: its tool steps; `thoughts`: its thoughts
  * with words in them. A thought and a step that started together read thought first.
  */
-export function islandLines(run: Pick<Run, "steps" | "reasoning"> | undefined, { steps, thoughts }: { steps: boolean; thoughts: boolean }): IslandLine[] {
+export function islandLines(run: Pick<Run, "steps" | "reasoning" | "teamwork" | "taskHandoffs"> | undefined, { steps, thoughts }: { steps: boolean; thoughts: boolean }): IslandLine[] {
   if (!run) return [];
   const lines: { at: number; order: number; line: IslandLine }[] = [];
-  if (steps) for (const step of run.steps ?? []) lines.push({ at: step.started, order: 1, line: { kind: "step", key: "s:" + step.id, step } });
+  if (steps) for (const step of run.steps ?? []) {
+    if (isStepCoveredByRail(step, run)) continue;
+    lines.push({ at: step.started, order: 1, line: { kind: "step", key: "s:" + step.id, step } });
+  }
   if (thoughts)
     for (const thought of run.reasoning ?? []) {
       if (!/\S/.test(thought.text)) continue;

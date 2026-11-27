@@ -60,8 +60,11 @@ export default function Chat() {
   const settings = useSettings();
   const owner = usePart("meta")?.you?.kind !== "member";
   const chatMode = usePart("proactive")?.chatMode;
+  // Every bot has a Main chat on a computer that keeps them; the Proactive setting doesn't decide that.
+  const mainChats = !!usePart("meta")?.capabilities.includes("main-chat-v1");
   const online = useOnline();
   const canManage = useCan("settings", "manage");
+  const canViewAgents = useCan("agents", "view");
   return (
     <Page title="Chat">
       {/* Approvals live here as on the computer, whose Chat settings say when bots ask first. */}
@@ -87,10 +90,18 @@ export default function Chat() {
       <View>
         <Label>Opening</Label>
         <Group>
-          <ChoiceMenu title="When you select a bot" value={!chatMode && prefs.botTap === "main" ? "latest" : prefs.botTap} options={chatMode ? BOT_TAPS : BOT_TAPS.filter(t => t.value !== "main")} onChange={(botTap) => setChatPrefs({ botTap })} stacked />
+          <ChoiceMenu title="When you select a bot" value={!mainChats && prefs.botTap === "main" ? "latest" : prefs.botTap} options={mainChats ? BOT_TAPS : BOT_TAPS.filter(t => t.value !== "main")} onChange={(botTap) => setChatPrefs({ botTap })} stacked />
           {chatMode && <ChoiceMenu title="Proactive signals" subtitle="Where your bots send alerts delivered to chat." value={chatMode}
             options={[{ value: "main", label: "Main chat" }, { value: "new", label: "New chat every time" }]}
             onChange={mode => void attempt(api.setProactiveChatMode(mode))} />}
+          <Row
+            title="Show routine chats"
+            subtitle="Include chats created and owned by routines in your chat list"
+            subtitleLines={2}
+            toggled={!!settings?.showRoutineChats}
+            disabled={!online || !canViewAgents}
+            onToggle={(showRoutineChats) => void attempt(api.setPreferences({ showRoutineChats }))}
+          />
         </Group>
       </View>
 

@@ -355,6 +355,37 @@ test("the gateway streams Copilot's answer as it is, from the endpoint the harne
   }
 });
 
+test("the gateway drops tool-schema formats Copilot refuses, such as Home Assistant's lower and strip", async (t) => {
+  const { ask, seen } = await copilotGateway(t, { answer: () => sse([]) });
+  const level = { type: "string", enum: ["debug", "info"], format: "lower", description: "Minimum log level." };
+  const tool = (parameters) => ({ type: "function", name: "mcp__Home_Assistant__hassio__get_logs", strict: false, parameters });
+  const body = {
+    model: "gpt-6.2-sol",
+    input: [],
+    tools: [
+      tool({ type: "object", properties: { level, domain: { anyOf: [{ type: "string", format: "strip" }, { type: "array", items: { type: "string", format: "strip" } }] }, since: { type: "string", format: "date-time" }, format: { type: "string", enum: ["format"] } } }),
+      { type: "function", name: "plain", parameters: { type: "object", properties: {} } },
+    ],
+  };
+  await ask("/copilot/responses", body);
+  const sent = JSON.parse(seen[0].body);
+  const props = sent.tools[0].parameters.properties;
+  assert.deepEqual(props.level, { type: "string", enum: ["debug", "info"], description: "Minimum log level." }, "the enum still checks the value");
+  assert.deepEqual(props.domain.anyOf, [{ type: "string" }, { type: "array", items: { type: "string" } }]);
+  assert.equal(props.since.format, "date-time", "a format Copilot knows stays");
+  assert.deepEqual(props.format, { type: "string", enum: ["format"] }, "a property named format is a schema, not the keyword");
+  assert.deepEqual(sent.tools[1], body.tools[1]);
+  const chat = { model: "m", messages: [], tools: [{ type: "function", function: { name: "f", parameters: { type: "object", properties: { level } } } }] };
+  await ask("/copilot/chat/completions", chat);
+  assert.equal(JSON.parse(seen[1].body).tools[0].function.parameters.properties.level.format, undefined);
+  const messages = { model: "m", messages: [], tools: [{ name: "f", input_schema: { type: "object", properties: { level } } }] };
+  await ask("/copilot/v1/messages", messages);
+  assert.equal(JSON.parse(seen[2].body).tools[0].input_schema.properties.level.format, undefined);
+  const clean = { model: "m", input: [], tools: [body.tools[1]] };
+  await ask("/copilot/responses", clean);
+  assert.equal(seen[3].body, JSON.stringify(clean), "a request with nothing to drop goes on as it was written");
+});
+
 test("Copilot's refusal goes back with its status, and with the sign-in hidden should it appear", async (t) => {
   const { ask } = await copilotGateway(t, { answer: () => new Response(JSON.stringify({ error: { message: "quota: Bearer gho_secret has none left", code: "quota_exceeded" } }), { status: 429, headers: { "content-type": "application/json", "retry-after": "30" } }) });
   const out = await ask("/copilot/chat/completions", { model: "m", messages: [] });

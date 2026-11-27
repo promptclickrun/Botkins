@@ -7,6 +7,21 @@ import { createHash, randomBytes } from "node:crypto";
 import { createServer } from "node:http";
 
 const sha = (text) => createHash("sha256").update(text).digest("base64url");
+const allowedRedirect = (value) => {
+  let parsed;
+  try {
+    parsed = new URL(value);
+  } catch {
+    return false;
+  }
+  if (parsed.hash || parsed.username || parsed.password) return false;
+  if (parsed.protocol === "https:") return true;
+  if (parsed.protocol === "http:") {
+    const host = parsed.hostname.toLowerCase();
+    return host === "localhost" || host === "[::1]" || host === "::1" || /^127\.(25[0-5]|2[0-4]\d|1?\d?\d)\.(25[0-5]|2[0-4]\d|1?\d?\d)\.(25[0-5]|2[0-4]\d|1?\d?\d)$/.test(host);
+  }
+  return false;
+};
 const body = (request) =>
   new Promise((resolve) => {
     let text = "";
@@ -69,6 +84,8 @@ export async function oauthMcpServer(options = {}) {
     if (url.pathname === "/register" && request.method === "POST") {
       if (!state.registration) return json(404, { error: "not_found" });
       const data = JSON.parse(text);
+      if (!Array.isArray(data.redirect_uris) || !data.redirect_uris.length || !data.redirect_uris.every((u) => typeof u === "string" && allowedRedirect(u)))
+        return json(400, { error: "invalid_client_metadata", error_description: "Redirect URI must use https, or http on a loopback host" });
       const id = "client-" + randomBytes(6).toString("hex");
       state.clients.set(id, { redirects: data.redirect_uris, name: data.client_name });
       return json(201, { client_id: id, redirect_uris: data.redirect_uris, token_endpoint_auth_method: "none" });
@@ -77,7 +94,7 @@ export async function oauthMcpServer(options = {}) {
       const q = url.searchParams;
       const client = state.clients.get(q.get("client_id")) ?? (state.staticClient?.id === q.get("client_id") ? { redirects: null } : null);
       const redirect = q.get("redirect_uri");
-      if (!client || (client.redirects && !client.redirects.includes(redirect)) || q.get("response_type") !== "code" || q.get("code_challenge_method") !== "S256" || !q.get("code_challenge"))
+      if (!client || !redirect || !allowedRedirect(redirect) || (client.redirects && !client.redirects.includes(redirect)) || q.get("response_type") !== "code" || q.get("code_challenge_method") !== "S256" || !q.get("code_challenge"))
         return json(400, { error: "invalid_request" });
       const back = new URL(redirect);
       back.searchParams.set("state", q.get("state"));

@@ -233,7 +233,7 @@ function browserForm(action, url, fields, values, token, submit) {
     const key = getAttr(input, "name") || getAttr(input, "id") || "";
     const isTextarea = tagOf(input) === "textarea";
     const inputType = isTextarea ? "textarea" : (getAttr(input, "type") || "text").trim().toLowerCase();
-    if (!/^[A-Za-z][A-Za-z0-9_-]{0,63}$/.test(key) || key in Object.prototype || input.disabled || input.readOnly ||
+    if (!/^[A-Za-z](?:[A-Za-z0-9_-]|\.(?=[A-Za-z0-9_-])){0,127}$/.test(key) || key in Object.prototype || input.disabled || input.readOnly ||
         !input.checkVisibility({ opacityProperty: true, visibilityProperty: true }) ||
         (!isTextarea && !["text", "email", "password", "tel", "search", "number"].includes(inputType))) continue;
     inputs.set(key, inputs.has(key) ? null : input);

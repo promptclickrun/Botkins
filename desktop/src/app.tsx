@@ -370,7 +370,7 @@ function App() {
   const look = state?.settings.appearance;
   useEffect(() => {
     if (look) applyAppearance(look);
-  }, [look?.theme, look?.colorTheme, look?.darkColorTheme, look?.contrast, look?.textSize, look?.font, look?.bubble]);
+  }, [look?.theme, look?.colorTheme, look?.darkColorTheme, look?.contrast, look?.textSize, look?.font, look?.bubble, look?.backdrop]);
   // The main process is told which chat is on screen, so a phone isn't pinged for a reply here.
   const onScreen = page === "Chats" && chatId && !modal ? chatId : null;
   useEffect(() => {
@@ -539,8 +539,10 @@ function App() {
     open(key);
     return key;
   }
+  // Every bot has a Main chat on a computer that keeps them; the Proactive setting doesn't decide that.
+  const keepsMain = !state?.remote?.using || state.remote.using.capabilities.includes("main-chat-v1");
   async function mainChat(id: string) {
-    if (!state?.proactive?.chatMode) return newChat(id);
+    if (!keepsMain) return newChat(id);
     const key = await api.mainChat(id);
     await openNew(key);
     return key;
@@ -548,7 +550,7 @@ function App() {
   function botChat(b: Bot) {
     leave(() => {
       // Settings › Chat › When you select a bot: "Main chat", when this computer keeps one.
-      if (state?.proactive?.chatMode && (state.settings.botTap ?? "main") === "main" && teamCan(state, "agents", "chat")) {
+      if (keepsMain && (state?.settings.botTap ?? "main") === "main" && state && teamCan(state, "agents", "chat")) {
         markBotRead(b.id);
         void mainChat(b.id).catch(fail);
         return;
@@ -624,7 +626,8 @@ function App() {
         return;
       }
       if (command === "new" || command === "clear") {
-        if (command === "clear" && chat?.main) await api.changeMainFork(chat.id, "reset", undefined, chat.activeFork);
+        // In a Main chat both clear its context in place; the Main chat stays the same chat.
+        if (chat?.main) await api.changeMainFork(chat.id, "reset", undefined, chat.activeFork);
         else await newChat(bot?.id || state!.bots[0].id);
         clear();
         return;
@@ -891,7 +894,7 @@ function App() {
     go: workPage,
     activity: () => nav("Activity"),
     usage: () => nav("Usage"),
-    waiting: (state.tasks ?? []).filter((t) => t.status === "review" || t.status === "blocked").length,
+    waiting: (state.tasks ?? []).filter((t) => t.status === "blocked" || (t.status === "review" && !t.reviewerBotId)).length,
   };
   const openWork = () => workPage(work.tabs.includes(workTab) ? workTab : work.tabs[0]);
   // Collapses the side menu to icons: beside Settings when open, at the top of the strip when collapsed.

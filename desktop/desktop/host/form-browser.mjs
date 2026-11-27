@@ -159,6 +159,9 @@ export class ScreenBrowser {
     }
   }
 
+  hasOpenPage(chatId) {
+    return Boolean(this.session?.send && this.session.chatId === chatId);
+  }
   page(chatId) {
     if (!this.session?.send || this.session.chatId !== chatId) throw closed();
     return this.session.send;

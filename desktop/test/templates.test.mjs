@@ -120,7 +120,9 @@ test("imports refuse files that aren't Botkins templates and drop looks Botkins 
   };
   assert.throws(() => templates.importFrom(write("a.json", "not json")), /isn't a bot template/);
   assert.throws(() => templates.importFrom(write("b.json", { name: "x" })), /isn't a Botkins bot template/);
-  assert.throws(() => templates.importFrom(write("c.json", { format: FORMAT, version: 3, name: "x" })), /newer Botkins/);
+  assert.throws(() => templates.importFrom(write("c.json", { format: FORMAT, version: 4, name: "x" })), /newer Botkins/);
+  // A version 3 template's requirements resolve only in the marketplace that lists it.
+  assert.throws(() => templates.importFrom(write("c3.json", { format: FORMAT, version: 3, name: "x", role: "y", instructions: "z", requires: { skills: ["a@^1.0.0"] } })), /Marketplace › Bots/);
   assert.throws(
     () => templates.importFrom(write("d.json", { format: FORMAT, version: 1, name: "x", role: "y", instructions: "z".repeat(30001) })),
     /Use up to 30,000 characters/,

@@ -360,7 +360,7 @@ async function launchChromium(chromeBin) {
 const chromeBin = findChromiumBinary();
 
 test(
-  "HTTPS extension_fill integration: auto-submit disabled, Ask -> approve fill-only, Always allow -> no card, off-origin action/base/formaction/redirect refused, TOTP in same-origin iframe",
+  "HTTPS extension_fill integration over the secure.fill path: Ask -> fill, same-site submit, Always allow -> no card, cross-site action filled but not submitted, redirect refused, TOTP in same-origin iframe",
   { skip: !chromeBin ? "No Chromium/Chrome binary available on this host" : false },
   async (t) => {
     if (!existsSync(driverBundlePath)) {
@@ -430,9 +430,11 @@ test(
         // Only same-origin / http(s) subframes get isolated worlds (foreign chrome-extension:// cannot!)
         if (frameUrl.startsWith("https://") || frameUrl.startsWith("http://")) {
           try {
+            // One world name for every frame, as Chrome gives one extension a single isolated world:
+            // the driver fills a same-origin iframe from the top frame and marks it in that shared world.
             const iso = await browser.cdp.send("Page.createIsolatedWorld", {
               frameId: cf.frame.id,
-              worldName: `botkins-vault-sub-${fid}`,
+              worldName: "botkins-vault-top",
             });
             frameContexts.set(fid, iso.executionContextId);
             fid++;
@@ -541,57 +543,42 @@ test(
       },
     };
 
-    const secureInputs = new SecureInputs(
-      fakeWs,
-      (plan, values, opts) => performSecureUse(plan, values, {
-        ...opts,
-        extensionFill: (args) => controller.run("browser_secure_fill", args),
-      }),
-      {
-        credentials: () => creds,
-        credentialGrants: grants,
-        savedLogins: (_chatId, origin, opts) => creds.findForSite({ url: opts?.url ?? origin, query: opts?.query }),
+    // The one extension path: main's secure.fill transport to an enabled, live device, which
+    // the real BrowserController answers on the real HTTPS page.
+    const bridge = {
+      devices: () => [{ id: "dev-1", name: "Chrome", connected: true, enabled: true }],
+      call: async (name) => {
+        assert.equal(name, "browser_tabs");
+        return controller.run("browser_tabs", {});
       },
-    );
+      secureFill: (_deviceId, payload) => controller.runSecureFill(payload),
+    };
+    const secureInputs = new SecureInputs(fakeWs, performSecureUse, {
+      credentials: () => creds,
+      credentialGrants: grants,
+      browserTools: bridge,
+      savedLogins: (_chatId, origin, opts) => creds.findForSite({ url: opts?.url ?? origin, query: opts?.query }),
+    });
     const tools = new Map(secureInputs.tools(bot, chat, run, task).map((tool) => [tool.name, tool.handler]));
+    const loginFields = [
+      { name: "email", source: "username" },
+      { name: "password", source: "value" },
+    ];
 
-    // 1. Navigate to the local HTTPS login page (with foreign chrome-extension:// iframe!)
+    // 1. Fill only under default Ask: one card, both inputs filled, nothing submitted.
     await navigateAndBind(`${trustedServer.origin}/`);
-
-    // 1b. extension_fill with submit fails closed (auto-submit is disabled in MV3 extension)
-    await assert.rejects(
-      () => tools.get("use_credential")({
-        credentialId: credId,
-        operation: "extension_fill",
-        destination: `${trustedServer.origin}/`,
-        fields: [
-          { selector: "#email", source: "username" },
-          { selector: "#password", source: "value" },
-        ],
-        submit: { selector: "#submit-btn" },
-      }),
-      /auto-submit is disabled/i,
-    );
-    assert.equal(cards.length, 0, "Auto-submit refusal must fail closed before prompting");
-    assert.notEqual(await browser.cdp.eval(`document.querySelector('#password').value`), secretPassword);
-
-    // 2. Fill-only under default Ask (card raised & approved once; never auto-submits)
     nextCardAction = "approve";
     const fillRes1 = JSON.parse(await tools.get("use_credential")({
       credentialId: credId,
       operation: "extension_fill",
       destination: `${trustedServer.origin}/`,
-      fields: [
-        { selector: "#email", source: "username" },
-        { selector: "#password", source: "value" },
-      ],
+      fields: loginFields,
     }));
     assert.equal(cards.length, 1, "First use under Ask must raise an approval card");
     assert.equal(fillRes1.applied, true);
-    assert.equal(fillRes1.submitted, false, "extension_fill must never auto-submit");
+    assert.deepEqual(fillRes1.filled, ["email", "password"]);
+    assert.equal(fillRes1.submitted, undefined, "no submit was asked for");
     assert.ok(!JSON.stringify(fillRes1).includes(secretPassword), "Secret must never appear in tool output");
-
-    // Verify React state + DOM value filled cleanly on the real HTTPS page without auto-submitting!
     const pageCheck1 = await browser.cdp.eval(`({
       email: document.querySelector('#email').value,
       reactEmail: window.__reactInputState?.email,
@@ -602,55 +589,43 @@ test(
     assert.equal(pageCheck1.reactEmail, "colt@scissorsscotch.com");
     assert.equal(pageCheck1.passwordMatches, true);
     assert.equal(pageCheck1.submits, 0);
-
-    // Verify a bot snapshot of the page NEVER reads the filled password back!
     const snap = await controller.run("browser_snapshot", { tabId });
     assert.ok(!JSON.stringify(snap).includes(secretPassword), "browser_snapshot must never expose password value");
 
-    // 3. Reload, approve with "remember" (Always allow for this site), then fill AGAIN with NO card!
+    // 2. Same-site submit succeeds: the form has no action, so it submits to the page itself.
     await navigateAndBind(`${trustedServer.origin}/`);
     nextCardAction = "remember";
     const fillRes2 = JSON.parse(await tools.get("use_credential")({
       credentialId: credId,
       operation: "extension_fill",
       destination: `${trustedServer.origin}/`,
-      fields: [
-        { selector: "#email", source: "username" },
-        { selector: "#password", source: "value" },
-      ],
+      fields: loginFields,
+      submit: true,
     }));
     assert.equal(cards.length, 2);
     assert.equal(fillRes2.applied, true);
-    assert.equal(fillRes2.submitted, false);
+    assert.equal(fillRes2.submitted, true, "a same-site form must be submitted");
+    assert.equal(fillRes2.submitRefused, undefined);
     assert.equal(fillRes2.grantLevel, "always");
+    const submits = await browser.cdp.eval(`window.__submits`);
+    assert.equal(submits.length, 1);
+    assert.equal(submits[0].email, "colt@scissorsscotch.com");
+    assert.equal(submits[0].passwordLength, secretPassword.length);
 
-    // Reload and invoke again — must run immediately with ZERO new approval card!
+    // 3. The standing Always-allow grant fills again with no new card.
     await navigateAndBind(`${trustedServer.origin}/`);
     const fillRes3 = JSON.parse(await tools.get("use_credential")({
       credentialId: credId,
       operation: "extension_fill",
       destination: `${trustedServer.origin}/`,
-      fields: [
-        { selector: "#email", source: "username" },
-        { selector: "#password", source: "value" },
-      ],
+      fields: loginFields,
     }));
     assert.equal(cards.length, 2, "Standing Always-allow grant must fill without raising another card");
     assert.equal(fillRes3.applied, true);
-    assert.equal(fillRes3.submitted, false);
     assert.equal(fillRes3.grantLevel, "always");
 
-    const pageCheck3 = await browser.cdp.eval(`({
-      passwordMatches: document.querySelector('#password').value === ${JSON.stringify(secretPassword)},
-      submitted: (window.__submits?.length ?? 0) > 0,
-    })`);
-    assert.equal(pageCheck3.passwordMatches, true);
-    assert.equal(pageCheck3.submitted, false);
-
-    // 3b. Even under an Always-allow grant on trustedServer.origin, off-origin submit destinations
-    // (<form action>, HTTP downgrade, <base href>, <button formaction>, external submitter, DOM clobbering)
-    // MUST fail closed BEFORE writing any value!
-    // Use a dedicated botId so the per-bot rate limiter (10/min) is not exhausted across the full scenario.
+    // 4. A form that would post to a different site (action, HTTP downgrade, <base href>, formaction,
+    // an external submitter, DOM clobbering) is filled but never submitted, and the result says why.
     grants.setGrant({
       credentialId: credId,
       botId: "bot-bad-paths",
@@ -670,109 +645,105 @@ test(
       "/page-clobbered",
     ]) {
       await navigateAndBind(`${trustedServer.origin}${badPath}`);
-      await assert.rejects(
-        () => badPathTools.get("use_credential")({
-          credentialId: credId,
-          operation: "extension_fill",
-          destination: `${trustedServer.origin}${badPath}`,
-          fields: [{ selector: "#password", source: "value" }],
-        }),
-        /origin mismatch|submit destination|https/i,
-      );
-      const pw = await browser.cdp.eval(`document.querySelector('#password')?.value ?? ''`);
-      assert.equal(pw, "", `${badPath} must fail closed before writing dummy secret`);
+      const res = JSON.parse(await badPathTools.get("use_credential")({
+        credentialId: credId,
+        operation: "extension_fill",
+        destination: `${trustedServer.origin}${badPath}`,
+        fields: [{ name: "password", source: "value" }],
+        submit: true,
+      }));
+      assert.equal(res.applied, true, `${badPath} still fills`);
+      assert.deepEqual(res.filled, ["password"]);
+      assert.equal(res.submitted, false, `${badPath} must not be submitted`);
+      assert.equal(res.submitRefused, "cross_site_action", badPath);
+      assert.match(res.message, /different site/);
+      await new Promise((r) => setTimeout(r, 150));
+      assert.ok((await browser.getUrl()).startsWith(`${trustedServer.origin}${badPath}`), `${badPath} must stay on the approved page`);
+      assert.equal(await browser.cdp.eval(`document.querySelector('#password').value`), secretPassword);
     }
 
-    // 4. Malicious redirect attack: page navigated to /redirect -> evilServer.origin!
-    // Even though the bot has a standing Always-allow grant for trustedServer.origin,
-    // the extension DOM driver checks window.location.origin at fill time and MUST REFUSE!
+    // 5. A tab redirected to another origin is not a tab on the approved origin: nothing is filled.
     await navigateAndBind(`${trustedServer.origin}/redirect`);
-    const redirectedUrl = await browser.getUrl();
-    assert.ok(redirectedUrl.startsWith(evilServer.origin), "Expected 302 redirect to evil origin");
-
+    assert.ok((await browser.getUrl()).startsWith(evilServer.origin), "Expected 302 redirect to evil origin");
     await assert.rejects(
       () => tools.get("use_credential")({
         credentialId: credId,
         operation: "extension_fill",
         destination: `${trustedServer.origin}/`,
-        fields: [{ selector: "#password", source: "value" }],
+        fields: [{ name: "password", source: "value" }],
       }),
-      /origin mismatch|does not match/i,
+      /No connected browser extension tab is open/,
     );
-    // Verify the evil page's password input NEVER received our secret!
-    const evilPassValue = await browser.cdp.eval(`document.querySelector('#password').value`);
-    assert.notEqual(evilPassValue, secretPassword, "Redirected origin must NEVER receive the secret");
+    assert.notEqual(await browser.cdp.eval(`document.querySelector('#password').value`), secretPassword);
+    // The extension's own re-check refuses a fill pinned to the approved origin on the redirected tab.
+    await assert.rejects(
+      () => controller.runSecureFill({ tabId, origin: trustedServer.origin, fields: [{ key: "password", kind: "password", value: "dummy-value-1" }] }),
+      (err) => err.secureCode === "origin_mismatch",
+    );
 
-    // 5. Asking directly for the evil origin does NOT reuse the trusted origin's Always-allow grant
+    // 6. Asking for the evil origin directly does not reuse the trusted origin's grant.
     nextCardAction = "deny";
     const evilDirectRes = JSON.parse(await tools.get("use_credential")({
       credentialId: credId,
       operation: "extension_fill",
       destination: `${evilServer.origin}/`,
-      fields: [{ selector: "#password", source: "value" }],
+      fields: [{ name: "password", source: "value" }],
     }));
     assert.equal(cards.length, 3, "Different origin must NOT inherit trusted origin's standing grant");
     assert.equal(evilDirectRes.applied, false);
     assert.equal(evilDirectRes.denied, true);
 
-    // 6. Cross-origin iframe host page: attempting to fill into the evil cross-origin iframe fails closed
+    // 7. A cross-origin iframe is never walked: its input is reported missing, not filled.
     await navigateAndBind(`${trustedServer.origin}/xorigin-host`);
-    await assert.rejects(
-      () => tools.get("use_credential")({
-        credentialId: credId,
-        operation: "extension_fill",
-        destination: `${trustedServer.origin}/xorigin-host`,
-        fields: [{ selector: "#frame-code", source: "value" }],
-      }),
-      /not found|mismatch|could not/i,
-    );
+    const xorigin = JSON.parse(await tools.get("use_credential")({
+      credentialId: credId,
+      operation: "extension_fill",
+      destination: `${trustedServer.origin}/xorigin-host`,
+      fields: [{ name: "frame-code", source: "totp" }],
+      totp: true,
+    }));
+    assert.deepEqual(xorigin.filled, []);
+    assert.deepEqual(xorigin.missing, ["frame-code"]);
 
-    // 7. TOTP 2FA code fill into the same-origin #reachable-iframe on trustedServer under the same grant
+    // 8. A TOTP code fills the same-origin iframe under the same grant and is scrubbed from output.
     await navigateAndBind(`${trustedServer.origin}/`);
-    const snapBefore2fa = await controller.run("browser_snapshot", { tabId });
-    const otpEl = snapBefore2fa.elements.find((e) => e.name === "2FA Code");
-    assert.ok(otpEl, "Same-origin 2FA iframe input should be indexed");
-
     const totpRes = JSON.parse(await tools.get("use_credential")({
       credentialId: credId,
       operation: "extension_fill",
       destination: `${trustedServer.origin}/`,
-      fields: [{ ref: otpEl.ref, source: "totp" }],
+      fields: [{ name: "frame-code", source: "totp" }],
       totp: true,
     }));
     assert.equal(cards.length, 3, "TOTP on same trusted origin reuses the standing grant");
-    assert.equal(totpRes.applied, true);
-
+    assert.deepEqual(totpRes.filled, ["frame-code"]);
     const otpFilled = await browser.cdp.eval(
       `document.getElementById('reachable-iframe').contentDocument.querySelector('#frame-code').value`,
     );
     assert.match(otpFilled, /^\d{6}$/, "Expected 6-digit TOTP code filled into same-origin iframe");
     assert.ok(!JSON.stringify(totpRes).includes(otpFilled), "TOTP code must be scrubbed from tool output");
 
-    // 8. Security: tainted tab blocks browser_eval and browser_cdp, snapshot redacts secret-filled TOTP input,
-    // and filling a password secret into a non-password input (#email) is refused!
+    // 9. The filled tab refuses browser_eval and browser_cdp, and snapshots redact the code.
     await assert.rejects(
       () => controller.run("browser_eval", { tabId, expression: "document.querySelector('#password').value" }),
-      /received a vault credential|cannot run browser_eval/i,
+      /securely filled value/,
     );
     await assert.rejects(
       () => controller.run("browser_cdp", { tabId, method: "Runtime.evaluate", params: { expression: "1+1" } }),
-      /received a vault credential|cannot run browser_cdp/i,
+      /securely filled value/,
     );
-    const snapAfterTotp = await controller.run("browser_snapshot", { tabId });
-    const snapJson = JSON.stringify(snapAfterTotp);
+    const snapJson = JSON.stringify(await controller.run("browser_snapshot", { tabId }));
     assert.ok(!snapJson.includes(secretPassword), "snapshot must never contain filled password");
     assert.ok(!snapJson.includes(otpFilled), "snapshot must never contain secret-filled TOTP value");
 
+    // 10. A password is never filled into a non-password input.
     await assert.rejects(
-      () =>
-        tools.get("use_credential")({
-          credentialId: credId,
-          operation: "extension_fill",
-          destination: `${trustedServer.origin}/`,
-          fields: [{ selector: "#email", source: "value" }],
-        }),
-      /non-password input/i,
+      () => tools.get("use_credential")({
+        credentialId: credId,
+        operation: "extension_fill",
+        destination: `${trustedServer.origin}/`,
+        fields: [{ name: "email", source: "value" }],
+      }),
+      /password input/i,
     );
   },
 );

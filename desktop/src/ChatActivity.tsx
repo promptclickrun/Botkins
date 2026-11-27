@@ -9,6 +9,7 @@ import {
   ChevronRight,
   Circle,
   CircleAlert,
+  ExternalLink,
   Eye,
   FilePenLine,
   FilePlus2,
@@ -42,6 +43,7 @@ import {
   formatWorkingDuration,
   groupForOpenMode,
   isCodingKind,
+  isStepCoveredByRail,
   parseStepInput,
   partitionForFoldMode,
   stepHeadline,
@@ -842,16 +844,18 @@ export function ToolTrail({
   }, [live, fold]);
   const now = useNow(live && fold);
 
-  const rawSteps = run.steps ?? [];
+  const hasSteps = (run.steps?.length ?? 0) > 0;
+  const rawSteps = (run.steps ?? []).filter((step) => !isStepCoveredByRail(step, run));
   const shownSteps = visibleSteps(rawSteps);
-  const count = shownSteps.length || run.usedTools?.length || 0;
+  const legacyTools = hasSteps ? undefined : run.usedTools;
+  const count = shownSteps.length || legacyTools?.length || 0;
   if (!count) return null;
 
   if (!fold) {
     const groups = groupForOpenMode(rawSteps);
-    if (!groups.length && run.usedTools?.length) {
-      const primary = uniqueKinds(undefined, run.usedTools, 1)[0] ?? "tool";
-      const summary = run.summary || summarizeToolNames(run.usedTools) || (count === 1 ? "Used a tool" : `Used ${count} tools`);
+    if (!groups.length && legacyTools?.length) {
+      const primary = uniqueKinds(undefined, legacyTools, 1)[0] ?? "tool";
+      const summary = run.summary || summarizeToolNames(legacyTools) || (count === 1 ? "Used a tool" : `Used ${count} tools`);
       return (
         <section className="tool-trail tool-trail-open" aria-label="Tool activity">
           <div className="open-work-group">
@@ -872,7 +876,7 @@ export function ToolTrail({
             {expanded && (
               <div className="open-work-body">
                 <ul className="open-work-steps">
-                  {run.usedTools.map((name) => (
+                  {legacyTools.map((name) => (
                     <li className="open-step-item" key={name}>
                       <div className="open-step-static">
                         <Check size={13} className="step-ok" />
@@ -915,7 +919,7 @@ export function ToolTrail({
           : [];
     const liveCodingIds = new Set(liveCodingSteps.map((s) => s.id));
     const foldedSteps = liveCodingIds.size > 0 ? shownSteps.filter((s) => !liveCodingIds.has(s.id)) : shownSteps;
-    const foldedKinds = uniqueKinds(foldedSteps, run.usedTools, 4);
+    const foldedKinds = uniqueKinds(foldedSteps, legacyTools, 4);
     const foldedLabel =
       liveCodingIds.size > 0
         ? foldedSteps.length === 1
@@ -953,14 +957,14 @@ export function ToolTrail({
     );
   }
 
-  const kinds = uniqueKinds(rawSteps, run.usedTools, 4);
+  const kinds = uniqueKinds(rawSteps, legacyTools, 4);
   const blocks = partitionForFoldMode(rawSteps);
   const last = Math.max(run.time, ...rawSteps.map((s) => s.finished ?? s.started));
   const elapsed = (run.finished ?? last) - run.time;
   const summary =
     run.summary ||
     summarizeSteps(shownSteps) ||
-    summarizeToolNames(run.usedTools) ||
+    summarizeToolNames(legacyTools) ||
     (count === 1 ? "1 step" : count + " steps");
 
   return (
@@ -978,7 +982,7 @@ export function ToolTrail({
         ) : (
           <div className="fold-blocks">
             <ul className="open-work-steps">
-              {run.usedTools?.map((name) => (
+              {legacyTools?.map((name) => (
                 <li className="open-step-item" key={name}>
                   <div className="open-step-static">
                     <Check size={13} className="step-ok" />
@@ -1078,6 +1082,23 @@ export function RunCards({
           </span>
           <button className="secondary" onClick={() => void window.botkins.openApp(app.id)}>
             Open app
+          </button>
+        </section>
+      ))}
+      {run.claudeArtifacts?.map((artifact) => (
+        <section className="chat-card app-card claude-artifact-card" key={artifact.id} aria-label={artifact.title}>
+          <span className="app-card-icon" aria-hidden="true">
+            <Sparkles size={20} />
+          </span>
+          <span className="app-card-text">
+            <strong>{artifact.title}</strong>
+            <small>
+              {artifact.action === "update" ? "Updated Claude artifact" : "Claude artifact"}
+              {artifact.private ? " · Private on claude.ai" : " · On claude.ai"}
+            </small>
+          </span>
+          <button className="secondary" onClick={() => void window.botkins.openLink(artifact.url)}>
+            <ExternalLink size={14} aria-hidden="true" /> Open on claude.ai
           </button>
         </section>
       ))}

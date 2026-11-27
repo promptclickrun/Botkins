@@ -143,6 +143,14 @@ export const botsCommands = {
           context.print(await call(context, "bots.duplicate", one(context, "Name the bot (its name or id).")), (copy) => "Copied " + named(copy.from.name) + " as " + named(copy.name) + ". Change its name with `botkins bots edit " + botWord(copy.name) + " --name <text>`.");
         },
       },
+      "reload-tools": {
+        summary: "Reconnect a bot's tools in all its chats",
+        usage: "botkins bots reload-tools <bot>",
+        details: "Each of the bot's chats starts its harness afresh at its next turn, so it connects to Botkins' own tools and the bot's MCP servers again. Conversations and messages stay. A chat in a turn reloads when the turn ends. In one chat, type /reload-tools.",
+        async run(context) {
+          context.print(await call(context, "bots.reloadTools", one(context, "Name the bot (its name or id).")), (found) => "Reloaded the tools of " + named(found.name) + ". Each chat reconnects at its next reply.");
+        },
+      },
       order: {
         summary: "Show the order of the bots, or put some first",
         usage: "botkins bots order [<bot>…]",
@@ -327,6 +335,14 @@ export const botsCommands = {
             async run(context) {
               if (context.args.length !== 2) throw usage("Name the section (its name or id), then its new name.");
               context.print(await call(context, "bots.sections.rename", context.args[0], context.args[1]), (done) => "Renamed it to " + named(done.name) + ".");
+            },
+          },
+          move: {
+            summary: "Move a section to a place on Home (1 is the top)",
+            usage: "botkins bots sections move <section> <place>",
+            async run(context) {
+              if (context.args.length !== 2) throw usage("Name the section (its name or id), then its place (1 is the top).");
+              context.print(await call(context, "bots.sections.move", context.args[0], context.args[1]), (list) => list.map((entry, at) => at + 1 + ". " + named(entry.name)).join("\n"));
             },
           },
           remove: {

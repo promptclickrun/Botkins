@@ -68,7 +68,7 @@ export function activityLabel(state: AvatarState): string {
 }
 
 export function needsYou(parts: Partial<PhoneParts>) {
-  return (parts.live?.requests.length ?? 0) + (parts.tasks?.filter((task) => task.status === "review" || task.status === "blocked").length ?? 0);
+  return (parts.live?.requests.length ?? 0) + (parts.tasks?.filter((task) => task.status === "blocked" || (task.status === "review" && !task.reviewerBotId)).length ?? 0);
 }
 
 export function panelRefreshing(streams: QuietLive["streams"] | undefined, chatId: string | undefined) {

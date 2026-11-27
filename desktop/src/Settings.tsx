@@ -54,6 +54,7 @@ import TeamSettings, { type TeamView } from "./TeamSettings";
 import ExperimentalSettings from "./ExperimentalSettings";
 import ProfileSettings from "./ProfileSettings";
 import NodeHostSettings from "./NodeHostSettings";
+import { ClaudeArtifactsSettings } from "./ClaudeArtifactsSettings";
 import { memberTeam, teamCan } from "./teamAccess";
 import "./settings.css";
 
@@ -95,7 +96,7 @@ const GROUPS: SectionGroup[] = [
   { rule: true, ids: ["usage", "experimental", "feedback", "about"] },
 ];
 const SECTIONS: { id: SectionId; label: string; icon: LucideIcon; about: string; words?: string }[] = [
-  { id: "general", label: "General", icon: Settings2, about: "The models your bots use, the harness they run in, and what runs in the background.", words: "default model routines harness background fast mode thinking" },
+  { id: "general", label: "General", icon: Settings2, about: "The models your bots use, the harness they run in, Claude artifacts, and what runs in the background.", words: "default model routines harness claude artifacts grants background fast mode thinking" },
   { id: "profile", label: "Profile", icon: UserCircle, about: "Who you are to your bots and to the people you work with.", words: "name picture photo about me account" },
   { id: "appearance", label: "Appearance", icon: Palette, about: "How Botkins looks on this computer. Your phone keeps its own choices.", words: "theme dark light mode color backdrop font text size avatar animations" },
   { id: "sidebar", label: "Side menu", icon: PanelLeft, about: "What the side menu shows, and in what order.", words: "places order hide show sidebar" },
@@ -448,6 +449,9 @@ export default function Settings({
                 setup={!state.remote?.using || state.remote.using.capabilities.includes("provider-signin-v1")}
                 windows={!state.remote?.using && /Windows/i.test(navigator.userAgent)}
               />
+              {!memberHost && (!state.remote?.using || state.remote.using.capabilities.includes("claude-artifacts-v1")) && (
+                <ClaudeArtifactsSettings bots={bots} providerRevision={state.providers?.revision} fail={fail} />
+              )}
               <TaskSettings settings={preferences} limits={state.taskLimits} change={changePreferences} fail={fail} />
               <BackgroundSettings settings={preferences} change={changePreferences} fail={fail} />
             </>
@@ -458,7 +462,7 @@ export default function Settings({
           )}
           {section === "sidebar" && <SidebarSettings settings={state.settings} spaces={hasSpaces(state)} fail={fail} />}
           {section === "chats" && <>
-            <ChatDisplaySettings settings={{ ...settings, showUpdates: preferences.showUpdates }} change={changePreferences} chatMode={state.proactive?.chatMode} fail={fail} />
+            <ChatDisplaySettings settings={{ ...settings, showUpdates: preferences.showUpdates, showRoutineChats: preferences.showRoutineChats }} change={changePreferences} chatMode={state.proactive?.chatMode} mainChats={!state.remote?.using || state.remote.using.capabilities.includes("main-chat-v1")} fail={fail} />
             {(!memberHost || teamCan(state, "settings", "manage")) && <>
               <SummarySettings settings={preferences} change={changePreferences} fail={fail} />
               <BehaviorSettings settings={preferences} change={changePreferences} fail={fail} />
@@ -558,7 +562,7 @@ export default function Settings({
                           <summary>Commands, skills and tools</summary>
                           {catalog.choices.map((c) => (
                             <small key={c.command}>
-                              /{c.command} · {c.source}
+                              /{c.command} · {c.source}{c.exposure === "indirect" ? " · indirect" : ""}
                             </small>
                           ))}
                         </details>

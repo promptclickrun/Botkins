@@ -17,6 +17,7 @@ import { CronExpressionParser } from "cron-parser";
 import { nextTime, textField } from "./panels.mjs";
 import { BOARD_KINDS, GOAL_CATEGORIES } from "./board.mjs";
 import { spaceShare } from "./link/team.mjs";
+import { isRoutineChat } from "./link/routine-chat.mjs";
 import { isGroup } from "./groups.mjs";
 import {
   ROUTINE_NOTIFY_TARGETS,
@@ -451,6 +452,7 @@ export class Routines {
   buildChat(data, now, createdBy, opts) {
     // A script runs on this computer, so only its owner writes one.
     if (createdBy && data.script != null) throw new Error("Only the computer's owner can add a script to a routine.");
+    if (createdBy && data.allowReadyTasks === true) throw new Error("Only the computer's owner can let a routine create Ready tasks.");
     const fields = this.fields(data, now);
     const deliver = deliveryField(data.deliver, this.ws, data.botId, personOf(createdBy));
     const notifyChange = this.notifyChange(data.botId, data, personOf(createdBy), opts);
@@ -460,7 +462,8 @@ export class Routines {
       {
         id: 1,
         routine: true,
-        enabled: !opts.fromTemplate,
+        // A template's routine starts paused, unless the template marks it active and the person left it on.
+        enabled: !opts.fromTemplate || opts.active === true,
         ...(opts.fromTemplate && { fromTemplate: true }),
         createdAt: now,
         ...fields,
@@ -468,6 +471,7 @@ export class Routines {
         ...(deliver && { deliver }),
         ...(notifyChange.notify === false && { notify: false }),
         ...(notifyChange.notifyTargets && { notifyTargets: notifyChange.notifyTargets }),
+        ...(data.allowReadyTasks === true && { allowReadyTasks: true }),
       },
     ];
     return chat;
@@ -478,10 +482,12 @@ export class Routines {
     // Whoever changes it, the result may only go to a chat of the routine's creator.
     const deliver = data.deliver === undefined ? undefined : (deliveryField(data.deliver, this.ws, chat.botId, personOf(entry.createdBy)) ?? null);
     const notifyChange = this.notifyChange(chat.botId, data, actor, opts);
+    if (actor !== "owner" && data.allowReadyTasks === true) throw new Error("Only the computer's owner can let a routine create Ready tasks.");
     // A change of destination, of notifying or of the model alone leaves the schedule as it is, so a finished one-time routine can still take it.
     if (["name", "prompt", "cadence", "timezone", "script", "followUp"].every((k) => data[k] === undefined)) {
       this.setDeliver(entry, deliver);
       this.setNotifyTargets(entry, notifyChange);
+      this.setAllowReadyTasks(entry, data.allowReadyTasks);
       this.ws.save();
       return entry;
     }
@@ -504,6 +510,7 @@ export class Routines {
     Object.assign(entry, fields);
     this.setDeliver(entry, deliver);
     this.setNotifyTargets(entry, notifyChange);
+    this.setAllowReadyTasks(entry, data.allowReadyTasks);
     delete entry.finishedAt;
     chat.title = "Routine · " + entry.name;
     this.ws.save();
@@ -528,6 +535,12 @@ export class Routines {
     if (change.notifyTargets === undefined) return;
     if (change.notifyTargets) entry.notifyTargets = change.notifyTargets;
     else delete entry.notifyTargets;
+  }
+  /** Whether this routine is allowed to create Ready tasks for bots (owner-approved opt-in). */
+  setAllowReadyTasks(entry, allow) {
+    if (allow === undefined) return;
+    if (allow === true) entry.allowReadyTasks = true;
+    else delete entry.allowReadyTasks;
   }
   /** Pauses or resumes a routine or any chat schedule. */
   setEnabled(chatId, id, enabled, now = Date.now()) {
@@ -596,6 +609,7 @@ export class Routines {
         ...(entry.notify === false && { notify: false }),
         ...(notifyTargets && { notifyTargets }),
         ...(entry.script && { script: entry.script, followUp: entry.followUp === true }),
+        ...(entry.allowReadyTasks === true && !createdBy && { allowReadyTasks: true }),
       },
       now,
       createdBy,
@@ -634,6 +648,7 @@ export class Routines {
         notifySummary: summarizeNotifyTargets(entry.notifyTargets, this.ws.notifyTargetsContext(chat.botId)),
       }),
       ...(entry.script && { script: entry.script, followUp: entry.followUp === true }),
+      ...(entry.allowReadyTasks === true && { allowReadyTasks: true }),
       // Kept by Botkins for the bot's Proactive agent: changed on the bot's profile, not here.
       ...(entry.proactive && { proactive: true }),
       // The routine's own model; without one it uses the Default routines model.
@@ -1121,7 +1136,7 @@ function runScriptRoutine(ws, chat, entry, trigger) {
     delete run.stopRequested;
     run.finished = Date.now();
     chat.time = run.finished;
-    if (run.status !== "Stopped") chat.unread = true;
+    if (run.status !== "Stopped" && !isRoutineChat(chat)) chat.unread = true;
     ws.events.emit("turn", { chat, run });
     ws.save();
     if (ws.queues.has(chat.id)) setImmediate(() => ws.drain(chat.id));

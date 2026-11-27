@@ -3,6 +3,8 @@
 // containing other extensions' iframes (Proton Pass, 1Password, Bitwarden, Grammarly, etc.)
 // work normally.
 
+import { isSameSite } from "./site.mjs";
+
 export const DRIVER_VERSION = "0.3.0";
 
 const BLOCKED_IFRAME_SCHEMES = [
@@ -292,16 +294,95 @@ function cssPathWithinRoot(el) {
   return parts.join(" > ");
 }
 
-const secretFilledElements = new WeakSet();
+const SENSITIVE_FIELD_KINDS = new Set(["password", "secret", "code"]);
+const SECRET_INPUT_REFUSED_ERROR = "This input holds a securely filled value. Submit the form or navigate first.";
 
-function getValueState(el) {
+function getSecretStore(el, fallbackWin) {
+  const elWin = getWin(el, fallbackWin);
+  if (!elWin) return null;
+  if (!elWin.__botkinsSecretElements) {
+    try {
+      Object.defineProperty(elWin, "__botkinsSecretElements", {
+        value: new WeakMap(),
+        configurable: true,
+        enumerable: false,
+        writable: true,
+      });
+    } catch {
+      elWin.__botkinsSecretElements = new WeakMap();
+    }
+  }
+  return elWin.__botkinsSecretElements;
+}
+
+function getSecretMeta(el, fallbackWin) {
+  const elWin = getWin(el, fallbackWin);
+  return elWin?.__botkinsSecretElements?.get(el) || null;
+}
+
+function markSecretElement(el, meta, fallbackWin) {
+  const store = getSecretStore(el, fallbackWin);
+  if (store) store.set(el, meta);
+}
+
+function unmarkSecretElement(el, fallbackWin) {
+  const elWin = getWin(el, fallbackWin);
+  elWin?.__botkinsSecretElements?.delete(el);
+}
+
+function isSensitiveSecretMeta(meta) {
+  return Boolean(meta && (SENSITIVE_FIELD_KINDS.has(meta.kind) || meta.wasPassword));
+}
+
+function isSecretRedactedElement(el, fallbackWin) {
+  if (!el || el.nodeType !== 1) return false;
+  if (isPasswordInput(el)) return true;
+  const meta = getSecretMeta(el, fallbackWin);
+  if (!isSensitiveSecretMeta(meta)) return false;
+  // Once an SPA empties a non-password input, the secret is gone from that input.
+  if (String(el.value ?? "").length === 0) {
+    unmarkSecretElement(el, fallbackWin);
+    return false;
+  }
+  return true;
+}
+
+function isSecretProtectedElement(el, fallbackWin) {
+  if (!el || el.nodeType !== 1) return false;
+  const meta = getSecretMeta(el, fallbackWin);
+  if (!isSensitiveSecretMeta(meta)) return false;
+  if (String(el.value ?? "").length === 0) {
+    unmarkSecretElement(el, fallbackWin);
+    return false;
+  }
+  return true;
+}
+
+function isLiveFilledElement(el, topDoc) {
+  if (!el) return false;
+  try {
+    if (!el.isConnected) return false;
+    const ownerDoc = el.ownerDocument;
+    if (!ownerDoc || !ownerDoc.defaultView) return false;
+    if (ownerDoc !== topDoc) {
+      const frameEl = ownerDoc.defaultView.frameElement;
+      if (!frameEl || !frameEl.isConnected) return false;
+    }
+    return String(el.value ?? "").length > 0;
+  } catch {
+    return false;
+  }
+}
+
+function getValueState(el, fallbackWin) {
   const tag = el.tagName.toLowerCase();
   const state = {};
+  const secretRedacted = isSecretRedactedElement(el, fallbackWin);
 
   if (tag === "input") {
     const t = (el.type || "text").toLowerCase();
-    if (t === "password" || secretFilledElements.has(el)) {
-      // Never expose password or vault-filled secret values in snapshots.
+    if (t === "password" || secretRedacted) {
+      // Never expose password or securely filled secret/code values in snapshots.
       const filled = Boolean(el.value && el.value.length > 0);
       state.hasValue = filled;
       state.valueState = filled ? "filled" : "empty";
@@ -315,7 +396,7 @@ function getValueState(el) {
       state.value = String(el.value ?? "").slice(0, 200);
     }
   } else if (tag === "textarea") {
-    if (secretFilledElements.has(el)) {
+    if (secretRedacted) {
       const filled = Boolean(el.value && el.value.length > 0);
       state.hasValue = filled;
       state.valueState = filled ? "filled" : "empty";
@@ -426,6 +507,7 @@ function collectVisibleText(root, win, opts) {
     if (node.nodeType === 1) {
       const tag = node.tagName.toLowerCase();
       if (SKIP_TEXT_TAGS.has(tag)) return;
+      if (isSecretRedactedElement(node, win)) return;
       if (tag === "iframe") {
         if (allowAllSameOrigin || includeBlankIframes) {
           const subDoc = tryGetIframeDocument(node, allowAllSameOrigin);
@@ -768,6 +850,48 @@ function selectOptionOnElement(el, opts, win) {
 
 export function createDomDriver(win = globalThis) {
   const refs = new Map(); // ref -> Element (persists until next snapshot)
+  const docToken = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+  const secretEntries = new Map(); // Element -> { kind, wasPassword }
+  let docHadSensitiveFill = false;
+
+  function pruneSecretEntries() {
+    const doc = win.document;
+    for (const [el] of [...secretEntries.entries()]) {
+      if (!isLiveFilledElement(el, doc)) {
+        secretEntries.delete(el);
+        unmarkSecretElement(el, win);
+      }
+    }
+  }
+
+  function hasActiveSecretFields() {
+    pruneSecretEntries();
+    if (secretEntries.size === 0) {
+      docHadSensitiveFill = false;
+      return false;
+    }
+    if (docHadSensitiveFill) {
+      for (const meta of secretEntries.values()) {
+        if (isSensitiveSecretMeta(meta)) {
+          return true;
+        }
+      }
+      // All sensitive (password/secret/code) inputs have been emptied or removed by the SPA.
+      secretEntries.clear();
+      docHadSensitiveFill = false;
+      return false;
+    }
+    return true;
+  }
+
+  function secretStatus(opts = {}) {
+    const expectedToken = typeof opts.docToken === "string" ? opts.docToken : "";
+    if (expectedToken && expectedToken !== docToken) {
+      return { ok: true, sameDoc: false, active: false, docToken };
+    }
+    const active = hasActiveSecretFields();
+    return { ok: true, sameDoc: true, active, docToken };
+  }
 
   function resolveElement({ ref, selector, text, allowAllSameOrigin = false }) {
     const doc = win.document;
@@ -850,7 +974,7 @@ export function createDomDriver(win = globalThis) {
           const tag = el.tagName.toLowerCase();
           const role = implicitRole(el);
           const name = computeAccessibleName(el);
-          const valueState = getValueState(el);
+          const valueState = getValueState(el, win);
 
           const entry = {
             ref,
@@ -864,6 +988,15 @@ export function createDomDriver(win = globalThis) {
 
           if (tag === "input" && el.type) entry.type = el.type.toLowerCase();
           else if (tag === "button" && el.getAttribute("type")) entry.type = el.getAttribute("type").toLowerCase();
+
+          if (tag === "input" || tag === "textarea" || tag === "select") {
+            const rawName = (el.getAttribute("name") || "").trim();
+            const rawId = (el.id || "").trim();
+            if (rawName) entry.inputName = rawName.slice(0, 128);
+            if (rawId) entry.id = rawId.slice(0, 128);
+            const fieldKey = rawName || rawId;
+            if (fieldKey) entry.fieldKey = fieldKey.slice(0, 128);
+          }
 
           if (name) {
             entry.name = name;
@@ -986,6 +1119,14 @@ export function createDomDriver(win = globalThis) {
       }
     }
 
+    if (isSecretProtectedElement(el, win)) {
+      return {
+        ok: false,
+        found: true,
+        secretProtected: true,
+        error: SECRET_INPUT_REFUSED_ERROR,
+      };
+    }
     if (isFileInput(el)) {
       return {
         ok: false,
@@ -1129,6 +1270,14 @@ export function createDomDriver(win = globalThis) {
   function select(opts = {}) {
     const el = resolveElement(opts);
     if (!el) return { ok: false, found: false, error: "Select element not found." };
+    if (isSecretProtectedElement(el, win)) {
+      return {
+        ok: false,
+        found: true,
+        secretProtected: true,
+        error: SECRET_INPUT_REFUSED_ERROR,
+      };
+    }
     if (el.tagName.toLowerCase() !== "select") {
       return { ok: false, found: true, error: `Element <${el.tagName.toLowerCase()}> is not a <select>.` };
     }
@@ -1315,231 +1464,344 @@ export function createDomDriver(win = globalThis) {
     return { ok: true, found: Boolean(el) };
   }
 
-  /**
-   * Origin-pinned credential fill for Botkins vault autofill (`extension_fill`).
-   * Verifies BOTH the current frame's origin AND top-level frame origin against `expectedOrigin`
-   * before touching any DOM element and again before optional submit. Uses native prototype
-   * value setters + React `_valueTracker` reset + input/change events. Never returns any value.
-   */
-  function secureFill(opts = {}) {
-    const doc = win.document;
-    const expectedOrigin = typeof opts.expectedOrigin === "string" ? opts.expectedOrigin.trim() : "";
-    if (!expectedOrigin) {
-      return { ok: false, reason: "origin-mismatch", error: "Missing expectedOrigin for secure fill." };
+  function isSameOriginSecureDoc(doc, expectedOrigin, ownerDoc) {
+    if (!doc) return false;
+    try {
+      const origin = String(doc.location?.origin || "");
+      if (origin && origin === expectedOrigin) return true;
+      const href = String(doc.location?.href || "").toLowerCase();
+      if ((href === "about:blank" || href === "about:srcdoc") && ownerDoc) {
+        return String(ownerDoc.location?.origin || "") === expectedOrigin;
+      }
+    } catch {}
+    return false;
+  }
+
+  function walkSecureTree(root, doc, expectedOrigin, visitor) {
+    if (!root) return;
+    const children = root.children || [];
+    for (let i = 0; i < children.length; i++) {
+      const el = children[i];
+      if (!el || el.nodeType !== 1) continue;
+      const tag = el.tagName.toLowerCase();
+      if (tag === "iframe") {
+        if (isBlockedIframe(el)) continue;
+        try {
+          const subDoc = el.contentDocument;
+          if (subDoc && subDoc.documentElement && isSameOriginSecureDoc(subDoc, expectedOrigin, doc)) {
+            walkSecureTree(subDoc.documentElement, subDoc, expectedOrigin, visitor);
+          }
+        } catch {}
+        continue;
+      }
+      if (visitor(el, doc) === false) continue;
+      if (el.shadowRoot) {
+        walkSecureTree(el.shadowRoot, doc, expectedOrigin, visitor);
+      }
+      if (el.children && el.children.length > 0) {
+        walkSecureTree(el, doc, expectedOrigin, visitor);
+      }
     }
-    const checkOrigin = () => {
+  }
+
+  function isSecureFieldTypeCompatible(el, kind) {
+    const tag = el.tagName.toLowerCase();
+    if (tag !== "input" && tag !== "textarea") return false;
+    const inputType = tag === "input" ? (el.type || "text").toLowerCase() : "";
+    const disallowed = new Set([
+      "hidden",
+      "submit",
+      "button",
+      "reset",
+      "image",
+      "file",
+      "checkbox",
+      "radio",
+      "range",
+      "color",
+      "date",
+      "datetime-local",
+      "month",
+      "time",
+      "week",
+    ]);
+    if (tag === "input" && disallowed.has(inputType)) return false;
+    if (kind === "password") {
+      return tag === "input" && inputType === "password";
+    }
+    if (kind === "code") {
+      return tag === "input" && ["text", "tel", "number", "password", "search"].includes(inputType);
+    }
+    if (kind === "secret") {
+      return tag === "textarea" || (tag === "input" && ["password", "text", "search"].includes(inputType));
+    }
+    // kind === "text" (default)
+    return tag === "textarea" || (tag === "input" && ["text", "email", "tel", "search", "url", "number"].includes(inputType));
+  }
+
+  const isLoopbackHost = (host) => host === "localhost" || host === "127.0.0.1" || host === "[::1]";
+
+  // The approved origin must hold for this frame AND the top frame, over HTTPS
+  // (loopback HTTP only when the host opted in with allowLocalHttp).
+  function secureFrameOriginOk(expectedOrigin, allowLocalHttp) {
+    try {
       const loc = win.location;
-      if (!loc || loc.origin !== expectedOrigin) return false;
-      if (loc.protocol !== "https:") {
-        const localOk = Boolean(opts.allowLocalHttp) && (loc.hostname === "localhost" || loc.hostname === "127.0.0.1" || loc.hostname === "[::1]");
-        if (!localOk) return false;
-      }
+      if (!loc || String(loc.origin || "") !== expectedOrigin) return false;
       if (loc.username || loc.password) return false;
-      if (win !== win.top) {
-        try {
-          if (win.top.location.origin !== expectedOrigin) return false;
-        } catch {
-          return false;
-        }
-      }
+      if (loc.protocol !== "https:" && !(allowLocalHttp && loc.protocol === "http:" && isLoopbackHost(loc.hostname))) return false;
+      if (win !== win.top && String(win.top.location.origin || "") !== expectedOrigin) return false;
       return true;
-    };
-
-    if (!checkOrigin()) {
-      return {
-        ok: false,
-        reason: "origin-mismatch",
-        error: "Origin mismatch: refused to fill credentials on this frame.",
-      };
-    }
-
-    const rawFields = Array.isArray(opts.fields) ? opts.fields : [];
-    if (!rawFields.length || rawFields.length > 16) {
-      return { ok: false, error: "Provide between 1 and 16 fields to fill." };
-    }
-
-    const resolveFieldEl = (field) => {
-      if (field.ref || field.selector) {
-        return resolveElement({ ref: field.ref, selector: field.selector, allowAllSameOrigin: false });
-      }
-      const key = typeof field.name === "string" ? field.name.trim() : "";
-      if (!key) return null;
-      const escaped = typeof CSS !== "undefined" && typeof CSS.escape === "function"
-        ? CSS.escape(key)
-        : key.replace(/["\\]/g, "\\$&");
-      return (
-        querySelectorDeep(doc, `input[name="${escaped}"], textarea[name="${escaped}"]`, { allowAllSameOrigin: false }) ||
-        querySelectorDeep(doc, `input[id="${escaped}"], textarea[id="${escaped}"]`, { allowAllSameOrigin: false }) ||
-        resolveElement({ text: key, allowAllSameOrigin: false })
-      );
-    };
-
-    if (opts.submit) {
-      return {
-        ok: false,
-        reason: "auto-submit-disabled",
-        error: "Auto-submit is disabled for extension_fill because Chrome MV3 cannot enforce submit destinations at the browser network boundary. Fill without submit, or use page_fill_submit in the host sign-in browser.",
-      };
-    }
-
-    const allowLocalHttp = Boolean(opts.allowLocalHttp);
-    const getAttr = (el, name) => (el ? Element.prototype.getAttribute.call(el, name) : null);
-    const hasAttr = (el, name) => Boolean(el && Element.prototype.hasAttribute.call(el, name));
-    const tagOf = (el) => {
-      if (!el) return "";
-      const getter = Object.getOwnPropertyDescriptor(Element.prototype, "tagName")?.get;
-      return String(getter ? getter.call(el) : el.tagName || "").toLowerCase();
-    };
-    const isApprovedDest = (rawAttr, targetDoc, targetWin) => {
-      try {
-        const trimmed = rawAttr === null || rawAttr === undefined ? "" : String(rawAttr).trim();
-        const docUrl = targetDoc?.URL || targetWin?.location?.href || "";
-        // Per HTML spec, missing or empty action/formaction submits to document URL (not <base href>).
-        const resolved = trimmed
-          ? new URL(trimmed, targetDoc?.baseURI || docUrl)
-          : new URL(docUrl);
-        if (resolved.username || resolved.password) return false;
-        const isHttps = resolved.protocol === "https:";
-        const localOk = allowLocalHttp && resolved.protocol === "http:" && (resolved.hostname === "localhost" || resolved.hostname === "127.0.0.1" || resolved.hostname === "[::1]");
-        if (!isHttps && !localOk) return false;
-        return resolved.origin === expectedOrigin;
-      } catch {
-        return false;
-      }
-    };
-    const getForm = (el, targetDoc, targetWin) => {
-      if (!el) return null;
-      if (hasAttr(el, "form")) {
-        const formId = getAttr(el, "form");
-        if (!formId) return null;
-        const byId = targetDoc?.getElementById?.(formId);
-        return byId && tagOf(byId) === "form" ? byId : null;
-      }
-      const tag = tagOf(el);
-      const proto = tag === "input" ? targetWin?.HTMLInputElement?.prototype
-        : tag === "button" ? targetWin?.HTMLButtonElement?.prototype
-        : tag === "textarea" ? targetWin?.HTMLTextAreaElement?.prototype
-        : tag === "select" ? targetWin?.HTMLSelectElement?.prototype
-        : null;
-      const getter = proto ? Object.getOwnPropertyDescriptor(proto, "form")?.get : null;
-      if (getter) {
-        const own = getter.call(el);
-        if (own && tagOf(own) === "form") return own;
-      }
-      const closest = Element.prototype.closest.call(el, "form");
-      return closest && tagOf(closest) === "form" ? closest : null;
-    };
-    const isSubmitControl = (el) => {
-      const tag = tagOf(el);
-      if (tag === "button") {
-        const t = (getAttr(el, "type") || "").trim().toLowerCase();
-        return !t || (t !== "button" && t !== "reset");
-      }
-      if (tag === "input") {
-        const t = (getAttr(el, "type") || "").trim().toLowerCase();
-        return t === "submit" || t === "image";
-      }
+    } catch {
       return false;
-    };
-    const validateFormDestination = (form, targetDoc, targetWin) => {
-      if (!form) return isApprovedDest(null, targetDoc, targetWin);
-      if (!isApprovedDest(getAttr(form, "action"), targetDoc, targetWin)) return false;
-      const root = targetDoc || doc;
-      const candidates = root.querySelectorAll ? root.querySelectorAll("button, input") : [];
-      for (const el of candidates) {
-        if (!isSubmitControl(el)) continue;
-        if (getForm(el, root, targetWin) !== form) continue;
-        if (hasAttr(el, "formaction") && !isApprovedDest(getAttr(el, "formaction"), root, targetWin)) {
-          return false;
+    }
+  }
+
+  // Read attributes and form ownership through the prototypes so a page cannot clobber
+  // `form.action` (e.g. with <input name="action">) to hide an off-site destination.
+  const secureGetAttr = (el, name) => (el ? Element.prototype.getAttribute.call(el, name) : null);
+  const secureHasAttr = (el, name) => Boolean(el && Element.prototype.hasAttribute.call(el, name));
+  const secureTagOf = (el) => {
+    if (!el) return "";
+    const getter = Object.getOwnPropertyDescriptor(Element.prototype, "tagName")?.get;
+    return String(getter ? getter.call(el) : el.tagName || "").toLowerCase();
+  };
+
+  function isSameSiteSubmitDestination(rawAttr, targetDoc, expectedOrigin) {
+    try {
+      const trimmed = rawAttr === null || rawAttr === undefined ? "" : String(rawAttr).trim();
+      const docUrl = targetDoc?.URL || "";
+      // Per HTML, a missing or empty action/formaction submits to the document URL (not <base href>).
+      const resolvedUrl = trimmed ? new URL(trimmed, targetDoc?.baseURI || docUrl) : new URL(docUrl);
+      return isSameSite(resolvedUrl, expectedOrigin);
+    } catch {
+      return false;
+    }
+  }
+
+  function secureFormOf(el, targetDoc, targetWin) {
+    if (!el) return null;
+    if (secureHasAttr(el, "form")) {
+      const formId = secureGetAttr(el, "form");
+      if (!formId) return null;
+      const byId = targetDoc?.getElementById?.(formId);
+      return byId && secureTagOf(byId) === "form" ? byId : null;
+    }
+    const tag = secureTagOf(el);
+    const proto = tag === "input" ? targetWin?.HTMLInputElement?.prototype
+      : tag === "button" ? targetWin?.HTMLButtonElement?.prototype
+      : tag === "textarea" ? targetWin?.HTMLTextAreaElement?.prototype
+      : tag === "select" ? targetWin?.HTMLSelectElement?.prototype
+      : null;
+    const getter = proto ? Object.getOwnPropertyDescriptor(proto, "form")?.get : null;
+    if (getter) {
+      const own = getter.call(el);
+      if (own && secureTagOf(own) === "form") return own;
+    }
+    const closest = Element.prototype.closest.call(el, "form");
+    return closest && secureTagOf(closest) === "form" ? closest : null;
+  }
+
+  function isSecureSubmitControl(el) {
+    const tag = secureTagOf(el);
+    const t = (secureGetAttr(el, "type") || "").trim().toLowerCase();
+    if (tag === "button") return !t || (t !== "button" && t !== "reset");
+    if (tag === "input") return t === "submit" || t === "image";
+    return false;
+  }
+
+  // The form's submitters, including external `form=` ones, in document order.
+  function secureSubmittersOf(form, elDoc, elWin) {
+    const controls = elDoc?.querySelectorAll ? elDoc.querySelectorAll("button, input") : [];
+    const out = [];
+    for (const ctrl of controls) {
+      if (isSecureSubmitControl(ctrl) && secureFormOf(ctrl, elDoc, elWin) === form) out.push(ctrl);
+    }
+    return out;
+  }
+
+  // Where submitting the filled field would send it must be on the approved page's site
+  // (same scheme and registrable domain): the form's action and every submitter's formaction.
+  // No form or no action submits to the page itself, which passes.
+  function secureSubmitDestinationOk(el, expectedOrigin) {
+    const elDoc = el.ownerDocument;
+    const elWin = getWin(el, win);
+    if (secureHasAttr(el, "form") && !secureFormOf(el, elDoc, elWin)) return false;
+    const form = secureFormOf(el, elDoc, elWin);
+    if (!form) return isSameSiteSubmitDestination(null, elDoc, expectedOrigin);
+    if (!isSameSiteSubmitDestination(secureGetAttr(form, "action"), elDoc, expectedOrigin)) return false;
+    for (const ctrl of secureSubmittersOf(form, elDoc, elWin)) {
+      if (secureHasAttr(ctrl, "formaction") &&
+          !isSameSiteSubmitDestination(secureGetAttr(ctrl, "formaction"), elDoc, expectedOrigin)) return false;
+    }
+    return true;
+  }
+
+  function secureSubmit(lastEl) {
+    const elDoc = lastEl.ownerDocument;
+    const elWin = getWin(lastEl, win);
+    const form = secureFormOf(lastEl, elDoc, elWin);
+    const submitBtn = form
+      ? secureSubmittersOf(form, elDoc, elWin).find((c) => !c.disabled && isElementVisible(c, elWin))
+      : null;
+    if (submitBtn) {
+      dispatchPointerClickSequence(submitBtn, elWin, null, false);
+      return;
+    }
+    const enterInit = { key: "Enter", code: "Enter", keyCode: 13, which: 13, bubbles: true, cancelable: true, composed: true };
+    const notPrevented = lastEl.dispatchEvent(makeKeyboardEvent(elWin, "keydown", enterInit));
+    lastEl.dispatchEvent(makeKeyboardEvent(elWin, "keypress", { ...enterInit, charCode: 13 }));
+    if (notPrevented && secureTagOf(lastEl) !== "textarea") dispatchSubmitOnForm(lastEl);
+    lastEl.dispatchEvent(makeKeyboardEvent(elWin, "keyup", enterInit));
+  }
+
+  function secureFill(opts = {}) {
+    const fields = Array.isArray(opts.fields) ? opts.fields : [];
+    const expectedOrigin = String(opts.origin || "").trim();
+    const allowLocalHttp = opts.allowLocalHttp === true;
+    const resolved = [];
+    try {
+      if (!expectedOrigin || !secureFrameOriginOk(expectedOrigin, allowLocalHttp)) {
+        return {
+          ok: false,
+          code: "origin_mismatch",
+          error: "Tab origin does not match the approved origin.",
+        };
+      }
+
+      const doc = win.document;
+      if (!doc?.documentElement) {
+        return { ok: true, filled: [], missing: fields.map((f) => String(f?.key || "")).filter(Boolean) };
+      }
+
+      const candidates = [];
+      walkSecureTree(doc.documentElement, doc, expectedOrigin, (el, ownerDoc) => {
+        const tag = el.tagName.toLowerCase();
+        if (tag !== "input" && tag !== "textarea") return true;
+        if (tag === "input" && (el.type || "").toLowerCase() === "hidden") return true;
+        if (el.disabled || el.readOnly) return true;
+        const elWin = getWin(el, win);
+        if (!isElementVisible(el, elWin)) return true;
+        candidates.push({
+          el,
+          ownerDoc,
+          name: el.getAttribute("name") || "",
+          id: el.id || "",
+        });
+        return true;
+      });
+
+      const missing = [];
+      for (const field of fields) {
+        const key = String(field?.key || "");
+        const kind = String(field?.kind || "text");
+        const value = typeof field?.value === "string" ? field.value : "";
+        if (!key) continue;
+
+        let matched = candidates.filter((c) => c.name === key);
+        if (matched.length === 0) {
+          matched = candidates.filter((c) => c.id === key);
+        }
+        if (matched.length === 0) {
+          missing.push(key);
+          continue;
+        }
+
+        const compatible = matched.find((c) => isSecureFieldTypeCompatible(c.el, kind));
+        if (!compatible) {
+          if (kind === "password") {
+            return {
+              ok: false,
+              code: "password_type_mismatch",
+              error: `Refused to fill password field "${key}" into a non-password input.`,
+            };
+          }
+          return {
+            ok: false,
+            code: "type_mismatch",
+            error: `Refused to fill field "${key}" into an incompatible input type.`,
+          };
+        }
+
+        resolved.push({ key, kind, value, el: compatible.el, ownerDoc: compatible.ownerDoc });
+      }
+
+      // Re-verify this frame's and the top frame's origin immediately before writing values.
+      if (!secureFrameOriginOk(expectedOrigin, allowLocalHttp)) {
+        return {
+          ok: false,
+          code: "origin_mismatch",
+          error: "Tab origin changed before filling.",
+        };
+      }
+
+      const filled = [];
+      for (const item of resolved) {
+        if (!isSameOriginSecureDoc(item.ownerDoc, expectedOrigin, doc)) {
+          return {
+            ok: false,
+            code: "origin_mismatch",
+            error: "Frame origin no longer matches the approved origin.",
+          };
+        }
+        const el = item.el;
+        const elWin = getWin(el, win);
+        if (typeof el.scrollIntoView === "function") {
+          try {
+            el.scrollIntoView({ block: "center", inline: "center", behavior: "instant" });
+          } catch {}
+        }
+        if (typeof el.focus === "function") {
+          try {
+            el.focus({ preventScroll: true });
+          } catch {}
+        }
+        setNativeValue(el, item.value, elWin);
+        const meta = { kind: item.kind, wasPassword: isPasswordInput(el) };
+        secretEntries.set(el, meta);
+        if (isSensitiveSecretMeta(meta)) {
+          docHadSensitiveFill = true;
+          markSecretElement(el, meta, elWin);
+        }
+        el.dispatchEvent(
+          makeInputEvent(elWin, "input", {
+            bubbles: true,
+            composed: true,
+            inputType: "insertText",
+          }),
+        );
+        el.dispatchEvent(new (elWin?.Event || Event)("change", { bubbles: true }));
+        filled.push(item.key);
+      }
+
+      let submitted = false;
+      let submitRefused = "";
+      if (opts.submit === true && resolved.length > 0) {
+        const lastEl = resolved[resolved.length - 1].el;
+        if (!secureFrameOriginOk(expectedOrigin, allowLocalHttp)) {
+          submitRefused = "origin_changed";
+        } else if (!resolved.every((item) => secureSubmitDestinationOk(item.el, expectedOrigin))) {
+          submitRefused = "cross_site_action";
+        } else {
+          secureSubmit(lastEl);
+          submitted = true;
         }
       }
-      return true;
-    };
 
-    const selected = [];
-    for (const field of rawFields) {
-      if (!field || typeof field.value !== "string") {
-        return { ok: false, error: "Invalid field payload." };
+      const secretActive = filled.length > 0 ? hasActiveSecretFields() : false;
+      return { ok: true, filled, missing, docToken, secretActive, submitted, ...(submitRefused && { submitRefused }) };
+    } finally {
+      for (const item of resolved) {
+        item.value = "";
+        item.el = null;
+        item.ownerDoc = null;
       }
-      const el = resolveFieldEl(field);
-      if (!el) {
-        return { ok: false, found: false, error: "Target credential input not found." };
-      }
-      const tag = tagOf(el);
-      if (tag !== "input" && tag !== "textarea") {
-        return { ok: false, found: true, error: `Refused to fill non-input element <${tag}>.` };
-      }
-      if (isFileInput(el) || el.disabled || el.readOnly) {
-        return { ok: false, found: true, error: "Target credential input is disabled, read-only, or a file input." };
-      }
-      const inputType = tag === "input" ? (getAttr(el, "type") || "text").trim().toLowerCase() : "";
-      if (inputType === "hidden") {
-        return { ok: false, found: true, error: "Refused to fill hidden input element." };
-      }
-      // Verify the element's own document matches expectedOrigin (blocks inlined cross-origin targets).
-      const elWin = getWin(el, win);
-      const elDoc = el.ownerDocument || doc;
-      if (!elWin?.location || elWin.location.origin !== expectedOrigin) {
-        return { ok: false, reason: "origin-mismatch", error: "Origin mismatch: element belongs to another origin." };
-      }
-      if (!isElementVisible(el, elWin)) {
-        return { ok: false, found: true, error: "Refused to fill invisible or off-screen input element." };
-      }
-      const isPasswordField = field.kind === "password";
-      if (isPasswordField && (tag !== "input" || inputType !== "password")) {
-        return { ok: false, found: true, error: "Refused to fill a password secret into a non-password input." };
-      }
-      // Fail closed BEFORE writing any value if the input's enclosing form or any associated submitter
-      // targets a destination outside the approved HTTPS origin.
-      if (hasAttr(el, "form") && !getForm(el, elDoc, elWin)) {
-        return { ok: false, reason: "origin-mismatch", error: "Refused to fill credentials: input references an invalid or missing form." };
-      }
-      const form = getForm(el, elDoc, elWin);
-      if (!validateFormDestination(form, elDoc, elWin)) {
-        return { ok: false, reason: "origin-mismatch", error: "Refused to fill credentials: effective submit destination is outside the approved HTTPS origin." };
-      }
-      const isSecret = field.secret !== false && field.kind !== "username";
-      selected.push({ el, elWin, value: field.value, isSecret });
-    }
-
-    // Re-check origin immediately before writing values.
-    if (!checkOrigin()) {
-      return { ok: false, reason: "origin-mismatch", error: "Origin changed before filling credentials." };
-    }
-
-    for (const item of selected) {
-      const { el, elWin, value, isSecret } = item;
-      if (isSecret) {
-        secretFilledElements.add(el);
-      }
-      if (typeof el.scrollIntoView === "function") {
-        try {
-          el.scrollIntoView({ block: "center", inline: "center", behavior: "instant" });
-        } catch {
-          el.scrollIntoView();
+      resolved.length = 0;
+      for (const field of fields) {
+        if (field && typeof field === "object") {
+          field.value = "";
         }
       }
-      try {
-        el.focus?.({ preventScroll: true });
-      } catch {}
-      setNativeValue(el, value, elWin);
-      // Do not echo the secret in InputEvent.data.
-      el.dispatchEvent(
-        makeInputEvent(elWin, "input", {
-          bubbles: true,
-          composed: true,
-          inputType: "insertReplacementText",
-        }),
-      );
-      el.dispatchEvent(new (elWin?.Event || Event)("change", { bubbles: true }));
     }
-
-    return {
-      ok: true,
-      filledCount: selected.length,
-      submitted: false,
-      origin: expectedOrigin,
-    };
   }
 
   function dispatch(action, payload = {}) {
@@ -1562,6 +1824,8 @@ export function createDomDriver(win = globalThis) {
         return probe(payload);
       case "secureFill":
         return secureFill(payload);
+      case "secretStatus":
+        return secretStatus(payload);
       default:
         return { ok: false, error: `Unknown DOM driver action: ${action}` };
     }
@@ -1569,6 +1833,7 @@ export function createDomDriver(win = globalThis) {
 
   return {
     version: DRIVER_VERSION,
+    docToken,
     refs,
     snapshot,
     click,
@@ -1579,6 +1844,7 @@ export function createDomDriver(win = globalThis) {
     checkWait,
     probe,
     secureFill,
+    secretStatus,
     dispatch,
   };
 }

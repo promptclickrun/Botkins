@@ -612,6 +612,46 @@ test("a token Apple no longer knows is forgotten, and a test notification report
   }
 });
 
+test("alerts omit thread-id and collapse so iOS folds them into one app-wide stack, while updates collapse by hash", async () => {
+  const { link, call, until, done, sent } = await setup();
+  try {
+    await call("link.push.register", { token: TOKEN, env: "production" });
+    await call("link.push.presence", false);
+    const deviceId = link.status().devices[0].id;
+
+    // Two replies in the same chat and a reply in another bot's chat: none carry thread-id or collapse.
+    await call("send", "chat-blog", "First note.");
+    await until(() => sent.filter((item) => item.type === "alert").length === 1, "first reply");
+    await call("send", "chat-blog", "Second note.");
+    await until(() => sent.filter((item) => item.type === "alert").length === 2, "second reply in same chat");
+    await call("send", "chat-launch", "Note in another chat.");
+    await until(() => sent.filter((item) => item.type === "alert").length === 3, "reply in another chat");
+    assert.equal(link.push.notify(deviceId, { t: "Launch", m: "Sam commented", k: "space", s: "sp_1" }), true);
+    await until(() => sent.filter((item) => item.type === "alert").length === 4, "space alert");
+
+    for (const item of sent.filter((one) => one.type === "alert")) {
+      assert.equal(item.payload.aps["thread-id"], undefined, "no thread-id so iOS folds into one app stack");
+      assert.equal(item.collapse, undefined, "no collapse id so unread alerts stack instead of overwriting");
+    }
+
+    // App update notices stay in the same app stack (no thread-id) but share a hashed collapse id
+    // so a newer version replaces an older unread update banner.
+    const beforeUpdates = sent.length;
+    assert.equal(link.push.updateAvailable("0.18.0"), 1);
+    await until(() => sent.length > beforeUpdates, "first update alert");
+    assert.equal(link.push.updateAvailable("0.18.1"), 1);
+    await until(() => sent.length > beforeUpdates + 1, "second update alert");
+    const [firstUpdate, secondUpdate] = sent.slice(beforeUpdates);
+    assert.equal(firstUpdate.payload.aps["thread-id"], undefined);
+    assert.equal(secondUpdate.payload.aps["thread-id"], undefined);
+    assert.equal(typeof firstUpdate.collapse, "string");
+    assert.ok(firstUpdate.collapse!.length > 0 && !firstUpdate.collapse!.includes("update"));
+    assert.equal(firstUpdate.collapse, secondUpdate.collapse);
+  } finally {
+    await done();
+  }
+});
+
 // ---------------------------------------------------------------------------------------------
 // Tools that run on a phone.
 

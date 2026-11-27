@@ -234,7 +234,11 @@ export function headlessBackend(rawRequest, version, { team = () => null, log = 
     },
     async setLook(...args) { await request("setLook", args); await refresh(); },
     frames: { page: (id) => request("framePage", [id]), chatFor: (id) => request("frameChat", [id]) },
-    extras: { adoptMcpSignIn: (...args) => request("adoptMcpSignIn", args) },
+    extras: {
+      adoptMcpSignIn: (...args) => request("adoptMcpSignIn", args),
+      startMcpSignIn: (...args) => request("startMcpSignIn", args),
+      finishMcpSignIn: (...args) => request("finishMcpSignIn", args),
+    },
     screen: {
       get superKey() { return available && superKey; },
       get openVideo() { return available && hasVideo ? openWorkspaceVideo : undefined; },

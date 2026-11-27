@@ -109,6 +109,9 @@ export class Screen {
     this.viewing = new Map(); // deviceId → { since, timer }
     this.displayCache = null;
     this.queue = Promise.resolve();
+    this.botActivity = null; // latest native computer-use action marker for live viewers
+    this.activitySeq = 0;
+    this.cuaFrame = null; // optional JPEG frame emitted by cua-driver (e.g. background window capture)
   }
 
   source() {
@@ -289,6 +292,58 @@ export class Screen {
     const entry = this.shots.get(display);
     if (entry) entry.unchanged = 0;
   }
+  /**
+   * Native computer-use activity (cua-driver): records a live action marker and optional JPEG
+   * frame so paired phones watching the Screen stream see what the bot did immediately, including
+   * when background delivery leaves the person's pointer untouched.
+   */
+  noteBotActivity(activity, frame) {
+    if (!activity || typeof activity !== "object") return null;
+    const seq = ++this.activitySeq;
+    const at = Date.now();
+    const clean = (value, max = 120) => (typeof value === "string" ? value.replace(/[\r\n\t]+/g, " ").trim().slice(0, max) : undefined);
+    const point =
+      activity.point &&
+      typeof activity.point.x === "number" &&
+      Number.isFinite(activity.point.x) &&
+      typeof activity.point.y === "number" &&
+      Number.isFinite(activity.point.y)
+        ? { x: Math.round(activity.point.x), y: Math.round(activity.point.y) }
+        : undefined;
+    this.botActivity = {
+      seq,
+      at,
+      ...(clean(activity.botId, 64) && { botId: clean(activity.botId, 64) }),
+      ...(clean(activity.botName, 80) && { botName: clean(activity.botName, 80) }),
+      action: clean(activity.action, 48) ?? "act",
+      ...(clean(activity.summary, 180) && { summary: clean(activity.summary, 180) }),
+      ...(clean(activity.app, 80) && { app: clean(activity.app, 80) }),
+      ...(clean(activity.windowTitle, 120) && { windowTitle: clean(activity.windowTitle, 120) }),
+      deliveryMode: activity.deliveryMode === "foreground" ? "foreground" : "background",
+      pointerUntouched: activity.pointerUntouched !== false,
+      ...(point && { point }),
+    };
+    if (frame?.jpeg) {
+      const jpeg = Buffer.isBuffer(frame.jpeg) ? frame.jpeg : Buffer.from(frame.jpeg);
+      if (jpeg.length > 2 && jpeg[0] === 0xff && jpeg[1] === 0xd8 && jpeg.length <= MAX_JPEG) {
+        const size = jpegSize(jpeg);
+        this.cuaFrame = {
+          seq,
+          at,
+          jpeg,
+          width: Number(frame.width) || size?.width || 0,
+          height: Number(frame.height) || size?.height || 0,
+        };
+      }
+    }
+    for (const entry of this.shots.values()) entry.unchanged = 0;
+    return this.botActivity;
+  }
+  /** Latest fresh bot activity marker (within 20s), or null. */
+  recentActivity(now = Date.now()) {
+    if (!this.botActivity || now - this.botActivity.at > 20_000) return null;
+    return this.botActivity;
+  }
   /** An interactive viewer waits for a change. A paced preview (wait: false) samples once. */
   async frame(deviceId, options, gone) {
     this.stillAllowed(deviceId);
@@ -303,6 +358,21 @@ export class Screen {
       if (!this.readers.has(reader) || connection?.closed) throw new Failure("Screen viewing stopped.");
     };
     try {
+      const activity = this.recentActivity();
+      const source = this.source();
+      if (!source && this.cuaFrame && Date.now() - this.cuaFrame.at <= 20_000) {
+        check();
+        this.watch(deviceId);
+        const f = this.cuaFrame;
+        return {
+          seq: f.seq,
+          display: "1",
+          width: f.width,
+          height: f.height,
+          ...(f.seq !== after && { jpeg: f.jpeg.toString("base64") }),
+          ...(activity && { activity }),
+        };
+      }
       const display = await this.pick(o.display);
       check();
       this.watch(deviceId);
@@ -311,7 +381,8 @@ export class Screen {
       if (entry) entry.unchanged = shot.seq === after ? (entry.unchanged ?? 0) + 1 : 0;
       let grabbedAt = Date.now();
       const until = Date.now() + WAIT_MS;
-      while (o.wait !== false && shot.seq === after && Date.now() < until) {
+      const startActivitySeq = this.activitySeq;
+      while (o.wait !== false && shot.seq === after && this.activitySeq === startActivitySeq && Date.now() < until) {
         check();
         // Wake at the normal pace, but capture only once the backed-off delay has passed, so input
         // (which resets the delay through `noteInput`) shows within one POLL_MS on a quiet screen.
@@ -323,8 +394,28 @@ export class Screen {
         if (entry) entry.unchanged = shot.seq === after ? (entry.unchanged ?? 0) + 1 : 0;
       }
       check();
+      const latestActivity = this.recentActivity();
+      const freshCua =
+        latestActivity?.deliveryMode === "background" &&
+        this.cuaFrame &&
+        this.cuaFrame.seq === latestActivity.seq &&
+        Date.now() - this.cuaFrame.at <= 10_000
+          ? this.cuaFrame
+          : null;
+      if (freshCua && shot.seq === after) {
+        const seq = Math.max(shot.seq + 1, freshCua.seq);
+        return {
+          seq,
+          display: display.id,
+          width: freshCua.width || shot.width,
+          height: freshCua.height || shot.height,
+          jpeg: freshCua.jpeg.toString("base64"),
+          activity: latestActivity,
+        };
+      }
       return { seq: shot.seq, display: display.id, width: shot.width, height: shot.height,
-        ...(shot.seq !== after && { jpeg: shot.jpeg.toString("base64") }) };
+        ...(shot.seq !== after && { jpeg: shot.jpeg.toString("base64") }),
+        ...(latestActivity && { activity: latestActivity }) };
     } finally {
       this.readers.delete(reader);
     }

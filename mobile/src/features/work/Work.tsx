@@ -187,10 +187,14 @@ export function Routines({ routines, chats, bots }: { routines: RoutineEntry[]; 
               <WorkflowRow key={wf.id} workflow={wf} latestRun={workflowRuns.find((r) => r.workflowId === wf.id)} />
             ))}
           </Group>
+          {canCreate && <Button title="New workflow" variant="ghost" size="sm" icon={Plus} style={{ alignSelf: "flex-start", marginTop: space.sm }} onPress={() => openWorkflow("new")} />}
         </View>
       )}
       {routines.length === 0 && workflows.length === 0 ? (
-        <EmptyState art={<Mascot size={104} state="planning" />} title="No routines yet" action={canCreate ? "New routine" : undefined} onAction={canCreate ? () => openRoutine("new") : undefined} />
+        <View style={{ gap: space.sm }}>
+          <EmptyState art={<Mascot size={104} state="planning" />} title="No routines yet" action={canCreate ? "New routine" : undefined} onAction={canCreate ? () => openRoutine("new") : undefined} />
+          {canCreate && <Button title="New workflow" variant="ghost" size="sm" icon={Plus} style={{ alignSelf: "center" }} onPress={() => openWorkflow("new")} />}
+        </View>
       ) : routines.length > 0 ? (
         <Group>
           {routines.map((routine) => (
@@ -276,12 +280,14 @@ function ScheduleRow({ chat, entry, bot }: { chat: ChatSummary; entry: ChatSched
 
 // Tasks
 
-export function TaskRow({ task, bot }: { task: BotTask; bot?: Bot }) {
+export function TaskRow({ task, bot, reviewer }: { task: BotTask; bot?: Bot; reviewer?: Bot }) {
   const { colors } = useTheme();
-  const subtitle = taskSubtitle(task, bot);
+  const subtitle = taskSubtitle(task, bot, reviewer);
   const action =
     task.status === "review" ? (
       <Button title="Approve" variant="ghost" size="sm" onPress={() => void attempt(api.moveTask(task.id, "done"), "Approved")} accessibilityLabel={"Approve " + task.title} />
+    ) : task.status === "done" ? (
+      <Button title="Reopen" variant="ghost" size="sm" onPress={() => void attempt(api.moveTask(task.id, "ready"), "Reopened")} accessibilityLabel={"Reopen " + task.title} />
     ) : (task.status === "later" || task.status === "ready") && task.botId ? (
       <Button title="Start" variant="ghost" size="sm" onPress={() => void attempt(api.startTask(task.id), "Started")} accessibilityLabel={"Start " + task.title} />
     ) : (task.status === "later" || task.status === "ready") && !task.botId ? (
@@ -429,7 +435,7 @@ function TaskPart({ tasks, bots }: { tasks: BotTask[]; bots: Map<string, Bot> })
           <TaskChips view={view} onChange={setView} counts={counts} />
           <Group inset={space.lg + 40 + space.md}>
             {shown.length ? (
-              shown.map((task) => <TaskRow key={task.id} task={task} bot={task.botId ? bots.get(task.botId) : undefined} />)
+              shown.map((task) => <TaskRow key={task.id} task={task} bot={task.botId ? bots.get(task.botId) : undefined} reviewer={task.reviewerBotId ? bots.get(task.reviewerBotId) : undefined} />)
             ) : (
               <Row title={empty} />
             )}
@@ -523,7 +529,7 @@ export function useNeeds(tasks: BotTask[], bots: Map<string, Bot>): Need[] {
       }
     }
     for (const task of tasks)
-      if (task.status === "review" || task.status === "blocked") {
+      if (task.status === "blocked" || (task.status === "review" && !task.reviewerBotId)) {
         const bot = task.botId ? bots.get(task.botId) : undefined;
         out.push({ key: "t" + task.id, bot, title: task.title, caption: task.status === "review" ? "Ready for review" : "Blocked", onPress: () => openTask(task.id) });
       }
@@ -536,17 +542,18 @@ function NewMenu({ member, canRoutine }: { member: boolean; canRoutine: boolean 
   const { colors } = useTheme();
   const actions = [
     ...(member ? [] : [{ id: "project", title: "New project", image: "folder.badge.plus" }, { id: "task", title: "New task", image: "checklist" }]),
-    ...(canRoutine ? [{ id: "routine", title: "New routine", image: "clock.arrow.circlepath" }] : []),
+    ...(canRoutine ? [{ id: "routine", title: "New routine", image: "clock.arrow.circlepath" }, { id: "workflow", title: "New workflow", image: "point.3.connected.trianglepath.dotted" }] : []),
   ];
   if (!actions.length) return null;
   const run = (id: string) => {
     if (id === "project") router.push({ pathname: "/projects", params: { new: "1" } } as unknown as Href);
     else if (id === "task") openTask("new");
     else if (id === "routine") openRoutine("new");
+    else if (id === "workflow") openWorkflow("new");
   };
   return (
     <MenuView title="New" actions={actions} onPressAction={({ nativeEvent }) => run(nativeEvent.event)}>
-      <View accessible accessibilityRole="button" accessibilityLabel="New project, task or routine" style={{ width: 44, height: 44, borderRadius: 22, backgroundColor: colors.accent, alignItems: "center", justifyContent: "center" }}>
+      <View accessible accessibilityRole="button" accessibilityLabel="New project, task, routine or workflow" style={{ width: 44, height: 44, borderRadius: 22, backgroundColor: colors.accent, alignItems: "center", justifyContent: "center" }}>
         <Plus size={22} color={colors.onAccent} strokeWidth={2.2} />
       </View>
     </MenuView>

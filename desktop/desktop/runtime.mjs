@@ -27,6 +27,7 @@ import { PROVIDER_USAGE, ProviderUsage } from "./providerusage.mjs";
 import { ARTIFACTS, SIDE_PANE } from "./sidepane.mjs";
 import { cloneProjectRepository } from "./project-clone.mjs";
 import { PROJECT_ARTIFACTS, PROJECT_ARTIFACT_CALLS } from "./projects.mjs";
+import { JOB_CALLS, PROJECT_JOBS } from "./jobs.mjs";
 import { MCP_APP_METHODS, PI_PACKAGE_METHODS, REMOTE_METHODS, WORKFLOW_METHODS } from "./link/methods.mjs";
 import { chunk, fileDetails, openChatPath, publicFile, thumbnail } from "./artifact-files.mjs";
 import { REMOTE_HOSTS } from "./remotehosts.mjs";
@@ -39,6 +40,7 @@ import { templateForReader } from "./link/template-bundle.mjs";
 import { AGENT_TEMPLATES, MARKET_REFRESH } from "./plugin-catalog.mjs";
 import { COMPOSIO_APPS, composioHandlers } from "./composio.mjs";
 import { MCP_APPS, mcpAppHandlers } from "./mcp-apps.mjs";
+import { CLAUDE_ARTIFACTS_CAPABILITY, CLAUDE_ARTIFACT_METHODS } from "./claude-artifacts.mjs";
 import { performSecureUse } from "./secure-input.mjs";
 import { CredentialGrants } from "./credential-grants.mjs";
 import { releasePage } from "./updates.mjs";
@@ -58,6 +60,7 @@ import { validateAttachments } from "./canvas.mjs";
 import { wikiPath } from "./wiki.mjs";
 import { pickedSkill, uploadSkill } from "./link/skill-import.mjs";
 import { skillsCatalog } from "./skills-catalog.mjs";
+import { MARKETPLACE_V2, MARKET_V2_METHODS, MarketV2 } from "./catalog-v2.mjs";
 import { MCP_CATALOG_CAPABILITY, MCP_CATALOG_METHODS, mcpCatalog } from "./mcp-catalog.mjs";
 import { zip } from "./zip.mjs";
 import { LinkPreviews } from "./linkpreview.mjs";
@@ -83,6 +86,7 @@ import { CodexVoice } from "./codexvoice.mjs";
 import { SavedCredentials, trialToolDirs } from "./savedcredentials.mjs";
 import { forgetChatPeople, teamHandlers } from "./team-ipc.mjs";
 import { chatSectionHandlers, withOwnerChatSections } from "./chat-sections-ipc.mjs";
+import { phoneSignIns } from "./phone-signin.mjs";
 
 /**
  * How a trial run's Copilot runtime signs in to GitHub without the keychain: with the token in
@@ -135,13 +139,13 @@ const MARK_CHATS_READ = "mark-chats-read-v1";
 const STOP_HELPER = "stop-helper-v1";
 /** Event-based Workflows in the Routines area (`workflows-v1`). */
 export const WORKFLOWS = "workflows-v1";
-export const CAPABILITIES = ["main-chat-v1", "message-reactions-v1", "client-message-id-v1", "voice-turns-v1", "voice-history-v1", "quiet-replies-v1", "models-v2", "fast-mode-v1", LOOKS_CAPABILITY, ...headCapabilities, BOT_VOICE, ROUTINE_DELIVERY, "routine-no-output-v1", ROUTINE_OWNER, ROUTINE_SCRIPTS, ROUTINE_MODELS, ROUTINE_SILENT, ROUTINE_NOTIFY_TARGETS, WORKFLOWS, PROACTIVE, PROACTIVE_LEARNING, PROACTIVE_TEAM, BOARD_MENTIONS, PROVIDER_USAGE, SIDE_PANE, REMOTE_HOSTS, FILES, FOLDERS, ARTIFACTS, PROJECT_ARTIFACTS, "project-folders-v1", "project-mode-v1", "project-clone-v1", "secure-input-v1", "turn-timeline-v1", PLUGINS, PLUGIN_STARTS, PROVIDER_SIGNIN, SPACES, AGENT_TEMPLATES, "agent-template-bundles-v1", COMPOSIO_APPS, MARKET_REFRESH, MCP_APPS, "pi-packages-v1", "pi-packages-remove-v1", "skill-upload-v1", "skills-catalog-v1", "skills-featured-v1", SCRIPT_COMMANDS_CAPABILITY, MCP_CATALOG_CAPABILITY, CHAT_TITLE_REGENERATION, MARK_CHATS_READ, STOP_HELPER, KEYED_PROVIDERS];
+export const CAPABILITIES = ["main-chat-v1", "message-reactions-v1", "client-message-id-v1", "voice-turns-v1", "voice-history-v1", "quiet-replies-v1", "models-v2", "fast-mode-v1", LOOKS_CAPABILITY, ...headCapabilities, BOT_VOICE, ROUTINE_DELIVERY, "routine-no-output-v1", ROUTINE_OWNER, ROUTINE_SCRIPTS, ROUTINE_MODELS, ROUTINE_SILENT, ROUTINE_NOTIFY_TARGETS, WORKFLOWS, PROACTIVE, PROACTIVE_LEARNING, PROACTIVE_TEAM, BOARD_MENTIONS, PROVIDER_USAGE, SIDE_PANE, REMOTE_HOSTS, FILES, FOLDERS, ARTIFACTS, PROJECT_ARTIFACTS, "project-folders-v1", "project-mode-v1", "project-clone-v1", PROJECT_JOBS, "secure-input-v1", "turn-timeline-v1", PLUGINS, PLUGIN_STARTS, PROVIDER_SIGNIN, SPACES, AGENT_TEMPLATES, "agent-template-bundles-v1", COMPOSIO_APPS, MARKET_REFRESH, MCP_APPS, "pi-packages-v1", "pi-packages-remove-v1", "skill-upload-v1", "skills-catalog-v1", "skills-featured-v1", MARKETPLACE_V2, SCRIPT_COMMANDS_CAPABILITY, MCP_CATALOG_CAPABILITY, CHAT_TITLE_REGENERATION, MARK_CHATS_READ, STOP_HELPER, KEYED_PROVIDERS, CLAUDE_ARTIFACTS_CAPABILITY];
 /**
  * What a paired device is told this app supports. A feature whose calls the link does not carry
  * (desktop/link/methods.mjs) is left out, so a device never asks for what it cannot reach.
  */
 export const linkCapabilities = (methods = REMOTE_METHODS) =>
-  CAPABILITIES.filter((name) => (name !== "agent-template-bundles-v1" || (methods.has("addBot") && methods.has("agents.template"))) && (name !== "message-reactions-v1" || methods.has("reactToMessage")) && (!["voice-history-v1", "voice-turns-v1"].includes(name) || methods.has("recordVoiceLine")) && (name !== "project-folders-v1" || (methods.has("editProjectFolder") && methods.has("setChatFolder") && methods.has("chatProjectFolder"))) && (name !== "project-clone-v1" || methods.has("cloneProjectRepository")) && (name !== "project-mode-v1" || methods.has("updateProject")) && (name !== PROJECT_ARTIFACTS || PROJECT_ARTIFACT_CALLS.every((call) => methods.has(call))) && (name !== SPACES || SPACE_CALLS.every((call) => methods.has(call))) && (name !== MARKET_REFRESH || methods.has("plugins.refresh")) && (name !== "pi-packages-v1" || PI_PACKAGE_METHODS.every((call) => methods.has(call))) && (name !== "pi-packages-remove-v1" || methods.has("piPackages.remove")) && (name !== "skill-upload-v1" || methods.has("skills.upload")) && (name !== "skills-catalog-v1" || ["search", "preview", "install"].every(key => methods.has("skillsCatalog." + key))) && (name !== "skills-featured-v1" || methods.has("skillsCatalog.featured")) && (name !== SCRIPT_COMMANDS_CAPABILITY || ["skills.saveScript", "skills.readScript"].every((call) => methods.has(call))) && (name !== MCP_CATALOG_CAPABILITY || MCP_CATALOG_METHODS.every((call) => methods.has(call))) && (name !== MCP_APPS || MCP_APP_METHODS.every((call) => methods.has(call))) && (name !== CHAT_TITLE_REGENERATION || methods.has("regenerateChatTitle")) && (name !== MARK_CHATS_READ || methods.has("markChatsRead")) && (name !== STOP_HELPER || methods.has("stopHelper")) && (name !== WORKFLOWS || WORKFLOW_METHODS.every((call) => methods.has(call))));
+  CAPABILITIES.filter((name) => (name !== "agent-template-bundles-v1" || (methods.has("addBot") && methods.has("agents.template"))) && (name !== "message-reactions-v1" || methods.has("reactToMessage")) && (!["voice-history-v1", "voice-turns-v1"].includes(name) || methods.has("recordVoiceLine")) && (name !== "project-folders-v1" || (methods.has("editProjectFolder") && methods.has("setChatFolder") && methods.has("chatProjectFolder"))) && (name !== "project-clone-v1" || methods.has("cloneProjectRepository")) && (name !== PROJECT_JOBS || JOB_CALLS.every((call) => methods.has(call))) && (name !== "project-mode-v1" || methods.has("updateProject")) && (name !== PROJECT_ARTIFACTS || PROJECT_ARTIFACT_CALLS.every((call) => methods.has(call))) && (name !== SPACES || SPACE_CALLS.every((call) => methods.has(call))) && (name !== MARKET_REFRESH || methods.has("plugins.refresh")) && (name !== "pi-packages-v1" || PI_PACKAGE_METHODS.every((call) => methods.has(call))) && (name !== "pi-packages-remove-v1" || methods.has("piPackages.remove")) && (name !== "skill-upload-v1" || methods.has("skills.upload")) && (name !== "skills-catalog-v1" || ["search", "preview", "install"].every(key => methods.has("skillsCatalog." + key))) && (name !== "skills-featured-v1" || methods.has("skillsCatalog.featured")) && (name !== MARKETPLACE_V2 || MARKET_V2_METHODS.every((call) => methods.has(call))) && (name !== SCRIPT_COMMANDS_CAPABILITY || ["skills.saveScript", "skills.readScript"].every((call) => methods.has(call))) && (name !== MCP_CATALOG_CAPABILITY || MCP_CATALOG_METHODS.every((call) => methods.has(call))) && (name !== MCP_APPS || MCP_APP_METHODS.every((call) => methods.has(call))) && (name !== CLAUDE_ARTIFACTS_CAPABILITY || CLAUDE_ARTIFACT_METHODS.every((call) => methods.has(call))) && (name !== CHAT_TITLE_REGENERATION || methods.has("regenerateChatTitle")) && (name !== MARK_CHATS_READ || methods.has("markChatsRead")) && (name !== STOP_HELPER || methods.has("stopHelper")) && (name !== WORKFLOWS || WORKFLOW_METHODS.every((call) => methods.has(call))));
 /** The calls of spaces (docs/spaces.md). The capability is named to a device only when the link carries them all. */
 export const SPACE_CALLS = ["read", "create", "rename", "remove", "setProject", "setPanelProject", "newPanel", "ask", "movePanel", "patchState", "note", "removeNote"].map((name) => "spaces." + name);
 
@@ -347,19 +351,20 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
     savedLogins: (chatId, origin, options) => loginLookups ? loginLookups.find(chatId, origin) : link.loginNames(chatId, origin, options),
     credentials: () => link?.credentials ?? null,
     credentialGrants,
-    extensionFill: (args, ctx) => {
-      if (!link?.browser) throw new Error("Browser extension bridge is not ready.");
-      return link.browser.secureFill(args, ctx);
-    },
     settings: () => workspace?.state?.settings ?? {},
-    ...(host.headless && !formBrowser && { pageUnavailable: "Browser form filling needs the desktop viewer or a Linux host with Chromium and an X11 display. See A screen without Docker in the terminal guide." }),
-    secureUse: (plan, values, { signal, extensionFill, appFill, settings } = {}) => performSecureUse(plan, values, {
+    ...(host.headless && !formBrowser && { pageUnavailable: "Browser form filling needs a connected Botkins browser extension tab, the desktop viewer, or a Linux host with Chromium and an X11 display. See A screen without Docker in the terminal guide." }),
+    secureUse: (plan, values, { signal, fillExtension, fillNative, appFill, settings } = {}) => performSecureUse(plan, values, {
       signal,
+      fillExtension,
+      fillNative,
       fillPage: () => formBrowser ? formBrowser.fill(plan, values, signal) : host.window.fillSecurePage(plan, values, signal),
-      extensionFill: extensionFill ?? ((args, ctx) => link.browser.secureFill(args, ctx)),
       appFill,
       settings: settings ?? workspace?.state?.settings ?? {},
     }),
+    computerUse: {
+      onActivity: (activity, frame) => link?.screen?.noteBotActivity?.(activity, frame),
+      screenAdapter: () => host.screen,
+    },
     ...(keys && {
       vaultKey: keys,
       // Keys an earlier version encrypted into the workspace file are read once, to move them into the vault.
@@ -377,7 +382,12 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
     // Tools a bot runs on a paired phone (desktop/phonetools.mjs). The link is made further down.
     phoneTools: () => (link ? { tools: () => link.deviceTools(), call: (name, args, options) => link.callDeviceTool(name, args, options) } : null),
     // Tools a bot runs on a paired Chromium browser extension (desktop/browsertools.mjs).
-    browserTools: () => (link ? { tools: () => link.browserTools(), call: (name, args, options) => link.callBrowserTool(name, args, options) } : null),
+    browserTools: () => (link ? {
+      tools: () => link.browserTools(),
+      call: (name, args, options) => link.callBrowserTool(name, args, options),
+      devices: () => link.browserDevices(),
+      secureFill: (deviceId, payload, options) => link.secureFillBrowser(deviceId, payload, options),
+    } : null),
   });
   // Conversations from builds that shared ~/.copilot keep their history.
   copilot.adoptSessions(workspace.sessionIds());
@@ -409,6 +419,7 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
   });
   // Tokens kept from an earlier start go where the tools read them.
   signIns.restore();
+  const phoneSignIn = phoneSignIns((id) => (id.startsWith("plugin-") ? workspace.plugins : workspace.integrations));
   const openSignIn = (url) => {
     if (new URL(url).protocol !== "https:") throw new Error("That sign-in page can't be opened.");
     return host.shell.openExternal(url);
@@ -430,6 +441,8 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
   };
   const catalog = skillsCatalog(() => workspace.integrations);
   const apps = mcpCatalog(() => workspace.integrations);
+  // Marketplace format version 2 ("marketplace-v2-v1", desktop/catalog-v2.mjs): catalog skills, packs and version 3 templates.
+  const market = new MarketV2({ ws: workspace, skills: catalog, plugins: workspace.plugins });
   const handlers = {
     pickSkillUpload: async () => {
       const paths = await host.dialogs.open({title: "Upload skill", properties: ["openFile"], filters: [{ name: "Skills", extensions: ["md", "zip"] }]});
@@ -440,6 +453,14 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
     "skillsCatalog.preview": catalog.preview,
     "skillsCatalog.install": catalog.install,
     "skillsCatalog.featured": catalog.featured,
+    "market.catalog": () => market.list(),
+    "market.skillImage": (id) => market.image(id),
+    "market.skillPreview": (id) => market.skillPreview(id),
+    "market.skillInstall": (token, options) => market.skillInstall(token, options),
+    "market.packPreview": (id) => market.packPreview(id),
+    "market.packInstall": (token, options) => market.packInstall(token, options),
+    "market.templatePreview": (id) => market.templatePreview(id),
+    "market.templateInstall": (token, options) => market.templateInstall(token, options),
     // The direct apps catalog (desktop/mcp-catalog.mjs): a tool server added with a tap, a sign-in or a key.
     "mcpCatalog.list": apps.list,
     "mcpCatalog.add": apps.add,
@@ -711,6 +732,7 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
     makePrimary: (id) => workspace.agents.makePrimary(id),
     reorderBots: (ids) => workspace.agents.reorderBots(ids),
     duplicateBot: (id, person) => workspace.agents.duplicateBot(id, person),
+    reloadBotTools: (id) => workspace.reloadBotTools(id),
     // Bot templates (desktop/templates.mjs)
     saveTemplate: (botId, name) => workspace.templates.saveFromBot(botId, name),
     renameTemplate: (id, name) => workspace.templates.rename(id, name),
@@ -742,6 +764,7 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
     addSection: (name) => workspace.agents.addSection(name),
     renameSection: (id, name) => workspace.agents.renameSection(id, name),
     deleteSection: (id) => workspace.agents.deleteSection(id),
+    orderSections: (ids) => workspace.agents.orderSections(ids),
     setChatFlags: (id, patch) => workspace.agents.setChatFlags(id, patch),
     markChatsRead: (ids) => workspace.agents.markChatsRead(ids),
     renameChat: (id, title) => workspace.agents.renameChat(id, title),
@@ -811,7 +834,7 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
     linkPreview: (url) => (workspace.state.settings.linkPreviews ? linkPreviews.preview(String(url)) : null),
     // Tasks board (desktop/tasks.mjs)
     saveTask: (data) => workspace.tasks.save(data),
-    moveTask: (id, status) => workspace.tasks.move(id, status),
+    moveTask: (id, status, options) => workspace.tasks.move(id, status, options),
     startTask: (id) => workspace.tasks.start(id),
     deleteTask: (id) => workspace.tasks.remove(id),
     // Event-based Workflows (desktop/workflows.mjs)
@@ -826,6 +849,9 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
     workflowRespondApproval: (runId, nodeId, decision, note) => workspace.workflows.respondApproval(runId, nodeId ?? null, decision, note ?? ""),
     workflowCancelRun: (runId) => workspace.workflows.cancelRun(runId),
     workflowRotateWebhookSecret: (workflowId, nodeId) => workspace.workflows.rotateWebhookSecret(workflowId, nodeId),
+    workflowGithubStatus: (options) => workspace.workflows.githubStatus(options ?? {}),
+    workflowGithubSignInStart: () => workspace.workflows.githubSignInStart(),
+    workflowGithubSignInCancel: () => workspace.workflows.githubSignInCancel(),
     workflowExportText: (id) => JSON.stringify(workspace.workflows.exportJson(id, host.version), null, 2),
     workflowImportText: (raw, agentMap) => workspace.workflows.importJson(raw, agentMap ?? {}),
     workflowExport: async (id) => {
@@ -896,6 +922,15 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
       return paths[0];
     },
     startProjectChat: (...args) => workspace.projects.startChat(...args),
+    // Jobs from a project's page ("project-jobs-v1", desktop/jobs.mjs): a prompt, one chat and one worktree per bot.
+    projectJobSetup: (projectId, folder) => workspace.jobs.setupOf(projectId, folder),
+    approveJobSetup: (projectId, folder, hash) => workspace.jobs.approveSetup(projectId, folder, hash),
+    startProjectJob: (projectId, options) => workspace.jobs.start(projectId, options),
+    projectJobStatus: (chatId) => workspace.jobs.status(chatId),
+    bringInJob: (chatId, message) => workspace.jobs.bringIn(chatId, message),
+    catchUpJob: (chatId) => workspace.jobs.catchUp(chatId),
+    removeJobWorktree: (chatId) => workspace.jobs.removeWorktree(chatId),
+    startJobTurn: (chatId) => workspace.jobs.startTurn(chatId),
     // Artifacts a person attached to a project (capability "project-artifacts-v1").
     addProjectArtifact: (projectId, artifactId) => workspace.projects.addArtifact(projectId, artifactId),
     removeProjectArtifact: (projectId, artifactId) => workspace.projects.removeArtifact(projectId, artifactId),
@@ -1048,7 +1083,14 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
     },
     // The harnesses that are programs of their own (Pi and OMP), and whether each is installed, for Settings › Harness.
     harnesses: () => providers.harnessStatuses(),
-    // Signing in and installing from a phone ("provider-signin-v1"). The phone names the provider;
+    // Claude artifacts (desktop/claude-artifacts.mjs): availability, model, and per-bot standing grants.
+    "claudeArtifacts.status": (refresh) => workspace.claudeArtifacts.status({ refresh: refresh === true }),
+    "claudeArtifacts.setModel": async (model) => {
+      workspace.claudeArtifacts.setModel(model);
+      return workspace.claudeArtifacts.status();
+    },
+    "claudeArtifacts.setBotApproval": (botId, allowed) => workspace.claudeArtifacts.setGrant(String(botId), allowed === true),
+    "claudeArtifacts.revokeBotApproval": (botId) => workspace.claudeArtifacts.revokeGrant(String(botId)),
     // the sign-in or the install command is this computer's own (desktop/terminal/signin.mjs).
     providerSignInStart: (id, options) =>
       signIns.start(String(id), { service: typeof options?.service === "string" ? options.service : undefined, method: typeof options?.method === "string" ? options.method : undefined, abandonedMs: PHONE_PATIENCE_MS }),
@@ -1254,6 +1296,8 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
     macToolsStatus: () => workspace.mac.status(),
     setMacTool: (tool, level) => workspace.mac.set(tool, level),
     grantMacTool: (permission) => workspace.mac.grant(permission),
+    computerUseStatus: () => workspace.computerUse.status(),
+    requestComputerUsePermission: (permission) => workspace.computerUse.requestPermission(permission),
     // Voice (Settings › Voice, desktop/voicedesk.mjs). Only this window may call these: none is in
     // REMOTE_METHODS (a phone reaches voice through the link's own calls). No key ever comes back.
     voiceSettings: () => voiceDesk.settings(),
@@ -1395,7 +1439,12 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
       release: (memberId) => workspace.spaces.memberRemoved(memberId),
     },
     // A phone that signed in to an MCP server hands the computer its sign-in (reached as "link.adoptMcpSignIn").
-    extras: { adoptMcpSignIn: (serverId, grant) => workspace.integrations.adoptSignIn(serverId, grant) },
+    // A tool's sign-in in the phone's own browser, for a computer with no browser to open (desktop/phone-signin.mjs).
+    extras: {
+      adoptMcpSignIn: (serverId, grant) => workspace.integrations.adoptSignIn(serverId, grant),
+      startMcpSignIn: (serverId) => phoneSignIn.start(serverId),
+      finishMcpSignIn: (serverId, address) => phoneSignIn.finish(serverId, String(address ?? "")),
+    },
     screen: screens,
     // The app's own speech helpers for voice.mjs (desktop/link/VOICE.md). No local engine yet.
     voice: { ...(codexVoice && { codex: codexVoice }) },
@@ -1598,6 +1647,7 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
       workspace.reactionTurns?.close();
       workspace.hostDispatch.close();
       workspace.nodeHost.close();
+      workspace.computerUse?.close();
       updates?.stopAuto?.();
       // A routine's script stops with Botkins; its run is ended when Botkins opens again.
       routines.stopScripts();
@@ -1605,6 +1655,7 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
       workspace.interactions.cancel(undefined, { detached: true, keep: true });
       workspace.connects.close();
       workspace.mcpApps.close();
+      workspace.workflows?.githubAuth?.stop();
       clearInterval(timer);
       clearInterval(announcing);
       for (const timer of checking) clearTimeout(timer);

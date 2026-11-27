@@ -22,6 +22,8 @@ import { DRIVER_VERSION } from "./dom-driver.mjs";
 const BLOCKED_SCHEMES = ["chrome:", "edge:", "chrome-extension:", "devtools:", "view-source:", "chrome-untrusted:"];
 const CDP_VERSION = "1.3";
 const DOM_DRIVER_FILE = "dist/dom-driver.js";
+const SECRET_TAB_ERROR = "This tab holds a securely filled value. Submit the form or navigate first.";
+const SECRET_TABS_SESSION_KEY = "botkinsSecretTabs";
 
 export function isEligibleUrl(url) {
   if (typeof url !== "string" || !url) return true; // newly created blank/loading tab
@@ -74,6 +76,12 @@ function urlOrigin(url) {
   } catch {
     return "";
   }
+}
+
+function stripUrlHash(url) {
+  const s = String(url || "");
+  const idx = s.indexOf("#");
+  return idx >= 0 ? s.slice(0, idx) : s;
 }
 
 function screenshotAbortedError(message) {
@@ -258,13 +266,31 @@ export class BrowserController {
     this.attached = new Set(); // active ephemeral debugger sessions
     this.cdpQueues = new Map(); // tabId -> Promise chain
     this.tabRefs = new Map(); // tabId -> Map<globalRef, { frameId, localRef, tag, type, role }>
-    this.taintedTabs = new Map(); // tabId -> { origin, url } tabs that received a vault credential
-    this._onTaintedTabUpdated = (tabId, changeInfo) => {
-      if (this.taintedTabs.has(tabId) && (changeInfo?.status === "loading" || typeof changeInfo?.url === "string")) {
-        this.untaintTab(tabId);
+    this.secretTabs = new Map(); // tabId -> { origin, urlNoHash, navGen, docToken }
+    this.tabNavGen = new Map(); // tabId -> number
+    this.secretTabsHydrated = false;
+    this._secretWatchersAttached = false;
+    this._onSecretTabUpdated = (tabId, changeInfo) => {
+      if (typeof tabId !== "number") return;
+      if (changeInfo?.status === "loading") {
+        this.tabNavGen.set(tabId, (this.tabNavGen.get(tabId) || 0) + 1);
+      }
+      const entry = this.secretTabs.get(tabId);
+      if (!entry) return;
+      if (typeof changeInfo?.url === "string" && urlOrigin(changeInfo.url) !== entry.origin) {
+        this.clearSecretTab(tabId);
+        return;
+      }
+      if (changeInfo?.status === "complete" && (this.tabNavGen.get(tabId) || 0) !== entry.navGen) {
+        this.clearSecretTab(tabId);
       }
     };
-    this._watchingTaintedUpdates = false;
+    this._onSecretWebNav = (details) => {
+      if (details?.frameId === 0 && typeof details.tabId === "number") {
+        this.tabNavGen.set(details.tabId, (this.tabNavGen.get(details.tabId) || 0) + 1);
+        this.clearSecretTab(details.tabId);
+      }
+    };
 
     if (typeof chrome !== "undefined" && chrome.debugger?.onDetach) {
       chrome.debugger.onDetach.addListener((source) => {
@@ -277,39 +303,123 @@ export class BrowserController {
       chrome.tabs.onRemoved.addListener((tabId) => {
         this.tabRefs.delete(tabId);
         this.attached.delete(tabId);
-        this.untaintTab(tabId);
+        this.tabNavGen.delete(tabId);
+        this.clearSecretTab(tabId);
       });
     }
   }
 
-  taintTab(tabId, info) {
-    this.taintedTabs.set(tabId, info);
-    if (!this._watchingTaintedUpdates && typeof chrome !== "undefined" && chrome.tabs?.onUpdated?.addListener) {
-      chrome.tabs.onUpdated.addListener(this._onTaintedTabUpdated);
-      this._watchingTaintedUpdates = true;
+  syncSecretWatchers() {
+    if (typeof chrome === "undefined") return;
+    const need = this.secretTabs.size > 0;
+    if (need && !this._secretWatchersAttached) {
+      chrome.tabs?.onUpdated?.addListener?.(this._onSecretTabUpdated);
+      chrome.webNavigation?.onCommitted?.addListener?.(this._onSecretWebNav);
+      this._secretWatchersAttached = true;
+    } else if (!need && this._secretWatchersAttached) {
+      chrome.tabs?.onUpdated?.removeListener?.(this._onSecretTabUpdated);
+      chrome.webNavigation?.onCommitted?.removeListener?.(this._onSecretWebNav);
+      this._secretWatchersAttached = false;
     }
   }
 
-  untaintTab(tabId) {
-    this.taintedTabs.delete(tabId);
-    if (this._watchingTaintedUpdates && this.taintedTabs.size === 0 && typeof chrome !== "undefined" && chrome.tabs?.onUpdated?.removeListener) {
-      chrome.tabs.onUpdated.removeListener(this._onTaintedTabUpdated);
-      this._watchingTaintedUpdates = false;
+  async hydrateSecretTabs() {
+    if (this.secretTabsHydrated) return;
+    this.secretTabsHydrated = true;
+    if (typeof chrome === "undefined" || typeof chrome.storage?.session?.get !== "function") return;
+    try {
+      const data = await chrome.storage.session.get(SECRET_TABS_SESSION_KEY);
+      const saved = data?.[SECRET_TABS_SESSION_KEY];
+      if (!saved || typeof saved !== "object") return;
+      for (const [k, v] of Object.entries(saved)) {
+        const tabId = Number(k);
+        if (!Number.isInteger(tabId) || this.secretTabs.has(tabId)) continue;
+        if (v && typeof v === "object" && typeof v.origin === "string") {
+          this.secretTabs.set(tabId, {
+            origin: v.origin,
+            urlNoHash: typeof v.urlNoHash === "string" ? v.urlNoHash : "",
+            navGen: Number(v.navGen) || 0,
+            docToken: typeof v.docToken === "string" ? v.docToken : "",
+          });
+        }
+      }
+      this.syncSecretWatchers();
+    } catch {}
+  }
+
+  persistSecretTabs() {
+    if (typeof chrome === "undefined" || typeof chrome.storage?.session?.set !== "function") return;
+    const obj = {};
+    for (const [tabId, entry] of this.secretTabs.entries()) {
+      obj[String(tabId)] = entry;
+    }
+    try {
+      const res = chrome.storage.session.set({ [SECRET_TABS_SESSION_KEY]: obj });
+      if (res && typeof res.catch === "function") res.catch(() => {});
+    } catch {}
+  }
+
+  markSecretTab(tabId, info) {
+    this.secretTabs.set(tabId, info);
+    this.syncSecretWatchers();
+    this.persistSecretTabs();
+  }
+
+  clearSecretTab(tabId) {
+    if (this.secretTabs.delete(tabId)) {
+      this.syncSecretWatchers();
+      this.persistSecretTabs();
     }
   }
 
-  assertNotTainted(tab, action) {
-    const taint = this.taintedTabs.get(tab.id);
-    if (!taint) return;
-    const currentUrl = tab.url || tab.pendingUrl || "";
+  async isTabSecretBearing(tab) {
+    if (!tab || typeof tab.id !== "number") return false;
+    await this.hydrateSecretTabs();
+    const entry = this.secretTabs.get(tab.id);
+    if (!entry) return false;
+
+    const currentUrl = tab.url || "";
     const currentOrigin = urlOrigin(currentUrl);
-    if (currentOrigin && currentOrigin !== taint.origin) {
-      this.untaintTab(tab.id);
-      return;
+    if (currentOrigin && currentOrigin !== entry.origin) {
+      this.clearSecretTab(tab.id);
+      return false;
     }
-    throw new Error(
-      `Blocked: tab ${tab.id} received a vault credential and cannot run ${action} until it navigates to a new page.`,
-    );
+
+    if (this.hasScripting()) {
+      try {
+        const { frames } = await this.execDriver(
+          tab.id,
+          "secretStatus",
+          { docToken: entry.docToken },
+          { frameIds: [0] },
+        );
+        const status = frames[0]?.result;
+        if (status?.ok === true) {
+          if (!status.sameDoc || status.active === false) {
+            this.clearSecretTab(tab.id);
+            return false;
+          }
+          return true;
+        }
+      } catch {
+        // Fail closed while the tab is marked secret-bearing.
+        return true;
+      }
+    }
+
+    if ((this.tabNavGen.get(tab.id) || 0) !== entry.navGen && tab.status === "complete") {
+      this.clearSecretTab(tab.id);
+      return false;
+    }
+    return true;
+  }
+
+  async assertNotSecretBearing(tab) {
+    if (await this.isTabSecretBearing(tab)) {
+      const err = new Error(SECRET_TAB_ERROR);
+      err.code = "secret_tab_restricted";
+      throw err;
+    }
   }
 
   async findBotkinsGroup(windowId) {
@@ -361,26 +471,42 @@ export class BrowserController {
 
     await prev;
     let shouldDetach = false;
-    try {
-      if (!chrome.debugger?.attach || !chrome.debugger?.sendCommand) {
-        throw new Error("chrome.debugger API is unavailable.");
-      }
+    const attachOnce = async () => {
       try {
         await chrome.debugger.attach({ tabId }, CDP_VERSION);
         this.attached.add(tabId);
         shouldDetach = true;
       } catch (err) {
-        if (/already attached/i.test(String(err?.message || err))) {
+        const msg = String(err?.message || err || "");
+        if (/already attached/i.test(msg) && !/another debugger/i.test(msg)) {
           this.attached.add(tabId);
           shouldDetach = true;
         } else {
           throw formatCdpError(err, actionDesc);
         }
       }
+    };
+    try {
+      if (!chrome.debugger?.attach || !chrome.debugger?.sendCommand) {
+        throw new Error("chrome.debugger API is unavailable.");
+      }
+      await attachOnce();
       return await fn(async (method, params = {}) => {
         try {
           return await chrome.debugger.sendCommand({ tabId }, method, params);
         } catch (err) {
+          const msg = String(err?.message || err || "");
+          // Background tabs (active: false) can briefly lose debugger attachment across
+          // navigation / RenderFrameHost swaps right after attach; re-attach once and retry.
+          if (/debugger is not attached/i.test(msg)) {
+            this.attached.delete(tabId);
+            await attachOnce();
+            try {
+              return await chrome.debugger.sendCommand({ tabId }, method, params);
+            } catch (retryErr) {
+              throw formatCdpError(retryErr, actionDesc);
+            }
+          }
           throw formatCdpError(err, actionDesc);
         }
       });
@@ -437,6 +563,9 @@ export class BrowserController {
   async execDriver(tabId, action, payload = {}, { allFrames = false, frameIds = null } = {}) {
     let target = frameIds ? { tabId, frameIds } : allFrames ? { tabId, allFrames: true } : { tabId, frameIds: [0] };
     let usedAllFrames = Boolean(allFrames && !frameIds);
+    const canFallbackToTop = (tgt) =>
+      Boolean(tgt?.allFrames) ||
+      (usedAllFrames && Array.isArray(tgt?.frameIds) && !(tgt.frameIds.length === 1 && tgt.frameIds[0] === 0));
 
     const invoke = async (tgt, act, data) => {
       try {
@@ -445,7 +574,7 @@ export class BrowserController {
           args: [act, data, DRIVER_VERSION],
         });
       } catch (err) {
-        if (tgt.allFrames) {
+        if (canFallbackToTop(tgt)) {
           usedAllFrames = false;
           target = { tabId, frameIds: [0] };
           return await this.executeScripting(target, {
@@ -464,14 +593,15 @@ export class BrowserController {
       const installFrameIds = needingInstall
         .map((r) => r.frameId)
         .filter((id) => typeof id === "number");
-      const installTarget =
+      let installTarget =
         installFrameIds.length > 0 ? { tabId, frameIds: installFrameIds } : target;
       try {
         await this.executeScripting(installTarget, { files: [DOM_DRIVER_FILE] });
       } catch (err) {
-        if (installTarget.allFrames) {
+        if (canFallbackToTop(installTarget)) {
           usedAllFrames = false;
-          await this.executeScripting({ tabId, frameIds: [0] }, { files: [DOM_DRIVER_FILE] });
+          installTarget = { tabId, frameIds: [0] };
+          await this.executeScripting(installTarget, { files: [DOM_DRIVER_FILE] });
         } else {
           throw err;
         }
@@ -534,12 +664,18 @@ export class BrowserController {
     );
   }
 
-  async waitForLoad(tabId, timeoutMs = 10_000) {
+  async waitForLoad(tabId, timeoutMs = 10_000, expectedUrl = "") {
+    const expectNavigated = /^https?:\/\//i.test(String(expectedUrl || ""));
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
       try {
         const tab = await chrome.tabs.get(tabId);
-        if (tab.status === "complete") return tab;
+        const currentUrl = String(tab.url || "");
+        const stillInitialBlank =
+          expectNavigated &&
+          (!currentUrl || currentUrl === "about:blank") &&
+          Boolean(tab.pendingUrl);
+        if (tab.status === "complete" && !stillInitialBlank) return tab;
       } catch {
         return null;
       }
@@ -636,10 +772,11 @@ export class BrowserController {
           };
         }
       } catch {
-        // Fall through to ephemeral CDP fallback only when scripting fails.
+        // Fall through to ephemeral CDP fallback only when scripting fails and tab is not secret-bearing.
       }
     }
 
+    await this.assertNotSecretBearing(tab);
     const snap = await this.evaluateCdp(tab.id, CDP_SNAPSHOT_EXPR(maxChars), false, "page snapshot");
     this.tabRefs.delete(tab.id);
     return { tabId: tab.id, ...(snap || {}) };
@@ -1113,6 +1250,9 @@ export class BrowserController {
         if (domRes?.ok) {
           return { typed: true, tabId: tab.id, length: text.length };
         }
+        if (domRes?.secretProtected) {
+          throw new Error(domRes.error || "This input holds a securely filled value. Submit the form or navigate first.");
+        }
         if (domRes?.reason === "file-input") {
           throw new Error(domRes.error || "File inputs cannot be filled by typing; use browser_cdp with DOM.setFileInputFiles.");
         }
@@ -1120,13 +1260,14 @@ export class BrowserController {
           throw new Error(domRes.error || "Input element not found.");
         }
       } catch (err) {
-        if (err instanceof Error && /not found|disabled|file input|option not found|no focused/i.test(err.message)) {
+        if (err instanceof Error && /not found|disabled|file input|option not found|no focused|securely filled value/i.test(err.message)) {
           throw err;
         }
-        // Otherwise fall back to ephemeral CDP typing.
+        // Otherwise fall back to ephemeral CDP typing unless tab is secret-bearing.
       }
     }
 
+    await this.assertNotSecretBearing(tab);
     return await this.typeViaCdp(tab, args);
   }
 
@@ -1319,7 +1460,7 @@ export class BrowserController {
   }
 
   async runEval(tab, args) {
-    this.assertNotTainted(tab, "browser_eval");
+    await this.assertNotSecretBearing(tab);
     const expression = String(args.expression || "");
     const awaitPromise = args.awaitPromise !== false;
 
@@ -1371,87 +1512,111 @@ export class BrowserController {
     return { tabId: tab.id, result: value ?? null };
   }
 
-  async runSecureFill(tab, args) {
-    if (!this.hasScripting()) {
-      throw new Error("Secure credential fill requires Chrome scripting API support.");
-    }
-    const expectedOrigin = urlOrigin(args.expectedOrigin || "");
-    if (!expectedOrigin) {
-      throw new Error("Secure credential fill requires a valid expectedOrigin.");
-    }
-    const tabUrl = tab.url || tab.pendingUrl || "";
-    const currentOrigin = urlOrigin(tabUrl);
-    if (!currentOrigin || currentOrigin !== expectedOrigin) {
-      throw new Error(`Origin mismatch: active tab is on ${currentOrigin || "an unknown origin"}, not ${expectedOrigin}.`);
-    }
-    if (!tabUrl.startsWith("https://")) {
-      const localOk = Boolean(args.allowLocalHttp) && /^http:\/\/(localhost|127\.0\.0\.1|\[::1\])(?::\d+)?\//i.test(tabUrl);
-      if (!localOk) {
-        throw new Error("Secure credential fill requires an HTTPS page.");
-      }
-    }
-
-    if (args.submit) {
-      throw new Error(
-        "Auto-submit is disabled for extension_fill because Chrome MV3 cannot enforce submit destinations at the browser network boundary. Fill without submit, or use page_fill_submit in the host sign-in browser.",
-      );
-    }
-
-    const rawFields = Array.isArray(args.fields) ? args.fields : [];
-    if (!rawFields.length) throw new Error("No fields provided for secure fill.");
-
-    // Determine target frame: if refs map to a single frame, target it; otherwise top frame (0).
-    // Cross-origin frames are always rejected inside dom-driver's secureFill origin check.
-    let targetFrameId = 0;
-    const mappedFields = [];
-    for (const f of rawFields) {
-      if (f?.ref) {
-        const mapped = this.tabRefs.get(tab.id)?.get(f.ref);
-        if (mapped) {
-          if (targetFrameId !== 0 && targetFrameId !== mapped.frameId) {
-            throw new Error("All fields in one secure fill must belong to the same frame.");
-          }
-          targetFrameId = mapped.frameId;
-          mappedFields.push({ ...f, ref: mapped.localRef });
-          continue;
-        }
-      }
-      mappedFields.push({ ...f });
-    }
-
-    // Taint the tab before injecting secrets so subsequent browser_eval / browser_cdp calls
-    // cannot read the filled secret back into model context.
-    this.taintTab(tab.id, { origin: expectedOrigin, url: tabUrl });
-
+  // Dedicated secure-fill handler invoked ONLY for internal `secure.fill` asks from the
+  // Botkins host (never exposed via `run()` / bot-callable `browser_*` tools).
+  // Re-checks tab origin, targets top frame + same-origin frames only, never uses CDP/eval/type,
+  // never echoes values, never logs or persists values, and zeroes all field values after use.
+  async runSecureFill(args = {}) {
+    const rawFields = Array.isArray(args?.fields) ? args.fields : [];
+    const fields = [];
+    const allowedKeys = new Set();
     try {
+      const settings = await this.getSettings();
+      if (settings.enabled === false) {
+        throw new Error("Botkins Browser Control is paused in the extension popup.");
+      }
+      const tabId = Number(args?.tabId);
+      if (!Number.isInteger(tabId) || tabId < 0) {
+        throw new Error("Secure fill requires a valid target tabId.");
+      }
+      const approvedOrigin = urlOrigin(String(args?.origin || "").trim());
+      if (!approvedOrigin || !/^https?:\/\//i.test(approvedOrigin)) {
+        throw new Error("Secure fill requires a valid approved origin.");
+      }
+      if (rawFields.length === 0) {
+        throw new Error("Secure fill requires at least one field.");
+      }
+      for (const item of rawFields) {
+        const key = String(item?.key || "").trim();
+        const kind = ["text", "password", "code", "secret"].includes(item?.kind) ? item.kind : "text";
+        const value = typeof item?.value === "string" ? item.value : "";
+        if (!key || !value) {
+          throw new Error("Each secure fill field requires a key and value.");
+        }
+        allowedKeys.add(key);
+        fields.push({ key, kind, value });
+      }
+
+      const tab = await this.resolveTab(tabId);
+      const currentOrigin = urlOrigin(tab.url || "");
+      const pendingOrigin = tab.pendingUrl ? urlOrigin(tab.pendingUrl) : "";
+      if (currentOrigin !== approvedOrigin || (pendingOrigin && pendingOrigin !== approvedOrigin)) {
+        const err = new Error("Refused secure fill: tab origin does not match the approved origin.");
+        err.secureCode = "origin_mismatch";
+        throw err;
+      }
+
+      if (!this.hasScripting()) {
+        throw new Error("Secure fill requires chrome.scripting and will not fall back to CDP.");
+      }
+
+      // Inject/execute ONLY in top frame (frameIds: [0]) so secret payloads never cross into
+      // cross-origin iframes. The isolated-world driver traverses same-origin iframes directly.
       const { frames } = await this.execDriver(
         tab.id,
         "secureFill",
         {
-          expectedOrigin,
-          allowLocalHttp: Boolean(args.allowLocalHttp),
-          fields: mappedFields,
-          submit: false,
+          origin: approvedOrigin,
+          fields,
+          submit: Boolean(args?.submit),
+          allowLocalHttp: args?.allowLocalHttp === true,
         },
-        { frameIds: [targetFrameId] },
+        { frameIds: [0] },
       );
+
       const res = frames[0]?.result;
-      if (!res?.ok) {
-        throw new Error(res?.error || "Secure credential fill failed.");
+      if (!res) {
+        throw new Error("Secure fill could not run on the target tab.");
       }
-      return {
-        filled: true,
-        tabId: tab.id,
-        filledCount: Number(res.filledCount || 0),
-        submitted: false,
-        origin: res.origin || expectedOrigin,
-      };
+      if (res.ok !== true) {
+        const err = new Error(
+          res.code === "origin_mismatch"
+            ? "Refused secure fill: tab origin does not match the approved origin."
+            : res.code === "password_type_mismatch"
+              ? "Refused secure fill: a password value can only be filled into a password input."
+              : res.code === "type_mismatch"
+                ? "Refused secure fill: target element type does not match the requested field kind."
+                : "Secure fill failed on the target tab.",
+        );
+        if (res.code) err.secureCode = res.code;
+        throw err;
+      }
+
+      const filled = Array.isArray(res.filled) ? res.filled.filter((k) => allowedKeys.has(k)) : [];
+      const missing = Array.isArray(res.missing) ? res.missing.filter((k) => allowedKeys.has(k)) : [];
+      if (filled.length > 0 && res.secretActive !== false) {
+        this.markSecretTab(tab.id, {
+          origin: approvedOrigin,
+          urlNoHash: stripUrlHash(tab.url || ""),
+          navGen: this.tabNavGen.get(tab.id) || 0,
+          docToken: typeof res.docToken === "string" ? res.docToken : "",
+        });
+      }
+      const out = { filled, missing };
+      if (args?.submit) {
+        out.submitted = res.submitted === true;
+        if (res.submitRefused === "cross_site_action" || res.submitRefused === "origin_changed") {
+          out.submitRefused = res.submitRefused;
+        }
+      }
+      return out;
     } finally {
-      // Drop references to plaintext values immediately after injection.
-      for (const f of mappedFields) f.value = "";
-      for (const f of rawFields) {
-        if (f && typeof f === "object") f.value = "";
+      for (const f of fields) f.value = "";
+      fields.length = 0;
+      for (const item of rawFields) {
+        if (item && typeof item === "object") item.value = "";
       }
+      if (Array.isArray(args?.fields)) args.fields.length = 0;
     }
   }
 
@@ -1487,7 +1652,7 @@ export class BrowserController {
         if (settings.mode === "group") {
           await this.ensureTabInGroup(created.id, created.windowId);
         }
-        const settled = await this.waitForLoad(created.id, 8000);
+        const settled = await this.waitForLoad(created.id, 8000, url);
         return {
           tabId: created.id,
           windowId: created.windowId,
@@ -1498,12 +1663,14 @@ export class BrowserController {
 
       case "browser_navigate": {
         const tab = await this.resolveTab(args.tabId);
+        const prevUrlNoHash = stripUrlHash(tab.url || "");
         this.tabRefs.delete(tab.id);
-        this.untaintTab(tab.id);
         const action = args.action || (args.url ? "goto" : "reload");
+        let isHashOnlyGoto = false;
         if (action === "goto") {
           const url = String(args.url || "").trim();
           if (!url || !isEligibleUrl(url)) throw new Error("Provide a valid http:// or https:// URL.");
+          isHashOnlyGoto = url.includes("#") && stripUrlHash(url) === prevUrlNoHash;
           await chrome.tabs.update(tab.id, { url });
         } else if (action === "back") {
           await chrome.tabs.goBack(tab.id);
@@ -1513,13 +1680,19 @@ export class BrowserController {
           await chrome.tabs.reload(tab.id);
         }
         const settled = await this.waitForLoad(tab.id, 10_000);
+        const nextUrlNoHash = stripUrlHash(settled?.url || "");
+        if (action === "reload" || (action === "goto" && !isHashOnlyGoto) || (nextUrlNoHash && nextUrlNoHash !== prevUrlNoHash)) {
+          this.tabNavGen.set(tab.id, (this.tabNavGen.get(tab.id) || 0) + 1);
+          this.clearSecretTab(tab.id);
+        }
         return { tabId: tab.id, title: settled?.title || "", url: settled?.url || "" };
       }
 
       case "browser_close_tab": {
         const tab = await this.resolveTab(args.tabId);
         this.tabRefs.delete(tab.id);
-        this.untaintTab(tab.id);
+        this.tabNavGen.delete(tab.id);
+        this.clearSecretTab(tab.id);
         await this.detach(tab.id);
         await chrome.tabs.remove(tab.id);
         return { closed: true, tabId: tab.id };
@@ -1543,11 +1716,6 @@ export class BrowserController {
       case "browser_type": {
         const tab = await this.resolveTab(args.tabId);
         return await this.runType(tab, args);
-      }
-
-      case "browser_secure_fill": {
-        const tab = await this.resolveTab(args.tabId);
-        return await this.runSecureFill(tab, args);
       }
 
       case "browser_select": {
@@ -1577,7 +1745,7 @@ export class BrowserController {
 
       case "browser_cdp": {
         const tab = await this.resolveTab(args.tabId);
-        this.assertNotTainted(tab, "browser_cdp");
+        await this.assertNotSecretBearing(tab);
         const method = String(args.method || "").trim();
         if (!method) throw new Error("CDP `method` is required.");
         const result = await this.cdp(

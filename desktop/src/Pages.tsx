@@ -1,7 +1,8 @@
 import { storageKey } from "./storage";
 import { useBotDrag } from "./useBotDrag";
 import { useChatDrag } from "./useChatDrag";
-import { chatGroups, chatsPageUnreadChats, hasChatSections, movedSection, type ChatGroup } from "./chatSections";
+import { chatGroups, chatsPageUnreadChats, hasChatSections, isVisibleInChatList, movedSection, type ChatGroup } from "./chatSections";
+import { isRoutineChat } from "../desktop/link/routine-chat.mjs";
 import {
   useEffect,
   useLayoutEffect,
@@ -368,13 +369,16 @@ const run = (actions: PageActions, p: Promise<unknown>) => void p.catch(actions.
 const runSection = (actions: PageActions, p: Promise<unknown>) =>
   void p.catch((e: unknown) => actions.fail((e instanceof Error ? e.message : String(e)).replace(/^Error invoking remote method '[^']+':\s*(Error:\s*)?/, "")));
 
+/** Whether the computer in use keeps a Main chat for each bot (every current one does). */
+export const keepsMainChats = (state: State) => !state.remote?.using || state.remote.using.capabilities.includes("main-chat-v1");
+
 /** The bot ⋯ menu, shared by bot cards, the sidebar and the bot page. */
 export function botMenuItems(state: State, b: Bot, actions: PageActions, ask: AskFn): MenuItem[] {
   const primary = state.bots[0]?.id === b.id;
   const sections = state.sections ?? [];
   const hasUnread = botUnreadChats(state.chats, b.id).length > 0;
   const items: MenuItem[] = [
-    ...(state.proactive?.chatMode ? [{ label: "Main chat", icon: MessageSquarePlus, run: () => actions.mainChat(b.id) }] : []),
+    ...(keepsMainChats(state) ? [{ label: "Main chat", icon: MessageSquarePlus, run: () => actions.mainChat(b.id) }] : []),
     { label: "New chat", icon: MessageSquarePlus, run: () => actions.newChatWith(b.id) },
     { label: "Bot page", icon: UserRound, run: () => actions.botPage(b.id) },
     ...(hasUnread ? [{ label: "Mark as read", icon: MailOpen, run: () => actions.markBotRead(b.id) }] : []),
@@ -472,7 +476,12 @@ export async function deleteBot(b: Bot, ask: AskFn) {
   return !!ok;
 }
 
-function sectionMenuItems(section: Section, actions: PageActions, ask: AskFn): MenuItem[] {
+function sectionMenuItems(sections: Section[], section: Section, actions: PageActions, ask: AskFn): MenuItem[] {
+  const order = (by: -1 | 1) => movedSection(sections, section.id, by);
+  const move = (by: -1 | 1) => {
+    const ids = order(by);
+    if (ids) run(actions, api().orderSections(ids));
+  };
   return [
     {
       label: "Rename…",
@@ -490,6 +499,9 @@ function sectionMenuItems(section: Section, actions: PageActions, ask: AskFn): M
           })(),
         ),
     },
+    { label: "Move up", icon: ArrowUp, disabled: !order(-1), run: () => move(-1) },
+    { label: "Move down", icon: ArrowDown, disabled: !order(1), run: () => move(1) },
+    "separator",
     {
       label: "Delete section…",
       icon: Trash2,
@@ -519,7 +531,7 @@ function sectionMenuItems(section: Section, actions: PageActions, ask: AskFn): M
  * side menu, so a bot's row says the same thing in both places.
  */
 function botLatest(state: State) {
-  const showMain = state.proactive?.chatMode && (state.settings.botTap ?? "main") === "main";
+  const showMain = keepsMainChats(state) && (state.settings.botTap ?? "main") === "main";
   const creator = memberTeam(state)?.me.memberId;
   const latest = new Map<string, Chat>();
   for (const c of state.chats) {
@@ -670,7 +682,7 @@ export function BotCards({
         {sections.map(({ section, bots }) => {
           const open = !collapsed.includes(section.id);
           const sectionMenu = (e: ReactMouseEvent<HTMLElement>) =>
-            menu.show(e, section.name, sectionMenuItems(section, actions, dialogs.ask));
+            menu.show(e, section.name, sectionMenuItems(state.sections, section, actions, dialogs.ask));
           return (
             <div {...drag.place({ pinned: false, sectionId: section.id })} className="botgroup" key={section.id} onContextMenu={sectionMenu}>
               <div className="botgroup-head group-label">
@@ -820,7 +832,7 @@ export function SidebarBots({ state, actions, compact, selectedBotId }: { state:
   // One walk over the chats for each bot's latest preview: the conversation the default bot
   // selection opens (its Main chat, when that is the choice). The shared helper owns the unread
   // dot, which can come from any of the bot's chats.
-  const showMain = state.proactive?.chatMode && (state.settings.botTap ?? "main") === "main";
+  const showMain = keepsMainChats(state) && (state.settings.botTap ?? "main") === "main";
   const creator = memberTeam(state)?.me.memberId;
   const latest = new Map<string, Chat>();
   for (const c of state.chats) {
@@ -1016,13 +1028,40 @@ function chatMenuItems(state: State, chat: Chat, actions: PageActions, ask: AskF
     },
     // Only when the computer in use keeps sections; without them the menu is as before.
     ...(hasChatSections(state) ? [chatSectionItem(state, chat, actions, ask)] : []),
+    ...(!isRoutineChat(chat)
+      ? [
+          {
+            label: chat.unread ? "Mark read" : "Mark unread",
+            icon: chat.unread ? MailOpen : Mail,
+            run: () => run(actions, api().setChatFlags(chat.id, { unread: !chat.unread })),
+          },
+        ]
+      : []),
+  ];
+  // A Main chat can be archived or deleted, never renamed: the bot's next visit makes a new one.
+  if (chat.main) return [
+    ...common,
+    { label: "Archive", icon: Archive, run: () => run(actions, api().setChatFlags(chat.id, { archived: true })) },
+    "separator",
     {
-      label: chat.unread ? "Mark read" : "Mark unread",
-      icon: chat.unread ? MailOpen : Mail,
-      run: () => run(actions, api().setChatFlags(chat.id, { unread: !chat.unread })),
+      label: "Delete…",
+      icon: Trash2,
+      danger: true,
+      run: () =>
+        run(
+          actions,
+          (async () => {
+            const ok = await ask({
+              title: "Delete this Main chat?",
+              body: "This removes the chat and its history. Opening the bot again starts a new Main chat. You can't undo this.",
+              confirm: "Delete chat",
+              danger: true,
+            });
+            if (ok) await api().deleteChat(chat.id);
+          })(),
+        ),
     },
   ];
-  if (chat.main) return common;
   return [
     ...common,
     {
@@ -1105,7 +1144,8 @@ export function ChatRow({
   const dialogs = useAsk();
   if (!b) return null;
   const canChat = teamCan(state, "agents", "chat");
-  const canMarkRead = !canChat && !!chat.unread && teamCan(state, "agents");
+  const unread = !!chat.unread && !isRoutineChat(chat);
+  const canMarkRead = !canChat && unread && teamCan(state, "agents");
   const controls = canChat || canMarkRead ? actions : undefined;
   const items = (): MenuItem[] =>
     canChat
@@ -1139,7 +1179,7 @@ export function ChatRow({
     );
   const row = (
     <button
-      className={"row chatrow" + (chat.unread ? " unread" : "")}
+      className={"row chatrow" + (unread ? " unread" : "")}
       aria-current={selected ? "true" : undefined}
       onClick={() => open(chat.id)}
     >
@@ -1167,7 +1207,7 @@ export function ChatRow({
               </>
             )}
           </small>
-          {chat.unread && <i className="unread-dot" aria-label="Unread" />}
+          {unread && <i className="unread-dot" aria-label="Unread" />}
         </span>
         {project && (
           <small className="row-folder">
@@ -1426,10 +1466,24 @@ const foldedChatSections = new Set<string>();
 
 type ChatFilterName = "All" | "Unread" | "Archived";
 
-/** The All / Unread / Archived chips over a chat list. */
-function ChatFilterChips({ state, filter, setFilter }: { state: State; filter: ChatFilterName; setFilter: (f: ChatFilterName) => void }) {
+/** The All / Unread / Archived chips plus the "Show routine chats" toggle over a chat list. */
+function ChatFilterChips({
+  state,
+  actions,
+  filter,
+  setFilter,
+  selectedChatId,
+}: {
+  state: State;
+  actions: PageActions;
+  filter: ChatFilterName;
+  setFilter: (f: ChatFilterName) => void;
+  selectedChatId?: string;
+}) {
+  const showRoutineChats = !!state.settings.showRoutineChats;
   const unread = chatsPageUnreadChats(state.chats).length;
-  const archived = state.chats.filter((c) => c.archived).length;
+  const archived = state.chats.filter((c) => c.archived && isVisibleInChatList(c, { showRoutineChats, selectedChatId })).length;
+  const hasRoutines = state.chats.some((c) => isRoutineChat(c));
   return (
     <div className="chip-row chat-filters" role="group" aria-label="Show chats">
       {(
@@ -1443,6 +1497,15 @@ function ChatFilterChips({ state, filter, setFilter }: { state: State; filter: C
           {label}
         </button>
       ))}
+      {(hasRoutines || showRoutineChats) && (
+        <button
+          className="chip"
+          aria-pressed={showRoutineChats}
+          onClick={() => run(actions, api().setPreferences({ showRoutineChats: !showRoutineChats }))}
+        >
+          Show routine chats
+        </button>
+      )}
     </div>
   );
 }
@@ -1485,10 +1548,11 @@ function ChatList({
   const menu = useMenu();
   const dialogs = useAsk();
   const drag = useChatDrag(state.chats, (e) => runSection(actions, Promise.reject(e)));
+  const showRoutineChats = !!state.settings.showRoutineChats;
   const chats = state.chats;
   // Sections are there only when the computer in use keeps them ("chat-sections-v1").
   const sections = hasChatSections(state) ? state.chatSections ?? [] : undefined;
-  const groups = chatGroups({ chats, sections, query, filter, botName: (c) => state.bots.find((b) => b.id === c.botId)?.name });
+  const groups = chatGroups({ chats, sections, query, filter, showRoutineChats, selectedChatId, botName: (c) => state.bots.find((b) => b.id === c.botId)?.name });
   const matched = groups.some((group) => group.chats.length);
   // A chat is dragged into a section only where its menu could move it there.
   const movable = !!sections && filter !== "Archived" && teamCan(state, "agents", "chat");
@@ -1585,7 +1649,9 @@ function ChatList({
               ? "You're all caught up."
               : filter === "Archived"
                 ? "No archived chats."
-                : "No chats. Restore one from Archived."}
+                : !showRoutineChats && chats.some((c) => !c.archived && isRoutineChat(c))
+                  ? "Routine chats are hidden."
+                  : "No chats. Restore one from Archived."}
         </p>
       )}
       {menu.node}
@@ -1647,7 +1713,7 @@ export function ChatsPage({
           value={query}
           onValueChange={setQuery}
         />
-        <ChatFilterChips state={state} filter={filter} setFilter={setFilter} />
+        <ChatFilterChips state={state} actions={actions} filter={filter} setFilter={setFilter} />
       </div>
       <ChatList state={state} actions={actions} query={query} filter={filter} />
       {dialogs.node}
@@ -1704,7 +1770,7 @@ export function ChatListColumn({
           value={query}
           onValueChange={setQuery}
         />
-        <ChatFilterChips state={state} filter={filter} setFilter={setFilter} />
+        <ChatFilterChips state={state} actions={actions} filter={filter} setFilter={setFilter} selectedChatId={selectedChatId} />
       </div>
       <div className="chatlist-scroll">
         <ChatList state={state} actions={actions} query={query} filter={filter} selectedChatId={selectedChatId} />

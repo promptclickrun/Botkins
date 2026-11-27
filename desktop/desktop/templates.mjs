@@ -6,7 +6,7 @@ import { readFileSync, statSync, writeFileSync } from "node:fs";
 import { textField } from "./panels.mjs";
 import { instructionsField, summaryField } from "./agents.mjs";
 import { cleanLook } from "./looks.mjs";
-import { templateBundle, templateFileBundle } from "./link/template-bundle.mjs";
+import { storedBundle, templateBundle, templateFileBundle, templateRequires } from "./link/template-bundle.mjs";
 
 /** The format a template file is written in. */
 export const FORMAT = "botkins.bot-template";
@@ -20,10 +20,12 @@ const MAX_FILE = 256 * 1024;
  * silhouette an earlier version saved.
  */
 export function templateFields(data) {
-  return checkedFields(data, templateBundle(data?.bundle));
+  // A format version 3 template (a marketplace's `templates`) keeps its `requires` and its routines' `active`.
+  const v3 = data?.version === 3 || data?.requires !== undefined;
+  return checkedFields(data, templateBundle(data?.bundle, { active: v3 }), v3 && data?.requires !== undefined ? templateRequires(data.requires) : undefined);
 }
 
-function checkedFields(data, bundle) {
+function checkedFields(data, bundle, requires) {
   if (!data || typeof data !== "object" || Array.isArray(data)) throw new Error("This isn't a bot template.");
   const look = cleanLook(data.look);
   return {
@@ -33,6 +35,7 @@ function checkedFields(data, bundle) {
     instructions: instructionsField(data.instructions),
     ...(look && { look }),
     ...(bundle && { bundle }),
+    ...(requires && { requires }),
   };
 }
 
@@ -43,8 +46,11 @@ export function templateFile(template) {
   return { format: FORMAT, version: bundle ? 2 : 1, name, role, ...(summary && { summary }), instructions, ...(look && { look }), ...(bundle && { bundle }) };
 }
 
-/** Reads a shared template file's text, refusing anything that isn't one. */
-export function parseTemplateFile(text) {
+/**
+ * Reads a shared template file's text, refusing anything that isn't one. `versions` are the format
+ * versions taken: a marketplace's `agents` takes 1 and 2, its `templates` takes 3.
+ */
+export function parseTemplateFile(text, versions = [1, 2, 3]) {
   if (typeof text !== "string" || Buffer.byteLength(text, "utf8") > MAX_FILE) throw new Error("That file is too large to be a bot template.");
   let data;
   try {
@@ -53,7 +59,7 @@ export function parseTemplateFile(text) {
     throw new Error("That file isn't a bot template. Templates are .json files exported from Botkins.");
   }
   if (!FORMATS.includes(data?.format)) throw new Error("That file isn't a Botkins bot template.");
-  return checkedFields(data, templateFileBundle(data));
+  return checkedFields(data, templateFileBundle(data, versions), data.version === 3 && data.requires !== undefined ? templateRequires(data.requires) : undefined);
 }
 
 export class Templates {
@@ -113,7 +119,11 @@ export class Templates {
     if (typeof text !== "string" || !text.trim()) throw new Error("That file is empty.");
     if (Buffer.byteLength(text, "utf8") > MAX_FILE) throw new Error("That file is too large to be a bot template.");
     const from = typeof name === "string" && name.trim() ? name.trim().split(/[\\/]/).pop().slice(0, 120) : undefined;
-    return this.add(parseTemplateFile(text), "imported", from);
+    const { requires, bundle, ...fields } = parseTemplateFile(text);
+    // What a version 3 template requires resolves only against the marketplace that lists it.
+    if (requires) throw new Error("This template needs skills, packs or plugins from its marketplace. Add it from Marketplace › Bots instead.");
+    const kept = storedBundle(bundle);
+    return this.add({ ...fields, ...(kept && { bundle: kept }) }, "imported", from);
   }
   /** Imports a template file someone shared. */
   importFrom(path) {

@@ -44,6 +44,9 @@ function pick(list, ref, what, see, label = (entry) => entry.name) {
  * @param handlers   `runtime.handlers`.
  * @param bot        (ref) → a bot, by id or by a name only one bot has (desktop/terminal/control.mjs).
  */
+/** The mark of a caller that showed the person what happens and got their yes at a terminal or in the app. */
+const personAgreed = (mark) => mark !== null && typeof mark === "object" && !Array.isArray(mark) && mark.agreed === true;
+
 export function projectsApi({ workspace, handlers, bot }) {
   const state = () => workspace.state;
   const projects = () => state().projects ?? [];
@@ -81,6 +84,22 @@ export function projectsApi({ workspace, handlers, bot }) {
     return pick(todos, ref, "to-do", "botkins todos list <project>", (entry) => entry.text);
   };
   const todosOf = (p) => ({ project: named(p), todos: p.todos.map(todoView) });
+  const jobChats = () => state().chats.filter((chat) => chat.job);
+  /** A job by its chat's id (6 characters at least) or its title. */
+  const jobChat = (ref) => pick(jobChats(), ref, "job", "botkins jobs list <project>", (chat) => chat.title);
+  const jobView = (chat) => ({
+    id: chat.id,
+    title: chat.title,
+    bot: botName(chat.botId),
+    where: chat.job.where,
+    state: chat.job.state,
+    working: workspace.active.has(chat.id),
+    ...(chat.job.branch && { branch: chat.job.branch, base: chat.job.base }),
+    ...(chat.job.setup && { setup: chat.job.setup }),
+    ...(chat.job.setupError && { setupError: chat.job.setupError }),
+    ...(chat.job.mergedSha && { mergedSha: chat.job.mergedSha }),
+    createdAt: iso(chat.job.createdAt),
+  });
 
   // ── Changes in a project's folder ──
   const needFolder = (p) => {
@@ -111,9 +130,12 @@ export function projectsApi({ workspace, handlers, bot }) {
     bot: botName(t.botId),
     botId: t.botId ?? null,
     createdBy: t.createdBy === "person" ? "person" : (botName(t.createdBy) ?? "a bot"),
+    ...(t.review && { review: t.review }),
+    ...(t.reviewerBotId && { reviewerBotId: t.reviewerBotId, reviewer: botName(t.reviewerBotId) ?? "a bot" }),
     ...(t.problem && { problem: t.problem }),
     ...(t.result && { result: t.result }),
     ...(t.chatId && { chatId: t.chatId }),
+    ...(t.history?.length && { history: t.history }),
     createdAt: iso(t.createdAt),
     updatedAt: iso(t.updatedAt),
   });
@@ -255,6 +277,66 @@ export function projectsApi({ workspace, handlers, bot }) {
       return { chatId, project: named(found), bots: bots.map((entry) => ({ id: entry.id, name: entry.name })), mode: workspace.chat(chatId).mode, ...(found.folder && { folder: workspace.chat(chatId).folder ?? found.folder }) };
     },
 
+    // ── Jobs (desktop/jobs.mjs): a prompt per bot, each in a chat and a git worktree of its own ──
+    /** A project's jobs, newest first. */
+    "jobs.list"([ref]) {
+      const found = project(ref);
+      const jobs = state().chats.filter((chat) => chat.projectId === found.id && chat.job).sort((a, b) => b.job.createdAt - a.job.createdAt);
+      return { project: named(found), jobs: jobs.map(jobView) };
+    },
+    /** Where the project's jobs start, and the setup commands from .botkins/worktrees.json. */
+    async "jobs.setup"([ref, folder]) {
+      const found = project(ref);
+      return { project: named(found), ...(await handlers.projectJobSetup(found.id, folder ?? undefined)) };
+    },
+    /**
+     * Says yes to the setup commands the caller showed the person: `hash` is theirs, from `jobs.setup`. The commands
+     * run outside any bot's sandbox, so this needs the mark `{ agreed: true }` of a person's yes: a bot's shell must
+     * not allow commands it wrote by a quiet call (`botkins jobs allow-setup` asks at a terminal; no flag gives it).
+     */
+    async "jobs.allowSetup"([ref, hash, folder, mark]) {
+      if (!personAgreed(mark)) throw new ControlError("Allowing a repository's setup commands needs a yes of the person: they run on this computer, outside any sandbox. Show them to the person and give `{ \"agreed\": true }` as the last argument (`botkins jobs allow-setup` asks at a terminal; no flag gives it), or allow them in the app.", "NEEDS_YES");
+      const found = project(ref);
+      await handlers.approveJobSetup(found.id, folder ?? undefined, text(hash, 64, "the setup's hash"));
+      return { project: named(found) };
+    },
+    /** Starts a job for each bot: `options` { bots: [name or id…], prompt, checkout?: true, folder?, mode?, carry?: true, agreed?: true }. */
+    async "jobs.start"([ref, options = {}]) {
+      const found = project(ref);
+      const refs = Array.isArray(options?.bots) ? options.bots : [];
+      if (!refs.length) throw new ControlError("Give at least one bot.", "BAD_ARGUMENT");
+      const bots = [...new Map(refs.map((entry) => bot(entry)).map((entry) => [entry.id, entry])).values()];
+      const mode = oneOf(["default", "plan", "yolo"], options.mode ?? found.mode ?? "default", "A mode");
+      if (mode === "yolo" && options.agreed !== true) throw new ControlError("A job in the mode yolo needs a yes: each request of the bot in it gets a yes with no question. Show that to the person, and give `agreed: true` (on the command line, `--yes`).", "NEEDS_YES");
+      const ids = await handlers.startProjectJob(found.id, { botIds: bots.map((entry) => entry.id), prompt: text(options.prompt, 32000, "the prompt"), where: options.checkout ? "checkout" : "worktree", mode, ...(options.folder && { folder: options.folder }), ...(options.carry && { carry: true }) });
+      return { project: named(found), jobs: ids.map((id) => jobView(workspace.chat(id))) };
+    },
+    async "jobs.status"([ref]) {
+      const chat = jobChat(ref);
+      return { job: jobView(chat), ...(await handlers.projectJobStatus(chat.id)) };
+    },
+    /** Merges into the person's checkout, so it needs the mark `{ agreed: true }` of a person's yes, as `jobs.allowSetup` does. */
+    async "jobs.bringIn"([ref, message, mark]) {
+      if (!personAgreed(mark)) throw new ControlError("Bringing a job in changes your checkout, so it needs a yes of the person. Show the files to the person and give `{ \"agreed\": true }` as the last argument (`botkins jobs bring-in` asks at a terminal; no flag gives it), or bring it in from the app.", "NEEDS_YES");
+      const chat = jobChat(ref);
+      return { job: jobView(chat), ...(await handlers.bringInJob(chat.id, message ?? undefined)) };
+    },
+    async "jobs.catchUp"([ref]) {
+      const chat = jobChat(ref);
+      await handlers.catchUpJob(chat.id);
+      return { job: jobView(chat) };
+    },
+    async "jobs.remove"([ref]) {
+      const chat = jobChat(ref);
+      await handlers.removeJobWorktree(chat.id);
+      return { job: jobView(chat) };
+    },
+    async "jobs.startAnyway"([ref]) {
+      const chat = jobChat(ref);
+      await handlers.startJobTurn(chat.id);
+      return { job: jobView(chat) };
+    },
+
     // ── To-dos (each is a project's own) ──
     "todos.list": ([ref]) => todosOf(project(ref)),
     /** One to-do, by its id, its words or its number. */
@@ -332,10 +414,13 @@ export function projectsApi({ workspace, handlers, bot }) {
       });
       return taskView(task(found.id));
     },
-    async "tasks.move"([ref, status, mark]) {
+    async "tasks.move"([ref, status, markOrOpts, maybeMark]) {
       const found = task(ref);
+      const hasNote = markOrOpts && typeof markOrOpts === "object" && Object.hasOwn(markOrOpts, "note");
+      const opts = hasNote ? { note: markOrOpts.note } : {};
+      const mark = hasNote ? (maybeMark ?? markOrOpts) : markOrOpts;
       if (status === "ready") needsScriptYes(workspace, found.body?.trim() || found.title, mark, "This task");
-      await handlers.moveTask(found.id, oneOf([...LANES, "archived"], status, "A status"));
+      await handlers.moveTask(found.id, oneOf([...LANES, "archived"], status, "A status"), opts);
       return taskView(task(found.id));
     },
     /** Starts the task now, in its own chat: a turn of its bot's model. A task that is working already is left as it is (`already: true`). */

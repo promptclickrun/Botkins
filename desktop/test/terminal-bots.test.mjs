@@ -148,6 +148,11 @@ test("a bot is copied, put in order, made primary, flagged and put in a section"
   assert.equal(partial.exit, 1);
   assert.match(partial.err, /There is no section called Works\./);
   assert.deepEqual((await botkins(["bots", "sections", "list", "--json"])).json().map((entry) => entry.name), ["House", "Workshop"]);
+  // A section moves to a place, 1 being the top of Home.
+  const placed = await botkins(["bots", "sections", "move", "Workshop", "1"]);
+  assert.equal(placed.exit, 0, placed.err);
+  assert.equal(placed.out, "1. Workshop\n2. House\n");
+  assert.equal((await botkins(["bots", "sections", "move", "House", "9"])).exit, 1, "a place past the end is refused");
 
   // Each change is in the log, by a name.
   assert.deepEqual(await changes(), [
@@ -161,6 +166,7 @@ test("a bot is copied, put in order, made primary, flagged and put in a section"
     "bots.sections.add Workshop", "bots.flags.set Nova",
     "bots.sections.rename House",
     "bots.sections.remove Work",
+    "bots.sections.move Workshop",
   ]);
 });
 
@@ -520,7 +526,7 @@ test("`botkins help --json` lists the new commands, and says which ones ask", as
   assert.equal(await main(["help", "bots", "--json"], io), 0);
   const bots = JSON.parse(out).areas[0].commands;
   const have = bots.map((entry) => entry.command);
-  for (const name of ["bots duplicate", "bots order", "bots primary", "bots flags", "bots memory", "bots sections list", "bots sections add", "bots sections rename", "bots sections remove", "bots import"]) assert.ok(have.includes(name), name);
+  for (const name of ["bots duplicate", "bots order", "bots primary", "bots flags", "bots memory", "bots sections list", "bots sections add", "bots sections rename", "bots sections move", "bots sections remove", "bots import"]) assert.ok(have.includes(name), name);
   assert.deepEqual(bots.find((entry) => entry.command === "bots flags").options.map((option) => option.name), ["--pin", "--unpin", "--hide", "--show", "--teamwork", "--no-teamwork", "--section", "--no-section"]);
   assert.deepEqual(bots.find((entry) => entry.command === "bots memory").arguments, [{ name: "bot", required: true }]);
   assert.deepEqual(bots.find((entry) => entry.command === "bots import").arguments, [{ name: "agent", required: false, many: true }]);

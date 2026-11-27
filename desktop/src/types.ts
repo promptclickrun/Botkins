@@ -9,6 +9,31 @@ export type CatalogSkill = { id: string; source: string; skillId: string; name: 
 /** Where a featured skill comes from: its repository at a pinned commit, its license and who wrote it. */
 export type SkillSource = { author: string; license: string; repo: string; commit: string; path: string; url: string; pack?: string };
 export type CatalogPreview = { name: string; description: string; text: string; token: string; installed?: string; /** A featured skill's source. */ source?: SkillSource; /** A featured skill's files, the license among them. */ files?: string[] };
+/** Marketplace format version 2 ("marketplace-v2-v1", desktop/catalog-v2.mjs). */
+export type MarketSkillTools = "shell" | "node" | "python" | "browser" | "network";
+export type MarketSkillListing = {
+  id: string; kind: "skill"; name: string; version: string; summary: string; category?: string; categoryName?: string; author?: string;
+  license: string; requires: { tools: MarketSkillTools[]; optional: MarketSkillTools[] }; hasPreview: boolean;
+  marketplace: string; marketplaceName: string; commit: string;
+  installed?: { shared?: { version: string; commit: string }; bots: { id: string; name: string; version: string }[] };
+  update?: boolean; warnings: string[];
+};
+export type MarketPackListing = { id: string; kind: "pack"; name: string; version: string; summary: string; skills: string[]; plugins: string[]; marketplace: string; marketplaceName: string; commit: string };
+export type MarketTemplateListing = MarketAgent & { kind: "template"; format: 3; commit: string; requires?: { skills?: string[]; packs?: string[]; plugins?: string[] }; routines?: number };
+export type MarketCatalog = { skills: MarketSkillListing[]; packs: MarketPackListing[]; templates: MarketTemplateListing[]; errors?: { marketplace: string; error: string }[] };
+export type MarketSkillReview = CatalogPreview & {
+  source: SkillSource & { catalog: string; version: string };
+  files: string[]; executable: string[]; size: number; listing: MarketSkillListing;
+  update?: { from: string; to: string; added: string[]; changed: string[]; removed: string[] };
+};
+export type MarketPluginReview = { id: string; name: string; version?: string; description?: string; revision: string; contents?: { mcpServers?: { name: string; kind: string; url?: string; command?: string; args?: string[] }[]; hooks?: { event?: string; command?: string }[] }; warnings?: string[]; installed?: { bots: "all" | string[]; enabled: boolean; revision?: string; matchesRevision?: boolean } };
+export type MarketPackReview = { id: string; name: string; version: string; summary: string; marketplaceName: string; commit: string; token: string; skills: MarketSkillReview[]; plugins: MarketPluginReview[] };
+export type MarketRoutineReview = { name: string; instructions: string; cadence: NonNullable<AgentTemplateBundle["routines"]>[number]["cadence"]; active: boolean };
+export type MarketTemplateReview = {
+  id: string; token: string; commit: string; marketplaceName: string; version: string; name: string; role: string; summary: string; instructions: string; look?: MarketAgent["look"];
+  packs: { name: string; version: string; summary: string }[]; skills: MarketSkillReview[]; privateSkills: { name: string; description: string; instructions: string }[];
+  plugins: MarketPluginReview[]; routines: MarketRoutineReview[];
+};
 /** A skill on the featured shelf ("skills-featured-v1"). Its id is `owner/repo/skill@commit7`: preview and install it as a catalog skill. */
 export type FeaturedSkill = SkillSource & { id: string; name: string; summary: string; group: string; installed?: string };
 
@@ -131,7 +156,7 @@ export type Attachment = {
   kind?: "file" | "directory";
 };
 export type ArtifactKind = "folder" | "file" | "image" | "audio" | "video";
-export type ArtifactSource = "tool" | "media" | "upload" | "export";
+export type ArtifactSource = "tool" | "media" | "upload" | "export" | "claude";
 export type Artifact = {
   id: string;
   botId: string;
@@ -145,6 +170,8 @@ export type Artifact = {
   size: number | null;
   time: number;
   source: ArtifactSource;
+  /** External URL for published Claude artifacts (private on claude.ai). */
+  url?: string;
 };
 /** A record named in a message with "#" (a project, a wiki page, or a file in the bot's workspace). */
 export type Mention =
@@ -156,6 +183,16 @@ export type Mention =
   | { kind: "board"; id: string; label: string; board?: "feed" | "idea" | "goal"; body?: string; links?: { url: string; title?: string }[] };
 /** What the composer sends for a mention; the main process checks it and fills in the label. */
 export type MentionInput = { kind: "project" | "board"; id: string } | { kind: "file" | "wiki"; path: string };
+/** Structured sender metadata for bot-to-bot messages (teamwork, task handoffs, remote dispatches). */
+export type MessageFrom = {
+  kind: "bot";
+  botId: string;
+  name: string;
+  hostId?: string;
+  hostName?: string;
+  chatId?: string;
+  via: "teamwork" | "task" | "remote";
+};
 export type Message = {
   reactions?: { actor: string; emoji: string }[];
   clientMessageId?: string;
@@ -180,6 +217,8 @@ export type Message = {
   botId?: string;
   /** A team member's stamped identity. The original displayed text is unchanged. */
   author?: { memberId: string; name: string };
+  /** Structured sender metadata when another bot sent this message. */
+  from?: MessageFrom;
 };
 export type Chat = {
   hostDispatch?: true;
@@ -202,6 +241,8 @@ export type Chat = {
   invited?: string[];
   /** The project folder this chat works in, and how freely its bot acts there. */
   projectId?: string;
+  /** Set on a chat that a job started (desktop/jobs.mjs). */
+  job?: Job;
   folder?: string;
   mode?: ChatMode;
   panelId?: string;
@@ -269,6 +310,8 @@ export type Run = {
   connects?: ConnectCard[];
   /** Tools with an MCP App view that ran in this turn. */
   mcpApps?: McpAppCard[];
+  /** Private Claude artifacts published or updated in this turn. */
+  claudeArtifacts?: ClaudeArtifactCard[];
   chatId: string;
   title: string;
   time: number;
@@ -306,9 +349,29 @@ export type Run = {
   failures?: { botId: string; detail: string }[];
   /** Teammates the bot asked for help during this turn, in order (desktop/teamwork.mjs). */
   teamwork?: TeamAsk[];
+  /** Task Board jobs this bot created for another bot during this turn (desktop/tasks.mjs). */
+  taskHandoffs?: TaskHandoff[];
 };
 export type WorkflowNodeKind = "trigger" | "agent" | "model" | "condition" | "approval" | "output";
 export type WorkflowTriggerKind = "task" | "schedule" | "manual" | "routine" | "chat" | "webhook" | "github";
+
+export interface WorkflowGithubSignIn {
+  status: "idle" | "starting" | "waiting" | "done" | "failed";
+  code: string | null;
+  url: string | null;
+  error: string | null;
+  login: string | null;
+}
+
+export interface WorkflowGithubStatus {
+  installed: boolean;
+  authenticated: boolean;
+  login: string | null;
+  scopes: string[];
+  repos: string[];
+  installUrl: string;
+  signIn: WorkflowGithubSignIn;
+}
 export type WorkflowOutputDestination = "chat" | "feed" | "idea" | "goal" | "notification";
 
 export interface WorkflowFieldDef {
@@ -420,10 +483,14 @@ export interface WorkflowRun {
 /** One request from a bot to a teammate, and what came of it. */
 export type TeamAsk = {
   id: string;
+  /** Tool step ID that triggered this ask, when correlated. */
+  toolCallId?: string;
   /** The teammate that was asked. */
   botId: string;
   /** The bot that asked. */
   fromBotId: string;
+  /** Structured sender metadata set by the backend. */
+  from?: MessageFrom;
   remote?: { hostId: string; hostName: string; botName: string };
   message: string;
   expecting?: string;
@@ -438,6 +505,22 @@ export type TeamAsk = {
   /** The tools the teammate used. */
   steps?: Step[];
   usedTools?: string[];
+};
+/** A Task Board job a bot created for another bot during a turn. */
+export type TaskHandoff = {
+  id: string;
+  taskId: string;
+  /** Tool step ID that created this handoff, when correlated. */
+  toolCallId?: string;
+  botId: string;
+  fromBotId: string;
+  from?: MessageFrom;
+  title: string;
+  details?: string;
+  priority?: TaskPriority;
+  status: TaskStatus | "archived";
+  chatId?: string;
+  started: number;
 };
 export type Reasoning = {
   id: string;
@@ -926,6 +1009,8 @@ export type ChatSchedule = {
   script?: string;
   /** On a script routine: after the script, the bot follows `prompt` with the script's output. */
   followUp?: boolean;
+  /** Owner-approved opt-in: lets this routine create Ready tasks assigned to a bot. */
+  allowReadyTasks?: boolean;
 };
 export type Cadence =
   | { kind: "once"; date: string; time: string }
@@ -962,6 +1047,8 @@ export type RoutineInput = {
   notify?: boolean;
   /** Specific notification targets ("routine-notify-targets-v1"). null resets to everyone; omitted on an edit keeps the existing targets. */
   notifyTargets?: RoutineNotifyTargets | null;
+  /** Owner-approved opt-in: lets this routine create Ready tasks assigned to a bot. */
+  allowReadyTasks?: boolean;
 };
 export type UsageTotals = {
   turns: number;
@@ -1174,6 +1261,7 @@ declare global {
       addSection(name: string): Promise<string>;
       renameSection(id: string, name: string): Promise<void>;
       deleteSection(id: string): Promise<void>;
+      orderSections(ids: string[]): Promise<void>;
       setChatFlags(
         id: string,
         patch: Partial<Pick<Chat, "pinned" | "archived" | "unread">>,
@@ -1203,6 +1291,17 @@ declare global {
       chooseProjectFolder(id: string, append?: boolean): Promise<string | null>;
       /** A new chat in a project with one bot, or 2 to 6 for a group. Every bot needs access. */
       startProjectChat(botIds: string[], projectId: string, mode?: ChatMode, folder?: string | null): Promise<string>;
+      /** Jobs (desktop/jobs.mjs): where a project's jobs start, and the setup commands of its repository. */
+      projectJobSetup(projectId: string, folder?: string): Promise<JobSetup>;
+      /** The person saw the setup commands (`hash` is from projectJobSetup) and said yes. */
+      approveJobSetup(projectId: string, folder: string | undefined, hash: string): Promise<string>;
+      /** One job per bot: a chat, a worktree (unless where is "checkout"), the setup, then the prompt. The chats' ids. */
+      startProjectJob(projectId: string, options: JobStart): Promise<string[]>;
+      projectJobStatus(chatId: string): Promise<JobStatus>;
+      bringInJob(chatId: string, message?: string): Promise<{ ok: true; commit: string } | { ok: false; conflicts: string[] }>;
+      catchUpJob(chatId: string): Promise<void>;
+      removeJobWorktree(chatId: string): Promise<void>;
+      startJobTurn(chatId: string): Promise<void>;
       /** Attaches an artifact to a project; one already there moves to the front. Answers the project's list afterwards. */
       addProjectArtifact(projectId: string, artifactId: string): Promise<string[]>;
       removeProjectArtifact(projectId: string, artifactId: string): Promise<string[]>;
@@ -1218,7 +1317,7 @@ declare global {
       linkPreview(url: string): Promise<LinkPreview | null>;
       // Tasks board
       saveTask(data: TaskInput): Promise<string>;
-      moveTask(id: string, status: TaskStatus | "archived"): Promise<void>;
+      moveTask(id: string, status: TaskStatus | "archived", options?: { note?: string }): Promise<void>;
       startTask(id: string): Promise<void>;
       deleteTask(id: string): Promise<void>;
       // Event-based Workflows
@@ -1233,6 +1332,9 @@ declare global {
       workflowRespondApproval(runId: string, nodeId: string | null, decision: "approved" | "rejected", note?: string): Promise<WorkflowRun>;
       workflowCancelRun(runId: string): Promise<WorkflowRun>;
       workflowRotateWebhookSecret(workflowId: string, nodeId: string): Promise<{ routeId: string; secret: string }>;
+      workflowGithubStatus(options?: { includeRepos?: boolean }): Promise<WorkflowGithubStatus>;
+      workflowGithubSignInStart(): Promise<WorkflowGithubSignIn>;
+      workflowGithubSignInCancel(): Promise<WorkflowGithubStatus>;
       workflowExport(id: string): Promise<boolean>;
       workflowImport(): Promise<{ workflow: Workflow; unresolvedAgents: string[] } | null>;
       workflowExportText(id: string): Promise<string>;
@@ -1383,6 +1485,14 @@ declare global {
       "skillsCatalog.preview"(id: string): Promise<CatalogPreview>;
       "skillsCatalog.install"(token: string, replace?: string[]): Promise<SkillImportResult>;
       "skillsCatalog.featured"(): Promise<FeaturedSkill[]>;
+      "market.catalog"(): Promise<MarketCatalog>;
+      "market.skillImage"(id: string): Promise<string>;
+      "market.skillPreview"(id: string): Promise<MarketSkillReview>;
+      "market.skillInstall"(token: string, options?: { bots?: "all" | string[]; replace?: string[] }): Promise<SkillImportResult>;
+      "market.packPreview"(id: string): Promise<MarketPackReview>;
+      "market.packInstall"(token: string, options?: { bots?: "all" | string[]; replace?: string[]; commit?: string }): Promise<SkillImportResult & { plugins: string[] }>;
+      "market.templatePreview"(id: string): Promise<MarketTemplateReview>;
+      "market.templateInstall"(token: string, options?: { routines?: string[]; commit?: string; name?: string }): Promise<{ botId: string; skills: string[]; plugins: string[] }>;
       "mcpCatalog.list"(): Promise<McpCatalog>;
       "mcpCatalog.add"(id: string, options?: { keys?: Record<string, string>; confirm?: string }): Promise<McpCatalogAdded>;
       "piPackages.browse"(query?: { query?: string; page?: number }): Promise<{ packages: PiPackageListing[]; nextPage?: number }>;
@@ -1586,6 +1696,10 @@ declare global {
       resetPhoneRelay(): Promise<PhoneLink>;
       /** Asks macOS for a permission the screen needs, and opens the page of System Settings where it is switched on. */
       requestScreenPermission(kind: "screenRecording" | "accessibility"): Promise<PhoneLink>;
+      /** Bundled CUA Driver availability and OS permission status for native computer use on this computer. */
+      computerUseStatus(): Promise<ComputerUseStatus>;
+      /** Asks macOS for Accessibility or Screen Recording for native computer use and opens System Settings. */
+      requestComputerUsePermission(kind: "accessibility" | "screenRecording"): Promise<ComputerUseStatus>;
       /** Opens the page of System Settings where macOS lets Botkins use the local network. */
       allowLocalNetwork(): Promise<PhoneLink>;
       // iMessage and Mail tools for bots (Settings › MCP servers › On this Mac). Only this window can make these calls.
@@ -1703,6 +1817,10 @@ declare global {
       /** A read that nobody waited for has come in: ask again. */
       onProviderUsage(fn: () => void): () => void;
       exportUsage(days: number): Promise<boolean>;
+      "claudeArtifacts.status"(refresh?: boolean): Promise<ClaudeArtifactsStatus>;
+      "claudeArtifacts.setModel"(model: "haiku" | "sonnet" | "opus"): Promise<ClaudeArtifactsStatus>;
+      "claudeArtifacts.setBotApproval"(botId: string, allowed: boolean): Promise<ClaudeArtifactsStatus>;
+      "claudeArtifacts.revokeBotApproval"(botId: string): Promise<ClaudeArtifactsStatus>;
       /** A notification click asks to open a chat. */
       onOpenChat(fn: (chatId: string) => void): () => void;
       onOpenSettings(fn: (tab: string) => void): () => void;
@@ -2119,6 +2237,8 @@ export type Capability = {
   command: string;
   source: string;
   description: string;
+  /** How a Tool is offered to the model: directly in its tool schemas, or indirectly (e.g. codemode/tool commands). */
+  exposure?: "direct" | "indirect";
 };
 export type Catalog = {
   choices: Capability[];
@@ -2432,6 +2552,25 @@ export type MacToolsStatus = {
   permissions: { fullDisk?: boolean; messagesAutomation?: boolean; mailAutomation?: boolean };
 };
 
+export type ComputerUseStatus = {
+  enabled: boolean;
+  bundled: boolean;
+  binarySource: string | null;
+  version: string;
+  license: string;
+  platform: string;
+  supported: boolean;
+  session: string;
+  limited?: boolean;
+  ready: boolean;
+  checkedWith?: string;
+  permissions: {
+    accessibility: boolean;
+    screenRecording: boolean;
+  };
+  notes: string[];
+};
+
 export type Preferences = {
   fastMode?: FastMode;
   model: ModelChoice;
@@ -2454,6 +2593,8 @@ export type Preferences = {
   linkPreviews?: boolean;
   /** Speak each new reply aloud in the open chat. */
   readAloud?: boolean;
+  /** Show routine-owned chats in the chat list (off by default). */
+  showRoutineChats?: boolean;
   /** The person finished the welcome screen. */
   onboarded?: boolean;
   /** A new workspace has no default model until a provider is connected (desktop/workspace.mjs firstDefaultModel). */
@@ -2464,6 +2605,8 @@ export type Preferences = {
   notifications: NotificationSettings;
   /** On (the default): every bot can use every project. Off: each bot's grant applies. */
   access?: { allBots: boolean };
+  /** Off by default: allows owner-chat bots (and approved node jobs) to inspect and act on native apps via bundled CUA Driver. */
+  computerUse?: boolean;
   /** iMessage and Mail as bot tools, on a Mac. Only the app's own window changes it (setMacTool); a phone can read it to say "set up on your Mac". */
   macTools?: MacToolLevels;
   /**
@@ -2473,6 +2616,8 @@ export type Preferences = {
    * Set either field with setPreferences({ sidebar: { order } }) or ({ sidebar: { collapsed } }).
    */
   sidebar?: { order: string[]; collapsed: boolean; picked?: boolean };
+  /** Model used by headless Claude Code artifact sub-runs. */
+  claudeArtifactModel?: "haiku" | "sonnet" | "opus";
   /**
    * What runs a turn around the model (desktop/harness). "copilot": one harness, the Copilot
    * runtime, runs every chat it can, and the model's own plan answers (GitHub Copilot, ChatGPT,
@@ -2501,6 +2646,8 @@ export type Preferences = {
   tasksMax?: number;
   /** Task Board tasks that one bot runs at once, 1 to 8, when the person set it. */
   tasksPerBot?: number;
+  /** Opt-in migration: hand existing bot-created tasks in Review to their creator bot. */
+  tasksCreatorReviewExisting?: boolean;
 };
 /** The Task Board's limits in force, and each one's value without the person's setting (the environment's, else the default). Missing on an older computer. */
 export type TaskLimits = { tasksMax: number; tasksPerBot: number; defaults: { tasksMax: number; tasksPerBot: number } };
@@ -2610,6 +2757,9 @@ export type AgentRequest = {
   credentialName?: string;
   credentialSource?: string;
   destination?: string;
+  artifactGrant?: true;
+  rememberScope?: "bot";
+  botName?: string;
   /** Its words (a script command's whole script) are read in the app: never answered from a notification, a card or a gadget. */
   review?: true;
   nodeJob?: true;
@@ -2682,6 +2832,46 @@ export type Project = {
   lastUsed: number;
   createdAt: number;
 };
+/** A job: a prompt that started its own chat, in a git worktree of its own or in the checkout. */
+export type Job = {
+  prompt?: string;
+  where: "worktree" | "checkout";
+  state: "open" | "brought-in" | "removed";
+  createdAt: number;
+  branch?: string;
+  base?: string;
+  baseSha?: string;
+  setup?: "waiting" | "running" | "done" | "failed" | "skipped" | "none";
+  setupError?: string;
+  mergedSha?: string;
+  carryFailed?: true;
+};
+export type JobStart = { botIds: string[]; prompt: string; where?: "worktree" | "checkout"; folder?: string; mode?: ChatMode; carry?: boolean };
+export type JobSetup =
+  | { repo: false; folder?: string }
+  | { repo: true; folder: string; root: string; base: string | null; sha: string | null; short: string | null; changed: number; setup: string[]; branch: string; file: boolean; hash: string; error?: string; approved: boolean };
+export type JobStatus = {
+  where: "worktree" | "checkout";
+  state: Job["state"];
+  working: boolean;
+  canBringIn: boolean;
+  reason: string;
+  branch?: string;
+  base?: string;
+  baseSha?: string;
+  exists?: boolean;
+  ahead?: number;
+  behind?: number;
+  uncommitted?: number;
+  files?: { path: string; added: number; removed: number; new?: true }[];
+  added?: number;
+  removed?: number;
+  conflicts?: string[];
+  conflictsUnknown?: true;
+  checkout?: string | null;
+  checkoutChanged?: number;
+  mergedSha?: string;
+};
 export type ProjectInput = { name?: string; description?: string; color?: ProjectColor | null; folder?: string };
 export type BotAccessGrant = { all: boolean; projects: string[] };
 /** How freely a coding chat's bot acts: ask before risky steps, plan first without changing code, or run without asking. */
@@ -2693,7 +2883,22 @@ export type ProjectChanges =
 
 /** An HTML app a bot showed in a turn, as its card in the chat. */
 export type AppCard = { id: string; title: string; description: string; sendsAnswers: boolean };
-
+/** A Claude artifact published or updated in a turn, as its link card in the chat. */
+export type ClaudeArtifactCard = { id: string; title: string; url: string; size?: number; action?: "publish" | "update"; time: number; private?: boolean };
+/** Availability, model, and standing per-bot grants for Claude artifacts. */
+export type ClaudeArtifactsStatus = {
+  available: boolean;
+  installed: boolean;
+  signedIn: boolean;
+  subscription: boolean;
+  version?: string;
+  account?: string;
+  plan?: string;
+  reason?: string;
+  model: "haiku" | "sonnet" | "opus";
+  models: ("haiku" | "sonnet" | "opus")[];
+  grants: { botId: string; botName: string; grantedAt: number }[];
+};
 /**
  * A bot asked the person to connect a Composio app (desktop/connects.mjs). The card holds only the
  * app and where it stands; the page to sign in on is given to the owner who presses Connect.
@@ -2722,6 +2927,15 @@ export type McpAppView = {
 
 export type TaskStatus = "later" | "ready" | "working" | "review" | "blocked" | "done";
 export type TaskPriority = "low" | "normal" | "high" | "urgent";
+export type TaskReviewMode = "person" | "creator" | "auto";
+export type TaskHistoryEntry = {
+  at: number;
+  by: string;
+  byName?: string;
+  from: TaskStatus | "archived";
+  to: TaskStatus | "archived";
+  note?: string;
+};
 export type BotTask = {
   id: string;
   title: string;
@@ -2730,14 +2944,20 @@ export type BotTask = {
   priority: TaskPriority;
   status: TaskStatus | "archived";
   createdBy: string;
+  /** Chat where a bot created this task via task_create, for linking back. */
+  createdChatId?: string;
+  review?: TaskReviewMode;
+  reviewerBotId?: string;
   createdAt: number;
   updatedAt: number;
   chatId?: string;
   runId?: string;
   result?: string;
   problem?: string;
+  pendingNote?: { text: string; by: string; byName?: string; from: TaskStatus | "archived"; at: number };
+  history?: TaskHistoryEntry[];
 };
-export type TaskInput = { id?: string; title: string; body?: string; botId?: string | null; priority?: TaskPriority; status?: "later" | "ready" };
+export type TaskInput = { id?: string; title: string; body?: string; botId?: string | null; priority?: TaskPriority; status?: "later" | "ready"; review?: TaskReviewMode };
 
 export type LinkPreview = { url: string; title: string; description: string; site: string; image?: string };
 

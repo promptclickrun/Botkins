@@ -330,3 +330,24 @@ export function joinPage(): Response {
   `,
   );
 }
+
+/** Fixed target for the OAuth callback bounce; never read from the request. */
+export const MCP_AUTH_TARGET = "botkins://mcp-auth";
+
+/**
+ * Bounces a tool's OAuth callback (`GET /mcp-auth?...`) to the phone app's fixed custom scheme,
+ * keeping the original query string intact. No target is ever taken from the request, and the
+ * query is never logged.
+ */
+export function mcpAuthRedirect(url: URL): Response {
+  const query = url.search.startsWith("?") ? url.search : "";
+  return new Response(null, {
+    status: 302,
+    headers: {
+      location: MCP_AUTH_TARGET + query,
+      "cache-control": "no-store",
+      "referrer-policy": "no-referrer",
+      "x-content-type-options": "nosniff",
+    },
+  });
+}

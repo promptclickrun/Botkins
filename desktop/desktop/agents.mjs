@@ -1,7 +1,9 @@
 // Bot and chat management: primary bot, pins, hiding, sections, duplication and deletion.
 // How a bot looks is in desktop/looks.mjs.
 import { randomUUID } from "node:crypto";
-import { conversations, makeMainChat } from "./link/main-chat.mjs";
+import { cpSync, existsSync, lstatSync } from "node:fs";
+import { conversations, makeMainChat, retireMainChat } from "./link/main-chat.mjs";
+import { isRoutineChat } from "./link/routine-chat.mjs";
 import { textField } from "./panels.mjs";
 import { nextLook } from "./looks.mjs";
 import { holderSessions } from "./providers/sessions.mjs";
@@ -187,7 +189,12 @@ export class Agents {
     // A copy belongs to whoever copied it: the mark of who made the first one is not carried over.
     delete copy.createdBy;
     if (person !== "owner") copy.createdBy = person;
-    return this.ws.installBot(copy, this.ws.bundleForBot(source, person), this.state.bots.indexOf(source) + 1);
+    // The copy gets its own copy of the source's marketplace skills.
+    const from = source.catalogSkills?.length ? this.ws.integrations.botCatalogDirectory(source) : null;
+    if (!from || !existsSync(from)) delete copy.catalogSkills;
+    const copyId = this.ws.installBot(copy, this.ws.bundleForBot(source, person), this.state.bots.indexOf(source) + 1);
+    if (copy.catalogSkills) cpSync(from, this.ws.integrations.botCatalogDirectory(copy), { recursive: true, filter: (path) => !lstatSync(path).isSymbolicLink() });
+    return copyId;
   }
   async deleteBot(id) {
     const bot = this.ws.bot(id);
@@ -239,6 +246,7 @@ export class Agents {
     this.ws.clearCatalogs();
     this.ws.save();
     if (bot.bundle?.skills) this.ws.integrations.removeBotSkills(bot);
+    if (bot.catalogSkills) this.ws.integrations.removeBotCatalogSkills(bot);
     await this.deleteSessions(chats, memberSessions);
   }
   addSection(name) {
@@ -249,6 +257,13 @@ export class Agents {
   }
   renameSection(id, name) {
     this.section(id).name = textField(name, 40, "section name");
+    this.ws.save();
+  }
+  /** Puts the sections in the order of `ids`. Sections it doesn't name keep their order after the named ones. */
+  orderSections(ids) {
+    if (!Array.isArray(ids)) throw new Error("Give the section ids in their new order.");
+    const named = [...new Set(ids)].map((id) => this.section(id));
+    this.state.sections = [...named, ...this.state.sections.filter((section) => !named.includes(section))];
     this.ws.save();
   }
   deleteSection(id) {
@@ -265,7 +280,12 @@ export class Agents {
       if (typeof value !== "boolean") throw new Error("Invalid chat flag");
       next[key] = value;
     }
-    if (chat.main && next.archived) throw new Error("Main chat stays in your chats.");
+    // Archiving a Main chat retires it: it stays as an ordinary chat, and the next visit to the bot makes a new Main chat.
+    if (chat.main && next.archived) {
+      this.assertIdle([chat], "chat");
+      retireMainChat(chat);
+    }
+    if (isRoutineChat(chat) && next.unread) next.unread = false;
     Object.assign(chat, next);
     this.ws.save();
   }
@@ -297,9 +317,13 @@ export class Agents {
   }
   async deleteChat(id) {
     const chat = this.ws.chat(id);
-    if (chat.main) throw new Error("Main chat stays with its bot. Use Reset context to start fresh.");
+    // Deleting a Main chat is allowed: the next visit to the bot makes a new one (workspace.mainChat).
     this.assertIdle([chat], "chat");
+    // Not while a job's setup, bring-in or removal is under way (desktop/jobs.mjs).
+    if (chat.job) this.ws.jobs?.idle(chat);
     this.state.chats = this.state.chats.filter((c) => c !== chat);
+    // A job's worktree goes with it; its branch stays (desktop/jobs.mjs).
+    this.ws.jobs?.forget(chat);
     // A question left waiting in the chat goes with it.
     this.ws.interactions.cancel(id, { detached: true });
     this.ws.mcpApps?.removeChats([id]);

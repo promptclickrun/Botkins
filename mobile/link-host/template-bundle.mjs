@@ -41,14 +41,15 @@ function routineCadence(value) {
   return { kind, time, days: [...days].sort((a, b) => a - b) };
 }
 
-function routine(value) {
-  fields(value, ["name", "instructions", "cadence"], "Bundled routine");
+function routine(value, active = false) {
+  fields(value, active ? ["name", "instructions", "cadence", "active"] : ["name", "instructions", "cadence"], "Bundled routine");
   const name = words(value.name, 80, "Routine name");
   if (/[\\/]/.test(name) || name === "." || name === ".." || PROTOTYPE_NAMES.has(name.toLowerCase()))
     throw new Error("A bundled routine needs a display name without a path or reserved name.");
   const instructions = words(value.instructions, 4000, "Routine instructions", true);
   if (instructions.startsWith("/")) throw new Error("Bundled routine instructions cannot start with a slash command.");
-  return { name, instructions, cadence: routineCadence(value.cadence) };
+  if (value.active !== undefined && typeof value.active !== "boolean") throw new Error("A routine's active must be true or false.");
+  return { name, instructions, cadence: routineCadence(value.cadence), ...(value.active === true && { active: true }) };
 }
 
 function items(list, check, label) {
@@ -60,13 +61,16 @@ function items(list, check, label) {
   return entries;
 }
 
-/** Checks and copies a portable bundle. An absent bundle keeps the original template format. */
-export function templateBundle(input) {
+/**
+ * Checks and copies a portable bundle. An absent bundle keeps the original template format.
+ * `{ active: true }` reads a format version 3 bundle, whose routines may say `active`.
+ */
+export function templateBundle(input, { active = false } = {}) {
   if (input === undefined) return undefined;
   fields(input, ["skills", "routines"], "Template bundle");
   const bundle = {};
   if (Object.hasOwn(input, "skills")) bundle.skills = items(input.skills, skill, "skills");
-  if (Object.hasOwn(input, "routines")) bundle.routines = items(input.routines, routine, "routines");
+  if (Object.hasOwn(input, "routines")) bundle.routines = items(input.routines, (value) => routine(value, active), "routines");
   if (!bundle.skills && !bundle.routines) throw new Error("A template bundle needs skills or routines.");
   if (Buffer.byteLength(JSON.stringify(bundle), "utf8") > MAX_BYTES) throw new Error("Template bundle exceeds 64 KiB.");
   return bundle;
@@ -99,12 +103,52 @@ export function templateForReader(template, version) {
   return template;
 }
 
-/** Reads the bundle from an imported template file after the caller recognizes its format. */
-export function templateFileBundle(data) {
-  if (data.version !== 1 && data.version !== 2) throw new Error("This template was made by a newer Botkins. Update Botkins to import it.");
+/** A requirement on a catalog listing: `name@range`, the range `^x.y.z`, `~x.y.z` or `x.y.z`. */
+export const REFERENCE = /^([a-z0-9][a-z0-9-]{0,63})@([\^~]?(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*))$/;
+const MAX_REQUIRES = 32;
+
+/** A version 3 template's `requires`: { skills?, packs?, plugins? }, each a list of name@range. */
+export function templateRequires(value) {
+  fields(value, ["skills", "packs", "plugins"], "Template requires");
+  const out = {};
+  let total = 0;
+  for (const kind of ["skills", "packs", "plugins"]) {
+    if (!Object.hasOwn(value, kind)) continue;
+    const list = value[kind];
+    if (!Array.isArray(list) || list.length > MAX_REQUIRES || !list.every((item) => typeof item === "string" && REFERENCE.test(item)))
+      throw new Error(`Template requires.${kind} must list up to ${MAX_REQUIRES} entries written name@range (^1.2.3, ~1.2.3 or 1.2.3).`);
+    const names = list.map((item) => REFERENCE.exec(item)[1]);
+    if (new Set(names).size !== names.length) throw new Error(`Template requires.${kind} names a listing twice.`);
+    out[kind] = [...list];
+    total += list.length;
+  }
+  if (!total) throw new Error("Template requires lists nothing.");
+  return out;
+}
+
+const V2_KEYS = ["format", "version", "name", "role", "summary", "instructions", "look", "bundle"];
+
+/**
+ * Reads the bundle from an imported template file after the caller recognizes its format.
+ * `versions` are the format versions the reader takes: a marketplace's `agents` takes 1 and 2 only.
+ */
+export function templateFileBundle(data, versions = [1, 2, 3]) {
+  if (![1, 2, 3].includes(data.version)) throw new Error("This template was made by a newer Botkins. Update Botkins to import it.");
+  if (!versions.includes(data.version)) throw new Error("This template uses format version " + data.version + ", which this list doesn't take.");
+  if (data.version === 3) {
+    if (Object.keys(data).some((key) => ![...V2_KEYS, "requires"].includes(key))) throw new Error("That version 3 template contains an unknown field.");
+    if (!Object.hasOwn(data, "bundle") && !Object.hasOwn(data, "requires")) throw new Error("A version 3 template needs requires or bundle.");
+    return Object.hasOwn(data, "bundle") ? templateBundle(data.bundle, { active: true }) : undefined;
+  }
   if (Object.hasOwn(data, "bundle") !== (data.version === 2)) throw new Error("A bot template with a bundle must use version 2, and version 2 requires a bundle.");
   if (data.version === 1) return undefined;
-  if (Object.keys(data).some((key) => !["format", "version", "name", "role", "summary", "instructions", "look", "bundle"].includes(key)))
+  if (Object.keys(data).some((key) => !V2_KEYS.includes(key)))
     throw new Error("That version 2 template contains an unknown field.");
   return templateBundle(data.bundle);
+}
+
+/** A bundle as a bot keeps it: routines lose `active`, which only says how they start. */
+export function storedBundle(bundle) {
+  if (!bundle?.routines) return bundle;
+  return { ...bundle, routines: bundle.routines.map(({ active: _active, ...rest }) => rest) };
 }

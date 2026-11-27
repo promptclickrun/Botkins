@@ -387,7 +387,7 @@ const approvalHelp: Record<Values["approval"], string> = {
   all: "Approves every request, commands and file changes too. Managed policies still apply.",
 };
 
-export function ChatDisplaySettings({ settings, change, chatMode, fail }: Pick<Props, "settings" | "change" | "fail"> & { chatMode?: "main" | "new" }) {
+export function ChatDisplaySettings({ settings, change, chatMode, mainChats = true, fail }: Pick<Props, "settings" | "change" | "fail"> & { chatMode?: "main" | "new"; mainChats?: boolean }) {
   // With Steps or Thinking Open, a finished turn always folds into the island's receipt.
   const island = settings.steps === "open" || settings.thinking === "open";
   return (
@@ -409,6 +409,12 @@ export function ChatDisplaySettings({ settings, change, chatMode, fail }: Pick<P
         checked={settings.showUpdates !== false}
         onChange={(on) => void change({ showUpdates: on }).catch(fail)}
       />
+      <SwitchRow
+        label="Show routine chats"
+        help="Include chats created and owned by routines in the chat list."
+        checked={!!settings.showRoutineChats}
+        onChange={(on) => void change({ showRoutineChats: on }).catch(fail)}
+      />
       <Row label="Position after response completes">
         {(id) => <select className="completion-position" id={id} value={settings.completionPosition ?? "latest"} onChange={e => saveChatDisplay({ completionPosition: e.target.value === "beginning" ? "beginning" : "latest" })}>
           <option value="latest">Keep at latest content</option>
@@ -416,8 +422,8 @@ export function ChatDisplaySettings({ settings, change, chatMode, fail }: Pick<P
         </select>}
       </Row>
       <Row label="When you select a bot">
-        {(id) => <select className="bot-tap" id={id} value={settings.botTap === "main" && !chatMode ? "latest" : settings.botTap ?? (chatMode ? "main" : "latest")} onChange={e => saveChatDisplay({ botTap: e.target.value as Values["botTap"] })}>
-          {chatMode && <option value="main">Open Main chat</option>}
+        {(id) => <select className="bot-tap" id={id} value={settings.botTap === "main" && !mainChats ? "latest" : settings.botTap ?? (mainChats ? "main" : "latest")} onChange={e => saveChatDisplay({ botTap: e.target.value as Values["botTap"] })}>
+          {mainChats && <option value="main">Open Main chat</option>}
           <option value="latest">Open the latest chat</option>
           <option value="new">Start a new chat</option>
         </select>}
@@ -451,9 +457,20 @@ export function TaskSettings({ settings, limits, change, fail }: Props & { limit
     </Row>
   );
   return (
-    <Group title="Tasks" footer="Each running task uses its bot's model and plan.">
+    <Group title="Tasks" footer="Each running task uses its bot's model and plan. Existing bot-created tasks in Review stay yours unless you turn on creator review below.">
       {pick("tasksMax", 16, "Tasks at once")}
       {pick("tasksPerBot", 8, "Tasks at once per bot")}
+      <Row label="Route existing bot-created Review tasks to creator">
+        {(id) => (
+          <input
+            id={id}
+            type="checkbox"
+            role="switch"
+            checked={settings.tasksCreatorReviewExisting === true}
+            onChange={(e) => void change({ tasksCreatorReviewExisting: e.target.checked }).catch(fail)}
+          />
+        )}
+      </Row>
     </Group>
   );
 }

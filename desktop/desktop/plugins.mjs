@@ -720,9 +720,9 @@ export class Plugins {
     }
     throw new Error("This plugin sign-in is unavailable.");
   }
-  async signIn(id, { open, patience, finished, followed } = {}) {
+  async signIn(id, { open, patience, finished, followed, redirect, answerRedirect } = {}) {
     const server = this.signInServer(id);
-    await this.oauth.signIn(server, { client: server.clientId ? { clientId: server.clientId } : undefined, ...(open && { open }), ...(patience && { patience }), ...(finished && { finished }), ...(followed && { followed }) });
+    await this.oauth.signIn(server, { client: server.clientId ? { clientId: server.clientId } : undefined, ...(open && { open }), ...(patience && { patience }), ...(finished && { finished }), ...(followed && { followed }), ...(redirect && { redirect }), ...(answerRedirect && { answerRedirect }) });
     if (!this.authServer(id)) {
       this.vault.remove(this.oauth.entry(server));
       throw new Error("The plugin changed during sign-in.");

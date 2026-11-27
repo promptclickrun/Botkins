@@ -1,0 +1,424 @@
+/* T3 Code-style vertical accent rail cards for bot-to-bot messages (incoming, outgoing, task handoff).
+   Uses Botkins' semantic tokens from tokens.css only so every light/dark theme stays coherent. */
+
+.agent-rail-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 8px 0 4px;
+  max-width: 100%;
+}
+
+.agent-rail {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  padding: 9px 12px 9px 14px;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--rail-accent, var(--info));
+  border-radius: 6px var(--radius) var(--radius) 6px;
+  background: color-mix(in srgb, var(--surface) 78%, var(--canvas));
+  color: var(--ink);
+  font-size: calc(13.5px * var(--text-scale));
+  line-height: 1.45;
+  align-self: stretch;
+}
+
+.agent-rail.via-teamwork {
+  --rail-accent: var(--info);
+}
+
+.agent-rail.via-task {
+  --rail-accent: var(--warning);
+}
+
+.agent-rail.via-remote {
+  --rail-accent: var(--accent-text);
+}
+
+.agent-rail.status-answered,
+.agent-rail.status-done,
+.agent-rail.status-review {
+  --rail-accent: var(--success);
+}
+
+.agent-rail.status-failed {
+  --rail-accent: var(--danger);
+}
+
+.agent-rail.status-blocked {
+  --rail-accent: var(--warning);
+}
+
+/* Header: compact single-line identity + channel/status + link; avatar stays anchored beside text. */
+.agent-rail-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  min-width: 0;
+}
+
+.agent-rail-head > .agent-rail-face {
+  margin-top: 1px;
+}
+
+.agent-rail-head > .agent-rail-link {
+  margin-left: auto;
+}
+
+.agent-rail-face {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 0;
+}
+
+.agent-rail-face.neutral {
+  border-radius: 50%;
+  background: var(--sunken);
+  color: var(--muted);
+}
+
+.agent-rail-identity {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex-wrap: wrap;
+}
+
+.agent-rail-who {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  font-size: calc(13px * var(--text-scale));
+  color: var(--ink-2);
+}
+
+.agent-rail-arrow {
+  flex: none;
+  color: var(--muted);
+}
+
+.agent-rail-dir {
+  color: var(--muted);
+  font-weight: 500;
+}
+
+.agent-rail-name {
+  font-weight: 650;
+  color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-rail-host {
+  color: var(--muted);
+  font-size: calc(12px * var(--text-scale));
+}
+
+.agent-rail-via {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--sunken);
+  color: var(--muted);
+  font-size: calc(11.5px * var(--text-scale));
+  font-weight: 600;
+  line-height: 1.5;
+  white-space: nowrap;
+}
+
+.agent-rail-time,
+.agent-rail-meta {
+  font-size: calc(11.5px * var(--text-scale));
+  color: var(--faint);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.agent-rail-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: calc(11.5px * var(--text-scale));
+  font-weight: 600;
+  line-height: 1.5;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-rail-status.tone-neutral {
+  background: var(--sunken);
+  color: var(--muted);
+}
+
+.agent-rail-status.tone-accent {
+  background: var(--info-soft);
+  color: var(--info);
+}
+
+.agent-rail-status.tone-success {
+  background: var(--success-soft);
+  color: var(--success);
+}
+
+.agent-rail-status.tone-warning {
+  background: var(--warning-soft);
+  color: var(--warning);
+}
+
+.agent-rail-status.tone-danger {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.agent-rail-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  flex: none;
+  animation: agent-rail-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes agent-rail-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .agent-rail-dot {
+    animation: none;
+  }
+}
+
+.agent-rail-link {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 3px 8px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--canvas);
+  color: var(--ink-2);
+  font: inherit;
+  font-size: calc(11.5px * var(--text-scale));
+  font-weight: 600;
+  line-height: 1.3;
+  cursor: pointer;
+}
+
+.agent-rail-link:hover {
+  background: var(--hover);
+  border-color: var(--line-strong);
+  color: var(--ink);
+}
+
+.agent-rail-link:focus-visible,
+.agent-rail-toggle:focus-visible,
+.agent-rail-reply-toggle:focus-visible {
+  outline: 2px solid var(--accent-text);
+  outline-offset: 2px;
+}
+
+/* Content area */
+.agent-rail-title {
+  font-weight: 650;
+  font-size: calc(13.5px * var(--text-scale));
+  color: var(--ink);
+  line-height: 1.35;
+}
+
+.agent-rail-body {
+  min-width: 0;
+  color: var(--ink-2);
+}
+
+.agent-rail-body p,
+.agent-rail-preview,
+.agent-rail-text {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.agent-rail-preview {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  color: var(--ink-2);
+}
+
+.agent-rail-expect {
+  margin: 5px 0 0;
+  font-size: calc(12px * var(--text-scale));
+  color: var(--muted);
+}
+
+.agent-rail-expect strong {
+  color: var(--ink-2);
+  font-weight: 600;
+}
+
+.agent-rail-foot {
+  display: flex;
+  align-items: center;
+  margin-top: 2px;
+}
+
+.agent-rail-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 6px;
+  margin-left: -6px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: calc(12px * var(--text-scale));
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.agent-rail-toggle.inline {
+  margin-top: 4px;
+}
+
+.agent-rail-toggle:hover {
+  background: var(--hover);
+  color: var(--ink);
+}
+
+/* Folded reply / result disclosure underneath the outgoing ask */
+.agent-rail-reply-wrap {
+  margin-top: 2px;
+  padding-top: 6px;
+  border-top: 1px solid var(--line);
+}
+
+.agent-rail-reply-toggle {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 6px;
+  margin-left: -6px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ink-2);
+  font: inherit;
+  font-size: calc(12.5px * var(--text-scale));
+  text-align: left;
+  cursor: pointer;
+  min-width: 0;
+}
+
+.agent-rail-reply-toggle:hover {
+  background: var(--hover);
+}
+
+.agent-rail-reply-toggle > svg {
+  flex: none;
+  color: var(--muted);
+}
+
+.agent-rail-reply-label {
+  flex: none;
+  font-weight: 600;
+  color: var(--ink-2);
+}
+
+.agent-rail-reply-snippet {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+  font-size: calc(12px * var(--text-scale));
+}
+
+.agent-rail-group-toggle {
+  margin-left: 0;
+  gap: 8px;
+}
+
+.agent-rail-group-toggle > .agent-rail-status {
+  flex: none;
+}
+
+.agent-rail-group-body {
+  margin-top: 8px;
+}
+
+.agent-rail-reply-body {
+  margin-top: 6px;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--canvas);
+  border: 1px solid var(--line);
+  color: var(--ink);
+  font-size: calc(13.5px * var(--text-scale));
+}
+
+.agent-rail-reply-body > :first-child {
+  margin-top: 0;
+}
+
+.agent-rail-reply-body > :last-child {
+  margin-bottom: 0;
+}
+
+.agent-rail-subblock + .agent-rail-subblock {
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+}
+
+.agent-rail-sublabel {
+  display: block;
+  margin-bottom: 4px;
+  font-size: calc(11px * var(--text-scale));
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.agent-rail-error {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin: 0;
+  color: var(--danger);
+  font-size: calc(12.5px * var(--text-scale));
+}
+
+.agent-rail-error > svg {
+  flex: none;
+  margin-top: 2px;
+}
+
+.agent-rail-steps {
+  margin-top: 8px;
+  padding-top: 6px;
+  border-top: 1px solid var(--line);
+}

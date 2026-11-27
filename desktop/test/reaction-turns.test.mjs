@@ -223,15 +223,15 @@ test("bots are told about reactions and about confirming a routine's notificatio
   const { ws } = setup(t);
   const chat = ws.chat(ws.createChat("pip"));
   const text = ws.instructionsFor(chat, ws.bot("pip"), { id: "r" });
-  assert.match(text, /react to your messages with an emoji/);
+  assert.match(text, /When the person reacts to your message with an emoji, Botkins gives you a turn that says so; it is not a message from them/);
   // The bot judges a reaction by what it means in the conversation: no emoji is named as one to answer or not.
-  const guidance = text.match(/\nThe person can react[^\n]*/)[0];
+  const guidance = text.match(/\n## Replies\n[^\n]*/)[0];
   assert.doesNotMatch(guidance, /\p{Extended_Pictographic}/u);
   const told = reactionPrompt([{ emoji: "👍", text: "Done.", latest: true }]).split("\n").filter((line) => !line.startsWith("- "));
   for (const line of told) assert.doesNotMatch(line, /\p{Extended_Pictographic}/u, line);
   assert.match(text, /\[SILENT\]/);
-  assert.match(text, /Before creating a routine .* confirm only relevant settings the person has not already specified/);
-  assert.match(text, /panel refresh \(today_routine\) always updates that one fixed panel in its space silently and alerts only on failure/);
+  assert.match(text, /Before routine_create, confirm only what the person hasn't said: cadence and timezone, where results go \(deliver\) and whether it notifies/);
+  assert.match(text, /today_routine to keep one panel fresh \(it updates silently and alerts only on failure\)/);
 });
 
 test("streamed text is held back only while it can still be [SILENT]", () => {

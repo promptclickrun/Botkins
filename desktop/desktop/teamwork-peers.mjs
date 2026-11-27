@@ -14,6 +14,7 @@ const operations = new Set([
   "job.submit",
   "job.status",
   "job.cancel",
+  "job.answer",
   "control.status",
   "control.submit",
   "control.poll",
@@ -30,6 +31,7 @@ const nodeOperations = new Set([
   "job.submit",
   "job.status",
   "job.cancel",
+  "job.answer",
   "control.status",
   "control.submit",
   "control.poll",
@@ -41,7 +43,7 @@ const nodeOperations = new Set([
   "migrate.activate",
   "migrate.rollback",
 ]);
-const trackedOperations = new Set(["submit", "status", "job.submit", "job.status", "control.submit", "control.poll"]);
+const trackedOperations = new Set(["submit", "status", "job.submit", "job.status", "job.answer", "control.submit", "control.poll"]);
 const cancelOperations = new Set(["cancel", "job.cancel", "control.cancel"]);
 const windowMs = 60_000;
 const statusCacheMs = 10_000;
@@ -181,7 +183,8 @@ export function installTeamworkPeers({ workspace, link }, profile, transport = g
         reply = { error: String(error?.message || "The teamwork request failed.").slice(0, 360) };
       }
       if (trackedOperations.has(operation)) {
-        if (pending(reply.value) && !reply.value?.output) reply.value = { status: reply.value.status };
+        // A pending job's approval (ask) is shown to the owner on the asking computer, so it is sent only after the peer checks out, as output is.
+        if (pending(reply.value) && !reply.value?.output && !reply.value?.ask) reply.value = { status: reply.value.status };
         else await peer.verify();
       }
       if (cancelOperations.has(operation) && reply.value) reply.value = { status: reply.value.status };
@@ -227,7 +230,7 @@ export function installTeamworkPeers({ workspace, link }, profile, transport = g
       const sealed = await response.json();
       const reply = unbox(key, sealed.box, "teamwork/reply/" + id);
       if (trackedOperations.has(operation)) {
-        if (pending(reply.value) && !reply.value?.output) return { status: reply.value.status };
+        if (pending(reply.value) && !reply.value?.output && !reply.value?.ask) return { status: reply.value.status };
         await verify({ profileId, targetId: local.serverId, targetKey: local.serverKey, serverId, serverKey: remote.serverKey });
       }
       if (reply.error) throw new Error(reply.error);

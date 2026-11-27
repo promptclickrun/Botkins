@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { generateKeyPairSync, sign } from "node:crypto";
 import { before, describe, it } from "node:test";
 import { HOST_PROTOCOL, HOST_PROTOCOL_V3, MAX_SKEW, hostChallenge, hostChallengeV3, hostProof, hostProofV3, networkOf, roomOf } from "../src/pure.ts";
+import { MCP_AUTH_TARGET, mcpAuthRedirect } from "../src/shared.ts";
 
 describe("networkOf", () => {
   it("leaves IPv4 and local alone", () => {
@@ -117,5 +118,27 @@ describe("hostProofV3", () => {
     assert.equal(await hostProofV3([...good.slice(0, -1), "s." + signature], room, now), false);
     assert.equal(await hostProofV3([...good.slice(0, 2), "g.short", ...good.slice(3)], room, now), false);
     assert.equal(await hostProofV3([...good.slice(0, 2), "g." + "!".repeat(43), ...good.slice(3)], room, now), false);
+  });
+});
+
+describe("mcpAuthRedirect", () => {
+  it("bounces to the fixed botkins://mcp-auth target with the query kept verbatim", () => {
+    const query = "?code=abc-123&state=xyz_789&iss=https%3A%2F%2Fauth.example.com";
+    const res = mcpAuthRedirect(new URL("https://relay.botkins.app/mcp-auth" + query));
+    assert.equal(res.status, 302);
+    assert.equal(res.headers.get("location"), MCP_AUTH_TARGET + query);
+    assert.equal(res.headers.get("cache-control"), "no-store");
+    assert.equal(res.headers.get("referrer-policy"), "no-referrer");
+
+    const errQuery = "?error=access_denied&error_description=User+cancelled&state=xyz_789";
+    assert.equal(mcpAuthRedirect(new URL("https://relay.botkins.app/mcp-auth" + errQuery)).headers.get("location"), MCP_AUTH_TARGET + errQuery);
+    assert.equal(mcpAuthRedirect(new URL("https://relay.botkins.app/mcp-auth")).headers.get("location"), MCP_AUTH_TARGET);
+
+    // No open redirect: query params or authority-like tokens stay strictly in the query of the fixed target.
+    const tricky = mcpAuthRedirect(new URL("https://relay.botkins.app/mcp-auth?redirect=https://evil.example&@evil.example"));
+    const target = new URL(tricky.headers.get("location"));
+    assert.equal(target.protocol, "botkins:");
+    assert.equal(target.host, "mcp-auth");
+    assert.equal(target.pathname, "");
   });
 });

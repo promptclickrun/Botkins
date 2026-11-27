@@ -2,7 +2,7 @@
 // changed after it. One loop at a time. Each picture goes into the image slot that is not on
 // screen and takes the front only once it has been drawn, so the screen never flickers.
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { ScreenFrame } from "@/link/types";
+import type { ScreenBotActivity, ScreenFrame } from "@/link/types";
 import { AppState } from "react-native";
 import { readScreenFrame } from "@/state/link";
 import { useApp } from "@/state/store";
@@ -26,6 +26,7 @@ export function useFeed({ enabled, display, maxWidth, quality, gapMs = 0, once =
   const [pictures, setPictures] = useState<Pictures>({ a: null, b: null, front: "a" });
   const [state, setState] = useState<FeedState>("starting");
   const [error, setError] = useState<string | null>(null);
+  const [activity, setActivity] = useState<ScreenBotActivity | null>(null);
   const [run, setRun] = useState(0);
   const front = useRef<SlotName>("a");
   const waiting = useRef<{ id: number; finish: (promote: boolean) => void } | null>(null);
@@ -86,6 +87,9 @@ export function useFeed({ enabled, display, maxWidth, quality, gapMs = 0, once =
     void runScreenFeed({
       signal, once, gapMs, draw: present,
       read: after => readScreenFrame(computer, { display, maxWidth, quality, after, ...((once || gapMs > 0) && { wait: false }) }, signal),
+      onActivity: (next) => {
+        if (!signal.aborted) setActivity(next ?? null);
+      },
       report: (value, error) => {
         setState(value);
         setError(error ?? null);
@@ -119,5 +123,5 @@ export function useFeed({ enabled, display, maxWidth, quality, gapMs = 0, once =
   const b = !display || pictures.b?.display === display ? pictures.b : null;
   const visible = a === pictures.a && b === pictures.b ? pictures : { a, b, front: pictures.front };
   const picture = visible[visible.front];
-  return { pictures: visible, size: picture ?? a ?? b, state, error, hasPicture: !!picture, drawn, retry };
+  return { pictures: visible, size: picture ?? a ?? b, state, error, hasPicture: !!picture, activity, drawn, retry };
 }

@@ -121,7 +121,7 @@ export default function Settings() {
       key: "you",
       rows: [
         ...(owner || permission("agents", "view")
-          ? [row("general", "General", <Row leading={<IconTile icon={Settings2} color={brand.tide} />} title="General" subtitle="Default model, harness, background" chevron onPress={go("/settings/general")} />, { subtitle: "Default model, harness, background", words: "model harness copilot claude codex pi omp background startup storage" })]
+          ? [row("general", "General", <Row leading={<IconTile icon={Settings2} color={brand.tide} />} title="General" subtitle="Default model, harness, Claude artifacts, background" chevron onPress={go("/settings/general")} />, { subtitle: "Default model, harness, Claude artifacts, background", words: "model harness copilot claude artifacts grants codex pi omp background startup storage" })]
           : []),
         row(
           "profile",

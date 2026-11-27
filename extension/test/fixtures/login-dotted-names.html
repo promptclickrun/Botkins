@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Example Portal Sign In</title>
+  <style>
+    body { margin: 16px; font-family: sans-serif; }
+    .row { margin-bottom: 10px; }
+    iframe.ext-overlay { width: 20px; height: 20px; border: 0; vertical-align: middle; }
+  </style>
+</head>
+<body>
+  <h1>Portal Sign In</h1>
+  <form id="portal-login">
+    <div class="row">
+      <label for="login-email">Email</label>
+      <input id="login-email" name="LoginModel.Email" type="email" autocomplete="username" required />
+    </div>
+    <div class="row">
+      <label for="login-password">Password</label>
+      <input id="login-password" name="LoginModel.Password" type="password" autocomplete="current-password" required />
+      <iframe
+        id="pm-overlay"
+        class="ext-overlay"
+        title="Password manager overlay"
+        src="chrome-extension://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/overlay.html"
+      ></iframe>
+    </div>
+    <div class="row">
+      <label for="tenant_code">Workspace code</label>
+      <input id="tenant_code" type="text" />
+    </div>
+    <button id="signin-btn" type="submit">Continue</button>
+  </form>
+
+  <script>
+    window.__reactState = { email: "", password: "" };
+    window.__vueEvents = [];
+    window.__submits = [];
+
+    function attachReactTracker(inputId, stateKey) {
+      const el = document.getElementById(inputId);
+      const protoDesc = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value");
+      let tracked = el.value;
+      el._valueTracker = {
+        getValue() { return tracked; },
+        setValue(val) { tracked = String(val); },
+      };
+      Object.defineProperty(el, "value", {
+        configurable: true,
+        get() { return protoDesc.get.call(this); },
+        set(v) {
+          tracked = String(v);
+          return protoDesc.set.call(this, v);
+        },
+      });
+      el.addEventListener("input", (ev) => {
+        const cur = protoDesc.get.call(el);
+        if (tracked !== cur) {
+          tracked = cur;
+          window.__reactState[stateKey] = cur;
+        }
+        window.__vueEvents.push({ type: "input", target: inputId, hasData: ev.data != null && ev.data !== "" });
+      });
+      el.addEventListener("change", () => {
+        window.__vueEvents.push({ type: "change", target: inputId });
+      });
+    }
+
+    attachReactTracker("login-email", "email");
+    attachReactTracker("login-password", "password");
+
+    document.getElementById("tenant_code").addEventListener("input", () => {
+      window.__vueEvents.push({ type: "input", target: "tenant_code" });
+    });
+
+    document.getElementById("portal-login").addEventListener("submit", (ev) => {
+      ev.preventDefault();
+      window.__submits.push({
+        email: document.getElementById("login-email").value,
+        passwordLength: document.getElementById("login-password").value.length,
+        passwordMatches: document.getElementById("login-password").value,
+        tenant: document.getElementById("tenant_code").value,
+      });
+    });
+  </script>
+</body>
+</html>
