@@ -178,13 +178,13 @@ export class Interactions {
           .update(JSON.stringify([request.kind, ...request.remember.slice(1)]))
           .digest("hex")
       : null;
-    const mode = chat.approval ?? this.ws.state.settings.approval;
+    const mode = this.ws.effectiveApproval ? this.ws.effectiveApproval(chat) : (chat.approval ?? this.ws.state.settings.approval);
     if (
       !request.managed &&
       (mode === "all" ||
         // YOLO is per chat: only a coding chat set to YOLO, whose folder still exists, runs without asking.
-        // A request to leave or loosen the sandbox still asks.
-        (chat.mode === "yolo" && !!this.ws.projects?.folderFor(chat) && !request.sandboxEscape) ||
+        // External channel chats never auto-approve via YOLO. A request to leave or loosen the sandbox still asks.
+        (!chat.channel && chat.mode === "yolo" && !!this.ws.projects?.folderFor(chat) && !request.sandboxEscape) ||
         (mode === "read" && request.readOnly && !request.sandboxEscape) ||
         (key && chat.approvals?.includes(key)))
     )

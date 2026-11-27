@@ -6,7 +6,7 @@ export type Graph = { nodes: WorkflowNode[]; edges: WorkflowEdge[] };
 export type StepKind = Exclude<WorkflowNode["kind"], "trigger">;
 export type Branch = "default" | "yes" | "no" | "approved" | "rejected";
 
-export const TRIGGER_KINDS: WorkflowTriggerKind[] = ["manual", "schedule", "task", "chat", "routine", "webhook", "github"];
+export const TRIGGER_KINDS: WorkflowTriggerKind[] = ["manual", "schedule", "task", "chat", "routine", "webhook", "github", "channel"];
 export const STEP_KINDS: StepKind[] = ["agent", "model", "condition", "approval", "output"];
 
 export const KIND_LABEL: Record<WorkflowNode["kind"], string> = {
@@ -32,6 +32,7 @@ export const TRIGGER_LABEL: Record<WorkflowTriggerKind, string> = {
   routine: "A routine finishes",
   webhook: "A webhook call",
   github: "GitHub activity",
+  channel: "Channel message",
 };
 
 /** The two ways out of a step that branches, in the order they are drawn. */

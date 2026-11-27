@@ -354,7 +354,7 @@ export type Run = {
   taskHandoffs?: TaskHandoff[];
 };
 export type WorkflowNodeKind = "trigger" | "agent" | "model" | "condition" | "approval" | "output";
-export type WorkflowTriggerKind = "task" | "schedule" | "manual" | "routine" | "chat" | "webhook" | "github";
+export type WorkflowTriggerKind = "task" | "schedule" | "manual" | "routine" | "chat" | "webhook" | "github" | "channel";
 
 export interface WorkflowGithubSignIn {
   status: "idle" | "starting" | "waiting" | "done" | "failed";
@@ -896,6 +896,90 @@ export type NodeHostState = {
     snapshot: NodeConversionSnapshotSummary | null;
   };
 };
+export type ChannelKind = "slack" | "telegram" | "discord" | "imessage";
+export type ChannelDmPolicy = "pairing" | "allowlist" | "open" | "off";
+export type ChannelGroupMode = "mention" | "all";
+export type ChannelToolProfile = "restricted" | "standard";
+export type ChannelStatusState =
+  | "connected"
+  | "reconnecting"
+  | "auth_error"
+  | "disabled"
+  | "paused"
+  | "waiting_permission"
+  | "disconnected";
+
+export interface ChannelPolicy {
+  dm: ChannelDmPolicy;
+  allowlist: string[];
+  groups: {
+    enabled: boolean;
+    mode: ChannelGroupMode;
+    channels: string[];
+  };
+  toolProfile: ChannelToolProfile;
+  ignoreBots?: boolean;
+  limits?: {
+    senderPerMinute?: number;
+    connectionPerMinute?: number;
+    maxInboundLength?: number;
+    maxAttachmentBytes?: number;
+    dailyTurnCap?: number;
+  };
+}
+
+export interface ChannelConnection {
+  id: string;
+  kind: ChannelKind;
+  label: string;
+  transport: string;
+  enabled: boolean;
+  paused?: boolean;
+  botId: string;
+  nodeHostId?: string;
+  policy: ChannelPolicy;
+  configuredSecrets?: string[];
+  pendingPairings?: Array<{
+    code: string;
+    senderId: string;
+    display: string;
+    conversationId: string;
+    createdAt: number;
+    expiresAt: number;
+  }>;
+  status?: {
+    state: ChannelStatusState;
+    detail?: string;
+    updatedAt?: number;
+  };
+  createdAt?: number;
+  updatedAt?: number;
+}
+
+export interface ChannelPairing {
+  code: string;
+  connectionId: string;
+  label?: string;
+  kind?: ChannelKind;
+  channel?: ChannelKind;
+  senderId: string;
+  display?: string;
+  senderDisplay?: string;
+  conversationId: string;
+  createdAt: number;
+  expiresAt: number;
+}
+
+export interface ChannelAuditEntry {
+  at: string;
+  connectionId: string;
+  channel: string;
+  senderId: string;
+  conversationId: string;
+  decision: string;
+  reason?: string;
+}
+
 export type State = {
   /** Which computer's workspace this is: null for this one, else the paired computer in use. */
   remote?: {
@@ -906,6 +990,8 @@ export type State = {
   profile?: ProfileState;
   /** Local node host role, shared folders, active job grants, and last completed request. */
   nodeHost?: NodeHostState;
+  /** Published external messaging channels (owner view only). */
+  channels?: ChannelConnection[];
   bots: Bot[];
   /** Full team management data for this computer's owner, or this member's filtered identity. */
   team?: OwnerTeam | MemberTeam;
@@ -1340,6 +1426,29 @@ declare global {
       workflowImport(): Promise<{ workflow: Workflow; unresolvedAgents: string[] } | null>;
       workflowExportText(id: string): Promise<string>;
       workflowImportText(raw: string, agentMap?: Record<string, string>): Promise<{ workflow: Workflow; unresolvedAgents: string[] }>;
+      // Channel Hooks (owner-only)
+      channelsList(): Promise<ChannelConnection[]>;
+      channelAdd(input: {
+        kind: ChannelKind;
+        label?: string;
+        transport?: string;
+        botId?: string;
+        nodeHostId?: string;
+        secrets?: Record<string, string>;
+        policy?: Partial<ChannelPolicy>;
+        enabled?: boolean;
+      }): Promise<ChannelConnection>;
+      channelUpdate(ref: string, patch: Record<string, unknown>): Promise<ChannelConnection>;
+      channelRemove(ref: string): Promise<{ removed: boolean }>;
+      channelBind(ref: string, botId: string): Promise<ChannelConnection>;
+      channelSetPolicy(ref: string, patch: Record<string, unknown>): Promise<ChannelConnection>;
+      channelPause(ref: string): Promise<ChannelConnection>;
+      channelResume(ref: string): Promise<ChannelConnection>;
+      channelPairList(ref?: string | null): Promise<ChannelPairing[]>;
+      channelPairApprove(code: string, ref?: string | null): Promise<{ approved: boolean; senderId: string; connectionId: string }>;
+      channelPairDeny(code: string, ref?: string | null): Promise<{ denied: boolean; senderId: string; connectionId: string }>;
+      channelTest(ref: string): Promise<{ ok: boolean; state: string; detail: string; identity?: string }>;
+      channelLogs(ref?: string | null, options?: { limit?: number }): Promise<ChannelAuditEntry[]>;
       onPrefill(fn: (data: { chatId?: string; text: string; panelId?: string; spaceId?: string }) => void): () => void;
       /** The person really clicked or pressed a key inside a custom view (its id). Missing on an older main process. */
       onFrameGesture?(fn: (data: { frame: string }) => void): () => void;
