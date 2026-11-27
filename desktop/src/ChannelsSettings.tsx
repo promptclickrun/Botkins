@@ -530,6 +530,21 @@ export default function ChannelsSettings({ state }: { state: State }) {
               </Row>
 
               <SwitchRow
+                label="Phone notifications for replies"
+                help="Off by default. Send a push notification to your paired phone when a reply finishes on this channel."
+                checked={Boolean(conn.policy.notifyPhone)}
+                disabled={busy}
+                onChange={(checked) =>
+                  void runAction(
+                    () => api.channelSetPolicy(conn.id, { notifyPhone: checked }),
+                    checked
+                      ? `Enabled phone notifications for ${conn.label}.`
+                      : `Disabled phone notifications for ${conn.label}.`,
+                  )
+                }
+              />
+
+              <SwitchRow
                 label="Allow group channels"
                 help="Off by default. Only listed group/channel IDs are accepted when enabled."
                 checked={Boolean(conn.policy.groups?.enabled)}

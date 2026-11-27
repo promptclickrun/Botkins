@@ -919,6 +919,7 @@ export interface ChannelPolicy {
   };
   toolProfile: ChannelToolProfile;
   ignoreBots?: boolean;
+  notifyPhone?: boolean;
   limits?: {
     senderPerMinute?: number;
     connectionPerMinute?: number;

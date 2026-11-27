@@ -1014,7 +1014,7 @@ botkins channels remove <connection> --yes
 
 - **Owner-only.** Only the owner configures channels (Desktop **Settings › Channels**, the owner's Phone for status/pairings/pause/resume, or the CLI at a terminal). No bot tool can create, re-bind, approve pairings for, or widen a channel.
 - **Secrets never go on the command line.** `botkins channels add` reads tokens from a hidden prompt at a terminal, or from standard input (`--secrets -` as JSON, e.g. `{"appToken":"…","botToken":"…"}`). Tokens are stored in the encrypted vault and never appear in `workspace.json`, logs, tool results, or transcripts.
-- **Safe defaults.** Every new channel starts with `--dm pairing` (strangers get a one-time code and no bot turn until approved), `--groups off`, and `--tool-profile restricted` (read-only knowledge tools only).
+- **Safe defaults.** Every new channel starts with `--dm pairing` (strangers get a one-time code and no bot turn until approved), `--groups off`, `--notify-phone off`, and `--tool-profile restricted` (read-only knowledge tools only).
 
 ## Scripts and JSON
 

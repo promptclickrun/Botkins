@@ -331,8 +331,9 @@ export class Push {
         const was = before.get(run.id);
         if (working && was === undefined) this.onStart(sends, targets, state, run, chats, bots);
         else if (!working && was !== false) {
+          const chat = chats.get(run.chatId);
           this.onFinish(sends, targets, state, run, chats, bots, mentionedRuns);
-          if (run.status !== "Stopped" && run.notify !== false) ended.add(run.chatId);
+          if (run.status !== "Stopped" && run.notify !== false && (!chat?.channel || this.kindOf(run, chat, state) !== null)) ended.add(run.chatId);
         }
         // Turns still under way: their Live Activities follow along.
         else if (working) this.onProgress(sends, targets, state, run);
@@ -460,8 +461,16 @@ export class Push {
     }
   }
 
+  /** Whether a channel chat's replies may notify paired phones (off by default per channel policy). */
+  channelNotifies(chat, state = null) {
+    if (!chat?.channel) return true;
+    const channels = state?.channels ?? this.snapshot?.()?.channels;
+    const conn = Array.isArray(channels) ? channels.find((c) => c?.id && c.id === chat.channel?.connectionId) : null;
+    return conn?.policy?.notifyPhone === true;
+  }
+
   /** Whether a run that finished is worth a notification, and of which kind (the desktop's own rules). */
-  kindOf(run, chat) {
+  kindOf(run, chat, state = null) {
     if (!chat || chat.temporary || run.status === "Stopped" || run.notify === false) return null;
     // A bot's own check that failed is in its Proactive log, not a notification.
     if (run.proactive && (run.status !== "Completed" || !run.delivery)) return null;
@@ -480,12 +489,13 @@ export class Push {
       // A routine the person made quiet says nothing, here or on the computer.
       return entry?.notify === false ? null : "routines";
     }
+    if (chat.channel && !this.channelNotifies(chat, state)) return null;
     return "replies";
   }
 
   onFinish(sends, targets, state, run, chats, bots, mentionedRuns = null) {
     const chat = chats.get(run.chatId);
-    const kind = this.kindOf(run, chat);
+    const kind = this.kindOf(run, chat, state);
     const resolved =
       kind === "routines" && !run.panelId && !run.proactive
         ? resolveRoutineTargets({

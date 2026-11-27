@@ -148,13 +148,14 @@ export const channelsCommands = {
       },
 
       policy: {
-        summary: "Update DM, group, tool profile, or rate-limit policy for a channel",
-        usage: "botkins channels policy <channel> [--dm <policy>] [--groups <on|off>] [--group-mode <mention|all>] [--group-channels <ids>] [--tools <restricted|standard>] [--sender-rate <n>] [--channel-rate <n>] [--daily-cap <n>] [--max-length <n>]",
+        summary: "Update DM, group, phone notification, tool profile, or rate-limit policy for a channel",
+        usage: "botkins channels policy <channel> [--dm <policy>] [--groups <on|off>] [--group-mode <mention|all>] [--group-channels <ids>] [--notify-phone <on|off>] [--tools <restricted|standard>] [--sender-rate <n>] [--channel-rate <n>] [--daily-cap <n>] [--max-length <n>]",
         options: {
           dm: { type: "string", value: "policy", about: "DM policy: pairing, allowlist, open, or off" },
           groups: { type: "string", value: "on|off", about: "Enable or disable group messages (off by default)" },
           "group-mode": { type: "string", value: "mention|all", about: "When groups are on: mention (default) or all" },
           "group-channels": { type: "string", value: "ids", about: "Comma-separated external channel/chat IDs allowed for group replies" },
+          "notify-phone": { type: "string", value: "on|off", about: "Send phone push notifications for replies on this channel (off by default)" },
           tools: { type: "string", value: "restricted|standard", about: "Tool profile: restricted (default, read-only) or standard (widened)" },
           "sender-rate": { type: "string", value: "n", about: "Max messages per sender per minute" },
           "channel-rate": { type: "string", value: "n", about: "Max messages per connection per minute" },
@@ -168,6 +169,10 @@ export const channelsCommands = {
           const patch = {};
           if (o.dm) patch.dm = o.dm;
           if (o.tools) patch.toolProfile = o.tools;
+          if (o["notify-phone"] !== undefined) {
+            if (!["on", "off", "true", "false"].includes(o["notify-phone"].toLowerCase())) throw usage("--notify-phone must be on or off.");
+            patch.notifyPhone = o["notify-phone"].toLowerCase() === "on" || o["notify-phone"].toLowerCase() === "true";
+          }
           const groups = {};
           if (o.groups !== undefined) {
             if (!["on", "off", "true", "false"].includes(o.groups.toLowerCase())) throw usage("--groups must be on or off.");
@@ -191,7 +196,7 @@ export const channelsCommands = {
           if (!Object.keys(patch).length) throw usage("Provide at least one policy option to change.");
           const updated = await context.client.call("channels.policy", [ref, patch]);
           context.print(updated, (c) =>
-            `Updated policy for "${c.label}": dm=${c.policy.dm}, groups=${c.policy.groups.enabled ? c.policy.groups.mode : "off"}, tools=${c.policy.toolProfile}, dailyCap=${c.policy.limits.dailyTurnCap}.`,
+            `Updated policy for "${c.label}": dm=${c.policy.dm}, groups=${c.policy.groups.enabled ? c.policy.groups.mode : "off"}, notifyPhone=${c.policy.notifyPhone ? "on" : "off"}, tools=${c.policy.toolProfile}, dailyCap=${c.policy.limits.dailyTurnCap}.`,
           );
         },
       },

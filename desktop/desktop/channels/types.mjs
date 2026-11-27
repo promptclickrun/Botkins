@@ -68,6 +68,7 @@ export function defaultPolicy() {
     },
     toolProfile: "restricted",
     ignoreBots: true,
+    notifyPhone: false,
     limits: {
       ...DEFAULT_LIMITS,
       allowedAttachmentTypes: [...DEFAULT_LIMITS.allowedAttachmentTypes],
@@ -91,6 +92,7 @@ export function normalizePolicy(raw = {}, base = defaultPolicy()) {
   const dm = DM_POLICIES.includes(raw.dm) ? raw.dm : base.dm;
   const toolProfile = TOOL_PROFILES.includes(raw.toolProfile) ? raw.toolProfile : base.toolProfile;
   const ignoreBots = typeof raw.ignoreBots === "boolean" ? raw.ignoreBots : base.ignoreBots;
+  const notifyPhone = typeof raw.notifyPhone === "boolean" ? raw.notifyPhone : Boolean(base.notifyPhone);
   const rawGroups = raw.groups && typeof raw.groups === "object" ? raw.groups : {};
   const groups = {
     enabled: typeof rawGroups.enabled === "boolean" ? rawGroups.enabled : base.groups.enabled,
@@ -124,7 +126,7 @@ export function normalizePolicy(raw = {}, base = defaultPolicy()) {
       : [...base.limits.allowedAttachmentTypes],
     dailyTurnCap: positiveInt(rawLimits.dailyTurnCap, base.limits.dailyTurnCap, 1, 100000),
   };
-  return { dm, allowlist, groups, toolProfile, ignoreBots, limits };
+  return { dm, allowlist, groups, toolProfile, ignoreBots, notifyPhone, limits };
 }
 
 export function normalizeInboundEvent(raw = {}) {
