@@ -584,10 +584,62 @@ test("CLI `botkins workflows retry` supports --allow-uncertain and logs it in te
   assert.equal(CHANGES["workflows.retry"](["run-10", null, { allowUncertainRetry: true }], { id: "run-10" }), "run-10 (allow-uncertain)");
 });
 
-test("Desktop WorkflowInspector renders githubUncertain warning and owner-only Retry anyway parity", () => {
+test("Desktop WorkflowInspector renders githubUncertain warning, target link, confirmation, and owner-only Retry anyway parity", () => {
   const inspector = readFileSync(new URL("../src/WorkflowInspector.tsx", import.meta.url), "utf8");
   assert.match(inspector, /GITHUB_UNCERTAIN_WARNING/);
+  assert.match(inspector, /resolveGithubUncertainDetails/);
+  assert.match(inspector, /dialogs\.ask/);
   assert.match(inspector, /Retry anyway/);
   assert.match(inspector, /allowUncertainRetry:\s*true/);
   assert.match(inspector, /isOwner/);
+
+  const nodes = [
+    { id: "tg", kind: "trigger", triggerKind: "github", label: "GH", config: { repos: ["promptclickrun/Botkins"] } },
+    { id: "o1", kind: "output", label: "Post review comment", config: { destination: "github", action: "comment" } },
+  ];
+  const run = {
+    id: "run-u1",
+    status: "failed",
+    errorCode: "githubUncertain",
+    error: 'Post review comment: Previous attempt for non-repeatable GitHub action "comment" on promptclickrun/Botkins#352 did not finish cleanly (githubUncertain).',
+    githubUncertain: {
+      nodeId: "o1",
+      stepLabel: "Post review comment",
+      action: "comment",
+      repository: "promptclickrun/Botkins",
+      number: 352,
+      pullRequest: true,
+      url: "https://github.com/promptclickrun/Botkins/pull/352",
+    },
+    steps: {
+      tg: { nodeId: "tg", kind: "trigger", label: "GH", status: "completed" },
+      o1: {
+        nodeId: "o1",
+        kind: "output",
+        label: "Post review comment",
+        status: "failed",
+        errorCode: "githubUncertain",
+        error: "refusing to double-post (githubUncertain)",
+        githubUncertain: {
+          nodeId: "o1",
+          stepLabel: "Post review comment",
+          action: "comment",
+          repository: "promptclickrun/Botkins",
+          number: 352,
+          pullRequest: true,
+          url: "https://github.com/promptclickrun/Botkins/pull/352",
+        },
+      },
+    },
+  };
+
+  assert.equal(gh.workflowRunStatusLabel(run), gh.GITHUB_UNCERTAIN_STATUS_LABEL);
+  assert.equal(gh.workflowStepStatusLabel(run.steps.o1, run), gh.GITHUB_UNCERTAIN_STATUS_LABEL);
+  const details = gh.resolveGithubUncertainDetails(run, nodes);
+  assert.ok(details);
+  assert.equal(details.actionLabel, "Post comment");
+  assert.equal(details.target, "promptclickrun/Botkins#352");
+  assert.equal(details.url, "https://github.com/promptclickrun/Botkins/pull/352");
+  assert.equal(gh.canShowUncertainRetry({ run, isOwner: true }), true);
+  assert.equal(gh.canShowUncertainRetry({ run, isOwner: false }), false);
 });

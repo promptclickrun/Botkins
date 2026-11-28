@@ -505,8 +505,19 @@ export function isIssueOnlyGithubTrigger(triggerNodes: ReadonlyArray<{ triggerKi
   return allEvents.every((ev) => ev.startsWith("issue."));
 }
 
+export const GITHUB_UNCERTAIN_STATUS_LABEL = "May have already posted to GitHub";
 export const GITHUB_UNCERTAIN_WARNING =
   "GitHub may already have this. Retrying could post twice.";
+
+export interface WorkflowGithubUncertainMeta {
+  nodeId?: string;
+  stepLabel?: string;
+  action: string;
+  repository: string;
+  number?: number | null;
+  pullRequest?: boolean | null;
+  url?: string | null;
+}
 
 export interface WorkflowStepLike {
   nodeId: string;
@@ -515,6 +526,7 @@ export interface WorkflowStepLike {
   status?: string;
   error?: string | null;
   errorCode?: string | null;
+  githubUncertain?: WorkflowGithubUncertainMeta | null;
 }
 
 export interface WorkflowRunLike {
@@ -522,7 +534,25 @@ export interface WorkflowRunLike {
   status?: string;
   error?: string | null;
   errorCode?: string | null;
+  githubUncertain?: WorkflowGithubUncertainMeta | null;
+  context?: Record<string, unknown> | null;
   steps?: Record<string, WorkflowStepLike> | null;
+}
+
+export interface GithubUncertainDetails {
+  nodeId: string | null;
+  stepLabel: string | null;
+  action: string | null;
+  actionLabel: string;
+  repository: string | null;
+  number: number | null;
+  pullRequest: boolean | null;
+  target: string | null;
+  url: string | null;
+  statusLabel: string;
+  summary: string;
+  confirmTitle: string;
+  confirmMessage: string;
 }
 
 /** Returns true if an error code or error text indicates a `githubUncertain` failure. */
@@ -535,13 +565,13 @@ export function isGithubUncertainError(errorCode?: string | null, errorText?: st
 /** Returns true if a single workflow step failed with `githubUncertain`. */
 export function isGithubUncertainStep(step: WorkflowStepLike | null | undefined): boolean {
   if (!step || step.status !== "failed") return false;
-  return isGithubUncertainError(step.errorCode, step.error);
+  return Boolean(step.githubUncertain) || isGithubUncertainError(step.errorCode, step.error);
 }
 
 /**
  * Finds the failed `githubUncertain` step on a workflow run, if any.
- * Checks failed steps first (preferring `errorCode === "githubUncertain"` or `githubUncertain` in `step.error`),
- * and falls back to the failed output step when `githubUncertain` is recorded at the run level.
+ * Checks failed steps first (preferring `githubUncertain` metadata, `errorCode === "githubUncertain"`,
+ * or `githubUncertain` in `step.error`), and falls back to the failed output step when recorded at run level.
  */
 export function findGithubUncertainStep<S extends WorkflowStepLike>(
   run: (WorkflowRunLike & { steps?: Record<string, S> | null }) | null | undefined,
@@ -551,7 +581,10 @@ export function findGithubUncertainStep<S extends WorkflowStepLike>(
   for (const step of steps) {
     if (isGithubUncertainStep(step)) return step;
   }
-  if (isGithubUncertainError(run.errorCode, run.error)) {
+  if (run.githubUncertain?.nodeId && run.steps?.[run.githubUncertain.nodeId]?.status === "failed") {
+    return run.steps[run.githubUncertain.nodeId] ?? null;
+  }
+  if (Boolean(run.githubUncertain) || isGithubUncertainError(run.errorCode, run.error)) {
     const failedOutput = steps.find((s) => s.status === "failed" && s.kind === "output");
     if (failedOutput) return failedOutput;
     const anyFailed = steps.find((s) => s.status === "failed");
@@ -563,7 +596,7 @@ export function findGithubUncertainStep<S extends WorkflowStepLike>(
 /** Returns true when a failed workflow run ended with `githubUncertain`. */
 export function hasGithubUncertainFailure(run: WorkflowRunLike | null | undefined): boolean {
   if (!run || run.status !== "failed") return false;
-  if (isGithubUncertainError(run.errorCode, run.error)) return true;
+  if (Boolean(run.githubUncertain) || isGithubUncertainError(run.errorCode, run.error)) return true;
   return Object.values(run.steps ?? {}).some((s) => isGithubUncertainStep(s));
 }
 
@@ -580,9 +613,180 @@ export function latestGithubUncertainRunForNode<R extends WorkflowRunLike>(
     if (!run || run.status !== "failed") continue;
     const step = run.steps?.[nodeId];
     if (isGithubUncertainStep(step)) return run;
-    if (step?.status === "failed" && isGithubUncertainError(run.errorCode, run.error)) return run;
+    if (step?.status === "failed" && (Boolean(run.githubUncertain) || isGithubUncertainError(run.errorCode, run.error))) return run;
   }
   return null;
+}
+
+/** Human-readable label for a GitHub output action (e.g., `"comment"` -> `"Post comment"`). */
+export function githubActionLabel(action: string | null | undefined): string {
+  const clean = String(action ?? "").trim();
+  if (!clean) return "GitHub action";
+  const match = WORKFLOW_GITHUB_ACTION_OPTIONS.find((opt) => opt.value === clean);
+  return match ? match.label : clean;
+}
+
+/** Builds a safe `https://github.com/...` URL for a repository or issue/PR item, or null if invalid. */
+export function buildGithubItemUrl(
+  repository: string | null | undefined,
+  number?: number | null,
+  pullRequest?: boolean | null,
+): string | null {
+  const repo = String(repository ?? "").trim();
+  if (!repo || !REPO_RE.test(repo)) return null;
+  if (typeof number === "number" && Number.isInteger(number) && number > 0) {
+    const seg = pullRequest === true ? "pull" : "issues";
+    return `https://github.com/${repo}/${seg}/${number}`;
+  }
+  return `https://github.com/${repo}/issues`;
+}
+
+function safeGithubUrl(url: string | null | undefined): string | null {
+  const text = String(url ?? "").trim();
+  if (!text) return null;
+  try {
+    const parsed = new URL(text);
+    if (parsed.protocol !== "https:") return null;
+    if (parsed.hostname !== "github.com" && !parsed.hostname.endsWith(".github.com")) return null;
+    return parsed.toString();
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Resolves display metadata for a `githubUncertain` run or step:
+ * - distinct status label ("May have already posted to GitHub")
+ * - action name and target (`owner/repo#123` or `owner/repo`)
+ * - safe GitHub link so the owner can check the item first
+ * - confirmation title & body for the owner-only "Retry anyway" control
+ */
+export function resolveGithubUncertainDetails(
+  run: WorkflowRunLike | null | undefined,
+  nodes?: ReadonlyArray<{ id: string; kind?: string; label?: string; config?: Record<string, any> }> | null,
+  step?: WorkflowStepLike | null,
+): GithubUncertainDetails | null {
+  if (!run && !step) return null;
+  const targetStep = step ? (isGithubUncertainStep(step) ? step : null) : findGithubUncertainStep(run);
+  const uncertain = Boolean(targetStep) || hasGithubUncertainFailure(run);
+  if (!uncertain) return null;
+
+  const meta = targetStep?.githubUncertain ?? run?.githubUncertain ?? null;
+  const nodeId = targetStep?.nodeId ?? meta?.nodeId ?? null;
+  const node = nodeId && Array.isArray(nodes) ? nodes.find((n) => n.id === nodeId) : undefined;
+  const cfg = node?.config ?? {};
+  const ctx = (run?.context ?? {}) as Record<string, any>;
+  const errText = String(targetStep?.error ?? run?.error ?? "");
+
+  const errActionMatch = /GitHub action "([^"]+)"/i.exec(errText);
+  const action: string | null =
+    (typeof meta?.action === "string" && meta.action.trim()) ||
+    (errActionMatch?.[1] ? errActionMatch[1].trim() : null) ||
+    (typeof cfg.action === "string" && cfg.action.trim()) ||
+    null;
+
+  let repository: string | null =
+    typeof meta?.repository === "string" && REPO_RE.test(meta.repository.trim()) ? meta.repository.trim() : null;
+  let number: number | null =
+    typeof meta?.number === "number" && Number.isInteger(meta.number) && meta.number > 0 ? meta.number : null;
+
+  if (!repository) {
+    const fromErr = /\bon\s+([\w.-]+\/[\w.-]+)(?:#(\d+))?/i.exec(errText);
+    if (fromErr?.[1] && REPO_RE.test(fromErr[1])) {
+      repository = fromErr[1];
+      if (!number && fromErr[2]) {
+        const parsed = Number(fromErr[2]);
+        if (Number.isInteger(parsed) && parsed > 0) number = parsed;
+      }
+    }
+  }
+  if (!repository) {
+    const explicitRepo = String(cfg.repository ?? cfg.repo ?? "").trim();
+    const useSameRepo = cfg.sameRepository !== false && (!explicitRepo || explicitRepo === "trigger" || explicitRepo === "same");
+    const candidate = useSameRepo ? String(ctx.repository ?? ctx.repo ?? "").trim() : explicitRepo;
+    if (REPO_RE.test(candidate)) repository = candidate;
+  }
+  if (!number && action !== "issue.create") {
+    const rawNum = Number(ctx.number);
+    if (Number.isInteger(rawNum) && rawNum > 0) number = rawNum;
+  }
+
+  const pullRequest: boolean | null =
+    typeof meta?.pullRequest === "boolean"
+      ? meta.pullRequest
+      : typeof ctx.pull_request === "boolean"
+        ? ctx.pull_request
+        : ctx.item_type === "pr"
+          ? true
+          : ctx.item_type === "issue"
+            ? false
+            : null;
+
+  const url =
+    safeGithubUrl(meta?.url) ??
+    (repository && number && typeof ctx.url === "string" && ctx.url.includes(`/${repository}/`) && ctx.url.endsWith(`/${number}`)
+      ? safeGithubUrl(ctx.url)
+      : null) ??
+    buildGithubItemUrl(repository, number, pullRequest);
+
+  const actionLabel = githubActionLabel(action);
+  const target = repository ? (number ? `${repository}#${number}` : repository) : null;
+  const summary = target ? `${actionLabel} on ${target}` : actionLabel;
+
+  return {
+    nodeId,
+    stepLabel: targetStep?.label ?? meta?.stepLabel ?? node?.label ?? null,
+    action,
+    actionLabel,
+    repository,
+    number,
+    pullRequest,
+    target,
+    url,
+    statusLabel: GITHUB_UNCERTAIN_STATUS_LABEL,
+    summary,
+    confirmTitle: "Retry anyway?",
+    confirmMessage: target
+      ? `${actionLabel} on ${target} may have already posted to GitHub. Check GitHub first — retrying anyway could post it a second time.`
+      : `${actionLabel} may have already posted to GitHub. Check GitHub first — retrying anyway could post it a second time.`,
+  };
+}
+
+/** Returns whether the owner-only "Retry anyway" control should be shown for a run (or step). */
+export function canShowUncertainRetry(input: {
+  run: WorkflowRunLike | null | undefined;
+  isOwner: boolean;
+  canUse?: boolean;
+  step?: WorkflowStepLike | null;
+}): boolean {
+  if (!input.isOwner) return false;
+  if (input.canUse === false) return false;
+  if (!input.run || input.run.status !== "failed") return false;
+  if (input.step) {
+    const found = findGithubUncertainStep(input.run);
+    return isGithubUncertainStep(input.step) || found?.nodeId === input.step.nodeId;
+  }
+  return hasGithubUncertainFailure(input.run);
+}
+
+/** Display status label for a workflow run, giving `githubUncertain` its own distinct label. */
+export function workflowRunStatusLabel(run: WorkflowRunLike | null | undefined): string {
+  if (!run?.status) return "";
+  if (hasGithubUncertainFailure(run)) return GITHUB_UNCERTAIN_STATUS_LABEL;
+  if (run.status === "waiting_approval") return "Waiting for approval";
+  return run.status.charAt(0).toUpperCase() + run.status.slice(1);
+}
+
+/** Display status label for a single workflow step, giving `githubUncertain` its own distinct label. */
+export function workflowStepStatusLabel(
+  step: WorkflowStepLike | null | undefined,
+  run?: WorkflowRunLike | null,
+): string {
+  if (!step?.status) return "";
+  const isUncertain = isGithubUncertainStep(step) || (run ? findGithubUncertainStep(run)?.nodeId === step.nodeId : false);
+  if (isUncertain) return GITHUB_UNCERTAIN_STATUS_LABEL;
+  if (step.status === "waiting_approval") return "Waiting for approval";
+  return step.status.charAt(0).toUpperCase() + step.status.slice(1);
 }
 
 /** Collects target repository names relevant to a GitHub output node (explicit repository or upstream GitHub trigger repos). */

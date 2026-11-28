@@ -3,11 +3,13 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import {
+  canShowUncertainRetry,
   deriveGithubAccessAlerts,
   extractCanonicalEvents,
   extractConfiguredRepos,
   filterLabelOptions,
   findGithubUncertainStep,
+  GITHUB_UNCERTAIN_STATUS_LABEL,
   GITHUB_UNCERTAIN_WARNING,
   groupDeliveriesByOutcome,
   groupReposByOwner,
@@ -17,8 +19,11 @@ import {
   latestGithubUncertainRunForNode,
   latestReplayableDelivery,
   normalizeLabelColor,
+  resolveGithubUncertainDetails,
   resolveOutputTargetRepos,
   shouldClearLabelsOnRepoChange,
+  workflowRunStatusLabel,
+  workflowStepStatusLabel,
   type WorkflowGithubDelivery,
 } from "../src/features/workflows/github";
 import { remoteArgs } from "../link-host/methods.mjs";
@@ -266,10 +271,31 @@ test("mobile github helpers detect githubUncertain runs/steps and link-host enfo
   };
   assert.equal(GITHUB_UNCERTAIN_WARNING, "GitHub may already have this. Retrying could post twice.");
   assert.equal(hasGithubUncertainFailure(run), true);
+  assert.equal(workflowRunStatusLabel(run), GITHUB_UNCERTAIN_STATUS_LABEL);
+  assert.equal(workflowStepStatusLabel(run.steps.o1, run), GITHUB_UNCERTAIN_STATUS_LABEL);
   assert.equal(findGithubUncertainStep(run)?.nodeId, "o1");
   assert.equal(isGithubUncertainStep(run.steps.o1), true);
   assert.equal(latestGithubUncertainRunForNode([run], "o1")?.id, "run-gh-1");
   assert.equal(latestGithubUncertainRunForNode([run], "other"), null);
+  assert.equal(canShowUncertainRetry({ run, isOwner: true, canUse: true }), true);
+  assert.equal(canShowUncertainRetry({ run, isOwner: false, canUse: true }), false);
+  const details = resolveGithubUncertainDetails(
+    {
+      ...run,
+      githubUncertain: {
+        nodeId: "o1",
+        stepLabel: "Post comment",
+        action: "comment",
+        repository: "org/repo",
+        number: 42,
+        pullRequest: false,
+        url: "https://github.com/org/repo/issues/42",
+      },
+    },
+  );
+  assert.equal(details?.actionLabel, "Post comment");
+  assert.equal(details?.target, "org/repo#42");
+  assert.equal(details?.url, "https://github.com/org/repo/issues/42");
 
   // Mobile link-host mirrors desktop/desktop/link/{methods,team}.mjs exactly
   assert.equal(

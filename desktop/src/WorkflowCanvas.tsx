@@ -43,7 +43,12 @@ import type {
 } from "./types";
 import type { NodeFieldAnalysis } from "./workflowAnalysis";
 import { parseTemplateTokens } from "./workflowAnalysis";
-import { extractConfiguredRepos, WORKFLOW_GITHUB_ACTION_OPTIONS } from "./workflowGithub";
+import {
+  extractConfiguredRepos,
+  isGithubUncertainStep,
+  WORKFLOW_GITHUB_ACTION_OPTIONS,
+  workflowStepStatusLabel,
+} from "./workflowGithub";
 
 const NODE_W = 248;
 const NODE_H_DEFAULT = 116;
@@ -612,22 +617,24 @@ export function WorkflowCanvas({
                 <div className="wf-node-body">{nodePreview(node, bots, nodeAnalysis)}</div>
 
                 {/* Live step status footer */}
-                {stepRun && (
-                  <div className={`wf-node-status wf-status-${stepRun.status}`}>
-                    {stepRun.status === "running" && <LoaderCircle size={12} className="wf-spin" />}
-                    {stepRun.status === "completed" && <CheckCircle2 size={12} />}
-                    {stepRun.status === "failed" && <XCircle size={12} />}
-                    {stepRun.status === "waiting_approval" && <ShieldCheck size={12} />}
-                    <span>
-                      {stepRun.status === "waiting_approval"
-                        ? "Waiting for approval"
-                        : stepRun.status === "completed" && stepRun.branch
+                {stepRun && (() => {
+                  const isUncertain = isGithubUncertainStep(stepRun);
+                  return (
+                    <div className={`wf-node-status wf-status-${isUncertain ? "github_uncertain" : stepRun.status}`}>
+                      {stepRun.status === "running" && <LoaderCircle size={12} className="wf-spin" />}
+                      {stepRun.status === "completed" && <CheckCircle2 size={12} />}
+                      {isUncertain && <AlertTriangle size={12} />}
+                      {stepRun.status === "failed" && !isUncertain && <XCircle size={12} />}
+                      {stepRun.status === "waiting_approval" && <ShieldCheck size={12} />}
+                      <span>
+                        {stepRun.status === "completed" && stepRun.branch
                           ? `Done · ${stepRun.branch}`
-                          : stepRun.status}
-                    </span>
-                    {duration && <span className="wf-node-timer">{duration}</span>}
-                  </div>
-                )}
+                          : workflowStepStatusLabel(stepRun, activeRun)}
+                      </span>
+                      {duration && <span className="wf-node-timer">{duration}</span>}
+                    </div>
+                  );
+                })()}
 
                 {/* Output port(s) */}
                 {ports.map((port) => (
