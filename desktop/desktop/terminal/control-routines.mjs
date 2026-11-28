@@ -416,5 +416,16 @@ export function routinesApi({ workspace, handlers, bot, selection }) {
     async "workflows.replay"([id, nodeId]) {
       return await handlers.workflowGithubReplayLast(id, nodeId);
     },
+    "github.status": () => handlers.githubAgentStatus(),
+    "github.installUrl": () => handlers.githubAgentInstallUrl(),
+    async "github.refresh"() {
+      return await handlers.githubAgentRefresh();
+    },
+    async "github.setRepo"([repo, patch]) {
+      return await handlers.githubAgentSetRepo(repo, patch ?? {});
+    },
+    async "github.unbind"([installationId]) {
+      return await handlers.githubAgentUnbind(installationId);
+    },
   };
 }

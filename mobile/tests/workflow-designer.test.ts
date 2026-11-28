@@ -166,7 +166,7 @@ test("the phone's field analysis is the computer's, apart from its import", () =
 test("GitHub trigger exposes mention/issue fields and formats event summaries", () => {
   const gh = {
     ...newTrigger("github", "t_gh"),
-    config: { repo: "promptclickrun/Botkins", events: ["issue_opened", "bot_mentioned"], mentionHandle: "@botkins-bot", pollMinutes: 5 },
+    config: { repo: "promptclickrun/Botkins", events: ["issue_opened", "bot_mentioned"], mentionHandle: "@botkins-agent", pollMinutes: 5 },
   };
   const out = {
     ...newStep("output", "o_gh"),

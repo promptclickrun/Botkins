@@ -218,11 +218,23 @@ export function normalizeGithubTriggerConfig(rawConfig = {}) {
     cfg.baseBranch = cfg.baseBranch.trim();
   }
 
-  // Normalize mention handles (both legacy `mentionHandle` string and `mentionHandles[]` array)
+  // Normalize mention handles (both legacy `mentionHandle` string and `mentionHandles[]` array).
+  // Migrate deprecated `@botkins-bot` -> `@botkins-agent`.
+  if (typeof cfg.mentionHandle === "string" && cfg.mentionHandle.trim()) {
+    cfg.mentionHandle = cfg.mentionHandle.replace(/@?botkins-bot\b/gi, "@botkins-agent");
+  }
   if (Array.isArray(cfg.mentionHandles)) {
-    cfg.mentionHandles = cfg.mentionHandles
-      .map((h) => String(h ?? "").trim().replace(/^@+/, "").toLowerCase())
-      .filter((h) => /^[a-z0-9](?:[a-z0-9-]{0,38})$/.test(h));
+    const seen = new Set();
+    const out = [];
+    for (const h of cfg.mentionHandles) {
+      let cleaned = String(h ?? "").trim().replace(/^@+/, "").toLowerCase();
+      if (cleaned === "botkins-bot") cleaned = "botkins-agent";
+      if (/^[a-z0-9](?:[a-z0-9-]{0,38})$/.test(cleaned) && !seen.has(cleaned)) {
+        seen.add(cleaned);
+        out.push(cleaned);
+      }
+    }
+    cfg.mentionHandles = out;
   }
 
   return cfg;

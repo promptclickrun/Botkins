@@ -801,7 +801,7 @@ test("GitHub trigger polls issues, PR updates, comments, user mentions, and @bot
         config: {
           repo: "promptclickrun/Botkins",
           events: ["issue_opened", "issue_updated", "pr_updated", "issue_comment", "user_mentioned", "bot_mentioned"],
-          mentionHandle: "@botkins-bot, @glory-bot",
+          mentionHandle: "@botkins-agent, @glory-bot",
           pollMinutes: 1,
         },
       },
@@ -839,7 +839,7 @@ test("GitHub trigger polls issues, PR updates, comments, user mentions, and @bot
       {
         number: 1,
         title: "Old issue",
-        body: "Hello @botkins-bot",
+        body: "Hello @botkins-agent",
         url: "https://github.com/promptclickrun/Botkins/issues/1",
         author: { login: "alice" },
         state: "OPEN",
@@ -852,7 +852,7 @@ test("GitHub trigger polls issues, PR updates, comments, user mentions, and @bot
   await ws.workflows.tick(baseNow);
   assert.equal(ws.workflows.listRuns(wf.id).length, 0);
 
-  // 2) New issue #2 mentioning @botkins-bot + PR #5 updated -> fires issue_opened, bot_mentioned, pr_updated
+  // 2) New issue #2 mentioning @botkins-agent + PR #5 updated -> fires issue_opened, bot_mentioned, pr_updated
   snapshot = {
     ...snapshot,
     prs: [
@@ -867,7 +867,7 @@ test("GitHub trigger polls issues, PR updates, comments, user mentions, and @bot
       {
         number: 2,
         title: "Crash on watch",
-        body: "Hey @botkins-bot can you investigate?",
+        body: "Hey @botkins-agent can you investigate?",
         url: "https://github.com/promptclickrun/Botkins/issues/2",
         author: { login: "bob" },
         state: "OPEN",
@@ -880,9 +880,9 @@ test("GitHub trigger polls issues, PR updates, comments, user mentions, and @bot
   await waitFor(() => ws.workflows.listRuns(wf.id).length === 3 && ws.workflows.listRuns(wf.id).every((r) => r.status === "completed"));
   const titlesAfterStep2 = ws.state.board.map((b) => b.title);
   assert.ok(titlesAfterStep2.includes("issue_opened:issue#2:"));
-  assert.ok(titlesAfterStep2.includes("bot_mentioned:issue#2:@botkins-bot"));
+  assert.ok(titlesAfterStep2.includes("bot_mentioned:issue#2:@botkins-agent"));
   assert.ok(titlesAfterStep2.includes("pr_updated:pr#5:"));
-  const botPost = ws.state.board.find((b) => b.title === "bot_mentioned:issue#2:@botkins-bot");
+  const botPost = ws.state.board.find((b) => b.title === "bot_mentioned:issue#2:@botkins-agent");
   assert.ok(botPost.body.includes("bug, watch"));
 
   // 3) Re-polling unchanged snapshot does NOT duplicate any run
@@ -918,9 +918,9 @@ test("GitHub trigger polls issues, PR updates, comments, user mentions, and @bot
 });
 
 test("workflow-github helpers parse mentions, gh auth status, and device-code sign-in lifecycle", async () => {
-  assert.deepEqual(parseMentionHandles("@botkins-bot, glory-bot"), ["@botkins-bot", "@glory-bot"]);
-  assert.equal(findMentionInText("please help @botkins-bot!", ["@botkins-bot"]), "@botkins-bot");
-  assert.equal(findMentionInText("email@botkins-bot.com and @botkins-bot2", ["@botkins-bot"]), null);
+  assert.deepEqual(parseMentionHandles("@botkins-agent, glory-bot"), ["@botkins-agent", "@glory-bot"]);
+  assert.equal(findMentionInText("please help @botkins-agent!", ["@botkins-agent"]), "@botkins-agent");
+  assert.equal(findMentionInText("email@botkins-agent.com and @botkins-agent2", ["@botkins-agent"]), null);
 
   const parsedAuth = parseGhAuthStatus(`github.com
   ✓ Logged in to github.com account coltcoan (keyring)
@@ -1518,12 +1518,12 @@ test("GitHub trigger polls multiple repos[] and emits canonical events with 24 f
       repository: { full_name: "org/web" },
       sender: { login: "carol", type: "User" },
       issue: { number: 12, title: "Help", pull_request: {} },
-      comment: { body: "Hey @botkins-bot please review", html_url: "https://github.com/org/web/pull/12#issuecomment-5", user: { login: "carol" } },
+      comment: { body: "Hey @botkins-agent please review", html_url: "https://github.com/org/web/pull/12#issuecomment-5", user: { login: "carol" } },
     },
-    { mentionHandles: ["@botkins-bot"] },
+    { mentionHandles: ["@botkins-agent"] },
   );
   assert.deepEqual(normalized.map((c) => c.event), ["comment", "mention"]);
-  assert.equal(normalized[1].payload.mention, "@botkins-bot");
+  assert.equal(normalized[1].payload.mention, "@botkins-agent");
   assert.equal(normalized[0].payload.pull_request, true);
 });
 

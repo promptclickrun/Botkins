@@ -45,6 +45,7 @@ import { Vault } from "./vault.mjs";
 import { Frames } from "./frames.mjs";
 import { ClaudeArtifacts } from "./claude-artifacts.mjs";
 import { Workflows } from "./workflows.mjs";
+import { GithubAgentManager } from "./github-agent.mjs";
 import { ChannelManager } from "./channels/index.mjs";
 import { effectiveChannelApproval } from "./channels/security.mjs";
 import { registerBuiltInAdapters } from "./channels/adapters/index.mjs";
@@ -436,6 +437,7 @@ export class Workspace {
     }
     this.tasks = new Tasks(this);
     this.workflows = new Workflows(this, options?.workflows);
+    this.githubAgent = new GithubAgentManager(this, options?.githubAgent);
     this.channels = new ChannelManager({
       workspace: this,
       vault: this.vault,

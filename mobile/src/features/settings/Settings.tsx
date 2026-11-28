@@ -12,6 +12,7 @@ import {
   ChartColumn,
   FlaskConical,
   FolderLock,
+  GitBranch,
   Info,
   KeyRound,
   Layers,
@@ -186,6 +187,18 @@ export default function Settings() {
                   onPress={go("/settings/channels")}
                 />,
                 { words: "channel hooks slack telegram discord imessage pairing allowlist publish" },
+              ),
+              row(
+                "github",
+                "GitHub",
+                <Row
+                  leading={<IconTile icon={GitBranch} color={brand.clay} />}
+                  title="GitHub"
+                  subtitle="Botkins Agent · @botkins-agent mentions"
+                  chevron
+                  onPress={go("/settings/github")}
+                />,
+                { subtitle: "Botkins Agent · @botkins-agent mentions", words: "github app botkins-agent mention repo install webhook pull request issue" },
               ),
             ]
           : []),

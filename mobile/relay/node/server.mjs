@@ -25,12 +25,29 @@ import { HOST_GROUP_LENGTH, HOST_PROTOCOL, HOST_PROTOCOL_V3, PHONE_PROTOCOL, hex
 import { PendingRequests } from "../src/pending.ts";
 import { spaceFrame, spacePage } from "../src/space.ts";
 import {
+  GITHUB_AGENT_SLUG_DEFAULT,
+  GITHUB_CLAIM_MAX,
+  GITHUB_CLAIM_TTL_MS,
   GITHUB_DELIVERY_DEDUPE_MAX,
   GITHUB_DELIVERY_DEDUPE_TTL_MS,
   GITHUB_EVENTS_PATH,
+  GITHUB_NONCE_MAX,
+  GITHUB_NONCE_TTL_MS,
+  GITHUB_SETUP_PATH,
+  agentAppOf,
+  allowsLegacyUserTokenAuth,
   authorizeSubscribedRepos,
   checkGitHubWebhookRequest,
+  fetchInstallationRepos,
+  githubSetupResultPage,
+  mintSingleRepoInstallationToken,
+  verifyGitHubClaimRequest,
+  verifyGitHubInstallationsListRequest,
+  verifyGitHubInstallationOAuth,
+  verifyGitHubSetupState,
   verifyGitHubSubscribe,
+  verifyGitHubTokenRequest,
+  verifyGitHubUnbindRequest,
 } from "../src/github.ts";
 import {
   BASE64URL_22,
@@ -323,6 +340,168 @@ function loadQrSource(file) {
     .replace(/^export const stringToBytes = .*$/m, "");
 }
 
+/** Persisted GitHub App installation bindings for the self-hosted Node relay (DATA_DIR/github-bindings.json). */
+class GitHubBindings {
+  constructor(file) {
+    this.file = file;
+    /** installationId (number) -> { installationId, accountLogin, accountType, installerLogin, repositorySelection, repos: Set<string>, suspended, updatedAt } */
+    this.installations = new Map();
+    /** room -> Set<installationId> */
+    this.roomToInsts = new Map();
+    /** installationId -> Set<room> */
+    this.instToRooms = new Map();
+    if (!file) return;
+    try {
+      const saved = JSON.parse(readFileSync(file, "utf8"));
+      for (const inst of Array.isArray(saved.installations) ? saved.installations : []) {
+        const id = Number(inst?.installationId);
+        if (!Number.isSafeInteger(id) || id <= 0) continue;
+        this.installations.set(id, {
+          installationId: id,
+          accountLogin: String(inst.accountLogin || ""),
+          accountType: String(inst.accountType || "User"),
+          installerLogin: String(inst.installerLogin || ""),
+          repositorySelection: inst.repositorySelection === "all" ? "all" : "selected",
+          repos: new Set(Array.isArray(inst.repos) ? inst.repos.map((r) => String(r).toLowerCase()) : []),
+          suspended: Boolean(inst.suspended),
+          updatedAt: Number(inst.updatedAt) || Date.now(),
+        });
+      }
+      for (const [room, ids] of Object.entries(saved.rooms ?? {})) {
+        if (!ROOM_NAME.test(room) || !Array.isArray(ids)) continue;
+        for (const rawId of ids) {
+          const id = Number(rawId);
+          if (!this.installations.has(id)) continue;
+          if (!this.roomToInsts.has(room)) this.roomToInsts.set(room, new Set());
+          this.roomToInsts.get(room).add(id);
+          if (!this.instToRooms.has(id)) this.instToRooms.set(id, new Set());
+          this.instToRooms.get(id).add(room);
+        }
+      }
+    } catch {
+      // No file yet, or unreadable: start empty.
+    }
+  }
+  save() {
+    if (!this.file) return;
+    mkdirSync(dirname(this.file), { recursive: true, mode: 0o700 });
+    const payload = {
+      installations: [...this.installations.values()].map((i) => ({ ...i, repos: [...i.repos].sort() })),
+      rooms: Object.fromEntries([...this.roomToInsts.entries()].map(([room, ids]) => [room, [...ids]])),
+    };
+    writeFileSync(this.file + ".tmp", JSON.stringify(payload), { mode: 0o600 });
+    renameSync(this.file + ".tmp", this.file);
+  }
+  bind(room, inst) {
+    const id = Number(inst.installationId);
+    this.installations.set(id, {
+      installationId: id,
+      accountLogin: String(inst.accountLogin || ""),
+      accountType: String(inst.accountType || "User"),
+      installerLogin: String(inst.installerLogin || inst.accountLogin || ""),
+      repositorySelection: inst.repositorySelection === "all" ? "all" : "selected",
+      repos: new Set(Array.isArray(inst.repos) ? inst.repos.map((r) => String(r).toLowerCase()) : []),
+      suspended: Boolean(inst.suspended),
+      updatedAt: Number(inst.updatedAt) || Date.now(),
+    });
+    if (!this.roomToInsts.has(room)) this.roomToInsts.set(room, new Set());
+    this.roomToInsts.get(room).add(id);
+    if (!this.instToRooms.has(id)) this.instToRooms.set(id, new Set());
+    this.instToRooms.get(id).add(room);
+    this.save();
+  }
+  unbind(room, installationId) {
+    this.roomToInsts.get(room)?.delete(installationId);
+    if (this.roomToInsts.get(room)?.size === 0) this.roomToInsts.delete(room);
+    this.instToRooms.get(installationId)?.delete(room);
+    if (!this.instToRooms.get(installationId)?.size) {
+      this.instToRooms.delete(installationId);
+      this.installations.delete(installationId);
+    }
+    this.save();
+  }
+  listForRoom(room) {
+    const ids = [...(this.roomToInsts.get(room) ?? [])].sort((a, b) => a - b);
+    const out = [];
+    for (const id of ids) {
+      const inst = this.installations.get(id);
+      if (!inst || inst.suspended) continue;
+      out.push({
+        installationId: inst.installationId,
+        accountLogin: inst.accountLogin,
+        accountType: inst.accountType,
+        installerLogin: inst.installerLogin,
+        repositorySelection: inst.repositorySelection,
+        repos: [...inst.repos].sort(),
+        suspended: inst.suspended,
+        updatedAt: inst.updatedAt,
+      });
+    }
+    return out;
+  }
+  isRoomBoundToInstallation(room, installationId) {
+    const inst = this.installations.get(installationId);
+    if (!inst || inst.suspended) return false;
+    return Boolean(this.roomToInsts.get(room)?.has(installationId));
+  }
+  resolveForRepo(room, repoLower) {
+    const ids = [...(this.roomToInsts.get(room) ?? [])].sort((a, b) => a - b);
+    const owner = repoLower.split("/")[0] || "";
+    let allFallback = null;
+    for (const id of ids) {
+      const inst = this.installations.get(id);
+      if (!inst || inst.suspended) continue;
+      if (inst.repos.has(repoLower)) return id;
+      if (inst.repositorySelection === "all" && allFallback === null) {
+        const acc = inst.accountLogin.toLowerCase();
+        if (!acc || acc === owner) allFallback = id;
+      }
+    }
+    return allFallback;
+  }
+  applyEvent(ev) {
+    const id = ev.installationId;
+    const affectedRooms = [...(this.instToRooms.get(id) ?? [])];
+    if (ev.event === "installation") {
+      if (ev.action === "deleted" || ev.action === "suspend") {
+        for (const room of affectedRooms) {
+          this.roomToInsts.get(room)?.delete(id);
+          if (this.roomToInsts.get(room)?.size === 0) this.roomToInsts.delete(room);
+        }
+        this.instToRooms.delete(id);
+        this.installations.delete(id);
+        this.save();
+        return affectedRooms;
+      }
+      const existing = this.installations.get(id);
+      if (existing && (ev.action === "unsuspend" || ev.action === "created" || ev.action === "new_permissions_accepted")) {
+        if (ev.accountLogin) existing.accountLogin = ev.accountLogin;
+        if (ev.accountType) existing.accountType = ev.accountType;
+        existing.repositorySelection = ev.repositorySelection === "all" ? "all" : "selected";
+        existing.suspended = false;
+        existing.updatedAt = Date.now();
+        if (Array.isArray(ev.repositories) && ev.repositories.length > 0) {
+          existing.repos = new Set(ev.repositories.map((r) => String(r).toLowerCase()));
+        }
+        this.save();
+      }
+      return affectedRooms;
+    }
+    if (ev.event === "installation_repositories") {
+      const existing = this.installations.get(id);
+      if (existing) {
+        existing.repositorySelection = ev.repositorySelection === "all" ? "all" : "selected";
+        existing.updatedAt = Date.now();
+        for (const r of ev.repositoriesAdded ?? []) existing.repos.add(String(r).toLowerCase());
+        for (const r of ev.repositoriesRemoved ?? []) existing.repos.delete(String(r).toLowerCase());
+        this.save();
+      }
+      return affectedRooms;
+    }
+    return affectedRooms;
+  }
+}
+
 /**
  * A relay server. Options (all optional):
  *   dataDir        where invite cards are kept (none: memory only)
@@ -334,18 +513,54 @@ function loadQrSource(file) {
  *   botkinsDir     the folder of Botkin pictures a shared space's page shows (the phone app's assets/botkins)
  *   spaceBytesMax  how much all copies of shared spaces may take together (1 GiB)
  */
-export function createRelay({ dataDir, pushUpstream = DEFAULT_PUSH_UPSTREAM, clientIpHeader, limits = true, qrFile, botkinsDir, spaceBytesMax, githubWebhookSecret, githubApiBase, fetch = globalThis.fetch } = {}) {
+export function createRelay({
+  dataDir,
+  pushUpstream = DEFAULT_PUSH_UPSTREAM,
+  clientIpHeader,
+  limits = true,
+  qrFile,
+  botkinsDir,
+  spaceBytesMax,
+  githubWebhookSecret,
+  githubAgentAppId,
+  githubAgentAppSlug,
+  githubAgentAppKey,
+  githubAgentClientId,
+  githubAgentClientSecret,
+  githubAllowUserTokenAuth,
+  githubApiBase,
+  githubWebBase,
+  fetch = globalThis.fetch,
+} = {}) {
   const invites = new Invites(dataDir ? join(dataDir, "invites.json") : null);
   const spaces = new Spaces(dataDir || null, spaceBytesMax);
+  const githubBindings = new GitHubBindings(dataDir ? join(dataDir, "github-bindings.json") : null);
+  const githubEnv = {
+    GITHUB_AGENT_APP_ID: githubAgentAppId,
+    GITHUB_AGENT_APP_SLUG: githubAgentAppSlug,
+    GITHUB_AGENT_APP_KEY: githubAgentAppKey,
+    GITHUB_AGENT_CLIENT_ID: githubAgentClientId,
+    GITHUB_AGENT_CLIENT_SECRET: githubAgentClientSecret,
+    GITHUB_ALLOW_USER_TOKEN_AUTH: githubAllowUserTokenAuth ? "1" : "",
+  };
+  const githubAgentApp = agentAppOf(githubEnv);
+  const githubAppSlug = githubAgentApp?.appSlug || githubAgentAppSlug || GITHUB_AGENT_SLUG_DEFAULT;
+  const legacyUserTokenMode = allowsLegacyUserTokenAuth(githubEnv);
   /** repoLower -> Map<room, expiresAtMs> */
   const githubSubsByRepo = new Map();
   /** room -> Set<repoLower> */
   const githubReposByRoom = new Map();
   /** deliveryId -> expiresAtMs */
   const githubSeenDeliveries = new Map();
+  /** nonce -> expiresAtMs */
+  const githubUsedNonces = new Map();
+  /** deliveryId -> { room, until } */
+  const githubDeliveryClaims = new Map();
   const sweepGithub = () => {
     const now = Date.now();
     for (const [id, until] of githubSeenDeliveries) if (until <= now) githubSeenDeliveries.delete(id);
+    for (const [n, until] of githubUsedNonces) if (until <= now) githubUsedNonces.delete(n);
+    for (const [id, entry] of githubDeliveryClaims) if (entry.until <= now) githubDeliveryClaims.delete(id);
     for (const [repo, byRoom] of githubSubsByRepo) {
       for (const [room, until] of byRoom) if (until <= now) byRoom.delete(room);
       if (!byRoom.size) githubSubsByRepo.delete(repo);
@@ -384,6 +599,34 @@ export function createRelay({ dataDir, pushUpstream = DEFAULT_PUSH_UPSTREAM, cli
       map.set(room, expiresAt);
     }
     githubReposByRoom.set(room, next);
+  };
+  const pruneRoomUnboundSubs = (room) => {
+    const prev = githubReposByRoom.get(room);
+    if (!prev) return;
+    for (const repo of [...prev]) {
+      if (githubBindings.resolveForRepo(room, repo) === null) {
+        prev.delete(repo);
+        const map = githubSubsByRepo.get(repo);
+        if (map) {
+          map.delete(room);
+          if (!map.size) githubSubsByRepo.delete(repo);
+        }
+      }
+    }
+    if (!prev.size) githubReposByRoom.delete(room);
+  };
+  const pushInstallationsToRoom = (roomName) => {
+    const host = rooms.get(roomName)?.activeHost();
+    if (!host) return;
+    send(
+      host.ws,
+      JSON.stringify({
+        type: "github-installations",
+        version: 1,
+        appSlug: githubAppSlug,
+        installations: githubBindings.listForRoom(roomName),
+      }),
+    );
   };
   const sweeper = setInterval(() => (invites.sweep(), spaces.sweep(), sweepGithub()), WINDOW_MS);
   sweeper.unref();
@@ -546,31 +789,7 @@ export function createRelay({ dataDir, pushUpstream = DEFAULT_PUSH_UPSTREAM, cli
             this.pinged(side);
             send(ws, "pong");
           } else if (side.kind === "host" && !side.closing && text.length <= 64 * 1024 && text.startsWith("{")) {
-            void (async () => {
-              const checked = await verifyGitHubSubscribe(text, this.name);
-              if (!checked.ok) {
-                send(ws, JSON.stringify({ type: "github-subscribed", ok: false, error: checked.error }));
-                return;
-              }
-              const cachedAllowed = activeRoomGithubSubs(this.name, checked.expiresAt);
-              const { allowed, denied } = await authorizeSubscribedRepos(checked.repos, checked.proofs, {
-                cachedAllowed,
-                fetch,
-                apiBase: githubApiBase || process.env.GITHUB_API_BASE || undefined,
-              });
-              setRoomGithubSubs(this.name, allowed, checked.expiresAt);
-              send(
-                ws,
-                JSON.stringify({
-                  type: "github-subscribed",
-                  ok: true,
-                  count: allowed.length,
-                  allowed,
-                  denied,
-                  expiresAt: checked.expiresAt,
-                }),
-              );
-            })();
+            void this.handleHostControl(ws, text);
           }
         } else {
           this.message(side, new Uint8Array(data.buffer, data.byteOffset, data.byteLength));
@@ -587,6 +806,167 @@ export function createRelay({ dataDir, pushUpstream = DEFAULT_PUSH_UPSTREAM, cli
       });
       log("open", { kind: side.kind, phones: this.openPhones().length });
       this.settle();
+    }
+
+    async handleHostControl(ws, text) {
+      let parsed;
+      try {
+        parsed = JSON.parse(text);
+      } catch {
+        send(ws, JSON.stringify({ type: "github-subscribed", ok: false, error: "bad_json" }));
+        return;
+      }
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return;
+      const msgType = typeof parsed.type === "string" ? parsed.type : "";
+      const apiBase = githubApiBase || process.env.GITHUB_API_BASE || undefined;
+
+      if (msgType === "github-token") {
+        const checked = await verifyGitHubTokenRequest(parsed, this.name);
+        const requestId = typeof parsed.requestId === "string" ? parsed.requestId : "";
+        if (!checked.ok) {
+          send(ws, JSON.stringify({ type: "github-token-result", requestId, ok: false, error: checked.error }));
+          return;
+        }
+        if (!githubAgentApp) {
+          send(ws, JSON.stringify({ type: "github-token-result", requestId: checked.requestId, ok: false, error: "app_not_configured" }));
+          return;
+        }
+        const installationId = githubBindings.resolveForRepo(this.name, checked.repo);
+        if (!installationId) {
+          send(ws, JSON.stringify({ type: "github-token-result", requestId: checked.requestId, ok: false, error: "not_bound" }));
+          return;
+        }
+        const minted = await mintSingleRepoInstallationToken(githubAgentApp, installationId, checked.repo, checked.permissions, {
+          fetch,
+          apiBase,
+        });
+        if (!minted.ok) {
+          log("github_token", { status: minted.status, error: minted.error });
+          send(ws, JSON.stringify({ type: "github-token-result", requestId: checked.requestId, ok: false, error: minted.error }));
+          return;
+        }
+        log("github_token", { status: 201 });
+        send(
+          ws,
+          JSON.stringify({
+            type: "github-token-result",
+            requestId: checked.requestId,
+            ok: true,
+            repo: checked.repo,
+            installationId,
+            token: minted.token,
+            expiresAt: minted.expiresAt,
+            permissions: minted.permissions,
+          }),
+        );
+        return;
+      }
+
+      if (msgType === "github-claim") {
+        const checked = await verifyGitHubClaimRequest(parsed, this.name);
+        const requestId = typeof parsed.requestId === "string" ? parsed.requestId : "";
+        if (!checked.ok) {
+          send(ws, JSON.stringify({ type: "github-claim-result", requestId, ok: false, claimed: false, error: checked.error }));
+          return;
+        }
+        sweepGithub();
+        const existing = githubDeliveryClaims.get(checked.deliveryId);
+        let claimed = false;
+        if (existing && existing.until > Date.now()) {
+          claimed = existing.room === this.name;
+        } else {
+          githubDeliveryClaims.set(checked.deliveryId, { room: this.name, until: Date.now() + GITHUB_CLAIM_TTL_MS });
+          while (githubDeliveryClaims.size > GITHUB_CLAIM_MAX) {
+            const oldest = githubDeliveryClaims.keys().next().value;
+            if (oldest === undefined) break;
+            githubDeliveryClaims.delete(oldest);
+          }
+          claimed = true;
+        }
+        send(ws, JSON.stringify({ type: "github-claim-result", requestId: checked.requestId, ok: true, claimed }));
+        return;
+      }
+
+      if (msgType === "github-installations-list") {
+        const checked = await verifyGitHubInstallationsListRequest(parsed, this.name);
+        const requestId = typeof parsed.requestId === "string" ? parsed.requestId : "";
+        if (!checked.ok) {
+          send(ws, JSON.stringify({ type: "github-installations-result", requestId, ok: false, error: checked.error }));
+          return;
+        }
+        send(
+          ws,
+          JSON.stringify({
+            type: "github-installations-result",
+            requestId: checked.requestId,
+            ok: true,
+            appSlug: githubAppSlug,
+            installations: githubBindings.listForRoom(this.name),
+          }),
+        );
+        return;
+      }
+
+      if (msgType === "github-unbind") {
+        const checked = await verifyGitHubUnbindRequest(parsed, this.name);
+        const requestId = typeof parsed.requestId === "string" ? parsed.requestId : "";
+        if (!checked.ok) {
+          send(ws, JSON.stringify({ type: "github-unbind-result", requestId, ok: false, error: checked.error }));
+          return;
+        }
+        githubBindings.unbind(this.name, checked.installationId);
+        pruneRoomUnboundSubs(this.name);
+        send(
+          ws,
+          JSON.stringify({
+            type: "github-unbind-result",
+            requestId: checked.requestId,
+            ok: true,
+            installations: githubBindings.listForRoom(this.name),
+          }),
+        );
+        return;
+      }
+
+      if (msgType !== "github-subscribe") return;
+
+      const checked = await verifyGitHubSubscribe(text, this.name);
+      if (!checked.ok) {
+        send(ws, JSON.stringify({ type: "github-subscribed", ok: false, error: checked.error }));
+        return;
+      }
+
+      let allowedRepos = [];
+      let deniedRepos = [];
+      if (legacyUserTokenMode) {
+        const cachedAllowed = activeRoomGithubSubs(this.name, checked.expiresAt);
+        const res = await authorizeSubscribedRepos(checked.repos, checked.proofs, {
+          cachedAllowed,
+          fetch,
+          apiBase,
+        });
+        allowedRepos = res.allowed;
+        deniedRepos = res.denied;
+      } else {
+        for (const repo of checked.repos) {
+          if (githubBindings.resolveForRepo(this.name, repo) !== null) allowedRepos.push(repo);
+          else deniedRepos.push(repo);
+        }
+        allowedRepos.sort();
+        deniedRepos.sort();
+      }
+      setRoomGithubSubs(this.name, allowedRepos, checked.expiresAt);
+      send(
+        ws,
+        JSON.stringify({
+          type: "github-subscribed",
+          ok: true,
+          count: allowedRepos.length,
+          allowed: allowedRepos,
+          denied: deniedRepos,
+          expiresAt: checked.expiresAt,
+        }),
+      );
     }
 
     message(side, bytes) {
@@ -885,6 +1265,67 @@ export function createRelay({ dataDir, pushUpstream = DEFAULT_PUSH_UPSTREAM, cli
     }
   }
 
+  async function handleGitHubSetup(request, network) {
+    if (!allowed("requests", network)) return plain("Too many requests", 429);
+    if (request.method !== "GET") return plain("Method not allowed", 405);
+    if (!githubAgentApp) {
+      return githubSetupResultPage({ ok: false, message: "Botkins Agent GitHub App credentials are not configured on this relay." });
+    }
+    const url = new URL(request.url);
+    const code = (url.searchParams.get("code") ?? "").trim();
+    const stateParam = (url.searchParams.get("state") ?? "").trim();
+    const instParam = (url.searchParams.get("installation_id") ?? "").trim();
+    const installationId = /^\d{1,12}$/.test(instParam) ? Number(instParam) : 0;
+    if (!code || !stateParam || !installationId) {
+      return githubSetupResultPage({ ok: false, message: "Missing installation_id, code, or state from GitHub." });
+    }
+    const verifiedState = await verifyGitHubSetupState(stateParam);
+    if (!verifiedState.ok) {
+      log("github_setup", { status: 400, reason: verifiedState.error });
+      return githubSetupResultPage({
+        ok: false,
+        message: verifiedState.error === "expired_state"
+          ? "This install link expired (10-minute limit). Start again from Botkins Settings › GitHub."
+          : "This install link signature is invalid. Start again from Botkins Settings › GitHub.",
+      });
+    }
+    sweepGithub();
+    if (githubUsedNonces.has(verifiedState.nonce)) {
+      log("github_setup", { status: 400, reason: "replayed_nonce" });
+      return githubSetupResultPage({ ok: false, message: "This install link was already used. Start again from Botkins Settings › GitHub." });
+    }
+    githubUsedNonces.set(verifiedState.nonce, Math.max(Date.now() + GITHUB_NONCE_TTL_MS, verifiedState.exp * 1000));
+    while (githubUsedNonces.size > GITHUB_NONCE_MAX) {
+      const oldest = githubUsedNonces.keys().next().value;
+      if (oldest === undefined) break;
+      githubUsedNonces.delete(oldest);
+    }
+
+    const oauth = await verifyGitHubInstallationOAuth(githubAgentApp, code, installationId, {
+      fetch,
+      apiBase: githubApiBase || process.env.GITHUB_API_BASE || undefined,
+      webBase: githubWebBase || process.env.GITHUB_WEB_BASE || undefined,
+    });
+    if (!oauth.ok) {
+      log("github_setup", { status: oauth.status, reason: oauth.error });
+      return githubSetupResultPage({
+        ok: false,
+        message: oauth.error === "installation_not_authorized"
+          ? "GitHub confirmed you do not have access to that installation."
+          : "GitHub could not verify this installation. Please try again.",
+      });
+    }
+
+    githubBindings.bind(verifiedState.room, oauth.installation);
+    pushInstallationsToRoom(verifiedState.room);
+    log("github_setup", { status: 200, repos: oauth.installation.repos.length });
+    return githubSetupResultPage({
+      ok: true,
+      accountLogin: oauth.installation.accountLogin,
+      repoCount: oauth.installation.repos.length,
+    });
+  }
+
   async function handleGitHubEvents(request, network) {
     const checked = await checkGitHubWebhookRequest(request, githubWebhookSecret, {
       checkIp: async () => allowed("githubIp", network),
@@ -905,6 +1346,29 @@ export function createRelay({ dataDir, pushUpstream = DEFAULT_PUSH_UPSTREAM, cli
       githubSeenDeliveries.delete(oldest);
     }
 
+    if (checked.kind === "installation") {
+      let repos = checked.repositories;
+      if (
+        checked.event === "installation" &&
+        (checked.action === "created" || checked.action === "unsuspend") &&
+        checked.repositorySelection === "all" &&
+        githubAgentApp
+      ) {
+        const fetched = await fetchInstallationRepos(githubAgentApp, checked.installationId, {
+          fetch,
+          apiBase: githubApiBase || process.env.GITHUB_API_BASE || undefined,
+        });
+        if (fetched.length) repos = fetched;
+      }
+      const affectedRooms = githubBindings.applyEvent({ ...checked, repositories: repos });
+      for (const roomName of affectedRooms) {
+        pruneRoomUnboundSubs(roomName);
+        pushInstallationsToRoom(roomName);
+      }
+      log("github_installation_event", { event: checked.event, action: checked.action, rooms: affectedRooms.length });
+      return Response.json({ ok: true }, { status: 202, headers: { "cache-control": "no-store" } });
+    }
+
     const targets = githubSubsByRepo.get(checked.repositoryLower);
     if (!targets || !targets.size) {
       log("github_delivery", { event: checked.event, status: 204, delivered: 0 });
@@ -913,12 +1377,17 @@ export function createRelay({ dataDir, pushUpstream = DEFAULT_PUSH_UPSTREAM, cli
 
     const frameText = JSON.stringify(checked.frame);
     let delivered = 0;
+    let eligibleCount = 0;
     for (const [roomName, until] of targets) {
       if (until <= now) continue;
+      const boundOk =
+        checked.installationId !== null && githubBindings.isRoomBoundToInstallation(roomName, checked.installationId);
+      if (!boundOk && !legacyUserTokenMode) continue;
+      eligibleCount++;
       const host = rooms.get(roomName)?.activeHost();
       if (host && send(host.ws, frameText)) delivered++;
     }
-    log("github_delivery", { event: checked.event, status: delivered > 0 ? 202 : 204, targets: targets.size, delivered });
+    log("github_delivery", { event: checked.event, status: delivered > 0 ? 202 : 204, targets: eligibleCount, delivered });
     return delivered > 0
       ? Response.json({ ok: true, delivered }, { status: 202, headers: { "cache-control": "no-store" } })
       : new Response(null, { status: 204, headers: { "cache-control": "no-store" } });
@@ -929,6 +1398,9 @@ export function createRelay({ dataDir, pushUpstream = DEFAULT_PUSH_UPSTREAM, cli
     const url = new URL(request.url);
     if (url.pathname === GITHUB_EVENTS_PATH) {
       return handleGitHubEvents(request, network);
+    }
+    if (url.pathname === GITHUB_SETUP_PATH) {
+      return handleGitHubSetup(request, network);
     }
     if (url.pathname === "/v1/push") {
       if (!allowed("requests", network)) return Response.json({ error: "rate_limited" }, { status: 429 });
@@ -1033,6 +1505,12 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
     pushUpstream: process.env.PUSH_UPSTREAM || DEFAULT_PUSH_UPSTREAM,
     clientIpHeader: process.env.CLIENT_IP_HEADER || undefined,
     githubWebhookSecret: process.env.GITHUB_WEBHOOK_SECRET || undefined,
+    githubAgentAppId: process.env.GITHUB_AGENT_APP_ID || undefined,
+    githubAgentAppSlug: process.env.GITHUB_AGENT_APP_SLUG || undefined,
+    githubAgentAppKey: process.env.GITHUB_AGENT_APP_KEY || undefined,
+    githubAgentClientId: process.env.GITHUB_AGENT_CLIENT_ID || undefined,
+    githubAgentClientSecret: process.env.GITHUB_AGENT_CLIENT_SECRET || undefined,
+    githubAllowUserTokenAuth: process.env.GITHUB_ALLOW_USER_TOKEN_AUTH === "1" || process.env.GITHUB_ALLOW_USER_TOKEN_AUTH === "true",
     limits: process.env.RATE_LIMITS !== "off",
     qrFile: process.env.QR_FILE || undefined,
     botkinsDir: process.env.BOTKINS_DIR || undefined,

@@ -9,7 +9,7 @@ const execFileAsync = promisify(execFile);
 
 export const GH_INSTALL_URL = "https://cli.github.com/";
 export const GH_DEVICE_URL = "https://github.com/login/device";
-export const DEFAULT_BOT_MENTION = "@botkins-bot";
+export const DEFAULT_BOT_MENTION = "@botkins-agent";
 
 export const GITHUB_EVENT_KINDS = [
   "issue.opened",
@@ -105,7 +105,7 @@ export function parseMentionHandles(raw, fallback = DEFAULT_BOT_MENTION) {
 
 /**
  * Finds the first matching `@handle` mention in `text` (case-insensitive, word-bounded so emails
- * like `foo@botkins-bot.com` and longer handles like `@botkins-bot-dev` do not false-match).
+ * like `foo@botkins-agent.com` and longer handles like `@botkins-agent-dev` do not false-match).
  */
 export function findMentionInText(text, handles) {
   if (typeof text !== "string" || !text || !Array.isArray(handles) || !handles.length) return null;

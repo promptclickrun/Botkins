@@ -143,6 +143,12 @@ export const WORKSPACE = {
   workflowGithubCatalog: no("person"), // lists repository labels and assignees for the desktop/mobile GitHub workflow pickers
   workflowGithubDeliveries: cmd("workflows deliveries"),
   workflowGithubReplayLast: cmd("workflows replay"),
+  // ── GitHub App ("Botkins Agent") ──
+  githubAgentStatus: cmd("github status"),
+  githubAgentInstallUrl: cmd("github install"),
+  githubAgentRefresh: cmd("github refresh"),
+  githubAgentSetRepo: cmd("github repo"),
+  githubAgentUnbind: cmd("github unbind"),
   // ── Channel Hooks ──
   channelsList: cmd("channels list"),
   channelAdd: cmd("channels add"),
@@ -803,6 +809,10 @@ export const CHANGES = {
   "channels.resume": (args, value) => value?.label ?? args?.[0],
   "channels.pair.approve": (args, value) => value?.connectionId ?? args?.[1] ?? "pair",
   "channels.pair.deny": (args, value) => value?.connectionId ?? args?.[1] ?? "pair",
+  // GitHub Agent: log repo name or installation id only, never tokens or signed states.
+  "github.refresh": null,
+  "github.setRepo": (args) => args?.[0] ?? "repo",
+  "github.unbind": (args) => (args?.[0] ? String(args[0]) : "installation"),
 };
 /** The service's own calls that only read, wait or talk in a chat: no line. Every call is in this list, in CHANGES or in LOGS_ITSELF. */
 export const READS = ["interactions.list", "skills.review", "chat.scriptCommand", "skillsCatalog.search", "skillsCatalog.preview", "skillsCatalog.featured", "market.catalog", "market.skillImage", "market.skillPreview", "market.packPreview", "market.templatePreview", "mcpCatalog.list", "piPackages.browse", "piPackages.preview", "piPackages.list", "status", "logs.read", "doctor", "events.wait", "pair.status", "devices.list", "bots.list", "bots.get", "providers.list", "providers.services", "providers.login.read", "providers.login.input", "providers.login.cancel", "models", "chat.open", "chat.list", "chat.send", "chat.read", "chat.stop", "runs.list", "routines.list", "plugins.list", "plugins.marketplaces", "plugins.refresh", "plugins.browse", "plugins.preview", "config.get", "config.describe", "relay.status", "update.status", "update.check", "methods", "plugins.get", "tools.list", "tools.get", "tools.import.preview", "tools.signIn.read", "tools.signIn.input", "tools.signIn.cancel", "skills.list", "skills.get", "bots.tools", "bots.access", "bots.menu", "folders.list", "gadgets.get", "profile.status", "profile.home"];
@@ -810,7 +820,7 @@ export const READS = ["interactions.list", "skills.review", "chat.scriptCommand"
 export const MORE_READS = {
   bots: ["bots.flags", "bots.proactive", "bots.memory", "bots.sections", "bots.sections.get", "bots.importable", "bots.import.preview", "templates.list", "templates.get", "templates.import.preview", "templates.browse", "templates.market"],
   chats: ["chats.list", "chats.get", "chats.search", "chats.queue", "chats.helpers", "chats.mentions", "chats.aside", "chats.sections", "chats.projectLook", "chats.messages"], // (`chats.aside` asks the chat's model a question that the chat does not keep.)
-  routines: ["routines.get", "routines.runs", "routines.review", "routines.when", "routines.schedules", "workflows.list", "workflows.export", "workflows.deliveries"],
+  routines: ["routines.get", "routines.runs", "routines.review", "routines.when", "routines.schedules", "workflows.list", "workflows.export", "workflows.deliveries", "github.status", "github.installUrl"],
   projects: ["projects.list", "projects.get", "projects.artifacts", "projects.changes", "projects.diff", "jobs.list", "jobs.setup", "jobs.status", "todos.list", "todos.get", "tasks.list", "tasks.get", "artifacts.list", "artifacts.read", "artifacts.resolve"],
   wiki: ["wiki.tree", "wiki.find", "wiki.page", "wiki.search", "wiki.history", "wiki.version", "wiki.exportPlan"],
   prefs: ["preferences.get", "preferences.harnesses", "usage.report", "usage.export", "cache.info", "macTools.status"],

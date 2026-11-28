@@ -426,7 +426,7 @@ const V3_IN_ALL = 256;
  * conn+id until the phone leaves or the reconnect grace window expires.
  */
 export class RelayHost {
-  constructor({ url, key, serve, onGone = () => {}, onChange = () => {}, onTaken = () => {}, onGithubDelivery = () => {}, getGithubAuthProof = null, log = () => {}, WebSocket = globalThis.WebSocket, timers = {}, group, fallbackV2 = true }) {
+  constructor({ url, key, serve, onGone = () => {}, onChange = () => {}, onTaken = () => {}, onGithubDelivery = () => {}, onGithubInstallations = () => {}, getGithubAuthProof = null, log = () => {}, WebSocket = globalThis.WebSocket, timers = {}, group, fallbackV2 = true }) {
     this.key = key;
     this.secret = key?.privateKey;
     this.publicKey = key?.publicKey;
@@ -435,6 +435,7 @@ export class RelayHost {
     this.onChangeCallback = onChange;
     this.onTakenCallback = onTaken;
     this.onGithubDeliveryCallback = onGithubDelivery;
+    this.onGithubInstallationsCallback = onGithubInstallations;
     this.getGithubAuthProof = typeof getGithubAuthProof === "function" ? getGithubAuthProof : null;
     this.logTo = log;
     this.WebSocketClass = WebSocket;
@@ -468,6 +469,10 @@ export class RelayHost {
     this.endpoint = null;
     this.githubRepos = [];
     this.githubRenewTimer = null;
+    this.githubPendingRequests = new Map(); // requestId -> { resolve, reject, timer }
+    this.githubTokenCache = new Map(); // `${repo}|${permKey}` -> { token, expiresAtMs, installationId, permissions }
+    this.githubInstallations = [];
+    this.githubAppSlug = "botkins-agent";
     try {
       const origin = cleanRelayUrl(url);
       if (!validRelayKey(key)) throw new Error("no key");
@@ -520,6 +525,12 @@ export class RelayHost {
     this.grace = null;
     this.clear(this.githubRenewTimer);
     this.githubRenewTimer = null;
+    for (const [, pending] of this.githubPendingRequests) {
+      this.clear(pending.timer);
+      try { pending.reject(new Error("Relay stopped.")); } catch {}
+    }
+    this.githubPendingRequests.clear();
+    this.githubTokenCache.clear();
     for (const [socket] of [...this.sockets]) this.finishSocket(socket, 1000, true);
     for (const conn of [...this.conns.keys()]) this.leave(conn);
     this.conns.clear();
@@ -605,7 +616,9 @@ export class RelayHost {
       }
     }
     this.nextPing(socket, meta);
-    if (meta.slot === "active" && this.githubRepos.length) void this.sendGithubSubscribe(socket);
+    if (meta.slot === "active" && this.githubRepos.length) {
+      void this.sendGithubSubscribe(socket);
+    }
     // The relay accepts two sockets for one v3 group. A v2 relay is left with one seat.
     if (meta.mode === "v3" && !this.standby && meta.slot === "active") this.scheduleStandby(true);
   }
@@ -686,6 +699,190 @@ export class RelayHost {
       });
     }
     return true;
+  }
+
+  /** Builds a signed 10-minute GitHub App installation URL (`?state=...`) bound to this host's room key. */
+  createGithubInstallUrl(appSlug = this.githubAppSlug || "botkins-agent") {
+    if (!validRelayKey(this.key) || !this.room) throw new Error("Relay key is not ready.");
+    const slug = String(appSlug || "botkins-agent").trim().toLowerCase();
+    if (!/^[a-z0-9](?:[a-z0-9-]{0,62})$/.test(slug)) throw new Error("Invalid GitHub App slug.");
+    const nonce = randomBytes(18).toString("base64url");
+    const exp = Math.floor(this.timers.now() / 1000) + 600;
+    const challenge = `botkins-github-setup-v1:${this.room}:${nonce}:${exp}`;
+    const sig = signWithRelayKey(this.key, challenge);
+    const state = Buffer.from(
+      JSON.stringify({ v: 1, key: this.key.publicKey, room: this.room, nonce, exp, sig }),
+      "utf8",
+    ).toString("base64url");
+    return {
+      url: `https://github.com/apps/${slug}/installations/new?state=${encodeURIComponent(state)}`,
+      expiresAt: exp * 1000,
+      appSlug: slug,
+    };
+  }
+
+  _sendGithubControlRequest(payload, timeoutMs = 15_000) {
+    const socket = this.socket;
+    if (!socket || !this.sockets.has(socket) || !this.up) {
+      return Promise.reject(new Error("Relay is not connected."));
+    }
+    const requestId = payload.requestId;
+    return new Promise((resolve, reject) => {
+      const timer = this.later(timeoutMs, () => {
+        this.githubPendingRequests.delete(requestId);
+        reject(new Error("Relay GitHub request timed out."));
+      });
+      this.githubPendingRequests.set(requestId, { resolve, reject, timer });
+      try {
+        socket.send(JSON.stringify(payload));
+      } catch (err) {
+        this.clear(timer);
+        this.githubPendingRequests.delete(requestId);
+        reject(err);
+      }
+    });
+  }
+
+  /** Requests (and caches in memory until shortly before expiry) a single-repository installation token from the relay. */
+  async getGithubInstallationToken(repo, permissions = null) {
+    const cleanRepo = String(repo ?? "").trim().toLowerCase();
+    if (!/^[a-z0-9._-]{1,100}\/[a-z0-9._-]{1,100}$/.test(cleanRepo)) return null;
+    if (!validRelayKey(this.key) || !this.room || !this.up) return null;
+
+    const perms = permissions && typeof permissions === "object" && !Array.isArray(permissions)
+      ? permissions
+      : { issues: "write", metadata: "read", pull_requests: "write" };
+    const sortedEntries = Object.entries(perms)
+      .filter(([, v]) => v === "read" || v === "write")
+      .sort(([a], [b]) => a.localeCompare(b));
+    const permKey = sortedEntries.map(([k, v]) => `${k}=${v}`).join(",");
+    const cacheKey = `${cleanRepo}|${permKey}`;
+
+    const now = this.timers.now();
+    const cached = this.githubTokenCache.get(cacheKey);
+    // Keep a 90-second safety margin before token expiry.
+    if (cached && cached.expiresAtMs - now > 90_000) {
+      return cached.token;
+    }
+
+    const requestId = randomBytes(12).toString("base64url");
+    const time = Math.floor(now / 1000);
+    const challenge = `botkins-github-token-v1:${this.room}:${requestId}:${cleanRepo}:${time}:${permKey}`;
+    const sig = signWithRelayKey(this.key, challenge);
+    let reply;
+    try {
+      reply = await this._sendGithubControlRequest({
+        type: "github-token",
+        v: 1,
+        requestId,
+        key: this.key.publicKey,
+        time,
+        repo: cleanRepo,
+        permissions: Object.fromEntries(sortedEntries),
+        sig,
+      });
+    } catch {
+      return null;
+    }
+    if (!reply?.ok || typeof reply.token !== "string" || !reply.token.trim()) return null;
+    const expiresAtMs = Date.parse(reply.expiresAt || "") || now + 50 * 60_000;
+    this.githubTokenCache.set(cacheKey, {
+      token: reply.token.trim(),
+      expiresAtMs,
+      installationId: reply.installationId ?? null,
+      permissions: reply.permissions ?? Object.fromEntries(sortedEntries),
+    });
+    return reply.token.trim();
+  }
+
+  /** Drops any cached installation tokens for `repo` (or all repos if omitted). */
+  invalidateGithubTokens(repo = null) {
+    if (!repo) {
+      this.githubTokenCache.clear();
+      return;
+    }
+    const prefix = `${String(repo).trim().toLowerCase()}|`;
+    for (const key of [...this.githubTokenCache.keys()]) {
+      if (key.startsWith(prefix)) this.githubTokenCache.delete(key);
+    }
+  }
+
+  /** Claims exclusive handling of a GitHub delivery ID across a team of rooms bound to the same installation. */
+  async claimGithubDelivery(deliveryId) {
+    const clean = String(deliveryId ?? "").trim();
+    if (!clean || !validRelayKey(this.key) || !this.room || !this.up) return { ok: false, claimed: false };
+    const requestId = randomBytes(12).toString("base64url");
+    const time = Math.floor(this.timers.now() / 1000);
+    const challenge = `botkins-github-claim-v1:${this.room}:${requestId}:${clean}:${time}`;
+    const sig = signWithRelayKey(this.key, challenge);
+    try {
+      const reply = await this._sendGithubControlRequest({
+        type: "github-claim",
+        v: 1,
+        requestId,
+        key: this.key.publicKey,
+        time,
+        deliveryId: clean,
+        sig,
+      }, 8_000);
+      return { ok: Boolean(reply?.ok), claimed: reply?.claimed === true };
+    } catch {
+      return { ok: false, claimed: false };
+    }
+  }
+
+  /** Fetches the room's bound GitHub App installations from the relay. */
+  async listGithubInstallations() {
+    if (!validRelayKey(this.key) || !this.room || !this.up) {
+      return { ok: false, appSlug: this.githubAppSlug, installations: this.githubInstallations };
+    }
+    const requestId = randomBytes(12).toString("base64url");
+    const time = Math.floor(this.timers.now() / 1000);
+    const challenge = `botkins-github-installs-v1:${this.room}:${requestId}:${time}`;
+    const sig = signWithRelayKey(this.key, challenge);
+    const reply = await this._sendGithubControlRequest({
+      type: "github-installations-list",
+      v: 1,
+      requestId,
+      key: this.key.publicKey,
+      time,
+      sig,
+    });
+    if (reply?.ok) {
+      if (typeof reply.appSlug === "string" && reply.appSlug) this.githubAppSlug = reply.appSlug;
+      this.githubInstallations = Array.isArray(reply.installations) ? reply.installations : [];
+      try {
+        this.onGithubInstallationsCallback({ appSlug: this.githubAppSlug, installations: this.githubInstallations });
+      } catch {}
+    }
+    return { ok: Boolean(reply?.ok), appSlug: this.githubAppSlug, installations: this.githubInstallations };
+  }
+
+  /** Unbinds a GitHub App installation from this host's room on the relay. */
+  async unbindGithubInstallation(installationId) {
+    const id = Number(installationId);
+    if (!Number.isSafeInteger(id) || id <= 0) throw new Error("Invalid installation ID.");
+    if (!validRelayKey(this.key) || !this.room || !this.up) throw new Error("Relay is not connected.");
+    const requestId = randomBytes(12).toString("base64url");
+    const time = Math.floor(this.timers.now() / 1000);
+    const challenge = `botkins-github-unbind-v1:${this.room}:${requestId}:${id}:${time}`;
+    const sig = signWithRelayKey(this.key, challenge);
+    const reply = await this._sendGithubControlRequest({
+      type: "github-unbind",
+      v: 1,
+      requestId,
+      key: this.key.publicKey,
+      time,
+      installationId: id,
+      sig,
+    });
+    if (!reply?.ok) throw new Error(reply?.error || "Could not unbind GitHub installation.");
+    this.githubInstallations = Array.isArray(reply.installations) ? reply.installations : [];
+    this.githubTokenCache.clear();
+    try {
+      this.onGithubInstallationsCallback({ appSlug: this.githubAppSlug, installations: this.githubInstallations });
+    } catch {}
+    return { ok: true, installations: this.githubInstallations };
   }
 
   nextPing(socket, meta) {
@@ -873,6 +1070,22 @@ export class RelayHost {
           const parsed = JSON.parse(data);
           if (parsed && parsed.type === "github-delivery") {
             this.onGithubDeliveryCallback(parsed);
+          } else if (parsed && parsed.type === "github-installations") {
+            if (typeof parsed.appSlug === "string" && parsed.appSlug) this.githubAppSlug = parsed.appSlug;
+            this.githubInstallations = Array.isArray(parsed.installations) ? parsed.installations : [];
+            this.githubTokenCache.clear();
+            try {
+              this.onGithubInstallationsCallback({ appSlug: this.githubAppSlug, installations: this.githubInstallations });
+            } catch {}
+          } else if (
+            parsed &&
+            typeof parsed.requestId === "string" &&
+            this.githubPendingRequests.has(parsed.requestId)
+          ) {
+            const pending = this.githubPendingRequests.get(parsed.requestId);
+            this.githubPendingRequests.delete(parsed.requestId);
+            this.clear(pending.timer);
+            pending.resolve(parsed);
           }
         } catch {}
       }

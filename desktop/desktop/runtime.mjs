@@ -859,6 +859,12 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
     workflowGithubCatalog: (options) => workspace.workflows.githubCatalog(options ?? {}),
     workflowGithubDeliveries: (workflowId, nodeId) => workspace.workflows.listGithubDeliveries(workflowId, nodeId ?? null),
     workflowGithubReplayLast: (workflowId, nodeId) => workspace.workflows.replayLastGithubEvent(workflowId, nodeId ?? null),
+    // GitHub App ("Botkins Agent") settings & built-in @mention responder — strictly owner-only.
+    githubAgentStatus: () => workspace.githubAgent.status(),
+    githubAgentInstallUrl: () => workspace.githubAgent.installUrl(),
+    githubAgentRefresh: () => workspace.githubAgent.refresh(),
+    githubAgentSetRepo: (repo, patch) => workspace.githubAgent.setRepoConfig(repo, patch ?? {}),
+    githubAgentUnbind: (installationId) => workspace.githubAgent.unbind(installationId),
     workflowExportText: (id) => JSON.stringify(workspace.workflows.exportJson(id, host.version), null, 2),
     workflowImportText: (raw, agentMap) => workspace.workflows.importJson(raw, agentMap ?? {}),
     workflowExport: async (id) => {
@@ -1590,23 +1596,52 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
     announce();
     push();
   });
+  const syncGithubSubscriptions = () => {
+    const wfRepos = workspace.workflows.subscribedGithubRepos();
+    const mentionRepos = workspace.githubAgent.mentionEnabledRepos();
+    const merged = [...new Set([...wfRepos, ...mentionRepos])].sort().slice(0, 100);
+    link.setGithubRepos(merged);
+  };
+  workspace.workflows.setGithubInstallationTokenProvider((repo) => link.getGithubInstallationToken(repo));
+  workspace.githubAgent.setBridge({
+    getInstallationToken: (repo, permissions) => link.getGithubInstallationToken(repo, permissions),
+    claimDelivery: (deliveryId) => link.claimGithubDelivery(deliveryId),
+    createInstallUrl: (appSlug) => link.createGithubInstallUrl(appSlug),
+    refreshInstallations: () => link.listGithubInstallations(),
+    unbindInstallation: (installationId) => link.unbindGithubInstallation(installationId),
+    isRelayConnected: () => Boolean(link.relayLink?.connected),
+    onReposChanged: () => syncGithubSubscriptions(),
+  });
   link.on("relay", ({ connected }) => {
     workspace.workflows.onRelayStateChanged(connected);
+    if (connected) {
+      syncGithubSubscriptions();
+      void workspace.githubAgent.refresh().catch(() => {});
+    }
+    push();
+  });
+  link.on("githubInstallations", (info) => {
+    try {
+      workspace.githubAgent.syncInstallations(info);
+      push();
+    } catch (error) {
+      console.error("GitHub installations sync:", error.message);
+    }
   });
   link.on("githubDelivery", (frame) => {
     try {
       workspace.workflows.receiveGithubDelivery(frame);
     } catch (error) {
-      console.error("GitHub relay delivery:", error.message);
+      console.error("GitHub relay delivery (workflows):", error.message);
     }
+    void workspace.githubAgent.handleDelivery(frame).catch((error) => {
+      console.error("GitHub relay delivery (mentions):", error.message);
+    });
   });
-  link.setGithubAuthProofProvider(async () => {
-    const token = await workspace.workflows.githubAuth?.getAuthToken?.();
-    return token ? { githubToken: token } : null;
+  workspace.workflows.setGithubReposListener(() => {
+    syncGithubSubscriptions();
   });
-  workspace.workflows.setGithubReposListener((repos) => {
-    link.setGithubRepos(repos);
-  });
+  syncGithubSubscriptions();
   // A phone switched a source on or off: the next turn's tools are read anew, and Settings looks again.
   link.on("tools", () => {
     phoneRevision++;

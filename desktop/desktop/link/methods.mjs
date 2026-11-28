@@ -85,6 +85,7 @@ export const WORKFLOW_METHODS = [
   "workflowRotateWebhookSecret", "workflowExportText", "workflowImportText",
   "workflowGithubStatus", "workflowGithubSignInStart", "workflowGithubSignInCancel",
   "workflowGithubCatalog", "workflowGithubDeliveries", "workflowGithubReplayLast",
+  "githubAgentStatus", "githubAgentInstallUrl", "githubAgentRefresh", "githubAgentSetRepo", "githubAgentUnbind",
 ];
 /** External messaging Channel Hooks ("channels-v1", desktop/channels/index.mjs). Strictly owner-only. */
 export const CHANNEL_METHODS = [
@@ -597,6 +598,32 @@ export function remoteArgs(method, args, { deviceId, uploads } = {}) {
       throw new Error("Choose a workflow to inspect or replay GitHub deliveries.");
     }
     return nodeId ? [workflowId, nodeId] : [workflowId];
+  }
+  if (method === "githubAgentStatus" || method === "githubAgentInstallUrl" || method === "githubAgentRefresh") {
+    return [];
+  }
+  if (method === "githubAgentUnbind") {
+    const id = Number(args[0]);
+    if (!Number.isSafeInteger(id) || id <= 0) throw new Error("Choose a GitHub installation to disconnect.");
+    return [id];
+  }
+  if (method === "githubAgentSetRepo") {
+    const [repo, rawPatch] = args;
+    if (typeof repo !== "string" || !/^[A-Za-z0-9._-]{1,100}\/[A-Za-z0-9._-]{1,100}$/.test(repo.trim())) {
+      throw new Error("Choose a valid GitHub repository (owner/repo).");
+    }
+    const patch = rawPatch && typeof rawPatch === "object" && !Array.isArray(rawPatch) ? rawPatch : {};
+    const out = {};
+    if (patch.answerMentions !== undefined) out.answerMentions = patch.answerMentions === true;
+    if (patch.defaultBotId !== undefined) out.defaultBotId = typeof patch.defaultBotId === "string" && patch.defaultBotId.trim() ? patch.defaultBotId.trim().slice(0, 100) : null;
+    if (patch.allowlist !== undefined) {
+      out.allowlist = Array.isArray(patch.allowlist)
+        ? patch.allowlist.map((x) => String(x ?? "").trim()).filter(Boolean).slice(0, 100)
+        : typeof patch.allowlist === "string"
+          ? patch.allowlist.slice(0, 4000)
+          : [];
+    }
+    return [repo.trim().toLowerCase(), out];
   }
   if (method === "regenerateChatTitle") {
     if (args.length !== 1 || !clean(args[0])) throw new Error("Choose a chat to regenerate its title.");

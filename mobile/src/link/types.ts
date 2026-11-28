@@ -1752,6 +1752,50 @@ export type WorkflowGithubDelivery = {
   replayable?: boolean;
 };
 
+export type GithubAgentInstallation = {
+  installationId: number;
+  accountLogin: string;
+  accountType: string;
+  installerLogin: string;
+  repositorySelection: "all" | "selected";
+  repos: string[];
+  suspended: boolean;
+  updatedAt: number;
+  manageUrl?: string;
+};
+
+export type GithubAgentRepoConfig = {
+  fullName: string;
+  installationId: number | null;
+  accountLogin: string;
+  answerMentions: boolean;
+  defaultBotId: string | null;
+  allowlist: string[];
+};
+
+export type GithubAgentStatus = {
+  appSlug: string;
+  mentionHandle: string;
+  relayConnected: boolean;
+  eventsOn: boolean;
+  installations: GithubAgentInstallation[];
+  repos: GithubAgentRepoConfig[];
+  lastDelivery: {
+    deliveryId: string;
+    event: string;
+    action: string | null;
+    repository: string;
+    receivedAt: string;
+  } | null;
+  manageAppUrl: string;
+};
+
+export type GithubAgentInstallUrl = {
+  url: string;
+  expiresAt: number;
+  appSlug: string;
+};
+
 export type WorkflowGithubStatus = {
   installed: boolean;
   authenticated: boolean;
@@ -2436,6 +2480,14 @@ export type Calls = {
   workflowGithubCatalog(options?: { repos?: string[]; repo?: string; includeLabels?: boolean; includeAssignees?: boolean }): WorkflowGithubCatalog;
   workflowGithubDeliveries(workflowId: string, nodeId?: string): WorkflowGithubDelivery[];
   workflowGithubReplayLast(workflowId: string, nodeId?: string): WorkflowRun;
+  githubAgentStatus(): GithubAgentStatus;
+  githubAgentInstallUrl(): GithubAgentInstallUrl;
+  githubAgentRefresh(): GithubAgentStatus;
+  githubAgentSetRepo(
+    repo: string,
+    patch: { answerMentions?: boolean; defaultBotId?: string | null; allowlist?: string[] | string },
+  ): GithubAgentStatus;
+  githubAgentUnbind(installationId: number): GithubAgentStatus;
   channelsList(): ChannelConnection[];
   channelAdd(input: ChannelInput): ChannelConnection;
   channelUpdate(id: string, patch: ChannelInput): ChannelConnection;
