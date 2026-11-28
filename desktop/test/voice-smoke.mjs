@@ -17,7 +17,7 @@ import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSyn
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { _electron, expect } from "@playwright/test";
-import { signedInAs, skipWelcome } from "./welcome-helper.mjs";
+import { goHome, signedInAs, skipWelcome } from "./welcome-helper.mjs";
 import { starterBots } from "./starter.mjs";
 
 const KEY = "sk-voice-smoke-NOT-A-REAL-KEY-0123456789";
@@ -101,7 +101,8 @@ try {
   await signedInAs(app);
   page = await skipWelcome(page);
   await page.reload();
-  await page.getByRole("heading", { name: "Home", exact: true }).waitFor();
+  // Set up, the workspace opens on its primary bot's chat; this smoke starts on Home.
+  await goHome(page);
   const button = (name) => page.getByRole("button", { name, exact: true });
   const entry = () => page.getByRole("combobox", { name: "Message", exact: true });
   const voice = () => page.evaluate(() => window.botkins.voiceSettings());

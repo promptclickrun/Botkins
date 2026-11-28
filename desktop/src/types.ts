@@ -3050,12 +3050,13 @@ export type Preferences = {
   /** iMessage and Mail as bot tools, on a Mac. Only the app's own window changes it (setMacTool); a phone can read it to say "set up on your Mac". */
   macTools?: MacToolLevels;
   /**
-   * The side menu: its places in the person's order (always every place once: "Home", "Today",
-   * "Chats", "Work", "Wiki") and whether the menu is collapsed to icons, which is
-   * the usual menu. `picked` is there once the person has opened or collapsed it themselves.
-   * Set either field with setPreferences({ sidebar: { order } }) or ({ sidebar: { collapsed } }).
+   * The side menu: every place once in the person's order (src/places.ts has the list), the places
+   * kept off the menu (`hidden`: they are tiles on the All page), and whether the menu is collapsed
+   * to icons, which is the usual menu. `picked` is there once the person has opened or collapsed it
+   * themselves. Set any field alone with setPreferences({ sidebar: { order } }), ({ sidebar: {
+   * hidden } }) or ({ sidebar: { collapsed } }); the others stay as they were.
    */
-  sidebar?: { order: string[]; collapsed: boolean; picked?: boolean };
+  sidebar?: { order: string[]; /** The places kept off the side menu: tiles on the All page. An older computer sends none. */ hidden?: string[]; collapsed: boolean; picked?: boolean };
   /** Model used by headless Claude Code artifact sub-runs. */
   claudeArtifactModel?: "haiku" | "sonnet" | "opus";
   /**

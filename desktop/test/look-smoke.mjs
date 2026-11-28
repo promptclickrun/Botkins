@@ -8,7 +8,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { _electron, expect } from "@playwright/test";
-import { signedInAs, skipWelcome } from "./welcome-helper.mjs";
+import { pinPlaces, signedInAs, skipWelcome } from "./welcome-helper.mjs";
 import { openToday } from "./spaces-helper.mjs";
 
 const dir = mkdtempSync(join(tmpdir(), "botkins-look-"));
@@ -149,6 +149,8 @@ try {
 
   // ---- A tour of the places, for screenshots.
   const nav = page.getByRole("navigation", { name: "Workspace" });
+  // The Wiki is a tile on the All page of a new menu: the tour opens it from the menu.
+  await pinPlaces(page, "Wiki");
   const place = async (name) => {
     await nav.getByRole("button", { name, exact: true }).click();
     await page.waitForTimeout(250);

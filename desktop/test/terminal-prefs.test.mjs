@@ -92,10 +92,13 @@ test("preferences: a fixed list of keys, a value that fits, and a log line with 
   assert.equal((await botkins(["preferences", "set", "clarify", "choices,changes"])).out, "Set clarify to choices, changes.\n");
   assert.equal((await botkins(["preferences", "set", "clarify", "none"])).out, "Set clarify to none.\n");
   assert.equal((await botkins(["preferences", "set", "sidebar.order", "Wiki,Home"])).exit, 0);
+  // The places kept off the side menu are a list too, and the order stays as it was.
+  assert.equal((await botkins(["preferences", "set", "sidebar.hidden", "Usage,Market"])).out, "Set sidebar.hidden to Market, Usage.\n");
   assert.equal((await botkins(["preferences", "set", "appearance.bubble", "#3366CC"])).exit, 0);
   const now = (await botkins(["preferences", "show", "--json"])).json();
   assert.deepEqual([now["appearance.theme"], now.showThinking, now.linkPreviews, now["notifications.quietHours.from"], now.clarify, now["appearance.bubble"]], ["dark", false, true, "21:30", [], "#3366CC"]);
   assert.deepEqual(now["sidebar.order"].slice(0, 2), ["Wiki", "Home"]);
+  assert.deepEqual(now["sidebar.hidden"], ["Market", "Usage"]);
   // The change is in the workspace itself, not only in the answer.
   assert.equal((await client.call("preferences.get", "appearance.theme"))["appearance.theme"], "dark");
   // A value that does not fit is refused with what the key takes, and the setting stays.
@@ -104,6 +107,7 @@ test("preferences: a fixed list of keys, a value that fits, and a log line with 
     [["showThinking", "maybe"], /showThinking takes on or off\./],
     [["notifications.quietHours.to", "25:00"], /takes a time of day as HH:MM/],
     [["clarify", "missing,nonsense"], /clarify takes some of missing, choices, changes, or none\./],
+    [["sidebar.hidden", "Wiki,Settings"], /sidebar\.hidden takes some of Home, Today, Chats, Work, Projects, Tasks, Routines, Spaces, Wiki, Market, Activity, Usage, or none\./],
     [["appearance.bubble", "red"], /takes theme, or a color such as #3366cc\./],
   ]) {
     const refused = await botkins(["preferences", "set", ...argv]);

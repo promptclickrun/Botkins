@@ -11,7 +11,7 @@ import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { _electron, expect } from "@playwright/test";
-import { signedInAs, skipWelcome } from "./welcome-helper.mjs";
+import { pinPlaces, signedInAs, skipWelcome } from "./welcome-helper.mjs";
 import { seedApp } from "./starter.mjs";
 
 const dir = mkdtempSync(join(tmpdir(), "botkins-wiki-ui-"));
@@ -162,6 +162,8 @@ try {
   await save("playbooks/round-trip.md", ROUND);
 
   // ---- Home: sections, recent pages and the offer for records without a page.
+  // The Wiki is a tile on the All page of a new menu: pinned, it is a place on the side menu.
+  await pinPlaces(page, "Wiki");
   await sidebar("Wiki").click();
   await expect(page.getByRole("navigation", { name: "Workspace" }).getByRole("button", { name: "Wiki", exact: true })).toHaveAttribute("aria-current", "page");
   await expect(page.locator(".wiki-home h1")).toHaveText("Wiki");

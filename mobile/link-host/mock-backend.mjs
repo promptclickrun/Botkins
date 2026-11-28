@@ -118,6 +118,8 @@ class DemoProtonPass {
   }
 }
 /** The demo computer's owner, as a person. */
+// Every place the computer's side menu can show, in the usual order (the desktop's desktop/preferences.mjs).
+const SIDEBAR = ["Home", "Today", "Chats", "Work", "Projects", "Tasks", "Routines", "Spaces", "Wiki", "Market", "Activity", "Usage"];
 const OWNER_NAME = "Alex";
 const DESIGN_SKILL = "---\nname: design-review\ndescription: Review a design.\n---\nCheck readability and contrast.";
 const BUILTIN_SPACES = [["today", "Today"], ["feed", "Feed"], ["ideas", "Ideas"], ["goals", "Goals"]];
@@ -512,7 +514,8 @@ export function seed() {
       notifications: { replies: true, routines: true, requests: true, reminders: true, quietHours: { enabled: false, from: "22:00", to: "07:00" }, bots: { mode: "all", ids: [] }, mutedBots: [] },
       access: { allBots: true },
       background: { keepRunning: true, runAtStartup: false },
-      sidebar: { order: ["Home", "Today", "Chats", "Work", "Wiki"], collapsed: true },
+      // Every place in order, and the ones kept off the menu, as tiles on the computer's All page (the desktop's desktop/preferences.mjs).
+      sidebar: { order: [...SIDEBAR], hidden: SIDEBAR.filter((place) => !["Home", "Today", "Chats", "Work", "Spaces"].includes(place)), collapsed: true },
       teamwork: true,
       // Turns between a chat's summaries into a new title: 5 to 30, or 0 for off (the desktop's desktop/summaries.mjs).
       autoSummarize: 10,
@@ -2619,9 +2622,9 @@ export class MockBackend {
       const settings = this.state.settings;
       // The side menu and Background take part of their setting, as the desktop's do (its desktop/preferences.mjs).
       if (rest.sidebar) {
-        const places = ["Home", "Today", "Chats", "Work", "Wiki"];
-        const named = [...new Set((rest.sidebar.order ?? settings.sidebar.order).filter((place) => places.includes(place)))];
-        rest.sidebar = { order: [...named, ...places.filter((place) => !named.includes(place))], collapsed: rest.sidebar.collapsed ?? settings.sidebar.collapsed };
+        const named = [...new Set((rest.sidebar.order ?? settings.sidebar.order).filter((place) => SIDEBAR.includes(place)))];
+        const hidden = rest.sidebar.hidden ?? settings.sidebar.hidden;
+        rest.sidebar = { order: [...named, ...SIDEBAR.filter((place) => !named.includes(place))], hidden: SIDEBAR.filter((place) => hidden.includes(place)), collapsed: rest.sidebar.collapsed ?? settings.sidebar.collapsed };
       }
       if (rest.background) {
         const next = { ...settings.background, ...rest.background };

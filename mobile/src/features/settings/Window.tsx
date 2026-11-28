@@ -9,7 +9,8 @@ import type { Appearance, Preferences } from "@/link/types";
 import { useOnline, usePart, useSettings } from "@/state/hooks";
 import { api } from "@/state/link";
 import { BACKDROPS, backdropById, brand, Group, IconButton, IconTile, Label, Loading, Page, radius, Row, Segmented, space, T, THEMES, type ThemeDef, themeById, useTheme } from "@/ui";
-import { DESKTOP_TEXT_SIZES, desktopFonts, desktopFontShown, isUsualOrder, movePlace, type Place, PLACES, placeOrder } from "./computer";
+import { useSpacesOn } from "@/features/spaces/data";
+import { DESKTOP_TEXT_SIZES, desktopFonts, desktopFontShown, isUsualMenu, menuOf, pinsPlaces, type Place, placeMoved, PLACES_BEFORE, placeShown, type Sidebar, spacesShown, usualMenu } from "./computer";
 import { useHeld } from "./shared";
 
 const MODES: { value: Appearance["theme"]; label: string }[] = [
@@ -37,7 +38,9 @@ export default function Window() {
   const platform = usePart("meta")?.platform;
   const [look, holdLook] = useHeld(settings?.appearance);
   const [prefs, holdPrefs] = useHeld(settings && { linkPreviews: settings.linkPreviews, readAloud: settings.readAloud });
-  const [sidebar, holdSidebar] = useHeld(settings?.sidebar);
+  const [sidebar, holdSidebar] = useHeld<Sidebar>(settings?.sidebar);
+  // With spaces, Today is a space on the computer, and its menu has a section of spaces.
+  const spaces = useSpacesOn();
   if (!settings || !look || !prefs)
     return (
       <Page title="Your computer's window">
@@ -47,15 +50,22 @@ export default function Window() {
 
   const setLook = (patch: Partial<Appearance>) => void holdLook(patch, () => api.setPreferences({ appearance: patch }));
   const setPref = (patch: Pick<Preferences, "linkPreviews" | "readAloud">) => void holdPrefs(patch, () => api.setPreferences(patch));
-  // The side menu takes part of its setting: the order alone, or icons only alone.
-  const setSidebar = (patch: Partial<NonNullable<Preferences["sidebar"]>>) => void holdSidebar(patch, () => api.setPreferences({ sidebar: patch as NonNullable<Preferences["sidebar"]> }));
+  // The side menu takes part of its setting: the order alone, the places off it alone, or icons only alone.
+  const setSidebar = (patch: Partial<Sidebar>) => void holdSidebar(patch, () => api.setPreferences({ sidebar: patch as NonNullable<Preferences["sidebar"]> }));
 
   // Which half of a theme the computer shows: "System" follows the computer, shown here as this phone's.
   const showDark = look.theme === "dark" || (look.theme === "system" && dark);
   const fonts = desktopFonts(platform);
   const font = look.font !== undefined ? fonts.find((item) => item.id === desktopFontShown(look.font, platform)) : undefined;
-  const order = sidebar ? placeOrder(sidebar.order) : [];
-  const move = (place: Place, by: -1 | 1) => setSidebar({ order: movePlace(order, place, by) });
+  // The places on the computer's menu, in its order, then the ones it keeps on its All page. A
+  // computer from before places could be taken off the menu has its six, all on it.
+  const pins = pinsPlaces(sidebar);
+  const { menu, off } = menuOf(sidebar, spaces);
+  const move = (place: Place, by: -1 | 1) => {
+    const next = placeMoved(sidebar, spaces, place, by);
+    if (next) setSidebar(next);
+  };
+  const show = (place: Place, on: boolean) => setSidebar(placeShown(sidebar, spaces, place, on));
 
   return (
     <Page title="Your computer's window" caption="How Botkins looks on your computer">
@@ -166,23 +176,43 @@ export default function Window() {
             </Group>
           </View>
           <View>
-            <Label>Places</Label>
+            <Label>On the side menu</Label>
             <Group>
-              {order.map((place, index) => (
+              {menu.map((place, index) => (
                 <Row
                   key={place}
                   title={place}
                   trailing={
                     <View style={{ flexDirection: "row", gap: space.xs }}>
                       <IconButton icon={ArrowUp} label={"Move " + place + " up"} size={36} color={index === 0 ? colors.faint : colors.ink2} disabled={!online || index === 0} onPress={() => move(place, -1)} />
-                      <IconButton icon={ArrowDown} label={"Move " + place + " down"} size={36} color={index === order.length - 1 ? colors.faint : colors.ink2} disabled={!online || index === order.length - 1} onPress={() => move(place, 1)} />
+                      <IconButton icon={ArrowDown} label={"Move " + place + " down"} size={36} color={index === menu.length - 1 ? colors.faint : colors.ink2} disabled={!online || index === menu.length - 1} onPress={() => move(place, 1)} />
                     </View>
                   }
+                  {...(pins ? { toggled: true, disabled: !online, onToggle: (on: boolean) => show(place, on) } : {})}
                 />
               ))}
-              <Row title="Reset to the usual order" tone="accent" disabled={!online || isUsualOrder(order)} onPress={() => setSidebar({ order: [...PLACES] })} />
+              {pins && spaces && <Row title="Your spaces" subtitle="Under the places" toggled={spacesShown(sidebar)} disabled={!online} onToggle={(on) => show("Spaces", on)} />}
+              <Row
+                title={pins ? "Reset to the usual menu" : "Reset to the usual order"}
+                tone="accent"
+                disabled={!online || isUsualMenu(sidebar, spaces)}
+                onPress={() => setSidebar(pins ? usualMenu() : { order: [...PLACES_BEFORE] })}
+              />
             </Group>
           </View>
+          {pins && off.length > 0 && (
+            <View>
+              <Label>On the All page</Label>
+              <Group>
+                {off.map((place) => (
+                  <Row key={place} title={place} toggled={false} disabled={!online} onToggle={(on) => show(place, on)} />
+                ))}
+              </Group>
+              <T variant="footnote" color="muted" style={{ paddingHorizontal: space.xs, paddingTop: space.xs }}>
+                Switch a place on to pin it to the side menu. On the computer, you can also drag a tile from All onto the menu.
+              </T>
+            </View>
+          )}
         </View>
       )}
 

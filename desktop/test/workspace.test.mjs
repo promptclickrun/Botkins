@@ -140,50 +140,70 @@ test("a failed reply can be retried and an active run resumes in place after res
   assert.equal(Object.keys(workspace.snapshot().streams).length, 0);
 });
 
-test("the side menu's order and collapsed state are settings", async (t) => {
+test("the side menu's places, their order and its collapsed state are settings", async (t) => {
   const { mkdtempSync, rmSync, writeFileSync, mkdirSync } = await import("node:fs");
   const { tmpdir } = await import("node:os");
   const { join } = await import("node:path");
-  const { SIDEBAR, sidebarField } = await import("../desktop/preferences.mjs");
+  const { SIDEBAR, SIDEBAR_USUAL, sidebarField } = await import("../desktop/preferences.mjs");
   const dir = mkdtempSync(join(tmpdir(), "botkins-sidebar-"));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const ws = new Workspace(dir, async () => ({}), () => {});
+  const after = (...first) => [...first, ...SIDEBAR.filter((place) => !first.includes(place))];
+  // Every place can be on the menu. A new menu is short: the rest are tiles on the All page.
+  assert.deepEqual(SIDEBAR, ["Home", "Today", "Chats", "Work", "Projects", "Tasks", "Routines", "Spaces", "Wiki", "Market", "Activity", "Usage"]);
+  assert.deepEqual(SIDEBAR_USUAL, ["Home", "Today", "Chats", "Work", "Spaces"]);
+  const off = ["Projects", "Tasks", "Routines", "Wiki", "Market", "Activity", "Usage"];
   // The usual menu shows icons only.
-  assert.deepEqual(ws.state.settings.sidebar, { order: ["Home", "Today", "Chats", "Work", "Wiki", "Market"], collapsed: true });
+  assert.deepEqual(ws.state.settings.sidebar, { order: [...SIDEBAR], hidden: off, collapsed: true });
   // A new order names the places it cares about; the rest follow in their usual order. Unknown and repeated names are dropped.
   ws.setPreferences({ sidebar: { order: ["Wiki", "Chats", "Nope", "Wiki"] } });
-  assert.deepEqual(ws.state.settings.sidebar, { order: ["Wiki", "Chats", "Home", "Today", "Work", "Market"], collapsed: true }, "reordering is not a choice about icons");
+  assert.deepEqual(ws.state.settings.sidebar, { order: after("Wiki", "Chats"), hidden: off, collapsed: true }, "reordering is not a choice about icons, and takes nothing off the menu or onto it");
+  // The places kept off the menu are a list of their own, kept in the usual order. Unknown and repeated names are dropped.
+  ws.setPreferences({ sidebar: { hidden: ["Usage", "Home", "Nope", "Usage"] } });
+  assert.deepEqual(ws.state.settings.sidebar, { order: after("Wiki", "Chats"), hidden: ["Home", "Usage"], collapsed: true }, "taking places off keeps the order");
+  ws.setPreferences({ sidebar: { hidden: [] } });
+  assert.deepEqual(ws.state.settings.sidebar.hidden, [], "every place can be on the menu at once");
+  ws.setPreferences({ sidebar: { hidden: ["Market"] } });
   // Opening the menu is the person's choice, and is kept as one.
   ws.setPreferences({ sidebar: { collapsed: false } });
-  assert.deepEqual(ws.state.settings.sidebar, { order: ["Wiki", "Chats", "Home", "Today", "Work", "Market"], collapsed: false, picked: true }, "opening keeps the order");
+  assert.deepEqual(ws.state.settings.sidebar, { order: after("Wiki", "Chats"), hidden: ["Market"], collapsed: false, picked: true }, "opening keeps the order and the places");
   ws.setPreferences({ sidebar: { order: [...SIDEBAR].reverse() } });
   assert.equal(ws.state.settings.sidebar.collapsed, false, "reordering keeps the open menu");
-  for (const bad of ["Home", ["Home"], { order: "Home" }, { order: [1] }, { collapsed: "yes" }, { picked: "yes" }])
+  for (const bad of ["Home", ["Home"], { order: "Home" }, { order: [1] }, { hidden: "Wiki" }, { hidden: [1] }, { collapsed: "yes" }, { picked: "yes" }])
     assert.throws(() => ws.setPreferences({ sidebar: bad }), /side menu/);
-  // It survives a restart, and a menu saved before a place existed gains that place.
+  // It survives a restart.
   const again = new Workspace(dir, async () => ({}), () => {});
-  assert.deepEqual(again.state.settings.sidebar, { order: [...SIDEBAR].reverse(), collapsed: false, picked: true });
+  assert.deepEqual(again.state.settings.sidebar, { order: [...SIDEBAR].reverse(), hidden: ["Market"], collapsed: false, picked: true });
   again.setPreferences({ sidebar: { collapsed: true } });
-  assert.deepEqual(new Workspace(dir, async () => ({}), () => {}).state.settings.sidebar, { order: [...SIDEBAR].reverse(), collapsed: true, picked: true }, "so does collapsing it again");
-  assert.deepEqual(sidebarField({ order: ["Chats", "Home"] }).order, ["Chats", "Home", "Today", "Work", "Wiki", "Market"]);
+  assert.deepEqual(new Workspace(dir, async () => ({}), () => {}).state.settings.sidebar, { order: [...SIDEBAR].reverse(), hidden: ["Market"], collapsed: true, picked: true }, "so does collapsing it again");
+  assert.deepEqual(sidebarField({ order: ["Chats", "Home"] }).order, after("Chats", "Home"));
   // Places that no longer exist are dropped. The remaining places keep their order.
-  assert.deepEqual(sidebarField({ order: ["Wiki", "Old page", "Home", "Projects"], collapsed: true }).order, ["Wiki", "Home", "Today", "Chats", "Work", "Market"]);
-  assert.deepEqual(sidebarField({ order: ["Projects", "Work", "Wiki", "Home", "Today", "Chats"] }).order, ["Work", "Wiki", "Home", "Today", "Chats", "Market"]);
+  assert.deepEqual(sidebarField({ order: ["Wiki", "Old page", "Home", "Projects"], collapsed: true }).order, after("Wiki", "Home", "Projects"));
+  // A menu saved before places could be taken off it showed six places and the spaces. One left in
+  // the usual order becomes today's shorter menu. One the person had put in their own order keeps
+  // all six. Either way the places added since start as tiles on the All page.
+  assert.deepEqual(sidebarField({ order: ["Home", "Today", "Chats", "Work", "Wiki", "Market"] }).hidden, off);
+  assert.deepEqual(sidebarField({ order: ["Home", "Today"] }).hidden, off, "an order that changes nothing is the usual order");
+  assert.deepEqual(sidebarField({ order: ["Wiki", "Chats"] }).hidden, ["Projects", "Tasks", "Routines", "Activity", "Usage"]);
+  // A client from before then sends only an order: the places off the menu stay as they were.
+  assert.deepEqual(sidebarField({ order: ["Work"] }, { order: SIDEBAR, hidden: ["Home"], collapsed: true }), { order: after("Work"), hidden: ["Home"], collapsed: true });
   const old = join(dir, "old");
   mkdirSync(old);
   writeFileSync(join(old, "workspace.json"), JSON.stringify({ bots: [], chats: [], runs: [], settings: { sidebar: { order: ["Work", "Home"], collapsed: "broken" } } }));
-  assert.deepEqual(new Workspace(old, async () => ({}), () => {}).state.settings.sidebar, { order: [...SIDEBAR], collapsed: true }, "a damaged setting falls back to the usual menu");
+  assert.deepEqual(new Workspace(old, async () => ({}), () => {}).state.settings.sidebar, { order: [...SIDEBAR], hidden: off, collapsed: true }, "a damaged setting falls back to the usual menu");
   // A menu saved open before the choice was recorded was only the usual menu of its day: it becomes
   // today's usual menu, in its own order. One saved collapsed stays collapsed.
   const earlier = join(dir, "earlier");
   mkdirSync(earlier);
   writeFileSync(join(earlier, "workspace.json"), JSON.stringify({ bots: [], chats: [], runs: [], settings: { sidebar: { order: ["Work", "Home"], collapsed: false } } }));
   const moved = new Workspace(earlier, async () => ({}), () => {});
-  assert.deepEqual(moved.state.settings.sidebar, { order: ["Work", "Home", "Today", "Chats", "Wiki", "Market"], collapsed: true });
-  assert.deepEqual(sidebarField({ order: SIDEBAR, collapsed: true }), { order: [...SIDEBAR], collapsed: true });
-  // Once opened by the person, it stays open across restarts.
+  assert.deepEqual(moved.state.settings.sidebar, { order: after("Work", "Home"), hidden: ["Projects", "Tasks", "Routines", "Activity", "Usage"], collapsed: true });
+  assert.deepEqual(sidebarField({ order: SIDEBAR, collapsed: true }), { order: [...SIDEBAR], hidden: off, collapsed: true });
+  // Once opened by the person, it stays open across restarts, and so do the places.
   moved.setPreferences({ sidebar: { collapsed: false } });
-  assert.equal(new Workspace(earlier, async () => ({}), () => {}).state.settings.sidebar.collapsed, false);
+  const kept = new Workspace(earlier, async () => ({}), () => {}).state.settings.sidebar;
+  assert.equal(kept.collapsed, false);
+  assert.deepEqual(kept.hidden, ["Projects", "Tasks", "Routines", "Activity", "Usage"], "a menu made whole once is not made over again");
 });
 
 test("a turn's live text starts a new paragraph when a new message begins", async () => {

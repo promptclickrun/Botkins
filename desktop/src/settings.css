@@ -1470,9 +1470,19 @@ dialog.bot-studio:not([open]) {
 .set-row.place-row.drop-after::after {
   bottom: -1px;
 }
+/* A place kept off the menu has no order: it is not dragged, and reads quieter. */
+.set-row.place-row.off {
+  cursor: default;
+}
+.set-row.place-row.off .place-name,
+.set-row.place-row.off .place-icon {
+  color: var(--faint);
+}
 .place-grip {
   display: grid;
   place-items: center;
+  width: 14px;
+  flex: none;
   color: var(--faint);
 }
 .place-icon {
@@ -1489,7 +1499,11 @@ dialog.bot-studio:not([open]) {
 }
 .place-moves {
   display: inline-flex;
+  align-items: center;
   gap: 2px;
+}
+.place-moves > :first-child {
+  margin-right: 8px;
 }
 .place-moves .int-icon:disabled {
   opacity: 0.3;

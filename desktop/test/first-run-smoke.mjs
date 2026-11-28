@@ -154,9 +154,9 @@ try {
   assert.equal(readFileSync(agentFile("reviewer.agent.md"), "utf8"), reviewer);
   await app.close();
 
-  // A second launch opens the workspace: the bots are there, so the first-run step is gone.
+  // A second launch opens the workspace on its primary bot's chat: the bots are there, so the first-run step is gone.
   await start("with-agents", "home");
-  await heading("Home").waitFor({ timeout: 30000 });
+  await page.locator(".chathead").waitFor({ timeout: 30000 });
   await expect(heading("Bring in your agents")).toHaveCount(0);
   assert.equal((await snapshot()).bots.length, 3);
   await app.close();
