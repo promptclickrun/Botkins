@@ -30,7 +30,8 @@ export default function General() {
             onPress={() => router.push("/settings/claude-artifacts" as Href)}
           />
         )}
-        {owner && <Row leading={<IconTile icon={HardDrive} color={brand.tide} />} title="Background and storage" subtitle="Run at startup, keep running, cache" chevron onPress={() => router.push("/settings/desktop" as Href)} />}
+        {owner && <Row leading={<IconTile icon={HardDrive} color={brand.tide} />} title="Storage" subtitle="Workspace size, run pruning, cache" chevron onPress={() => router.push("/settings/storage" as Href)} />}
+        {owner && <Row leading={<IconTile icon={HardDrive} color={brand.tide} />} title="Background" subtitle="Run at startup, keep running" chevron onPress={() => router.push("/settings/desktop" as Href)} />}
       </Group>
     </Page>
   );

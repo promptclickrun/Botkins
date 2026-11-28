@@ -255,6 +255,8 @@ const POLICY = {
   exportUsageText: "owner",
   cacheInfo: "owner",
   clearCache: "owner",
+  workspaceStats: "owner",
+  workspacePrune: "owner",
   providerUsage: "owner",
   testNotification: "owner",
   listFolders: "owner",

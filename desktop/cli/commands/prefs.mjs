@@ -66,6 +66,9 @@ const KEYS = [
   ["sidebar.collapsed", "on | off", "The side menu shows icons only"],
   ["proactive.chatMode", "main | new", "Proactive signals: Main chat or New chat every time, for you on this computer"],
   ["proactive.enabled", "on | off", "Experimental: the computer's switch for the Proactive agent (each bot's own is `botkins bots proactive`)"],
+  ["workspacePrune.auto", "on | off", "Automatically prune old workspace runs at startup and once a day"],
+  ["workspacePrune.keepDays", "1 to 3650", "Days of run history to keep before auto-pruning"],
+  ["workspacePrune.mode", "trim | delete", "How auto-pruning compacts old runs: trim or delete"],
 ];
 /** The keys, for the help of `preferences set`. */
 export const PREFERENCE_KEYS = KEYS.map(([key]) => key);
@@ -346,9 +349,107 @@ const macGroup = {
   },
 };
 
+// ── Workspace storage & pruning ─────────────────────────────────────────────────────────────────
+function formatBytes(bytes) {
+  if (!Number.isFinite(bytes) || bytes < 1024) return Math.max(0, Math.round(bytes || 0)) + " B";
+  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + " KB";
+  return (bytes / 1024 / 1024).toFixed(1) + " MB";
+}
+function parseWhole(raw, name, min, max) {
+  const n = typeof raw === "number" ? raw : typeof raw === "string" && /^\d+$/.test(raw.trim()) ? Number(raw.trim()) : NaN;
+  if (!Number.isInteger(n) || n < min || n > max) throw usage(`--${name} must be a whole number from ${min} to ${max}.`);
+  return n;
+}
+const workspaceStatsText = (stats) => {
+  const lines = [
+    `Workspace file: ${formatBytes(stats.bytes)} (${formatBytes(stats.runsBytes)} in runs)`,
+    `Runs: ${number(stats.runCount)} across ${number(stats.chatCount)} chats${stats.trimmedRuns ? ` (${number(stats.trimmedRuns)} already trimmed)` : ""}`,
+  ];
+  if (stats.oldestRunAt) lines.push(`Oldest run: ${new Date(stats.oldestRunAt).toISOString().slice(0, 10)}`);
+  if (stats.archiveDir) lines.push(`Archive folder: ${safe(stats.archiveDir)}`);
+  return lines.join("\n");
+};
+const workspacePruneText = (result) => {
+  const verb = result.mode === "delete" ? "delete" : "trim";
+  const past = result.mode === "delete" ? "Deleted" : "Trimmed";
+  const affected = result.affectedCount;
+  if (result.dryRun) {
+    if (!affected) return `Nothing to ${verb} (keep ${result.keepDays} days, newest ${result.keepRuns} runs; workspace is ${formatBytes(result.beforeBytes)}).`;
+    return [
+      `Dry run (${result.mode}, keep ${result.keepDays} days, newest ${result.keepRuns} runs):`,
+      `  Would ${verb}: ${number(affected)} run${affected === 1 ? "" : "s"}`,
+      `  Size: ${formatBytes(result.beforeBytes)} -> ${formatBytes(result.afterBytes)} (saves ${formatBytes(result.savedBytes)})`,
+      ...(result.archivePath ? [`  Archive would be written to: ${safe(result.archivePath)}`] : []),
+    ].join("\n");
+  }
+  if (!affected) return `Nothing to ${verb}. Workspace stays ${formatBytes(result.beforeBytes)}.`;
+  return [
+    `${past} ${number(affected)} run${affected === 1 ? "" : "s"} (mode: ${result.mode}, keep ${result.keepDays} days, newest ${result.keepRuns} runs).`,
+    `Size: ${formatBytes(result.beforeBytes)} -> ${formatBytes(result.afterBytes)} (saved ${formatBytes(result.savedBytes)}).`,
+    ...(result.archivePath ? [`Archive: ${safe(result.archivePath)}`] : []),
+  ].join("\n");
+};
+const workspaceGroup = {
+  summary: "Inspect workspace storage size and prune old run payloads",
+  commands: {
+    stats: {
+      summary: "Show workspace.json size, run count, and archive location",
+      usage: "botkins workspace stats",
+      async run(context) {
+        if (context.args.length) throw usage("This command takes no arguments.");
+        context.print(await context.client.call("workspace.stats"), workspaceStatsText);
+      },
+    },
+    prune: {
+      summary: "Trim tool payloads from old runs or delete old runs (writes a gzip archive first)",
+      usage: "botkins workspace prune --keep-days <N> [--keep-runs <N>] [--mode <trim|delete>] [--dry-run] [--yes]",
+      options: {
+        "keep-days": { type: "string", value: "days", about: "Keep runs from the last N days (1 to 3650, default 30)" },
+        "keep-runs": { type: "string", value: "count", about: "Also always keep the newest N runs overall (0 to 100000, default 200)" },
+        mode: { type: "string", value: "trim|delete", about: "trim (drop step inputs/outputs, default) or delete (remove old runs)" },
+        "dry-run": { type: "boolean", about: "Preview what would be pruned without changing workspace.json" },
+        ...YES,
+      },
+      details: [
+        "Never touches working/queued runs, the newest run of each chat, or runs referenced by pending approvals, tasks, or workflow runs.",
+        "Before mutating workspace.json, writes a gzip archive under data/archive/workspace-runs-<timestamp>.json.gz.",
+      ].join("\n"),
+      async run(context) {
+        if (context.args.length) throw usage("Use options (--keep-days, --keep-runs, --mode, --dry-run, --yes) instead of positional arguments.");
+        const opts = {};
+        if (context.options["keep-days"] !== undefined) opts.keepDays = parseWhole(context.options["keep-days"], "keep-days", 1, 3650);
+        if (context.options["keep-runs"] !== undefined) opts.keepRuns = parseWhole(context.options["keep-runs"], "keep-runs", 0, 100_000);
+        if (context.options.mode !== undefined) {
+          const m = String(context.options.mode).trim().toLowerCase();
+          if (m !== "trim" && m !== "delete") throw usage("--mode must be trim or delete.");
+          opts.mode = m;
+        }
+        const dryRun = context.options["dry-run"] === true;
+        if (dryRun) {
+          const preview = await context.client.call("workspace.prune", { ...opts, dryRun: true });
+          context.print(preview, workspacePruneText);
+          return;
+        }
+        // Preview first so the confirmation names the exact counts, bytes saved and archive path.
+        const preview = await context.client.call("workspace.prune", { ...opts, dryRun: true });
+        if (!preview.affectedCount) {
+          context.print({ ...preview, dryRun: false, archivePath: null }, workspacePruneText);
+          return;
+        }
+        const verb = preview.mode === "delete" ? "Delete" : "Trim";
+        const msg = `${verb} ${number(preview.affectedCount)} run${preview.affectedCount === 1 ? "" : "s"} to save ~${formatBytes(preview.savedBytes)}?${preview.archivePath ? " Archive: " + safe(preview.archivePath) : ""}`;
+        if (!(await confirm(context, msg))) return EXIT.failed;
+        const result = await context.client.call("workspace.prune", { ...opts, dryRun: false });
+        context.print(result, workspacePruneText);
+      },
+    },
+  },
+};
+
 export const prefsCommands = {
   preferences,
   usage: usageGroup,
   cache: cacheGroup,
+  workspace: workspaceGroup,
   "mac-tools": macGroup,
 };

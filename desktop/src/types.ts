@@ -1278,13 +1278,14 @@ declare global {
         fastMode?: FastMode | null,
       ): Promise<void>;
       setPreferences(
-        patch: Partial<Omit<Preferences, "model" | "appearance" | "proactive" | "tasksMax" | "tasksPerBot">> & {
+        patch: Partial<Omit<Preferences, "model" | "appearance" | "proactive" | "workspacePrune" | "tasksMax" | "tasksPerBot">> & {
           appearance?: Partial<Appearance>;
           /** null clears the setting: the limit is then the environment's, else the default. */
           tasksMax?: number | null;
           tasksPerBot?: number | null;
           /** Only what changes: the computer lays it over what it has (desktop/proactive-settings.mjs). */
           proactive?: Partial<ProactiveSettings>;
+          workspacePrune?: Partial<WorkspacePruneSettings>;
         },
       ): Promise<void>;
       sideQuestion(id: string, question: string): Promise<string>;
@@ -1758,6 +1759,8 @@ declare global {
       refreshPanel(id: string): Promise<void>;
       cacheInfo(): Promise<{ bytes: number; catalogs: number }>;
       clearCache(): Promise<void>;
+      workspaceStats(): Promise<WorkspaceStats>;
+      workspacePrune(options?: WorkspacePruneOptions): Promise<WorkspacePruneResult>;
       mainChat(botId: string): Promise<string>;
       changeMainFork(id: string, action: "reset" | "fork" | "switch", value?: number | string, expected?: string): Promise<string>;
       setProactiveChatMode(mode: "main" | "new"): Promise<void>;
@@ -2789,6 +2792,8 @@ export type Preferences = {
   autoSummarize?: number;
   /** Settings › Experimental › Proactive agent: the computer's switch (desktop/proactive.mjs). Each bot's own is `State.proactive`. Missing on an older computer. */
   proactive?: ProactiveSettings;
+  /** Settings › Storage › Automatic workspace pruning (desktop/workspace-prune.mjs). Off by default. */
+  workspacePrune?: WorkspacePruneSettings;
   /** Task Board tasks that run at once on the computer, 1 to 16, when the person set it (desktop/task-limits.mjs). */
   tasksMax?: number;
   /** Task Board tasks that one bot runs at once, 1 to 8, when the person set it. */
@@ -2801,6 +2806,37 @@ export type TaskLimits = { tasksMax: number; tasksPerBot: number; defaults: { ta
 export type ProactiveWatch = "runs" | "tasks" | "requests" | "context";
 /** The computer's switch for the Proactive agent. Off pauses every bot's agent without forgetting its settings. */
 export type ProactiveSettings = { enabled: boolean };
+export type WorkspacePruneMode = "trim" | "delete";
+export type WorkspacePruneSettings = { auto: boolean; keepDays: number; mode: WorkspacePruneMode };
+export type WorkspaceStats = {
+  bytes: number;
+  runsBytes: number;
+  runCount: number;
+  chatCount: number;
+  trimmedRuns: number;
+  oldestRunAt: number | null;
+  newestRunAt: number | null;
+  archiveDir: string | null;
+};
+export type WorkspacePruneOptions = {
+  keepDays?: number;
+  keepRuns?: number;
+  mode?: WorkspacePruneMode;
+  dryRun?: boolean;
+};
+export type WorkspacePruneResult = {
+  mode: WorkspacePruneMode;
+  keepDays: number;
+  keepRuns: number;
+  dryRun: boolean;
+  beforeBytes: number;
+  afterBytes: number;
+  savedBytes: number;
+  trimmedCount: number;
+  deletedCount: number;
+  affectedCount: number;
+  archivePath: string | null;
+};
 /** One person a bot looks out for ("proactive-team-v1"): `on` is their own check, `notify: false` delivers their alerts with no notification. */
 export type ProactivePerson = { on: boolean; notify: boolean };
 /** What a delivered proactive alert carries: its run, the label of what the bot offers to do, and what the person chose. */

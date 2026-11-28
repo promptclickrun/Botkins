@@ -249,7 +249,7 @@ test("artifacts on a project: attach, move to the front, take off, and one that 
   assert.equal(PROJECT_ARTIFACTS, "project-artifacts-v1");
   assert.ok(CAPABILITIES.includes(PROJECT_ARTIFACTS));
   // A paired device hears of it only when the link carries all three calls.
-  const gated = new Set(["agent-template-bundles-v1", "message-reactions-v1", "project-folders-v1", "project-mode-v1", "project-clone-v1", "project-jobs-v1", "spaces-v1", "voice-history-v1", "voice-turns-v1", "market-refresh-v1", "mcp-apps-v1", "pi-packages-v1", "pi-packages-remove-v1", "skill-upload-v1", "skills-catalog-v1", "skills-featured-v1", "marketplace-v2-v1", "script-commands-v1", "mcp-catalog-v1", "chat-title-regeneration-v1", "mark-chats-read-v1", "stop-helper-v1", "workflows-v1", "claude-artifacts-v1", "channels-v1"]);
+  const gated = new Set(["agent-template-bundles-v1", "message-reactions-v1", "project-folders-v1", "project-mode-v1", "project-clone-v1", "project-jobs-v1", "spaces-v1", "voice-history-v1", "voice-turns-v1", "market-refresh-v1", "mcp-apps-v1", "pi-packages-v1", "pi-packages-remove-v1", "skill-upload-v1", "skills-catalog-v1", "skills-featured-v1", "marketplace-v2-v1", "script-commands-v1", "mcp-catalog-v1", "chat-title-regeneration-v1", "mark-chats-read-v1", "stop-helper-v1", "workflows-v1", "claude-artifacts-v1", "channels-v1", "workspace-prune-v1"]);
   assert.equal(linkCapabilities(new Set(["agents.template"])).includes("agent-template-bundles-v1"), false);
   assert.ok(linkCapabilities(new Set(["agents.template", "addBot"])).includes("agent-template-bundles-v1"));
   const withArtifacts = CAPABILITIES.filter((name) => !gated.has(name));
