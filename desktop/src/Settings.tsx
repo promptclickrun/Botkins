@@ -57,6 +57,7 @@ import ExperimentalSettings from "./ExperimentalSettings";
 import ProfileSettings from "./ProfileSettings";
 import NodeHostSettings from "./NodeHostSettings";
 import ChannelsSettings from "./ChannelsSettings";
+import StorageSettings from "./StorageSettings";
 import GithubSettings from "./GithubSettings";
 import { ClaudeArtifactsSettings } from "./ClaudeArtifactsSettings";
 import { memberTeam, teamCan } from "./teamAccess";
@@ -123,7 +124,7 @@ const SECTIONS: { id: SectionId; label: string; icon: LucideIcon; about: string;
   { id: "phone", label: "Phone", icon: Smartphone, about: "Phones and computers paired with this one.", words: "pair devices mobile qr" },
   { id: "voice", label: "Voice", icon: Mic, about: "How bots listen and speak, in chats and live calls.", words: "speech live voice microphone tts transcription" },
   { id: "usage", label: "Usage", icon: ChartColumn, about: "What your bots used, by day, bot and model.", words: "tokens cost spend runs" },
-  { id: "storage", label: "Storage", icon: HardDrive, about: "What Botkins keeps on this computer to stay fast.", words: "cache clear" },
+  { id: "storage", label: "Storage", icon: HardDrive, about: "Workspace size, run history pruning, and local cache.", words: "cache clear storage prune workspace trim runs archive" },
   // The id stays "account" so /login and older callers still land here.
   { id: "account", label: "Model providers", icon: Boxes, about: "Where your bots\u2019 models come from, and the keys and sign-ins for them.", words: "login sign in api key copilot claude openai providers limits" },
   { id: "experimental", label: "Experimental", icon: FlaskConical, about: "Early features you can try. They may change.", words: "proactive beta" },
@@ -649,33 +650,21 @@ export default function Settings({
           {section === "voice" && <VoiceSettings state={state} />}
           {section === "usage" && <Usage runCount={runCount} />}
           {section === "storage" && (
-            <Group
-              title="Workspace cache"
-              footer="Clearing keeps your chats, bots, panels and routines."
-              actions={
-                <button
-                  type="button"
-                  className="set-button"
-                  disabled={busy}
-                  onClick={() =>
-                    act(async () => {
-                      await api.clearCache();
-                      setCache(await api.cacheInfo());
-                      setMessage("Cache cleared.");
-                    })
-                  }
-                >
-                  Clear cache
-                </button>
+            <StorageSettings
+              settings={preferences}
+              cache={cache}
+              busy={busy}
+              onClearCache={() =>
+                act(async () => {
+                  await api.clearCache();
+                  setCache(await api.cacheInfo());
+                  setMessage("Cache cleared.");
+                })
               }
-            >
-              <ValueRow label="Browser cache" value={cache ? (cache.bytes / 1024 / 1024).toFixed(1) + " MB" : "Measuring…"} />
-              <ValueRow
-                label="Saved capability menus"
-                value={cache ? String(cache.catalogs) : "…"}
-                help="So “/” opens fast."
-              />
-            </Group>
+              onChangePreferences={changePreferences}
+              onStatus={setMessage}
+              onError={fail}
+            />
           )}
           {section === "account" && (
             <ProviderSettings

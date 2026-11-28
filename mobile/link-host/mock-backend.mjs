@@ -517,6 +517,7 @@ export function seed() {
       // Turns between a chat's summaries into a new title: 5 to 30, or 0 for off (the desktop's desktop/summaries.mjs).
       autoSummarize: 10,
       proactive: { enabled: true },
+      workspacePrune: { auto: false, keepDays: 30, mode: "trim" },
       harness: "copilot",
       longPromptCache: true,
       providers: { copilot: { enabled: true }, codex: { enabled: true }, claude: { enabled: true }, opencode: { enabled: false }, openrouter: { enabled: false }, foundry: { enabled: false }, "openai-api": { enabled: false }, grok: { enabled: false } },
@@ -1553,7 +1554,7 @@ export class MockBackend {
     // "plugins-v1" (docs/plugins.md): made-up catalogs and installs. One plugin starts installed.
     this.capabilities.push("pi-packages-v1", "pi-packages-remove-v1", "skill-upload-v1", "skills-catalog-v1", "skills-featured-v1", "script-commands-v1", "mcp-catalog-v1");
     // Each person's own picture ("people-avatars-v1"): `setMyAvatar`, kept on the team's people.
-    this.capabilities.push("people-avatars-v1", "channels-v1");
+    this.capabilities.push("people-avatars-v1", "channels-v1", "workspace-prune-v1");
     this.channelSecrets = new Map();
     this.channelAudit = this.seedChannelAudit();
     if (!Array.isArray(this.state.channels)) this.state.channels = this.seedChannels();
@@ -2635,6 +2636,14 @@ export class MockBackend {
         if (typeof (rest.proactive.enabled ?? settings.proactive.enabled) !== "boolean") throw new Error("Choose on or off");
         rest.proactive = { enabled: rest.proactive.enabled ?? settings.proactive.enabled };
         this.state.proactive.enabled = rest.proactive.enabled;
+      }
+      if (rest.workspacePrune) {
+        const cur = settings.workspacePrune ?? { auto: false, keepDays: 30, mode: "trim" };
+        const next = { ...cur, ...rest.workspacePrune };
+        if (typeof next.auto !== "boolean") throw new Error("Choose on or off for automatic workspace pruning.");
+        if (!Number.isInteger(next.keepDays) || next.keepDays < 1 || next.keepDays > 3650) throw new Error("Keep days must be a whole number from 1 to 3650.");
+        if (next.mode !== "trim" && next.mode !== "delete") throw new Error("Choose trim or delete for workspace prune mode.");
+        rest.workspacePrune = { auto: next.auto, keepDays: next.keepDays, mode: next.mode };
       }
       Object.assign(settings, rest);
       if (appearance) Object.assign(settings.appearance, appearance, appearance.colorTheme !== undefined && { themePicked: true }, appearance.font !== undefined && { fontPicked: true });
@@ -4709,6 +4718,105 @@ export class MockBackend {
     },
     clearCache() {
       this.cache = { bytes: 0, catalogs: 0 };
+    },
+    workspaceStats() {
+      const runs = Array.isArray(this.state.runs) ? this.state.runs : [];
+      const chats = Array.isArray(this.state.chats) ? this.state.chats : [];
+      const bytes = Buffer.byteLength(JSON.stringify(this.state));
+      const runsBytes = Buffer.byteLength(JSON.stringify(runs));
+      let oldestRunAt = null;
+      let newestRunAt = null;
+      let trimmedRuns = 0;
+      for (const run of runs) {
+        const ts = typeof run?.finished === "number" ? run.finished : (typeof run?.time === "number" ? run.time : 0);
+        if (ts > 0) {
+          if (oldestRunAt === null || ts < oldestRunAt) oldestRunAt = ts;
+          if (newestRunAt === null || ts > newestRunAt) newestRunAt = ts;
+        }
+        if (Array.isArray(run?.steps) && run.steps.length > 0 && run.steps.every((s) => s.input === undefined && s.output === undefined && s.progress === undefined)) {
+          trimmedRuns++;
+        }
+      }
+      return { bytes, runsBytes, runCount: runs.length, chatCount: chats.length, trimmedRuns, oldestRunAt, newestRunAt, archiveDir: "~/.botkins/data/archive" };
+    },
+    workspacePrune(options = {}) {
+      const defaults = this.state.settings?.workspacePrune ?? { auto: false, keepDays: 30, mode: "trim" };
+      const keepDays = options.keepDays ?? defaults.keepDays ?? 30;
+      const keepRuns = options.keepRuns ?? 200;
+      const mode = options.mode ?? defaults.mode ?? "trim";
+      const dryRun = options.dryRun === true;
+      const runs = Array.isArray(this.state.runs) ? this.state.runs : [];
+      const cutoff = now() - keepDays * 24 * HOUR;
+      const protectedIds = new Set();
+      const newestByChat = new Map();
+      for (const run of runs) {
+        if (!run?.id) continue;
+        if (run.status === "Working" || run.status === "Queued") protectedIds.add(run.id);
+        const ts = typeof run.finished === "number" ? run.finished : (typeof run.time === "number" ? run.time : 0);
+        if (run.chatId) {
+          const prev = newestByChat.get(run.chatId);
+          if (!prev || ts > prev.ts) newestByChat.set(run.chatId, { id: run.id, ts });
+        }
+      }
+      for (const { id } of newestByChat.values()) protectedIds.add(id);
+      for (const req of this.state.requests ?? []) if (req?.runId) protectedIds.add(req.runId);
+      for (const task of this.state.tasks ?? []) if (task?.runId) protectedIds.add(task.runId);
+      const ranked = runs
+        .map((run, index) => ({ id: run?.id, ts: typeof run?.finished === "number" ? run.finished : (typeof run?.time === "number" ? run.time : 0), index }))
+        .sort((a, b) => (b.ts !== a.ts ? b.ts - a.ts : a.index - b.index));
+      const newestKept = new Set(ranked.slice(0, keepRuns).map((e) => e.id));
+      const beforeBytes = Buffer.byteLength(JSON.stringify(this.state));
+      const nextRuns = [];
+      let trimmedCount = 0;
+      let deletedCount = 0;
+      for (const run of runs) {
+        const ts = typeof run?.finished === "number" ? run.finished : (typeof run?.time === "number" ? run.time : 0);
+        const eligible = run?.id && !protectedIds.has(run.id) && !newestKept.has(run.id) && ts < cutoff;
+        if (!eligible) {
+          nextRuns.push(run);
+          continue;
+        }
+        if (mode === "delete") {
+          deletedCount++;
+        } else {
+          const hasHeavy = (run.steps ?? []).some((s) => s.input !== undefined || s.output !== undefined || s.progress !== undefined) || (run.reasoning?.length ?? 0) > 0;
+          if (hasHeavy) {
+            const copy = { ...run };
+            if (Array.isArray(run.steps)) {
+              copy.steps = run.steps.map(({ id, name, source, label, status, started, finished, agentId, botId, background }) =>
+                Object.fromEntries(Object.entries({ id, name, source, label, status, started, finished, agentId, botId, background }).filter(([, v]) => v !== undefined)),
+              );
+            }
+            delete copy.reasoning;
+            nextRuns.push(copy);
+            trimmedCount++;
+          } else {
+            nextRuns.push(run);
+          }
+        }
+      }
+      const affectedCount = trimmedCount + deletedCount;
+      const runsBefore = Buffer.byteLength(JSON.stringify(runs));
+      const runsAfter = Buffer.byteLength(JSON.stringify(nextRuns));
+      const afterBytes = Math.max(0, beforeBytes - Math.max(0, runsBefore - runsAfter));
+      const archivePath = affectedCount > 0 ? `~/.botkins/data/archive/workspace-runs-${new Date(now()).toISOString().replace(/[:.]/g, "-")}.json.gz` : null;
+      if (!dryRun && affectedCount > 0) {
+        this.state.runs = nextRuns;
+        this.changed();
+      }
+      return {
+        mode,
+        keepDays,
+        keepRuns,
+        dryRun,
+        beforeBytes,
+        afterBytes,
+        savedBytes: Math.max(0, beforeBytes - afterBytes),
+        trimmedCount,
+        deletedCount,
+        affectedCount,
+        archivePath,
+      };
     },
     // The real app shows a notification on the computer. The demo only counts.
     testNotification() {

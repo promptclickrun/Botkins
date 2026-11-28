@@ -320,6 +320,8 @@ export const WORKSPACE = {
   exportUsageText: cmd("usage export"),
   cacheInfo: cmd("cache show"),
   clearCache: cmd("cache clear"),
+  workspaceStats: cmd("workspace stats"),
+  workspacePrune: cmd("workspace prune"),
   voiceSettings: cmd("voice show"),
   voiceOptions: cmd("voice options"),
   setVoice: cmd("voice set"),
@@ -682,6 +684,7 @@ export const CHANGES = {
   // its new value is one of a few fixed words, so its line has it ("approval to all", "teamwork to on"). A failure has the key only.
   "preferences.set": (args, value) => fixedWord(value?.key, value?.value) ?? value?.key ?? (typeof args?.[0] === "string" && /^[A-Za-z][A-Za-z.]{0,39}$/.test(args[0]) ? args[0] : null),
   "cache.clear": null,
+  "workspace.prune": (args, value) => (value ? (value.dryRun ? "dry-run" : `${value.mode} (${value.affectedCount} runs)`) : args?.[0]?.dryRun ? "dry-run" : args?.[0]?.mode ?? null),
   // The tool, and the level that it has now (off, read or interact: a Mac tool's level says what bots may do on this computer). A failure has the tool only.
   "macTools.set": (args, value) => (["imessage", "mail"].includes(value?.tool) && ["off", "read", "interact"].includes(value.levels?.[value.tool]) ? value.tool + " to " + value.levels[value.tool] : value?.tool ?? (["imessage", "mail"].includes(args?.[0]) ? args[0] : null)),
   // ── Credentials, the vault, password managers and the rest of a provider (control-credentials.mjs) ──
@@ -823,7 +826,7 @@ export const MORE_READS = {
   routines: ["routines.get", "routines.runs", "routines.review", "routines.when", "routines.schedules", "workflows.list", "workflows.export", "workflows.deliveries", "github.status", "github.installUrl"],
   projects: ["projects.list", "projects.get", "projects.artifacts", "projects.changes", "projects.diff", "jobs.list", "jobs.setup", "jobs.status", "todos.list", "todos.get", "tasks.list", "tasks.get", "artifacts.list", "artifacts.read", "artifacts.resolve"],
   wiki: ["wiki.tree", "wiki.find", "wiki.page", "wiki.search", "wiki.history", "wiki.version", "wiki.exportPlan"],
-  prefs: ["preferences.get", "preferences.harnesses", "usage.report", "usage.export", "cache.info", "macTools.status"],
+  prefs: ["preferences.get", "preferences.harnesses", "usage.report", "usage.export", "cache.info", "workspace.stats", "macTools.status"],
   credentials: ["credentials.list", "credentials.grants", "credentials.audit", "credentials.vault", "credentials.managers", "protonPass.installPlan", "protonPass.signInRead", "providers.usage", "providers.installPlan", "providers.install.read", "providers.install.input", "providers.install.cancel"],
   voice: ["voice.get", "voice.options"], // (`voice.options` can make the service ask a provider for its lists, with the saved key, at the address that the app saved: the call cannot choose it.)
   // (Spaces and panels)

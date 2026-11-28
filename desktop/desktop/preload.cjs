@@ -403,6 +403,8 @@ for (const name of [
   "changePanel",
   "clearCache",
   "cacheInfo",
+  "workspaceStats",
+  "workspacePrune",
   "mainChat",
   "changeMainFork",
   "setProactiveChatMode",

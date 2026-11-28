@@ -117,6 +117,7 @@ import { proposalsFrom } from "./proactive-learning.mjs";
 import { Templates } from "./templates.mjs";
 import { currentBotBundle, templateBundle } from "./link/template-bundle.mjs";
 import { readWorkspace, WorkspaceWriter } from "./workspace-file.mjs";
+import { computeWorkspaceStats, runWorkspacePrune, workspacePruneField } from "./workspace-prune.mjs";
 import { migrateWorkspaceFile, SqliteWorkspaceStore, WORKSPACE_DB_FILENAME } from "./workspace-sqlite.mjs";
 import { Access } from "./access.mjs";
 import { SessionSearch } from "./session-search.mjs";
@@ -350,6 +351,11 @@ export class Workspace {
       this.state.settings.sidebar = sidebarField(this.state.settings.sidebar);
     } catch {
       this.state.settings.sidebar = sidebarField();
+    }
+    try {
+      this.state.settings.workspacePrune = workspacePruneField(this.state.settings.workspacePrune);
+    } catch {
+      this.state.settings.workspacePrune = workspacePruneField();
     }
     // Match older work rows to their original prompts once, including failed turns with no assistant message.
     for (const chat of this.state.chats) {
@@ -1661,6 +1667,24 @@ export class Workspace {
   clearCatalogs() {
     this.catalogGeneration++;
     this.catalogs.clear();
+  }
+  /** Storage statistics for workspace.json and run history. */
+  workspaceStats() {
+    return computeWorkspaceStats(this);
+  }
+  /**
+   * Prunes old run payloads (`trim`) or old run records (`delete`), serialized via the
+   * workspace prune lock and skipping all active/protected runs. Writes a gzip archive
+   * before mutating state unless `dryRun` is true.
+   */
+  pruneWorkspace(options = {}, extra) {
+    return this.locked("__workspace__", () => runWorkspacePrune(this, options, extra));
+  }
+  /** Runs an automatic prune if `settings.workspacePrune.auto` is enabled. */
+  async runAutoPrune(extra) {
+    const pref = this.state?.settings?.workspacePrune;
+    if (!pref?.auto || this.closing) return null;
+    return this.pruneWorkspace({ keepDays: pref.keepDays, mode: pref.mode, dryRun: false }, extra);
   }
   async locked(id, action) {
     const previous = this.locks.get(id) ?? Promise.resolve();

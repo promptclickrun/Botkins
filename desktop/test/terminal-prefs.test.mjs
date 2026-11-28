@@ -353,6 +353,39 @@ test("cache: show, and clear after a yes", { skip }, async (t) => {
   assert.deepEqual(await changes(), ["cache.clear", "cache.clear"]);
 });
 
+test("workspace: stats and prune via CLI (dry-run, confirmation, --yes)", { skip }, async (t) => {
+  const { botkins, workspace } = await service(t);
+  const now = Date.now();
+  const day = 86_400_000;
+  workspace.state.chats = [{ id: "c1", botId: "b1", title: "Main", time: now, messages: [] }];
+  workspace.state.runs = [
+    { id: "r-new", chatId: "c1", title: "New", time: now - day, finished: now - day + 1000, status: "Completed", detail: "", steps: [{ id: "s1", name: "bash", label: "ls", input: "{}", output: "a".repeat(2000), status: "Done", started: now - day }] },
+    { id: "r-old", chatId: "c1", title: "Old", time: now - 60 * day, finished: now - 60 * day + 1000, status: "Completed", detail: "", steps: [{ id: "s2", name: "bash", label: "ls", input: "{}", output: "b".repeat(8000), status: "Done", started: now - 60 * day }] },
+  ];
+  workspace.save(false);
+
+  const stats = await botkins(["workspace", "stats", "--json"]);
+  assert.equal(stats.exit, 0, stats.err);
+  assert.equal(stats.json().runCount, 2);
+  assert.ok(stats.json().bytes > 8000);
+
+  const dry = await botkins(["workspace", "prune", "--keep-days", "30", "--keep-runs", "0", "--mode", "trim", "--dry-run", "--json"]);
+  assert.equal(dry.exit, 0, dry.err);
+  assert.equal(dry.json().dryRun, true);
+  assert.equal(dry.json().trimmedCount, 1);
+  assert.ok(workspace.state.runs[1].steps[0].output, "dry-run did not mutate");
+
+  const needsYes = await botkins(["workspace", "prune", "--keep-days", "30", "--keep-runs", "0"]);
+  assert.equal(needsYes.exit, 2);
+  assert.match(needsYes.err, /This needs a yes\. Run it again with --yes\./);
+
+  const pruned = await botkins(["workspace", "prune", "--keep-days", "30", "--keep-runs", "0", "--mode", "trim", "--yes", "--json"]);
+  assert.equal(pruned.exit, 0, pruned.err);
+  assert.equal(pruned.json().trimmedCount, 1);
+  assert.ok(pruned.json().archivePath && existsSync(pruned.json().archivePath));
+  assert.equal(workspace.state.runs[1].steps[0].output, undefined);
+});
+
 test("mac-tools: a level that gives bots more is shown first and needs a yes", { skip }, async (t) => {
   const { botkins, client, changes, workspace } = await service(t);
   // The permission checks of the real Mac are replaced: a test never asks macOS.
@@ -446,7 +479,7 @@ test("the commands are in `botkins help --json`, and the lists of the command li
   const { botkins } = await service(t);
   const help = (await botkins(["help", "--json"])).json();
   const area = (name) => help.areas.find((entry) => entry.name === name);
-  for (const [name, verbs] of Object.entries({ preferences: ["show", "set", "harnesses"], usage: ["show", "export"], cache: ["show", "clear"], "mac-tools": ["status", "set"] })) {
+  for (const [name, verbs] of Object.entries({ preferences: ["show", "set", "harnesses"], usage: ["show", "export"], cache: ["show", "clear"], workspace: ["migrate", "status", "export", "stats", "prune"], "mac-tools": ["status", "set"] })) {
     assert.deepEqual(area(name).commands.map((command) => command.path[1]), verbs, name);
     for (const command of area(name).commands) assert.match(command.usage, /^botkins /);
   }
@@ -455,8 +488,8 @@ test("the commands are in `botkins help --json`, and the lists of the command li
   assert.deepEqual(set.options.map((option) => option.name), ["--file", "--yes"]);
   assert.equal(set.asks, "--yes");
   // The commands that ask a person first, by the flag that answers (what the fixed list of test/terminal-coverage.test.mjs needs).
-  const asking = help.areas.flatMap((entry) => (["preferences", "usage", "cache", "mac-tools"].includes(entry.name) ? entry.commands : [])).filter((command) => command.asks).map((command) => command.command + " " + command.asks);
-  assert.deepEqual(asking.sort(), ["cache clear --yes", "mac-tools set --yes", "preferences set --yes", "usage export --yes"]);
+  const asking = help.areas.flatMap((entry) => (["preferences", "usage", "cache", "workspace", "mac-tools"].includes(entry.name) ? entry.commands : [])).filter((command) => command.asks).map((command) => command.command + " " + command.asks);
+  assert.deepEqual(asking.sort(), ["cache clear --yes", "mac-tools set --yes", "preferences set --yes", "usage export --yes", "workspace prune --yes"]);
   // `--help` lists every key, with what it takes.
   const text = (await botkins(["preferences", "set", "--help"])).out;
   for (const name of Object.keys(PREFERENCES)) assert.ok(text.includes("  " + name.padEnd(Math.max(...Object.keys(PREFERENCES).map((key) => key.length))) + "  "), name);
@@ -464,7 +497,7 @@ test("the commands are in `botkins help --json`, and the lists of the command li
   assert.deepEqual(PREFERENCE_KEYS, Object.keys(PREFERENCES));
   // The Mac tools are the service's.
   assert.deepEqual(Object.keys(MAC_TOOL_NAMES), ["imessage", "mail"]);
-  assert.deepEqual(Object.keys(prefsCommands), ["preferences", "usage", "cache", "mac-tools"]);
+  assert.deepEqual(Object.keys(prefsCommands), ["preferences", "usage", "cache", "workspace", "mac-tools"]);
 });
 
 test("preferences: autoSummarize takes off or 5 to 30 turns", { skip }, async (t) => {

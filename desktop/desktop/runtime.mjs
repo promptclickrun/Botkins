@@ -143,13 +143,15 @@ export const WORKFLOWS = "workflows-v1";
 export const CHANNELS = "channels-v1";
 /** A2UI v1.0 interactive surfaces, Botkins Catalog, and bidirectional function RPC (`a2ui-v1`). */
 export const A2UI_CAPABILITY = "a2ui-v1";
-export const CAPABILITIES = ["main-chat-v1", "message-reactions-v1", "client-message-id-v1", "voice-turns-v1", "voice-history-v1", "quiet-replies-v1", "models-v2", "fast-mode-v1", LOOKS_CAPABILITY, ...headCapabilities, BOT_VOICE, ROUTINE_DELIVERY, "routine-no-output-v1", ROUTINE_OWNER, ROUTINE_SCRIPTS, ROUTINE_MODELS, ROUTINE_SILENT, ROUTINE_NOTIFY_TARGETS, WORKFLOWS, CHANNELS, A2UI_CAPABILITY, PROACTIVE, PROACTIVE_LEARNING, PROACTIVE_TEAM, BOARD_MENTIONS, PROVIDER_USAGE, SIDE_PANE, REMOTE_HOSTS, FILES, FOLDERS, ARTIFACTS, PROJECT_ARTIFACTS, "project-folders-v1", "project-mode-v1", "project-clone-v1", PROJECT_JOBS, "secure-input-v1", "turn-timeline-v1", PLUGINS, PLUGIN_STARTS, PROVIDER_SIGNIN, SPACES, AGENT_TEMPLATES, "agent-template-bundles-v1", COMPOSIO_APPS, MARKET_REFRESH, MCP_APPS, "pi-packages-v1", "pi-packages-remove-v1", "skill-upload-v1", "skills-catalog-v1", "skills-featured-v1", MARKETPLACE_V2, SCRIPT_COMMANDS_CAPABILITY, MCP_CATALOG_CAPABILITY, CHAT_TITLE_REGENERATION, MARK_CHATS_READ, STOP_HELPER, KEYED_PROVIDERS, CLAUDE_ARTIFACTS_CAPABILITY];
+/** Workspace storage stats and run pruning (`workspace-prune-v1`). */
+export const WORKSPACE_PRUNE = "workspace-prune-v1";
+export const CAPABILITIES = ["main-chat-v1", "message-reactions-v1", "client-message-id-v1", "voice-turns-v1", "voice-history-v1", "quiet-replies-v1", "models-v2", "fast-mode-v1", LOOKS_CAPABILITY, ...headCapabilities, BOT_VOICE, ROUTINE_DELIVERY, "routine-no-output-v1", ROUTINE_OWNER, ROUTINE_SCRIPTS, ROUTINE_MODELS, ROUTINE_SILENT, ROUTINE_NOTIFY_TARGETS, WORKFLOWS, CHANNELS, A2UI_CAPABILITY, WORKSPACE_PRUNE, PROACTIVE, PROACTIVE_LEARNING, PROACTIVE_TEAM, BOARD_MENTIONS, PROVIDER_USAGE, SIDE_PANE, REMOTE_HOSTS, FILES, FOLDERS, ARTIFACTS, PROJECT_ARTIFACTS, "project-folders-v1", "project-mode-v1", "project-clone-v1", PROJECT_JOBS, "secure-input-v1", "turn-timeline-v1", PLUGINS, PLUGIN_STARTS, PROVIDER_SIGNIN, SPACES, AGENT_TEMPLATES, "agent-template-bundles-v1", COMPOSIO_APPS, MARKET_REFRESH, MCP_APPS, "pi-packages-v1", "pi-packages-remove-v1", "skill-upload-v1", "skills-catalog-v1", "skills-featured-v1", MARKETPLACE_V2, SCRIPT_COMMANDS_CAPABILITY, MCP_CATALOG_CAPABILITY, CHAT_TITLE_REGENERATION, MARK_CHATS_READ, STOP_HELPER, KEYED_PROVIDERS, CLAUDE_ARTIFACTS_CAPABILITY];
 /**
  * What a paired device is told this app supports. A feature whose calls the link does not carry
  * (desktop/link/methods.mjs) is left out, so a device never asks for what it cannot reach.
  */
 export const linkCapabilities = (methods = REMOTE_METHODS) =>
-  CAPABILITIES.filter((name) => (name !== "agent-template-bundles-v1" || (methods.has("addBot") && methods.has("agents.template"))) && (name !== "message-reactions-v1" || methods.has("reactToMessage")) && (!["voice-history-v1", "voice-turns-v1"].includes(name) || methods.has("recordVoiceLine")) && (name !== "project-folders-v1" || (methods.has("editProjectFolder") && methods.has("setChatFolder") && methods.has("chatProjectFolder"))) && (name !== "project-clone-v1" || methods.has("cloneProjectRepository")) && (name !== PROJECT_JOBS || JOB_CALLS.every((call) => methods.has(call))) && (name !== "project-mode-v1" || methods.has("updateProject")) && (name !== PROJECT_ARTIFACTS || PROJECT_ARTIFACT_CALLS.every((call) => methods.has(call))) && (name !== SPACES || SPACE_CALLS.every((call) => methods.has(call))) && (name !== MARKET_REFRESH || methods.has("plugins.refresh")) && (name !== "pi-packages-v1" || PI_PACKAGE_METHODS.every((call) => methods.has(call))) && (name !== "pi-packages-remove-v1" || methods.has("piPackages.remove")) && (name !== "skill-upload-v1" || methods.has("skills.upload")) && (name !== "skills-catalog-v1" || ["search", "preview", "install"].every(key => methods.has("skillsCatalog." + key))) && (name !== "skills-featured-v1" || methods.has("skillsCatalog.featured")) && (name !== MARKETPLACE_V2 || MARKET_V2_METHODS.every((call) => methods.has(call))) && (name !== SCRIPT_COMMANDS_CAPABILITY || ["skills.saveScript", "skills.readScript"].every((call) => methods.has(call))) && (name !== MCP_CATALOG_CAPABILITY || MCP_CATALOG_METHODS.every((call) => methods.has(call))) && (name !== MCP_APPS || MCP_APP_METHODS.every((call) => methods.has(call))) && (name !== CLAUDE_ARTIFACTS_CAPABILITY || CLAUDE_ARTIFACT_METHODS.every((call) => methods.has(call))) && (name !== CHAT_TITLE_REGENERATION || methods.has("regenerateChatTitle")) && (name !== MARK_CHATS_READ || methods.has("markChatsRead")) && (name !== STOP_HELPER || methods.has("stopHelper")) && (name !== WORKFLOWS || WORKFLOW_METHODS.every((call) => methods.has(call))) && (name !== CHANNELS || CHANNEL_METHODS.every((call) => methods.has(call))));
+  CAPABILITIES.filter((name) => (name !== "agent-template-bundles-v1" || (methods.has("addBot") && methods.has("agents.template"))) && (name !== "message-reactions-v1" || methods.has("reactToMessage")) && (!["voice-history-v1", "voice-turns-v1"].includes(name) || methods.has("recordVoiceLine")) && (name !== "project-folders-v1" || (methods.has("editProjectFolder") && methods.has("setChatFolder") && methods.has("chatProjectFolder"))) && (name !== "project-clone-v1" || methods.has("cloneProjectRepository")) && (name !== PROJECT_JOBS || JOB_CALLS.every((call) => methods.has(call))) && (name !== "project-mode-v1" || methods.has("updateProject")) && (name !== PROJECT_ARTIFACTS || PROJECT_ARTIFACT_CALLS.every((call) => methods.has(call))) && (name !== SPACES || SPACE_CALLS.every((call) => methods.has(call))) && (name !== MARKET_REFRESH || methods.has("plugins.refresh")) && (name !== "pi-packages-v1" || PI_PACKAGE_METHODS.every((call) => methods.has(call))) && (name !== "pi-packages-remove-v1" || methods.has("piPackages.remove")) && (name !== "skill-upload-v1" || methods.has("skills.upload")) && (name !== "skills-catalog-v1" || ["search", "preview", "install"].every(key => methods.has("skillsCatalog." + key))) && (name !== "skills-featured-v1" || methods.has("skillsCatalog.featured")) && (name !== MARKETPLACE_V2 || MARKET_V2_METHODS.every((call) => methods.has(call))) && (name !== SCRIPT_COMMANDS_CAPABILITY || ["skills.saveScript", "skills.readScript"].every((call) => methods.has(call))) && (name !== MCP_CATALOG_CAPABILITY || MCP_CATALOG_METHODS.every((call) => methods.has(call))) && (name !== MCP_APPS || MCP_APP_METHODS.every((call) => methods.has(call))) && (name !== CLAUDE_ARTIFACTS_CAPABILITY || CLAUDE_ARTIFACT_METHODS.every((call) => methods.has(call))) && (name !== CHAT_TITLE_REGENERATION || methods.has("regenerateChatTitle")) && (name !== MARK_CHATS_READ || methods.has("markChatsRead")) && (name !== STOP_HELPER || methods.has("stopHelper")) && (name !== WORKFLOWS || WORKFLOW_METHODS.every((call) => methods.has(call))) && (name !== CHANNELS || CHANNEL_METHODS.every((call) => methods.has(call))) && (name !== WORKSPACE_PRUNE || (methods.has("workspaceStats") && methods.has("workspacePrune"))));
 /** The calls of spaces (docs/spaces.md). The capability is named to a device only when the link carries them all. */
 export const SPACE_CALLS = ["read", "create", "rename", "remove", "setProject", "setPanelProject", "newPanel", "ask", "movePanel", "patchState", "note", "removeNote"].map((name) => "spaces." + name);
 
@@ -995,6 +997,8 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
       workspace.clearCatalogs();
       await host.cache.clear();
     },
+    workspaceStats: () => workspace.workspaceStats(),
+    workspacePrune: (options) => workspace.pruneWorkspace(options ?? {}),
     // The wiki (desktop/wiki.mjs). Changes made here are the person's own.
     wikiTree: () => workspace.wiki.tree(),
     wikiPage: (path) => workspace.wiki.page(path),
@@ -1743,11 +1747,18 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
       void workspace.channels.startAll().catch((error) => console.error("Channels:", error.message));
       // The default harness's runtime starts now, in the background, instead of with the first message.
       checking.push(setTimeout(() => void workspace.warmUp(), 1500));
+      // Automatic workspace pruning: when enabled in settings.workspacePrune, runs shortly after
+      // startup and once every 24 hours.
+      const autoPrune = () => {
+        if (!workspace.state?.settings?.workspacePrune?.auto) return;
+        void workspace.runAutoPrune().catch((error) => console.error("Auto-prune workspace:", error.message));
+      };
+      checking.push(setTimeout(autoPrune, 5000), setInterval(autoPrune, 24 * 60 * 60 * 1000));
       if (host.packaged && !trial && updates) {
         const check = () => updates.check().catch(() => {});
         checking.push(setTimeout(check, 12000), setInterval(check, 6 * 60 * 60 * 1000));
-        for (const timer of checking) timer.unref();
       }
+      for (const timer of checking) timer.unref?.();
     },
     /** Stops for good (the program is quitting). Resolves when the providers, the tools and the link have closed. */
     stop() {

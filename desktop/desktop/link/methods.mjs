@@ -148,7 +148,7 @@ export const REMOTE_METHODS = new Set([
   "wikiTree", "wikiPage", "saveWikiPage", "createWikiPage", "createWikiPageFor", "createWikiFolder", "moveWiki",
   "deleteWiki", "searchWiki", "wikiHistory", "wikiVersion", "restoreWikiVersion", "wikiExportPlan", "exportWikiFile",
   // Usage and storage. "testNotification" shows a notification on the computer, which is what its button is for.
-  "usage", "exportUsageText", "cacheInfo", "clearCache", "providerUsage", "testNotification",
+  "usage", "exportUsageText", "cacheInfo", "clearCache", "workspaceStats", "workspacePrune", "providerUsage", "testNotification",
   // The computer's folders, by name only, and the two calls that take one a person chose there
   "listFolders", "addProjectFolder", "addSkillFolderAt",
   // What a bot made or was given ("artifacts-v1"): the app keeps an index, and these read only what is in it
@@ -580,6 +580,28 @@ export function remoteArgs(method, args, { deviceId, uploads } = {}) {
   }
   if (method === "workflowGithubSignInStart" || method === "workflowGithubSignInCancel") {
     return [];
+  }
+  if (method === "workspaceStats") return [];
+  if (method === "workspacePrune") {
+    const opts = args[0] && typeof args[0] === "object" && !Array.isArray(args[0]) ? args[0] : {};
+    const out = {};
+    if (opts.keepDays !== undefined) {
+      if (!Number.isInteger(opts.keepDays) || opts.keepDays < 1 || opts.keepDays > 3650) throw new Error("Choose 1 to 3,650 days to keep.");
+      out.keepDays = opts.keepDays;
+    }
+    if (opts.keepRuns !== undefined) {
+      if (!Number.isInteger(opts.keepRuns) || opts.keepRuns < 0 || opts.keepRuns > 100000) throw new Error("Choose 0 to 100,000 runs to keep.");
+      out.keepRuns = opts.keepRuns;
+    }
+    if (opts.mode !== undefined) {
+      if (opts.mode !== "trim" && opts.mode !== "delete") throw new Error("Choose trim or delete.");
+      out.mode = opts.mode;
+    }
+    if (opts.dryRun !== undefined) {
+      if (typeof opts.dryRun !== "boolean") throw new Error("Choose whether to preview.");
+      out.dryRun = opts.dryRun;
+    }
+    return [out];
   }
   if (method === "workflowGithubCatalog") {
     const opts = args[0] && typeof args[0] === "object" && !Array.isArray(args[0]) ? args[0] : {};

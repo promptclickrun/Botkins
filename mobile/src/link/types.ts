@@ -1369,6 +1369,7 @@ export type Preferences = {
   autoSummarize?: number;
   /** Settings › Experimental › Proactive agent: the computer's switch. Each bot's own is the `proactive` part. Missing on a computer without "proactive-agent-v2". */
   proactive?: ProactiveSettings;
+  workspacePrune?: WorkspacePruneSettings;
   providers?: Record<string, { enabled: boolean }>;
   /**
    * What runs a bot's turn around the model. "copilot": one harness (the Copilot SDK) for every plan.
@@ -1551,6 +1552,37 @@ export type Meta = {
 export type ProactiveWatch = "runs" | "tasks" | "requests" | "context";
 /** The computer's switch for the Proactive agent. Off pauses every bot's agent without forgetting its settings. */
 export type ProactiveSettings = { enabled: boolean };
+export type WorkspacePruneMode = "trim" | "delete";
+export type WorkspacePruneSettings = { auto: boolean; keepDays: number; mode: WorkspacePruneMode };
+export type WorkspaceStats = {
+  bytes: number;
+  runsBytes: number;
+  runCount: number;
+  chatCount: number;
+  trimmedRuns: number;
+  oldestRunAt: number | null;
+  newestRunAt: number | null;
+  archiveDir: string | null;
+};
+export type WorkspacePruneOptions = {
+  keepDays?: number;
+  keepRuns?: number;
+  mode?: WorkspacePruneMode;
+  dryRun?: boolean;
+};
+export type WorkspacePruneResult = {
+  mode: WorkspacePruneMode;
+  keepDays: number;
+  keepRuns: number;
+  dryRun: boolean;
+  beforeBytes: number;
+  afterBytes: number;
+  savedBytes: number;
+  trimmedCount: number;
+  deletedCount: number;
+  affectedCount: number;
+  archivePath: string | null;
+};
 /** One person a bot looks out for ("proactive-team-v1"): `on` is their own check, `notify: false` delivers their alerts with no notification. */
 export type ProactivePerson = { on: boolean; notify: boolean };
 /** What a delivered proactive alert carries: its run, the label of what the bot offers to do, and what the person chose. Never the offer's own request. */
@@ -2336,7 +2368,7 @@ export type LiveSession =
 
 /** The desktop's calls a phone may make (link-host/methods.mjs), with their arguments and answers. */
 export type Calls = {
-  setPreferences(patch: Partial<Omit<Preferences, "model" | "appearance" | "providers" | "proactive">> & { appearance?: Partial<Appearance>; proactive?: Partial<ProactiveSettings> }): void;
+  setPreferences(patch: Partial<Omit<Preferences, "model" | "appearance" | "providers" | "proactive" | "workspacePrune">> & { appearance?: Partial<Appearance>; proactive?: Partial<ProactiveSettings>; workspacePrune?: Partial<WorkspacePruneSettings> }): void;
   appInfo(): { version: string; electron: string; chrome: string; platform: string };
   // ---- The computer's own updates ("app-update-v1"; the owner's devices only). None takes a version or an address.
   appUpdateStatus(): AppUpdate;
@@ -2595,6 +2627,8 @@ export type Calls = {
   /** Makes the wiki page for a project that has none yet; answers the page's path. */
   createWikiPageFor(record: { kind: "project"; id: string }): string;
   cacheInfo(): { bytes: number; catalogs: number };
+  workspaceStats(): WorkspaceStats;
+  workspacePrune(options?: WorkspacePruneOptions): WorkspacePruneResult;
   /** A bot's artifacts, newest first, 50 a page. `folder` (a folder artifact's id) lists what is directly in it. Needs "artifacts-v1". */
   "artifacts.list"(query: { botId: string; chatId?: string; kind?: "files" | "media"; folder?: string; cursor?: string }): ArtifactPage;
   /** A piece of an artifact (512 KiB at most), by its id. */

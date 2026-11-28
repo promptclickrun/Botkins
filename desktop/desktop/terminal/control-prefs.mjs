@@ -17,6 +17,7 @@ import { MAC_LEVELS, MAC_TOOLS } from "../mactools.mjs";
 import { defaultProactive } from "../proactive-settings.mjs";
 import { TASK_LIMITS, taskLimits } from "../task-limits.mjs";
 import { usageCsv } from "../usage.mjs";
+import { defaultWorkspacePrune, MAX_KEEP_DAYS, MIN_KEEP_DAYS, PRUNE_MODES, workspacePruneField } from "../workspace-prune.mjs";
 import { ControlError } from "./socket.mjs";
 
 const bad = (message, code = "BAD_ARGUMENT") => new ControlError(message, code);
@@ -75,6 +76,9 @@ export const PREFERENCES = {
   "sidebar.collapsed": switches("The side menu shows icons only"),
   "proactive.chatMode": choice(["main", "new"], "Where your proactive chat alerts land: Main chat or New chat every time"),
   "proactive.enabled": switches("Experimental: the computer's switch for the Proactive agent (each bot's own is `botkins bots proactive`)"),
+  "workspacePrune.auto": switches("Automatically prune old workspace runs at startup and once a day"),
+  "workspacePrune.keepDays": { type: "int", min: MIN_KEEP_DAYS, max: MAX_KEEP_DAYS, about: "Days of run history to keep before auto-pruning (1 to 3650)" },
+  "workspacePrune.mode": choice(PRUNE_MODES, "How auto-pruning compacts old runs: trim (drop tool inputs/outputs) or delete (remove old runs)"),
 };
 /** What each choice of the preference `harness` is, in a sentence. */
 export const HARNESS_ABOUT = {
@@ -112,6 +116,7 @@ function wholeSettings(settings = {}) {
     background: backgroundField(settings.background),
     sidebar: sidebarField(settings.sidebar),
     proactive: { ...defaultProactive, ...settings.proactive },
+    workspacePrune: workspacePruneField(settings.workspacePrune),
     // The limits in force: the person's setting, else the environment's, else the default.
     tasksMax: taskLimits(settings).tasksMax,
     tasksPerBot: taskLimits(settings).tasksPerBot,
@@ -172,6 +177,11 @@ function parsePreference(key, spec, value) {
       if (value === null || (typeof value === "string" && value.trim().toLowerCase() === "default")) return null;
       const n = typeof value === "number" ? value : typeof value === "string" && /^\d{1,3}$/.test(value.trim()) ? Number(value.trim()) : NaN;
       if (!Number.isInteger(n) || n < spec.min || n > spec.max) throw refuse("a number from " + spec.min + " to " + spec.max + ", or default");
+      return n;
+    }
+    case "int": {
+      const n = typeof value === "number" ? value : typeof value === "string" && /^\d{1,5}$/.test(value.trim()) ? Number(value.trim()) : NaN;
+      if (!Number.isInteger(n) || n < spec.min || n > spec.max) throw refuse("a whole number from " + spec.min + " to " + spec.max);
       return n;
     }
     case "text":
@@ -280,6 +290,12 @@ export function prefsApi({ workspace, handlers }) {
     async "cache.clear"() {
       await handlers.clearCache();
       return { cleared: true, ...(await handlers.cacheInfo()) };
+    },
+
+    // ── Workspace storage & pruning ──
+    "workspace.stats": () => handlers.workspaceStats(),
+    async "workspace.prune"([options]) {
+      return handlers.workspacePrune(options ?? {});
     },
 
     // ── The Mac tools ──

@@ -12,6 +12,7 @@ import {
   ChartColumn,
   FlaskConical,
   FolderLock,
+  HardDrive,
   GitBranch,
   Info,
   KeyRound,
@@ -240,6 +241,7 @@ export default function Settings() {
     {
       key: "more",
       rows: [
+        ...(owner ? [row("storage", "Storage", <Row leading={<IconTile icon={HardDrive} color={brand.rose} />} title="Storage" subtitle="Workspace size, run pruning, cache" chevron onPress={go("/settings/storage")} />, { subtitle: "Workspace size, run pruning, cache", words: "storage prune workspace trim runs archive cache clear" })] : []),
         ...(owner ? [row("usage", "Usage", <Row leading={<IconTile icon={ChartColumn} color={colors.ink2} />} title="Usage" chevron onPress={go("/settings/usage")} />, { words: "tokens cost plans limits" })] : []),
         ...(owner && meta?.capabilities.includes("proactive-agent-v2")
           ? [row("experimental", "Experimental", <Row leading={<IconTile icon={FlaskConical} color={colors.ink2} />} title="Experimental" value={settings?.proactive?.enabled ? "Proactive agent on" : undefined} chevron onPress={go("/settings/experimental")} />, { words: "proactive beta" })]
