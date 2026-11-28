@@ -6,6 +6,7 @@ agent file with the reader Botkins itself uses.
 
 import json
 import os
+import sqlite3
 import subprocess
 import zipfile
 from pathlib import Path
@@ -123,6 +124,24 @@ def _workspace(data, agent_path, bot_id="bot-1"):
         {"bots": [{"id": bot_id, "name": "Ralph", "origin": {"provider": "copilot", "file": str(agent_path)}}]}))
 
 
+def _workspace_db(data, agent_path, bot_id="bot-1", name="Ralph"):
+    data.mkdir(parents=True, exist_ok=True)
+    bot = {"id": bot_id, "name": name, "origin": {"provider": "copilot", "file": str(agent_path)}}
+    conn = sqlite3.connect(data / "workspace.db")
+    try:
+        conn.execute("PRAGMA journal_mode = WAL")
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS bots (id TEXT PRIMARY KEY, sort_order INTEGER NOT NULL, name TEXT, data TEXT NOT NULL)"
+        )
+        conn.execute(
+            "INSERT OR REPLACE INTO bots (id, sort_order, name, data) VALUES (?, ?, ?, ?)",
+            (bot_id, 0, name, json.dumps(bot)),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def test_full_clone_waits_then_fills_the_bot(root, tmp_path):
     result = clone.build_clone(ralph(root), full=True)
     path = clone.write_agent(result.agent, tmp_path / "agents")
@@ -200,6 +219,45 @@ def test_finds_botkins_data_on_linux(tmp_path, monkeypatch):
     data.mkdir(parents=True)
     (data / "workspace.json").write_text("{}")
     assert clone.botkins_data_dir() == data
+
+
+def test_finds_botkins_data_and_bot_from_sqlite_and_json_fallback(tmp_path, monkeypatch):
+    for var in ("BOTKINS_DATA", "BOTKINS_DATA_DIR", "XDG_CONFIG_HOME", "XDG_DATA_HOME"):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    agent = tmp_path / "agents" / "hermes-ralph.agent.md"
+    agent.parent.mkdir(parents=True)
+    agent.write_text("---\nname: Ralph\n---\nHello\n")
+
+    # 1. SQLite-only workspace (post-migration: workspace.json renamed away)
+    data = tmp_path / ".local" / "share" / "botkins" / "data"
+    _workspace_db(data, agent, bot_id="bot-sql", name="Ralph")
+    (data / "workspace.json.migrated-12345").write_text("{}")
+    assert clone.botkins_data_dir() == data
+    found = clone.find_bot(agent)
+    assert found is not None and found["id"] == "bot-sql" and found["name"] == "Ralph"
+
+    # Read-only check: works even when the db file has read-only permissions (0o400)
+    db_file = data / "workspace.db"
+    db_file.chmod(0o400)
+    try:
+        found_ro = clone.find_bot(agent, data_dir=data)
+        assert found_ro is not None and found_ro["id"] == "bot-sql"
+    finally:
+        db_file.chmod(0o600)
+
+    # 2. Fallback to workspace.json when workspace.db is absent
+    json_dir = tmp_path / "json-only"
+    _workspace(json_dir, agent, bot_id="bot-json")
+    found_json = clone.find_bot(agent, data_dir=json_dir)
+    assert found_json is not None and found_json["id"] == "bot-json"
+
+    # 3. Fallback to workspace.json when workspace.db is unreadable/corrupt
+    corrupt_dir = tmp_path / "corrupt-db"
+    _workspace(corrupt_dir, agent, bot_id="bot-fallback")
+    (corrupt_dir / "workspace.db").write_text("not a sqlite file")
+    found_fb = clone.find_bot(agent, data_dir=corrupt_dir)
+    assert found_fb is not None and found_fb["id"] == "bot-fallback"
 
 
 class FakeLlm:

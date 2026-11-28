@@ -93,6 +93,8 @@ export const WORKSPACE = {
   deleteChat: cmd("chats delete"),
   reactToMessage: cmd("chats react"),
   "chat.cardAction": cmd("chats card"),
+  "chat.a2uiAction": no("window's own"),
+  "chat.a2uiFunction": no("window's own"),
   forkChat: cmd("chats fork"),
   compact: cmd("chats compact"),
   setChatFlags: cmd("chats flags"),
@@ -138,6 +140,15 @@ export const WORKSPACE = {
   workflowGithubStatus: no("person"), // checks local gh CLI sign-in state for the Workflow trigger UI; terminal users run `gh auth status`
   workflowGithubSignInStart: no("person"), // interactive browser device-code flow for `gh auth login --web`; terminal users run `gh auth login`
   workflowGithubSignInCancel: no("person"), // cancels an in-progress `gh auth login --web` started from the window or owner phone
+  workflowGithubCatalog: no("person"), // lists repository labels and assignees for the desktop/mobile GitHub workflow pickers
+  workflowGithubDeliveries: cmd("workflows deliveries"),
+  workflowGithubReplayLast: cmd("workflows replay"),
+  // ── GitHub App ("Botkins Agent") ──
+  githubAgentStatus: cmd("github status"),
+  githubAgentInstallUrl: cmd("github install"),
+  githubAgentRefresh: cmd("github refresh"),
+  githubAgentSetRepo: cmd("github repo"),
+  githubAgentUnbind: cmd("github unbind"),
   // ── Channel Hooks ──
   channelsList: cmd("channels list"),
   channelAdd: cmd("channels add"),
@@ -405,7 +416,7 @@ export const WORKSPACE = {
   ...each("startDictation startLiveVoice endLiveVoice liveVoiceTool liveVoiceTranscript recordVoiceLine transcribe speak", no("window")), // the window's microphone and speaker
   ...each("testNotification requestScreenPermission allowLocalNetwork grantMacTool setPhoneScreen computerUseStatus requestComputerUsePermission", no("window")), // a notification or a permission the system asks for on the screen
   // ── What only the window uses to draw itself ──
-  ...each("sidePane frameAnswer frameOpenLink linkPreview previewChatPath thumbnailChatPath inspectChatPaths artifacts.thumbnail warmChat", no("window's own")),
+  ...each("sidePane stepDetail frameAnswer frameOpenLink linkPreview previewChatPath thumbnailChatPath inspectChatPaths artifacts.thumbnail warmChat", no("window's own")),
 };
 
 /** The phone link's own calls: every `link.*` name of `LinkHost` (desktop/link/server.mjs). */
@@ -613,7 +624,12 @@ export const CHANGES = {
   "workflows.pause": (args, value) => value?.name ?? args?.[0],
   "workflows.resume": (args, value) => value?.name ?? args?.[0],
   "workflows.run": (args, value) => value?.workflowId ?? args?.[0],
-  "workflows.retry": (args, value) => value?.id ?? args?.[0],
+  "workflows.replay": (args, value) => value?.workflowId ?? args?.[0],
+  "workflows.retry": (args, value) => {
+    const id = value?.id ?? args?.[0];
+    if (args?.[2]?.allowUncertainRetry !== true) return id;
+    return thingForLog(id) && String(id).length <= 61 ? id + " (allow-uncertain)" : "(allow-uncertain)";
+  },
   "workflows.approve": (args, value) => value?.id ?? args?.[0],
   "workflows.cancel": (args, value) => value?.id ?? args?.[0],
   "workflows.import": (args, value) => value?.workflow?.name ?? "imported",
@@ -782,6 +798,10 @@ export const CHANGES = {
   "node.convert.run": (args, value) => levelOf(value?.job?.nodeName ?? args?.[0]?.nodeName, value?.job?.status ?? "run"),
   "node.convert.undo": (args, value) => value?.snapshotId ?? args?.[0] ?? "latest",
   "node.remote.control": (args, value) => levelOf(value?.hostName ?? args?.[0], args?.[1]),
+  // ── Connected computers & unified multi-host view (control-hosts.mjs) ──
+  "hosts.unified": (args) => (args?.[0] === true ? "on" : "off"),
+  "hosts.include": (args) => levelOf(args?.[0], args?.[1] === true ? "included" : "excluded"),
+  "hosts.focus": (args) => args?.[0] || "local",
   // Channel Hooks: log connection label/id only, never tokens or message bodies.
   "channels.add": (args, value) => value?.label ?? args?.[0]?.label ?? args?.[0]?.kind,
   "channels.update": (args, value) => value?.label ?? args?.[0],
@@ -792,6 +812,10 @@ export const CHANGES = {
   "channels.resume": (args, value) => value?.label ?? args?.[0],
   "channels.pair.approve": (args, value) => value?.connectionId ?? args?.[1] ?? "pair",
   "channels.pair.deny": (args, value) => value?.connectionId ?? args?.[1] ?? "pair",
+  // GitHub Agent: log repo name or installation id only, never tokens or signed states.
+  "github.refresh": null,
+  "github.setRepo": (args) => args?.[0] ?? "repo",
+  "github.unbind": (args) => (args?.[0] ? String(args[0]) : "installation"),
 };
 /** The service's own calls that only read, wait or talk in a chat: no line. Every call is in this list, in CHANGES or in LOGS_ITSELF. */
 export const READS = ["interactions.list", "skills.review", "chat.scriptCommand", "skillsCatalog.search", "skillsCatalog.preview", "skillsCatalog.featured", "market.catalog", "market.skillImage", "market.skillPreview", "market.packPreview", "market.templatePreview", "mcpCatalog.list", "piPackages.browse", "piPackages.preview", "piPackages.list", "status", "logs.read", "doctor", "events.wait", "pair.status", "devices.list", "bots.list", "bots.get", "providers.list", "providers.services", "providers.login.read", "providers.login.input", "providers.login.cancel", "models", "chat.open", "chat.list", "chat.send", "chat.read", "chat.stop", "runs.list", "routines.list", "plugins.list", "plugins.marketplaces", "plugins.refresh", "plugins.browse", "plugins.preview", "config.get", "config.describe", "relay.status", "update.status", "update.check", "methods", "plugins.get", "tools.list", "tools.get", "tools.import.preview", "tools.signIn.read", "tools.signIn.input", "tools.signIn.cancel", "skills.list", "skills.get", "bots.tools", "bots.access", "bots.menu", "folders.list", "gadgets.get", "profile.status", "profile.home"];
@@ -799,7 +823,7 @@ export const READS = ["interactions.list", "skills.review", "chat.scriptCommand"
 export const MORE_READS = {
   bots: ["bots.flags", "bots.proactive", "bots.memory", "bots.sections", "bots.sections.get", "bots.importable", "bots.import.preview", "templates.list", "templates.get", "templates.import.preview", "templates.browse", "templates.market"],
   chats: ["chats.list", "chats.get", "chats.search", "chats.queue", "chats.helpers", "chats.mentions", "chats.aside", "chats.sections", "chats.projectLook", "chats.messages"], // (`chats.aside` asks the chat's model a question that the chat does not keep.)
-  routines: ["routines.get", "routines.runs", "routines.review", "routines.when", "routines.schedules", "workflows.list", "workflows.export"],
+  routines: ["routines.get", "routines.runs", "routines.review", "routines.when", "routines.schedules", "workflows.list", "workflows.export", "workflows.deliveries", "github.status", "github.installUrl"],
   projects: ["projects.list", "projects.get", "projects.artifacts", "projects.changes", "projects.diff", "jobs.list", "jobs.setup", "jobs.status", "todos.list", "todos.get", "tasks.list", "tasks.get", "artifacts.list", "artifacts.read", "artifacts.resolve"],
   wiki: ["wiki.tree", "wiki.find", "wiki.page", "wiki.search", "wiki.history", "wiki.version", "wiki.exportPlan"],
   prefs: ["preferences.get", "preferences.harnesses", "usage.report", "usage.export", "cache.info", "workspace.stats", "macTools.status"],
@@ -815,6 +839,8 @@ export const MORE_READS = {
   apps: ["apps.list", "apps.connected", "apps.accounts", "apps.card"], // (`apps.card` looks at a chat's Connect card again; when the app is connected, the chat goes on as it would for the window.)
   // (Node host, control-node.mjs)
   node: ["node.status", "node.approvals", "node.audit", "node.convert.inspect", "node.convert.plan", "node.convert.status", "node.remote.status"],
+  // (Connected computers & unified view, control-hosts.mjs)
+  hosts: ["hosts.status"],
   // (Channel Hooks, control-channels.mjs)
   channels: ["channels.list", "channels.pair.list", "channels.test", "channels.logs"],
 };

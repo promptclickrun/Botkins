@@ -8,7 +8,7 @@ import { chmodSync, existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { Script } from "node:vm";
 import test from "node:test";
-import { Workspace } from "./starter.mjs";
+import { Workspace, readPersistedWorkspace } from "./starter.mjs";
 import { fakeClient, tempDir } from "./fake-copilot.mjs";
 import { IMSG_INSTALL, MacTools, macToolsField } from "../desktop/mactools.mjs";
 import * as scripts from "../desktop/mactools-mail.mjs";
@@ -366,7 +366,7 @@ test("setMacTool checks its arguments, refuses off a Mac, saves, and reopens ses
   await r.mac.set("mail", "read");
   assert.deepEqual(r.ws.state.settings.macTools, { imessage: "interact", mail: "read" });
   // Saved with the workspace.
-  assert.deepEqual(JSON.parse(readFileSync(r.ws.file, "utf8")).settings.macTools, { imessage: "interact", mail: "read" });
+  assert.deepEqual(readPersistedWorkspace(r.ws.dir).settings.macTools, { imessage: "interact", mail: "read" });
   // Not on a Mac: anything but Off is refused, and Off still clears a choice that came along.
   const other = rig(t, { levels: { imessage: "read", mail: "off" }, options: { platform: "win32" } });
   await assert.rejects(other.mac.set("imessage", "read"), /only in Botkins on a Mac/);

@@ -6,7 +6,7 @@ import { createHash } from "node:crypto";
 import { existsSync, readdirSync, readFileSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
-import { Workspace } from "./starter.mjs";
+import { Workspace, readPersistedWorkspace } from "./starter.mjs";
 import { readWorkspace } from "../desktop/workspace-file.mjs";
 import { fakeClient, tempDir } from "./fake-copilot.mjs";
 
@@ -14,7 +14,7 @@ function setup(t) {
   const dir = tempDir(t);
   let heard = 0;
   const ws = new Workspace(dir, fakeClient().client, () => heard++);
-  const onDisk = () => JSON.parse(readFileSync(join(dir, "workspace.json"), "utf8"));
+  const onDisk = () => readPersistedWorkspace(dir);
   t.after(() => ws.flushSave());
   return { dir, ws, onDisk, heard: () => heard };
 }
@@ -60,7 +60,7 @@ test("concurrent live turns checkpoint their own work without rewriting historic
     if (starts.length === 2) bothStarted.resolve();
     return new Promise(() => {}); // simulate a process that dies before the provider finishes
   });
-  const ws = new Workspace(dir, client, () => {});
+  const ws = new Workspace(dir, client, () => {}, { storage: "json" });
   const a = ws.createChat("pip"), b = ws.createChat("scout");
   const history = "old-history".repeat(100_000);
   ws.chat(a).messages.push({ role: "assistant", text: history });
@@ -108,7 +108,7 @@ test("concurrent live turns checkpoint their own work without rewriting historic
   assert.equal(statSync(sidecar).mtimeMs, 10_000, "a different chat's delta leaves the checkpoint alone");
 
   const restarted = fakeClient();
-  const again = new Workspace(dir, restarted.client, () => {});
+  const again = new Workspace(dir, restarted.client, () => {}, { storage: "json" });
   assert.equal(existsSync(sidecar), false);
   await Promise.all(again.resumeActive());
   assert.match(restarted.log.sent.find(([, prompt]) => prompt.includes("First task"))[1], /Earlier partial reply:\nFirst draft/);
@@ -130,7 +130,7 @@ test("a graceful flush commits the current draft and supersedes its checkpoint e
     ready.resolve(session);
     return new Promise(() => {});
   });
-  const ws = new Workspace(dir, client, () => {});
+  const ws = new Workspace(dir, client, () => {}, { storage: "json" });
   const chat = ws.createChat("pip");
   void ws.send(chat, "Task");
   const session = await ready.promise;
@@ -166,7 +166,7 @@ test("a partial voice insertion or correction before the checkpoint boundary kee
     ws.active.get(chatId).nextCheckpoint = 0;
     session.emit({ type: "assistant.message_delta", data: { deltaContent: text } });
     t.mock.timers.tick(750);
-    assert.deepEqual(readWorkspace(ws.file).chats.find(c => c.id === chatId).messages, ws.chat(chatId).messages);
+    assert.deepEqual(readPersistedWorkspace(dir).chats.find(c => c.id === chatId).messages, ws.chat(chatId).messages);
   };
   ws.recordVoiceLine(chatId, "user-1", "User arriving late", false);
   checkpoint("draft");

@@ -23,7 +23,7 @@ const FOR_A_PERSON = {
   changePanel: 2, routine: 2, refreshPanel: 1, boardAct: 3,
   // A bot's Proactive agent is changed, and its alerts are acted on, as the person who calls.
   mainChat: 1, changeMainFork: 4, addBot: 1, duplicateBot: 1, importAgents: 1, setProactiveChatMode: 1,
-  setBotProactive: 2, proactiveAct: 3, reactToMessage: 4,
+  setBotProactive: 2, proactiveAct: 3, reactToMessage: 4, "chat.a2uiAction": 2, "chat.a2uiFunction": 2,
 };
 
 /**
@@ -55,6 +55,9 @@ export function deviceCall({ workspace, handlers, folders }) {
     if (name === "recordVoiceLine") return handlers[name](checked[0], checked[1], checked[2], checked[3], member, checked[4]);
     // A script command is the owner's to remove, turn off or replace, whatever a member's role lets them do to a skill (desktop/script-commands.mjs).
     if (member) {
+      if (name === "workflowRetryRun" && checked[2]?.allowUncertainRetry === true) {
+        throw new Error("Only the owner can retry an uncertain GitHub action.");
+      }
       const names = name === "removeSkill" || name === "setSkillEnabled" ? [checked[0]] : name === "skills.upload" ? checked[0]?.replace : name === "skillsCatalog.install" ? checked[1] : [];
       const scripts = workspace.state.skills?.scripts ?? {};
       if (Array.isArray(names) && names.some((skill) => typeof skill === "string" && Object.hasOwn(scripts, skill))) throw new Error("Only the owner can remove, turn off or replace a script command.");

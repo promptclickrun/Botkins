@@ -47,6 +47,9 @@ export function isLinkablePath(value: string, spaces = false): boolean {
 }
 
 const fence = (line: string) => /^\s*(```|~~~)/.test(line);
+// Bare MEDIA: on its own line (optionally after a list or quote mark) can carry unquoted spaces
+// such as macOS "/Users/.../Application Support/Botkins/..." or Windows "C:\Users\A B\...".
+const MEDIA_LINE_LEAD = /^\s*(?:[-*+]|\d+[.)]|>)?\s*$/;
 
 /** The paths in one line of ordinary text (not inside a code block). `at` is where the line starts in the whole text. */
 function inLine(line: string, at: number): PathSpan[] {
@@ -60,14 +63,33 @@ function inLine(line: string, at: number): PathSpan[] {
     taken.push([start, end]);
   };
 
-  // 1. MEDIA: attachments: MEDIA:/path, MEDIA: /path, MEDIA:"/path with spaces", MEDIA:`…`.
+  // 1. MEDIA: attachments: MEDIA:/path, MEDIA: /path, MEDIA:"/path with spaces", MEDIA:`…`,
+  //    or bare MEDIA: on its own line carrying spaces (macOS Application Support, Windows user dirs).
   for (const match of line.matchAll(/MEDIA:[ ]?(?:"([^"\n]+)"|'([^'\n]+)'|`([^`\n]+)`|(\S+))/g)) {
     const start = match.index;
-    if (!boundary(start)) continue;
+    if (!boundary(start) || !free(start, start + match[0].length)) continue;
     const quoted = match[1] ?? match[2] ?? match[3];
     if (quoted !== undefined) {
       if (isLinkablePath(quoted, true)) add(start, start + match[0].length, quoted, true);
       continue;
+    }
+    if (MEDIA_LINE_LEAD.test(line.slice(0, start))) {
+      const restStart = start + match[0].length - match[4]!.length;
+      const tail = line.slice(restStart).replace(/[ \t]+$/, "");
+      if (/\s/.test(tail) && !/(?:^|\s)MEDIA:/i.test(tail)) {
+        // Prefer whole line when it is a path with spaces (macOS Application Support, Windows dirs),
+        // unless the first token is already a complete path followed by prose words ("MEDIA:/a.png and the source is ...").
+        const firstToken = match[4]!.replace(TRAILING, "");
+        const whole = tail.replace(TRAILING, "");
+        const restAfterFirst = tail.slice(match[4]!.length);
+        const looksLikeProse =
+          isLinkablePath(firstToken) &&
+          /^\s+(?:and|or|then|is|was|are|were|in|on|at|to|for|with|from|as|by|of|the|a|an|that|this|which|here|there|see|open|check|shows?|has|have|had)\b/i.test(restAfterFirst);
+        if (!looksLikeProse && isLinkablePath(whole, true)) {
+          add(start, restStart + whole.length, whole, true);
+          continue;
+        }
+      }
     }
     const bare = match[4]!.replace(TRAILING, "");
     if (isLinkablePath(bare)) add(start, start + match[0].length - (match[4]!.length - bare.length), bare, true);

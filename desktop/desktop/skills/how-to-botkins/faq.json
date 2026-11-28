@@ -279,6 +279,12 @@
      "url": "https://botkins.app/faq#what-are-skills"
     },
     {
+     "id": "does-botkins-support-a2ui",
+     "question": "Does Botkins support A2UI?",
+     "answer": "Yes. Botkins supports A2UI 1.0 Basic Catalog surfaces on desktop and phone. Any bot turn, routine, task result, or Workflow chat Output step can post an interactive A2UI surface (Text, Image, Icon, Row, Column, List, Card, Tabs, Modal, Divider, Button, TextField, CheckBox, ChoicePicker, Slider, DateTimeInput) using Botkins' own light/dark styling. Surfaces are validated on the host with no scripts or arbitrary URLs; external links use Botkins' link confirmation, and turning off rich cards shows a plain-text fallback with action buttons. Button actions route back to the owning bot, built-in dispatch/dismiss actions, or a workflow resume/trigger. Custom third-party catalogs and bidirectional function RPC loops are not included yet.",
+     "url": "https://botkins.app/faq#does-botkins-support-a2ui"
+    },
+    {
      "id": "what-are-plugins-and-the-marketplace",
      "question": "What are plugins and the Marketplace?",
      "answer": "Plugins bundle skills, hooks and MCP servers. The built-in marketplaces are Botkins', github/awesome-copilot and github/copilot-plugins, and you can add more. Before you install, Botkins shows every command the plugin will start. It warns about risky plugins but leaves the decision to you.\n Approved hooks and plugin MCP servers can run on Copilot, Pi and OMP. Other harnesses use the plugin's skills only. On Pi and OMP, a plugin hook can ask for approval or refuse a tool call, but can't approve a call on your behalf.\n When Botkins starts a subagent, an approved plugin hook can add instructions before the child starts or change the reply its parent receives. If OMP starts its own subagent, hooks can see when it starts and what it returns, but can't change either the instructions or the reply.",

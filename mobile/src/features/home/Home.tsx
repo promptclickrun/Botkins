@@ -41,17 +41,23 @@ const TOP = { perRow: 4, width: "25%", size: 80, fewSize: 96 } as const;
 /** A big bare avatar with its name under it, for the row at the top. */
 function TopBot({ bot, size, width }: { bot: Bot; size: number; width?: `${number}%` }) {
   const state = useBotActivity(bot.id);
+  const unified = useApp((s) => s.unified);
   const status = activityLabel(state);
   const canChat = useCan("agents", "chat");
   return (
     <View style={width ? { width, alignItems: "center" } : { flex: 1, alignItems: "center" }}>
       <BotMenu bot={bot}>
-        <Tap onPress={() => canChat ? void openBotChat(bot.id) : router.push({ pathname: "/bot/[id]", params: { id: bot.id } })} sink={0.94} accessibilityLabel={bot.name + (status ? ", " + status : "")} style={{ alignItems: "center", gap: 6, paddingHorizontal: space.xs }}>
+        <Tap onPress={() => canChat ? void openBotChat(bot.id) : router.push({ pathname: "/bot/[id]", params: { id: bot.id } })} sink={0.94} accessibilityLabel={bot.name + (unified && bot.hostName ? " on " + bot.hostName : "") + (status ? ", " + status : "")} style={{ alignItems: "center", gap: 4, paddingHorizontal: space.xs }}>
           {/* Home holds still: the agent you're with moves, on its page and in its chat. */}
           <BotAvatar bot={bot} state={state} size={size} />
           <T variant="footnote" weight="600" color="ink2" numberOfLines={1} center>
             {bot.name}
           </T>
+          {unified && !!bot.hostName && (
+            <T variant="caption" color="muted" numberOfLines={1} center>
+              {bot.hostName}
+            </T>
+          )}
           {/* What it is doing, in words beside the still avatar: Home holds still (see "Where avatars move"). */}
           {!!status && (
             <T variant="caption" color={state === "waiting" ? "warning" : "muted"} numberOfLines={1} center style={{ marginTop: -4 }}>
@@ -65,6 +71,8 @@ function TopBot({ bot, size, width }: { bot: Bot; size: number; width?: `${numbe
 }
 
 function NeedsYou({ request, bot }: { request: AgentRequest; bot?: Bot }) {
+  const unified = useApp((s) => s.unified);
+  const host = unified ? request.hostName || bot?.hostName : undefined;
   const isNode = isNodeJobRequest(request);
   const [busy, setBusy] = useState<"deny" | "approve" | null>(null);
   // An ordinary approval is answered right here, as on a notification; anything risky, a script to
@@ -80,7 +88,7 @@ function NeedsYou({ request, bot }: { request: AgentRequest; bot?: Bot }) {
     ? (request.sourceBotName && request.sourceHostName
         ? `${request.sourceBotName} on ${request.sourceHostName}`
         : request.sourceBotName || "Node host") + " needs approval"
-    : (bot?.name ?? "A bot") + " needs you";
+    : (bot?.name ?? "A bot") + (host ? " · " + host : "") + " needs you";
   return (
     <Row
       leading={bot ? <BotAvatar bot={bot} state="waiting" size={40} /> : undefined}
@@ -309,7 +317,16 @@ export default function Home() {
   const synced = useApp((state) => state.synced);
   const link = useApp((state) => state.link);
   const online = link === "online";
-  const computer = useApp((state) => state.pairing?.name) ?? "Computer";
+  const unified = useApp((state) => state.unified);
+  const unifiedHosts = useApp((state) => state.unifiedHosts);
+  const includedHosts = unifiedHosts.filter((h) => h.included);
+  const onlineHosts = includedHosts.filter((h) => h.state === "online").length;
+  const computer = unified
+    ? onlineHosts === includedHosts.length
+      ? "All computers"
+      : onlineHosts + "/" + includedHosts.length + " computers"
+    : (useApp((state) => state.pairing?.name) ?? "Computer");
+  const pillOnline = unified ? onlineHosts === includedHosts.length && includedHosts.length > 0 : online;
   const adminOn = useApp((state) => state.parts.meta?.you?.kind === "owner" && state.parts.meta.you.admin === true);
   const computerOrder = usePrefs(prefs => prefs.computerOrder);
   const computers = useApp((state) => state.pairings);
@@ -375,15 +392,15 @@ export default function Home() {
       <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: space.md }}>
         <View style={{ flex: 1, minWidth: 0, flexDirection: "row", alignItems: "center", gap: space.sm }}>
           {/* A tap opens the computer's page; a hold opens the switcher. */}
-          <HoldMenu title="Computers" actions={computerActions(computers, inUse, directoryHosts, computerOrder)} onPressAction={({ nativeEvent }) => runComputerChoice(nativeEvent.event)} style={{ flexShrink: 1 }}>
+          <HoldMenu title="Computers" actions={computerActions(computers, inUse, directoryHosts, computerOrder, unified)} onPressAction={({ nativeEvent }) => runComputerChoice(nativeEvent.event)} style={{ flexShrink: 1 }}>
             <Tap
-              onPress={() => router.push("/settings/desktop")}
+              onPress={() => router.push(unified ? "/settings/computers" : "/settings/desktop")}
               feel="select"
-              accessibilityLabel={computer + (online ? ", connected" : ", not connected") + (adminOn ? ", Admin mode" : "")}
+              accessibilityLabel={computer + (pillOnline ? ", connected" : ", not connected") + (adminOn ? ", Admin mode" : "")}
               accessibilityHint="Hold to switch computers"
               style={{ flexShrink: 1, flexDirection: "row", alignItems: "center", gap: 7, height: 32, paddingHorizontal: 12, borderRadius: 16, backgroundColor: colors.surface }}
             >
-              <Dot tone={online ? "success" : "warning"} size={7} />
+              <Dot tone={pillOnline ? "success" : "warning"} size={7} />
               <T variant="footnote" weight="600" color="ink2" numberOfLines={1} style={{ flexShrink: 1 }}>
                 {computer}
               </T>

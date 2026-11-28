@@ -9,9 +9,24 @@ const execFileAsync = promisify(execFile);
 
 export const GH_INSTALL_URL = "https://cli.github.com/";
 export const GH_DEVICE_URL = "https://github.com/login/device";
-export const DEFAULT_BOT_MENTION = "@botkins-bot";
+export const DEFAULT_BOT_MENTION = "@botkins-agent";
 
 export const GITHUB_EVENT_KINDS = [
+  "issue.opened",
+  "issue.closed",
+  "issue.labeled",
+  "pr.opened",
+  "pr.updated",
+  "pr.reviewRequested",
+  "pr.reviewSubmitted",
+  "pr.checksFailed",
+  "pr.merged",
+  "comment",
+  "mention",
+  "assigned",
+];
+
+export const LEGACY_GITHUB_EVENT_KINDS = [
   "pr_opened",
   "pr_updated",
   "pr_review",
@@ -23,9 +38,34 @@ export const GITHUB_EVENT_KINDS = [
   "bot_mentioned",
 ];
 
-const PR_EVENTS = new Set(["pr_opened", "pr_updated", "pr_review", "ci_status", "user_mentioned", "bot_mentioned"]);
-const ISSUE_EVENTS = new Set(["issue_opened", "issue_updated", "user_mentioned", "bot_mentioned"]);
-const COMMENT_EVENTS = new Set(["issue_comment", "user_mentioned", "bot_mentioned"]);
+const PR_EVENTS = new Set([
+  "pr.opened",
+  "pr.updated",
+  "pr.reviewrequested",
+  "pr.reviewsubmitted",
+  "pr.checksfailed",
+  "pr.merged",
+  "mention",
+  "assigned",
+  "pr_opened",
+  "pr_updated",
+  "pr_review",
+  "ci_status",
+  "user_mentioned",
+  "bot_mentioned",
+]);
+const ISSUE_EVENTS = new Set([
+  "issue.opened",
+  "issue.closed",
+  "issue.labeled",
+  "mention",
+  "assigned",
+  "issue_opened",
+  "issue_updated",
+  "user_mentioned",
+  "bot_mentioned",
+]);
+const COMMENT_EVENTS = new Set(["comment", "mention", "issue_comment", "user_mentioned", "bot_mentioned"]);
 
 const GH_ENV_PREFIXES = ["GH_", "GITHUB_", "XDG_CONFIG_HOME", "NO_COLOR"];
 const SIGN_IN_START_TIMEOUT_MS = 15_000;
@@ -65,7 +105,7 @@ export function parseMentionHandles(raw, fallback = DEFAULT_BOT_MENTION) {
 
 /**
  * Finds the first matching `@handle` mention in `text` (case-insensitive, word-bounded so emails
- * like `foo@botkins-bot.com` and longer handles like `@botkins-bot-dev` do not false-match).
+ * like `foo@botkins-agent.com` and longer handles like `@botkins-agent-dev` do not false-match).
  */
 export function findMentionInText(text, handles) {
   if (typeof text !== "string" || !text || !Array.isArray(handles) || !handles.length) return null;
@@ -219,19 +259,28 @@ export class WorkflowGithubAuth {
     }
 
     let repos = [];
+    let repoAccess = [];
     if (authenticated && includeRepos) {
       const repoRes = await this.execGh(
         bin,
-        ["repo", "list", "--limit", "30", "--json", "nameWithOwner"],
+        ["repo", "list", "--limit", "100", "--json", "nameWithOwner,isPrivate,viewerPermission"],
         { timeout: 12_000 },
       );
       if (repoRes.ok) {
         try {
           const list = JSON.parse(repoRes.stdout || "[]");
           if (Array.isArray(list)) {
-            repos = list
-              .map((r) => (typeof r?.nameWithOwner === "string" ? r.nameWithOwner.trim() : ""))
-              .filter(Boolean);
+            for (const r of list) {
+              const name = typeof r?.nameWithOwner === "string" ? r.nameWithOwner.trim() : "";
+              if (!name) continue;
+              repos.push(name);
+              const perm = String(r?.viewerPermission || "").toUpperCase();
+              repoAccess.push({
+                fullName: name,
+                ...(perm ? { writable: perm === "ADMIN" || perm === "MAINTAIN" || perm === "WRITE" } : {}),
+                ...(typeof r?.isPrivate === "boolean" ? { isPrivate: r.isPrivate } : {}),
+              });
+            }
           }
         } catch {}
       }
@@ -243,6 +292,7 @@ export class WorkflowGithubAuth {
       login: login || null,
       scopes: parsed.scopes,
       repos,
+      repoAccess,
       installUrl: GH_INSTALL_URL,
       signIn: this.signInSnapshot(),
     };
@@ -389,6 +439,85 @@ export class WorkflowGithubAuth {
     });
   }
 
+  /**
+   * Resolves a short-lived local GitHub read token (preferring `gh auth token`, falling back to
+   * `GH_TOKEN`/`GITHUB_TOKEN` env) used solely as a proof of repository read access when subscribing
+   * to the relay. Never persisted or logged.
+   */
+  async getAuthToken() {
+    const bin = this.findGh();
+    if (bin) {
+      const res = await this.execGh(bin, ["auth", "token"], { timeout: 6_000 });
+      if (res.ok) {
+        const tok = String(res.stdout || "").trim();
+        if (tok && !/\s/.test(tok)) return tok;
+      }
+    }
+    const envTok = String(process.env.GH_TOKEN || process.env.GITHUB_TOKEN || "").trim();
+    return envTok && !/\s/.test(envTok) ? envTok : null;
+  }
+
+  /**
+   * Lists repository labels (up to 500) using local `gh api` pagination.
+   * Used by the trigger label picker and GitHub output catalog validation.
+   */
+  async listRepoLabels(repo) {
+    const bin = this.findGh();
+    if (!bin || !repo) return [];
+    const res = await this.execGh(
+      bin,
+      ["api", "--paginate", `repos/${repo}/labels?per_page=100`],
+      { timeout: 15_000, maxBuffer: 4 * 1024 * 1024 },
+    );
+    if (!res.ok) return [];
+    try {
+      const parsed = JSON.parse(res.stdout || "[]");
+      if (!Array.isArray(parsed)) return [];
+      const seen = new Set();
+      const out = [];
+      for (const l of parsed) {
+        const name = typeof l === "string" ? l.trim() : String(l?.name || "").trim();
+        if (!name || seen.has(name.toLowerCase())) continue;
+        seen.add(name.toLowerCase());
+        out.push({ name, color: typeof l?.color === "string" ? l.color : "", description: typeof l?.description === "string" ? l.description : "" });
+        if (out.length >= 500) break;
+      }
+      return out;
+    } catch {
+      return [];
+    }
+  }
+
+  /**
+   * Lists repository assignees / collaborators (up to 500) using local `gh api`.
+   */
+  async listRepoAssignees(repo) {
+    const bin = this.findGh();
+    if (!bin || !repo) return [];
+    const res = await this.execGh(
+      bin,
+      ["api", "--paginate", `repos/${repo}/assignees?per_page=100`],
+      { timeout: 15_000, maxBuffer: 4 * 1024 * 1024 },
+    );
+    if (!res.ok) return [];
+    try {
+      const parsed = JSON.parse(res.stdout || "[]");
+      if (!Array.isArray(parsed)) return [];
+      const seen = new Set();
+      const out = [];
+      for (const u of parsed) {
+        const login = typeof u === "string" ? u.trim() : String(u?.login || "").trim();
+        if (!login || seen.has(login.toLowerCase())) continue;
+        seen.add(login.toLowerCase());
+        out.push({ login, type: typeof u?.type === "string" ? u.type : "User" });
+        if (out.length >= 500) break;
+      }
+      return out;
+    } catch {
+      return [];
+    }
+  }
+
   /** Cancels an in-progress `gh auth login` device-code sign-in. */
   async cancelSignIn() {
     this.signIn = { status: "idle", code: null, url: null, error: null, login: null };
@@ -443,10 +572,10 @@ export function createDefaultGithubPoller(auth, options = {}) {
 
     const wantsAny = events.length === 0;
     const needPrs = wantsAny || events.some((e) => PR_EVENTS.has(e));
-    const needAllPrStates = events.includes("pr_updated");
-    const needIssues = events.some((e) => ISSUE_EVENTS.has(e));
+    const needAllPrStates = events.some((e) => ["pr_updated", "pr.updated", "pr.merged"].includes(e));
+    const needIssues = wantsAny || events.some((e) => ISSUE_EVENTS.has(e));
     const needComments = events.some((e) => COMMENT_EVENTS.has(e));
-    const needViewer = events.includes("user_mentioned");
+    const needViewer = events.some((e) => e === "user_mentioned" || e === "mention");
 
     const tasks = [];
     let prs = [];
@@ -466,7 +595,7 @@ export function createDefaultGithubPoller(auth, options = {}) {
           "--limit",
           "25",
           "--json",
-          "number,title,body,author,url,headRefName,state,reviewDecision,statusCheckRollup,labels,createdAt,updatedAt",
+          "number,title,body,author,authorAssociation,url,headRefName,baseRefName,headRefOid,state,mergedAt,reviewDecision,reviewRequests,assignees,statusCheckRollup,labels,createdAt,updatedAt",
         ]).then((data) => {
           if (Array.isArray(data)) prs = data;
         }),
@@ -485,7 +614,7 @@ export function createDefaultGithubPoller(auth, options = {}) {
           "--limit",
           "25",
           "--json",
-          "number,title,body,author,url,state,labels,createdAt,updatedAt",
+          "number,title,body,author,authorAssociation,url,state,assignees,labels,createdAt,updatedAt",
         ]).then((data) => {
           if (Array.isArray(data)) issues = data;
         }),

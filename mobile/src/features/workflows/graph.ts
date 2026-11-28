@@ -1,6 +1,7 @@
 // Plain graph edits for the phone's workflow designer: no React, so tests can drive them.
 // The host (desktop/desktop/workflows.mjs) checks and normalizes what is saved; these keep a draft valid as it is edited.
 import type { WorkflowEdge, WorkflowNode, WorkflowTriggerKind } from "@/link/types";
+import { extractConfiguredRepos, WORKFLOW_GITHUB_ACTION_OPTIONS, WORKFLOW_GITHUB_EVENT_LABELS } from "./github";
 
 export type Graph = { nodes: WorkflowNode[]; edges: WorkflowEdge[] };
 export type StepKind = Exclude<WorkflowNode["kind"], "trigger">;
@@ -66,7 +67,7 @@ export function newTrigger(triggerKind: WorkflowTriggerKind, id: string): Workfl
     : triggerKind === "task" ? { event: "status_changed", toStatus: "done" }
     : triggerKind === "chat" ? { mentionOnly: false }
     : triggerKind === "routine" ? { onlyOnStatus: "any" }
-    : triggerKind === "github" ? { events: ["pr_opened"], pollMinutes: 5 }
+    : triggerKind === "github" ? { repos: [], events: ["issue.opened"], notBot: true, pollMinutes: 5 }
     : triggerKind === "webhook" ? { fields: [] }
     : { inputs: [] };
   return { id, kind: "trigger", triggerKind, label: TRIGGER_LABEL[triggerKind], position: { x: 0, y: 0 }, config };
@@ -341,8 +342,13 @@ export function summary(node: WorkflowNode, botName?: (id?: string, name?: strin
         case "webhook":
           return c.routeId ? "Webhook URL ready" : "URL made when saved";
         case "github": {
-          const evs = Array.isArray(c.events) ? c.events.map((e: string) => GITHUB_EVENT_LABEL[e as (typeof GITHUB_EVENTS)[number]] ?? e) : [];
-          return c.repo ? `${c.repo} · ${evs.join(", ") || "no events"}` : "Choose a repository";
+          const repos = extractConfiguredRepos(c);
+          const evs = Array.isArray(c.events)
+            ? c.events.map((e: string) => WORKFLOW_GITHUB_EVENT_LABELS[e] ?? GITHUB_EVENT_LABEL[e as (typeof GITHUB_EVENTS)[number]] ?? e)
+            : [];
+          if (!repos.length) return "Choose a repository";
+          const repoText = repos.length === 1 ? repos[0] : `${repos[0]} +${repos.length - 1}`;
+          return `${repoText} · ${evs.join(", ") || "no events"}`;
         }
         default:
           return "Run now, from here or the computer";
@@ -360,6 +366,11 @@ export function summary(node: WorkflowNode, botName?: (id?: string, name?: strin
     case "approval":
       return c.message || "Approve or reject";
     case "output": {
+      if (c.destination === "github") {
+        const act = WORKFLOW_GITHUB_ACTION_OPTIONS.find((a) => a.value === (c.action || "comment"));
+        const target = c.sameRepository === false && c.repository ? c.repository : "trigger repo";
+        return `GitHub · ${act?.label ?? (c.action || "Post comment")} (${target})`;
+      }
       const where = c.destination === "chat" ? "Chat" : c.destination === "feed" ? "Feed" : c.destination === "idea" ? "Ideas" : c.destination === "goal" ? "Goals" : "Notification";
       return [where, c.template ? String(c.template).replace(/\s+/g, " ") : "No message yet"].join(" · ");
     }
@@ -384,7 +395,7 @@ export const OP_LABEL: Record<string, string> = {
   exists: "is set",
   empty: "is empty",
 };
-export const DESTINATIONS = ["chat", "feed", "idea", "goal", "notification"] as const;
+export const DESTINATIONS = ["chat", "feed", "idea", "goal", "notification", "github"] as const;
 export const GOAL_CATEGORIES = ["health", "relationships", "finance", "career", "interests", "productivity", "other"] as const;
 export const DAYS = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"] as const;
 export const GITHUB_EVENTS = [

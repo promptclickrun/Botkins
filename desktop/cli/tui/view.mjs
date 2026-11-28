@@ -89,6 +89,18 @@ const tabLines = {
             ]
           : []),
         ["Workspace", status.workspace.bots + " bots, " + status.workspace.chats + " chats, " + status.workspace.routines + " routines" + (status.workspace.working ? ", " + c.cyan(status.workspace.working + " working") : "") + (status.workspace.waiting ? ", " + c.yellow(status.workspace.waiting + " waiting for an answer") : "")],
+        ...(status.unified
+          ? [
+              [
+                "Unified view",
+                c.green("on") +
+                  " · " +
+                  (status.hosts?.length
+                    ? status.hosts.map((h) => h.name + " (" + (h.state === "online" ? c.green("online") : c.yellow(h.state || "idle")) + (h.requests ? ", " + c.yellow(h.requests + " waiting") : "") + ")").join(", ")
+                    : "local only"),
+              ],
+            ]
+          : []),
         ["Secrets", status.vault.locked ? c.red("vault locked") : "wrapped by the " + status.secrets.where],
         ["Memory", status.memory.rssMb + " MB"],
         ["Data folder", status.dataDir],
@@ -113,13 +125,17 @@ const tabLines = {
   Bots(state, size, c) {
     const bots = state.bots ?? [];
     if (!bots.length) return [c.dim("There are no bots yet. Press a to add one.")];
+    const unified = bots.some((bot) => bot.hostName);
+    if (unified) {
+      return columns(bots.map((bot) => [bot.name + (bot.working ? c.cyan(" (working)") : ""), bot.hostName ?? "", bot.role, bot.model ? (bot.model.provider ? bot.model.provider + "/" : "") + bot.model.model : "default", String(bot.chats)]), size.width, { head: ["NAME", "HOST", "ROLE", "MODEL", "CHATS"], selected: state.selected, c });
+    }
     return columns(bots.map((bot) => [bot.name + (bot.working ? c.cyan(" (working)") : ""), bot.role, bot.model ? (bot.model.provider ? bot.model.provider + "/" : "") + bot.model.model : "default", String(bot.chats)]), size.width, { head: ["NAME", "ROLE", "MODEL", "CHATS"], selected: state.selected, c });
   },
   Chats(state, size, c) {
     const chats = state.chats ?? [];
     if (state.reading) {
       const { reading } = state;
-      const lines = [c.bold(reading.title) + c.dim("  (esc to go back, c to reply)"), ""];
+      const lines = [c.bold(reading.title) + (reading.hostName ? c.dim(" · " + reading.hostName) : "") + c.dim("  (esc to go back, c to reply)"), ""];
       const body = [];
       for (const message of reading.messages) {
         const who = message.role === "user" ? c.cyan("you") : c.green(reading.bot ?? "bot");
@@ -132,6 +148,10 @@ const tabLines = {
       return [...lines, ...wrapped.slice(-Math.max(1, size.height - 2))];
     }
     if (!chats.length) return [c.dim("There are no chats yet. Start one from the Bots tab (c), or with `botkins chat <bot>`.")];
+    const unified = chats.some((chat) => chat.hostName);
+    if (unified) {
+      return columns(chats.map((chat) => [chat.title, chat.hostName ?? "", chat.bot ?? "", String(chat.messages), chat.waiting ? c.yellow("approval") : chat.working ? c.cyan("working") : ""]), size.width, { head: ["CHAT", "HOST", "BOT", "MESSAGES", ""], selected: state.selected, c });
+    }
     return columns(chats.map((chat) => [chat.title, chat.bot ?? "", String(chat.messages), chat.working ? c.cyan("working") : ""]), size.width, { head: ["CHAT", "BOT", "MESSAGES", ""], selected: state.selected, c });
   },
   Routines(state, size, c) {

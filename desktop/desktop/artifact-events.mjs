@@ -85,21 +85,42 @@ export function normalizeMedia(text, folder) {
         return line;
       }
       if (fenced) return line;
-      let out = line.replace(/`\s*MEDIA:\s?([^`\s]+)\s*`/gi, (whole, raw) => {
+      let out = line.replace(/`\s*MEDIA:\s?([^`\n]+?)\s*`/gi, (whole, raw) => {
         const file = mediaFile(raw, folder);
         return file ? "MEDIA: " + file.path + file.rest : whole;
       });
-      // "MEDIA:" anywhere in a line; a bold or lowercase label only where a line starts (after a list or quote mark), so prose ("social media: …") stays prose.
-      out = out.replace(/(^|[\s([{<"'“‘])MEDIA:([ ]?)([`"']?)([^\s`"']+)\3/g, (whole, before, space, quote, raw) => {
+      // Bare MEDIA: on its own line (optionally after a list/quote prefix, bold or lowercase label):
+      // try the whole rest of the line as one path (trimmed) so macOS Application Support and Windows paths with spaces work.
+      out = out.replace(/^(\s*(?:[-*+]|\d+[.)]|>)?\s*)(\*\*|__)?(media):(\*\*|__)?([ ]?)([^\n]+)$/i, (whole, lead, open, label, close, space, rest) => {
+        if ((open || "") !== (close || "")) return whole;
+        const trimmed = rest.trimEnd();
+        const quotedMatch = /^([`"'])([^\n]+)\1(.*)$/.exec(trimmed);
+        if (quotedMatch) {
+          const [, quote, inner, after] = quotedMatch;
+          const file = mediaFile(inner, folder);
+          if (file) return lead + "MEDIA:" + (open || label !== "MEDIA" ? " " : (space || " ")) + quote + file.path + quote + file.rest + after;
+          return whole;
+        }
+        const file = mediaFile(trimmed, folder);
+        if (file) return lead + "MEDIA:" + (open || label !== "MEDIA" ? " " : (space || " ")) + file.path + file.rest;
+        return whole;
+      });
+      // "MEDIA:" anywhere in a line (quoted with spaces or bare single token); lowercase/bold at line start with trailing prose.
+      out = out.replace(/(^|[\s([{<"'“‘])MEDIA:([ ]?)(?:"([^"\n]+)"|'([^'\n]+)'|`([^`\n]+)`|([^\s`"']+))/g, (whole, before, space, dq, sq, bt, bare) => {
+        const quote = dq !== undefined ? '"' : sq !== undefined ? "'" : bt !== undefined ? "`" : "";
+        const raw = dq ?? sq ?? bt ?? bare;
         const file = mediaFile(raw, folder);
         return file ? before + "MEDIA:" + (space || " ") + quote + file.path + quote + file.rest : whole;
       });
-      out = out.replace(/^(\s*(?:[-*+]|\d+[.)]|>)?\s*)(\*\*|__)?media:(\*\*|__)?[ ]?([`"']?)([^\s`"']+)\4/i, (whole, lead, open, close, quote, raw) => {
+      out = out.replace(/^(\s*(?:[-*+]|\d+[.)]|>)?\s*)(\*\*|__)?media:(\*\*|__)?[ ]?(?:"([^"\n]+)"|'([^'\n]+)'|`([^`\n]+)`|([^\s`"']+))/i, (whole, lead, open, close, dq, sq, bt, bare) => {
         if ((open || "") !== (close || "") || (!open && whole.slice(lead.length, lead.length + 6) === "MEDIA:")) return whole;
+        const quote = dq !== undefined ? '"' : sq !== undefined ? "'" : bt !== undefined ? "`" : "";
+        const raw = dq ?? sq ?? bt ?? bare;
         const file = mediaFile(raw, folder);
         return file ? lead + "MEDIA: " + quote + file.path + quote + file.rest : whole;
       });
-      out = out.replace(/!\[[^\]\n]*\]\(<?([^)\s>]+)>?(?:\s+"[^"]*")?\)/g, (whole, raw) => {
+      out = out.replace(/!\[[^\]\n]*\]\((?:<([^>\n]+)>|([^)\n]+?))(?:\s+"[^"]*")?\)/g, (whole, angled, plain) => {
+        const raw = (angled ?? plain ?? "").trim();
         const file = mediaFile(raw, folder);
         return file ? "MEDIA: " + file.path : whole;
       });
@@ -111,7 +132,8 @@ export function normalizeMedia(text, folder) {
 /** Raised when the rule for which `MEDIA:` files are a bot's own widens, so old messages are read once more. */
 // 2: loosely written attachments in the bot's own folder count (normalizeMedia).
 // 3: a picture, sound or video counts wherever it is on the computer.
-const MEDIA_PASS = 3;
+// 4: bare MEDIA: lines with spaces (e.g. macOS Application Support paths) resolve to end of line.
+const MEDIA_PASS = 4;
 /** The kinds of file a `MEDIA:` line may show from anywhere (fileDetails' kind, from the file's type). */
 const MEDIA_KINDS = new Set(["image", "audio", "video"]);
 
@@ -203,9 +225,12 @@ export class ArtifactEvents {
       const chat = this.ws.state.chats.find((c) => c.id === run.chatId);
       if (!chat) continue;
       for (const step of run.steps ?? []) {
-        if (step.status !== "Done" || !step.input) continue;
+        if (step.status !== "Done") continue;
+        // A finished run's long input stays in the workspace database until it is asked for.
+        const input = step.input ?? (step.more ? this.ws.stepDetail?.(run.chatId, run.id, step.id, { maxChars: 0 })?.input : undefined);
+        if (!input) continue;
         let args;
-        try { args = JSON.parse(step.input); } catch { continue; }
+        try { args = JSON.parse(input); } catch { continue; }
         const botId = step.botId || chat.botId;
         const root = this.folder(chat, botId);
         for (const path of destinations(step.name, args)) this.record(chat, botId, run, root, path, step.finished ?? run.time, true);

@@ -4,7 +4,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { Workspace } from "./starter.mjs";
+import { Workspace, readPersistedWorkspace } from "./starter.mjs";
 import { fakeClient, tempDir, tick } from "./fake-copilot.mjs";
 import { defaultSettings } from "../desktop/preferences.mjs";
 import { titleFrom } from "../desktop/summaries.mjs";
@@ -138,7 +138,7 @@ test("regenerating a title uses the conversation and saves it even with automati
   assert.equal(await ws.summaries.regenerate(id), "Title 1");
   assert.equal(ws.chat(id).title, "Title 1");
   assert.equal(ws.chat(id).titleSet, true, "automatic naming still respects a manual title");
-  assert.equal(JSON.parse(readFileSync(ws.file, "utf8")).chats.find((chat) => chat.id === id).title, "Title 1");
+  assert.equal(readPersistedWorkspace(ws.dir).chats.find((chat) => chat.id === id).title, "Title 1");
   assert.deepEqual(ws.chat(id).messages, messages);
   const [[session, prompt]] = summaries(log);
   assert.match(prompt, /The chat is called “My garden”/);

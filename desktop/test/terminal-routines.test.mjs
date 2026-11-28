@@ -11,6 +11,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable, Writable } from "node:stream";
 import { main } from "../cli/main.mjs";
+import { readPersistedWorkspaceText } from "./starter.mjs";
 import { terminalPaths } from "../desktop/terminal/paths.mjs";
 import { startService } from "../desktop/terminal/serve.mjs";
 import { controlClient } from "../desktop/terminal/socket.mjs";
@@ -143,7 +144,7 @@ test("`routines add` shows the whole routine and asks; with no terminal it needs
   // The log names the call and the routine, and nothing of the prompt.
   assert.deepEqual((await changes()).filter((line) => line.startsWith("routines.")), ["routines.add Morning brief"]);
   assert.equal(readFileSync(paths.logFile, "utf8").includes("SECRET-PROMPT-TEXT"), false, "the prompt is in the workspace, not in the log");
-  assert.equal(readFileSync(join(paths.dataDir, "workspace.json"), "utf8").includes("SECRET-PROMPT-TEXT"), true);
+  assert.equal(readPersistedWorkspaceText(paths.dataDir).includes("SECRET-PROMPT-TEXT"), true);
   // A routine that is not there.
   assert.match((await botkins(["routines", "show", "Nothing"])).err, /There is no routine called Nothing\. See `botkins routines list`\./);
 });

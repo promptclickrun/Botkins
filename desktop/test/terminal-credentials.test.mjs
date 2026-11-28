@@ -14,6 +14,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough, Readable, Writable } from "node:stream";
 import { main } from "../cli/main.mjs";
+import { readPersistedWorkspaceText } from "./starter.mjs";
 import { terminalPaths } from "../desktop/terminal/paths.mjs";
 import { startService } from "../desktop/terminal/serve.mjs";
 import { controlClient } from "../desktop/terminal/socket.mjs";
@@ -122,7 +123,7 @@ before(async () => {
   const changes = async () => (await client.call("logs.read", { tail: 400 })).entries.map((entry) => entry.text).filter((text) => /(Changed|Tried) from the command line/.test(text)).map((text) => text.slice(text.search(/(Changed|Tried) from/)).replace("Changed from the command line: ", ""));
   const store = () => running.runtime.link.credentials;
   /** Every place that could hold a value in the clear: the log, the workspace's file, the stores' files, and what the commands printed. */
-  const places = () => [readFileSync(paths.logFile, "utf8"), readFileSync(join(paths.dataDir, "workspace.json"), "utf8"), readFileSync(store().vault.file, "utf8"), ...(existsSync(running.runtime.workspace.vault.file) ? [readFileSync(running.runtime.workspace.vault.file, "utf8")] : []), ...seen];
+  const places = () => [readFileSync(paths.logFile, "utf8"), readPersistedWorkspaceText(paths.dataDir), readFileSync(store().vault.file, "utf8"), ...(existsSync(running.runtime.workspace.vault.file) ? [readFileSync(running.runtime.workspace.vault.file, "utf8")] : []), ...seen];
   const none = (message = "") => {
     for (const place of places()) for (const value of ALL) assert.equal(place.includes(value), false, "a value shows " + message + ": " + place.slice(Math.max(0, place.indexOf(value) - 40), place.indexOf(value) + 60));
   };

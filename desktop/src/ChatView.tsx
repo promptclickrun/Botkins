@@ -1,5 +1,6 @@
 import AlertActions, { hasProactiveTeam } from "./AlertActions";
 import WorkflowActionCard from "./WorkflowActionCard";
+import A2uiSurface from "./A2uiSurface";
 import {
   Fragment,
   useCallback,
@@ -851,6 +852,15 @@ function ChatViewBody({
       ) : (
         <RichText text={m.voiceCaption ?? m.text} files={files} mentions={mentions} />
       )}
+      {!!m.a2uiSurfaces?.length &&
+        m.a2uiSurfaces.map((surface) => (
+          <A2uiSurface
+            key={surface.surfaceId}
+            chatId={chat.id}
+            surface={surface}
+            openChat={openChat}
+          />
+        ))}
       <Attachments list={m.attachments} />
       {!!m.mentions?.length && (
         <MentionChips
@@ -1295,6 +1305,15 @@ function ChatViewBody({
               ) : (
                 <RichText text={message.text} files={files} mentions={mentions} />
               )}
+              {!!message.a2uiSurfaces?.length &&
+                message.a2uiSurfaces.map((surface) => (
+                  <A2uiSurface
+                    key={surface.surfaceId}
+                    chatId={chat.id}
+                    surface={surface}
+                    openChat={openChat}
+                  />
+                ))}
               <Attachments list={message.attachments} />
               <Reactions state={state} message={message} botId={chat.botId} />
             </article>
@@ -1314,7 +1333,7 @@ function ChatViewBody({
               !messageTimelineOwner(prev);
             return (
               <Fragment key={i}>
-                {(m.text || m.actionCard || m.role !== "assistant") && (
+                {(m.text || m.actionCard || !!m.a2uiSurfaces?.length || m.role !== "assistant") && (
                   isAgentMessage(m) ? (
                     <IncomingAgentRail
                       id={`message-${chat.id}-${loadedFrom + i}`}
@@ -1370,6 +1389,15 @@ function ChatViewBody({
                       ) : (
                         <RichText text={m.voiceCaption ?? m.text} files={files} mentions={mentions} />
                       )}
+                      {!!m.a2uiSurfaces?.length &&
+                        m.a2uiSurfaces.map((surface) => (
+                          <A2uiSurface
+                            key={surface.surfaceId}
+                            chatId={chat.id}
+                            surface={surface}
+                            openChat={openChat}
+                          />
+                        ))}
                       <Attachments list={m.attachments} />
                     {!!m.mentions?.length && (
                       <MentionChips

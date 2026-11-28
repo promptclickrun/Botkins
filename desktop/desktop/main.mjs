@@ -14,6 +14,7 @@ import { join } from "node:path";
 import { chunk, fileDetails, publicFile } from "./artifact-files.mjs";
 import { ArtifactMedia } from "./artifact-media.mjs";
 import { HERE, RemoteHosts, splitPreferences } from "./remotehosts.mjs";
+import { composeUnifiedDesktopState, LOCAL_HOST_ID, parseScopedId, rescopeResult, routeUnifiedCall, unscopeId } from "./unified-hosts.mjs";
 import { adminModeStore, hasAdminMode, ownerWindowView } from "./admin-view.mjs";
 import { fillSecurePage, VIEWER_PARTITION, attachViewer, guardGuest, guardViewerSession } from "./webviewer.mjs";
 import { APP_SCHEME, AppWindows, registerAppScheme } from "./app-window.mjs";
@@ -77,20 +78,27 @@ autoUpdater.on("before-quit-for-update", () => {
 
 // The chat open in the window, as the page last said (handlers.viewing).
 let viewingChat = null;
+// Which host Settings / host-scoped actions target while operating all computers in one view.
+let settingsHost = LOCAL_HOST_ID;
 /**
- * Tells the other computer in use whether this window is in front, and with which chat, so that it
- * doesn't ping a phone for a reply the person is reading here. Said again whenever the window
+ * Tells the other computer(s) in use whether this window is in front, and with which chat, so that
+ * they don't ping a phone for a reply the person is reading here. Said again whenever the window
  * comes to the front or leaves it: a window left behind must not keep a phone quiet.
  */
 function tellWatching() {
-  if (!remote?.inUse()) return;
   const front = !!win && !win.isDestroyed() && win.isVisible() && win.isFocused();
+  if (remote?.isUnified()) {
+    remote.presenceUnified(front, viewingChat ?? undefined);
+    return;
+  }
+  if (!remote?.inUse()) return;
   void remote.call("link.push.presence", [front, viewingChat ?? undefined]).catch(() => {});
 }
 const viewerGuests = new Set();
 /**
- * What the window shows: this computer's workspace, or the state of the other computer in use
- * (with this window's own look). `remote` says which, and lists the computers this app is paired to.
+ * What the window shows: this computer's workspace, all included computers combined (unified mode),
+ * or the state of one other computer in use (with this window's own look). `remote` says which,
+ * and lists the computers this app is paired to.
  */
 const withLocalHostMeta = (state) => {
   if (!link) return state;
@@ -106,6 +114,34 @@ const withLocalHostMeta = (state) => {
 };
 const appSnapshot = () => {
   const using = remote?.inUse() ?? null;
+  const unified = remote?.isUnified() ?? false;
+  const localName = link?.status?.().name || computerName() || "This computer";
+  if (unified) {
+    const localView = withOwnerChatSections(ownerWindowView(withLocalHostMeta(workspace.snapshot()), link, adminMode?.get() === true), link);
+    const remotes = remote.unifiedEntries(workspace.state.settings);
+    const composed = composeUnifiedDesktopState(localView, { localName, remotes });
+    const activeSettingsHost = settingsHost !== LOCAL_HOST_ID && remotes.some((r) => r.hostId === settingsHost) ? settingsHost : LOCAL_HOST_ID;
+    const localBots = Array.isArray(localView.bots) ? localView.bots.length : 0;
+    const localRequests = Array.isArray(localView.requests) ? localView.requests.length : 0;
+    return {
+      ...composed,
+      ...(link ? { team: link.team() } : {}),
+      phones: { revision: runtime.phoneRevision() },
+      remote: {
+        using: null,
+        unified: true,
+        unifiedEnabled: true,
+        localName,
+        settingsHost: activeSettingsHost,
+        unifiedHosts: [
+          { id: LOCAL_HOST_ID, name: localName, state: "online", local: true, bots: localBots, requests: localRequests },
+          ...remote.unifiedHostsStatus(),
+        ],
+        hosts: remote.list(),
+      },
+      ...(profile && { profile: profile.status({ existing: !!workspace?.state?.bots?.length || !!workspace?.state?.chats?.length || !!workspace?.nodeHost?.enabled || !!remote?.list?.().length }) }),
+    };
+  }
   return {
     // This computer's own workspace goes to its window as the owner is shown it: the owner's view
     // of the spaces, and with Admin mode off only what the owner is part of (desktop/admin-view.mjs).
@@ -114,7 +150,7 @@ const appSnapshot = () => {
     ...(using ? remote.snapshot(workspace.state.settings) : withOwnerChatSections(ownerWindowView(withLocalHostMeta(workspace.snapshot()), link, adminMode?.get() === true), link)),
     ...(!using && link ? { team: link.team() } : {}),
     phones: { revision: runtime.phoneRevision() },
-    remote: { using, hosts: remote?.list() ?? [] },
+    remote: { using, unified: false, unifiedEnabled: remote?.unifiedEnabled() ?? false, localName, settingsHost: LOCAL_HOST_ID, unifiedHosts: [], hosts: remote?.list() ?? [] },
     ...(profile && { profile: profile.status({ existing: !!workspace?.state?.bots?.length || !!workspace?.state?.chats?.length || !!workspace?.nodeHost?.enabled || !!remote?.list?.().length }) }),
   };
 };
@@ -347,6 +383,7 @@ else
       lib: await import("./remote/link-client.mjs"),
       device: { name: computerName(), platform: process.platform },
       changed: () => push(),
+      onEvent: (event) => runtime?.notifier?.consider(event),
       log: (line) => console.error(line),
     });
     // The app opens on the computer it was on when it was closed: this one, or a paired one.
@@ -452,6 +489,20 @@ else
           const page = await remote.call("link.frame.page", [id]);
           if (remote.client !== client) throw new Error("The paired computer changed.");
           html = guardedFramePage(page.html, page.data);
+        } else if (remote.isUnified()) {
+          try {
+            html = workspace.frames.page(id);
+          } catch {
+            for (const [hostId, slot] of remote.pool) {
+              if (slot.state !== "online") continue;
+              try {
+                const page = await remote.callHost(hostId, "link.frame.page", [id]);
+                html = guardedFramePage(page.html, page.data);
+                break;
+              } catch {}
+            }
+            if (!html) throw new Error("Not found");
+          }
         } else html = workspace.frames.page(id);
         return new Response(html, {
           headers: {
@@ -523,13 +574,14 @@ else
       // reply the person is already looking at.
       viewing: (chatId) => {
         viewingChat = typeof chatId === "string" && chatId ? chatId : null;
-        // While another computer is in use: it sends the messages of the chat on screen, and
-        // learns that this window has it in front (so it doesn't ping a phone for that chat).
-        if (remote.inUse()) remote.watch(viewingChat ? [viewingChat] : []);
+        // While another computer is in use (or all computers in unified mode): it sends the
+        // messages of the chat on screen, and learns that this window has it in front.
+        if (remote.isUnified()) remote.watchUnified(viewingChat ? [viewingChat] : []);
+        else if (remote.inUse()) remote.watch(viewingChat ? [viewingChat] : []);
         tellWatching();
       },
       // Other computers' Botkins this app uses (Settings › Computers and teams, the first launch and the switcher). A phone can't make these calls.
-      remoteHosts: () => ({ using: remote.inUse(), hosts: remote.list() }),
+      remoteHosts: () => ({ using: remote.inUse(), unified: remote.isUnified(), unifiedEnabled: remote.unifiedEnabled(), hosts: remote.list() }),
       remoteScreen: (hostId, viewerId, operation, ...args) => {
         if (operation === "start" && hostId === runtime.link.status().serverId) throw new Error("This is the computer you are using. Choose This computer to manage screen sharing.");
         return remote.screenRequest(hostId, viewerId, operation, ...args);
@@ -541,10 +593,33 @@ else
       },
       useRemoteHost: (id) => {
         const using = remote.use(typeof id === "string" && id ? id : null);
+        settingsHost = LOCAL_HOST_ID;
         if (using && viewingChat) viewingChat = null;
         return using;
       },
-      forgetRemoteHost: (id) => remote.forget(String(id)),
+      setUnifiedHosts: (enabled) => {
+        const on = remote.setUnified(enabled === true);
+        if (!on) settingsHost = LOCAL_HOST_ID;
+        if (remote.isUnified()) remote.watchUnified(viewingChat ? [viewingChat] : []);
+        else if (remote.inUse()) remote.watch(viewingChat ? [viewingChat] : []);
+        tellWatching();
+        return on;
+      },
+      setUnifiedHostIncluded: (id, included) => {
+        const hostId = String(id);
+        const ok = remote.setHostIncluded(hostId, included === true);
+        if (!included && settingsHost === hostId) settingsHost = LOCAL_HOST_ID;
+        return ok;
+      },
+      setSettingsHost: (id) => {
+        settingsHost = typeof id === "string" && id && id !== LOCAL_HOST_ID && remote.hosts.some((h) => h.id === id) ? id : LOCAL_HOST_ID;
+        push();
+        return settingsHost;
+      },
+      forgetRemoteHost: (id) => {
+        if (settingsHost === String(id)) settingsHost = LOCAL_HOST_ID;
+        return remote.forget(String(id));
+      },
       renameRemoteHost: (id, name) => remote.rename(String(id), name),
       // Hosted profile identity.  Only the public status/directory crosses into the page; the
       // bearer token and browser verifier remain in ProfileManager's protected file.
@@ -585,14 +660,39 @@ else
           return artifactMedia.add(artifact.mime, artifact.size, read);
         }
         const info = localPath ? fileDetails(localPath) : workspace.artifacts.entry(id)?.info;
-        if (!info) throw new Error("This file is unavailable.");
-        return artifactMedia.add(info.mime, info.size, (offset, length) => chunk(info, publicFile(info), { offset, length }));
+        if (info) return artifactMedia.add(info.mime, info.size, (offset, length) => chunk(info, publicFile(info), { offset, length }));
+        if (remote.isUnified() && !localPath) {
+          for (const [remoteHostId, slot] of remote.pool) {
+            if (slot.state !== "online") continue;
+            try {
+              const read = (offset, length) => remote.callHost(remoteHostId, "artifacts.read", [id, { offset, length }]);
+              const { artifact } = await read(0, 1);
+              return artifactMedia.add(artifact.mime, artifact.size, read);
+            } catch {}
+          }
+        }
+        throw new Error("This file is unavailable.");
       },
       closeArtifactMedia: (url) => artifactMedia.close(url),
+      stepDetail: (chatId, runId, stepId) => {
+        if (remote.inUse()) return remote.call("link.step", [String(chatId), String(runId), String(stepId)]);
+        // Unified mode: a remote host's chat and run carry scoped IDs. Ask the host that owns them.
+        const parsed = remote.isUnified() ? parseScopedId(String(chatId)) : null;
+        if (parsed) return remote.callHost(parsed.hostId, "link.step", [parsed.rawId, unscopeId(String(runId)), unscopeId(String(stepId))]);
+        return runtime.handlers.stepDetail(chatId, runId, stepId);
+      },
       showEmojiPanel: () => { if (app.isEmojiPanelSupported()) app.showEmojiPanel(); },
-      artifactMessagePage: (chatId, index) => {
-        if (!remote.inUse() || typeof chatId !== "string" || !Number.isSafeInteger(index) || index < 0) throw new Error("Choose a message on the paired computer.");
-        return remote.call("link.messages", [chatId, index + 11, 32]);
+      artifactMessagePage: async (chatId, index) => {
+        if (typeof chatId !== "string" || !Number.isSafeInteger(index) || index < 0) throw new Error("Choose a message on the paired computer.");
+        if (remote.inUse()) return remote.call("link.messages", [chatId, index + 11, 32]);
+        if (remote.isUnified()) {
+          const parsed = parseScopedId(chatId);
+          if (parsed) {
+            const result = await remote.callHost(parsed.hostId, "link.messages", [parsed.rawId, index + 11, 32]);
+            return rescopeResult("link.messages", parsed.hostId, result);
+          }
+        }
+        throw new Error("Choose a message on the paired computer.");
       },
       // The window's base for the small updates that follow (desktop/window-push.mjs).
       snapshot: () => windowPush.whole(),
@@ -661,7 +761,7 @@ else
       panelOpenFrames = new Set(next);
     });
     for (const [name, fn] of Object.entries(handlers))
-      ipcMain.handle(name, (event, ...args) => {
+      ipcMain.handle(name, async (event, ...args) => {
         if (
           event.senderFrame?.url !== pathToFileURL(html).href ||
           event.sender !== win.webContents
@@ -674,6 +774,33 @@ else
           const { own, theirs } = splitPreferences(args[0]);
           if (own) fn(own);
           return theirs ? remote.call(name, [theirs]) : undefined;
+        }
+        // In unified mode, route each call to the host that owns the referenced scoped ID (or the
+        // selected target host for host-scoped Settings / creation calls), unscoping arguments and
+        // rescoping the result seamlessly.
+        if (remote.isUnified() && !HERE.has(name)) {
+          if (name === "setPreferences") {
+            if (settingsHost === LOCAL_HOST_ID) return fn(...asPerson(name, args));
+            const { own, theirs } = splitPreferences(args[0]);
+            if (own) fn(own);
+            return theirs ? remote.callHost(settingsHost, name, [theirs]) : undefined;
+          }
+          const route = routeUnifiedCall(name, args, { settingsHost });
+          if (route.kind === "remote") {
+            const result = await remote.callHost(route.hostId, route.name, route.args);
+            return rescopeResult(name, route.hostId, result);
+          }
+          if (route.kind === "fanout") {
+            const results = await Promise.all(
+              route.calls.map(async (c) => {
+                if (c.hostId === LOCAL_HOST_ID) return fn(...asPerson(c.name, c.args));
+                const r = await remote.callHost(c.hostId, c.name, c.args);
+                return rescopeResult(c.name, c.hostId, r);
+              }),
+            );
+            return results[0];
+          }
+          return fn(...asPerson(name, route.args));
         }
         // The window is the person: what they send, or send again, may be a script command (desktop/device-call.mjs).
         return fn(...asPerson(name, args));
@@ -697,7 +824,7 @@ else
     if (!trial || isSplitHost()) {
       try {
         const { startAppControl } = await import("./terminal/control-start.mjs");
-        control = await startAppControl({ runtime, profile, root: home.dir, version: app.getVersion(), keys: () => (app.isPackaged && !trial ? { source: "keychain", where: "system keychain" } : null), say: (line) => console.error(line) });
+        control = await startAppControl({ runtime, profile, remote, root: home.dir, version: app.getVersion(), keys: () => (app.isPackaged && !trial ? { source: "keychain", where: "system keychain" } : null), say: (line) => console.error(line) });
       } catch (error) {
         console.error("Control socket: not started (" + error.message + ").");
       }
@@ -710,7 +837,7 @@ else
       appWindows?.closeAll();
       event.preventDefault();
       const force = setTimeout(() => app.exit(), 5000);
-      Promise.resolve(control?.close()).catch(() => {}).then(() => runtime.stop()).finally(() => {
+      Promise.resolve(control?.close()).catch(() => {}).then(() => remote?.stopAll()).then(() => runtime.stop()).finally(() => {
         clearTimeout(force);
         app.quit();
       });

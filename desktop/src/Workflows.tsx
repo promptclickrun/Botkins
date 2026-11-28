@@ -17,6 +17,8 @@ import {
 import { WorkflowCanvas } from "./WorkflowCanvas";
 import { WorkflowInspector } from "./WorkflowInspector";
 import { analyzeWorkflowFields } from "./workflowAnalysis";
+import { workflowRunStatusLabel } from "./workflowGithub";
+import { memberTeam } from "./teamAccess";
 import type {
   Bot,
   ModelInfo,
@@ -95,10 +97,10 @@ function starterTemplates(bots: Bot[]): Array<{ id: string; name: string; descri
     {
       id: "approval-gate",
       name: "PR Check → Approval → Notify",
-      description: "Poll a GitHub repo via gh, ask for human approval before posting a release summary.",
+      description: "Watch GitHub PR events across repos, ask for human approval, and post back to GitHub or chat.",
       build: () => ({
         name: "PR approval gate",
-        description: "Watches PR changes via gh CLI, asks for approval, and posts the outcome.",
+        description: "Watches PR changes via GitHub, asks for approval, and posts the outcome.",
         nodes: [
           {
             id: "trig_gh",
@@ -106,7 +108,13 @@ function starterTemplates(bots: Bot[]): Array<{ id: string; name: string; descri
             triggerKind: "github",
             label: "GitHub PR activity",
             position: { x: 40, y: 120 },
-            config: { repo: "owner/repo", events: ["pr_opened", "pr_review", "ci_status"], pollMinutes: 5 },
+            config: {
+              repos: ["owner/repo"],
+              repo: "owner/repo",
+              events: ["pr.opened", "pr.reviewSubmitted", "pr.checksFailed"],
+              notBot: true,
+              pollMinutes: 5,
+            },
           },
           {
             id: "model_triage",
@@ -114,7 +122,7 @@ function starterTemplates(bots: Bot[]): Array<{ id: string; name: string; descri
             label: "Summarize PR risk",
             position: { x: 350, y: 120 },
             config: {
-              prompt: "PR #{{number}} ({{title}}) by {{author}} has state {{state}}. Assess risk briefly.",
+              prompt: "PR #{{number}} ({{title}}) by {{author}} in {{repository}} has state {{state}}. Assess risk briefly.",
               outputFields: [
                 { name: "risk", type: "string", choices: ["low", "medium", "high"] },
                 { name: "summary", type: "string" },
@@ -199,7 +207,14 @@ function defaultNode(kind: WorkflowNodeKind, triggerKind: WorkflowTriggerKind | 
       triggerKind: tk,
       label: tk === "task" ? "Task trigger" : tk === "schedule" ? "Schedule" : `${tk[0].toUpperCase()}${tk.slice(1)} trigger`,
       position: { x: 40, y: 120 + existing.filter((n) => n.kind === "trigger").length * 160 },
-      config: tk === "task" ? { event: "status_changed", toStatus: "review" } : tk === "schedule" ? { cadence: "daily", time: "09:00" } : {},
+      config:
+        tk === "task"
+          ? { event: "status_changed", toStatus: "review" }
+          : tk === "schedule"
+            ? { cadence: "daily", time: "09:00" }
+            : tk === "github"
+              ? { repos: [], events: ["issue.opened"], notBot: true, pollMinutes: 5 }
+              : {},
     };
   }
   if (kind === "agent") {
@@ -558,7 +573,7 @@ export function WorkflowsView({
                         </span>
                         <span className="row-sub">
                           {wf.description || `${wf.nodes.length} steps · ${wf.edges.length} connections`}
-                          {latest ? ` · Last run: ${latest.status}` : ""}
+                          {latest ? ` · Last run: ${workflowRunStatusLabel(latest)}` : ""}
                         </span>
                       </span>
                     </button>
@@ -687,6 +702,7 @@ export function WorkflowsView({
           models={models}
           runs={runs}
           selectedRunId={activeRun?.id ?? null}
+          isOwner={!memberTeam(state) && state.remote?.using?.member !== true}
           tab={inspectorTab}
           onTab={setInspectorTab}
           onSelectRun={setSelectedRunId}
@@ -696,9 +712,11 @@ export function WorkflowsView({
               nodes: draft.nodes.map((n) => (n.id === nodeId ? updater(n) : n)),
             });
           }}
-          onRetryRun={async (runId, nodeId) => {
+          onRetryRun={async (runId, nodeId, options) => {
             try {
-              const r = await api.workflowRetryRun(runId, nodeId);
+              const r = options?.allowUncertainRetry
+                ? await api.workflowRetryRun(runId, nodeId ?? null, { allowUncertainRetry: true })
+                : await api.workflowRetryRun(runId, nodeId);
               setSelectedRunId(r.id);
             } catch (err) {
               fail(err);
@@ -715,6 +733,16 @@ export function WorkflowsView({
           onCancelRun={async (runId) => {
             try {
               await api.workflowCancelRun(runId);
+            } catch (err) {
+              fail(err);
+            }
+          }}
+          onReplayLastGithubEvent={async (nodeId) => {
+            try {
+              const r = await api.workflowGithubReplayLast(draft.id, nodeId);
+              setSelectedRunId(r.id);
+              setInspectorTab("runs");
+              flash("ok", "Replayed latest GitHub event");
             } catch (err) {
               fail(err);
             }

@@ -63,7 +63,7 @@ export async function examine({ paths, client, env, fetcher = fetch, node = proc
     }
     checks.push(check("Data folder", own && closed && writable, paths.root + (!own ? " belongs to another user." : !writable ? " can't be written by this user." : !closed ? " can be read by other users (mode " + (stat.mode & 0o777).toString(8) + ")." : " is this user's own, and closed to everyone else."), !own ? "Run the command as the user the service runs as, for example with `sudo -u botkins`." : !closed ? "chmod 700 '" + paths.root + "'" : undefined));
     const open = [];
-    for (const file of ["config.json", "data/vault.json", "data/vault.key", "data/host.key", "data/keystore.json", "data/link/link.json", "data/workspace.json", "logs/botkins.log"]) {
+    for (const file of ["config.json", "data/vault.json", "data/vault.key", "data/host.key", "data/keystore.json", "data/link/link.json", "data/workspace.db", "data/workspace.json", "logs/botkins.log"]) {
       const path = join(paths.root, file);
       if (existsSync(path) && (mode(path) & 0o077) !== 0) open.push(file + " (" + mode(path).toString(8) + ")");
     }

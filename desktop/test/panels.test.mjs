@@ -4,6 +4,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { Workspace } from "./starter.mjs";
+import { Workspace as RealWorkspace } from "../desktop/workspace.mjs";
 import { nextTime } from "../desktop/panels.mjs";
 
 function setup(
@@ -98,7 +99,16 @@ test("a missed cron occurrence is coalesced once, including after a restart; pau
   assert.ok(w.panels.get(p.id).routine.nextAt > Date.now());
 });
 test("Botkins 0.1 data is retained on migration and cache clearing", (t) => {
-  const { dir, open } = setup(t);
+  const dir = mkdtempSync(join(tmpdir(), "botkins-panels-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const open = () =>
+    new RealWorkspace(
+      dir,
+      async () => {
+        throw new Error("Offline");
+      },
+      () => {},
+    );
   const old = {
     bots: [
       {

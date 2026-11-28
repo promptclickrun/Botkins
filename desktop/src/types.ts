@@ -114,6 +114,11 @@ export type Bot = {
   suggestProactive?: boolean;
   /** A voice of this bot's own ("bot-voice-v1"). A field it leaves out is the same as Settings › Voice. */
   voice?: BotVoice;
+  /** Unified multi-host mode: which computer owns this bot ("local" or remote host id). */
+  hostId?: string;
+  hostName?: string;
+  hostMember?: boolean;
+  hostTeam?: string;
 };
 /**
  * An agent the person already has with a model provider (for Copilot, ~/.copilot/agents), as the
@@ -225,6 +230,111 @@ export type Message = {
   fromWorkflow?: { workflowId: string; workflowName: string; runId: string };
   /** Interactive action card attached by a Workflow Output step (dispatch/dismiss + needs-you badge). */
   actionCard?: WorkflowActionCard;
+  /** Interactive A2UI v1.0 UI surfaces attached to this chat message. */
+  a2uiSurfaces?: A2uiSurface[];
+};
+export type A2uiComponent = {
+  id: string;
+  component: string;
+  "@catalogId"?: string;
+  "@accessibility"?: {
+    label?: unknown;
+    description?: unknown;
+    live?: "off" | "polite" | "assertive";
+    hidden?: unknown;
+  };
+  "@metadata"?: { extensions?: Record<string, unknown> };
+  "@checks"?: Array<{ condition: unknown; message?: string }>;
+  weight?: number;
+  [key: string]: unknown;
+};
+export type A2uiSurface = {
+  surfaceId: string;
+  version: "1.0";
+  catalogId?: string;
+  sendDataModel?: boolean;
+  components: A2uiComponent[];
+  dataModel: Record<string, unknown>;
+  metadata?: { extensions?: Record<string, unknown> };
+  ownerBotId?: string;
+  workflow?: {
+    workflowId: string;
+    workflowName?: string;
+    runId?: string;
+    onAction?: "bot" | "resume" | "trigger";
+    targetWorkflowId?: string;
+  };
+  dispatch?: {
+    botId?: string;
+    botName?: string;
+    label?: string;
+    chatTitle?: string;
+    prompt: string;
+  };
+  state?: "open" | "dispatched" | "dismissed";
+  dispatchedChatId?: string;
+  dispatchedBotId?: string;
+  dispatchedBotName?: string;
+  acted?: Record<string, { route?: string; actionName?: string; state?: string; chatId?: string; workflowRunId?: string; actedBy?: string; actedAt?: number }>;
+  allowMembers?: boolean;
+  inlineCatalogs?: Array<Record<string, unknown>>;
+  pendingRendererCalls?: Array<{ surfaceId?: string; functionCallId: string; callFunction: Record<string, unknown>; createdAt?: number }>;
+  functionResults?: Record<string, { functionCallId: string; value?: unknown; error?: { code: string; message: string }; status?: string; updatedAt?: number }>;
+  actedBy?: string;
+  actedAt?: number;
+  deleted?: boolean;
+  createdAt?: number;
+  updatedAt?: number;
+};
+export type A2uiFunctionRpcPayload =
+  | {
+      kind: "callAgentFunction";
+      surfaceId: string;
+      functionCallId: string;
+      callFunction: { "@call": string; catalogId?: string; args?: Record<string, unknown> };
+      timeoutMs?: number;
+      dataModel?: Record<string, unknown>;
+    }
+  | {
+      kind: "rendererFunctionResponse";
+      surfaceId?: string;
+      response: { functionCallId: string; value?: unknown; error?: { code: string; message: string } };
+    };
+export type ChatA2uiFunctionResult = {
+  ok: boolean;
+  idempotent: boolean;
+  kind: "callAgentFunction" | "rendererFunctionResponse";
+  functionCallId: string;
+  status?: string;
+  route?: "bot" | "workflow";
+  envelope?: Record<string, unknown>;
+};
+export type A2uiActionPayload = {
+  version?: "1.0";
+  surfaceId: string;
+  sourceComponentId: string;
+  name: string;
+  actionId?: string;
+  userMessage?: string;
+  timestamp?: string;
+  context?: Record<string, unknown>;
+  dataModel?: Record<string, unknown>;
+};
+export type ChatA2uiActionResult = {
+  ok: true;
+  idempotent: boolean;
+  actionId: string;
+  route: "builtin" | "workflow" | "bot";
+  state?: "dispatched" | "dismissed";
+  chatId?: string;
+  botId?: string;
+  botName?: string;
+  alreadyDispatched?: boolean;
+  workflowId?: string;
+  workflowRunId?: string;
+  decision?: "approved" | "rejected";
+  actionName?: string;
+  surface: A2uiSurface;
 };
 export type WorkflowActionCard = {
   id: string;
@@ -310,6 +420,11 @@ export type Chat = {
     /** The person closed the pane (runId: the turn that was running, if any). */
     closed?: { runId: string | null; at: number };
   };
+  /** Unified multi-host mode: which computer owns this chat. */
+  hostId?: string;
+  hostName?: string;
+  hostMember?: boolean;
+  hostTeam?: string;
 };
 /** One tab of a chat's side pane, opened by a bot (docs/SIDE_PANE.md). */
 export type PanePanel = {
@@ -357,6 +472,7 @@ export type Run = {
   usedTools?: string[];
   steps?: Step[];
   cards?: Card[];
+  a2uiSurfaces?: A2uiSurface[];
   openModel?: boolean;
   options?: { label: string; prompt: string; description?: string }[];
   skill?: string;
@@ -399,16 +515,118 @@ export interface WorkflowGithubSignIn {
   login: string | null;
 }
 
+export interface WorkflowGithubRepoAccess {
+  fullName: string;
+  writable?: boolean;
+  events?: boolean;
+  isPrivate?: boolean;
+}
+
+export interface WorkflowGithubLabelOption {
+  name: string;
+  color: string;
+  description?: string;
+}
+
+export interface WorkflowGithubAssigneeOption {
+  login: string;
+  type?: string;
+}
+
+export interface WorkflowGithubCatalog {
+  repos: string[];
+  labels: WorkflowGithubLabelOption[];
+  assignees: WorkflowGithubAssigneeOption[];
+}
+
+export interface WorkflowGithubDelivery {
+  workflowId: string;
+  nodeId: string;
+  deliveryId: string;
+  event: string;
+  repository: string | null;
+  number: number | null;
+  pullRequest: boolean | null;
+  title: string | null;
+  url?: string | null;
+  receivedAt: string;
+  outcome: "waiting" | "started" | "skipped";
+  reason: "filter" | "self" | "chain" | "offline" | "refused" | null;
+  reasonDetail?: string | null;
+  runId: string | null;
+  waitsForRunId?: string | null;
+  replayable?: boolean;
+}
+
+export interface GithubAgentRepoPermission {
+  fullName: string;
+  pull: boolean;
+  push: boolean;
+  admin: boolean;
+}
+
+export interface GithubAgentInstallation {
+  installationId: number;
+  accountLogin: string;
+  accountType: string;
+  installerLogin: string;
+  repositorySelection: "all" | "selected";
+  repos: string[];
+  repoPermissions?: GithubAgentRepoPermission[];
+  suspended: boolean;
+  updatedAt: number;
+  boundAt?: number;
+  expiresAt?: number;
+  expired?: boolean;
+  manageUrl?: string;
+}
+
+export interface GithubAgentRepoConfig {
+  fullName: string;
+  installationId: number | null;
+  accountLogin: string;
+  canWrite?: boolean;
+  answerMentions: boolean;
+  defaultBotId: string | null;
+  allowlist: string[];
+}
+
+export interface GithubAgentStatus {
+  appSlug: string;
+  mentionHandle: string;
+  relayConnected: boolean;
+  eventsOn: boolean;
+  hasExpiredBindings?: boolean;
+  installations: GithubAgentInstallation[];
+  repos: GithubAgentRepoConfig[];
+  lastDelivery: {
+    deliveryId: string;
+    event: string;
+    action: string | null;
+    repository: string;
+    receivedAt: string;
+  } | null;
+  manageAppUrl: string;
+}
+
+export interface GithubAgentInstallUrl {
+  url: string;
+  expiresAt: number;
+  appSlug: string;
+}
+
 export interface WorkflowGithubStatus {
   installed: boolean;
   authenticated: boolean;
   login: string | null;
   scopes: string[];
   repos: string[];
+  repoAccess?: WorkflowGithubRepoAccess[];
+  webhookEventsEnabled?: boolean;
   installUrl: string;
   signIn: WorkflowGithubSignIn;
 }
-export type WorkflowOutputDestination = "chat" | "feed" | "idea" | "goal" | "notification";
+export type WorkflowOutputDestination = "chat" | "feed" | "idea" | "goal" | "notification" | "github";
 
 export interface WorkflowFieldDef {
   name: string;
@@ -478,6 +696,16 @@ export interface WorkflowInput {
 export type WorkflowStepStatus = "pending" | "running" | "waiting_approval" | "completed" | "failed" | "skipped" | "rejected";
 export type WorkflowRunStatus = "running" | "waiting_approval" | "completed" | "failed" | "cancelled";
 
+export interface WorkflowGithubUncertainInfo {
+  nodeId?: string;
+  stepLabel?: string;
+  action: string;
+  repository: string;
+  number?: number | null;
+  pullRequest?: boolean | null;
+  url?: string | null;
+}
+
 export interface WorkflowStepRun {
   nodeId: string;
   kind: WorkflowNodeKind;
@@ -486,6 +714,8 @@ export interface WorkflowStepRun {
   startedAt?: number | null;
   finishedAt?: number | null;
   error?: string | null;
+  errorCode?: string | null;
+  githubUncertain?: WorkflowGithubUncertainInfo | null;
   summary?: string;
   branch?: string;
   decision?: "approved" | "rejected";
@@ -501,11 +731,14 @@ export interface WorkflowRun {
   triggerNodeId: string;
   triggerKind?: WorkflowTriggerKind;
   manual?: boolean;
+  replay?: boolean;
   status: WorkflowRunStatus;
   startedAt: number;
   finishedAt?: number | null;
   retriedAt?: number | null;
   error?: string | null;
+  errorCode?: string | null;
+  githubUncertain?: WorkflowGithubUncertainInfo | null;
   pendingApproval?: {
     nodeId: string;
     label: string;
@@ -624,6 +857,19 @@ export type RemoteHost = {
   member?: true;
   /** The team this host's member pairing belongs to. */
   team?: string;
+  /** Whether this host is included when operating all computers in one view (default true). */
+  included?: boolean;
+};
+export type UnifiedHostStatus = {
+  id: string;
+  name: string;
+  state: "idle" | "connecting" | "online" | "offline" | "revoked";
+  local?: boolean;
+  route?: "direct" | "relay" | null;
+  member?: boolean;
+  team?: string;
+  bots?: number;
+  requests?: number;
 };
 export type ProfileHost = {
   serverId: string;
@@ -1020,6 +1266,16 @@ export type State = {
   /** Which computer's workspace this is: null for this one, else the paired computer in use. */
   remote?: {
     using: { id: string; name: string; state: "idle" | "connecting" | "online" | "offline" | "revoked"; route: "direct" | "relay" | null; version: string | null; capabilities: string[]; member?: true; team?: string } | null;
+    /** True when operating all connected computers together in one view. */
+    unified?: boolean;
+    /** Saved user preference for operating all computers in one view. */
+    unifiedEnabled?: boolean;
+    /** Display name for this local computer. */
+    localName?: string;
+    /** Target host for host-scoped Settings & creation while unified mode is active ("local" or a host id). */
+    settingsHost?: string;
+    /** Live status of each computer included in the unified view. */
+    unifiedHosts?: UnifiedHostStatus[];
     hosts: RemoteHost[];
   };
   /** The hosted profile's public identity and computer directory; no token or verifier is sent. */
@@ -1302,6 +1558,8 @@ declare global {
             agent?: string;
             /** The starter the form started from (desktop/starters.mjs). */
             starter?: string;
+            /** Unified multi-host mode: target computer id ("local" or remote host id). */
+            hostId?: string;
           },
       ): Promise<string>;
       /** The person's existing agents that can become bots. */
@@ -1452,13 +1710,25 @@ declare global {
       workflowPause(id: string): Promise<Workflow>;
       workflowResume(id: string): Promise<Workflow>;
       workflowRun(id: string, options?: { triggerNodeId?: string; inputs?: Record<string, unknown> }): Promise<WorkflowRun>;
-      workflowRetryRun(runId: string, nodeId?: string): Promise<WorkflowRun>;
+      workflowRetryRun(runId: string, nodeId?: string | null, options?: { allowUncertainRetry?: boolean }): Promise<WorkflowRun>;
       workflowRespondApproval(runId: string, nodeId: string | null, decision: "approved" | "rejected", note?: string): Promise<WorkflowRun>;
       workflowCancelRun(runId: string): Promise<WorkflowRun>;
       workflowRotateWebhookSecret(workflowId: string, nodeId: string): Promise<{ routeId: string; secret: string }>;
       workflowGithubStatus(options?: { includeRepos?: boolean }): Promise<WorkflowGithubStatus>;
       workflowGithubSignInStart(): Promise<WorkflowGithubSignIn>;
       workflowGithubSignInCancel(): Promise<WorkflowGithubStatus>;
+      workflowGithubCatalog(options?: { repos?: string[]; repo?: string; includeLabels?: boolean; includeAssignees?: boolean }): Promise<WorkflowGithubCatalog>;
+      workflowGithubDeliveries(workflowId: string, nodeId?: string): Promise<WorkflowGithubDelivery[]>;
+      workflowGithubReplayLast(workflowId: string, nodeId?: string): Promise<WorkflowRun>;
+      // Botkins Agent GitHub App (owner-only)
+      githubAgentStatus(): Promise<GithubAgentStatus>;
+      githubAgentInstallUrl(): Promise<GithubAgentInstallUrl>;
+      githubAgentRefresh(): Promise<GithubAgentStatus>;
+      githubAgentSetRepo(
+        repo: string,
+        patch: { answerMentions?: boolean; defaultBotId?: string | null; allowlist?: string[] | string },
+      ): Promise<GithubAgentStatus>;
+      githubAgentUnbind(installationId: number): Promise<GithubAgentStatus>;
       workflowExport(id: string): Promise<boolean>;
       workflowImport(): Promise<{ workflow: Workflow; unresolvedAgents: string[] } | null>;
       workflowExportText(id: string): Promise<string>;
@@ -1500,6 +1770,8 @@ declare global {
       pathForFile(file: File): string;
       reactToMessage(chatId: string, index: number, time: number | null, emoji: string): Promise<NonNullable<Message["reactions"]>>;
       "chat.cardAction"(chatId: string, target: number | string, action: "dispatch" | "dismiss"): Promise<ChatCardActionResult>;
+      "chat.a2uiAction"(chatId: string, payload: A2uiActionPayload): Promise<ChatA2uiActionResult>;
+      "chat.a2uiFunction"(chatId: string, payload: A2uiFunctionRpcPayload): Promise<ChatA2uiFunctionResult>;
       showEmojiPanel(): Promise<void>;
       forkChat(chatId: string, messageIndex: number): Promise<string>;
       retry(runId: string): Promise<void>;
@@ -1776,6 +2048,8 @@ declare global {
       stop(id: string): Promise<void>;
       /** Stops one helper or background command of the chat's turn, by its id (a helper's id is the id of the step that started it). "stop-helper-v1". */
       stopHelper(chatId: string, id: string): Promise<void>;
+      /** On-demand step input/output when loaded lazily from the SQLite store. */
+      stepDetail?(chatId: string, runId: string, stepId: string): Promise<{ input?: string; output?: string } | null>;
       /** The account behind one model provider. Without an id, the default provider (GitHub Copilot). */
       auth(providerId?: string): Promise<AuthStatus>;
       /** Starts that provider's sign-in in the person's browser and resolves when it is done. */
@@ -1933,6 +2207,12 @@ declare global {
       setMyAvatar(image: string | null): Promise<{ avatar?: string }>;
       /** Shows a paired computer's workspace in this window, or this computer's own (null). */
       useRemoteHost(id: string | null): Promise<unknown>;
+      /** Enables or disables operating all connected computers together in one unified view. */
+      setUnifiedHosts(enabled: boolean): Promise<boolean>;
+      /** Includes or excludes a specific paired computer from the unified view. */
+      setUnifiedHostIncluded(id: string, included: boolean): Promise<boolean>;
+      /** Selects which computer host-scoped Settings target while unified view is active ("local" or host id). */
+      setSettingsHost(id: string): Promise<string>;
       forgetRemoteHost(id: string): Promise<void>;
       renameRemoteHost(id: string, name: string): Promise<void>;
       /** Renames a paired phone or computer as this computer lists it. */
@@ -2901,6 +3181,8 @@ export type Step = {
   botId?: string;
   /** The computer can stop this helper or background command on its own: `stopHelper` ("stop-helper-v1"). Set only while it runs. */
   stoppable?: boolean;
+  /** The step's full input or output lives in SQLite and is read on demand when opened. */
+  more?: boolean;
 };
 export type Card = {
   id: string;
@@ -2954,6 +3236,8 @@ export type AgentRequest = {
   title: string;
   label?: string;
   preview?: string;
+  hostId?: string;
+  hostName?: string;
   detail?: string;
   remember?: string;
   sourceBotName?: string;
@@ -3136,6 +3420,8 @@ export type BotTask = {
   chatId?: string;
   runId?: string;
   result?: string;
+  hostId?: string;
+  hostName?: string;
   problem?: string;
   pendingNote?: { text: string; by: string; byName?: string; from: TaskStatus | "archived"; at: number };
   history?: TaskHistoryEntry[];

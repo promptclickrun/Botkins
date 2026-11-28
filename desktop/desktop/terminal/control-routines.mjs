@@ -396,8 +396,11 @@ export function routinesApi({ workspace, handlers, bot, selection }) {
     async "workflows.run"([id, options]) {
       return await handlers.workflowRun(id, options);
     },
-    async "workflows.retry"([runId, fromNodeId]) {
-      return await handlers.workflowRetryRun(runId, fromNodeId);
+    async "workflows.retry"([runId, fromNodeId, options]) {
+      const retryOpts = options && typeof options === "object" && !Array.isArray(options)
+        ? { allowUncertainRetry: options.allowUncertainRetry === true }
+        : {};
+      return await handlers.workflowRetryRun(runId, fromNodeId ?? null, retryOpts);
     },
     async "workflows.approve"([runId, nodeId, decision, note]) {
       return await handlers.workflowRespondApproval(runId, nodeId, decision, note);
@@ -408,6 +411,21 @@ export function routinesApi({ workspace, handlers, bot, selection }) {
     "workflows.export": ([id]) => handlers.workflowExportText(id),
     async "workflows.import"([raw, agentMap]) {
       return await handlers.workflowImportText(raw, agentMap);
+    },
+    "workflows.deliveries": ([id, nodeId, limit]) => handlers.workflowGithubDeliveries(id, nodeId, limit),
+    async "workflows.replay"([id, nodeId]) {
+      return await handlers.workflowGithubReplayLast(id, nodeId);
+    },
+    "github.status": () => handlers.githubAgentStatus(),
+    "github.installUrl": () => handlers.githubAgentInstallUrl(),
+    async "github.refresh"() {
+      return await handlers.githubAgentRefresh();
+    },
+    async "github.setRepo"([repo, patch]) {
+      return await handlers.githubAgentSetRepo(repo, patch ?? {});
+    },
+    async "github.unbind"([installationId]) {
+      return await handlers.githubAgentUnbind(installationId);
     },
   };
 }

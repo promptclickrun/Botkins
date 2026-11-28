@@ -12,12 +12,22 @@ import { setRandomSource } from "@/link/crypto";
 import type { PairTarget } from "@/link/pairing";
 import type { ProfileHost } from "@/link/profile";
 import { relayFetch } from "@/link/relay";
-import type { Calls, ChatDetail, ScreenFrame, ScreenInput } from "@/link/types";
+import type { A2uiActionPayload, A2uiFunctionRpcPayload, Calls, ChatDetail, Parts, ScreenFrame, ScreenInput } from "@/link/types";
 import { textMode, useChatPrefs } from "./chatPrefs";
-import { loadPrefs, usePrefs } from "./prefs";
+import { loadPrefs, setPrefs, usePrefs } from "./prefs";
 import { newPresenceKey, removePresenceKey } from "./presence";
 import { currentOf, hasRoom, indexOf, type Kept, NO_COMPUTERS, pairingKey, readKeptComputers, savedIds, startupComputers, tidy, TOO_MANY, using, withDetails, withPairing, without } from "./computers";
 import { applyParts, forgetComputer, mergeChat, onComputerChange, showToast, useApp } from "./store";
+import {
+  buildUnifiedHostsStatus,
+  hostOfId,
+  mergeUnifiedParts,
+  parseScopedId,
+  rescopeMobileResult,
+  routeMobileCall,
+  scopePartsForHost,
+  unscopeId,
+} from "./unified";
 import { createFollowing } from "./following";
 import { createPartsBatcher } from "./partsBatch";
 import { canBrowse, NearbyPace } from "./reconnect";
@@ -37,6 +47,75 @@ const fetcher = relayFetch(expoFetch as unknown as FetchLike);
 setRandomSource((length) => Crypto.getRandomBytes(length));
 
 let client: LinkClient | null = null;
+type PooledHost = {
+  pairing: Pairing;
+  client: LinkClient;
+  link: import("@/link/client").LinkState;
+  synced: boolean;
+  parts: Partial<Parts>;
+};
+const pool = new Map<string, PooledHost>();
+const allClients = (): LinkClient[] => (pool.size > 0 ? [...pool.values()].map((entry) => entry.client) : client ? [client] : []);
+const stopPool = () => {
+  for (const entry of pool.values()) entry.client.stop();
+  pool.clear();
+};
+function includedPairings(): Pairing[] {
+  const excluded = new Set(usePrefs.getState().excludedUnifiedHosts);
+  return kept.list.filter((pairing) => pairing.serverId === kept.current || !excluded.has(pairing.serverId));
+}
+function shouldUseUnified(): boolean {
+  return !activeProfilePairing && usePrefs.getState().unifiedHosts && includedPairings().length > 1;
+}
+function overallPoolLink(): import("@/link/client").LinkState {
+  let anyConnecting = false;
+  let anyRevoked = false;
+  for (const entry of pool.values()) {
+    if (entry.link === "online") return "online";
+    if (entry.link === "connecting") anyConnecting = true;
+    if (entry.link === "revoked") anyRevoked = true;
+  }
+  if (anyConnecting) return "connecting";
+  return anyRevoked ? "revoked" : "offline";
+}
+function refreshUnifiedStatus() {
+  if (!pool.size) return;
+  const primaryId = currentOf(kept)?.serverId ?? null;
+  useApp.setState({
+    link: overallPoolLink(),
+    unified: true,
+    unifiedHosts: buildUnifiedHostsStatus(kept.list, primaryId, usePrefs.getState().excludedUnifiedHosts, pool),
+  });
+}
+function pushMergedUnifiedParts(extra?: Record<string, unknown>) {
+  if (!pool.size) return;
+  const primaryId = currentOf(kept)?.serverId ?? null;
+  const snapshots = [...pool.values()].map((entry) => ({
+    pairing: entry.pairing,
+    link: entry.link,
+    synced: entry.synced,
+    parts: entry.parts,
+    chats: {},
+    running: {},
+    texts: {},
+  }));
+  const merged = mergeUnifiedParts(snapshots, primaryId, usePrefs.getState().settingsHost) as Record<string, unknown>;
+  partsBatcher.push(extra ? { ...merged, ...extra } : merged);
+}
+/** Read-only snapshot of pooled hosts for widgets, push registration, and device tools. */
+export function pooledEntries(): { pairing: Pairing; link: import("@/link/client").LinkState; synced: boolean; parts: Partial<Parts> }[] {
+  return [...pool.values()].map(({ pairing, link, synced, parts }) => ({ pairing, link, synced, parts }));
+}
+export function isUnifiedActive(): boolean {
+  return pool.size > 1;
+}
+/** Sends one RPC call directly to a specific connected host in the pool (or active single host). */
+export function callHost<T = unknown>(serverId: string, method: string, ...args: unknown[]): Promise<T> {
+  const pooled = pool.get(serverId);
+  if (pooled) return pooled.client.call<T>(method, ...args);
+  if (client && useApp.getState().pairing?.serverId === serverId) return client.call<T>(method, ...args);
+  return Promise.reject(new LinkError("offline", "That computer is not connected."));
+}
 type FrameHandle = { raf: number } | { timeout: ReturnType<typeof setTimeout> };
 // Text-only ticks wait for the next frame. The display link stops in the background (a push can
 // wake the app to sync), so there they wait on a short timer instead.
@@ -54,7 +133,11 @@ let savedStorageLocked = false;
 // A profile pairing is a separate trust path from the phone's manual pairings. While one is in
 // use it may temporarily be the active link, but it never replaces the local pairing in `kept`.
 let activeProfilePairing: Pairing | null = null;
-useChatPrefs.subscribe((prefs, before) => prefs.textStreaming !== before.textStreaming && client?.textStreamingChanged());
+useChatPrefs.subscribe((prefs, before) => {
+  if (prefs.textStreaming !== before.textStreaming) {
+    for (const c of allClients()) c.textStreamingChanged();
+  }
+});
 /** Who waits for the next sync to come back (`freshSync`). */
 const syncWaiters = new Set<() => void>();
 
@@ -67,7 +150,7 @@ const background = createBackgroundController({
     partsBatcher.flush();
   },
   onSleep: () => {
-    client?.rest();
+    for (const c of allClients()) c.rest();
     fetcher.rest({ force: true });
   },
   onWake: () => {
@@ -75,7 +158,7 @@ const background = createBackgroundController({
     void retrySavedStorage();
     // Give the returning screen time to reclaim its cached page.
     watched.returned();
-    client?.wake();
+    for (const c of allClients()) c.wake();
   },
 });
 
@@ -94,6 +177,7 @@ export function wakeForNotification() {
 }
 
 function follow(pairing: Pairing) {
+  stopPool();
   client?.stop();
   partsBatcher.clear();
   // A chat kept from the computer followed until now is not one of this computer's.
@@ -109,7 +193,7 @@ function follow(pairing: Pairing) {
       route, useApp.getState().parts.meta?.capabilities),
     onParts: partsBatcher.push,
     onState: (link) => {
-      useApp.setState({ link });
+      useApp.setState({ link, unified: false, unifiedHosts: [] });
       if (link === "online") nearbyPace.reset();
     },
     onUnreachable: () => void lookNearby(pairing.serverId),
@@ -136,8 +220,102 @@ function follow(pairing: Pairing) {
     },
   });
   publishWatch();
-  client.watchReasoning(reasoningWatchers.shown());
+  publishReasoningWatch();
   client.start({ resting: AppState.currentState !== "active" });
+}
+
+function followUnified() {
+  stopPool();
+  client?.stop();
+  client = null;
+  partsBatcher.clear();
+  watched.release();
+  const primary = currentOf(kept);
+  if (!primary) return;
+  const primaryId = primary.serverId;
+  const targets = includedPairings();
+  if (targets.length <= 1) {
+    follow(primary);
+    return;
+  }
+  const resting = AppState.currentState !== "active";
+  for (const pairing of targets) {
+    const entry: PooledHost = {
+      pairing,
+      client: null as unknown as LinkClient,
+      link: "connecting",
+      synced: false,
+      parts: {},
+    };
+    entry.client = new LinkClient(pairing, {
+      fetch: fetcher,
+      streamAppends: true,
+      separateThinking: true,
+      lightSteps: true,
+      runStepDeltas: true,
+      runSummaryDeltas: true,
+      textStreaming: (route) =>
+        textMode(
+          useChatPrefs.getState().textStreaming &&
+            AppState.currentState === "active" &&
+            replies.shown().some((id) => hostOfId(id, primaryId) === pairing.serverId),
+          route,
+          entry.parts.meta?.capabilities,
+        ),
+      onParts: (incoming) => {
+        if (pool.get(pairing.serverId) !== entry) return;
+        const name = (incoming.meta as { name?: string } | undefined)?.name || entry.parts.meta?.name || entry.pairing.name || "Computer";
+        const scoped = scopePartsForHost(incoming, pairing.serverId, name, primaryId);
+        const extra: Record<string, unknown> = {};
+        for (const [k, v] of Object.entries(scoped)) {
+          if (k.startsWith("chat:") || k.startsWith("run:") || k.startsWith("reasoning:") || k.startsWith("text:")) {
+            extra[k] = v;
+          } else {
+            (entry.parts as Record<string, unknown>)[k] = v;
+          }
+        }
+        entry.synced = true;
+        refreshUnifiedStatus();
+        pushMergedUnifiedParts(extra);
+      },
+      onState: (link) => {
+        if (pool.get(pairing.serverId) !== entry) return;
+        entry.link = link;
+        if (link === "online") nearbyPace.reset();
+        refreshUnifiedStatus();
+      },
+      onUnreachable: () => void lookNearby(pairing.serverId),
+      onRoute: (route) => {
+        if (pairing.serverId === primaryId) useApp.setState({ route });
+      },
+      onSync: () => {
+        if (syncWaiters.size) partsBatcher.flush();
+        for (const done of [...syncWaiters]) done();
+      },
+      check: () => fetcher.check(),
+      onHosts: (hosts) => {
+        const next = { ...entry.pairing, hosts };
+        entry.pairing = next;
+        if (!kept.list.some((item) => item.serverId === next.serverId)) return;
+        kept = withDetails(kept, next);
+        useApp.setState(kept.current === next.serverId ? { pairing: next, pairings: kept.list } : { pairings: kept.list });
+        void savePairing(next).catch(() => {});
+      },
+    });
+    pool.set(pairing.serverId, entry);
+    if (pairing.serverId === primaryId) client = entry.client;
+  }
+  refreshUnifiedStatus();
+  publishWatch();
+  publishReasoningWatch();
+  for (const entry of pool.values()) entry.client.start({ resting });
+}
+
+function followActive() {
+  const pairing = currentOf(kept);
+  if (!pairing) return;
+  if (shouldUseUnified()) followUnified();
+  else follow(pairing);
 }
 
 // A computer whose address changed (a new one from the router, another network at home) is found
@@ -173,11 +351,12 @@ function startOver() {
   nearbyPace.reset();
   activeProfilePairing = null;
   const pairing = currentOf(kept);
+  stopPool();
   client?.stop();
   client = null;
   forgetComputer();
-  useApp.setState({ pairing, pairings: kept.list, link: "connecting", ...EMPTY });
-  if (pairing) follow(pairing);
+  useApp.setState({ pairing, pairings: kept.list, unified: false, unifiedHosts: [], link: "connecting", ...EMPTY });
+  if (pairing) followActive();
 }
 
 /** Everything saved about the paired computers, read from the keychain. It throws when the keychain can't be read yet. */
@@ -206,8 +385,7 @@ async function restoreSavedStorage() {
     if (kept.list.length || useApp.getState().pairings.length) return;
     kept = startupComputers(saved.kept, usePrefs.getState().primaryHost);
     useApp.setState({ pairing: currentOf(kept), pairings: kept.list, link: "connecting" });
-    const pairing = currentOf(kept);
-    if (pairing) follow(pairing);
+    if (currentOf(kept)) followActive();
   } catch {
     // The phone remains usable with whatever was already in memory until the next foreground.
   }
@@ -254,7 +432,7 @@ async function startApp() {
   const held = useApp.getState();
   const pairing = savedStorageLocked ? held.pairing : currentOf(kept);
   useApp.setState(savedStorageLocked ? { booted: true, pairing, pairings: held.pairings, link: held.link } : { booted: true, pairing, pairings: kept.list, link: "connecting" });
-  if (pairing) follow(pairing);
+  if (pairing) followActive();
   // Notifications, and the tools bots can run on this phone. Loaded here, not at the top, because
   // both use this file.
   void import("./push").then((push) => push.startPush()).catch(() => {});
@@ -278,7 +456,9 @@ async function startApp() {
       last = now;
       nearbyPace.reset();
       clearTimeout(soon);
-      soon = setTimeout(() => AppState.currentState === "active" && client?.wake("network"), 1500);
+      soon = setTimeout(() => {
+        if (AppState.currentState === "active") for (const c of allClients()) c.wake("network");
+      }, 1500);
     });
   } catch {
     // A build without the network module still follows the app coming to the front.
@@ -442,15 +622,43 @@ export function deactivateProfilePairing() {
 
 /** Starts using another computer this phone is paired with. The one in use until now stays paired. */
 export async function switchComputer(serverId: string) {
+  if (usePrefs.getState().unifiedHosts) {
+    setPrefs({ unifiedHosts: false });
+  }
   if (activeProfilePairing) {
     activeProfilePairing = null;
     startOver();
   }
   const next = using(kept, serverId);
-  if (next === kept || next.current === kept.current) return;
+  if (next === kept) return;
+  const changed = next.current !== kept.current || pool.size > 0;
   kept = next;
-  startOver();
+  if (changed) startOver();
   await saveIndex().catch(() => {});
+}
+
+/** Switches unified multi-host mode on or off across connected computers. */
+export function setUnifiedHosts(enabled: boolean) {
+  if (usePrefs.getState().unifiedHosts === enabled && (enabled ? pool.size > 1 : pool.size === 0)) return;
+  setPrefs({ unifiedHosts: enabled });
+  startOver();
+}
+
+/** Includes or excludes one paired computer from the unified view. */
+export function setUnifiedHostIncluded(serverId: string, included: boolean) {
+  const prev = usePrefs.getState().excludedUnifiedHosts;
+  const next = included ? prev.filter((id) => id !== serverId) : prev.includes(serverId) ? prev : [...prev, serverId];
+  setPrefs({ excludedUnifiedHosts: next });
+  if (usePrefs.getState().unifiedHosts) startOver();
+}
+
+/** Picks which computer host-scoped Settings apply to while unified mode is active. */
+export function setSettingsHost(serverId: string) {
+  setPrefs({ settingsHost: serverId });
+  if (pool.size > 0) {
+    useApp.setState({ models: undefined, providers: undefined, skills: undefined });
+    pushMergedUnifiedParts();
+  }
 }
 
 /** The Shortcuts computer picker can open before the foreground app has booted. */
@@ -508,6 +716,27 @@ type Api = { [K in keyof Calls]: (...args: Parameters<Calls[K]>) => Promise<Retu
 /** The computer's calls, by name: `await api.addBot({...})`. Each rejects with a LinkError. */
 export const api = new Proxy({} as Api, {
   get: (_target, method: string) => (...args: unknown[]) => {
+    if (pool.size > 0) {
+      const primaryId = currentOf(kept)?.serverId;
+      if (!primaryId) return Promise.reject(new LinkError("offline", "Pair with your computer first."));
+      const route = routeMobileCall(method, args, {
+        primaryId,
+        settingsHostId: usePrefs.getState().settingsHost,
+        poolIds: [...pool.keys()],
+      });
+      if (route.kind === "fanout") {
+        return Promise.all(
+          route.calls.map((c) => {
+            const entry = pool.get(c.hostId);
+            if (!entry) return Promise.reject(new LinkError("offline", "Computer is not connected."));
+            return entry.client.call(method, ...c.args);
+          }),
+        );
+      }
+      const entry = pool.get(route.hostId);
+      if (!entry) return Promise.reject(new LinkError("offline", "Computer is not connected."));
+      return entry.client.call(method, ...route.args).then((result) => rescopeMobileResult(method, result, route.hostId, primaryId));
+    }
     if (!client) return Promise.reject(new LinkError("offline", "Pair with your computer first."));
     return client.call(method, ...args);
   },
@@ -516,12 +745,13 @@ export const api = new Proxy({} as Api, {
 /** Binds calls to the computer active right now; if the person switches computers mid-flow, `isCurrent()` turns false and further calls are ignored. */
 export function boundApi(): { api: Api; isCurrent: () => boolean } {
   const host = client;
-  const isCurrent = () => client === host;
+  const wasUnified = pool.size > 0;
+  const isCurrent = () => (wasUnified ? pool.size > 0 && client === host : client === host);
   const bound = new Proxy({} as Api, {
     get: (_target, method: string) => (...args: unknown[]) => {
       if (!host) return Promise.reject(new LinkError("offline", "Pair with your computer first."));
-      if (client !== host) return Promise.resolve(undefined);
-      return host.call(method, ...args);
+      if (!isCurrent()) return Promise.resolve(undefined);
+      return (api as unknown as Record<string, (...a: unknown[]) => Promise<unknown>>)[method]!(...args);
     },
   });
   return { api: bound, isCurrent };
@@ -529,29 +759,33 @@ export function boundApi(): { api: Api; isCurrent: () => boolean } {
 
 /** The frame request belongs to the viewer and the computer on which it opened. */
 export async function readScreenFrame(computer: string, options: Parameters<Calls["link.screen.frame"]>[0], signal: AbortSignal) {
-  if (!client || useApp.getState().pairing?.serverId !== computer) throw new LinkError("offline", "The computer changed.");
-  return client.callWithSignal<ScreenFrame>("link.screen.frame", signal, options);
+  const host = pool.get(computer)?.client ?? (useApp.getState().pairing?.serverId === computer ? client : null);
+  if (!host) throw new LinkError("offline", "The computer changed.");
+  return host.callWithSignal<ScreenFrame>("link.screen.frame", signal, options);
 }
 
 /** A decoder session and its cleanup belong to the computer that opened it. */
 export function desktopVideoLink(computer: string, id: string, signal: AbortSignal) {
-  const host = client;
-  if (!host || useApp.getState().pairing?.serverId !== computer) throw new LinkError("offline", "The computer changed.");
+  const host = pool.get(computer)?.client ?? (useApp.getState().pairing?.serverId === computer ? client : null);
+  if (!host) throw new LinkError("offline", "The computer changed.");
+  const stillHere = () => (pool.size > 0 ? pool.get(computer)?.client === host : client === host);
   return {
     open: (options: Parameters<Calls["link.screen.video.open"]>[1]) =>
       host.callWithSignal<{ mimeType: string }>("link.screen.video.open", signal, id, options),
     read: (seq: number) => host.callWithSignal<string>("link.screen.video.read", signal, id, seq),
     close: () => {
-      if (client === host && host.state === "online") void host.call("link.screen.video.close", id).catch(() => {});
+      if (stillHere() && host.state === "online") void host.call("link.screen.video.close", id).catch(() => {});
     },
   };
 }
 
 /** A final button-up may follow an in-flight call. Bind it to this computer at viewer creation. */
-export function screenInputSender() {
-  const host = client;
+export function screenInputSender(computer?: string) {
+  const host = (computer ? pool.get(computer)?.client : undefined) ?? client;
   return (display: string, events: ScreenInput[]) =>
-    host && host === client && host.state === "online" ? host.call("link.screen.input", display, events) : Promise.resolve();
+    host && (pool.size > 0 ? [...pool.values()].some((e) => e.client === host) : host === client) && host.state === "online"
+      ? host.call("link.screen.input", display, events)
+      : Promise.resolve();
 }
 
 /** Also update an older loaded page, outside the live chat subscription. */
@@ -589,6 +823,31 @@ export async function chatCardAction(chatId: string, target: number | string, ac
   return result;
 }
 
+/** Sends an A2UI v1.0 surface user action to the host and updates the surface in loaded chat pages. */
+export async function chatA2uiAction(chatId: string, payload: A2uiActionPayload) {
+  const host = client;
+  const result = await api["chat.a2uiAction"](chatId, payload);
+  useApp.setState(state => {
+    const view = state.chats[chatId];
+    if (client !== host || !view || !result?.surface) return {};
+    const offset = view.messages.findIndex(m => m.a2uiSurfaces?.some(s => s.surfaceId === result.surface.surfaceId));
+    if (offset < 0 || offset >= view.messages.length) return {};
+    const messages = view.messages.slice();
+    const prevList = messages[offset].a2uiSurfaces ?? [];
+    messages[offset] = {
+      ...messages[offset],
+      a2uiSurfaces: prevList.map(s => (s.surfaceId === result.surface.surfaceId ? result.surface : s)),
+    };
+    return { chats: { ...state.chats, [chatId]: { ...view, messages } } };
+  });
+  return result;
+}
+
+/** Sends a bidirectional A2UI v1.0 function call or rendererFunctionResponse over Link. */
+export async function chatA2uiFunction(chatId: string, payload: A2uiFunctionRpcPayload) {
+  return api["chat.a2uiFunction"](chatId, payload);
+}
+
 /** Runs a call and shows its failure as a toast. Resolves to undefined when it failed. */
 export async function attempt<T>(work: Promise<T>, done?: string): Promise<T | undefined> {
   try {
@@ -604,11 +863,34 @@ export async function attempt<T>(work: Promise<T>, done?: string): Promise<T | u
 // Sheets can need chat details without displaying a reply. Only a focused message view asks for words.
 const inBackground = () => AppState.currentState === "background";
 function publishWatch() {
+  if (pool.size > 0) {
+    const primaryId = currentOf(kept)?.serverId ?? null;
+    const shown = watched.shown();
+    const keptPage = watched.keptPage();
+    const replyShown = replies.shown();
+    for (const [hostId, entry] of pool) {
+      const forHost = (ids: string[]) => ids.filter((id) => hostOfId(id, primaryId) === hostId).map((id) => unscopeId(id));
+      const hostKept = keptPage && hostOfId(keptPage, primaryId) === hostId ? unscopeId(keptPage) : undefined;
+      entry.client.watch(forHost(shown), hostKept, forHost(replyShown));
+    }
+    return;
+  }
   client?.watch(watched.shown(), watched.keptPage(), replies.shown());
+}
+function publishReasoningWatch() {
+  const ids = reasoningWatchers.shown();
+  if (pool.size > 0) {
+    const primaryId = currentOf(kept)?.serverId ?? null;
+    for (const [hostId, entry] of pool) {
+      entry.client.watchReasoning(ids.filter((id) => hostOfId(id, primaryId) === hostId).map((id) => unscopeId(id)));
+    }
+    return;
+  }
+  client?.watchReasoning(ids);
 }
 const watched = createFollowing({ send: publishWatch, away: inBackground });
 const replies = createFollowing({ send: publishWatch, away: inBackground, lingerMs: 0 });
-const reasoningWatchers = createFollowing({ send: (ids) => client?.watchReasoning(ids), away: inBackground, lingerMs: 0 });
+const reasoningWatchers = createFollowing({ send: publishReasoningWatch, away: inBackground, lingerMs: 0 });
 const watchers = new Set<() => void>();
 /** The chat on screen now (the last one opened), if any. A chat that is only kept a little longer is not on screen. */
 export const chatOnScreen = () => watched.shown().at(-1);
@@ -656,7 +938,7 @@ export async function loadEarlier(chatId: string) {
 }
 
 export function wake() {
-  client?.wake("retry");
+  for (const c of allClients()) c.wake("retry");
 }
 
 /**
@@ -666,7 +948,8 @@ export function wake() {
  */
 export function freshSync(ms: number): Promise<boolean> {
   return new Promise((resolve) => {
-    if (!client) return resolve(false);
+    const clients = allClients();
+    if (!clients.length) return resolve(false);
     const done = (ok: boolean) => {
       clearTimeout(timer);
       syncWaiters.delete(hit);
@@ -677,7 +960,7 @@ export function freshSync(ms: number): Promise<boolean> {
     syncWaiters.add(hit);
     // Nobody is looking: the chat that was kept a little longer is let go, so this sync brings no chat's page.
     if (AppState.currentState !== "active") watched.release();
-    client.wake();
+    for (const c of clients) c.wake();
   });
 }
 
@@ -699,7 +982,7 @@ export async function syncForPush(ms: number) {
 export function restIfAway() {
   if (AppState.currentState !== "active") {
     if (background.held) return;
-    client?.rest();
+    for (const c of allClients()) c.rest();
     fetcher.rest({ force: true });
     background.sleepNowIfAway();
   }

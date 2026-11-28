@@ -3,7 +3,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { Workspace } from "./starter.mjs";
+import { Workspace, readPersistedWorkspace, readPersistedWorkspaceText } from "./starter.mjs";
 import { Providers } from "../desktop/providers/index.mjs";
 import { CopilotProvider } from "../desktop/providers/copilot/index.mjs";
 import { helperSessionId } from "../desktop/teamwork.mjs";
@@ -29,7 +29,7 @@ test("MCP keys are kept in the vault, encrypted, and reach only sessions", async
   const { ws, dir, log, open } = setup(t, undefined, { workspace: { vaultKey: keychain } });
   const id = ws.integrations.saveServer({ name: "tickets", command: "npx", args: ["tickets"], env: { API_KEY: "secret-123" } });
   ws.integrations.importServers('{"mcpServers":{"docs":{"url":"https://docs.example/mcp","headers":{"Authorization":"Bearer secret-456"}}}}');
-  const file = (name) => readFileSync(join(dir, "data", name), "utf8");
+  const file = (name) => name === "workspace.json" ? readPersistedWorkspaceText(join(dir, "data")) : readFileSync(join(dir, "data", name), "utf8");
   // The workspace file holds references; the vault holds ciphertext; the key is wrapped by the keychain.
   assert.doesNotMatch(file("workspace.json"), /secret-123|secret-456/);
   assert.match(file("workspace.json"), /"API_KEY":"vault:[0-9a-f-]{36}"/);
@@ -94,7 +94,8 @@ test("MCP keys are kept in the vault, encrypted, and reach only sessions", async
 test("a development run keeps the vault key in a file, and the secret is still not stored as text", (t) => {
   const { ws, dir, open } = setup(t);
   ws.integrations.saveServer({ name: "tickets", command: "npx", env: { API_KEY: "secret-123" } });
-  for (const name of ["workspace.json", "vault.json"]) assert.doesNotMatch(readFileSync(join(dir, "data", name), "utf8"), /secret-123/, name);
+  assert.doesNotMatch(readPersistedWorkspaceText(join(dir, "data")), /secret-123/, "workspace");
+  assert.doesNotMatch(readFileSync(join(dir, "data", "vault.json"), "utf8"), /secret-123/, "vault.json");
   assert.equal(ws.vault.protection, "file");
   assert.equal(statSync(join(dir, "data", "vault.key")).mode & 0o777, 0o600);
   assert.equal(statSync(join(dir, "data", "vault.json")).mode & 0o777, 0o600);
@@ -121,7 +122,7 @@ test("secrets an earlier version kept in the workspace file move into the vault"
   t.after(() => (console.error = original));
   const ws = new Workspace(join(dir, "data"), async () => ({}), () => {}, { secrets: { open: (data) => (data === "not-readable" ? null : codec.open(data)) } });
   assert.deepEqual(ws.integrations.serversFor({}).tickets.env, { API_KEY: "secret-123", REGION: "eu" });
-  const file = () => readFileSync(join(dir, "data", "workspace.json"), "utf8");
+  const file = () => readPersistedWorkspaceText(join(dir, "data"));
   assert.doesNotMatch(file(), /secret-123|"REGION":"eu"/);
   // One this run can't read is left as it was stored: it is never sent, and never thrown away.
   assert.match(file(), /"Authorization":"enc:v1:not-readable"/);
@@ -148,7 +149,7 @@ test("a development run on the installed app's data damages nothing", (t) => {
   const installed = () => new Workspace(join(dir, "data"), async () => ({}), () => {}, { vaultKey: keychain, secrets: { open: codec.open } });
   assert.deepEqual(installed().integrations.serversFor({}).tickets.env, { API_KEY: "secret-123" }, "a value that was never text is dropped, the rest opens");
   const vault = readFileSync(join(dir, "data", "vault.json"), "utf8");
-  const workspace = () => JSON.parse(readFileSync(join(dir, "data", "workspace.json"), "utf8")).mcpServers[0].env;
+  const workspace = () => readPersistedWorkspace(join(dir, "data")).mcpServers[0].env;
   const stored = workspace();
   // The same folder opened by a development run: no keychain. The vault stays as it is, and so do the references.
   const dev = new Workspace(join(dir, "data"), async () => ({}), () => {});
@@ -167,7 +168,7 @@ test("a development run on the installed app's data damages nothing", (t) => {
   mkdirSync(join(other, "data"));
   writeFileSync(join(other, "data", "workspace.json"), JSON.stringify(seed));
   new Workspace(join(other, "data"), async () => ({}), () => {});
-  assert.match(readFileSync(join(other, "data", "workspace.json"), "utf8"), /"API_KEY":"enc:v1:/, "a run that can't read an old value leaves it");
+  assert.match(readPersistedWorkspaceText(join(other, "data")), /"API_KEY":"enc:v1:/, "a run that can't read an old value leaves it");
   const afterDev = new Workspace(join(other, "data"), async () => ({}), () => {}, { vaultKey: keychain, secrets: { open: codec.open } });
   assert.equal(afterDev.integrations.serversFor({}).tickets.env.API_KEY, "secret-123");
   assert.equal(JSON.parse(readFileSync(join(other, "data", "vault.json"), "utf8")).key.by, "os", "the development run's empty vault is taken over by the installed app");

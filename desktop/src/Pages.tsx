@@ -1,4 +1,5 @@
 import { storageKey } from "./storage";
+import { HostChip } from "./RemoteHosts";
 import { useBotDrag } from "./useBotDrag";
 import { useChatDrag } from "./useChatDrag";
 import { chatGroups, chatsPageUnreadChats, hasChatSections, isVisibleInChatList, movedSection, type ChatGroup } from "./chatSections";
@@ -579,6 +580,7 @@ function BotCard({
         <span className="botcard-text">
           <span className="botcard-top">
             <strong>{b.name}</strong>
+            {state.remote?.unified && b.hostName && <HostChip name={b.hostName} local={b.hostId === "local"} />}
             {primary && <span className="botbadge">Primary</span>}
             {!primary && b.pinned && <Pin size={12} className="botcard-flag" aria-label="Pinned" />}
             {b.hidden && <EyeOff size={12} className="botcard-flag" aria-label="Hidden" />}
@@ -661,7 +663,7 @@ export function BotCards({
     const matches = state.bots.filter(
       (b) =>
         (filter === "Hidden" ? b.hidden : filter === "Pinned" ? b.pinned && !b.hidden : !b.hidden) &&
-        (!q || (b.name + " " + b.role + " " + (b.summary ?? "")).toLowerCase().includes(q)),
+        (!q || (b.name + " " + b.role + " " + (b.summary ?? "") + " " + (b.hostName ?? "")).toLowerCase().includes(q)),
     );
     body = matches.length ? (
       <div className="group bots">{matches.map(card)}</div>
@@ -862,6 +864,7 @@ export function SidebarBots({ state, actions, compact, selectedBotId }: { state:
           <span className="botnav-text">
             <span className="botnav-top">
               <span className="botnav-name">{b.name}</span>
+              {state.remote?.unified && b.hostName && <HostChip name={b.hostName} local={b.hostId === "local"} />}
               {unread.has(b.id) && <i className="unread-dot" aria-label="Unread" />}
             </span>
             {/* The time sits on the quiet line, so the name has the row's whole width. */}
@@ -1194,6 +1197,11 @@ export function ChatRow({
         </span>
         <span className="rowline">
           <small>
+            {state.remote?.unified && chat.hostName && (
+              <>
+                <HostChip name={chat.hostName} local={chat.hostId === "local"} />{" "}
+              </>
+            )}
             {card ? (
               <>
                 {createdBy && lastMessage?.role !== "user" && <>{createdBy} · </>}

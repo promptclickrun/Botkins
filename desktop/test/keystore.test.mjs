@@ -11,6 +11,7 @@ import { headlessHost } from "../desktop/host/headless.mjs";
 import { createRuntime } from "../desktop/runtime.mjs";
 import { Vault } from "../desktop/vault.mjs";
 import { LinkStore } from "../desktop/link/store.mjs";
+import { readPersistedWorkspaceText } from "./starter.mjs";
 
 const tempDir = (t) => {
   const dir = mkdtempSync(join(tmpdir(), "bk-keys-"));
@@ -164,7 +165,8 @@ test("the vault and the phone link keep their keys under the host key, and stay 
   const link = JSON.parse(readFileSync(join(dataDir, "link", "link.json"), "utf8"));
   assert.equal(link.wrapped, true);
   assert.match(link.privateKey, /^bk1\./);
-  for (const file of ["vault.json", "link/link.json", "workspace.json", "keystore.json"]) assert.doesNotMatch(readFileSync(join(dataDir, file), "utf8"), /sk-live-1234567890/);
+  for (const file of ["vault.json", "link/link.json", "keystore.json"]) assert.doesNotMatch(readFileSync(join(dataDir, file), "utf8"), /sk-live-1234567890/);
+  assert.doesNotMatch(readPersistedWorkspaceText(dataDir), /sk-live-1234567890/);
   // The same key opens them again.
   runtime = await start();
   assert.equal(runtime.workspace.vault.get(ref), "sk-live-1234567890");

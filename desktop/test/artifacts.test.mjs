@@ -307,13 +307,82 @@ test("a picture that a bot wrote into its own session's folder shows in that cha
   // named in another chat of that bot. So the first chat, which also named the other's picture,
   // may show it after this look, once that picture is the bot's by its own chat.)
   // That look happens once: the next start reads nothing again.
-  assert.equal(ws.state.mediaPass, 3);
+  assert.equal(ws.state.mediaPass, 4);
   ws.artifacts.rows.splice(0);
   ws.artifacts.save();
   ws.save();
   await ws.close?.();
   ws = open();
   assert.deepEqual(shown(ws, chatId), []);
+});
+
+test("macOS Application Support paths with spaces resolve in final and interim MEDIA: lines with the right messageIndex", async (t) => {
+  const { dir } = fixture(t);
+  const appSupport = join(dir, "Library", "Application Support", "Botkins", "data");
+  const own = join(appSupport, "files", "pip");
+  mkdirSync(own, { recursive: true });
+  const shot = join(own, "botkins-a2ui-desktop.png");
+  const interimShot = join(own, "interim preview.png");
+  const relativeShot = join(own, "chart with space.png");
+  writeFileSync(shot, "png");
+  writeFileSync(interimShot, "png");
+  writeFileSync(relativeShot, "png");
+
+  let releaseTool;
+  const toolStarted = new Promise((resolve) => { releaseTool = resolve; });
+  let finishTool;
+  const waitTool = new Promise((resolve) => { finishTool = resolve; });
+
+  const fake = fakeClient(async (_id, _message, sdk) => {
+    const interimText = `Interim update:\nMEDIA: ${interimShot}`;
+    sdk.emit({ type: "assistant.message_delta", data: { messageId: "m1", deltaContent: interimText } });
+    sdk.emit({ type: "tool.execution_start", data: { toolCallId: "t1", toolName: "write", arguments: { file_path: shot } } });
+    releaseTool();
+    await waitTool;
+    sdk.emit({ type: "tool.execution_complete", data: { toolCallId: "t1", success: true } });
+    return {
+      data: {
+        content: [
+          "Here are the files (not social media: " + shot + ").",
+          `MEDIA: ${shot}`,
+          `MEDIA: chart with space.png`,
+        ].join("\n"),
+      },
+    };
+  });
+
+  const ws = new Workspace(appSupport, fake.client, () => {});
+  const chatId = ws.createChat("pip");
+  const turn = ws.send(chatId, "Take a screenshot");
+  await toolStarted;
+
+  // Interim message (index 1) resolves the macOS-style path with spaces while Working.
+  assert.deepEqual(
+    ws.artifacts.resolve({ chatId, paths: [interimShot] }).items.map((item) => item?.name ?? null),
+    ["interim preview.png"],
+  );
+  const interimRow = ws.artifacts.rows.find((r) => r.source === "media" && r.name === "interim preview.png");
+  assert.equal(interimRow?.messageIndex, 1, "interim MEDIA: row points at the interim assistant message");
+
+  finishTool();
+  await turn;
+
+  const chat = ws.chat(chatId);
+  assert.equal(chat.messages.length, 3);
+  assert.equal(chat.messages[0].role, "user");
+  assert.equal(chat.messages[1].role, "assistant");
+  assert.equal(chat.messages[1].interim, true);
+  assert.equal(chat.messages[2].role, "assistant");
+  assert.ok(chat.messages[2].text.includes("MEDIA: " + relativeShot), "relative path with spaces normalized: " + chat.messages[2].text);
+  assert.ok(chat.messages[2].text.includes("not social media: " + shot), "prose 'social media:' left intact");
+
+  const resolved = ws.artifacts.resolve({ chatId, paths: [shot, interimShot, relativeShot] }).items;
+  assert.deepEqual(resolved.map((item) => item?.name ?? null), ["botkins-a2ui-desktop.png", "interim preview.png", "chart with space.png"]);
+
+  const finalMediaRow = ws.artifacts.rows.find((r) => r.source === "media" && r.name === "botkins-a2ui-desktop.png");
+  assert.equal(finalMediaRow?.messageIndex, 2, "final MEDIA: row points at the assistant message, not the user message");
+  const toolRow = ws.artifacts.rows.find((r) => r.source === "tool" && r.name === "botkins-a2ui-desktop.png");
+  assert.equal(toolRow?.messageIndex, 0, "tool write provenance stays on the user message that triggered the run");
 });
 
 test("interim assistant messages record and normalize MEDIA: both during and after a Working run without breaking finishReply or security rules", async (t) => {

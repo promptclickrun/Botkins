@@ -316,6 +316,7 @@ export function protectedRunIds(ws) {
 
 /**
  * Computes workspace storage statistics without mutating state.
+ * Works with both SQLite (`workspace.db` + WAL) and legacy JSON (`workspace.json`) stores.
  */
 export function computeWorkspaceStats(ws) {
   const runs = Array.isArray(ws.state?.runs) ? ws.state.runs : [];
@@ -324,13 +325,31 @@ export function computeWorkspaceStats(ws) {
   if (ws.file) {
     try {
       bytes = statSync(ws.file).size;
+      if (ws.sqlite) {
+        try { bytes += statSync(ws.file + "-wal").size; } catch {}
+      }
     } catch {
       bytes = Buffer.byteLength(JSON.stringify(ws.state ?? {}));
     }
   } else {
     bytes = Buffer.byteLength(JSON.stringify(ws.state ?? {}));
   }
-  const runsBytes = Buffer.byteLength(JSON.stringify(runs));
+  let runsBytes = 0;
+  if (ws.sqlite && !ws.sqlite.closed) {
+    try {
+      const row = ws.sqlite.db
+        .prepare("SELECT COALESCE(SUM(LENGTH(CAST(data AS BLOB))), 0) AS r FROM runs")
+        .get();
+      const srow = ws.sqlite.db
+        .prepare("SELECT COALESCE(SUM(LENGTH(CAST(data AS BLOB)) + COALESCE(LENGTH(CAST(input AS BLOB)), 0) + COALESCE(LENGTH(CAST(output AS BLOB)), 0)), 0) AS s FROM run_steps")
+        .get();
+      runsBytes = Number(row?.r ?? 0) + Number(srow?.s ?? 0);
+    } catch {
+      runsBytes = Buffer.byteLength(JSON.stringify(runs));
+    }
+  } else {
+    runsBytes = Buffer.byteLength(JSON.stringify(runs));
+  }
   let oldestRunAt = null;
   let newestRunAt = null;
   let trimmedRuns = 0;
@@ -340,7 +359,7 @@ export function computeWorkspaceStats(ws) {
       if (oldestRunAt === null || ts < oldestRunAt) oldestRunAt = ts;
       if (newestRunAt === null || ts > newestRunAt) newestRunAt = ts;
     }
-    if (Array.isArray(run?.steps) && run.steps.length > 0 && !run.steps.some(stepHasHeavyPayload)) {
+    if (Array.isArray(run?.steps) && run.steps.length > 0 && !run.steps.some((step) => step?.more === true || stepHasHeavyPayload(step))) {
       trimmedRuns++;
     }
   }
@@ -396,12 +415,31 @@ export function runWorkspacePrune(ws, rawOptions = {}, { now = Date.now() } = {}
     .sort((a, b) => (b.ts !== a.ts ? b.ts - a.ts : a.index - b.index));
   const newestKeptIds = new Set(ranked.slice(0, keepRuns).map((entry) => entry.id));
 
-  // Measure beforeBytes accurately against the serialized workspace (or file size).
+  // Hydrate a run's lazy SQLite steps when needed so dry-run sizing and archives see the full payloads.
+  const hydrateForPrune = (run) => {
+    if (!ws.sqlite || ws.sqlite.closed || !Array.isArray(run?.steps)) return run;
+    if (!run.steps.some((step) => step?.more === true)) return run;
+    const steps = run.steps.map((step) => {
+      if (!step?.more) return step;
+      const payload = ws.sqlite.readStepPayload(run.id, step.id);
+      const copy = { ...step };
+      delete copy.more;
+      if (payload?.input !== undefined && copy.input === undefined) copy.input = payload.input;
+      if (payload?.output !== undefined && copy.output === undefined) copy.output = payload.output;
+      return copy;
+    });
+    return { ...run, steps };
+  };
+
+  // Measure beforeBytes accurately against the workspace file on disk (plus WAL for SQLite).
   const beforeJson = JSON.stringify(ws.state);
   let beforeBytes = Buffer.byteLength(beforeJson);
   if (ws.file) {
     try {
       beforeBytes = statSync(ws.file).size;
+      if (ws.sqlite) {
+        try { beforeBytes += statSync(ws.file + "-wal").size; } catch {}
+      }
     } catch {
       // Fall back to serialized byte length.
     }
@@ -409,8 +447,11 @@ export function runWorkspacePrune(ws, rawOptions = {}, { now = Date.now() } = {}
 
   const nextRuns = [];
   const archived = [];
+  const trimRunIds = [];
+  const deleteRunIds = [];
   let trimmedCount = 0;
   let deletedCount = 0;
+  let removedBytes = 0;
 
   for (const run of runs) {
     const id = run?.id;
@@ -426,14 +467,19 @@ export function runWorkspacePrune(ws, rawOptions = {}, { now = Date.now() } = {}
       continue;
     }
 
+    const fullRun = hydrateForPrune(run);
     if (mode === "delete") {
-      archived.push(run);
+      archived.push(fullRun);
+      deleteRunIds.push(id);
+      removedBytes += Buffer.byteLength(JSON.stringify(fullRun));
       deletedCount++;
     } else {
-      const result = trimRun(run);
+      const result = trimRun(fullRun);
       if (result) {
         nextRuns.push(result.trimmed);
         archived.push(result.removed);
+        trimRunIds.push(id);
+        removedBytes += Math.max(0, Buffer.byteLength(JSON.stringify(fullRun)) - Buffer.byteLength(JSON.stringify(result.trimmed)));
         trimmedCount++;
       } else {
         nextRuns.push(run);
@@ -446,11 +492,7 @@ export function runWorkspacePrune(ws, rawOptions = {}, { now = Date.now() } = {}
   const archiveDir = ws.dir ? join(ws.dir, "archive") : null;
   const plannedArchivePath = affected > 0 && archiveDir ? join(archiveDir, `workspace-runs-${stamp}.json.gz`) : null;
 
-  // Estimate afterBytes by comparing serialized runs delta to beforeBytes (keeps file-overhead parity).
-  const runsBeforeBytes = Buffer.byteLength(JSON.stringify(runs));
-  const runsAfterBytes = Buffer.byteLength(JSON.stringify(nextRuns));
-  const deltaBytes = Math.max(0, runsBeforeBytes - runsAfterBytes);
-  let afterBytes = Math.max(0, beforeBytes - deltaBytes);
+  let afterBytes = Math.max(0, beforeBytes - removedBytes);
 
   if (dryRun || affected === 0) {
     return {
@@ -486,13 +528,28 @@ export function runWorkspacePrune(ws, rawOptions = {}, { now = Date.now() } = {}
     writeFileSync(archivePath, gzipSync(Buffer.from(payload, "utf8")), { mode: 0o600 });
   }
 
-  // Apply in one mutation and one save.
+  // Apply in one mutation and one save (coordinating with SQLite step blobs + VACUUM when on SQLite).
   ws.state.runs = nextRuns;
+  if (ws.sqlite && !ws.sqlite.closed) {
+    ws.sqlite.pruneRunsSql({ trimRunIds, deleteRunIds });
+  }
   ws.save();
+  if (ws.sqlite && !ws.sqlite.closed) {
+    try {
+      ws.sqlite.db.exec("PRAGMA wal_checkpoint(TRUNCATE);");
+      ws.sqlite.db.exec("VACUUM;");
+    } catch {
+      // Best-effort compaction; freed pages remain reusable even if VACUUM is skipped.
+    }
+  }
 
   if (ws.file) {
     try {
-      afterBytes = statSync(ws.file).size;
+      let measured = statSync(ws.file).size;
+      if (ws.sqlite) {
+        try { measured += statSync(ws.file + "-wal").size; } catch {}
+      }
+      afterBytes = measured;
     } catch {
       // Keep estimate if file stat is unavailable.
     }

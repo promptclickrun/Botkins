@@ -45,6 +45,7 @@ import { Vault } from "./vault.mjs";
 import { Frames } from "./frames.mjs";
 import { ClaudeArtifacts } from "./claude-artifacts.mjs";
 import { Workflows } from "./workflows.mjs";
+import { GithubAgentManager } from "./github-agent.mjs";
 import { ChannelManager } from "./channels/index.mjs";
 import { effectiveChannelApproval } from "./channels/security.mjs";
 import { registerBuiltInAdapters } from "./channels/adapters/index.mjs";
@@ -117,11 +118,13 @@ import { Templates } from "./templates.mjs";
 import { currentBotBundle, templateBundle } from "./link/template-bundle.mjs";
 import { readWorkspace, WorkspaceWriter } from "./workspace-file.mjs";
 import { computeWorkspaceStats, runWorkspacePrune, workspacePruneField } from "./workspace-prune.mjs";
+import { migrateWorkspaceFile, SqliteWorkspaceStore, WORKSPACE_DB_FILENAME } from "./workspace-sqlite.mjs";
 import { Access } from "./access.mjs";
 import { SessionSearch } from "./session-search.mjs";
 import { HowToBotkins } from "./how-to-botkins.mjs";
 import { memberCanSpaces, narrower, personName, speakerContext, speakerPrompt, turnAccess } from "./team-turn.mjs";
 import { Spaces } from "./spaces.mjs";
+import { a2uiTools, attachRunA2uiSurfaces, handleChatA2uiAction, handleChatA2uiFunction } from "./a2ui-host.mjs";
 
 // This identifier only correlates a local bubble with its echo. The host still owns every queue and run ID.
 const clientMessageTag = id => typeof id === "string" && /^[A-Za-z0-9_-]{1,80}$/.test(id) ? { clientMessageId: id } : {};
@@ -227,9 +230,46 @@ export class Workspace {
     this.spaceEventOf = options?.spaceEvent ?? null;
     // The port a sign-in's answer comes back on. Tests pass 0 for any free port.
     this.oauthPort = options?.oauthPort;
-    this.file = join(dir, "workspace.json");
-    this.writer = new WorkspaceWriter(this.file);
     this.dir = dir;
+    this.dbFile = join(dir, WORKSPACE_DB_FILENAME);
+    this.jsonFile = join(dir, "workspace.json");
+    // Storage backend: SQLite (`workspace.db`, WAL mode) by default, migrating any existing
+    // `workspace.json` atomically on first open. Falls back to JSON if migration or DB open fails,
+    // or when explicitly requested via `options.storage === "json"`.
+    const requestedBackend = options?.storage ?? process.env.BOTKINS_WORKSPACE_STORAGE;
+    const hadDb = existsSync(this.dbFile);
+    const hadJson = existsSync(this.jsonFile);
+    const isNew = !hadDb && !hadJson;
+    let useSqlite = requestedBackend !== "json";
+    if (useSqlite && !hadDb && hadJson) {
+      try {
+        migrateWorkspaceFile(dir);
+      } catch (error) {
+        console.error("[workspace] SQLite migration failed; falling back to workspace.json:", error?.stack ?? error);
+        useSqlite = false;
+      }
+    }
+    this.storage = useSqlite ? "sqlite" : "json";
+    if (useSqlite) {
+      try {
+        this.sqlite = new SqliteWorkspaceStore(dir, { lazySteps: options?.lazySteps !== false });
+        this.writer = this.sqlite;
+        this.file = this.dbFile;
+      } catch (error) {
+        // After a migration workspace.json is gone (renamed to .migrated-<ts>). Starting from that
+        // old copy, or from nothing, would hide or lose everything since: stop and say why.
+        if (!hadJson) throw new Error(`The workspace database ${this.dbFile} could not be opened: ${error?.message ?? error}`);
+        console.error("[workspace] SQLite open failed; falling back to workspace.json:", error?.stack ?? error);
+        this.storage = "json";
+        this.sqlite = null;
+        this.file = this.jsonFile;
+        this.writer = new WorkspaceWriter(this.jsonFile);
+      }
+    } else {
+      this.sqlite = null;
+      this.file = this.jsonFile;
+      this.writer = new WorkspaceWriter(this.jsonFile);
+    }
     this.providers =
       providers instanceof Providers ? providers : new Providers([new CopilotProvider({ connect: providers })]);
     // What runs a turn around the model: the Copilot runtime for every plan it can serve, or each
@@ -259,12 +299,13 @@ export class Workspace {
     // One session per bot answers "/" menus and side questions before a chat has a conversation.
     this.menus = new Map();
     this.panels = new Panels(this);
-    const isNew = !existsSync(this.file);
     this.state = isNew
       ? // A new workspace has no bots: the first-run screen offers the person's existing agents
         // (desktop/agents.mjs importable) or the Create a bot form.
         { bots: [], chats: [], runs: [] }
-      : readWorkspace(this.file);
+      : this.sqlite
+        ? this.sqlite.load()
+        : readWorkspace(this.jsonFile);
     this.hostDispatch = new HostDispatch(this, this.state.hostDispatch);
     delete this.state.hostDispatch;
     this.nodeHost = new NodeHost(this, this.state.nodeHost);
@@ -441,6 +482,7 @@ export class Workspace {
     }
     this.tasks = new Tasks(this);
     this.workflows = new Workflows(this, options?.workflows);
+    this.githubAgent = new GithubAgentManager(this, options?.githubAgent);
     this.channels = new ChannelManager({
       workspace: this,
       vault: this.vault,
@@ -496,9 +538,39 @@ export class Workspace {
       });
     }
   }
-  /** Fold a pending or published checkpoint back into the full file on orderly shutdown. */
+  /** Fold a pending or published checkpoint back into the store on orderly shutdown. */
   flushSave() {
     if (this.saveTimer || this.writer.written.size) this.save();
+  }
+  /** Flush any pending save and close the underlying SQLite handle cleanly. */
+  close() {
+    this.flushSave();
+    this.sqlite?.close();
+  }
+  /**
+   * Read full `input` and `output` for one step (hydrating from SQLite when loaded lazily).
+   * Returns `{ input?, output? }` or `null` when the run/step does not exist.
+   */
+  stepDetail(chatId, runId, stepId, { maxChars = 4000 } = {}) {
+    const run = this.state.runs.find((r) => r.id === runId && r.chatId === chatId);
+    if (!run) return null;
+    const all = [...(run.steps ?? []), ...(run.teamwork ?? []).flatMap((ask) => ask.steps ?? [])];
+    const step = all.find((s) => s.id === stepId);
+    if (!step) return null;
+    let input = step.input;
+    let output = step.output;
+    if (this.sqlite && (input === undefined || output === undefined || step.more)) {
+      const stored = this.sqlite.readStepPayload(runId, stepId);
+      if (stored) {
+        if (input === undefined && stored.input !== undefined) input = stored.input;
+        if (output === undefined && stored.output !== undefined) output = stored.output;
+      }
+    }
+    const clipText = (text) => (maxChars && typeof text === "string" && text.length > maxChars ? text.slice(0, maxChars - 1) + "…" : text);
+    return {
+      ...(input && { input: clipText(input) }),
+      ...(output && { output: clipText(output) }),
+    };
   }
   save(announce = true) {
     if (this.batchingSave) return;
@@ -1496,6 +1568,20 @@ export class Workspace {
     };
   }
   /**
+   * Handles a user action from an A2UI v1.0 surface stored on a chat message (built-in dispatch/dismiss,
+   * workflow resume/trigger, or follow-up turn to the owning bot). Idempotent per (surfaceId, actionId).
+   */
+  chatA2uiAction(chatId, payload, actor = "owner") {
+    return handleChatA2uiAction(this, chatId, payload, actor);
+  }
+  /**
+   * Handles bidirectional A2UI v1.0 function RPC (`callAgentFunction` and `rendererFunctionResponse`)
+   * with correlation IDs, schema validation, timeouts, trigger ACL, and idempotency.
+   */
+  chatA2uiFunction(chatId, payload, actor = "owner") {
+    return handleChatA2uiFunction(this, chatId, payload, actor);
+  }
+  /**
    * Makes a new chat for the same bot holding the conversation up to `messageIndex`.
    * Uses Copilot's native session fork when the boundary maps to a session event,
    * otherwise carries the transcript in the new session's system message.
@@ -1699,6 +1785,7 @@ export class Workspace {
       ...this.secureInputs.tools(bot, chat, run, task),
       ...updateTools(this.updates, chat, run, task, () => this.active.get(chat.id)),
       ...this.panels.tools(bot, chat, run, task),
+      ...a2uiTools(this, bot, chat, run, task),
       ...this.panels.routines.tools(bot, chat, run, task),
       ...this.workflows.tools(bot, chat, run, task),
       ...records,
@@ -3135,11 +3222,12 @@ export class Workspace {
         );
         if (task.stopped || this.closing) return;
         const empty = typeof text !== "string" || !text.trim();
+        const hasUi = Boolean(run.cards?.length || run.a2uiSurfaces?.length);
         if (isSilent(text || task.stream)) {
           run.noOutput = true;
           run.silent = true;
           noOutput = true;
-        } else if (empty && !run.cards?.length && (routine || run.reaction)) {
+        } else if (empty && !hasUi && (routine || run.reaction)) {
           run.noOutput = true;
           noOutput = true;
         }
@@ -3152,7 +3240,7 @@ export class Workspace {
           run.revealed = true;
           delete run.notify;
         }
-        if (empty && !run.cards?.length && !botSteps(run.steps).length && !task.stream?.trim() && !routine && !run.reaction && task.reactedBy !== bot.id)
+        if (empty && !hasUi && !botSteps(run.steps).length && !task.stream?.trim() && !routine && !run.reaction && task.reactedBy !== bot.id)
           throw new Error(bot.name + " finished without a reply.");
         const said = text || task.stream;
         if (!noOutput) this.commitAssistantReply(chat, run, task, said, bot);
@@ -3489,6 +3577,7 @@ export class Workspace {
     const beforeLast = chat.messages.at(-1);
     const wasInterim = !!beforeLast?.interim;
     finishReply(chat, run, task, safeFinal);
+    attachRunA2uiSurfaces(chat, run, task?.speaker || bot?.id);
     if (chat?.channel) {
       const committedMsg = chat.messages.at(-1);
       if (committedMsg?.role === "assistant" && typeof committedMsg.text === "string") {
@@ -3536,7 +3625,7 @@ export function deliveryGuidance(folder, ownerChat = true) {
     (ownerChat
       ? "Pictures, audio and video show from anywhere on this computer; other files only from your folders (that one or the chat's project folder), an upload, or a file you wrote."
       : "Files show only from your folders (that one or the chat's project folder), an upload, or a file you wrote.") +
-    "\nFor a view rather than a file: render_card for an inline card, side_pane_show for a panel beside the chat (HTML or a table), show_app for an interactive app in its own window, today_publish for a panel kept on Today or a space, claude_artifact for a private claude.ai page the person can share. side_pane_show kind \"screen\" offers a live view of browser or desktop work worth watching, not of code, shell commands or fetches."
+    "\nFor a view rather than a file: render_card for an inline card, render_ui for an interactive A2UI v1.0 surface in the chat (forms, inputs, buttons that return structured actions back to you, tabs, live data-bound updates), side_pane_show for a panel beside the chat (HTML or a table), show_app for an interactive app in its own window, today_publish for a panel kept on Today or a space, claude_artifact for a private claude.ai page the person can share. side_pane_show kind \"screen\" offers a live view of browser or desktop work worth watching, not of code, shell commands or fetches."
   );
 }
 /**

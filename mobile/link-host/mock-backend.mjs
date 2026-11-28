@@ -2977,6 +2977,61 @@ export class MockBackend {
       this.emit?.();
       return { ok: true, state: "dispatched", chatId: newChatId, botId: bot.id, botName: bot.name, alreadyDispatched: false, card: next };
     },
+    "chat.a2uiAction"(chatId, payload) {
+      const chat = this.chat(chatId);
+      let surface = null;
+      let ownerMessage = null;
+      for (const msg of chat.messages) {
+        const hit = msg.a2uiSurfaces?.find((s) => s.surfaceId === payload?.surfaceId);
+        if (hit) {
+          surface = hit;
+          ownerMessage = msg;
+          break;
+        }
+      }
+      if (!surface || !ownerMessage) throw new Error("A2UI surface not found in this chat.");
+      const actionId = payload.actionId || `${payload.surfaceId}:${payload.sourceComponentId}:${payload.name}`;
+      const acted = surface.acted || {};
+      if (Object.hasOwn(acted, actionId)) {
+        return { ok: true, idempotent: true, actionId, surface, ...acted[actionId] };
+      }
+      const next = {
+        ...surface,
+        ...(payload.dataModel ? { dataModel: payload.dataModel } : {}),
+        acted: { ...acted, [actionId]: { route: "bot", actionName: payload.name, actedAt: Date.now() } },
+        updatedAt: Date.now(),
+      };
+      ownerMessage.a2uiSurfaces = ownerMessage.a2uiSurfaces.map((s) => (s.surfaceId === surface.surfaceId ? next : s));
+      this.emit?.();
+      return { ok: true, idempotent: false, actionId, route: "bot", chatId, actionName: payload.name, surface: next };
+    },
+    "chat.a2uiFunction"(chatId, payload) {
+      const chat = this.chat(chatId);
+      const callId = payload?.functionCallId || payload?.response?.functionCallId || "fn-mock";
+      if (payload?.kind === "rendererFunctionResponse") {
+        return { ok: true, idempotent: false, kind: "rendererFunctionResponse", functionCallId: callId, envelope: { version: "1.0", rendererFunctionResponse: payload.response } };
+      }
+      let surface = null;
+      let ownerMessage = null;
+      for (const msg of chat.messages) {
+        const hit = msg.a2uiSurfaces?.find((s) => s.surfaceId === payload?.surfaceId);
+        if (hit) {
+          surface = hit;
+          ownerMessage = msg;
+          break;
+        }
+      }
+      if (!surface || !ownerMessage) throw new Error("A2UI surface not found in this chat.");
+      const envelope = { version: "1.0", agentFunctionResponse: { functionCallId: callId, value: { ok: true, echo: payload?.callFunction?.args ?? {} } } };
+      const next = {
+        ...surface,
+        functionResults: { ...(surface.functionResults || {}), [callId]: { ...envelope.agentFunctionResponse, status: "resolved", updatedAt: Date.now() } },
+        updatedAt: Date.now(),
+      };
+      ownerMessage.a2uiSurfaces = ownerMessage.a2uiSurfaces.map((s) => (s.surfaceId === surface.surfaceId ? next : s));
+      this.emit?.();
+      return { ok: true, idempotent: false, kind: "callAgentFunction", route: "bot", functionCallId: callId, status: "resolved", envelope };
+    },
     forkChat(chatId, messageIndex) {
       const from = this.chat(chatId);
       if (from.botIds) throw new Error("A group chat can't be forked.");
@@ -4373,6 +4428,75 @@ export class MockBackend {
         rows.push([new Date(time).toISOString(), new Date(time).toISOString().slice(0, 10), this.state.bots.find((bot) => bot.id === chat.botId)?.name ?? "", chat.id, chat.title, "Done", "message", "Claude Fable 5.2", 80_000 + index * 900, 6000 + index * 70, 30_000, (0.4 + index * 0.03).toFixed(2), 42_000 + index * 800, "claude"]);
       });
       return { name: "botkins-usage-" + days + "d.csv", text: rows.map((row) => row.map(cell).join(",")).join("\n") + "\n" };
+    },
+    // GitHub App ("Botkins Agent") settings (strictly owner-only).
+    githubAgentStatus() {
+      this._githubAgent ??= {
+        appSlug: "botkins-agent",
+        mentionHandle: "@botkins-agent",
+        relayConnected: true,
+        eventsOn: true,
+        installations: [
+          {
+            installationId: 5896932,
+            accountLogin: "acme",
+            accountType: "Organization",
+            installerLogin: "octocat",
+            repositorySelection: "selected",
+            repos: ["acme/app"],
+            suspended: false,
+            updatedAt: now(),
+            manageUrl: "https://github.com/settings/installations/5896932",
+          },
+        ],
+        repos: [
+          {
+            fullName: "acme/app",
+            installationId: 5896932,
+            accountLogin: "acme",
+            answerMentions: true,
+            defaultBotId: this.state.bots[0]?.id ?? null,
+            allowlist: [],
+          },
+        ],
+        lastDelivery: null,
+        manageAppUrl: "https://github.com/apps/botkins-agent",
+      };
+      return structuredClone(this._githubAgent);
+    },
+    githubAgentInstallUrl() {
+      return {
+        url: "https://github.com/apps/botkins-agent/installations/new?state=demo",
+        expiresAt: now() + 600_000,
+        appSlug: "botkins-agent",
+      };
+    },
+    githubAgentRefresh() {
+      return this.githubAgentStatus();
+    },
+    githubAgentSetRepo(repo, patch = {}) {
+      const status = this.githubAgentStatus();
+      const lower = String(repo || "").toLowerCase();
+      let entry = this._githubAgent.repos.find((r) => r.fullName === lower);
+      if (!entry) {
+        entry = { fullName: lower, installationId: 5896932, accountLogin: lower.split("/")[0] || "", answerMentions: false, defaultBotId: null, allowlist: [] };
+        this._githubAgent.repos.push(entry);
+      }
+      if (patch.answerMentions !== undefined) entry.answerMentions = patch.answerMentions === true;
+      if (patch.defaultBotId !== undefined) entry.defaultBotId = patch.defaultBotId || null;
+      if (patch.allowlist !== undefined) {
+        entry.allowlist = Array.isArray(patch.allowlist)
+          ? patch.allowlist.map((u) => String(u).trim().replace(/^@+/, "").toLowerCase()).filter(Boolean)
+          : String(patch.allowlist || "").split(/[\s,]+/).map((u) => u.trim().replace(/^@+/, "").toLowerCase()).filter(Boolean);
+      }
+      this._githubAgent.eventsOn = this._githubAgent.repos.some((r) => r.answerMentions);
+      return structuredClone(this._githubAgent);
+    },
+    githubAgentUnbind(installationId) {
+      this.githubAgentStatus();
+      this._githubAgent.installations = this._githubAgent.installations.filter((i) => i.installationId !== Number(installationId));
+      this._githubAgent.repos = this._githubAgent.repos.filter((r) => r.installationId !== Number(installationId));
+      return structuredClone(this._githubAgent);
     },
     // External messaging Channel Hooks ("channels-v1", strictly owner-only).
     channelsList() {

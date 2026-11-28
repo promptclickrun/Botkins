@@ -43,6 +43,12 @@ import type {
 } from "./types";
 import type { NodeFieldAnalysis } from "./workflowAnalysis";
 import { parseTemplateTokens } from "./workflowAnalysis";
+import {
+  extractConfiguredRepos,
+  isGithubUncertainStep,
+  WORKFLOW_GITHUB_ACTION_OPTIONS,
+  workflowStepStatusLabel,
+} from "./workflowGithub";
 
 const NODE_W = 248;
 const NODE_H_DEFAULT = 116;
@@ -170,8 +176,16 @@ function nodePreview(node: WorkflowNode, bots: Bot[], analysis?: NodeFieldAnalys
         return <span className="wf-node-preview-text">{cfg.mentionOnly ? "When mentioned in chat" : "On chat message"}{cfg.textContains ? ` containing “${cfg.textContains}”` : ""}</span>;
       case "webhook":
         return <span className="wf-node-preview-text">POST /webhooks/{(cfg.routeId || "…").slice(0, 10)}</span>;
-      case "github":
-        return <span className="wf-node-preview-text">{cfg.repo || "Configure owner/repo"}</span>;
+      case "github": {
+        const repos = extractConfiguredRepos(cfg);
+        const text =
+          repos.length === 0
+            ? "Configure repositories"
+            : repos.length === 1
+              ? repos[0]
+              : `${repos[0]} +${repos.length - 1} more`;
+        return <span className="wf-node-preview-text">{text}</span>;
+      }
       case "channel":
         return (
           <span className="wf-node-preview-text">
@@ -207,12 +221,23 @@ function nodePreview(node: WorkflowNode, bots: Bot[], analysis?: NodeFieldAnalys
     return <PreviewWithChips text={cfg.message || "Ask person to approve before continuing"} analysis={analysis} />;
   }
   if (node.kind === "output") {
+    if (cfg.destination === "github") {
+      const actionOpt = WORKFLOW_GITHUB_ACTION_OPTIONS.find((a) => a.value === (cfg.action || "comment"));
+      const targetRepo = cfg.sameRepository === false && cfg.repository ? cfg.repository : "trigger repo";
+      return (
+        <>
+          <span className="wf-pill">GitHub · {actionOpt?.label || cfg.action || "Post comment"}</span>
+          <PreviewWithChips text={cfg.body || cfg.template || targetRepo} analysis={analysis} />
+        </>
+      );
+    }
     const destLabel: Record<string, string> = {
       chat: "Post to chat",
       feed: "Today Feed",
       idea: "Today Ideas",
       goal: "Today Goals",
       notification: "Notification",
+      github: "GitHub",
     };
     return (
       <>
@@ -592,22 +617,24 @@ export function WorkflowCanvas({
                 <div className="wf-node-body">{nodePreview(node, bots, nodeAnalysis)}</div>
 
                 {/* Live step status footer */}
-                {stepRun && (
-                  <div className={`wf-node-status wf-status-${stepRun.status}`}>
-                    {stepRun.status === "running" && <LoaderCircle size={12} className="wf-spin" />}
-                    {stepRun.status === "completed" && <CheckCircle2 size={12} />}
-                    {stepRun.status === "failed" && <XCircle size={12} />}
-                    {stepRun.status === "waiting_approval" && <ShieldCheck size={12} />}
-                    <span>
-                      {stepRun.status === "waiting_approval"
-                        ? "Waiting for approval"
-                        : stepRun.status === "completed" && stepRun.branch
+                {stepRun && (() => {
+                  const isUncertain = isGithubUncertainStep(stepRun);
+                  return (
+                    <div className={`wf-node-status wf-status-${isUncertain ? "github_uncertain" : stepRun.status}`}>
+                      {stepRun.status === "running" && <LoaderCircle size={12} className="wf-spin" />}
+                      {stepRun.status === "completed" && <CheckCircle2 size={12} />}
+                      {isUncertain && <AlertTriangle size={12} />}
+                      {stepRun.status === "failed" && !isUncertain && <XCircle size={12} />}
+                      {stepRun.status === "waiting_approval" && <ShieldCheck size={12} />}
+                      <span>
+                        {stepRun.status === "completed" && stepRun.branch
                           ? `Done · ${stepRun.branch}`
-                          : stepRun.status}
-                    </span>
-                    {duration && <span className="wf-node-timer">{duration}</span>}
-                  </div>
-                )}
+                          : workflowStepStatusLabel(stepRun, activeRun)}
+                      </span>
+                      {duration && <span className="wf-node-timer">{duration}</span>}
+                    </div>
+                  );
+                })()}
 
                 {/* Output port(s) */}
                 {ports.map((port) => (

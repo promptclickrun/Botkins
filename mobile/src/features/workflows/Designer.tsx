@@ -11,7 +11,7 @@ import { Alert, Modal, Platform, ScrollView, Switch, useWindowDimensions, View }
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { openChat } from "@/features/chat/navigate";
 import type { Workflow, WorkflowNode, WorkflowTriggerKind } from "@/link/types";
-import { useBots, useCan, useWorkflowRuns, useWorkflows } from "@/state/hooks";
+import { useBots, useCan, useMember, useWorkflowRuns, useWorkflows } from "@/state/hooks";
 import { api, attempt } from "@/state/link";
 import { usePrefs } from "@/state/prefs";
 import { BackdropLayer, Button, EmptyState, Group, haptic, IconButton, Label, Loading, radius, Row, Segmented, Sheet, space, switchColors, T, Tap, tint, useShape, useTheme, useTextPrompt } from "@/ui";
@@ -91,6 +91,7 @@ function Designer({ id }: { id: string }) {
   const canCreate = useCan("today", "create");
   const canDelete = useCan("today", "delete");
   const canUse = useCan("today", "use");
+  const isOwner = !useMember();
   const shape = useShape();
   const { width, height } = useWindowDimensions();
   const landscape = width > height;
@@ -162,7 +163,7 @@ function Designer({ id }: { id: string }) {
     const out: { nodeId: string; text: string }[] = [];
     for (const n of draft.nodes) {
       for (const p of analysis[n.id]?.problems ?? []) out.push({ nodeId: n.id, text: `${n.label}: ${p.message}` });
-      if (n.kind === "output" && !String(n.config?.template ?? "").trim()) out.push({ nodeId: n.id, text: `${n.label}: the message is empty, so the run fails here.` });
+      if (n.kind === "output" && n.config?.destination !== "github" && !n.config?.card && !n.config?.a2ui && !String(n.config?.template ?? "").trim()) out.push({ nodeId: n.id, text: `${n.label}: the message is empty, so the run fails here.` });
       if (n.kind === "agent" && !n.config?.botId && !n.config?.botName) out.push({ nodeId: n.id, text: `${n.label}: choose a bot.` });
       if (n.kind === "agent" && !String(n.config?.prompt ?? "").trim()) out.push({ nodeId: n.id, text: `${n.label}: write a prompt.` });
     }
@@ -330,7 +331,7 @@ function Designer({ id }: { id: string }) {
       <Stack.Screen options={{ headerRight }} />
       {toolbar}
       {tab === "runs" ? (
-        <RunsView workflow={workflow} runs={runs} nodes={draft.nodes} canUse={canUse} />
+        <RunsView workflow={workflow} runs={runs} nodes={draft.nodes} canUse={canUse} isOwner={isOwner} />
       ) : view === "canvas" ? (
         <Canvas
           graph={draft}
@@ -371,12 +372,20 @@ function Designer({ id }: { id: string }) {
       )}
       {footer}
       <StepSheet
+        workflowId={workflow.id}
+        triggerNodes={triggers}
+        runs={runs}
+        isOwner={isOwner}
         node={editingNode}
         analysis={editingNode ? analysis[editingNode.id] : undefined}
         canRemove={!!editingNode && editable && canRemove(draft, editingNode.id)}
         onChange={(next: WorkflowNode) => change(updateNode(draft, next.id, next))}
         onRemove={() => editing && change(removeStep(draft, editing))}
         onClose={() => setEditing(null)}
+        onReplayed={() => {
+          setEditing(null);
+          setTab("runs");
+        }}
       />
       <AddSheet adding={adding} onStep={add} onTrigger={addTriggerOf} onClose={() => setAdding(null)} />
       {prompt.node}

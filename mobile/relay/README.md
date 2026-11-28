@@ -246,6 +246,47 @@ A signed request can be sent again by anyone who sees it inside the TLS connecti
 
 Not verified on this machine: a real call to Apple. Apple's servers need HTTP/2 (the fake one speaks HTTP/1.1), and the Cloudflare docs do not say in so many words that Worker `fetch` uses HTTP/2 to an origin. Other projects send APNs pushes from Workers, but that is not checked here. The first real push (to a sandbox build, to one's own device) is the check: an answer of `502 unreachable` for every item means the Worker could not connect. A token or key problem shows as Apple's own `403` with `reason` (`InvalidProviderToken`, `ExpiredProviderToken`, `BadTopic`...).
 
+## GitHub App ("Botkins Agent"): installation binding, webhooks & tokens
+
+The relay integrates with the **Botkins Agent** GitHub App (`botkins-agent`, App ID `5896932`) so any Botkins user can install the App on their repositories, receive real-time events, and reply on GitHub as **Botkins Agent**—without sending personal GitHub tokens through the relay and without co-mingling across users.
+
+### Installation binding (`GET /v1/github/setup`)
+
+1. From **Settings › GitHub** (or `botkins github install`), the host builds a signed 10-minute `state` parameter (`botkins-github-setup-v1:<room>:<nonce>:<exp>` signed with the host's Ed25519 relay key) and opens `https://github.com/apps/<slug>/installations/new?state=<state>`.
+2. GitHub installs the App with **"Request user authorization (OAuth) during installation"** enabled and redirects to `GET /v1/github/setup?installation_id=...&code=...&state=...`.
+3. The relay verifies the `state` signature and expiry, consumes the one-time nonce, exchanges `code` for a one-time user token using `GITHUB_AGENT_CLIENT_ID` / `GITHUB_AGENT_CLIENT_SECRET`, confirms `installation_id` appears in `GET /user/installations` for that user, reads the installation's repository list and installer login, and **immediately discards the user token** (never stored or logged).
+4. The binding (`installation_id` ↔ `room` + repository set) is stored in the `GitHubRouter` Durable Object (or `DATA_DIR/github-bindings.json` on the self-hosted Node relay). `installation` (`deleted` / `suspend` / `unsuspend` / `created`) and `installation_repositories` (`added` / `removed`) webhooks keep bindings and repo sets up to date automatically.
+
+### Webhook ingress (`POST /v1/github/events`), fan-out, and team claim locks
+
+- **Secret:** `GITHUB_WEBHOOK_SECRET` (Worker secret or Node env var). When unset, `POST /v1/github/events` answers `503 {"error":"github_off"}`.
+- **Body cap & signature:** `512 KiB` (`413`), `content-type: application/json` (`415`), constant-time HMAC-SHA256 on `x-hub-signature-256` (`401` on invalid/missing).
+- **Rate limits & dedupe:** Per-IP (`GITHUB_IP`, `namespace_id: 47617`, 120/min) and per `installation.id` (`GITHUB_INSTALL`, `namespace_id: 47618`, 240/min); `x-github-delivery` deduplicated for 10 minutes.
+- **Strict deny-by-default routing:** Deliveries are routed ONLY to rooms bound to `payload.installation.id` AND actively subscribed to `repository.full_name`. Unbound rooms receive zero frames. (Self-hosted relays without GitHub App credentials may opt into legacy user-token repo verification with `GITHUB_ALLOW_USER_TOKEN_AUTH=1`; this is off by default and ignored whenever App credentials are configured.)
+- **Team claim locks:** Multiple rooms bound to the same installation (a team) all receive event frames, and hosts send a signed `github-claim` message over their WebSocket so the relay grants an atomic per-delivery claim lock to exactly one room.
+
+### Single-repository installation tokens (over host WebSocket)
+
+- Over its authenticated WebSocket, a host sends a signed `github-token` request naming one `owner/repo` and minimal permissions (clamped to the App ceiling: `issues`, `pull_requests`, `contents` write; `checks`, `statuses`, `metadata` read).
+- The relay checks that the room is bound to an active installation owning that repository, then mints a short-lived installation token scoped strictly to `repositories: [<repo>]`. Tokens are kept only in memory on the host until near expiry and are never logged.
+
+### Self-hosting with your own GitHub App
+
+Create a GitHub App under your user or organization with:
+- **Webhook URL:** `https://<your-relay>/v1/github/events` (with a random webhook secret).
+- **Setup URL:** `https://<your-relay>/v1/github/setup` (and check **"Redirect on update"**).
+- **Callback URL:** `https://<your-relay>/v1/github/setup` and check **"Request user authorization (OAuth) during installation"**.
+- **Repository permissions:** Issues (Read & write), Pull requests (Read & write), Contents (Read & write), Checks (Read-only), Commit statuses (Read-only), Metadata (Read-only).
+- **Subscribe to events:** `issues`, `issue_comment`, `pull_request`, `pull_request_review`, `pull_request_review_comment`, `check_suite`, `status`, `push`, `installation`, `installation_repositories`.
+
+Set these environment variables on your Cloudflare Worker (`wrangler secret put`) or self-hosted Node relay (`mobile/relay/node/server.mjs`) — do **not** reuse `GITHUB_APP_*` (which belong to Botkins Intake feedback):
+- `GITHUB_AGENT_APP_ID` — numeric GitHub App ID
+- `GITHUB_AGENT_APP_SLUG` — App URL slug (e.g. `botkins-agent` or your own slug)
+- `GITHUB_AGENT_APP_KEY` — PEM PKCS#8 private key for the App
+- `GITHUB_AGENT_CLIENT_ID` — OAuth Client ID of the App
+- `GITHUB_AGENT_CLIENT_SECRET` — OAuth Client Secret of the App
+- `GITHUB_WEBHOOK_SECRET` — Webhook secret for `POST /v1/github/events`
+
 ## Pricing notes
 
 - Hibernated sockets stay open without duration charges. A room with held requests during host recovery can incur duration for the remaining reconnect window (at most 15 seconds at 128 MB). Ordinary request and answer traffic schedules no timer and incurs zero storage reads or writes.

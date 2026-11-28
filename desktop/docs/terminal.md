@@ -430,6 +430,44 @@ botkins models --routines claude/claude-sonnet-5-5 --effort low
 - The log has one line for each change, by the routine's name (`routines.add Morning brief`). It has no prompt. A change to a chat's schedule names the chat.
 - A bot's own routine tool makes none that runs more often than every 15 minutes (and at most 25 for a bot). These commands do not stop such a schedule: `routines add`, `edit` and `duplicate` show a cost line for it (how often it runs, and that each run uses the model and can cost money) and need `--yes` with no terminal, and the socket calls refuse it unless the call carries `{ fastSchedule: true }`, which the commands send after the yes.
 
+### Workflows
+
+An **event-based workflow** runs a graph of triggers, conditions, approvals, agent/model steps, and outputs (`chat`, `feed`, `idea`, `goal`, `notification`, or `github`).
+
+```sh
+botkins workflows list
+botkins workflows add workflow.json
+botkins workflows edit <id> patch.json
+botkins workflows pause <id>
+botkins workflows resume <id>
+botkins workflows run <id>
+botkins workflows retry <runId> [--allow-uncertain]
+botkins workflows approve <runId> approved --note "Looks good"
+botkins workflows cancel <runId>
+botkins workflows export <id>
+botkins workflows import workflow.botkins-workflow.json
+botkins workflows deliveries <id> [--node <nodeId>] [--limit <n>]
+botkins workflows replay <id> [--node <nodeId>]
+```
+
+- **GitHub triggers** accept `repos[]` (migrating legacy single `repo`), 12 canonical events (`issue.opened`, `issue.closed`, `issue.labeled`, `pr.opened`, `pr.updated`, `pr.reviewRequested`, `pr.reviewSubmitted`, `pr.checksFailed`, `pr.merged`, `comment`, `mention`, `assigned`; legacy names are migrated automatically), filters (`labels`, `notBot` on by default, `firstTime`, `titleContains`, `baseBranch`), and expose 24 typed `{{field}}` values (`event`, `repository`, `number`, `pull_request`, `title`, `body`, `url`, `state`, `author`, `sender`, `author_association`, `labels`, `added_label`, `assignees`, `base_branch`, `head_branch`, `head_sha`, `merged`, `review_state`, `review_body`, `comment_body`, `comment_url`, `check_conclusion`, `mention`) with context-aware escaping (`model`, `person`, `lines`). When the relay is enabled, the host subscribes for enabled trigger repos over its authenticated relay WebSocket and receives real-time `github-delivery` webhook frames from `POST /v1/github/events`; local `gh` polling persists cursors to disk for bounded offline/sleep backfill and zero-setup fallback without double-firing. Each trigger keeps a durable delivery ledger (newest 50, never pruning `waiting`), serializes runs per `(workflowId, repository, number)`, enforces a 1-hour same-workflow `self` guard (A→B allowed) and 3-per-10-minute cross-workflow `chain` cap, and supports 1-click **Run last event** replay via desktop/mobile UI or `botkins workflows replay`.
+- **Native GitHub output steps** (`destination: "github"`) run only inside a workflow run and respect unattended workflow gates. They support 10 actions (`comment`, `label.add`, `label.remove`, `assign`, `review.request`, `review.approve`, `review.changes`, `close`, `reopen`, `issue.create`), default to `sameRepository` + `sameItem`, restrict PR-only actions to PRs, validate agent-selected labels/reviewers against the repository catalog, prefer single-repo Botkins Agent installation tokens minted by the relay (falling back to local `gh` CLI only when no installation is bound), strip/refuse raw external-event echoes (`githubEventText`), and write a `sending` ledger record (`${runId}:${nodeId}:${pass}`) before each API call so crash restarts never double-post non-repeatable actions (`githubUncertain`). When a run fails with `githubUncertain`, pass `--allow-uncertain` to `botkins workflows retry <runId>` (owner-only) to clear the `sending` record and retry anyway if you have checked GitHub and want to proceed (retrying could post twice).
+
+### GitHub (`@botkins-agent`)
+
+Connect the **Botkins Agent** GitHub App to this host and answer `@botkins-agent` mentions on issues and pull requests without sending personal GitHub tokens through the relay. Strictly owner-only.
+
+```sh
+botkins github status
+botkins github install
+botkins github refresh
+botkins github repo <owner/repo> --mentions on --bot Glory [--allowlist alice,bob]
+botkins github unbind <installation-id>
+```
+
+- `botkins github install` prints a signed 10-minute GitHub App install URL bound to this host's room key. After you install on GitHub, the relay verifies your installation via one-time OAuth, discards the user token immediately, and binds `installation_id` to this host's room.
+- Turn on `--mentions on` for a repository to answer `@botkins-agent <bot name> ...` (or `@botkins-agent ...` using `--bot`) directly, with no workflow required. By default only the installer and repository collaborators with write permission (plus any `--allowlist` logins) can summon a bot; everyone else is ignored silently and logged in the delivery ledger. Replies acknowledge with 👀 and post as **Botkins Agent** starting with `**<BotName>** · Botkins`.
+
 ### Projects, to-dos, tasks and artifacts
 
 A **project** keeps folders, a to-do list, chats and artifacts together. A **task** is work for a bot on the task board; the board belongs to the whole app, not to a project. An **artifact** is a file that a bot made or showed.
@@ -738,6 +776,25 @@ botkins node disconnect --yes
 - **`botkins node disconnect`** turns off Node Host mode, cancels pending and running jobs, and stops advertising node capabilities. `revoke` and `disconnect` ask at a terminal and require `--yes` without a terminal.
 - All commands support `--json`. State changes leave a line in the log (`node.setup`, `node.rename`, `node.pause`, `node.share`, `node.wholeComputer`, `node.execMode`, `node.allowlist.add`, `node.allowlist.remove`, `node.revoke`, `node.disconnect`).
 
+## Unified multi-host view
+
+When multiple Botkins computers are paired with this host, you can operate bots, chats, pending approvals and runs from all of them together in one view instead of switching hosts one at a time.
+
+```sh
+botkins hosts list
+botkins hosts unified on
+botkins hosts unified off
+botkins hosts include "Studio Mac" off
+botkins hosts include "Studio Mac" on
+botkins hosts focus "Studio Mac"
+botkins hosts focus local
+```
+
+- **`botkins hosts list`** lists paired computers, their connection state, whether each is included in the unified view, and bot / pending-approval counts.
+- **`botkins hosts unified on|off`** enables or disables operating all included computers together. While unified view is on, `botkins bots list`, `botkins chat`, `botkins chats approve <chat-id>`, `botkins status`, and the TUI dashboard merge local and remote bots, chats, approvals and runs with host labels.
+- **`botkins hosts include <host> on|off`** controls which paired computers participate in the unified view.
+- **`botkins hosts focus <host|local>`** switches back to operating a single computer (either `local` or a paired host) and turns unified view off.
+
 ## Pair a phone
 
 ```sh
@@ -1014,8 +1071,21 @@ botkins channels remove <connection> --yes
 ```
 
 - **Owner-only.** Only the owner configures channels (Desktop **Settings › Channels**, the owner's Phone for status/pairings/pause/resume, or the CLI at a terminal). No bot tool can create, re-bind, approve pairings for, or widen a channel.
-- **Secrets never go on the command line.** `botkins channels add` reads tokens from a hidden prompt at a terminal, or from standard input (`--secrets -` as JSON, e.g. `{"appToken":"…","botToken":"…"}`). Tokens are stored in the encrypted vault and never appear in `workspace.json`, logs, tool results, or transcripts.
+- **Secrets never go on the command line.** `botkins channels add` reads tokens from a hidden prompt at a terminal, or from standard input (`--secrets -` as JSON, e.g. `{"appToken":"…","botToken":"…"}`). Tokens are stored in the encrypted vault and never appear in the workspace store (`workspace.db` / `workspace.json`), logs, tool results, or transcripts.
 - **Safe defaults.** Every new channel starts with `--dm pairing` (strangers get a one-time code and no bot turn until approved), `--groups off`, `--notify-phone off`, and `--tool-profile restricted` (read-only knowledge tools only).
+
+## Workspace store (`workspace.db`)
+
+Workspace state is stored in SQLite (`data/workspace.db`, WAL mode with `synchronous=NORMAL` and `foreign_keys=ON`) using Node's built-in `node:sqlite`. On first start, any existing `data/workspace.json` (and pending `turn-checkpoints/`) is imported in a single transaction, verified by row counts, and renamed to `data/workspace.json.migrated-<timestamp>`. If migration fails, Botkins logs the error and continues on `workspace.json`.
+
+```sh
+botkins workspace status --json
+botkins workspace migrate --dry-run
+botkins workspace migrate
+botkins workspace export [--out <path>]
+```
+
+- **Downgrading to an older build:** stop Botkins, run `botkins workspace export` (writes `data/workspace.json` from `data/workspace.db`), then move or remove `data/workspace.db` (`-wal`/`-shm`) before starting the older build.
 
 ## Scripts and JSON
 

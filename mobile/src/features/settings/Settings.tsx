@@ -13,8 +13,10 @@ import {
   FlaskConical,
   FolderLock,
   HardDrive,
+  GitBranch,
   Info,
   KeyRound,
+  Layers,
   LibraryBig,
   MessagesSquare,
   Monitor,
@@ -34,15 +36,15 @@ import {
   Boxes,
 } from "lucide-react-native";
 import { type ReactNode, useState } from "react";
-import { Alert, TextInput, View } from "react-native";
+import { Alert, ScrollView, TextInput, View } from "react-native";
 import type { Preferences } from "@/link/types";
 import { usePart, useProviders, useSettings, useSkills } from "@/state/hooks";
-import { unpair } from "@/state/link";
+import { setSettingsHost, unpair } from "@/state/link";
 import { usePrefs } from "@/state/prefs";
 import { useApp } from "@/state/store";
 import { useProfile, useProfileHosts } from "@/state/profile";
 import { can } from "@/state/team";
-import { Badge, backdropById, brand, Glass, Group, IconTile, Label, Page, radius, Row, space, T, Tap, tint, useTheme } from "@/ui";
+import { Badge, backdropById, brand, Chip, Dot, Glass, Group, IconTile, Label, Page, radius, Row, space, T, Tap, tint, useTheme } from "@/ui";
 import { themeById } from "@/ui/themes";
 import { findSettings } from "./search";
 import { linkLabel } from "./shared";
@@ -90,6 +92,10 @@ export default function Settings() {
   const { colors } = useTheme();
   const [query, setQuery] = useState("");
   const name = useApp((state) => state.pairing?.name) ?? "Your computer";
+  const primaryId = useApp((state) => state.pairing?.serverId);
+  const unified = useApp((state) => state.unified);
+  const unifiedHosts = useApp((state) => state.unifiedHosts);
+  const settingsHostPref = usePrefs((prefs) => prefs.settingsHost);
   const link = useApp((state) => state.link);
   const route = useApp((state) => state.route);
   const localComputers = useApp((state) => state.pairings);
@@ -111,6 +117,9 @@ export default function Settings() {
   const permission = (scope: Parameters<typeof can>[1], action: string) => can({ meta, team }, scope, action);
   const owner = meta?.you?.kind !== "member";
 
+  const includedHosts = unifiedHosts.filter((h) => h.included);
+  const onlineCount = includedHosts.filter((h) => h.state === "online").length;
+  const activeSettingsHost = includedHosts.some((h) => h.id === settingsHostPref) ? settingsHostPref : primaryId ?? includedHosts[0]?.id ?? null;
   const toolsOn = servers?.filter((server) => server.enabled).length;
   const skillsOn = skills?.filter((skill) => skill.enabled && !skillsOff?.includes(skill.name)).length;
   const signedIn = providers?.filter((provider) => provider.connected).length;
@@ -139,7 +148,7 @@ export default function Settings() {
           />,
           { words: "botkins profile name picture photo account sign in" },
         ),
-        row("computers", "Computers and teams", <Row leading={<IconTile icon={MonitorSmartphone} color={brand.tide} />} title="Computers and teams" value={computers > 1 ? String(computers) : undefined} chevron onPress={go("/settings/computers")} />, { words: "pair connect join switch host" }),
+        row("computers", "Computers and teams", <Row leading={<IconTile icon={MonitorSmartphone} color={brand.tide} />} title="Computers and teams" value={unified ? "All" : computers > 1 ? String(computers) : undefined} chevron onPress={go("/settings/computers")} />, { words: "pair connect join switch host" }),
         ...(owner && meta?.capabilities.includes("teams-v1")
           ? [
               row(
@@ -179,6 +188,18 @@ export default function Settings() {
                   onPress={go("/settings/channels")}
                 />,
                 { words: "channel hooks slack telegram discord imessage pairing allowlist publish" },
+              ),
+              row(
+                "github",
+                "GitHub",
+                <Row
+                  leading={<IconTile icon={GitBranch} color={brand.clay} />}
+                  title="GitHub"
+                  subtitle="Botkins Agent · @botkins-agent mentions"
+                  chevron
+                  onPress={go("/settings/github")}
+                />,
+                { subtitle: "Botkins Agent · @botkins-agent mentions", words: "github app botkins-agent mention repo install webhook pull request issue" },
               ),
             ]
           : []),
@@ -238,7 +259,17 @@ export default function Settings() {
       <SearchField value={query} onChange={setQuery} />
       {!searching && (
         <Group>
-          <Row leading={<IconTile icon={Monitor} color={brand.tide} size={36} />} title={name} subtitle={linkLabel(link, route)} chevron onPress={go("/settings/desktop")} />
+          {unified ? (
+            <Row
+              leading={<IconTile icon={Layers} color={brand.fern} size={36} />}
+              title="All computers"
+              subtitle={onlineCount + " of " + includedHosts.length + " connected"}
+              chevron
+              onPress={go("/settings/computers")}
+            />
+          ) : (
+            <Row leading={<IconTile icon={Monitor} color={brand.tide} size={36} />} title={name} subtitle={linkLabel(link, route)} chevron onPress={go("/settings/desktop")} />
+          )}
         </Group>
       )}
 
@@ -256,6 +287,23 @@ export default function Settings() {
             }
           />
         </Group>
+      )}
+
+      {!searching && unified && includedHosts.length > 1 && (
+        <View>
+          <Label>Settings for computer</Label>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginHorizontal: -space.xl }} contentContainerStyle={{ paddingHorizontal: space.xl, gap: space.sm }}>
+            {includedHosts.map((host) => (
+              <Chip
+                key={host.id}
+                label={host.name}
+                selected={host.id === activeSettingsHost}
+                leading={<Dot tone={host.state === "online" ? "success" : "warning"} size={6} />}
+                onPress={() => setSettingsHost(host.id)}
+              />
+            ))}
+          </ScrollView>
+        </View>
       )}
 
       {found.map((section) => (

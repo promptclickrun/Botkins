@@ -200,6 +200,7 @@ export default function RootLayout() {
               <Stack.Screen name="settings/channels/add" options={tall} />
               <Stack.Screen name="settings/channels/who" />
               <Stack.Screen name="settings/channels/activity" />
+              <Stack.Screen name="settings/github" />
               <Stack.Screen name="settings/teamwork" />
               <Stack.Screen name="settings/usage" />
               <Stack.Screen name="settings/about" />

@@ -72,6 +72,8 @@ const POLICY = {
   deleteChat: ["agents", "chat"],
   reactToMessage: ["agents", "chat"],
   "chat.cardAction": "owner",
+  "chat.a2uiAction": ["agents", "chat"],
+  "chat.a2uiFunction": ["agents", "chat"],
   forkChat: ["agents", "chat"],
   warmChat: ["agents", "chat"],
   setChatProject: "owner",
@@ -135,6 +137,14 @@ const POLICY = {
   workflowGithubStatus: ["today", "view"],
   workflowGithubSignInStart: "owner",
   workflowGithubSignInCancel: "owner",
+  workflowGithubCatalog: ["today", "view"],
+  workflowGithubDeliveries: ["today", "view"],
+  workflowGithubReplayLast: ["today", "use"],
+  githubAgentStatus: "owner",
+  githubAgentInstallUrl: "owner",
+  githubAgentRefresh: "owner",
+  githubAgentSetRepo: "owner",
+  githubAgentUnbind: "owner",
   saveTask: "owner",
   moveTask: "owner",
   startTask: "owner",
@@ -537,7 +547,7 @@ const SELF_METHODS = new Set([
   "link.feedback.send",
 ]);
 const BOT_METHODS = new Set(["updateBot", "setBotProactive", "proactiveAct", "setBotFlags", "makePrimary", "reorderBots", "deleteBot", "duplicateBot", "setBotAccess", "setBotIntegrations", "botMemory", "setBotMemory", "saveTemplate", "exportTemplateText", "link.setLook"]);
-const CHAT_METHODS = new Set(["changeMainFork", "setChatFlags", "renameChat", "regenerateChatTitle", "deleteChat", "forkChat", "reactToMessage", "warmChat", "setChatProject", "recordVoiceLine", "send", "stop", "stopHelper", "unqueue", "sendNow", "compact", "sideQuestion", "clearApprovals", "mentionables", "link.messages", "link.step", "sidePane", "changeSchedule", "link.voice.live", "link.voice.endLive", "link.team.inviteToChat", "link.team.removeFromChat", "link.chats.setSection", "mcpApps.view", "mcpApps.callTool", "mcpApps.readResource"]);
+const CHAT_METHODS = new Set(["changeMainFork", "setChatFlags", "renameChat", "regenerateChatTitle", "deleteChat", "forkChat", "reactToMessage", "chat.a2uiAction", "chat.a2uiFunction", "warmChat", "setChatProject", "recordVoiceLine", "send", "stop", "stopHelper", "unqueue", "sendNow", "compact", "sideQuestion", "clearApprovals", "mentionables", "link.messages", "link.step", "sidePane", "changeSchedule", "link.voice.live", "link.voice.endLive", "link.team.inviteToChat", "link.team.removeFromChat", "link.chats.setSection", "mcpApps.view", "mcpApps.callTool", "mcpApps.readResource"]);
 /** What only the person who started a chat (or the owner) may do to it; someone invited may not. */
 const CREATOR_METHODS = new Set(["changeMainFork", "renameChat", "regenerateChatTitle", "deleteChat", "setChatProject", "changeSchedule", "setModel", "clearApprovals", "compact", "link.team.inviteToChat"]);
 /** A routine is its chat: these take the routine's (chat's) id first ("routine-owner-v1"). */
@@ -1130,6 +1140,8 @@ export function authorize(principal, team, method, args = [], lookups = {}) {
     return "Only the owner can remove, turn off, replace or edit a script command.";
   // A routine's script runs on the owner's computer, so only the owner writes or changes one ("routine-scripts-v1").
   if ((method === "createRoutine" && args[0]?.script != null) || (method === "updateRoutine" && args[1]?.script !== undefined)) return "Only the owner can add or change a routine's script.";
+  // Overriding an uncertain GitHub write (githubUncertain) can double-post on GitHub, so only the owner may force it.
+  if (method === "workflowRetryRun" && args[2]?.allowUncertainRetry === true) return "Only the owner can retry an uncertain GitHub action.";
   if (((method === "skills.upload" && args[0]?.replace?.length) || (method === "skillsCatalog.install" && args[1]?.length)) && !hasAction(role.perms, "skills", "manage")) return "Your team role cannot replace skills.";
   if (method === "setPreferences") {
     const patch = args[0];

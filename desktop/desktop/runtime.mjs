@@ -141,9 +141,11 @@ const STOP_HELPER = "stop-helper-v1";
 export const WORKFLOWS = "workflows-v1";
 /** External messaging Channel Hooks (`channels-v1`). */
 export const CHANNELS = "channels-v1";
+/** A2UI v1.0 interactive surfaces, Botkins Catalog, and bidirectional function RPC (`a2ui-v1`). */
+export const A2UI_CAPABILITY = "a2ui-v1";
 /** Workspace storage stats and run pruning (`workspace-prune-v1`). */
 export const WORKSPACE_PRUNE = "workspace-prune-v1";
-export const CAPABILITIES = ["main-chat-v1", "message-reactions-v1", "client-message-id-v1", "voice-turns-v1", "voice-history-v1", "quiet-replies-v1", "models-v2", "fast-mode-v1", LOOKS_CAPABILITY, ...headCapabilities, BOT_VOICE, ROUTINE_DELIVERY, "routine-no-output-v1", ROUTINE_OWNER, ROUTINE_SCRIPTS, ROUTINE_MODELS, ROUTINE_SILENT, ROUTINE_NOTIFY_TARGETS, WORKFLOWS, CHANNELS, WORKSPACE_PRUNE, PROACTIVE, PROACTIVE_LEARNING, PROACTIVE_TEAM, BOARD_MENTIONS, PROVIDER_USAGE, SIDE_PANE, REMOTE_HOSTS, FILES, FOLDERS, ARTIFACTS, PROJECT_ARTIFACTS, "project-folders-v1", "project-mode-v1", "project-clone-v1", PROJECT_JOBS, "secure-input-v1", "turn-timeline-v1", PLUGINS, PLUGIN_STARTS, PROVIDER_SIGNIN, SPACES, AGENT_TEMPLATES, "agent-template-bundles-v1", COMPOSIO_APPS, MARKET_REFRESH, MCP_APPS, "pi-packages-v1", "pi-packages-remove-v1", "skill-upload-v1", "skills-catalog-v1", "skills-featured-v1", MARKETPLACE_V2, SCRIPT_COMMANDS_CAPABILITY, MCP_CATALOG_CAPABILITY, CHAT_TITLE_REGENERATION, MARK_CHATS_READ, STOP_HELPER, KEYED_PROVIDERS, CLAUDE_ARTIFACTS_CAPABILITY];
+export const CAPABILITIES = ["main-chat-v1", "message-reactions-v1", "client-message-id-v1", "voice-turns-v1", "voice-history-v1", "quiet-replies-v1", "models-v2", "fast-mode-v1", LOOKS_CAPABILITY, ...headCapabilities, BOT_VOICE, ROUTINE_DELIVERY, "routine-no-output-v1", ROUTINE_OWNER, ROUTINE_SCRIPTS, ROUTINE_MODELS, ROUTINE_SILENT, ROUTINE_NOTIFY_TARGETS, WORKFLOWS, CHANNELS, A2UI_CAPABILITY, WORKSPACE_PRUNE, PROACTIVE, PROACTIVE_LEARNING, PROACTIVE_TEAM, BOARD_MENTIONS, PROVIDER_USAGE, SIDE_PANE, REMOTE_HOSTS, FILES, FOLDERS, ARTIFACTS, PROJECT_ARTIFACTS, "project-folders-v1", "project-mode-v1", "project-clone-v1", PROJECT_JOBS, "secure-input-v1", "turn-timeline-v1", PLUGINS, PLUGIN_STARTS, PROVIDER_SIGNIN, SPACES, AGENT_TEMPLATES, "agent-template-bundles-v1", COMPOSIO_APPS, MARKET_REFRESH, MCP_APPS, "pi-packages-v1", "pi-packages-remove-v1", "skill-upload-v1", "skills-catalog-v1", "skills-featured-v1", MARKETPLACE_V2, SCRIPT_COMMANDS_CAPABILITY, MCP_CATALOG_CAPABILITY, CHAT_TITLE_REGENERATION, MARK_CHATS_READ, STOP_HELPER, KEYED_PROVIDERS, CLAUDE_ARTIFACTS_CAPABILITY];
 /**
  * What a paired device is told this app supports. A feature whose calls the link does not carry
  * (desktop/link/methods.mjs) is left out, so a device never asks for what it cannot reach.
@@ -849,13 +851,22 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
     workflowPause: (id) => workspace.workflows.pause(id),
     workflowResume: (id) => workspace.workflows.resume(id),
     workflowRun: (id, options) => workspace.workflows.runManual(id, options ?? {}),
-    workflowRetryRun: (runId, nodeId) => workspace.workflows.retryRun(runId, nodeId ?? null),
+    workflowRetryRun: (runId, nodeId, options) => workspace.workflows.retryRun(runId, nodeId ?? null, options && typeof options === "object" ? { allowUncertainRetry: options.allowUncertainRetry === true } : {}),
     workflowRespondApproval: (runId, nodeId, decision, note) => workspace.workflows.respondApproval(runId, nodeId ?? null, decision, note ?? ""),
     workflowCancelRun: (runId) => workspace.workflows.cancelRun(runId),
     workflowRotateWebhookSecret: (workflowId, nodeId) => workspace.workflows.rotateWebhookSecret(workflowId, nodeId),
     workflowGithubStatus: (options) => workspace.workflows.githubStatus(options ?? {}),
     workflowGithubSignInStart: () => workspace.workflows.githubSignInStart(),
     workflowGithubSignInCancel: () => workspace.workflows.githubSignInCancel(),
+    workflowGithubCatalog: (options) => workspace.workflows.githubCatalog(options ?? {}),
+    workflowGithubDeliveries: (workflowId, nodeId) => workspace.workflows.listGithubDeliveries(workflowId, nodeId ?? null),
+    workflowGithubReplayLast: (workflowId, nodeId) => workspace.workflows.replayLastGithubEvent(workflowId, nodeId ?? null),
+    // GitHub App ("Botkins Agent") settings & built-in @mention responder — strictly owner-only.
+    githubAgentStatus: () => workspace.githubAgent.status(),
+    githubAgentInstallUrl: () => workspace.githubAgent.installUrl(),
+    githubAgentRefresh: () => workspace.githubAgent.refresh(),
+    githubAgentSetRepo: (repo, patch) => workspace.githubAgent.setRepoConfig(repo, patch ?? {}),
+    githubAgentUnbind: (installationId) => workspace.githubAgent.unbind(installationId),
     workflowExportText: (id) => JSON.stringify(workspace.workflows.exportJson(id, host.version), null, 2),
     workflowImportText: (raw, agentMap) => workspace.workflows.importJson(raw, agentMap ?? {}),
     workflowExport: async (id) => {
@@ -1049,6 +1060,8 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
     },
     stop: (id) => workspace.stop(id),
     stopHelper: (id, helperId) => workspace.stopHelper(id, helperId),
+    // On-demand step input/output for SQLite lazy steps (maxChars: 12000 for desktop detail views).
+    stepDetail: (chatId, runId, stepId) => workspace.stepDetail(String(chatId), String(runId), String(stepId), { maxChars: 12000 }),
     // Opening a chat readies its session, so the next message starts at once.
     warmChat: (id) => void workspace.prewarm(id),
     // Chat canvas (desktop/canvas.mjs)
@@ -1062,8 +1075,29 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
     unqueue: (id, itemId) => workspace.unqueue(id, itemId),
     sendNow: (id, itemId) => workspace.sendNow(id, itemId),
     reactToMessage: (id, index, time, emoji, person = "owner") => workspace.reactToMessage(id, index, time, emoji, person === "owner" ? person : "member:" + person),
-    "chat.cardAction": (chatId, target, action, person = "owner") => {
+    "chat.cardAction": (chatId, target, action, payloadOrPerson = "owner", maybePerson = "owner") => {
+      if (action === "a2ui") {
+        const person = typeof maybePerson === "string" ? maybePerson : "owner";
+        const { turn, ...answer } = workspace.chatA2uiAction(
+          chatId,
+          { ...(payloadOrPerson && typeof payloadOrPerson === "object" ? payloadOrPerson : {}), ...(typeof target === "string" && target.trim() && !payloadOrPerson?.surfaceId ? { surfaceId: target.trim() } : {}) },
+          person === "owner" ? person : "member:" + person,
+        );
+        turn?.catch((error) => console.error("Workspace turn:", error.message));
+        return answer;
+      }
+      const person = typeof payloadOrPerson === "string" ? payloadOrPerson : "owner";
       const { turn, ...answer } = workspace.chatCardAction(chatId, target, action, person === "owner" ? person : "member:" + person);
+      turn?.catch((error) => console.error("Workspace turn:", error.message));
+      return answer;
+    },
+    "chat.a2uiAction": (chatId, payload, person = "owner") => {
+      const { turn, ...answer } = workspace.chatA2uiAction(chatId, payload, person === "owner" ? person : "member:" + person);
+      turn?.catch((error) => console.error("Workspace turn:", error.message));
+      return answer;
+    },
+    "chat.a2uiFunction": (chatId, payload, person = "owner") => {
+      const { turn, wait: _wait, ...answer } = workspace.chatA2uiFunction(chatId, payload, person === "owner" ? person : "member:" + person);
       turn?.catch((error) => console.error("Workspace turn:", error.message));
       return answer;
     },
@@ -1448,6 +1482,7 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
       changeListeners.add(listener);
       return () => changeListeners.delete(listener);
     },
+    stepDetail: (chatId, runId, stepId) => workspace.stepDetail(chatId, runId, stepId),
     // A bot's Botkin is kept on the bot (desktop/looks.mjs), so the link stores no looks of its own
     // and sends each bot's `look` as it is. A phone changes one through here.
     setLook: (botId, look) => workspace.updateBot(String(botId), { look }),
@@ -1568,6 +1603,52 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
     announce();
     push();
   });
+  const syncGithubSubscriptions = () => {
+    const wfRepos = workspace.workflows.subscribedGithubRepos();
+    const mentionRepos = workspace.githubAgent.mentionEnabledRepos();
+    const merged = [...new Set([...wfRepos, ...mentionRepos])].sort().slice(0, 100);
+    link.setGithubRepos(merged);
+  };
+  workspace.workflows.setGithubInstallationTokenProvider((repo) => link.getGithubInstallationToken(repo));
+  workspace.githubAgent.setBridge({
+    getInstallationToken: (repo, permissions) => link.getGithubInstallationToken(repo, permissions),
+    claimDelivery: (deliveryId) => link.claimGithubDelivery(deliveryId),
+    createInstallUrl: (appSlug) => link.createGithubInstallUrl(appSlug),
+    refreshInstallations: () => link.listGithubInstallations(),
+    unbindInstallation: (installationId) => link.unbindGithubInstallation(installationId),
+    isRelayConnected: () => Boolean(link.relayLink?.connected),
+    onReposChanged: () => syncGithubSubscriptions(),
+  });
+  link.on("relay", ({ connected }) => {
+    workspace.workflows.onRelayStateChanged(connected);
+    if (connected) {
+      syncGithubSubscriptions();
+      void workspace.githubAgent.refresh().catch(() => {});
+    }
+    push();
+  });
+  link.on("githubInstallations", (info) => {
+    try {
+      workspace.githubAgent.syncInstallations(info);
+      push();
+    } catch (error) {
+      console.error("GitHub installations sync:", error.message);
+    }
+  });
+  link.on("githubDelivery", (frame) => {
+    try {
+      workspace.workflows.receiveGithubDelivery(frame);
+    } catch (error) {
+      console.error("GitHub relay delivery (workflows):", error.message);
+    }
+    void workspace.githubAgent.handleDelivery(frame).catch((error) => {
+      console.error("GitHub relay delivery (mentions):", error.message);
+    });
+  });
+  workspace.workflows.setGithubReposListener(() => {
+    syncGithubSubscriptions();
+  });
+  syncGithubSubscriptions();
   // A phone switched a source on or off: the next turn's tools are read anew, and Settings looks again.
   link.on("tools", () => {
     phoneRevision++;
@@ -1703,7 +1784,7 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
       workspace.flushSave();
       return Promise.allSettled([formBrowser?.stop(), signIns.close(), providers.stop(), workspace.harness.stop(), bridge.stop(), link.stop(), codexVoice?.close()]).then((results) => {
         // Turns that ended while everything stopped wrote with `save`; anything still waiting goes now.
-        workspace.flushSave();
+        workspace.close();
         return results;
       });
     },

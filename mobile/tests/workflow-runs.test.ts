@@ -5,10 +5,36 @@ import { act, createElement as el } from "react";
 import type { Workflow, WorkflowNode, WorkflowRun } from "../src/link/types";
 import { mount, phoneModule } from "./render-phone";
 
-function loadRuns(apiCalls: { approve: unknown[][]; retry: unknown[][]; cancel: unknown[][] }) {
+function loadRuns(
+  apiCalls: { approve: unknown[][]; retry: unknown[][]; cancel: unknown[][] },
+  hooks?: {
+    alerts?: Array<{ title: string; message?: string; buttons?: Array<{ text?: string; onPress?: () => void }> }>;
+    openedUrls?: string[];
+  },
+) {
   return phoneModule("../src/features/workflows/Runs", {
-    "lucide-react-native": { ChevronDown: "ChevronDown", ChevronRight: "ChevronRight", ShieldCheck: "ShieldCheck" },
-    "react-native": { ScrollView: "ScrollView", View: "View" },
+    "lucide-react-native": {
+      ChevronDown: "ChevronDown",
+      ChevronRight: "ChevronRight",
+      ExternalLink: "ExternalLink",
+      ShieldCheck: "ShieldCheck",
+      TriangleAlert: "TriangleAlert",
+    },
+    "react-native": {
+      Alert: {
+        alert: (title: string, message?: string, buttons?: Array<{ text?: string; onPress?: () => void }>) => {
+          hooks?.alerts?.push({ title, message, buttons });
+        },
+      },
+      Linking: {
+        openURL: (url: string) => {
+          hooks?.openedUrls?.push(url);
+          return Promise.resolve();
+        },
+      },
+      ScrollView: "ScrollView",
+      View: "View",
+    },
     "@/state/link": {
       api: {
         workflowRespondApproval: (...args: unknown[]) => {
@@ -40,7 +66,7 @@ function loadRuns(apiCalls: { approve: unknown[][]; retry: unknown[][]; cancel: 
       useShape: () => ({ wide: false }),
       useTheme: () => ({ colors: { muted: "#888", warningSoft: "#320", warning: "#fa0", dangerSoft: "#300", line: "#444" } }),
     },
-  }) as { RunsView: (props: { workflow: Workflow; runs: WorkflowRun[]; nodes: WorkflowNode[]; canUse: boolean }) => ReturnType<typeof el> };
+  }) as { RunsView: (props: { workflow: Workflow; runs: WorkflowRun[]; nodes: WorkflowNode[]; canUse: boolean; isOwner?: boolean }) => ReturnType<typeof el> };
 }
 
 const nodes: WorkflowNode[] = [
@@ -149,4 +175,85 @@ test("RunsView caps rendered cards at 30 and renders EmptyState when runs is emp
   const filled = await mount(el(RunsView, { workflow, runs: manyRuns, nodes, canUse: true }));
   t.after(filled.unmount);
   assert.equal(filled.root.root.findAllByType("Group" as never).length, 30);
+});
+
+test("RunsView shows githubUncertain state, target link, normal Retry, and confirmed owner-only Retry anyway button", async (t) => {
+  const apiCalls = { approve: [] as unknown[][], retry: [] as unknown[][], cancel: [] as unknown[][] };
+  const alerts: Array<{ title: string; message?: string; buttons?: Array<{ text?: string; onPress?: () => void }> }> = [];
+  const openedUrls: string[] = [];
+  const { RunsView } = loadRuns(apiCalls, { alerts, openedUrls });
+
+  const uncertainRun = makeRun({
+    id: "run-uncertain",
+    status: "failed",
+    error: 'Post summary: Previous attempt for non-repeatable GitHub action "comment" on org/repo#88 did not finish cleanly (githubUncertain).',
+    errorCode: "githubUncertain",
+    githubUncertain: {
+      nodeId: "o1",
+      stepLabel: "Post summary",
+      action: "comment",
+      repository: "org/repo",
+      number: 88,
+      pullRequest: true,
+      url: "https://github.com/org/repo/pull/88",
+    },
+    steps: {
+      t1: { nodeId: "t1", kind: "trigger", label: "Task enters review", status: "completed", startedAt: 1_700_000_050_000, finishedAt: 1_700_000_050_200 },
+      o1: {
+        nodeId: "o1",
+        kind: "output",
+        label: "Post summary",
+        status: "failed",
+        startedAt: 1_700_000_050_300,
+        finishedAt: 1_700_000_060_000,
+        error: "Previous attempt did not finish cleanly (githubUncertain).",
+        errorCode: "githubUncertain",
+        githubUncertain: {
+          nodeId: "o1",
+          stepLabel: "Post summary",
+          action: "comment",
+          repository: "org/repo",
+          number: 88,
+          pullRequest: true,
+          url: "https://github.com/org/repo/pull/88",
+        },
+      },
+    },
+  });
+
+  // Owner sees distinct status label, target link, normal Retry, and confirmed "Retry anyway"
+  const ownerScreen = await mount(el(RunsView, { workflow, runs: [uncertainRun], nodes, canUse: true, isOwner: true }));
+  t.after(ownerScreen.unmount);
+  const ownerTexts = ownerScreen.root.root.findAllByType("T" as never).map((n) => String(n.props.children));
+  assert.ok(ownerTexts.some((t) => t.includes("May have already posted to GitHub")));
+  assert.ok(ownerTexts.some((t) => t.includes("Post comment on org/repo#88")));
+
+  const openBtn = ownerScreen.root.root.findAllByType("Button" as never).find((b) => b.props.title === "Open org/repo#88");
+  assert.ok(openBtn, "Owner sees GitHub target link button");
+  await act(async () => openBtn.props.onPress());
+  assert.deepEqual(openedUrls, ["https://github.com/org/repo/pull/88"]);
+
+  const normalRetry = ownerScreen.root.root.findAllByType("Button" as never).find((b) => b.props.title === "Retry Post summary");
+  assert.ok(normalRetry, "Normal Retry stays intact");
+  await act(async () => normalRetry.props.onPress());
+  assert.deepEqual(apiCalls.retry, [["run-uncertain", "o1"]]);
+
+  const retryAnyway = ownerScreen.root.root.findAllByType("Button" as never).find((b) => b.props.title === "Retry anyway");
+  assert.ok(retryAnyway, "Owner sees Retry anyway button");
+  await act(async () => retryAnyway.props.onPress());
+  assert.equal(alerts.length, 1, "Confirmation alert shown before uncertain retry");
+  assert.equal(apiCalls.retry.length, 1, "Retry does not fire before confirmation");
+
+  const confirmBtn = alerts[0].buttons?.find((b) => b.text === "Retry anyway");
+  assert.ok(confirmBtn?.onPress);
+  await act(async () => confirmBtn.onPress?.());
+  assert.deepEqual(apiCalls.retry[1], ["run-uncertain", "o1", { allowUncertainRetry: true }]);
+
+  // Member sees the state and target link, plus normal Retry, but NOT "Retry anyway"
+  const memberScreen = await mount(el(RunsView, { workflow, runs: [uncertainRun], nodes, canUse: true, isOwner: false }));
+  t.after(memberScreen.unmount);
+  const memberButtons = memberScreen.root.root.findAllByType("Button" as never).map((b) => b.props.title);
+  assert.ok(memberButtons.includes("Open org/repo#88"));
+  assert.ok(memberButtons.includes("Retry Post summary"));
+  assert.equal(memberButtons.includes("Retry anyway"), false, "Member must not see Retry anyway button");
 });

@@ -24,6 +24,7 @@ import { safeName } from "./uploads.mjs";
 import { botVoiceField } from "./voice.mjs";
 import { templateBundle } from "./template-bundle.mjs";
 import { cleanAvatar } from "./team.mjs";
+import { validateA2uiActionPayload, validateA2uiFunctionRpcPayload } from "./a2ui.mjs";
 
 /**
  * The plugin calls ("plugins-v1"), by their wire names. A rename is a change here and in pluginArgs.
@@ -83,6 +84,8 @@ export const WORKFLOW_METHODS = [
   "workflowRun", "workflowRetryRun", "workflowRespondApproval", "workflowCancelRun",
   "workflowRotateWebhookSecret", "workflowExportText", "workflowImportText",
   "workflowGithubStatus", "workflowGithubSignInStart", "workflowGithubSignInCancel",
+  "workflowGithubCatalog", "workflowGithubDeliveries", "workflowGithubReplayLast",
+  "githubAgentStatus", "githubAgentInstallUrl", "githubAgentRefresh", "githubAgentSetRepo", "githubAgentUnbind",
 ];
 /** External messaging Channel Hooks ("channels-v1", desktop/channels/index.mjs). Strictly owner-only. */
 export const CHANNEL_METHODS = [
@@ -107,7 +110,7 @@ export const REMOTE_METHODS = new Set([
   "addSection", "renameSection", "deleteSection", "orderSections",
   "saveTemplate", "renameTemplate", "deleteTemplate", "exportTemplateText", "importTemplateText",
   // Chats
-  "mainChat", "changeMainFork", "setProactiveChatMode", "createChat", "createGroupChat", "setChatFlags", "markChatsRead", "renameChat", "regenerateChatTitle", "deleteChat", "forkChat", "reactToMessage", "chat.cardAction", "warmChat",
+  "mainChat", "changeMainFork", "setProactiveChatMode", "createChat", "createGroupChat", "setChatFlags", "markChatsRead", "renameChat", "regenerateChatTitle", "deleteChat", "forkChat", "reactToMessage", "chat.cardAction", "chat.a2uiAction", "chat.a2uiFunction", "warmChat",
   "setChatProject", "startProjectChat", "recordVoiceLine",
   "send", "stop", "stopHelper", "unqueue", "sendNow", "retry", "compact", "sideQuestion", "respond", "clearApprovals",
   "mentionables", "catalog", "linkPreview",
@@ -524,12 +527,33 @@ export function remoteArgs(method, args, { deviceId, uploads } = {}) {
   if (method === "stopHelper" && (args.length !== 2 || !clean(args[0]) || !clean(args[1]))) throw new Error("Choose the helper or command to stop.");
   if (method === "mainChat" && (args.length !== 1 || !clean(args[0]))) throw new Error("Choose a bot.");
   if (method === "chat.cardAction") {
-    const [chatId, target, action] = args;
+    const [chatId, target, action, payload] = args;
+    if (action === "a2ui") {
+      if (args.length !== 4 || !clean(chatId) || !plain(payload)) {
+        throw new Error("Choose a chat and valid A2UI action payload.");
+      }
+      const checked = validateA2uiActionPayload({ ...payload, ...(typeof target === "string" && target.trim() && !payload.surfaceId ? { surfaceId: target.trim() } : {}) });
+      return [chatId, checked.surfaceId, "a2ui", checked];
+    }
     const validTarget = (typeof target === "number" && Number.isSafeInteger(target) && target >= 0) || (typeof target === "string" && clean(target) && target.length <= 128);
     if (args.length !== 3 || !clean(chatId) || !validTarget || !["dispatch", "dismiss"].includes(action)) {
       throw new Error("Choose a chat, action card, and valid action (dispatch or dismiss).");
     }
     return [chatId, typeof target === "string" ? target.trim() : target, action];
+  }
+  if (method === "chat.a2uiAction") {
+    const [chatId, payload] = args;
+    if (args.length !== 2 || !clean(chatId) || !plain(payload)) {
+      throw new Error("Choose a chat and valid A2UI action payload.");
+    }
+    return [chatId, validateA2uiActionPayload(payload)];
+  }
+  if (method === "chat.a2uiFunction") {
+    const [chatId, payload] = args;
+    if (args.length !== 2 || !clean(chatId) || !plain(payload)) {
+      throw new Error("Choose a chat and valid A2UI function payload.");
+    }
+    return [chatId, validateA2uiFunctionRpcPayload(payload)];
   }
   if (method === "setProactiveChatMode" && (args.length !== 1 || !["main", "new"].includes(args[0]))) throw new Error("Choose Main chat or New chat every time.");
   if (method === "changeMainFork") {
@@ -538,6 +562,17 @@ export function remoteArgs(method, args, { deviceId, uploads } = {}) {
       : action === "fork" ? Number.isSafeInteger(value) && value >= 0
       : action === "switch" && clean(value);
     if (!clean(id) || !valid || args.length > 4 || (expected != null && !clean(expected))) throw new Error("Choose a Main chat and a fork or reset.");
+  }
+  if (method === "workflowRetryRun") {
+    const [runId, nodeId, options] = args;
+    if (!clean(runId) || (nodeId != null && !clean(nodeId))) {
+      throw new Error("Choose a workflow run to retry.");
+    }
+    const opts = options && typeof options === "object" && !Array.isArray(options) ? options : null;
+    if (opts && opts.allowUncertainRetry === true) {
+      return [runId, nodeId ?? null, { allowUncertainRetry: true }];
+    }
+    return nodeId != null ? [runId, nodeId] : [runId];
   }
   if (method === "workflowGithubStatus") {
     const opts = args[0] && typeof args[0] === "object" && !Array.isArray(args[0]) ? args[0] : {};
@@ -567,6 +602,50 @@ export function remoteArgs(method, args, { deviceId, uploads } = {}) {
       out.dryRun = opts.dryRun;
     }
     return [out];
+  }
+  if (method === "workflowGithubCatalog") {
+    const opts = args[0] && typeof args[0] === "object" && !Array.isArray(args[0]) ? args[0] : {};
+    const repos = Array.isArray(opts.repos) ? opts.repos.map((r) => String(r ?? "").trim()).filter(Boolean).slice(0, 10) : [];
+    const repo = typeof opts.repo === "string" && opts.repo.trim() ? opts.repo.trim() : undefined;
+    return [{
+      ...(repos.length ? { repos } : {}),
+      ...(repo ? { repo } : {}),
+      includeLabels: opts.includeLabels !== false,
+      includeAssignees: opts.includeAssignees !== false,
+    }];
+  }
+  if (method === "workflowGithubDeliveries" || method === "workflowGithubReplayLast") {
+    const [workflowId, nodeId] = args;
+    if (!clean(workflowId) || (nodeId != null && !clean(nodeId))) {
+      throw new Error("Choose a workflow to inspect or replay GitHub deliveries.");
+    }
+    return nodeId ? [workflowId, nodeId] : [workflowId];
+  }
+  if (method === "githubAgentStatus" || method === "githubAgentInstallUrl" || method === "githubAgentRefresh") {
+    return [];
+  }
+  if (method === "githubAgentUnbind") {
+    const id = Number(args[0]);
+    if (!Number.isSafeInteger(id) || id <= 0) throw new Error("Choose a GitHub installation to disconnect.");
+    return [id];
+  }
+  if (method === "githubAgentSetRepo") {
+    const [repo, rawPatch] = args;
+    if (typeof repo !== "string" || !/^[A-Za-z0-9._-]{1,100}\/[A-Za-z0-9._-]{1,100}$/.test(repo.trim())) {
+      throw new Error("Choose a valid GitHub repository (owner/repo).");
+    }
+    const patch = rawPatch && typeof rawPatch === "object" && !Array.isArray(rawPatch) ? rawPatch : {};
+    const out = {};
+    if (patch.answerMentions !== undefined) out.answerMentions = patch.answerMentions === true;
+    if (patch.defaultBotId !== undefined) out.defaultBotId = typeof patch.defaultBotId === "string" && patch.defaultBotId.trim() ? patch.defaultBotId.trim().slice(0, 100) : null;
+    if (patch.allowlist !== undefined) {
+      out.allowlist = Array.isArray(patch.allowlist)
+        ? patch.allowlist.map((x) => String(x ?? "").trim()).filter(Boolean).slice(0, 100)
+        : typeof patch.allowlist === "string"
+          ? patch.allowlist.slice(0, 4000)
+          : [];
+    }
+    return [repo.trim().toLowerCase(), out];
   }
   if (method === "regenerateChatTitle") {
     if (args.length !== 1 || !clean(args[0])) throw new Error("Choose a chat to regenerate its title.");
