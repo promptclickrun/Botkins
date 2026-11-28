@@ -361,7 +361,7 @@ test("macOS Application Support paths with spaces resolve in final and interim M
     ws.artifacts.resolve({ chatId, paths: [interimShot] }).items.map((item) => item?.name ?? null),
     ["interim preview.png"],
   );
-  const interimRow = ws.artifacts.rows.find((r) => r.source === "media" && r.path === interimShot);
+  const interimRow = ws.artifacts.rows.find((r) => r.source === "media" && r.name === "interim preview.png");
   assert.equal(interimRow?.messageIndex, 1, "interim MEDIA: row points at the interim assistant message");
 
   finishTool();
@@ -379,9 +379,9 @@ test("macOS Application Support paths with spaces resolve in final and interim M
   const resolved = ws.artifacts.resolve({ chatId, paths: [shot, interimShot, relativeShot] }).items;
   assert.deepEqual(resolved.map((item) => item?.name ?? null), ["botkins-a2ui-desktop.png", "interim preview.png", "chart with space.png"]);
 
-  const finalMediaRow = ws.artifacts.rows.find((r) => r.source === "media" && r.path === shot);
+  const finalMediaRow = ws.artifacts.rows.find((r) => r.source === "media" && r.name === "botkins-a2ui-desktop.png");
   assert.equal(finalMediaRow?.messageIndex, 2, "final MEDIA: row points at the assistant message, not the user message");
-  const toolRow = ws.artifacts.rows.find((r) => r.source === "tool" && r.path === shot);
+  const toolRow = ws.artifacts.rows.find((r) => r.source === "tool" && r.name === "botkins-a2ui-desktop.png");
   assert.equal(toolRow?.messageIndex, 0, "tool write provenance stays on the user message that triggered the run");
 });
 
