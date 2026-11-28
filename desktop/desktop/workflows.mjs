@@ -593,10 +593,191 @@ export class Workflows {
     return await this.githubAuth.cancelSignIn();
   }
 
+  /** Lists labels and assignees/reviewers across one or more repos for UI pickers. */
+  async githubCatalog(options = {}) {
+    const rawRepos = Array.isArray(options?.repos)
+      ? options.repos
+      : typeof options?.repo === "string" && options.repo.trim()
+        ? [options.repo.trim()]
+        : [];
+    const repos = normalizeGithubRepos({ repos: rawRepos }).slice(0, 10);
+    const includeLabels = options?.includeLabels !== false;
+    const includeAssignees = options?.includeAssignees !== false;
+    if (!repos.length) return { repos: [], labels: [], assignees: [] };
+
+    const labelMap = new Map();
+    const assigneeMap = new Map();
+
+    await Promise.all(
+      repos.map(async (repo) => {
+        if (includeLabels && typeof this.githubAuth?.listRepoLabels === "function") {
+          const list = await this.githubAuth.listRepoLabels(repo).catch(() => []);
+          for (const item of Array.isArray(list) ? list : []) {
+            const name = typeof item === "string" ? item.trim() : String(item?.name || "").trim();
+            if (!name) continue;
+            const key = name.toLowerCase();
+            if (!labelMap.has(key)) {
+              labelMap.set(key, {
+                name,
+                color: typeof item === "object" && typeof item?.color === "string" ? item.color : "",
+                description: typeof item === "object" && typeof item?.description === "string" ? item.description : "",
+              });
+            }
+          }
+        }
+        if (includeAssignees && typeof this.githubAuth?.listRepoAssignees === "function") {
+          const list = await this.githubAuth.listRepoAssignees(repo).catch(() => []);
+          for (const item of Array.isArray(list) ? list : []) {
+            const login = typeof item === "string" ? item.trim() : String(item?.login || "").trim();
+            if (!login) continue;
+            const key = login.toLowerCase();
+            if (!assigneeMap.has(key)) {
+              assigneeMap.set(key, {
+                login,
+                type: typeof item === "object" && typeof item?.type === "string" ? item.type : "User",
+              });
+            }
+          }
+        }
+      }),
+    );
+
+    return {
+      repos,
+      labels: [...labelMap.values()].slice(0, 500),
+      assignees: [...assigneeMap.values()].slice(0, 500),
+    };
+  }
+
+  /** Lists recorded GitHub deliveries for a trigger node (newest first, max 50). */
+  listGithubDeliveries(workflowId, nodeId = null) {
+    this.ensureState();
+    const list = this.ws.state.workflowGithubDeliveries ?? [];
+    return list
+      .filter((d) => d && d.workflowId === workflowId && (!nodeId || d.nodeId === nodeId))
+      .sort((a, b) => Date.parse(b.receivedAt || "") - Date.parse(a.receivedAt || ""))
+      .slice(0, 50)
+      .map(({ payloadJson, ...rest }) => ({
+        ...rest,
+        replayable: rest.outcome === "started" && rest.reason !== "offline" && Boolean(payloadJson),
+      }));
+  }
+
+  /**
+   * Persists a GitHub delivery record (keeping up to 50 non-waiting rows per trigger, never pruning `waiting`).
+   * To keep workspace state compact, `payloadJson` is retained ONLY on `waiting` rows (needed for dequeue)
+   * and on the single newest `outcome === "started"` row per trigger (for "Run last event").
+   */
+  recordGithubDelivery(record) {
+    this.ensureState();
+    const list = this.ws.state.workflowGithubDeliveries;
+    const idx = list.findIndex(
+      (d) =>
+        d &&
+        d.workflowId === record.workflowId &&
+        d.nodeId === record.nodeId &&
+        d.deliveryId === record.deliveryId,
+    );
+    if (idx >= 0) {
+      list[idx] = { ...list[idx], ...record };
+    } else {
+      list.unshift(record);
+    }
+    // Prune per (workflowId, nodeId) to newest 50 non-waiting records while keeping all waiting records.
+    const byTrigger = new Map();
+    for (const item of list) {
+      const k = `${item.workflowId}:${item.nodeId}`;
+      if (!byTrigger.has(k)) byTrigger.set(k, []);
+      byTrigger.get(k).push(item);
+    }
+    const kept = [];
+    for (const entries of byTrigger.values()) {
+      const waiting = entries.filter((e) => e.outcome === "waiting");
+      const rest = entries
+        .filter((e) => e.outcome !== "waiting")
+        .sort((a, b) => Date.parse(b.receivedAt || "") - Date.parse(a.receivedAt || ""))
+        .slice(0, 50);
+
+      // Retain payloadJson only on the newest replayable (`outcome === "started"`) row per trigger.
+      let keptStartedPayload = false;
+      for (const entry of rest) {
+        if (entry.outcome === "started" && entry.reason !== "offline" && entry.payloadJson && !keptStartedPayload) {
+          keptStartedPayload = true;
+        } else if (entry.payloadJson !== undefined && entry.payloadJson !== null) {
+          entry.payloadJson = null;
+        }
+      }
+      kept.push(...waiting, ...rest);
+    }
+    this.ws.state.workflowGithubDeliveries = kept;
+    this.ws.save();
+  }
+
+  /** Replays the most recent started GitHub delivery payload for a trigger node. */
+  replayLastGithubEvent(workflowId, nodeId = null) {
+    this.ensureState();
+    const wf = this.get(workflowId);
+    const list = (this.ws.state.workflowGithubDeliveries ?? [])
+      .filter(
+        (d) =>
+          d &&
+          d.workflowId === workflowId &&
+          (!nodeId || d.nodeId === nodeId) &&
+          d.outcome === "started" &&
+          d.reason !== "offline" &&
+          d.payloadJson,
+      )
+      .sort((a, b) => Date.parse(b.receivedAt || "") - Date.parse(a.receivedAt || ""));
+    const latest = list[0];
+    if (!latest) {
+      throw new Error("No previous GitHub event is available to replay for this trigger.");
+    }
+    const triggerNode = wf.nodes.find((n) => n.id === latest.nodeId && n.kind === "trigger" && n.triggerKind === "github");
+    if (!triggerNode) {
+      throw new Error("GitHub trigger node no longer exists on this workflow.");
+    }
+    let payload = {};
+    try {
+      payload = JSON.parse(latest.payloadJson);
+    } catch {
+      throw new Error("Stored GitHub event payload could not be parsed.");
+    }
+    // Re-evaluate current trigger filters so edits to filters (e.g. notBot/baseBranch/labels) are respected on replay.
+    const filterResult = evaluateGithubTriggerFilters(triggerNode.config, payload, {
+      sender: payload.sender ?? payload.author,
+      author: payload.author,
+    });
+    if (!filterResult.pass) {
+      throw new Error(`Last GitHub event no longer matches this trigger's filters (${filterResult.reason || "filter"}).`);
+    }
+    // Keep `manual: false` so untrusted external-event framing, model escaping, and echo guards remain enforced;
+    // mark `replay: true` for audit and display only.
+    const run = this.startRun(wf, triggerNode, payload, { manual: false, replay: true });
+    this.recordGithubDelivery({
+      workflowId: wf.id,
+      nodeId: triggerNode.id,
+      deliveryId: `replay:${randomUUID().slice(0, 12)}`,
+      event: latest.event,
+      repository: latest.repository ?? null,
+      number: latest.number ?? null,
+      pullRequest: latest.pullRequest ?? null,
+      title: latest.title ?? null,
+      url: latest.url ?? null,
+      receivedAt: new Date().toISOString(),
+      outcome: "started",
+      reason: null,
+      reasonDetail: null,
+      runId: run.id,
+      payloadJson: latest.payloadJson,
+    });
+    return run;
+  }
+
   ensureState() {
     this.ws.state.workflows ??= [];
     this.ws.state.workflowRuns ??= [];
     this.ws.state.workflowGithubActions ??= {};
+    this.ws.state.workflowGithubDeliveries ??= [];
   }
 
   get all() {
@@ -1369,8 +1550,51 @@ export class Workflows {
       sender: opts.sender ?? item.sender ?? item.user ?? item.author,
       author: item.author ?? item.user,
     });
-    if (!filterResult.pass) return;
-    this.startRun(wf, node, payload);
+    const deliveryId = opts.deliveryId || `poll:${repo}:${event}:${payload.number || 0}:${Date.now()}:${randomUUID().slice(0, 6)}`;
+    let payloadJson = null;
+    try {
+      payloadJson = JSON.stringify(payload);
+    } catch {}
+
+    if (!filterResult.pass) {
+      this.recordGithubDelivery({
+        workflowId: wf.id,
+        nodeId: node.id,
+        deliveryId,
+        event: String(payload.event || event),
+        repository: repo || null,
+        number: Number(payload.number) || null,
+        pullRequest: typeof payload.pull_request === "boolean" ? payload.pull_request : null,
+        title: typeof payload.title === "string" && payload.title ? payload.title : null,
+        url: typeof payload.url === "string" && payload.url ? payload.url : null,
+        receivedAt: new Date().toISOString(),
+        outcome: "skipped",
+        reason: "filter",
+        reasonDetail: filterResult.reason || null,
+        runId: null,
+        payloadJson: null,
+      });
+      return;
+    }
+
+    const run = this.startRun(wf, node, payload);
+    this.recordGithubDelivery({
+      workflowId: wf.id,
+      nodeId: node.id,
+      deliveryId,
+      event: String(payload.event || event),
+      repository: repo || null,
+      number: Number(payload.number) || null,
+      pullRequest: typeof payload.pull_request === "boolean" ? payload.pull_request : null,
+      title: typeof payload.title === "string" && payload.title ? payload.title : null,
+      url: typeof payload.url === "string" && payload.url ? payload.url : null,
+      receivedAt: new Date().toISOString(),
+      outcome: "started",
+      reason: null,
+      reasonDetail: null,
+      runId: run.id,
+      payloadJson,
+    });
   }
 
   /** Handles Task Board created & status-changed events. */
@@ -1613,7 +1837,7 @@ export class Workflows {
   }
 
   /** Creates a run record and begins executing the workflow graph asynchronously. */
-  startRun(wf, triggerNode, triggerPayload, { manual = false } = {}) {
+  startRun(wf, triggerNode, triggerPayload, { manual = false, replay = false } = {}) {
     const now = Date.now();
     const steps = {};
     for (const node of wf.nodes) {
@@ -1633,6 +1857,7 @@ export class Workflows {
       triggerNodeId: triggerNode.id,
       triggerKind: triggerNode.triggerKind,
       manual,
+      ...(replay ? { replay: true } : {}),
       status: "running",
       startedAt: now,
       finishedAt: null,

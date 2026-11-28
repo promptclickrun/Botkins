@@ -1,38 +1,75 @@
 // Edits one trigger or step of a workflow draft. Changes stay in the draft until the designer saves it.
 import * as Clipboard from "expo-clipboard";
 import { CheckCircle2, Copy, ExternalLink, KeyRound, Plus, RefreshCw, Trash2, X } from "lucide-react-native";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Linking, Modal, View } from "react-native";
-import type { WorkflowGithubStatus, WorkflowNode, WorkflowTriggerKind } from "@/link/types";
+import type { WorkflowGithubCatalog, WorkflowGithubDelivery, WorkflowGithubStatus, WorkflowNode, WorkflowTriggerKind } from "@/link/types";
 import { useBots, useChats, useModels, useRoutines } from "@/state/hooks";
-import { api } from "@/state/link";
+import { api, attempt } from "@/state/link";
 import { showToast } from "@/state/store";
 import { Button, Field, Group, IconButton, Label, radius, Row, Segmented, Sheet, space, T, useTheme } from "@/ui";
 import type { NodeFieldAnalysis } from "./fields";
-import { CONDITION_OPS, DAYS, DESTINATIONS, GITHUB_EVENT_LABEL, GITHUB_EVENTS, GOAL_CATEGORIES, KIND_LABEL, newTrigger, OP_LABEL, OPS_WITHOUT_VALUE, TASK_STATUSES, TRIGGER_KINDS, TRIGGER_LABEL } from "./graph";
+import {
+  deriveGithubAccessAlerts,
+  extractCanonicalEvents,
+  extractConfiguredRepos,
+  isIssueOnlyGithubTrigger,
+  normalizeLabelColor,
+  PR_ONLY_ACTIONS,
+  resolveOutputTargetRepos,
+  shouldClearLabelsOnRepoChange,
+  WORKFLOW_GITHUB_ACTION_OPTIONS,
+  WORKFLOW_GITHUB_EVENT_GROUPS,
+  type WorkflowGithubAction,
+} from "./github";
+import {
+  GithubAccessAlertsMobile,
+  GithubDeliveriesModal,
+  GithubDeliveryPreviewCard,
+  GithubLabelPickerModal,
+  GithubPeoplePickerModal,
+  GithubRepoPickerModal,
+  SelectedChipRow,
+} from "./GithubPickers";
+import { CONDITION_OPS, DAYS, DESTINATIONS, GOAL_CATEGORIES, KIND_LABEL, newTrigger, OP_LABEL, OPS_WITHOUT_VALUE, TASK_STATUSES, TRIGGER_KINDS, TRIGGER_LABEL } from "./graph";
 import { Choice, TemplateField } from "./parts";
 
 type Props = {
+  workflowId: string;
+  triggerNodes: WorkflowNode[];
   node: WorkflowNode | null;
   analysis?: NodeFieldAnalysis;
   canRemove: boolean;
   onChange: (node: WorkflowNode) => void;
   onRemove: () => void;
   onClose: () => void;
+  onReplayed?: () => void;
 };
 
 const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1).replace(/_/g, " ");
 const problemsFor = (analysis: NodeFieldAnalysis | undefined, prop: string) => analysis?.problems.filter((p) => p.prop === prop && p.kind === "missing").map((p) => p.field);
 
-export function StepSheet({ node, analysis, canRemove, onChange, onRemove, onClose }: Props) {
+export function StepSheet({ workflowId, triggerNodes, node, analysis, canRemove, onChange, onRemove, onClose, onReplayed }: Props) {
   return (
     <Modal visible={!!node} animationType="slide" presentationStyle="pageSheet" supportedOrientations={["portrait", "landscape", "landscape-left", "landscape-right"]} onRequestClose={onClose}>
-      {node && <StepBody node={node} analysis={analysis} canRemove={canRemove} onChange={onChange} onRemove={onRemove} onClose={onClose} />}
+      {node && (
+        <StepBody
+          workflowId={workflowId}
+          triggerNodes={triggerNodes}
+          node={node}
+          analysis={analysis}
+          canRemove={canRemove}
+          onChange={onChange}
+          onRemove={onRemove}
+          onClose={onClose}
+          onReplayed={onReplayed}
+        />
+      )}
     </Modal>
   );
 }
 
-function StepBody({ node: given, analysis, canRemove, onChange, onRemove, onClose }: Props & { node: WorkflowNode }) {
+function StepBody({ workflowId, triggerNodes, node: given, analysis, canRemove, onChange, onRemove, onClose, onReplayed }: Props & { node: WorkflowNode }) {
   const [node, setNode] = useState(given);
   useEffect(() => setNode(given), [given.id]);
   const set = (patch: Partial<WorkflowNode>) => setNode((n) => ({ ...n, ...patch }));
@@ -48,7 +85,21 @@ function StepBody({ node: given, analysis, canRemove, onChange, onRemove, onClos
     <Sheet title={title} action="Done" onAction={done} onClose={onClose}>
       <View style={{ gap: space.xl }}>
         <Field label="Name" value={node.label} onChangeText={(label) => set({ label })} maxLength={80} />
-        {node.kind === "trigger" && <TriggerEditor node={node} setConfig={setConfig} setKind={(triggerKind) => set({ triggerKind, label: node.label === TRIGGER_LABEL[node.triggerKind ?? "manual"] ? TRIGGER_LABEL[triggerKind] : node.label, config: newTrigger(triggerKind, node.id).config })} />}
+        {node.kind === "trigger" && (
+          <TriggerEditor
+            workflowId={workflowId}
+            node={node}
+            setConfig={setConfig}
+            onReplayed={onReplayed}
+            setKind={(triggerKind) =>
+              set({
+                triggerKind,
+                label: node.label === TRIGGER_LABEL[node.triggerKind ?? "manual"] ? TRIGGER_LABEL[triggerKind] : node.label,
+                config: newTrigger(triggerKind, node.id).config,
+              })
+            }
+          />
+        )}
         {(node.kind === "agent" || node.kind === "model") && <AskEditor node={node} setConfig={setConfig} fields={fields} analysis={analysis} />}
         {node.kind === "condition" && <ConditionEditor cfg={cfg} setConfig={setConfig} fields={fields.map((f) => f.name)} />}
         {node.kind === "approval" && (
@@ -60,14 +111,26 @@ function StepBody({ node: given, analysis, canRemove, onChange, onRemove, onClos
             </T>
           </>
         )}
-        {node.kind === "output" && <OutputEditor cfg={cfg} setConfig={setConfig} fields={fields} analysis={analysis} />}
+        {node.kind === "output" && <OutputEditor nodeId={node.id} triggerNodes={triggerNodes} cfg={cfg} setConfig={setConfig} fields={fields} analysis={analysis} />}
         {canRemove && <Button title={node.kind === "trigger" ? "Remove trigger" : "Remove step"} variant="danger" icon={Trash2} onPress={() => { onRemove(); onClose(); }} />}
       </View>
     </Sheet>
   );
 }
 
-function TriggerEditor({ node, setConfig, setKind }: { node: WorkflowNode; setConfig: (patch: Record<string, unknown>) => void; setKind: (kind: WorkflowTriggerKind) => void }) {
+function TriggerEditor({
+  workflowId,
+  node,
+  setConfig,
+  setKind,
+  onReplayed,
+}: {
+  workflowId: string;
+  node: WorkflowNode;
+  setConfig: (patch: Record<string, unknown>) => void;
+  setKind: (kind: WorkflowTriggerKind) => void;
+  onReplayed?: () => void;
+}) {
   const cfg = node.config ?? {};
   const bots = useBots();
   const routines = useRoutines();
@@ -117,19 +180,18 @@ function TriggerEditor({ node, setConfig, setKind }: { node: WorkflowNode; setCo
           {cfg.routeId ? "The computer made this workflow's webhook URL and secret. Copy them from Workflows on the computer." : "The computer makes a webhook URL and secret when you save."} Fields in the posted JSON body become {"{{body.name}}"}.
         </T>
       )}
-      {kind === "github" && <GithubTriggerEditor nodeId={node.id} cfg={cfg} setConfig={setConfig} />}
+      {kind === "github" && <GithubTriggerEditor workflowId={workflowId} nodeId={node.id} cfg={cfg} setConfig={setConfig} onReplayed={onReplayed} />}
     </View>
   );
 }
 
-function GithubTriggerEditor({ nodeId, cfg, setConfig }: { nodeId: string; cfg: Record<string, any>; setConfig: (patch: Record<string, unknown>) => void }) {
-  const { colors } = useTheme();
+function useMobileGithubStatus(key: string) {
   const [status, setStatus] = useState<WorkflowGithubStatus | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const loadStatus = async (includeRepos = true) => {
+  const loadStatus = useCallback(async (includeRepos = true) => {
     try {
       const next = await api.workflowGithubStatus({ includeRepos });
       setStatus(next);
@@ -141,13 +203,14 @@ function GithubTriggerEditor({ nodeId, cfg, setConfig }: { nodeId: string; cfg: 
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
 
   useEffect(() => {
     setLoading(true);
     void loadStatus(true);
-  }, [nodeId]);
+  }, [key, loadStatus]);
 
+  // Poll ONLY while an interactive device-code sign-in is actively pending (never ungated polling).
   const waiting = status?.signIn?.status === "waiting" || status?.signIn?.status === "starting";
   useEffect(() => {
     if (!waiting) return;
@@ -155,7 +218,7 @@ function GithubTriggerEditor({ nodeId, cfg, setConfig }: { nodeId: string; cfg: 
       void loadStatus(true);
     }, 2500);
     return () => clearInterval(timer);
-  }, [waiting]);
+  }, [waiting, loadStatus]);
 
   const startSignIn = async () => {
     setBusy(true);
@@ -202,22 +265,126 @@ function GithubTriggerEditor({ nodeId, cfg, setConfig }: { nodeId: string; cfg: 
     void Linking.openURL(url).catch(() => showToast("Couldn't open GitHub.", "error"));
   };
 
-  const selectedEvents: string[] = Array.isArray(cfg.events)
-    ? cfg.events.map((e: unknown) => String(e))
-    : typeof cfg.events === "string" && cfg.events.trim()
-      ? cfg.events.split(",").map((s: string) => s.trim()).filter(Boolean)
-      : ["pr_opened"];
+  return { status, loading, busy, error, loadStatus, startSignIn, cancelSignIn, copyAndOpen };
+}
 
-  const onEventsChange = (events: string[]) => {
-    const patch: Record<string, unknown> = { events };
-    if (events.includes("bot_mentioned") && !cfg.mentionHandle) {
+function GithubTriggerEditor({
+  workflowId,
+  nodeId,
+  cfg,
+  setConfig,
+  onReplayed,
+}: {
+  workflowId: string;
+  nodeId: string;
+  cfg: Record<string, any>;
+  setConfig: (patch: Record<string, unknown>) => void;
+  onReplayed?: () => void;
+}) {
+  const { colors } = useTheme();
+  const { status, loading, busy, error, loadStatus, startSignIn, cancelSignIn, copyAndOpen } = useMobileGithubStatus(nodeId);
+  const [catalog, setCatalog] = useState<WorkflowGithubCatalog>({ repos: [], labels: [], assignees: [] });
+  const [catalogLoading, setCatalogLoading] = useState(false);
+  const [deliveries, setDeliveries] = useState<WorkflowGithubDelivery[]>([]);
+  const [deliveriesLoading, setDeliveriesLoading] = useState(false);
+  const [replaying, setReplaying] = useState(false);
+
+  const [repoModal, setRepoModal] = useState(false);
+  const [labelModal, setLabelModal] = useState(false);
+  const [deliveryModal, setDeliveryModal] = useState(false);
+
+  const selectedRepos = useMemo(() => extractConfiguredRepos(cfg), [cfg]);
+  const selectedEvents = useMemo(() => extractCanonicalEvents(cfg.events), [cfg.events]);
+  const selectedLabels: string[] = useMemo(
+    () => (Array.isArray(cfg.labels) ? cfg.labels.map((s: unknown) => String(s)).filter(Boolean) : []),
+    [cfg.labels],
+  );
+  const repoKey = selectedRepos.join("|");
+
+  useEffect(() => {
+    if (!status?.authenticated || !selectedRepos.length) {
+      setCatalog({ repos: [], labels: [], assignees: [] });
+      return;
+    }
+    let live = true;
+    setCatalogLoading(true);
+    void api
+      .workflowGithubCatalog({ repos: selectedRepos, includeLabels: true, includeAssignees: false })
+      .then((res) => {
+        if (live && res) setCatalog(res);
+      })
+      .catch(() => {})
+      .finally(() => {
+        if (live) setCatalogLoading(false);
+      });
+    return () => {
+      live = false;
+    };
+  }, [status?.authenticated, repoKey]);
+
+  const loadDeliveries = useCallback(async () => {
+    if (!workflowId) return;
+    setDeliveriesLoading(true);
+    try {
+      const list = await api.workflowGithubDeliveries(workflowId, nodeId);
+      setDeliveries(Array.isArray(list) ? list : []);
+    } catch {
+      setDeliveries([]);
+    } finally {
+      setDeliveriesLoading(false);
+    }
+  }, [workflowId, nodeId]);
+
+  useEffect(() => {
+    void loadDeliveries();
+  }, [loadDeliveries]);
+
+  const handleReplayLast = async () => {
+    setReplaying(true);
+    try {
+      const run = await attempt(api.workflowGithubReplayLast(workflowId, nodeId), "Replayed last GitHub event");
+      if (run) {
+        await loadDeliveries();
+        onReplayed?.();
+      }
+    } finally {
+      setReplaying(false);
+    }
+  };
+
+  const accessAlerts = useMemo(
+    () => deriveGithubAccessAlerts({ role: "trigger", selectedRepos, status }),
+    [selectedRepos, status],
+  );
+
+  const handleReposChange = (nextRepos: string[]) => {
+    const patch: Record<string, unknown> = {
+      repos: nextRepos,
+      repo: nextRepos[0] || "",
+    };
+    if (shouldClearLabelsOnRepoChange(selectedRepos, nextRepos)) {
+      patch.labels = [];
+    }
+    setConfig(patch);
+  };
+
+  const toggleGroupEvents = (groupValues: string[], nextForGroup: string[]) => {
+    const groupSet = new Set(groupValues);
+    const others = selectedEvents.filter((e) => !groupSet.has(e));
+    const merged = [...others, ...nextForGroup];
+    const patch: Record<string, unknown> = { events: merged.length ? merged : ["issue.opened"] };
+    if (merged.includes("mention") && !cfg.mentionHandle && !cfg.mentionHandles?.length) {
       patch.mentionHandle = "@botkins-bot";
     }
     setConfig(patch);
   };
 
+  const hasPrEvent = selectedEvents.some((e) => e.startsWith("pr."));
   const signIn = status?.signIn;
-  const repoOptions = (status?.repos ?? []).slice(0, 12).map((r) => ({ value: r, label: r }));
+  const labelColorFor = (name: string) => {
+    const match = catalog.labels.find((l) => l.name.toLowerCase() === name.toLowerCase());
+    return normalizeLabelColor(match?.color);
+  };
 
   return (
     <View style={{ gap: space.lg }}>
@@ -230,7 +397,7 @@ function GithubTriggerEditor({ nodeId, cfg, setConfig }: { nodeId: string; cfg: 
             ) : !status?.installed ? (
               <>
                 <T variant="footnote" color="muted">
-                  Install the GitHub CLI (gh) on your computer so Botkins can connect GitHub and poll locally.
+                  Install the GitHub CLI (gh) on your computer so Botkins can connect GitHub and watch events.
                 </T>
                 <View style={{ flexDirection: "row", gap: space.sm, flexWrap: "wrap" }}>
                   <Button
@@ -268,7 +435,7 @@ function GithubTriggerEditor({ nodeId, cfg, setConfig }: { nodeId: string; cfg: 
             ) : (
               <>
                 <T variant="footnote" color="muted">
-                  Sign in once with your GitHub account so your computer can poll issues, PRs, comments, and @mentions locally.
+                  Sign in once with your GitHub account so your computer can watch issues, PRs, comments, and @mentions.
                 </T>
                 <View style={{ flexDirection: "row", gap: space.sm }}>
                   <Button title={busy ? "Starting…" : "Connect GitHub"} size="sm" icon={KeyRound} disabled={busy} onPress={() => void startSignIn()} />
@@ -283,44 +450,393 @@ function GithubTriggerEditor({ nodeId, cfg, setConfig }: { nodeId: string; cfg: 
         </Group>
       </View>
 
-      <Field label="Repository" placeholder="owner/repo" value={cfg.repo ?? ""} onChangeText={(repo) => setConfig({ repo: repo.trim() })} autoCapitalize="none" autoCorrect={false} />
-      {repoOptions.length > 0 && (
-        <Choice label="Your repositories" options={repoOptions} value={cfg.repo ?? ""} onChange={(repo: string) => setConfig({ repo })} />
-      )}
-
-      <Choice
-        label="Events"
-        multi
-        options={GITHUB_EVENTS.map((e) => ({
-          value: e,
-          label: e === "user_mentioned" && status?.login ? `Mentioned @${status.login}` : GITHUB_EVENT_LABEL[e],
-        }))}
-        value={selectedEvents}
-        onChange={onEventsChange}
+      <GithubAccessAlertsMobile
+        alerts={accessAlerts}
+        onConnect={() => void startSignIn()}
+        onOpenGithub={() => void Linking.openURL("https://github.com/settings/installations").catch(() => showToast("Couldn't open GitHub.", "error"))}
       />
 
-      {selectedEvents.includes("bot_mentioned") && (
+      <View style={{ gap: space.sm }}>
+        <Label>Repositories</Label>
+        <Group>
+          <Row
+            title={selectedRepos.length ? `${selectedRepos.length} selected` : "Choose repositories"}
+            subtitle={selectedRepos.length ? selectedRepos.join(", ") : "Grouped by owner"}
+            subtitleLines={2}
+            chevron
+            onPress={() => setRepoModal(true)}
+          />
+        </Group>
+        <SelectedChipRow
+          items={selectedRepos}
+          onRemove={(repo) => handleReposChange(selectedRepos.filter((r) => r.toLowerCase() !== repo.toLowerCase()))}
+        />
+      </View>
+
+      <View style={{ gap: space.md }}>
+        {WORKFLOW_GITHUB_EVENT_GROUPS.map((grp) => {
+          const groupVals = grp.events.map((e) => e.value);
+          const activeInGroup = selectedEvents.filter((e) => groupVals.includes(e));
+          return (
+            <Choice
+              key={grp.group}
+              label={`Events · ${grp.group}`}
+              multi
+              options={grp.events.map((e) => ({ value: e.value, label: e.label }))}
+              value={activeInGroup}
+              onChange={(next: string[]) => toggleGroupEvents(groupVals, next)}
+            />
+          );
+        })}
+      </View>
+
+      <View style={{ gap: space.sm }}>
+        <Label>Label filter (optional)</Label>
+        <Group>
+          <Row
+            title={selectedLabels.length ? `${selectedLabels.length} label${selectedLabels.length === 1 ? "" : "s"}` : "Any label"}
+            subtitle={catalogLoading ? "Loading repository labels…" : selectedLabels.length ? selectedLabels.join(", ") : "Pick color-coded labels from your repo"}
+            subtitleLines={2}
+            chevron
+            onPress={() => setLabelModal(true)}
+          />
+        </Group>
+        <SelectedChipRow
+          items={selectedLabels}
+          colorFor={labelColorFor}
+          onRemove={(lbl) => setConfig({ labels: selectedLabels.filter((l) => l.toLowerCase() !== lbl.toLowerCase()) })}
+        />
+      </View>
+
+      {selectedEvents.includes("mention") && (
         <Field
-          label="Bot mention handle(s)"
+          label="Mention handle(s)"
           hint="Default @botkins-bot. Separate multiple handles with commas."
           placeholder="@botkins-bot"
-          value={cfg.mentionHandle ?? "@botkins-bot"}
-          onChangeText={(mentionHandle) => setConfig({ mentionHandle })}
+          value={
+            Array.isArray(cfg.mentionHandles) && cfg.mentionHandles.length
+              ? cfg.mentionHandles.map((h: string) => `@${h.replace(/^@/, "")}`).join(", ")
+              : cfg.mentionHandle ?? "@botkins-bot"
+          }
+          onChangeText={(mentionHandle) => setConfig({ mentionHandle, mentionHandles: undefined })}
           autoCapitalize="none"
           autoCorrect={false}
         />
       )}
 
-      <Field label="Branch (PRs)" placeholder="Optional, e.g. main" value={cfg.branch ?? ""} onChangeText={(branch) => setConfig({ branch: branch.trim() || undefined })} autoCapitalize="none" autoCorrect={false} />
-      <Field label="Author" placeholder="Optional username" value={cfg.author ?? ""} onChangeText={(author) => setConfig({ author: author.trim().replace(/^@/, "") || undefined })} autoCapitalize="none" autoCorrect={false} />
+      <View style={{ gap: space.sm }}>
+        <Label>Filters</Label>
+        <Group>
+          <Row title="Ignore bot accounts" toggled={cfg.notBot !== false} onToggle={(notBot) => setConfig({ notBot })} />
+          <Row title="First-time contributors only" toggled={cfg.firstTime === true} onToggle={(firstTime) => setConfig({ firstTime: firstTime ? true : undefined })} />
+        </Group>
+        <Field label="Title contains" placeholder="Optional, e.g. [RFC]" value={cfg.titleContains ?? ""} onChangeText={(titleContains) => setConfig({ titleContains: titleContains.trim() || undefined })} autoCapitalize="none" autoCorrect={false} />
+        {hasPrEvent && (
+          <Field label="Base branch (PR target)" placeholder="Optional, e.g. main" value={cfg.baseBranch ?? ""} onChangeText={(baseBranch) => setConfig({ baseBranch: baseBranch.trim() || undefined })} autoCapitalize="none" autoCorrect={false} />
+        )}
+      </View>
+
       <Field
-        label="Poll every (minutes)"
+        label="Fallback poll interval (minutes)"
         keyboardType="number-pad"
         value={String(cfg.pollMinutes ?? 5)}
         onChangeText={(text) => {
           const n = Number(text.replace(/[^0-9]/g, ""));
           setConfig({ pollMinutes: n >= 1 ? Math.min(120, n) : 5 });
         }}
+      />
+
+      <GithubDeliveryPreviewCard
+        deliveries={deliveries}
+        replaying={replaying}
+        onOpenAll={() => setDeliveryModal(true)}
+        onReplayLast={() => void handleReplayLast()}
+      />
+
+      <GithubRepoPickerModal
+        visible={repoModal}
+        selected={selectedRepos}
+        available={status?.repos ?? []}
+        multi
+        onChange={handleReposChange}
+        onClose={() => setRepoModal(false)}
+      />
+      <GithubLabelPickerModal
+        visible={labelModal}
+        title="Trigger labels"
+        selected={selectedLabels}
+        catalog={catalog.labels}
+        loading={catalogLoading}
+        onChange={(labels) => setConfig({ labels })}
+        onClose={() => setLabelModal(false)}
+      />
+      <GithubDeliveriesModal
+        visible={deliveryModal}
+        deliveries={deliveries}
+        loading={deliveriesLoading}
+        replaying={replaying}
+        onRefresh={() => void loadDeliveries()}
+        onReplayLast={() => void handleReplayLast()}
+        onClose={() => setDeliveryModal(false)}
+      />
+    </View>
+  );
+}
+
+function GithubOutputEditor({
+  nodeId,
+  triggerNodes,
+  cfg,
+  setConfig,
+  fields,
+  analysis,
+}: {
+  nodeId: string;
+  triggerNodes: WorkflowNode[];
+  cfg: Record<string, any>;
+  setConfig: (patch: Record<string, unknown>) => void;
+  fields: NodeFieldAnalysis["available"];
+  analysis?: NodeFieldAnalysis;
+}) {
+  const { status, startSignIn } = useMobileGithubStatus(`out:${nodeId}`);
+  const [catalog, setCatalog] = useState<WorkflowGithubCatalog>({ repos: [], labels: [], assignees: [] });
+  const [catalogLoading, setCatalogLoading] = useState(false);
+  const [repoModal, setRepoModal] = useState(false);
+  const [labelModal, setLabelModal] = useState(false);
+  const [peopleModal, setPeopleModal] = useState(false);
+
+  const issueOnly = useMemo(() => isIssueOnlyGithubTrigger(triggerNodes), [triggerNodes]);
+  const targetRepos = useMemo(() => resolveOutputTargetRepos(cfg, triggerNodes), [cfg, triggerNodes]);
+  const targetKey = targetRepos.join("|");
+
+  const action = (cfg.action || "comment") as WorkflowGithubAction;
+  const actionMeta = WORKFLOW_GITHUB_ACTION_OPTIONS.find((a) => a.value === action) ?? WORKFLOW_GITHUB_ACTION_OPTIONS[0];
+  const sameRepo = cfg.sameRepository !== false && (!cfg.repository || cfg.repository === "trigger");
+  const sameItem = cfg.sameItem !== false && (!cfg.item || cfg.item === "event");
+
+  const accessAlerts = useMemo(
+    () => deriveGithubAccessAlerts({ role: "output", selectedRepos: targetRepos, status }),
+    [targetRepos, status],
+  );
+
+  useEffect(() => {
+    if (!status?.authenticated || !targetRepos.length) {
+      setCatalog({ repos: [], labels: [], assignees: [] });
+      return;
+    }
+    let live = true;
+    setCatalogLoading(true);
+    void api
+      .workflowGithubCatalog({ repos: targetRepos.slice(0, 3), includeLabels: true, includeAssignees: true })
+      .then((res) => {
+        if (live && res) setCatalog(res);
+      })
+      .catch(() => {})
+      .finally(() => {
+        if (live) setCatalogLoading(false);
+      });
+    return () => {
+      live = false;
+    };
+  }, [status?.authenticated, targetKey]);
+
+  const labelsFromAgent = cfg.labelsFrom === "agent";
+  const selectedLabels: string[] = useMemo(
+    () => (Array.isArray(cfg.labels) ? cfg.labels.map((l: unknown) => String(l)).filter(Boolean) : []),
+    [cfg.labels],
+  );
+
+  const isReviewRequest = action === "review.request";
+  const peopleField = isReviewRequest ? "reviewers" : "assignees";
+  const peopleFromAgent = cfg.person === "agent" || (isReviewRequest ? cfg.reviewersFrom === "agent" : cfg.assigneesFrom === "agent");
+  const selectedPeople: string[] = useMemo(() => {
+    const raw = isReviewRequest ? cfg.reviewers : cfg.assignees;
+    return Array.isArray(raw) ? raw.map((p: unknown) => String(p).replace(/^@/, "")).filter(Boolean) : [];
+  }, [cfg.reviewers, cfg.assignees, isReviewRequest]);
+
+  const allowedActions = WORKFLOW_GITHUB_ACTION_OPTIONS.filter((opt) => !issueOnly || !opt.prOnly || opt.value === action);
+  const labelColorFor = (name: string) => {
+    const match = catalog.labels.find((l) => l.name.toLowerCase() === name.toLowerCase());
+    return normalizeLabelColor(match?.color);
+  };
+
+  return (
+    <View style={{ gap: space.lg }}>
+      <GithubAccessAlertsMobile
+        alerts={accessAlerts}
+        onConnect={() => void startSignIn()}
+        onOpenGithub={() => void Linking.openURL("https://github.com/settings/installations").catch(() => showToast("Couldn't open GitHub.", "error"))}
+      />
+
+      <Choice
+        label="GitHub action"
+        options={allowedActions.map((a) => ({ value: a.value, label: a.prOnly ? `${a.label} (PR)` : a.label }))}
+        value={action}
+        onChange={(nextAction: WorkflowGithubAction) => setConfig({ action: nextAction })}
+      />
+      {issueOnly && PR_ONLY_ACTIONS.has(action) && (
+        <T variant="footnote" color="danger">
+          This action only runs on pull requests, but the trigger only watches issues.
+        </T>
+      )}
+
+      <View style={{ gap: space.sm }}>
+        <Label>Target</Label>
+        <Group>
+          <Row
+            title="Same repository as trigger"
+            toggled={sameRepo}
+            onToggle={(on) => setConfig(on ? { sameRepository: true, repository: "trigger" } : { sameRepository: false, repository: targetRepos[0] || "" })}
+          />
+          {!sameRepo && (
+            <Row
+              title="Repository"
+              subtitle={cfg.repository && cfg.repository !== "trigger" ? cfg.repository : "Choose owner/repo"}
+              chevron
+              onPress={() => setRepoModal(true)}
+            />
+          )}
+          {action !== "issue.create" && (
+            <Row
+              title="Same issue or PR as trigger"
+              toggled={sameItem}
+              onToggle={(on) => setConfig(on ? { sameItem: true, item: "event" } : { sameItem: false, item: "" })}
+            />
+          )}
+        </Group>
+        {action !== "issue.create" && !sameItem && (
+          <TemplateField
+            label="Issue or PR number / URL"
+            area={false}
+            value={cfg.item && cfg.item !== "event" ? cfg.item : ""}
+            onChange={(item) => setConfig({ sameItem: false, item })}
+            fields={fields}
+            problems={problemsFor(analysis, "item")}
+            placeholder="#123, URL, or {{number}}"
+          />
+        )}
+      </View>
+
+      {actionMeta.needsTitle && (
+        <TemplateField
+          label="Issue title"
+          area={false}
+          value={cfg.title ?? ""}
+          onChange={(title) => setConfig({ title })}
+          fields={fields}
+          problems={problemsFor(analysis, "title")}
+          placeholder="Title for the new issue"
+        />
+      )}
+
+      {(actionMeta.needsBody || actionMeta.optionalBody) && (
+        <TemplateField
+          label={actionMeta.needsBody ? "Body" : "Body (optional)"}
+          value={cfg.body ?? cfg.template ?? ""}
+          onChange={(body) => setConfig({ body, template: body })}
+          fields={fields}
+          problems={problemsFor(analysis, "body") ?? problemsFor(analysis, "template")}
+          placeholder="Comment or review body using {{agent_reply}}"
+        />
+      )}
+
+      {actionMeta.usesCloseReason && (
+        <Choice
+          label="Close reason"
+          options={[
+            { value: "completed", label: "Completed" },
+            { value: "not_planned", label: "Not planned" },
+          ]}
+          value={cfg.stateReason ?? "completed"}
+          onChange={(stateReason: string) => setConfig({ stateReason })}
+        />
+      )}
+
+      {actionMeta.usesLabels && (
+        <View style={{ gap: space.sm }}>
+          <Label>Catalog labels</Label>
+          <Group>
+            <Row
+              title="Let agent pick from repo catalog"
+              toggled={labelsFromAgent}
+              onToggle={(on) => setConfig({ labelsFrom: on ? "agent" : undefined })}
+            />
+            {!labelsFromAgent && (
+              <Row
+                title={selectedLabels.length ? `${selectedLabels.length} selected` : "Choose labels"}
+                subtitle={catalogLoading ? "Loading labels…" : selectedLabels.join(", ") || "Pick from repository catalog"}
+                subtitleLines={2}
+                chevron
+                onPress={() => setLabelModal(true)}
+              />
+            )}
+          </Group>
+          {!labelsFromAgent && (
+            <SelectedChipRow
+              items={selectedLabels}
+              colorFor={labelColorFor}
+              onRemove={(lbl) => setConfig({ labels: selectedLabels.filter((l) => l.toLowerCase() !== lbl.toLowerCase()) })}
+            />
+          )}
+        </View>
+      )}
+
+      {(actionMeta.usesAssignees || actionMeta.usesReviewers) && (
+        <View style={{ gap: space.sm }}>
+          <Label>{isReviewRequest ? "Reviewers" : "Assignees"}</Label>
+          <Group>
+            <Row
+              title="Let agent pick from collaborators"
+              toggled={peopleFromAgent}
+              onToggle={(on) => setConfig({ person: on ? "agent" : undefined })}
+            />
+            {!peopleFromAgent && (
+              <Row
+                title={selectedPeople.length ? `${selectedPeople.length} selected` : `Choose ${isReviewRequest ? "reviewers" : "assignees"}`}
+                subtitle={catalogLoading ? "Loading collaborators…" : selectedPeople.map((p) => `@${p}`).join(", ") || "Pick from repository collaborators"}
+                subtitleLines={2}
+                chevron
+                onPress={() => setPeopleModal(true)}
+              />
+            )}
+          </Group>
+          {!peopleFromAgent && (
+            <SelectedChipRow
+              items={selectedPeople.map((p) => `@${p}`)}
+              onRemove={(handle) => {
+                const clean = handle.replace(/^@/, "").toLowerCase();
+                setConfig({ [peopleField]: selectedPeople.filter((p) => p.toLowerCase() !== clean), person: undefined });
+              }}
+            />
+          )}
+        </View>
+      )}
+
+      <GithubRepoPickerModal
+        visible={repoModal}
+        selected={cfg.repository && cfg.repository !== "trigger" ? [cfg.repository] : []}
+        available={status?.repos ?? []}
+        multi={false}
+        onChange={(next) => setConfig({ sameRepository: false, repository: next[0] || "" })}
+        onClose={() => setRepoModal(false)}
+      />
+      <GithubLabelPickerModal
+        visible={labelModal}
+        title="Output labels"
+        selected={selectedLabels}
+        catalog={catalog.labels}
+        loading={catalogLoading}
+        onChange={(labels) => setConfig({ labels })}
+        onClose={() => setLabelModal(false)}
+      />
+      <GithubPeoplePickerModal
+        visible={peopleModal}
+        title={isReviewRequest ? "Reviewers" : "Assignees"}
+        selected={selectedPeople}
+        catalog={catalog.assignees}
+        loading={catalogLoading}
+        onChange={(people) => setConfig({ [peopleField]: people, person: undefined })}
+        onClose={() => setPeopleModal(false)}
       />
     </View>
   );
@@ -388,12 +904,26 @@ function ConditionEditor({ cfg, setConfig, fields }: { cfg: Record<string, any>;
   );
 }
 
-function OutputEditor({ cfg, setConfig, fields, analysis }: { cfg: Record<string, any>; setConfig: (patch: Record<string, unknown>) => void; fields: NodeFieldAnalysis["available"]; analysis?: NodeFieldAnalysis }) {
+function OutputEditor({
+  nodeId,
+  triggerNodes,
+  cfg,
+  setConfig,
+  fields,
+  analysis,
+}: {
+  nodeId: string;
+  triggerNodes: WorkflowNode[];
+  cfg: Record<string, any>;
+  setConfig: (patch: Record<string, unknown>) => void;
+  fields: NodeFieldAnalysis["available"];
+  analysis?: NodeFieldAnalysis;
+}) {
   const bots = useBots();
   const chats = useChats();
   const { colors } = useTheme();
   const dest = cfg.destination ?? "chat";
-  const label = (d: string) => (d === "chat" ? "Chat" : d === "feed" ? "Feed" : d === "idea" ? "Ideas" : d === "goal" ? "Goals" : "Notification");
+  const label = (d: string) => (d === "chat" ? "Chat" : d === "feed" ? "Feed" : d === "idea" ? "Ideas" : d === "goal" ? "Goals" : d === "github" ? "GitHub" : "Notification");
   const visible = chats.filter((c) => !c.archived).slice(0, 20);
   const card = dest === "chat" && cfg.card && typeof cfg.card === "object" ? cfg.card : null;
   const a2ui = dest === "chat" && cfg.a2ui !== undefined && cfg.a2ui !== null ? cfg.a2ui : null;
@@ -421,12 +951,34 @@ function OutputEditor({ cfg, setConfig, fields, analysis }: { cfg: Record<string
   const dispatch = card?.dispatch && typeof card.dispatch === "object" ? card.dispatch : null;
   const setDispatch = (patch: Record<string, unknown>) => setCard({ dispatch: { ...(dispatch ?? {}), ...patch } });
   const cardFields: { label: string; value: string; tone?: string }[] = Array.isArray(card?.fields) ? card.fields : [];
-  const hasMessageOrCard = !!String(cfg.template ?? "").trim() || !!(card && String(card.title ?? "").trim()) || !!a2uiText.trim();
+  const hasMessageOrCard = dest === "github" || !!String(cfg.template ?? "").trim() || !!(card && String(card.title ?? "").trim()) || !!a2uiText.trim();
   return (
     <View style={{ gap: space.lg }}>
-      <Choice label="Send to" options={DESTINATIONS.map((d) => ({ value: d, label: label(d) }))} value={dest} onChange={(destination: string) => setConfig({ destination, ...(destination !== "chat" ? { card: undefined, a2ui: undefined } : {}) })} />
-      <Choice label="As" options={[{ value: "", label: "First bot" }, ...bots.map((b) => ({ value: b.name, label: b.name }))]} value={cfg.botName ?? ""} onChange={(botName: string) => setConfig({ botName: botName || undefined, botId: undefined })} />
-      {dest === "chat" && <Choice label="Chat" options={[{ value: "", label: "The bot's main chat" }, ...visible.map((c) => ({ value: c.id, label: c.title || "Chat" }))]} value={cfg.chatId ?? ""} onChange={(chatId: string) => setConfig({ chatId: chatId || undefined })} />}
+      <Choice
+        label="Send to"
+        options={DESTINATIONS.map((d) => ({ value: d, label: label(d) }))}
+        value={dest}
+        onChange={(destination: string) => {
+          if (destination === "github") {
+            setConfig({
+              destination: "github",
+              action: cfg.action || "comment",
+              sameRepository: cfg.sameRepository ?? true,
+              sameItem: cfg.sameItem ?? true,
+              card: undefined,
+              a2ui: undefined,
+            });
+          } else {
+            setConfig({ destination, ...(destination !== "chat" ? { card: undefined, a2ui: undefined } : {}) });
+          }
+        }}
+      />
+      {dest === "github" ? (
+        <GithubOutputEditor nodeId={nodeId} triggerNodes={triggerNodes} cfg={cfg} setConfig={setConfig} fields={fields} analysis={analysis} />
+      ) : (
+        <>
+          <Choice label="As" options={[{ value: "", label: "First bot" }, ...bots.map((b) => ({ value: b.name, label: b.name }))]} value={cfg.botName ?? ""} onChange={(botName: string) => setConfig({ botName: botName || undefined, botId: undefined })} />
+          {dest === "chat" && <Choice label="Chat" options={[{ value: "", label: "The bot's main chat" }, ...visible.map((c) => ({ value: c.id, label: c.title || "Chat" }))]} value={cfg.chatId ?? ""} onChange={(chatId: string) => setConfig({ chatId: chatId || undefined })} />}
       {dest === "chat" && (
         <Segmented
           options={[
@@ -550,6 +1102,8 @@ function OutputEditor({ cfg, setConfig, fields, analysis }: { cfg: Record<string
       {dest === "goal" && <Choice label="Category" options={GOAL_CATEGORIES.map((c) => ({ value: c, label: cap(c) }))} value={cfg.category ?? "other"} onChange={(category: string) => setConfig({ category })} />}
       <TemplateField label={card || a2ui ? "Plain-text fallback (optional)" : "Message"} value={cfg.template ?? ""} onChange={(template) => setConfig({ template })} fields={fields} problems={problemsFor(analysis, "template")} placeholder={card || a2ui ? "Auto-generated from the UI when blank." : "What to send. Tap a field to put it in."} />
       {!hasMessageOrCard && <T variant="footnote" style={{ color: colors.warning }}>An empty message fails the run.</T>}
+        </>
+      )}
     </View>
   );
 }

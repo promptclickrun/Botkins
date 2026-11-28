@@ -4,10 +4,11 @@ import { LocateFixed, Minus, Plus, Rows3, TriangleAlert } from "lucide-react-nat
 import { useEffect, useMemo, useRef, useState } from "react";
 import { type LayoutChangeEvent, View } from "react-native";
 import { GestureDetector, useCompetingGestures, usePanGesture, usePinchGesture, useSimultaneousGestures, useTapGesture } from "react-native-gesture-handler";
-import Animated, { useAnimatedStyle, useSharedValue, withTiming } from "react-native-reanimated";
+import Animated, { type SharedValue, useAnimatedStyle, useSharedValue, withSpring } from "react-native-reanimated";
+import { scheduleOnRN } from "react-native-worklets";
 import Svg, { Path, Text as SvgText } from "react-native-svg";
 import type { WorkflowNode } from "@/link/types";
-import { haptic, IconButton, radius, space, T, Tap, tint, useTheme } from "@/ui";
+import { Glass, haptic, IconButton, radius, space, T, Tap, tint, useTheme } from "@/ui";
 import type { NodeFieldAnalysis } from "./fields";
 import { BRANCH_LABEL, type Branch, branchesOf, branchOf, bounds, type Graph, NODE_H, NODE_W, summary } from "./graph";
 import { iconFor, useKindColor } from "./parts";
@@ -28,6 +29,7 @@ type Props = {
 const MIN_SCALE = 0.35;
 const MAX_SCALE = 2;
 const PAD = 120;
+const CANVAS_SPRING = { damping: 24, stiffness: 260, mass: 0.9 };
 
 export function Canvas({ graph, analysis, direction, botName, editable, onOpen, onAdd, onMove, onTidy }: Props) {
   const { colors } = useTheme();
@@ -37,10 +39,11 @@ export function Canvas({ graph, analysis, direction, botName, editable, onOpen, 
   const y = useSharedValue(0);
   const start = useSharedValue({ x: 0, y: 0, scale: 1 });
   const dragging = useSharedValue(false);
+  // Active drag offset lives on a UI-thread SharedValue (zero JS re-renders during drag).
+  const dragId = useSharedValue<string | null>(null);
+  const dragOffset = useSharedValue({ dx: 0, dy: 0 });
+  const [isDraggingNode, setIsDraggingNode] = useState(false);
   const box = useMemo(() => bounds(graph), [graph]);
-  // While a step is dragged, it draws where the finger is; the graph moves once it is dropped.
-  const [drag, setDrag] = useState<{ id: string; dx: number; dy: number } | null>(null);
-  const shown = useMemo(() => (drag ? { ...graph, nodes: graph.nodes.map((n) => (n.id === drag.id ? { ...n, position: { x: n.position.x + drag.dx, y: n.position.y + drag.dy } } : n)) } : graph), [graph, drag]);
 
   const fit = (animate = true) => {
     if (!view.w || !view.h) return;
@@ -48,7 +51,9 @@ export function Canvas({ graph, analysis, direction, botName, editable, onOpen, 
     // Scale is about the content's top-left (transformOrigin 0 0), so the offset puts the box's middle in the view's middle.
     const tx = view.w / 2 - (box.x + box.w / 2) * s;
     const ty = (view.h - 60) / 2 - (box.y + box.h / 2) * s;
-    const set = (v: { value: number }, to: number) => (v.value = animate ? withTiming(to, { duration: 260 }) : to);
+    const set = (v: SharedValue<number>, to: number) => {
+      v.value = animate ? withSpring(to, CANVAS_SPRING) : to;
+    };
     set(scale, s);
     set(x, tx);
     set(y, ty);
@@ -68,12 +73,13 @@ export function Canvas({ graph, analysis, direction, botName, editable, onOpen, 
   }, [direction, view.w]);
 
   const zoomBy = (factor: number) => {
+    haptic.select();
     const next = Math.max(MIN_SCALE, Math.min(MAX_SCALE, scale.value * factor));
     const cx = view.w / 2;
     const cy = view.h / 2;
-    x.value = withTiming(cx - ((cx - x.value) / scale.value) * next, { duration: 180 });
-    y.value = withTiming(cy - ((cy - y.value) / scale.value) * next, { duration: 180 });
-    scale.value = withTiming(next, { duration: 180 });
+    x.value = withSpring(cx - ((cx - x.value) / scale.value) * next, CANVAS_SPRING);
+    y.value = withSpring(cy - ((cy - y.value) / scale.value) * next, CANVAS_SPRING);
+    scale.value = withSpring(next, CANVAS_SPRING);
   };
 
   // One finger moves around; two belong to the pinch, which also follows the fingers' middle.
@@ -113,11 +119,11 @@ export function Canvas({ graph, analysis, direction, botName, editable, onOpen, 
   const content = useAnimatedStyle(() => ({ transform: [{ translateX: x.value }, { translateY: y.value }, { scale: scale.value }] }));
 
   const kindColor = useKindColor();
-  const byId = useMemo(() => new Map(shown.nodes.map((n) => [n.id, n])), [shown]);
+  const byId = useMemo(() => new Map(graph.nodes.map((n) => [n.id, n])), [graph]);
   const width = box.x + box.w + PAD * 2;
   const height = box.y + box.h + PAD * 2;
 
-  const edges = shown.edges.map((e) => {
+  const edges = graph.edges.map((e) => {
     const a = byId.get(e.from);
     const b = byId.get(e.to);
     if (!a || !b) return null;
@@ -130,6 +136,18 @@ export function Canvas({ graph, analysis, direction, botName, editable, onOpen, 
     const tone = branch === "no" || branch === "rejected" ? colors.danger : branch === "yes" || branch === "approved" ? colors.success : colors.lineStrong;
     return { id: e.id, d, tone, label: branch === "default" ? null : BRANCH_LABEL[branch], mx: (sx + tx) / 2, my: (sy + ty) / 2 - 6, tx, ty, across };
   });
+
+  const handleDragStart = () => {
+    haptic.select();
+    setIsDraggingNode(true);
+  };
+
+  const handleDragDrop = (nodeId: string, baseX: number, baseY: number, dx: number, dy: number) => {
+    setIsDraggingNode(false);
+    if (Math.abs(dx) + Math.abs(dy) > 2) {
+      onMove(nodeId, { x: baseX + dx, y: baseY + dy });
+    }
+  };
 
   return (
     <View style={{ flex: 1, overflow: "hidden", backgroundColor: colors.sunken }} onLayout={(e: LayoutChangeEvent) => setView({ w: e.nativeEvent.layout.width, h: e.nativeEvent.layout.height })}>
@@ -152,7 +170,7 @@ export function Canvas({ graph, analysis, direction, botName, editable, onOpen, 
                   ),
               )}
             </Svg>
-            {shown.nodes.map((n) => (
+            {graph.nodes.map((n) => (
               <CanvasNode
                 key={n.id}
                 node={n}
@@ -162,20 +180,19 @@ export function Canvas({ graph, analysis, direction, botName, editable, onOpen, 
                 editable={editable}
                 scale={scale}
                 dragging={dragging}
+                dragId={dragId}
+                dragOffset={dragOffset}
                 onOpen={() => onOpen(n.id)}
-                onDrag={(dx, dy) => setDrag({ id: n.id, dx, dy })}
-                onDrop={(dx, dy) => {
-                  setDrag(null);
-                  if (Math.abs(dx) + Math.abs(dy) > 2) onMove(n.id, { x: n.position.x + dx, y: n.position.y + dy });
-                }}
+                onDragStart={handleDragStart}
+                onDrop={(dx, dy) => handleDragDrop(n.id, n.position.x, n.position.y, dx, dy)}
               />
             ))}
             {editable &&
-              !drag &&
-              shown.nodes.flatMap((n) => {
+              !isDraggingNode &&
+              graph.nodes.flatMap((n) => {
                 const ways = branchesOf(n.kind) ?? ["default" as Branch];
                 return ways.map((b, i) => {
-                  const taken = shown.edges.some((e) => e.from === n.id && branchOf(e, n) === b);
+                  const taken = graph.edges.some((e) => e.from === n.id && branchOf(e, n) === b);
                   const offset = ways.length > 1 ? (i === 0 ? -0.22 : 0.22) : 0;
                   const px = direction === "across" ? n.position.x + NODE_W + 14 : n.position.x + NODE_W * (0.5 + offset) - 14;
                   const py = direction === "across" ? n.position.y + NODE_H * (0.5 + offset) - 14 : n.position.y + NODE_H + 10;
@@ -208,15 +225,34 @@ export function Canvas({ graph, analysis, direction, botName, editable, onOpen, 
           </Animated.View>
         </View>
       </GestureDetector>
-      <View style={{ position: "absolute", right: space.md, bottom: space.md, flexDirection: "row", gap: space.sm, padding: space.xs, borderRadius: radius.pill, backgroundColor: colors.raised, borderWidth: 1, borderColor: colors.line }}>
-        <IconButton icon={Minus} label="Zoom out" size={36} onPress={() => zoomBy(1 / 1.25)} />
-        <IconButton icon={Plus} label="Zoom in" size={36} onPress={() => zoomBy(1.25)} />
-        <IconButton icon={LocateFixed} label="Fit the workflow" size={36} onPress={() => fit()} />
+      <Glass
+        interactive
+        style={{
+          position: "absolute",
+          right: space.md,
+          bottom: space.md,
+          flexDirection: "row",
+          gap: space.xs,
+          padding: space.xs,
+          borderRadius: radius.pill,
+        }}
+      >
+        <IconButton icon={Minus} label="Zoom out" size={40} onPress={() => zoomBy(1 / 1.25)} />
+        <IconButton icon={Plus} label="Zoom in" size={40} onPress={() => zoomBy(1.25)} />
+        <IconButton
+          icon={LocateFixed}
+          label="Fit the workflow"
+          size={40}
+          onPress={() => {
+            haptic.select();
+            fit();
+          }}
+        />
         {editable && (
           <IconButton
             icon={Rows3}
             label={direction === "across" ? "Tidy, left to right" : "Tidy, top to bottom"}
-            size={36}
+            size={40}
             onPress={() => {
               haptic.select();
               onTidy();
@@ -225,72 +261,114 @@ export function Canvas({ graph, analysis, direction, botName, editable, onOpen, 
             }}
           />
         )}
-      </View>
+      </Glass>
     </View>
   );
 }
 
-function CanvasNode({ node, color, caption, problems, editable, scale, dragging, onOpen, onDrag, onDrop }: {
+function CanvasNode({
+  node,
+  color,
+  caption,
+  problems,
+  editable,
+  scale,
+  dragging,
+  dragId,
+  dragOffset,
+  onOpen,
+  onDragStart,
+  onDrop,
+}: {
   node: WorkflowNode;
   color: string;
   caption: string;
   problems: number;
   editable: boolean;
-  scale: { value: number };
-  dragging: { value: boolean };
+  scale: SharedValue<number>;
+  dragging: SharedValue<boolean>;
+  dragId: SharedValue<string | null>;
+  dragOffset: SharedValue<{ dx: number; dy: number }>;
   onOpen: () => void;
-  onDrag: (dx: number, dy: number) => void;
+  onDragStart: () => void;
   onDrop: (dx: number, dy: number) => void;
 }) {
   const { colors } = useTheme();
   const Icon = iconFor(node);
-  const last = useRef({ dx: 0, dy: 0 });
+  const nodeId = node.id;
+
   const hold = usePanGesture({
-    runOnJS: true,
     enabled: editable,
     activateAfterLongPress: 280,
     onActivate: () => {
-      haptic.select();
+      "worklet";
       dragging.value = true;
-      last.current = { dx: 0, dy: 0 };
+      dragId.value = nodeId;
+      dragOffset.value = { dx: 0, dy: 0 };
+      scheduleOnRN(onDragStart);
     },
     onUpdate: (e) => {
+      "worklet";
       const s = scale.value || 1;
-      last.current = { dx: e.translationX / s, dy: e.translationY / s };
-      onDrag(last.current.dx, last.current.dy);
+      dragOffset.value = { dx: e.translationX / s, dy: e.translationY / s };
     },
     onDeactivate: () => {
+      "worklet";
+      const { dx, dy } = dragOffset.value;
       dragging.value = false;
-      onDrop(last.current.dx, last.current.dy);
+      dragId.value = null;
+      dragOffset.value = { dx: 0, dy: 0 };
+      scheduleOnRN(onDrop, dx, dy);
     },
     onFinalize: () => {
-      dragging.value = false;
+      "worklet";
+      if (dragId.value === nodeId) {
+        dragging.value = false;
+        dragId.value = null;
+        dragOffset.value = { dx: 0, dy: 0 };
+      }
     },
   });
   const tap = useTapGesture({ runOnJS: true, onActivate: () => onOpen() });
   const gesture = useCompetingGestures(hold, tap);
+
+  const animatedNodeStyle = useAnimatedStyle(() => {
+    const active = dragId.value === nodeId;
+    return {
+      transform: [
+        { translateX: active ? dragOffset.value.dx : 0 },
+        { translateY: active ? dragOffset.value.dy : 0 },
+        { scale: withSpring(active ? 1.03 : 1, CANVAS_SPRING) },
+      ],
+      zIndex: active ? 20 : 1,
+    };
+  });
+
   return (
     <GestureDetector gesture={gesture}>
-      <View
+      <Animated.View
         accessible
         accessibilityRole="button"
         accessibilityLabel={`${node.label}. ${caption}${problems ? `. ${problems} to fix` : ""}`}
         accessibilityHint={editable ? "Opens the step. Hold and drag to move it." : "Opens the step."}
-        style={{
-          position: "absolute",
-          left: node.position.x,
-          top: node.position.y,
-          width: NODE_W,
-          height: NODE_H,
-          borderRadius: radius.md,
-          backgroundColor: colors.surface,
-          borderWidth: 1.5,
-          borderColor: problems ? colors.warning : tint(color, 0.45),
-          padding: space.sm,
-          flexDirection: "row",
-          gap: space.sm,
-          alignItems: "center",
-        }}
+        style={[
+          {
+            position: "absolute",
+            left: node.position.x,
+            top: node.position.y,
+            width: NODE_W,
+            height: NODE_H,
+            borderRadius: radius.md,
+            backgroundColor: colors.surface,
+            borderWidth: 1.5,
+            borderColor: problems ? colors.warning : tint(color, 0.45),
+            padding: space.sm,
+            flexDirection: "row",
+            gap: space.sm,
+            alignItems: "center",
+          },
+          animatedNodeStyle,
+        ]}
       >
         <View style={{ width: 34, height: 34, borderRadius: 10, backgroundColor: tint(color, 0.18), alignItems: "center", justifyContent: "center" }}>
           <Icon size={18} color={color} strokeWidth={2.2} />
@@ -304,7 +382,7 @@ function CanvasNode({ node, color, caption, problems, editable, scale, dragging,
           </T>
         </View>
         {problems > 0 && <TriangleAlert size={16} color={colors.warning} />}
-      </View>
+      </Animated.View>
     </GestureDetector>
   );
 }

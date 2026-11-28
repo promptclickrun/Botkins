@@ -259,19 +259,28 @@ export class WorkflowGithubAuth {
     }
 
     let repos = [];
+    let repoAccess = [];
     if (authenticated && includeRepos) {
       const repoRes = await this.execGh(
         bin,
-        ["repo", "list", "--limit", "30", "--json", "nameWithOwner"],
+        ["repo", "list", "--limit", "100", "--json", "nameWithOwner,isPrivate,viewerPermission"],
         { timeout: 12_000 },
       );
       if (repoRes.ok) {
         try {
           const list = JSON.parse(repoRes.stdout || "[]");
           if (Array.isArray(list)) {
-            repos = list
-              .map((r) => (typeof r?.nameWithOwner === "string" ? r.nameWithOwner.trim() : ""))
-              .filter(Boolean);
+            for (const r of list) {
+              const name = typeof r?.nameWithOwner === "string" ? r.nameWithOwner.trim() : "";
+              if (!name) continue;
+              repos.push(name);
+              const perm = String(r?.viewerPermission || "").toUpperCase();
+              repoAccess.push({
+                fullName: name,
+                ...(perm ? { writable: perm === "ADMIN" || perm === "MAINTAIN" || perm === "WRITE" } : {}),
+                ...(typeof r?.isPrivate === "boolean" ? { isPrivate: r.isPrivate } : {}),
+              });
+            }
           }
         } catch {}
       }
@@ -283,6 +292,7 @@ export class WorkflowGithubAuth {
       login: login || null,
       scopes: parsed.scopes,
       repos,
+      repoAccess,
       installUrl: GH_INSTALL_URL,
       signIn: this.signInSnapshot(),
     };

@@ -801,6 +801,7 @@ const HOST_SCOPED_CALLS = new Set([
   "workflowGithubStatus",
   "workflowGithubSignInStart",
   "workflowGithubSignInCancel",
+  "workflowGithubCatalog",
   "claudeArtifacts.status",
   "claudeArtifacts.setModel",
   "market.catalog",

@@ -4,7 +4,7 @@
 // - "Runs" tab: run history with per-step statuses, durations, outputs, Approve/Reject controls,
 //   and Retry from failed step (using the node's current settings).
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   AlertTriangle,
   Check,
@@ -12,13 +12,21 @@ import {
   Clock,
   Copy,
   ExternalLink,
+  Filter,
+  GitBranch,
   KeyRound,
+  Link2,
   LoaderCircle,
+  Play,
   Plus,
   RefreshCw,
+  Repeat,
   RotateCcw,
+  Search,
+  ShieldAlert,
   ShieldCheck,
   Trash2,
+  WifiOff,
   X,
   XCircle,
 } from "lucide-react";
@@ -31,6 +39,8 @@ import type {
   Workflow,
   WorkflowConditionRule,
   WorkflowFieldDef,
+  WorkflowGithubCatalog,
+  WorkflowGithubDelivery,
   WorkflowGithubStatus,
   WorkflowNode,
   WorkflowRun,
@@ -38,6 +48,26 @@ import type {
 } from "./types";
 import type { NodeFieldAnalysis } from "./workflowAnalysis";
 import { TRIGGER_FIELDS } from "./workflowAnalysis";
+import {
+  deriveGithubAccessAlerts,
+  extractCanonicalEvents,
+  extractConfiguredRepos,
+  filterLabelOptions,
+  groupDeliveriesByOutcome,
+  groupReposByOwner,
+  isIssueOnlyGithubTrigger,
+  latestReplayableDelivery,
+  normalizeLabelColor,
+  PR_ONLY_ACTIONS,
+  resolveOutputTargetRepos,
+  shouldClearLabelsOnRepoChange,
+  SKIP_REASON_META,
+  WORKFLOW_GITHUB_ACTION_OPTIONS,
+  WORKFLOW_GITHUB_EVENT_GROUPS,
+  WORKFLOW_GITHUB_EVENT_LABELS,
+  type GithubAccessAlert,
+  type WorkflowGithubAction,
+} from "./workflowGithub";
 
 const api = window.botkins;
 
@@ -58,45 +88,14 @@ const CONDITION_OPS: Array<{ value: WorkflowConditionRule["op"]; label: string }
   { value: "empty", label: "is empty" },
 ];
 
-const GITHUB_EVENT_OPTIONS: Array<{ value: string; label: string; hint: string }> = [
-  { value: "pr_opened", label: "PR opened", hint: "New pull request" },
-  { value: "pr_updated", label: "PR updated", hint: "PR edited, closed, or merged" },
-  { value: "pr_review", label: "PR review", hint: "Review decision changed" },
-  { value: "ci_status", label: "CI status", hint: "Checks passing/failing changed" },
-  { value: "issue_opened", label: "Issue opened", hint: "New issue" },
-  { value: "issue_updated", label: "Issue updated", hint: "Issue edited, labeled, or closed" },
-  { value: "issue_comment", label: "Comment added", hint: "New issue or PR comment" },
-  { value: "user_mentioned", label: "Mentioned me", hint: "Your GitHub @username mentioned" },
-  { value: "bot_mentioned", label: "Bot mentioned", hint: "Custom @bot handle mentioned" },
-];
-
-function normalizeEventList(raw: unknown): string[] {
-  if (Array.isArray(raw)) return raw.map((s) => String(s).trim().toLowerCase()).filter(Boolean);
-  if (typeof raw === "string" && raw.trim()) {
-    return raw
-      .split(",")
-      .map((s) => s.trim().toLowerCase())
-      .filter(Boolean);
-  }
-  return ["pr_opened", "pr_review", "ci_status"];
-}
-
-function GithubTriggerSettings({
-  nodeId,
-  config,
-  setConfig,
-}: {
-  nodeId: string;
-  config: Record<string, any>;
-  setConfig: (patch: Record<string, any>) => void;
-}) {
+function useGithubStatus(triggerKey: string) {
   const [status, setStatus] = useState<WorkflowGithubStatus | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [copiedCode, setCopiedCode] = useState(false);
 
-  const loadStatus = async (includeRepos = true) => {
+  const loadStatus = useCallback(async (includeRepos = true) => {
     try {
       const next = await api.workflowGithubStatus({ includeRepos });
       setStatus(next);
@@ -108,13 +107,14 @@ function GithubTriggerSettings({
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
 
   useEffect(() => {
     setLoading(true);
     void loadStatus(true);
-  }, [nodeId]);
+  }, [triggerKey, loadStatus]);
 
+  // Poll ONLY while an interactive device-code sign-in is actively pending.
   const waiting = status?.signIn?.status === "waiting" || status?.signIn?.status === "starting";
   useEffect(() => {
     if (!waiting) return;
@@ -122,7 +122,7 @@ function GithubTriggerSettings({
       void loadStatus(true);
     }, 2500);
     return () => clearInterval(timer);
-  }, [waiting]);
+  }, [waiting, loadStatus]);
 
   const handleStartSignIn = async () => {
     setBusy(true);
@@ -168,19 +168,514 @@ function GithubTriggerSettings({
     void api.openLink(url);
   };
 
-  const selectedEvents = normalizeEventList(config.events);
+  return { status, loading, busy, error, copiedCode, loadStatus, handleStartSignIn, handleCancelSignIn, handleCopyAndOpen };
+}
+
+function GithubAccessAlertsBar({
+  alerts,
+  onConnect,
+  onOpenGithub,
+}: {
+  alerts: GithubAccessAlert[];
+  onConnect: () => void;
+  onOpenGithub: () => void;
+}) {
+  if (!alerts.length) return null;
+  return (
+    <div className="wf-gh-alerts" role="status" aria-live="polite">
+      {alerts.map((alert) => (
+        <div key={alert.kind} className={`wf-gh-alert wf-gh-alert-${alert.kind}`}>
+          <AlertTriangle size={14} className="wf-gh-alert-icon" aria-hidden="true" />
+          <div className="wf-gh-alert-body">
+            <strong>{alert.title}</strong>
+            <span>{alert.detail}</span>
+          </div>
+          {alert.action === "github" ? (
+            <button type="button" className="wf-mini-btn" onClick={onOpenGithub}>
+              <ExternalLink size={11} /> GitHub
+            </button>
+          ) : (
+            <button type="button" className="wf-mini-btn wf-mini-btn-primary" onClick={onConnect}>
+              <KeyRound size={11} /> {alert.action === "reconnect" ? "Reconnect" : "Connect"}
+            </button>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function GithubMultiRepoPicker({
+  selected,
+  available,
+  onChange,
+}: {
+  selected: string[];
+  available: string[];
+  onChange: (next: string[]) => void;
+}) {
+  const [query, setQuery] = useState("");
+  const [customRepo, setCustomRepo] = useState("");
+
+  const allRepos = useMemo(() => [...new Set([...selected, ...available])], [selected, available]);
+  const groups = useMemo(() => groupReposByOwner(allRepos, query), [allRepos, query]);
+  const selectedLower = useMemo(() => new Set(selected.map((r) => r.toLowerCase())), [selected]);
+
+  const toggle = (repo: string) => {
+    const low = repo.toLowerCase();
+    const next = selectedLower.has(low)
+      ? selected.filter((r) => r.toLowerCase() !== low)
+      : [...selected, repo];
+    onChange(next);
+  };
+
+  const addCustom = () => {
+    const cleaned = customRepo.trim().replace(/^\/+|\/+$/g, "");
+    if (!/^[\w.-]+\/[\w.-]+$/.test(cleaned)) return;
+    if (!selectedLower.has(cleaned.toLowerCase())) {
+      onChange([...selected, cleaned]);
+    }
+    setCustomRepo("");
+  };
+
+  return (
+    <div className="wf-subbox wf-gh-picker">
+      <div className="wf-subbox-head">
+        <span className="wf-label">Repositories ({selected.length})</span>
+        {selected.length > 0 && (
+          <button type="button" className="wf-mini-btn" onClick={() => onChange([])}>
+            Clear
+          </button>
+        )}
+      </div>
+
+      {selected.length > 0 && (
+        <div className="wf-gh-chip-wrap">
+          {selected.map((repo) => (
+            <span key={repo} className="wf-gh-selected-chip">
+              <span>{repo}</span>
+              <button
+                type="button"
+                aria-label={`Remove ${repo}`}
+                onClick={() => toggle(repo)}
+              >
+                <X size={11} />
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
+
+      <div className="wf-gh-search-row">
+        <Search size={12} className="wf-gh-search-icon" aria-hidden="true" />
+        <input
+          type="text"
+          value={query}
+          placeholder="Filter repositories by owner or name…"
+          onChange={(e) => setQuery(e.target.value)}
+        />
+      </div>
+
+      {groups.length > 0 ? (
+        <div className="wf-gh-grouped-list" role="listbox" aria-multiselectable="true" aria-label="Repositories">
+          {groups.map((grp) => (
+            <div key={grp.owner} className="wf-gh-owner-group">
+              <div className="wf-gh-owner-head">{grp.owner}</div>
+              {grp.repos.map((repo) => {
+                const checked = selectedLower.has(repo.toLowerCase());
+                const shortName = repo.slice(repo.indexOf("/") + 1);
+                return (
+                  <button
+                    key={repo}
+                    type="button"
+                    role="option"
+                    aria-selected={checked}
+                    className={`wf-gh-pick-row ${checked ? "active" : ""}`}
+                    onClick={() => toggle(repo)}
+                  >
+                    <span className="wf-gh-check-box">{checked && <Check size={11} />}</span>
+                    <span className="wf-gh-pick-name">{shortName}</span>
+                  </button>
+                );
+              })}
+            </div>
+          ))}
+        </div>
+      ) : (
+        <p className="wf-hint">{query.trim() ? "No matching repositories." : "Add a repository below or connect GitHub to browse."}</p>
+      )}
+
+      <div className="wf-gh-custom-row">
+        <input
+          type="text"
+          value={customRepo}
+          placeholder="Add owner/repo manually…"
+          onChange={(e) => setCustomRepo(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              addCustom();
+            }
+          }}
+        />
+        <button type="button" className="wf-mini-btn" onClick={addCustom} disabled={!/^[\w.-]+\/[\w.-]+$/.test(customRepo.trim())}>
+          <Plus size={12} /> Add
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function GithubColorLabelPicker({
+  label,
+  selected,
+  catalog,
+  loading,
+  onChange,
+}: {
+  label: string;
+  selected: string[];
+  catalog: WorkflowGithubCatalog["labels"];
+  loading: boolean;
+  onChange: (next: string[]) => void;
+}) {
+  const [query, setQuery] = useState("");
+  const [custom, setCustom] = useState("");
+  const options = useMemo(() => filterLabelOptions(catalog, selected, query), [catalog, selected, query]);
+  const selectedLower = useMemo(() => new Set(selected.map((s) => s.toLowerCase())), [selected]);
+
+  const toggle = (name: string) => {
+    const low = name.toLowerCase();
+    onChange(selectedLower.has(low) ? selected.filter((s) => s.toLowerCase() !== low) : [...selected, name]);
+  };
+
+  const addCustom = () => {
+    const cleaned = custom.trim();
+    if (!cleaned) return;
+    if (!selectedLower.has(cleaned.toLowerCase())) onChange([...selected, cleaned]);
+    setCustom("");
+  };
+
+  return (
+    <div className="wf-subbox wf-gh-picker">
+      <div className="wf-subbox-head">
+        <span className="wf-label">
+          {label} {selected.length > 0 ? `(${selected.length})` : ""}
+        </span>
+        {loading && <LoaderCircle size={12} className="wf-spin" />}
+      </div>
+
+      {selected.length > 0 && (
+        <div className="wf-gh-chip-wrap">
+          {selected.map((name) => {
+            const match = options.find((o) => o.name.toLowerCase() === name.toLowerCase());
+            const dotColor = normalizeLabelColor(match?.color);
+            return (
+              <span key={name} className="wf-gh-selected-chip">
+                <span className="wf-gh-color-dot" style={{ backgroundColor: dotColor }} />
+                <span>{name}</span>
+                <button type="button" aria-label={`Remove label ${name}`} onClick={() => toggle(name)}>
+                  <X size={11} />
+                </button>
+              </span>
+            );
+          })}
+        </div>
+      )}
+
+      {options.length > 5 && (
+        <div className="wf-gh-search-row">
+          <Search size={12} className="wf-gh-search-icon" aria-hidden="true" />
+          <input
+            type="text"
+            value={query}
+            placeholder="Filter labels…"
+            onChange={(e) => setQuery(e.target.value)}
+          />
+        </div>
+      )}
+
+      {options.length > 0 ? (
+        <div className="wf-gh-label-list" role="listbox" aria-multiselectable="true" aria-label={label}>
+          {options.slice(0, 60).map((opt) => {
+            const active = selectedLower.has(opt.name.toLowerCase());
+            return (
+              <button
+                key={opt.name}
+                type="button"
+                role="option"
+                aria-selected={active}
+                className={`wf-gh-label-pill ${active ? "active" : ""}`}
+                title={opt.description || opt.name}
+                onClick={() => toggle(opt.name)}
+              >
+                <span className="wf-gh-color-dot" style={{ backgroundColor: normalizeLabelColor(opt.color) }} />
+                <span>{opt.name}</span>
+                {active && <Check size={11} />}
+              </button>
+            );
+          })}
+        </div>
+      ) : (
+        <p className="wf-hint">{loading ? "Loading repository labels…" : "No labels loaded yet. Type a label below or select a repo."}</p>
+      )}
+
+      <div className="wf-gh-custom-row">
+        <input
+          type="text"
+          value={custom}
+          placeholder="Add custom label…"
+          onChange={(e) => setCustom(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              addCustom();
+            }
+          }}
+        />
+        <button type="button" className="wf-mini-btn" onClick={addCustom} disabled={!custom.trim()}>
+          <Plus size={12} /> Add
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function skipReasonIcon(reason: WorkflowGithubDelivery["reason"]) {
+  switch (reason) {
+    case "self":
+      return <Repeat size={11} aria-hidden="true" />;
+    case "chain":
+      return <Link2 size={11} aria-hidden="true" />;
+    case "offline":
+      return <WifiOff size={11} aria-hidden="true" />;
+    case "refused":
+      return <ShieldAlert size={11} aria-hidden="true" />;
+    default:
+      return <Filter size={11} aria-hidden="true" />;
+  }
+}
+
+function GithubDeliveryLog({
+  workflowId,
+  nodeId,
+  onSelectRun,
+  onTabRuns,
+  onReplayLast,
+}: {
+  workflowId: string;
+  nodeId: string;
+  onSelectRun: (runId: string) => void;
+  onTabRuns: () => void;
+  onReplayLast?: (nodeId: string) => Promise<void>;
+}) {
+  const [deliveries, setDeliveries] = useState<WorkflowGithubDelivery[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [replaying, setReplaying] = useState(false);
+
+  const loadDeliveries = useCallback(async () => {
+    if (!api.workflowGithubDeliveries) return;
+    setLoading(true);
+    try {
+      const list = await api.workflowGithubDeliveries(workflowId, nodeId);
+      setDeliveries(Array.isArray(list) ? list : []);
+    } catch {
+      setDeliveries([]);
+    } finally {
+      setLoading(false);
+    }
+  }, [workflowId, nodeId]);
+
+  useEffect(() => {
+    void loadDeliveries();
+  }, [loadDeliveries]);
+
+  const groups = useMemo(() => groupDeliveriesByOutcome(deliveries), [deliveries]);
+  const replayable = useMemo(() => latestReplayableDelivery(deliveries), [deliveries]);
+
+  const handleReplay = async () => {
+    if (!onReplayLast || !replayable) return;
+    setReplaying(true);
+    try {
+      await onReplayLast(nodeId);
+      await loadDeliveries();
+    } finally {
+      setReplaying(false);
+    }
+  };
+
+  return (
+    <div className="wf-subbox wf-gh-deliveries">
+      <div className="wf-subbox-head">
+        <span className="wf-label">Recent deliveries {deliveries.length > 0 ? `(${deliveries.length})` : ""}</span>
+        <div className="wf-gh-delivery-actions">
+          <button
+            type="button"
+            className="wf-mini-btn"
+            disabled={loading}
+            onClick={() => void loadDeliveries()}
+            title="Refresh delivery log"
+          >
+            <RefreshCw size={11} className={loading ? "wf-spin" : ""} />
+          </button>
+          <button
+            type="button"
+            className="wf-mini-btn wf-mini-btn-primary"
+            disabled={!replayable || replaying || !onReplayLast}
+            onClick={() => void handleReplay()}
+            title={replayable ? `Replay ${replayable.event} on ${replayable.repository ?? "repo"}` : "No recorded event to replay yet"}
+          >
+            {replaying ? <LoaderCircle size={11} className="wf-spin" /> : <Play size={11} />}
+            Run last event
+          </button>
+        </div>
+      </div>
+
+      {groups.length === 0 ? (
+        <p className="wf-hint">No GitHub deliveries recorded for this trigger yet.</p>
+      ) : (
+        <div className="wf-gh-delivery-groups">
+          {groups.map((grp) => (
+            <div key={grp.outcome} className="wf-gh-delivery-group">
+              <div className={`wf-gh-delivery-group-head wf-gh-outcome-${grp.outcome}`}>
+                <span>{grp.label}</span>
+                <span className="wf-gh-delivery-count">{grp.items.length}</span>
+              </div>
+              {grp.items.map((item) => {
+                const reasonMeta = item.reason ? SKIP_REASON_META[item.reason] : null;
+                const targetRunId = item.runId || item.waitsForRunId;
+                return (
+                  <div key={item.deliveryId} className="wf-gh-delivery-row">
+                    <div className="wf-gh-delivery-main">
+                      <span className="wf-gh-delivery-title">
+                        <strong>{WORKFLOW_GITHUB_EVENT_LABELS[item.event] || item.event}</strong>
+                        {item.repository && (
+                          <span className="wf-gh-delivery-repo">
+                            {item.repository}
+                            {item.number ? `#${item.number}` : ""}
+                          </span>
+                        )}
+                      </span>
+                      {item.title && <span className="wf-gh-delivery-sub">{item.title}</span>}
+                      <span className="wf-gh-delivery-meta">
+                        {relTime(Date.parse(item.receivedAt) || Date.now())}
+                        {reasonMeta && (
+                          <span className="wf-gh-skip-pill" title={item.reasonDetail || reasonMeta.description}>
+                            {skipReasonIcon(item.reason)} {reasonMeta.label}
+                            {item.reasonDetail ? ` (${item.reasonDetail})` : ""}
+                          </span>
+                        )}
+                      </span>
+                    </div>
+                    <div className="wf-gh-delivery-cta">
+                      {targetRunId && (
+                        <button
+                          type="button"
+                          className="wf-mini-btn"
+                          onClick={() => {
+                            onSelectRun(targetRunId);
+                            onTabRuns();
+                          }}
+                        >
+                          {item.outcome === "waiting" ? "Blocking run" : "View run"}
+                        </button>
+                      )}
+                      {!targetRunId && item.url && (
+                        <button type="button" className="wf-mini-btn" onClick={() => void api.openLink(item.url!)}>
+                          <ExternalLink size={11} />
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function GithubTriggerSettings({
+  workflowId,
+  nodeId,
+  config,
+  setConfig,
+  onSelectRun,
+  onTabRuns,
+  onReplayLast,
+}: {
+  workflowId: string;
+  nodeId: string;
+  config: Record<string, any>;
+  setConfig: (patch: Record<string, any>) => void;
+  onSelectRun: (runId: string) => void;
+  onTabRuns: () => void;
+  onReplayLast?: (nodeId: string) => Promise<void>;
+}) {
+  const { status, loading, busy, error, copiedCode, loadStatus, handleStartSignIn, handleCancelSignIn, handleCopyAndOpen } =
+    useGithubStatus(nodeId);
+  const [catalog, setCatalog] = useState<WorkflowGithubCatalog>({ repos: [], labels: [], assignees: [] });
+  const [catalogLoading, setCatalogLoading] = useState(false);
+
+  const selectedRepos = useMemo(() => extractConfiguredRepos(config), [config]);
+  const selectedEvents = useMemo(() => extractCanonicalEvents(config.events), [config.events]);
+  const selectedLabels: string[] = useMemo(
+    () => (Array.isArray(config.labels) ? config.labels.map((s: unknown) => String(s)).filter(Boolean) : []),
+    [config.labels],
+  );
+  const repoKey = selectedRepos.join("|");
+
+  useEffect(() => {
+    if (!status?.authenticated || !selectedRepos.length || !api.workflowGithubCatalog) {
+      setCatalog({ repos: [], labels: [], assignees: [] });
+      return;
+    }
+    let live = true;
+    setCatalogLoading(true);
+    void api
+      .workflowGithubCatalog({ repos: selectedRepos, includeLabels: true, includeAssignees: false })
+      .then((res) => {
+        if (live && res) setCatalog(res);
+      })
+      .catch(() => {})
+      .finally(() => {
+        if (live) setCatalogLoading(false);
+      });
+    return () => {
+      live = false;
+    };
+  }, [status?.authenticated, repoKey]);
+
+  const accessAlerts = useMemo(
+    () => deriveGithubAccessAlerts({ role: "trigger", selectedRepos, status }),
+    [selectedRepos, status],
+  );
+
+  const handleReposChange = (nextRepos: string[]) => {
+    const patch: Record<string, any> = {
+      repos: nextRepos,
+      repo: nextRepos[0] || "",
+    };
+    if (shouldClearLabelsOnRepoChange(selectedRepos, nextRepos)) {
+      patch.labels = [];
+    }
+    setConfig(patch);
+  };
+
   const toggleEvent = (ev: string) => {
     const next = selectedEvents.includes(ev)
       ? selectedEvents.filter((item) => item !== ev)
       : [...selectedEvents, ev];
-    const patch: Record<string, any> = { events: next };
-    if (ev === "bot_mentioned" && !selectedEvents.includes(ev) && !config.mentionHandle) {
+    const patch: Record<string, any> = { events: next.length ? next : ["issue.opened"] };
+    if (ev === "mention" && !selectedEvents.includes(ev) && !config.mentionHandle && !config.mentionHandles?.length) {
       patch.mentionHandle = "@botkins-bot";
     }
     setConfig(patch);
   };
 
-  const repoListId = `wf-gh-repos-${nodeId}`;
+  const hasPrEvent = selectedEvents.some((e) => e.startsWith("pr."));
   const signIn = status?.signIn;
 
   return (
@@ -206,7 +701,7 @@ function GithubTriggerSettings({
         ) : !status?.installed ? (
           <div className="wf-gh-auth-body">
             <p className="wf-hint">
-              Install the GitHub CLI (<code>gh</code>) on this computer to connect GitHub and poll events locally.
+              Install the GitHub CLI (<code>gh</code>) on this computer to connect GitHub and watch events.
             </p>
             <button
               type="button"
@@ -246,7 +741,7 @@ function GithubTriggerSettings({
           </div>
         ) : (
           <div className="wf-gh-auth-body">
-            <p className="wf-hint">Sign in once with your GitHub account so Botkins can poll this repository locally.</p>
+            <p className="wf-hint">Sign in once with your GitHub account so Botkins can watch repositories.</p>
             <button
               type="button"
               className="wf-mini-btn wf-mini-btn-primary"
@@ -264,94 +759,476 @@ function GithubTriggerSettings({
         )}
       </div>
 
+      <GithubAccessAlertsBar
+        alerts={accessAlerts}
+        onConnect={() => void handleStartSignIn()}
+        onOpenGithub={() => void api.openLink("https://github.com/settings/installations")}
+      />
+
+      <GithubMultiRepoPicker
+        selected={selectedRepos}
+        available={status?.repos ?? []}
+        onChange={handleReposChange}
+      />
+
       <div className="wf-field-group">
-        <label className="wf-label">Repository (owner/repo)</label>
-        <input
-          type="text"
-          list={status?.repos?.length ? repoListId : undefined}
-          value={config.repo || ""}
-          placeholder="promptclickrun/Botkins"
-          onChange={(e) => setConfig({ repo: e.target.value.trim() })}
-        />
-        {!!status?.repos?.length && (
-          <datalist id={repoListId}>
-            {status.repos.map((r) => (
-              <option key={r} value={r} />
-            ))}
-          </datalist>
+        <label className="wf-label">Events</label>
+        <div className="wf-gh-event-groups">
+          {WORKFLOW_GITHUB_EVENT_GROUPS.map((grp) => (
+            <div key={grp.group} className="wf-gh-event-group">
+              <span className="wf-gh-event-group-label">{grp.group}</span>
+              <div className="wf-gh-events">
+                {grp.events.map((opt) => {
+                  const active = selectedEvents.includes(opt.value);
+                  return (
+                    <button
+                      key={opt.value}
+                      type="button"
+                      className={`wf-gh-event-pill ${active ? "active" : ""}`}
+                      title={opt.hint}
+                      onClick={() => toggleEvent(opt.value)}
+                    >
+                      {active && <Check size={11} />}
+                      <span>{opt.label}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <GithubColorLabelPicker
+        label="Label filter (optional)"
+        selected={selectedLabels}
+        catalog={catalog.labels}
+        loading={catalogLoading}
+        onChange={(labels) => setConfig({ labels })}
+      />
+
+      {selectedEvents.includes("mention") && (
+        <div className="wf-field-group">
+          <label className="wf-label">Mention handle(s)</label>
+          <input
+            type="text"
+            value={
+              Array.isArray(config.mentionHandles) && config.mentionHandles.length
+                ? config.mentionHandles.map((h: string) => `@${h.replace(/^@/, "")}`).join(", ")
+                : config.mentionHandle ?? "@botkins-bot"
+            }
+            placeholder="@botkins-bot"
+            onChange={(e) => setConfig({ mentionHandle: e.target.value, mentionHandles: undefined })}
+          />
+          <p className="wf-hint">Triggers when an issue, PR, or comment mentions any listed handle (comma-separated).</p>
+        </div>
+      )}
+
+      <div className="wf-subbox">
+        <span className="wf-label">Filters</span>
+        <label className="wf-check">
+          <input
+            type="checkbox"
+            checked={config.notBot !== false}
+            onChange={(e) => setConfig({ notBot: e.target.checked })}
+          />
+          <span>Ignore bot accounts (recommended)</span>
+        </label>
+        <label className="wf-check">
+          <input
+            type="checkbox"
+            checked={config.firstTime === true}
+            onChange={(e) => setConfig({ firstTime: e.target.checked ? true : undefined })}
+          />
+          <span>First-time contributors only</span>
+        </label>
+        <div className="wf-field-group">
+          <label className="wf-label">Title contains (optional)</label>
+          <input
+            type="text"
+            value={config.titleContains || ""}
+            placeholder="e.g. [RFC] or hotfix"
+            onChange={(e) => setConfig({ titleContains: e.target.value.trim() || undefined })}
+          />
+        </div>
+        {hasPrEvent && (
+          <div className="wf-field-group">
+            <label className="wf-label">
+              <GitBranch size={11} /> Base branch (exact PR target)
+            </label>
+            <input
+              type="text"
+              value={config.baseBranch || ""}
+              placeholder="e.g. main"
+              onChange={(e) => setConfig({ baseBranch: e.target.value.trim() || undefined })}
+            />
+          </div>
         )}
       </div>
 
       <div className="wf-field-group">
-        <label className="wf-label">Events</label>
-        <div className="wf-gh-events">
-          {GITHUB_EVENT_OPTIONS.map((opt) => {
-            const active = selectedEvents.includes(opt.value);
-            const label =
-              opt.value === "user_mentioned" && status?.login
-                ? `Mentioned @${status.login}`
-                : opt.label;
-            return (
-              <button
-                key={opt.value}
-                type="button"
-                className={`wf-gh-event-pill ${active ? "active" : ""}`}
-                title={opt.hint}
-                onClick={() => toggleEvent(opt.value)}
-              >
-                {active && <Check size={11} />}
-                <span>{label}</span>
-              </button>
-            );
-          })}
-        </div>
-      </div>
-
-      {selectedEvents.includes("bot_mentioned") && (
-        <div className="wf-field-group">
-          <label className="wf-label">Bot mention handle(s)</label>
-          <input
-            type="text"
-            value={config.mentionHandle ?? "@botkins-bot"}
-            placeholder="@botkins-bot"
-            onChange={(e) => setConfig({ mentionHandle: e.target.value })}
-          />
-          <p className="wf-hint">Triggers when an issue, PR, or comment mentions this handle (comma-separated for multiple).</p>
-        </div>
-      )}
-
-      <div className="wf-two-col">
-        <div className="wf-field-group">
-          <label className="wf-label">Branch filter (PRs)</label>
-          <input
-            type="text"
-            value={config.branch || ""}
-            placeholder="Optional, e.g. main"
-            onChange={(e) => setConfig({ branch: e.target.value.trim() || undefined })}
-          />
-        </div>
-        <div className="wf-field-group">
-          <label className="wf-label">Author filter</label>
-          <input
-            type="text"
-            value={config.author || ""}
-            placeholder="Optional username"
-            onChange={(e) => setConfig({ author: e.target.value.trim().replace(/^@/, "") || undefined })}
-          />
-        </div>
-      </div>
-
-      <div className="wf-field-group">
-        <label className="wf-label">Poll interval (min)</label>
+        <label className="wf-label">Fallback poll interval (min)</label>
         <input
           type="number"
           min={1}
           max={120}
           value={config.pollMinutes ?? 5}
-          onChange={(e) => setConfig({ pollMinutes: Math.max(1, Number(e.target.value) || 5) })}
+          onChange={(e) => setConfig({ pollMinutes: Math.max(1, Math.min(120, Number(e.target.value) || 5)) })}
         />
-        <p className="wf-hint">Polls via local <code>gh</code> CLI (no inbound tunnel or relay required).</p>
+        <p className="wf-hint">Used when local <code>gh</code> polling or offline catch-up is active.</p>
       </div>
+
+      <GithubDeliveryLog
+        workflowId={workflowId}
+        nodeId={nodeId}
+        onSelectRun={onSelectRun}
+        onTabRuns={onTabRuns}
+        onReplayLast={onReplayLast}
+      />
+    </>
+  );
+}
+
+function GithubOutputSettings({
+  nodeId,
+  workflow,
+  config,
+  analysis,
+  setConfig,
+}: {
+  nodeId: string;
+  workflow: Workflow;
+  config: Record<string, any>;
+  analysis?: NodeFieldAnalysis;
+  setConfig: (patch: Record<string, any>) => void;
+}) {
+  const { status, handleStartSignIn } = useGithubStatus(`out:${nodeId}`);
+  const [catalog, setCatalog] = useState<WorkflowGithubCatalog>({ repos: [], labels: [], assignees: [] });
+  const [catalogLoading, setCatalogLoading] = useState(false);
+  const [personQuery, setPersonQuery] = useState("");
+  const [customPerson, setCustomPerson] = useState("");
+
+  const triggers = useMemo(() => workflow.nodes.filter((n) => n.kind === "trigger"), [workflow.nodes]);
+  const issueOnly = useMemo(() => isIssueOnlyGithubTrigger(triggers), [triggers]);
+  const targetRepos = useMemo(() => resolveOutputTargetRepos(config, triggers), [config, triggers]);
+  const targetKey = targetRepos.join("|");
+
+  const action = (config.action || "comment") as WorkflowGithubAction;
+  const actionMeta = WORKFLOW_GITHUB_ACTION_OPTIONS.find((a) => a.value === action) ?? WORKFLOW_GITHUB_ACTION_OPTIONS[0];
+  const sameRepo = config.sameRepository !== false && (!config.repository || config.repository === "trigger");
+  const sameItem = config.sameItem !== false && (!config.item || config.item === "event");
+
+  const accessAlerts = useMemo(
+    () => deriveGithubAccessAlerts({ role: "output", selectedRepos: targetRepos, status }),
+    [targetRepos, status],
+  );
+
+  useEffect(() => {
+    if (!status?.authenticated || !targetRepos.length || !api.workflowGithubCatalog) {
+      setCatalog({ repos: [], labels: [], assignees: [] });
+      return;
+    }
+    let live = true;
+    setCatalogLoading(true);
+    void api
+      .workflowGithubCatalog({ repos: targetRepos.slice(0, 3), includeLabels: true, includeAssignees: true })
+      .then((res) => {
+        if (live && res) setCatalog(res);
+      })
+      .catch(() => {})
+      .finally(() => {
+        if (live) setCatalogLoading(false);
+      });
+    return () => {
+      live = false;
+    };
+  }, [status?.authenticated, targetKey]);
+
+  const labelsFromAgent = config.labelsFrom === "agent";
+  const selectedLabels: string[] = useMemo(
+    () => (Array.isArray(config.labels) ? config.labels.map((l: unknown) => String(l)).filter(Boolean) : []),
+    [config.labels],
+  );
+
+  const isReviewRequest = action === "review.request";
+  const peopleField = isReviewRequest ? "reviewers" : "assignees";
+  const peopleFromAgent = config.person === "agent" || (isReviewRequest ? config.reviewersFrom === "agent" : config.assigneesFrom === "agent");
+  const selectedPeople: string[] = useMemo(() => {
+    const raw = isReviewRequest ? config.reviewers : config.assignees;
+    return Array.isArray(raw) ? raw.map((p: unknown) => String(p).replace(/^@/, "")).filter(Boolean) : [];
+  }, [config.reviewers, config.assignees, isReviewRequest]);
+  const selectedPeopleLower = useMemo(() => new Set(selectedPeople.map((p) => p.toLowerCase())), [selectedPeople]);
+
+  const filteredAssignees = useMemo(() => {
+    const needle = personQuery.trim().toLowerCase();
+    const seen = new Set<string>();
+    const merged: Array<{ login: string }> = [];
+    for (const a of catalog.assignees) {
+      const k = a.login.toLowerCase();
+      if (!seen.has(k)) {
+        seen.add(k);
+        merged.push({ login: a.login });
+      }
+    }
+    for (const p of selectedPeople) {
+      const k = p.toLowerCase();
+      if (!seen.has(k)) {
+        seen.add(k);
+        merged.push({ login: p });
+      }
+    }
+    return merged.filter((u) => !needle || u.login.toLowerCase().includes(needle));
+  }, [catalog.assignees, selectedPeople, personQuery]);
+
+  const togglePerson = (login: string) => {
+    const clean = login.trim().replace(/^@/, "");
+    if (!clean) return;
+    const low = clean.toLowerCase();
+    const next = selectedPeopleLower.has(low)
+      ? selectedPeople.filter((p) => p.toLowerCase() !== low)
+      : [...selectedPeople, clean];
+    setConfig({ [peopleField]: next, person: undefined });
+  };
+
+  const addCustomPerson = () => {
+    const clean = customPerson.trim().replace(/^@/, "");
+    if (!clean) return;
+    if (!selectedPeopleLower.has(clean.toLowerCase())) {
+      setConfig({ [peopleField]: [...selectedPeople, clean], person: undefined });
+    }
+    setCustomPerson("");
+  };
+
+  const repoListId = `wf-gh-out-repos-${nodeId}`;
+
+  return (
+    <>
+      <GithubAccessAlertsBar
+        alerts={accessAlerts}
+        onConnect={() => void handleStartSignIn()}
+        onOpenGithub={() => void api.openLink("https://github.com/settings/installations")}
+      />
+
+      <div className="wf-field-group">
+        <label className="wf-label">GitHub action</label>
+        <select
+          value={action}
+          onChange={(e) => setConfig({ action: e.target.value as WorkflowGithubAction })}
+        >
+          {WORKFLOW_GITHUB_ACTION_OPTIONS.map((opt) => (
+            <option key={opt.value} value={opt.value} disabled={issueOnly && opt.prOnly}>
+              {opt.label}{opt.prOnly ? " (PR only)" : ""} — {opt.hint}
+            </option>
+          ))}
+        </select>
+        {issueOnly && PR_ONLY_ACTIONS.has(action) && (
+          <p className="wf-gh-error">This action only works on pull requests, but the trigger only watches issues.</p>
+        )}
+      </div>
+
+      <div className="wf-subbox">
+        <span className="wf-label">Target</span>
+        <label className="wf-check">
+          <input
+            type="checkbox"
+            checked={sameRepo}
+            onChange={(e) =>
+              setConfig(
+                e.target.checked
+                  ? { sameRepository: true, repository: "trigger" }
+                  : { sameRepository: false, repository: targetRepos[0] || "" },
+              )
+            }
+          />
+          <span>Same repository as trigger</span>
+        </label>
+        {!sameRepo && (
+          <div className="wf-field-group">
+            <label className="wf-label">Target repository (owner/repo)</label>
+            <input
+              type="text"
+              list={status?.repos?.length ? repoListId : undefined}
+              value={config.repository && config.repository !== "trigger" ? config.repository : ""}
+              placeholder="owner/repo or {{repository}}"
+              onChange={(e) => setConfig({ sameRepository: false, repository: e.target.value.trim() })}
+            />
+            {!!status?.repos?.length && (
+              <datalist id={repoListId}>
+                {status.repos.map((r) => (
+                  <option key={r} value={r} />
+                ))}
+              </datalist>
+            )}
+          </div>
+        )}
+
+        {action !== "issue.create" && (
+          <>
+            <label className="wf-check">
+              <input
+                type="checkbox"
+                checked={sameItem}
+                onChange={(e) =>
+                  setConfig(
+                    e.target.checked
+                      ? { sameItem: true, item: "event" }
+                      : { sameItem: false, item: "" },
+                  )
+                }
+              />
+              <span>Same issue or PR as trigger event</span>
+            </label>
+            {!sameItem && (
+              <WorkflowFieldInput
+                label="Target issue/PR number or URL"
+                multiline={false}
+                value={config.item && config.item !== "event" ? config.item : ""}
+                onChange={(item) => setConfig({ sameItem: false, item })}
+                analysis={analysis}
+                placeholder="#123, URL, or {{number}}"
+              />
+            )}
+          </>
+        )}
+      </div>
+
+      {actionMeta.needsTitle && (
+        <WorkflowFieldInput
+          label="Issue title"
+          multiline={false}
+          value={config.title || ""}
+          onChange={(title) => setConfig({ title })}
+          analysis={analysis}
+          placeholder="Summary title for new issue"
+        />
+      )}
+
+      {(actionMeta.needsBody || actionMeta.optionalBody) && (
+        <WorkflowFieldInput
+          label={actionMeta.needsBody ? "Body" : "Body (optional)"}
+          value={config.body ?? config.template ?? ""}
+          onChange={(body) => setConfig({ body, template: body })}
+          analysis={analysis}
+          placeholder="Write comment or review text using {{agent_reply}}…"
+        />
+      )}
+
+      {actionMeta.usesCloseReason && (
+        <div className="wf-field-group">
+          <label className="wf-label">Close reason (issues)</label>
+          <select value={config.stateReason || "completed"} onChange={(e) => setConfig({ stateReason: e.target.value })}>
+            <option value="completed">Completed</option>
+            <option value="not_planned">Not planned</option>
+          </select>
+        </div>
+      )}
+
+      {actionMeta.usesLabels && (
+        <div className="wf-field-group">
+          <label className="wf-check">
+            <input
+              type="checkbox"
+              checked={labelsFromAgent}
+              onChange={(e) => setConfig({ labelsFrom: e.target.checked ? "agent" : undefined })}
+            />
+            <span>Let agent pick from repository label catalog</span>
+          </label>
+          {!labelsFromAgent ? (
+            <GithubColorLabelPicker
+              label="Catalog labels"
+              selected={selectedLabels}
+              catalog={catalog.labels}
+              loading={catalogLoading}
+              onChange={(labels) => setConfig({ labels })}
+            />
+          ) : (
+            <p className="wf-hint">At run time, the model chooses only from real labels on the target repository.</p>
+          )}
+        </div>
+      )}
+
+      {(actionMeta.usesAssignees || actionMeta.usesReviewers) && (
+        <div className="wf-subbox wf-gh-picker">
+          <div className="wf-subbox-head">
+            <span className="wf-label">{isReviewRequest ? "Reviewers" : "Assignees"}</span>
+            {catalogLoading && <LoaderCircle size={12} className="wf-spin" />}
+          </div>
+          <label className="wf-check">
+            <input
+              type="checkbox"
+              checked={peopleFromAgent}
+              onChange={(e) => setConfig({ person: e.target.checked ? "agent" : undefined })}
+            />
+            <span>Let agent pick from repository collaborators</span>
+          </label>
+          {!peopleFromAgent ? (
+            <>
+              {selectedPeople.length > 0 && (
+                <div className="wf-gh-chip-wrap">
+                  {selectedPeople.map((login) => (
+                    <span key={login} className="wf-gh-selected-chip">
+                      <span>@{login}</span>
+                      <button type="button" aria-label={`Remove ${login}`} onClick={() => togglePerson(login)}>
+                        <X size={11} />
+                      </button>
+                    </span>
+                  ))}
+                </div>
+              )}
+              {filteredAssignees.length > 5 && (
+                <div className="wf-gh-search-row">
+                  <Search size={12} className="wf-gh-search-icon" aria-hidden="true" />
+                  <input
+                    type="text"
+                    value={personQuery}
+                    placeholder={`Filter ${isReviewRequest ? "reviewers" : "assignees"}…`}
+                    onChange={(e) => setPersonQuery(e.target.value)}
+                  />
+                </div>
+              )}
+              {filteredAssignees.length > 0 && (
+                <div className="wf-gh-label-list" role="listbox" aria-multiselectable="true">
+                  {filteredAssignees.slice(0, 40).map((u) => {
+                    const active = selectedPeopleLower.has(u.login.toLowerCase());
+                    return (
+                      <button
+                        key={u.login}
+                        type="button"
+                        role="option"
+                        aria-selected={active}
+                        className={`wf-gh-label-pill ${active ? "active" : ""}`}
+                        onClick={() => togglePerson(u.login)}
+                      >
+                        <span>@{u.login}</span>
+                        {active && <Check size={11} />}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+              <div className="wf-gh-custom-row">
+                <input
+                  type="text"
+                  value={customPerson}
+                  placeholder="Add GitHub @username…"
+                  onChange={(e) => setCustomPerson(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      addCustomPerson();
+                    }
+                  }}
+                />
+                <button type="button" className="wf-mini-btn" onClick={addCustomPerson} disabled={!customPerson.trim()}>
+                  <Plus size={12} /> Add
+                </button>
+              </div>
+            </>
+          ) : (
+            <p className="wf-hint">At run time, the model chooses only from real repository collaborators.</p>
+          )}
+        </div>
+      )}
     </>
   );
 }
@@ -372,6 +1249,7 @@ interface Props {
   onRetryRun: (runId: string, nodeId?: string) => Promise<void>;
   onRespondApproval: (runId: string, nodeId: string, decision: "approved" | "rejected", note: string) => Promise<void>;
   onCancelRun: (runId: string) => Promise<void>;
+  onReplayLastGithubEvent?: (nodeId: string) => Promise<void>;
   webhookPort?: number | null;
 }
 
@@ -486,6 +1364,7 @@ export function WorkflowInspector({
   onRetryRun,
   onRespondApproval,
   onCancelRun,
+  onReplayLastGithubEvent,
   webhookPort,
 }: Props) {
   const [freshSecret, setFreshSecret] = useState<{ nodeId: string; secret: string } | null>(null);
@@ -585,7 +1464,7 @@ export function WorkflowInspector({
                         onChangeNode(node.id, (prev) => ({
                           ...prev,
                           triggerKind: tk,
-                          config: tk === "github" ? { events: ["pr_opened", "pr_review", "ci_status"], pollMinutes: 5 } : {},
+                          config: tk === "github" ? { repos: [], events: ["issue.opened"], notBot: true, pollMinutes: 5 } : {},
                         }));
                       }}
                     >
@@ -822,7 +1701,15 @@ export function WorkflowInspector({
                   )}
 
                   {node.triggerKind === "github" && (
-                    <GithubTriggerSettings nodeId={node.id} config={node.config} setConfig={setConfig} />
+                    <GithubTriggerSettings
+                      workflowId={workflow.id}
+                      nodeId={node.id}
+                      config={node.config}
+                      setConfig={setConfig}
+                      onSelectRun={(runId) => onSelectRun(runId)}
+                      onTabRuns={() => onTab("runs")}
+                      onReplayLast={onReplayLastGithubEvent}
+                    />
                   )}
 
                   {node.triggerKind === "channel" && (
@@ -1077,7 +1964,18 @@ export function WorkflowInspector({
                       value={node.config.destination || "chat"}
                       onChange={(e) => {
                         const destination = e.target.value;
-                        setConfig(destination === "chat" ? { destination } : { destination, card: undefined, a2ui: undefined });
+                        if (destination === "github") {
+                          setConfig({
+                            destination: "github",
+                            action: node.config.action || "comment",
+                            sameRepository: node.config.sameRepository ?? true,
+                            sameItem: node.config.sameItem ?? true,
+                            card: undefined,
+                            a2ui: undefined,
+                          });
+                        } else {
+                          setConfig(destination === "chat" ? { destination } : { destination, card: undefined, a2ui: undefined });
+                        }
                       }}
                     >
                       <option value="chat">Post to chat</option>
@@ -1085,6 +1983,7 @@ export function WorkflowInspector({
                       <option value="idea">Today · Ideas</option>
                       <option value="goal">Today · Goals</option>
                       <option value="notification">Notification</option>
+                      <option value="github">GitHub (comment, label, assign, review, close, issue)</option>
                     </select>
                   </div>
                   {(node.config.destination || "chat") === "chat" && (
@@ -1386,6 +2285,15 @@ export function WorkflowInspector({
                       })()}
                     </>
                   )}
+                  {node.config.destination === "github" && (
+                    <GithubOutputSettings
+                      nodeId={node.id}
+                      workflow={workflow}
+                      config={node.config}
+                      analysis={analysis}
+                      setConfig={setConfig}
+                    />
+                  )}
                   {node.config.destination === "goal" && (
                     <div className="wf-field-group">
                       <label className="wf-label">Goal category</label>
@@ -1398,7 +2306,7 @@ export function WorkflowInspector({
                       </select>
                     </div>
                   )}
-                  {node.config.destination && node.config.destination !== "chat" && (
+                  {node.config.destination && node.config.destination !== "chat" && node.config.destination !== "github" && (
                     <WorkflowFieldInput
                       label="Title (optional)"
                       multiline={false}
@@ -1408,13 +2316,15 @@ export function WorkflowInspector({
                       placeholder="{{title}}"
                     />
                   )}
-                  <WorkflowFieldInput
-                    label={node.config.card || node.config.a2ui ? "Fallback text template (optional — for notifications & older clients)" : "Message template"}
-                    value={node.config.template || ""}
-                    onChange={(template) => setConfig({ template })}
-                    analysis={analysis}
-                    placeholder="Task {{title}} is ready for review:\n{{agent_reply}}"
-                  />
+                  {node.config.destination !== "github" && (
+                    <WorkflowFieldInput
+                      label={node.config.card || node.config.a2ui ? "Fallback text template (optional — for notifications & older clients)" : "Message template"}
+                      value={node.config.template || ""}
+                      onChange={(template) => setConfig({ template })}
+                      analysis={analysis}
+                      placeholder="Task {{title}} is ready for review:\n{{agent_reply}}"
+                    />
+                  )}
                 </>
               )}
             </div>
@@ -1441,7 +2351,7 @@ export function WorkflowInspector({
                     <span className="wf-run-row-main">
                       <strong>{r.status === "waiting_approval" ? "Waiting approval" : r.status}</strong>
                       <span>
-                        {r.manual ? "Manual" : r.triggerKind || "Event"} · {relTime(r.startedAt)}
+                        {r.replay ? "Replay" : r.manual ? "Manual" : r.triggerKind || "Event"} · {relTime(r.startedAt)}
                       </span>
                     </span>
                     <span className="wf-run-dur">{durText(r.startedAt, r.finishedAt)}</span>

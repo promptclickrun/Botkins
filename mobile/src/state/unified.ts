@@ -597,6 +597,7 @@ const SETTINGS_HOST_METHODS = new Set([
   "workflowGithubStatus",
   "workflowGithubSignInStart",
   "workflowGithubSignInCancel",
+  "workflowGithubCatalog",
   "claudeArtifacts.status",
   "claudeArtifacts.setModel",
   "market.catalog",
