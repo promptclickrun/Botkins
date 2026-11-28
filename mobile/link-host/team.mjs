@@ -144,6 +144,7 @@ const POLICY = {
   githubAgentInstallUrl: "owner",
   githubAgentRefresh: "owner",
   githubAgentSetRepo: "owner",
+  githubAgentSetSettings: "owner",
   githubAgentUnbind: "owner",
   saveTask: "owner",
   moveTask: "owner",

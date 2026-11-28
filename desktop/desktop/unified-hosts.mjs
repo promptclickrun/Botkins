@@ -1001,6 +1001,7 @@ const HOST_SCOPED_CALLS = new Set([
   "githubAgentInstallUrl",
   "githubAgentRefresh",
   "githubAgentSetRepo",
+  "githubAgentSetSettings",
   "githubAgentUnbind",
   "claudeArtifacts.status",
   "claudeArtifacts.setModel",

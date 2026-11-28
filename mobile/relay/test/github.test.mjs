@@ -16,6 +16,7 @@ import path from "node:path";
 import { after, before, describe, it } from "node:test";
 import { fileURLToPath } from "node:url";
 import WebSocket from "ws";
+import { RelayHost, newRelayKey } from "../../link-host/relay.mjs";
 import { createRelay } from "../node/server.mjs";
 import { HOST_PROTOCOL_V3, hostChallengeV3, roomOf } from "../src/pure.ts";
 import {
@@ -595,6 +596,130 @@ describe("POST /v1/github/events on Cloudflare Worker (wrangler dev)", () => {
       await strangerConn.close();
     }
   });
+
+  it("enforces RelayHost unbound opt-in off vs opt-in on against Cloudflare Worker", async () => {
+    const waitFor = async (fn, timeoutMs = 4000) => {
+      const deadline = Date.now() + timeoutMs;
+      while (Date.now() < deadline) {
+        if (fn()) return;
+        await sleep(25);
+      }
+      throw new Error("Timed out waiting for condition");
+    };
+
+    const runHostScenario = async (allowUserToken) => {
+      const sentSubFrames = [];
+      const acks = [];
+      const deliveries = [];
+      let proofCalls = 0;
+
+      class RecordingWebSocket extends WebSocket {
+        constructor(url, protocols) {
+          super(url, protocols);
+          this.on("message", (data, isBinary) => {
+            if (isBinary) return;
+            const text = data.toString();
+            if (text.startsWith("{")) {
+              try {
+                const parsed = JSON.parse(text);
+                if (parsed.type === "github-subscribed") acks.push(parsed);
+              } catch {}
+            }
+          });
+        }
+        send(data, ...rest) {
+          if (typeof data === "string" && data.startsWith("{")) {
+            try {
+              const parsed = JSON.parse(data);
+              if (parsed.type === "github-subscribe") sentSubFrames.push(parsed);
+            } catch {}
+          }
+          return super.send(data, ...rest);
+        }
+      }
+
+      const host = new RelayHost({
+        url: dev.base,
+        key: newRelayKey(),
+        serve: async () => ({ status: 200, body: Buffer.from("") }),
+        onGithubDelivery: (frame) => deliveries.push(frame),
+        getGithubAuthProof: async () => {
+          proofCalls++;
+          return { githubToken: "tok_owner_private" };
+        },
+        githubAllowUserTokenProof: allowUserToken,
+        WebSocket: RecordingWebSocket,
+      });
+
+      host.start();
+      try {
+        await waitFor(() => host.connected);
+        host.setGithubRepos(["promptclickrun/Botkins", "promptclickrun/botkins-website"]);
+        await waitFor(() => acks.length >= 1);
+        return { sentSubFrames, acks, deliveries, proofCalls, host };
+      } catch (err) {
+        host.stop();
+        throw err;
+      }
+    };
+
+    // Unbound host with opt-in OFF: no token sent, public repo allowed, private repo denied, no private frames delivered
+    const off = await runHostScenario(false);
+    try {
+      assert.equal(off.proofCalls, 0, "opt-in off must never invoke auth proof provider");
+      assert.equal(off.sentSubFrames.length, 1);
+      assert.equal(off.sentSubFrames[0].githubToken, undefined, "opt-in off must send no githubToken on host side");
+      assert.deepEqual(off.acks[0].allowed, ["promptclickrun/botkins"]);
+      assert.deepEqual(off.acks[0].denied, ["promptclickrun/botkins-website"]);
+
+      const privBody = issueWebhookPayload("promptclickrun/botkins-website", 778);
+      const privRes = await fetch(dev.base + GITHUB_EVENTS_PATH, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-github-event": "issues",
+          "x-github-delivery": "del-worker-optin-off-priv",
+          "x-hub-signature-256": hmacHeader(SECRET, privBody),
+        },
+        body: privBody,
+      });
+      assert.equal(privRes.status, 204);
+      await sleep(100);
+      assert.equal(off.deliveries.length, 0);
+    } finally {
+      off.host.stop();
+    }
+
+    // Unbound host with opt-in ON: keeps today's behavior (sends token, gets private repo allowed and receives frames)
+    const on = await runHostScenario(true);
+    try {
+      assert.equal(on.proofCalls, 1);
+      assert.equal(on.sentSubFrames.length, 1);
+      assert.equal(on.sentSubFrames[0].githubToken, "tok_owner_private");
+      assert.deepEqual(on.acks[0].allowed, ["promptclickrun/botkins", "promptclickrun/botkins-website"]);
+      assert.deepEqual(on.acks[0].denied, []);
+
+      const privBody = issueWebhookPayload("promptclickrun/botkins-website", 779);
+      const privRes = await fetch(dev.base + GITHUB_EVENTS_PATH, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-github-event": "issues",
+          "x-github-delivery": "del-worker-optin-on-priv",
+          "x-hub-signature-256": hmacHeader(SECRET, privBody),
+        },
+        body: privBody,
+      });
+      assert.equal(privRes.status, 202);
+      assert.equal((await privRes.json()).delivered, 1);
+      await waitFor(() => on.deliveries.length >= 1);
+      assert.equal(on.deliveries[0].deliveryId, "del-worker-optin-on-priv");
+      assert.equal(on.deliveries[0].repository, "promptclickrun/botkins-website");
+      assert.ok(!dev.output.includes("tok_owner_private"), "relay logs must never leak proof tokens");
+    } finally {
+      on.host.stop();
+    }
+  });
 });
 
 describe("POST /v1/github/events on self-hosted Node relay (parity + authz + rate limit)", () => {
@@ -712,6 +837,131 @@ describe("POST /v1/github/events on self-hosted Node relay (parity + authz + rat
     } finally {
       await ownerConn.close();
       await strangerConn.close();
+    }
+  });
+
+  it("enforces RelayHost unbound opt-in off vs opt-in on against self-hosted Node relay", async () => {
+    const waitFor = async (fn, timeoutMs = 4000) => {
+      const deadline = Date.now() + timeoutMs;
+      while (Date.now() < deadline) {
+        if (fn()) return;
+        await sleep(25);
+      }
+      throw new Error("Timed out waiting for condition");
+    };
+
+    const runHostScenario = async (allowUserToken) => {
+      const sentSubFrames = [];
+      const acks = [];
+      const deliveries = [];
+      let proofCalls = 0;
+
+      class RecordingWebSocket extends WebSocket {
+        constructor(url, protocols) {
+          super(url, protocols);
+          this.on("message", (data, isBinary) => {
+            if (isBinary) return;
+            const text = data.toString();
+            if (text.startsWith("{")) {
+              try {
+                const parsed = JSON.parse(text);
+                if (parsed.type === "github-subscribed") acks.push(parsed);
+              } catch {}
+            }
+          });
+        }
+        send(data, ...rest) {
+          if (typeof data === "string" && data.startsWith("{")) {
+            try {
+              const parsed = JSON.parse(data);
+              if (parsed.type === "github-subscribe") sentSubFrames.push(parsed);
+            } catch {}
+          }
+          return super.send(data, ...rest);
+        }
+      }
+
+      const host = new RelayHost({
+        url: base,
+        key: newRelayKey(),
+        serve: async () => ({ status: 200, body: Buffer.from("") }),
+        onGithubDelivery: (frame) => deliveries.push(frame),
+        getGithubAuthProof: async () => {
+          proofCalls++;
+          return { githubToken: "tok_owner_private" };
+        },
+        githubAllowUserTokenProof: allowUserToken,
+        WebSocket: RecordingWebSocket,
+      });
+
+      host.start();
+      try {
+        await waitFor(() => host.connected);
+        host.setGithubRepos(["promptclickrun/Botkins", "promptclickrun/botkins-website"]);
+        await waitFor(() => acks.length >= 1);
+        return { sentSubFrames, acks, deliveries, proofCalls, host };
+      } catch (err) {
+        host.stop();
+        throw err;
+      }
+    };
+
+    // Unbound host with opt-in OFF: no token sent, public repo allowed, private repo denied
+    const off = await runHostScenario(false);
+    try {
+      assert.equal(off.proofCalls, 0);
+      assert.equal(off.sentSubFrames.length, 1);
+      assert.equal(off.sentSubFrames[0].githubToken, undefined, "opt-in off must send no githubToken on host side");
+      assert.deepEqual(off.acks[0].allowed, ["promptclickrun/botkins"]);
+      assert.deepEqual(off.acks[0].denied, ["promptclickrun/botkins-website"]);
+
+      const privBody = issueWebhookPayload("promptclickrun/botkins-website", 889);
+      const privRes = await fetch(base + GITHUB_EVENTS_PATH, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-github-event": "issues",
+          "x-github-delivery": "node-optin-off-priv",
+          "x-hub-signature-256": hmacHeader(SECRET, privBody),
+          "x-test-ip": "10.0.0.2",
+        },
+        body: privBody,
+      });
+      assert.equal(privRes.status, 204);
+      await sleep(100);
+      assert.equal(off.deliveries.length, 0);
+    } finally {
+      off.host.stop();
+    }
+
+    // Unbound host with opt-in ON: sends token, gets private repo allowed, receives frames
+    const on = await runHostScenario(true);
+    try {
+      assert.equal(on.proofCalls, 1);
+      assert.equal(on.sentSubFrames.length, 1);
+      assert.equal(on.sentSubFrames[0].githubToken, "tok_owner_private");
+      assert.deepEqual(on.acks[0].allowed, ["promptclickrun/botkins", "promptclickrun/botkins-website"]);
+      assert.deepEqual(on.acks[0].denied, []);
+
+      const privBody = issueWebhookPayload("promptclickrun/botkins-website", 890);
+      const privRes = await fetch(base + GITHUB_EVENTS_PATH, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-github-event": "issues",
+          "x-github-delivery": "node-optin-on-priv",
+          "x-hub-signature-256": hmacHeader(SECRET, privBody),
+          "x-test-ip": "10.0.0.3",
+        },
+        body: privBody,
+      });
+      assert.equal(privRes.status, 202);
+      assert.equal((await privRes.json()).delivered, 1);
+      await waitFor(() => on.deliveries.length >= 1);
+      assert.equal(on.deliveries[0].deliveryId, "node-optin-on-priv");
+      assert.equal(on.deliveries[0].repository, "promptclickrun/botkins-website");
+    } finally {
+      on.host.stop();
     }
   });
 });

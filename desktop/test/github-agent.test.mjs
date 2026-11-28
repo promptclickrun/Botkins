@@ -408,3 +408,132 @@ test("RelayHost creates signed 10-minute GitHub App install URLs and caches inst
   assert.equal(formatGithubAgentReply("Glory", "All fixed.", "https://example.com/run/1"), "**Glory** · Botkins\n\nAll fixed.\n\n<sub>[View run](https://example.com/run/1)</sub>");
   assert.ok(frameGithubMentionPrompt({ repository: "acme/app", number: 1, pullRequest: false, title: "T", url: "u", sender: "a", commentBody: "b", requestText: "r", botName: "Glory" }).includes("--- external event input ---"));
 });
+
+test("RelayHost never sends gh user token on github-subscribe when bound or when opt-in is off, and sends it only when unbound with opt-in on", async () => {
+  const key = newRelayKey();
+  const nowMs = Date.UTC(2026, 10, 27, 12, 0, 0);
+
+  function makeHarness({ installations = [], allowUserToken = false } = {}) {
+    const sentFrames = [];
+    let proofCalls = 0;
+    class FakeWebSocket {
+      constructor() {
+        this.readyState = 1;
+        queueMicrotask(() => this.onopen?.());
+      }
+      send(data) {
+        if (typeof data !== "string" || data === "ping") return;
+        const msg = JSON.parse(data);
+        sentFrames.push(msg);
+        if (msg.type === "github-installations-list") {
+          queueMicrotask(() => {
+            this.onmessage?.({
+              data: JSON.stringify({
+                type: "github-installations-result",
+                requestId: msg.requestId,
+                ok: true,
+                appSlug: "botkins-agent",
+                installations,
+              }),
+            });
+          });
+        }
+      }
+      close() {
+        this.readyState = 3;
+      }
+    }
+    const host = new RelayHost({
+      url: "https://relay.botkins.app",
+      key,
+      serve: async () => ({ status: 200, body: "" }),
+      getGithubAuthProof: async () => {
+        proofCalls++;
+        return { githubToken: "gho_personal_cli_token_never_leak" };
+      },
+      githubAllowUserTokenProof: allowUserToken,
+      WebSocket: FakeWebSocket,
+      timers: { now: () => nowMs, setTimeout: () => ({ unref() {} }), clearTimeout: () => {}, random: () => 0.5 },
+    });
+    return { host, sentFrames, getProofCalls: () => proofCalls };
+  }
+
+  // 1. Unbound room with opt-in OFF (default): never calls proof provider and sends no githubToken
+  {
+    const { host, sentFrames, getProofCalls } = makeHarness({ installations: [], allowUserToken: false });
+    host.start();
+    await new Promise((r) => setTimeout(r, 10));
+    host.setGithubRepos(["acme/private-repo", "acme/public-repo"]);
+    await new Promise((r) => setTimeout(r, 20));
+    const sub = sentFrames.find((f) => f.type === "github-subscribe");
+    assert.ok(sub, "expected github-subscribe frame");
+    assert.equal(sub.githubToken, undefined, "unbound room with opt-in off must never attach githubToken");
+    assert.equal(sub.repoTokens, undefined);
+    assert.equal(getProofCalls(), 0, "proof provider must not be called when opt-in is off");
+    host.stop();
+  }
+
+  // 2. Bound room even with opt-in ON: queries/uses live binding, never calls proof provider, sends no githubToken
+  {
+    const { host, sentFrames, getProofCalls } = makeHarness({
+      installations: [
+        {
+          installationId: 1001,
+          accountLogin: "acme",
+          accountType: "Organization",
+          repos: ["acme/private-repo"],
+          suspended: false,
+          expired: false,
+          expiresAt: nowMs + 7 * 86_400_000,
+        },
+      ],
+      allowUserToken: true,
+    });
+    host.start();
+    await new Promise((r) => setTimeout(r, 10));
+    host.setGithubRepos(["acme/private-repo"]);
+    await new Promise((r) => setTimeout(r, 20));
+    const sub = sentFrames.find((f) => f.type === "github-subscribe");
+    assert.ok(sub, "expected github-subscribe frame");
+    assert.equal(sub.githubToken, undefined, "bound room must never attach githubToken even if fallback opt-in is on");
+    assert.equal(getProofCalls(), 0, "proof provider must not be called when a live binding exists");
+    host.stop();
+  }
+
+  // 3. Unbound room with opt-in ON: attaches githubToken fallback
+  {
+    const { host, sentFrames, getProofCalls } = makeHarness({ installations: [], allowUserToken: true });
+    host.start();
+    await new Promise((r) => setTimeout(r, 10));
+    host.setGithubRepos(["acme/private-repo"]);
+    await new Promise((r) => setTimeout(r, 20));
+    const sub = sentFrames.find((f) => f.type === "github-subscribe");
+    assert.ok(sub, "expected github-subscribe frame");
+    assert.equal(sub.githubToken, "gho_personal_cli_token_never_leak");
+    assert.equal(getProofCalls(), 1);
+    host.stop();
+  }
+
+  // 4. Persisted setting defaults to false and toggles cleanly via GithubAgentManager.setSettings
+  {
+    const ws = makeFakeWorkspace();
+    let lastFallback = null;
+    const mgr = new GithubAgentManager(ws, {
+      onRelayUserTokenFallbackChanged: (allow) => {
+        lastFallback = allow;
+      },
+    });
+    assert.equal(mgr.relayUserTokenFallback(), false);
+    assert.equal(mgr.status().relayUserTokenFallback, false);
+
+    const enabled = mgr.setSettings({ relayUserTokenFallback: true });
+    assert.equal(enabled.relayUserTokenFallback, true);
+    assert.equal(mgr.relayUserTokenFallback(), true);
+    assert.equal(lastFallback, true);
+
+    const disabled = mgr.setSettings({ relayUserTokenFallback: false });
+    assert.equal(disabled.relayUserTokenFallback, false);
+    assert.equal(mgr.relayUserTokenFallback(), false);
+    assert.equal(lastFallback, false);
+  }
+});

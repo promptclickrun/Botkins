@@ -426,7 +426,7 @@ const V3_IN_ALL = 256;
  * conn+id until the phone leaves or the reconnect grace window expires.
  */
 export class RelayHost {
-  constructor({ url, key, serve, onGone = () => {}, onChange = () => {}, onTaken = () => {}, onGithubDelivery = () => {}, onGithubInstallations = () => {}, getGithubAuthProof = null, log = () => {}, WebSocket = globalThis.WebSocket, timers = {}, group, fallbackV2 = true }) {
+  constructor({ url, key, serve, onGone = () => {}, onChange = () => {}, onTaken = () => {}, onGithubDelivery = () => {}, onGithubInstallations = () => {}, getGithubAuthProof = null, githubAllowUserTokenProof = false, log = () => {}, WebSocket = globalThis.WebSocket, timers = {}, group, fallbackV2 = true }) {
     this.key = key;
     this.secret = key?.privateKey;
     this.publicKey = key?.publicKey;
@@ -437,6 +437,7 @@ export class RelayHost {
     this.onGithubDeliveryCallback = onGithubDelivery;
     this.onGithubInstallationsCallback = onGithubInstallations;
     this.getGithubAuthProof = typeof getGithubAuthProof === "function" ? getGithubAuthProof : null;
+    this.githubAllowUserTokenProof = githubAllowUserTokenProof === true;
     this.logTo = log;
     this.WebSocketClass = WebSocket;
     this.timers = {
@@ -472,6 +473,7 @@ export class RelayHost {
     this.githubPendingRequests = new Map(); // requestId -> { resolve, reject, timer }
     this.githubTokenCache = new Map(); // `${repo}|${permKey}` -> { token, expiresAtMs, installationId, permissions }
     this.githubInstallations = [];
+    this.githubInstallationsLoaded = false;
     this.githubAppSlug = "botkins-agent";
     try {
       const origin = cleanRelayUrl(url);
@@ -523,6 +525,7 @@ export class RelayHost {
     this.standbyRetry = null;
     this.clear(this.grace);
     this.grace = null;
+    this.githubInstallationsLoaded = false;
     this.clear(this.githubRenewTimer);
     this.githubRenewTimer = null;
     for (const [, pending] of this.githubPendingRequests) {
@@ -650,12 +653,58 @@ export class RelayHost {
     this.getGithubAuthProof = typeof fn === "function" ? fn : null;
   }
 
+  /**
+   * Controls whether an unbound room (no live Botkins Agent installation binding) is allowed to
+   * attach a personal `gh`/user token proof to `github-subscribe`. Off by default; never used when
+   * the room has an active binding.
+   */
+  setGithubAllowUserTokenProof(allow) {
+    const next = allow === true;
+    if (this.githubAllowUserTokenProof === next) return;
+    this.githubAllowUserTokenProof = next;
+    if (this.socket && this.sockets.has(this.socket) && this.githubRepos.length) {
+      void this.sendGithubSubscribe(this.socket);
+    }
+  }
+
+  /** Seeds known bound installations (for example from persisted workspace state before the first relay sync). */
+  setGithubInstallations(installations) {
+    if (!Array.isArray(installations)) return;
+    this.githubInstallations = installations;
+  }
+
+  /** Whether this host currently holds at least one live (non-suspended, non-expired) Botkins Agent binding. */
+  hasLiveGithubBinding(now = this.timers.now()) {
+    return Array.isArray(this.githubInstallations) && this.githubInstallations.some((inst) => {
+      if (!inst || inst.suspended) return false;
+      if (inst.expired === true) return false;
+      const exp = Number(inst.expiresAt) || 0;
+      if (exp > 0 && exp <= now) return false;
+      return true;
+    });
+  }
+
   async sendGithubSubscribe(socket = this.socket) {
     if (!socket || !this.sockets.has(socket) || !validRelayKey(this.key) || !this.room) return false;
     const repos = [...this.githubRepos];
+    // Before sending an opt-in unbound user token on a freshly opened connection, query the relay
+    // once for current bindings so a bound room never leaks a personal token on reconnect.
+    if (
+      repos.length > 0 &&
+      this.githubAllowUserTokenProof &&
+      !this.hasLiveGithubBinding() &&
+      !this.githubInstallationsLoaded &&
+      this.getGithubAuthProof
+    ) {
+      try {
+        await this.listGithubInstallations(socket, 4_000);
+      } catch {}
+    }
     let githubToken;
     let repoTokens;
-    if (repos.length > 0 && this.getGithubAuthProof) {
+    // Never send a personal user token when the room has a live Botkins Agent App binding,
+    // and never send one unless the user explicitly opted into the unbound fallback.
+    if (repos.length > 0 && this.githubAllowUserTokenProof && !this.hasLiveGithubBinding() && this.getGithubAuthProof) {
       try {
         const proof = await this.getGithubAuthProof(repos);
         if (typeof proof === "string" && proof.trim()) {
@@ -721,8 +770,8 @@ export class RelayHost {
     };
   }
 
-  _sendGithubControlRequest(payload, timeoutMs = 15_000) {
-    const socket = this.socket;
+  _sendGithubControlRequest(payload, timeoutMs = 15_000, targetSocket = this.socket) {
+    const socket = targetSocket;
     if (!socket || !this.sockets.has(socket) || !this.up) {
       return Promise.reject(new Error("Relay is not connected."));
     }
@@ -832,7 +881,7 @@ export class RelayHost {
   }
 
   /** Fetches the room's bound GitHub App installations from the relay. */
-  async listGithubInstallations() {
+  async listGithubInstallations(targetSocket = this.socket, timeoutMs = 15_000) {
     if (!validRelayKey(this.key) || !this.room || !this.up) {
       return { ok: false, appSlug: this.githubAppSlug, installations: this.githubInstallations };
     }
@@ -847,10 +896,11 @@ export class RelayHost {
       key: this.key.publicKey,
       time,
       sig,
-    });
+    }, timeoutMs, targetSocket);
     if (reply?.ok) {
       if (typeof reply.appSlug === "string" && reply.appSlug) this.githubAppSlug = reply.appSlug;
       this.githubInstallations = Array.isArray(reply.installations) ? reply.installations : [];
+      this.githubInstallationsLoaded = true;
       try {
         this.onGithubInstallationsCallback({ appSlug: this.githubAppSlug, installations: this.githubInstallations });
       } catch {}
@@ -878,6 +928,7 @@ export class RelayHost {
     });
     if (!reply?.ok) throw new Error(reply?.error || "Could not unbind GitHub installation.");
     this.githubInstallations = Array.isArray(reply.installations) ? reply.installations : [];
+    this.githubInstallationsLoaded = true;
     this.githubTokenCache.clear();
     try {
       this.onGithubInstallationsCallback({ appSlug: this.githubAppSlug, installations: this.githubInstallations });
@@ -1073,6 +1124,7 @@ export class RelayHost {
           } else if (parsed && parsed.type === "github-installations") {
             if (typeof parsed.appSlug === "string" && parsed.appSlug) this.githubAppSlug = parsed.appSlug;
             this.githubInstallations = Array.isArray(parsed.installations) ? parsed.installations : [];
+            this.githubInstallationsLoaded = true;
             this.githubTokenCache.clear();
             try {
               this.onGithubInstallationsCallback({ appSlug: this.githubAppSlug, installations: this.githubInstallations });

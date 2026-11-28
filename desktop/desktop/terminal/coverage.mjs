@@ -148,6 +148,7 @@ export const WORKSPACE = {
   githubAgentInstallUrl: cmd("github install"),
   githubAgentRefresh: cmd("github refresh"),
   githubAgentSetRepo: cmd("github repo"),
+  githubAgentSetSettings: cmd("github relay-token"),
   githubAgentUnbind: cmd("github unbind"),
   // ── Channel Hooks ──
   channelsList: cmd("channels list"),
@@ -815,6 +816,7 @@ export const CHANGES = {
   // GitHub Agent: log repo name or installation id only, never tokens or signed states.
   "github.refresh": null,
   "github.setRepo": (args) => args?.[0] ?? "repo",
+  "github.setSettings": (args) => (args?.[0]?.relayUserTokenFallback ? "relayUserTokenFallback:on" : "relayUserTokenFallback:off"),
   "github.unbind": (args) => (args?.[0] ? String(args[0]) : "installation"),
 };
 /** The service's own calls that only read, wait or talk in a chat: no line. Every call is in this list, in CHANGES or in LOGS_ITSELF. */
