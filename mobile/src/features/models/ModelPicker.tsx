@@ -1,17 +1,19 @@
 import { router, useLocalSearchParams } from "expo-router";
 import { Check, ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, Info, Search } from "lucide-react-native";
 import { memo, type ReactNode, useMemo, useState } from "react";
-import { StyleSheet, TextInput, View } from "react-native";
+import { TextInput, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import type { FastMode, ModelChoice, ModelInfo } from "@/link/types";
-import { useBot, useCan, useChat, useModels, usePart, useProviders, useSettings } from "@/state/hooks";
+import { useBot, useBots, useCan, useChat, useModels, usePart, useProviders, useSettings } from "@/state/hooks";
 import { api, attempt } from "@/state/link";
 import { setPrefs, usePrefs } from "@/state/prefs";
 import { chooseModel, effectiveModel, effortLabel, findModel, groupModels, type ModelGroup, modelKey, routineDefault } from "@/state/models";
 import { heldRoutineModel } from "@/features/work/routineModel";
 import { useProviderUsage } from "@/state/providerUsage";
-import { Badge, Chip, EmptyState, Group, haptic, IconButton, Label, Loading, ProviderIcon, radius, Row, Sheet, space, T, Tap, useTheme } from "@/ui";
+import { Badge, EmptyState, Group, haptic, IconButton, Label, Loading, ProviderIcon, radius, Row, Sheet, space, T, Tap, useTheme } from "@/ui";
 import { contextFact } from "./facts";
+import { fastCanChange, fastFlip, SLIDER } from "./thinking";
+import { FastSwitch, ThinkingSlider } from "./ThinkingSlider";
 import { limitLine, limitTone, primaryLimit } from "./limits";
 import { moreAccessibilityLabel, moreLabel, pageGroups, pageMatches } from "./pages";
 import { defaultProviderOf, describeChoice } from "./shared";
@@ -144,6 +146,9 @@ function Picker() {
   const scope: Scope = SCOPES.find((name) => name === params.scope) ?? "global";
   const chat = useChat(scope === "chat" ? params.id : undefined);
   const bot = useBot(scope === "bot" || scope === "routine" ? params.id : chat?.botId);
+  // The face on the thinking slider: this chat's or page's bot, otherwise the person's first one.
+  const first = useBots()[0];
+  const face = bot ?? first;
   const held = scope === "routine" ? heldRoutineModel() : null;
   const { colors } = useTheme();
   const settings = useSettings();
@@ -234,30 +239,51 @@ function Picker() {
   };
 
   const fallback = scope !== "global" ? describeChoice(inherited, models, defaultProvider) : undefined;
-  const thinking = chosen && choice ? <Thinking model={chosen} effort={choice.reasoningEffort} onChange={(effort) => setChoice(chooseModel(chosen, effort))} /> : null;
-
-  const footer = (thinking || (speedAllowed && !!models?.length)) ? (
-    <View style={{ borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.line, backgroundColor: colors.canvas, paddingBottom: insets.bottom + space.sm }}>
-      {thinking}
-      {speedAllowed && (
-        <View style={{ paddingTop: space.md, paddingHorizontal: space.xl, gap: space.sm }}>
-          <View style={{ flexDirection: "row", justifyContent: "space-between", flexWrap: "wrap", gap: space.xs }}>
-            <T variant="label" accessibilityRole="header">Fast mode</T>
-            {scope !== "global" && <T variant="footnote" color="muted">{scope === "chat" ? "Bot" : "Global"} default · {effortLabel(inheritedSpeed)}</T>}
+  // The level and Fast, side by side under the list. No fill and no line: the sheet's own ground shows through.
+  const levels = chosen && choice ? chosen.efforts : undefined;
+  const level = choice?.reasoningEffort ?? chosen?.defaultEffort;
+  const fastOn = effectiveSpeed !== "off";
+  const savedEffective = savedSpeed ?? (scope === "global" ? "off" : inheritedSpeed);
+  const fast = speedAllowed && !!models?.length;
+  const footer = (levels || fast) ? (
+    <View style={{ paddingTop: space.md, paddingHorizontal: space.xl, paddingBottom: insets.bottom + space.sm, gap: space.sm }}>
+      <View style={{ flexDirection: "row", gap: space.md }}>
+        <View style={{ flex: 1, gap: space.sm }}>
+          <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: space.sm }}>
+            <T variant="label" color="muted" style={{ textTransform: "uppercase" }} accessibilityRole="header">Thinking</T>
+            {!!levels?.length && !!level && <T variant="caption" numberOfLines={1}>{effortLabel(level) + (level === chosen?.defaultEffort ? " · Default" : "")}</T>}
           </View>
-          <View style={{ flexDirection: "row", flexWrap: "wrap", gap: space.sm }}>
-            {scope !== "global" && <Chip label="Use default" selected={!speed} onPress={() => setSpeedEdit(null)} />}
-            {(["off", "fast", "ultrafast"] as const).filter((mode) => mode === "off" || speeds?.[mode]).map((mode) => (
-              <Chip key={mode} label={effortLabel(mode)} selected={(speed ?? (scope === "global" ? "off" : null)) === mode} onPress={() => setSpeedEdit(mode)} />
-            ))}
-          </View>
-          {effectiveSpeed !== "off" && <T variant="footnote" color={speeds?.[effectiveSpeed] ? "warning" : "muted"}>
-            {speeds?.[effectiveSpeed] ? effortLabel(effectiveSpeed) + " uses your plan allowance much faster."
-              : effortLabel(effectiveSpeed) + " is unavailable for this model. Turns use standard speed."}
-          </T>}
-          {effectiveSpeed === "off" && !speeds && <T variant="footnote" color="muted">Fast mode is unavailable for this model.</T>}
+          {levels?.length && chosen && level ? (
+            <ThinkingSlider
+              levels={levels}
+              value={level}
+              usual={chosen.defaultEffort}
+              bot={face}
+              // The model's own default is saved as no choice, so it follows the model.
+              onChange={(next) => setChoice(chooseModel(chosen, next === chosen.defaultEffort ? undefined : next))}
+            />
+          ) : (
+            <View style={{ height: SLIDER.height, justifyContent: "center" }}>
+              <T variant="subhead" color="muted">{levels ? "This model manages its own thinking." : "Follows the default."}</T>
+            </View>
+          )}
         </View>
-      )}
+        {fast && (
+          <View style={{ gap: space.sm, alignItems: "center" }}>
+            <T variant="label" color="muted" style={{ textTransform: "uppercase" }} accessibilityRole="header">Fast</T>
+            <FastSwitch
+              on={fastOn}
+              name={effortLabel(effectiveSpeed)}
+              disabled={!fastCanChange(speeds, effectiveSpeed)}
+              onChange={(on) => setSpeedEdit(fastFlip(on, speeds, savedEffective))}
+            />
+          </View>
+        )}
+      </View>
+      {fast && fastOn && <T variant="footnote" color={speeds?.[effectiveSpeed] ? "warning" : "muted"}>
+        {speeds?.[effectiveSpeed] ? effortLabel(effectiveSpeed) + " uses your plan allowance much faster."
+          : effortLabel(effectiveSpeed) + " is unavailable for this model. Turns use standard speed."}
+      </T>}
     </View>
   ) : null;
 
@@ -389,39 +415,6 @@ function SearchField({ value, onChange }: { value: string; onChange: (text: stri
         accessibilityLabel="Search models"
         style={[type.callout, { flex: 1, color: colors.ink, paddingVertical: 0 }]}
       />
-    </View>
-  );
-}
-
-/** The thinking levels the chosen model takes, pinned under the list so it is always in reach. */
-function Thinking({ model, effort, onChange }: { model: ModelInfo; effort?: string; onChange: (effort: string | undefined) => void }) {
-  const { colors } = useTheme();
-  const current = effort ?? model.defaultEffort;
-  return (
-    <View style={{ paddingTop: space.md, gap: space.sm }}>
-      <View style={{ flexDirection: "row", alignItems: "center", gap: space.sm, paddingHorizontal: space.xl }}>
-        <ProviderIcon provider={model.provider} name={model.providerName} size={14} />
-        <T variant="label" color="muted" style={{ textTransform: "uppercase" }} accessibilityRole="header">
-          {"Thinking · " + model.name}
-        </T>
-      </View>
-      {model.efforts.length === 0 ? (
-        <T variant="subhead" color="muted" style={{ paddingHorizontal: space.xl, paddingBottom: space.xs }}>
-          This model manages its own thinking.
-        </T>
-      ) : (
-        <View style={{ flexDirection: "row", flexWrap: "wrap", paddingHorizontal: space.xl, gap: space.sm }}>
-          {model.efforts.map((level) => (
-            <Chip
-              key={level}
-              label={effortLabel(level) + (level === model.defaultEffort ? " · Default" : "")}
-              selected={level === current}
-              // The model's own default is saved as no choice, so it follows the model.
-              onPress={() => onChange(level === model.defaultEffort ? undefined : level)}
-            />
-          ))}
-        </View>
-      )}
     </View>
   );
 }

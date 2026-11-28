@@ -5,8 +5,12 @@ import { useEffect, useState } from "react";
 import { View } from "react-native";
 import type { Calls } from "@/link/types";
 import { useOnline, usePart } from "@/state/hooks";
+import * as Clipboard from "expo-clipboard";
+import { crashText } from "@/state/crashNote";
+import { clearLastCrash, readLastCrash } from "@/state/lastCrash";
 import { api } from "@/state/link";
-import { Group, MascotPair, Page, Row, space, T, useTheme } from "@/ui";
+import { showToast } from "@/state/store";
+import { Button, Group, Label, MascotPair, Page, Row, space, T, useTheme } from "@/ui";
 import { platformName } from "./computer";
 import { capitalize } from "./shared";
 
@@ -22,6 +26,8 @@ export default function About() {
   const online = useOnline();
   // What the computer's app runs on (its Settings › About). An older computer, or one out of reach, shows only its version.
   const [info, setInfo] = useState<ReturnType<Calls["appInfo"]>>();
+  // The last error that closed the app or stopped a screen, if the phone kept one.
+  const [crash, setCrash] = useState(readLastCrash);
   useEffect(() => {
     if (!online) return;
     let live = true;
@@ -48,6 +54,38 @@ export default function About() {
           {!!info?.chrome && <Row title="Chromium" value={info.chrome} />}
           {!!info?.platform && <Row title="Platform" value={platformName(info.platform)} />}
         </Group>
+      )}
+      {crash && (
+        <>
+          <Label>{crash.kind === "fatal" ? "Last time the app closed" : "Last screen that failed"}</Label>
+          <Group>
+            <View style={{ padding: space.lg, gap: space.sm }}>
+              <T variant="footnote" color="muted">
+                {new Date(crash.at).toLocaleString() + (crash.version ? " · version " + crash.version : "")}
+              </T>
+              <T variant="callout" selectable>
+                {crash.message}
+              </T>
+              {!!crash.stack && (
+                <T variant="caption" color="faint" selectable numberOfLines={10}>
+                  {crash.stack}
+                </T>
+              )}
+            </View>
+          </Group>
+          <View style={{ flexDirection: "row", gap: space.sm }}>
+            <Button title="Copy details" variant="secondary" style={{ flex: 1 }} onPress={() => void Clipboard.setStringAsync(crashText(crash)).then(() => showToast("Copied", "success"))} />
+            <Button
+              title="Clear"
+              variant="secondary"
+              style={{ flex: 1 }}
+              onPress={() => {
+                clearLastCrash();
+                setCrash(null);
+              }}
+            />
+          </View>
+        </>
       )}
     </Page>
   );

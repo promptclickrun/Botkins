@@ -6,6 +6,8 @@ import { Appearance, Platform } from "react-native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { KeyboardProvider } from "react-native-keyboard-controller";
 import { boot } from "@/state/link";
+import { watchForCrashes } from "@/state/lastCrash";
+import { Failed } from "@/features/crash/Failed";
 import { listenForShortcuts } from "@/features/shortcuts/bridge";
 import { forget, readKept } from "@/state/keep";
 import { usePrefs } from "@/state/prefs";
@@ -16,6 +18,12 @@ import { chatRouteId } from "@/features/chat/chatNavigation";
 import { backdropBaseColor, ToastHost, useShape, useTheme } from "@/ui";
 
 void SplashScreen.preventAutoHideAsync();
+
+// An error that would close the app is written down first (Settings › About shows it at the next launch).
+watchForCrashes();
+
+/** A screen that throws while it draws shows what went wrong and a way back, where the app used to close. */
+export { Failed as ErrorBoundary };
 
 export default function RootLayout() {
   const theme = useTheme();

@@ -9,15 +9,8 @@ import type { GithubAgentRepoConfig, GithubAgentStatus } from "@/link/types";
 import { useBots, useOnline, usePart } from "@/state/hooks";
 import { api, attempt } from "@/state/link";
 import { showToast } from "@/state/store";
+import { computerLacksGithub, githubNotice } from "./githubNotice";
 import { Button, EmptyState, Field, Group, Label, Page, Row, space, T } from "@/ui";
-
-/**
- * What a computer from before the Botkins Agent says to its calls: its link has never heard of
- * them, and refuses anything it doesn't know with a sentence about phones. That is no fault of the
- * phone's: the computer's app needs an update (the calls came with 0.17.25).
- */
-const UNKNOWN_CALL = /unknown method|not supported|unsupported|not a function|can't be done from a phone/i;
-export const computerLacksGithub = (error: unknown) => error instanceof Error && UNKNOWN_CALL.test(error.message);
 
 function formatShortTime(iso?: string | null): string {
   if (!iso) return "None yet";
@@ -37,7 +30,7 @@ export default function GithubSettings() {
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [allowDrafts, setAllowDrafts] = useState<Record<string, string>>({});
-  // The computer's app is from before it could connect GitHub: nothing here can work until it is updated.
+  // The computer answered that it can't do GitHub's calls: nothing here can work until that is put right there.
   const [old, setOld] = useState(false);
 
   const load = useCallback(async (refreshFromRelay = false) => {
@@ -91,7 +84,8 @@ export default function GithubSettings() {
     return (
       <Page>
         <Stack.Screen options={{ title: "GitHub" }} />
-        <EmptyState title="Update the app on your computer" text="Connecting GitHub needs Botkins 0.17.25 or later on your computer. Update it there, then open this page again." action="Check again" onAction={() => void load(true)} />
+        {/* Which computer answered, and what it runs: with several computers joined, it is the one Settings is for. */}
+        <EmptyState {...githubNotice(meta)} action="Check again" onAction={() => void load(true)} />
       </Page>
     );
 

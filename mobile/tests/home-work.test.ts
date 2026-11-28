@@ -27,7 +27,10 @@ const { ServerLinkStatus } = phoneModule("../src/features/home/ServerLinkStatus"
 });
 const pushed: unknown[] = [];
 const openedChats: string[] = [];
+// A drop's held order (useHeldOrder), with the same link the test gives Home.
+const heldOrder = phoneModule("../src/features/home/useHeldOrder", { "@/state/link": {} });
 const Home = phoneModule("../src/features/home/Home", {
+  "./useHeldOrder": heldOrder,
   "expo-router": { useScrollToTop() {}, router: { push: (target: unknown) => pushed.push(target) } },
   "lucide-react-native": {}, "react-native": native, "react-native-reanimated": animated,
   "react-native-safe-area-context": { useSafeAreaInsets: () => insets }, "react-native-worklets": {},

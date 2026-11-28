@@ -29,7 +29,7 @@ const ui = {
 const animated = {
   __esModule: true, default: { ScrollView: "ScrollView", View: "View" },
   useAnimatedRef: () => useRef(null), useSharedValue: (value: unknown) => useRef({ value }).current, useAnimatedScrollHandler: () => undefined,
-  useAnimatedStyle: () => ({}), useAnimatedReaction: () => {}, useFrameCallback: () => ({ setActive() {} }), scrollTo() {},
+  useAnimatedStyle: () => ({}), useAnimatedReaction: () => {}, useFrameCallback: () => ({ setActive() {} }), scrollTo() {}, useDerivedValue: () => ({ value: 0 }),
   withTiming: (value: unknown, _config?: unknown, done?: () => void) => { done?.(); return value; },
   // A wait that is not over yet, told apart from a value: { after, then }.
   withDelay: (after: number, then: unknown) => ({ after, then }),
@@ -213,9 +213,13 @@ test("the first tab offers the primary bot first and keeps the bot a person chos
 test("the first tab shows the bot's chat under the row of bots, and Home while there is no bot", async (t) => {
   const asked: string[] = [];
   const pages: unknown[] = [];
+  const carried: unknown[] = [];
   const BotHome = phoneModule("../src/features/home/BotHome", {
     "lucide-react-native": {}, "react-native": native, "react-native-safe-area-context": safeArea, "react-native-reanimated": animated,
-    "react-native-worklets": { scheduleOnRN: (run: (...args: unknown[]) => void, ...args: unknown[]) => run(...args) },
+    "react-native-gesture-handler": gestures,
+    "react-native-worklets": { scheduleOnRN: (run: (...args: unknown[]) => void, ...args: unknown[]) => run(...args), scheduleOnUI() {} },
+    // The computer's order as it is: what a move asks of the computer is kept for the test to read.
+    "./useHeldOrder": { useHeldOrder: (list: unknown[]) => ({ shown: list, carry: (id: string, plan: unknown) => void carried.push([id, plan]) }) },
     "expo-router": { router: { push: (to: unknown) => pages.push(to) } },
     "@/features/all/open": { openPlace: (id: string) => opened.push(id) }, "@/features/chat/ChatScreen": { ChatPane: "ChatPane" },
     "@/features/chat/navigate": { openChat() {} }, "@/state/hooks": hooks, "@/state/prefs": prefs, "@/ui": ui,
@@ -249,7 +253,8 @@ test("the first tab shows the bot's chat under the row of bots, and Home while t
   const scroller = row.findByType("ScrollView");
   assert.equal(scroller.props.snapToInterval, STRIP.slot, "the row rests on a bot");
   assert.deepEqual(scroller.props.contentOffset, { x: 0, y: 0 }, "the bot on show starts in the middle");
-  assert.equal(scroller.props.contentContainerStyle.paddingHorizontal, (312 - STRIP.slot) / 2, "so the first and last bot can reach the middle too");
+  assert.equal(scroller.props.contentContainerStyle.width, 312 - STRIP.slot + 2 * STRIP.slot, "room at both ends, so the first and last bot can reach the middle too");
+  assert.equal(scroller.props.scrollEnabled, true);
   assert.equal(row.findAllByType("ChatMenu").length, 1);
   const faces = () => row.findAllByType("Tap").filter((tap) => tap.props.accessibilityState);
   assert.deepEqual(faces().map((face) => [face.props.accessibilityLabel, face.props.accessibilityState.selected]), [["Pip", true], ["Patch", false]]);
@@ -263,10 +268,16 @@ test("the first tab shows the bot's chat under the row of bots, and Home while t
   assert.equal(tag().props.accessibilityLabel, "Pip, Chief of staff, bot page");
   tag().props.onPress();
   assert.deepEqual(pages.splice(0), [{ pathname: "/bot/[id]", params: { id: "a" } }]);
-  // So is a tap on the bot that is already on show.
+  // So is a hold on any face in the row, the bot on show or another: the name tag can be switched off.
+  faces()[0].props.onLongPress();
+  faces()[1].props.onLongPress();
+  assert.deepEqual(pages.splice(0), [{ pathname: "/bot/[id]", params: { id: "a" } }, { pathname: "/bot/[id]", params: { id: "b" } }]);
+  // A tap on the bot already on show changes nothing.
   await act(async () => faces()[0].props.onPress());
-  assert.deepEqual(pages.splice(0), [{ pathname: "/bot/[id]", params: { id: "a" } }]);
-  assert.equal(usePrefs.getState().homeBot, null, "and nothing else changes");
+  assert.deepEqual(pages, []);
+  assert.equal(usePrefs.getState().homeBot, null, "and a hold opens a page without changing the bot on show");
+  // Two bots: the primary stays first, so there is nowhere to move the other, and no face can be carried.
+  assert.equal(row.findAllByType("Detector").length, 0);
 
   // A swipe that comes to rest on Patch: its name shows at once, and its chat opens.
   scroller.props.onScrollBeginDrag();
@@ -297,6 +308,24 @@ test("the first tab shows the bot's chat under the row of bots, and Home while t
   row = await bar();
   assert.equal(tagBox().props.pointerEvents, "none");
   assert.equal(STRIP.tagStaysMs, 2500);
+
+  // Three bots or more: every face but the primary bot's can be carried to a new place (hold, then slide),
+  // and VoiceOver has the same moves as actions. The computer is asked for the new order.
+  const trio = [...bots, { id: "c", name: "Dot", role: "" }];
+  await act(async () => useApp.setState({ parts: { meta, bots: trio, chats: [{ id: "main-a", botId: "a", main: true, time: 1, count: 0 }] } } as never));
+  row = await bar();
+  assert.deepEqual(faces().map((face) => face.props.accessibilityActions.map((action: { name: string }) => action.name)), [["longpress"], ["longpress", "left", "right"], ["longpress", "left", "right"]]);
+  assert.equal(row.findAllByType("Detector").length, 2, "the primary bot's face is not one to carry");
+  await act(async () => faces()[1].props.onAccessibilityAction({ nativeEvent: { actionName: "right" } }));
+  assert.deepEqual(carried.splice(0), [["b", { order: ["a", "c", "b"] }]]);
+  await act(async () => faces()[2].props.onAccessibilityAction({ nativeEvent: { actionName: "right" } }));
+  await act(async () => faces()[1].props.onAccessibilityAction({ nativeEvent: { actionName: "left" } }));
+  assert.deepEqual(carried, [], "nothing past the end, and nothing before the primary bot");
+  // A role that may not arrange the bots, or no link to the computer: nothing to carry.
+  await act(async () => useApp.setState({ link: "offline" } as never));
+  row = await bar();
+  assert.equal(row.findAllByType("Detector").length, 0);
+  await act(async () => useApp.setState({ link: "online" } as never));
 
   await act(async () => useApp.setState({ parts: { meta: { capabilities: [] }, bots, chats: [] } } as never));
   assert.equal(screen.root.root.findByType("Empty").props.action, "Start a chat", "without Main chats, a first chat waits for a tap");
