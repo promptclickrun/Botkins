@@ -3,21 +3,23 @@
 // (back to typing, the call goes on), Mute, the sound strip, Speaker and End. The chat above stays
 // as it is and shows what is said. In push to talk the sound strip is the button and Mute is gone,
 // because the microphone is open only while the strip is held.
-import { Keyboard, Mic, MicOff, PhoneOff, Speaker, Volume1 } from "lucide-react-native";
+import { Headphones, Keyboard, Mic, MicOff, PhoneOff, Speaker, Volume1, Volume2 } from "lucide-react-native";
 import { useEffect } from "react";
 import { Animated, View } from "react-native";
 import { useBot } from "@/state/hooks";
 import { useApp } from "@/state/store";
-import { BotAvatar, IconButton, radius, space, T, Tap, useTheme } from "@/ui";
+import { BotAvatar, Glass, IconButton, radius, space, T, Tap, useTheme } from "@/ui";
 import { endLiveCall, setLiveTyping, useLiveCall } from "./liveCall";
 import type { LiveStatus } from "./live/types";
 import { useLiveSession } from "./useLiveSession";
 
 /** The bot on the dock, and how far it stands above the dock's top edge. */
 const AVATAR = 112;
+const HERO_AVATAR = 152;
 const RISE = AVATAR / 2;
 /** Every control in the dock's row. */
 const CONTROL = 44;
+const HERO_CONTROL = 52;
 
 const WAVE = [4, 8, 14, 22, 16, 10, 18, 26, 20, 12, 6, 16, 24, 28, 18, 8, 12, 20, 14, 6, 4];
 const CALM = WAVE.map((height) => Math.max(4, Math.round(height / 3)));
@@ -91,7 +93,7 @@ function statusLine(status: LiveStatus): string {
   }
 }
 
-function Dock({ chatId, botId, computer, typing }: { chatId: string; botId: string; computer?: string; typing: boolean }) {
+function Dock({ chatId, botId, computer, typing, hero }: { chatId: string; botId: string; computer?: string; typing: boolean; /** Agents home tab: replaces the dock bar with a large centered avatar and mic / headphones / speaker controls. */ hero?: boolean }) {
   const { colors } = useTheme();
   const bot = useBot(botId);
   const call = useLiveSession({ chatId, botId, computer });
@@ -120,9 +122,82 @@ function Dock({ chatId, botId, computer, typing }: { chatId: string; botId: stri
     );
 
   // Live voice is the agent you're with: its face moves.
-  const face = <BotAvatar bot={bot} size={AVATAR} state={call.avatar} animated />;
+  const faceSize = hero ? HERO_AVATAR : AVATAR;
+  const face = <BotAvatar bot={bot} size={faceSize} state={call.avatar} animated />;
   const speaking = call.status === "talking";
   const open = call.live && !call.muted && call.status === "listening";
+  const activeBg = { backgroundColor: colors.ink };
+
+  if (hero) {
+    return (
+      <View testID="voice-dock-hero" style={{ alignItems: "center", gap: space.md, paddingTop: space.xs, paddingBottom: space.xs }}>
+        {interruptible ? (
+          <Tap onPress={call.interrupt} feel="none" sink={0.96} testID="voice-interrupt" accessibilityLabel={"Interrupt " + name}>
+            {face}
+          </Tap>
+        ) : (
+          face
+        )}
+        <View style={{ alignItems: "center", gap: space.xs }}>
+          <T variant="subhead" color={call.failed ? "danger" : "muted"} center numberOfLines={2} accessibilityLiveRegion="polite" style={{ paddingHorizontal: space.lg }}>
+            {line}
+          </T>
+          {!call.failed && !call.push && (
+            <SoundStrip shape={speaking ? "voice" : open ? "open" : "quiet"} color={speaking ? colors.accent : open ? colors.success : colors.lineStrong} bars={11} level={call.level} />
+          )}
+          {!call.savesTurns && !call.failed && (
+            <T variant="footnote" color="muted" center>
+              Update the app on your computer to save the whole call in this chat.
+            </T>
+          )}
+        </View>
+        {!call.failed && call.push && (
+          <View style={{ alignSelf: "stretch", paddingHorizontal: space.md }}>
+            <HoldStrip holding={call.holding} disabled={!call.live} level={call.level} onDown={call.talkDown} onUp={call.talkUp} />
+          </View>
+        )}
+        <Glass style={{ flexDirection: "row", alignItems: "center", gap: space.sm, padding: space.xs, borderRadius: radius.pill, overflow: "hidden" }}>
+          <IconButton icon={Keyboard} variant="soft" size={HERO_CONTROL} label="Type a message" onPress={() => setLiveTyping(true)} />
+          {!call.failed && !call.push && (
+            <IconButton
+              icon={call.muted ? MicOff : Mic}
+              variant="soft"
+              size={HERO_CONTROL}
+              color={!call.muted ? colors.canvas : colors.ink}
+              label={call.muted ? "Unmute microphone" : "Mute microphone"}
+              onPress={call.toggleMute}
+              style={!call.muted ? activeBg : undefined}
+            />
+          )}
+          {!call.failed && (
+            <IconButton
+              icon={Headphones}
+              variant="soft"
+              size={HERO_CONTROL}
+              disabled={!call.live}
+              color={!call.speaker ? colors.canvas : colors.ink}
+              label="Use headphones or earpiece"
+              onPress={() => call.setSpeaker(false)}
+              style={!call.speaker ? activeBg : undefined}
+            />
+          )}
+          {!call.failed && (
+            <IconButton
+              icon={Volume2}
+              variant="soft"
+              size={HERO_CONTROL}
+              disabled={!call.live}
+              color={call.speaker ? colors.canvas : colors.ink}
+              label="Use phone speaker"
+              onPress={() => call.setSpeaker(true)}
+              style={call.speaker ? activeBg : undefined}
+            />
+          )}
+          <IconButton icon={PhoneOff} size={HERO_CONTROL} color={colors.danger} label={call.failed ? "Close" : "End live voice"} onPress={endLiveCall} style={{ backgroundColor: colors.dangerSoft }} />
+        </Glass>
+      </View>
+    );
+  }
   return (
     // The room above the dock is the bot's: the chat ends over its head.
     <View testID="voice-dock" style={{ paddingTop: RISE + space.xs }}>
@@ -171,7 +246,7 @@ function Dock({ chatId, botId, computer, typing }: { chatId: string; botId: stri
  * Draws a chat's live voice call, when it has one. It takes the message box's place (the chat's
  * screen leaves the box out while `typing` is off), and the call ends when this goes away.
  */
-export function VoiceDock({ chatId }: { chatId: string }) {
+export function VoiceDock({ chatId, hero }: { chatId: string; /** On the agents home screen, show the larger avatar + mic/headphones/speaker layout instead of the standard dock bar. */ hero?: boolean }) {
   const call = useLiveCall((state) => state.call);
   const computer = useApp((state) => state.pairing?.serverId);
   useEffect(() => {
@@ -184,5 +259,5 @@ export function VoiceDock({ chatId }: { chatId: string }) {
   }, [chatId]);
   if (!call || call.chatId !== chatId) return null;
   // A new call, another bot or another computer starts from nothing.
-  return <Dock key={JSON.stringify([computer, chatId, call.botId])} chatId={chatId} botId={call.botId} computer={computer} typing={call.typing} />;
+  return <Dock key={JSON.stringify([computer, chatId, call.botId])} chatId={chatId} botId={call.botId} computer={computer} typing={call.typing} hero={hero} />;
 }

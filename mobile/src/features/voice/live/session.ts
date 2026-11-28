@@ -280,6 +280,13 @@ export class LiveSessionController {
     void Promise.resolve(this.transport?.setSpeaker(speaker)).catch(() => {});
   }
 
+  setSpeaker(on: boolean) {
+    if (this.output.speaker === on) return;
+    this.output.setSpeaker(on);
+    this.update({ speaker: on });
+    void Promise.resolve(this.transport?.setSpeaker(on)).catch(() => {});
+  }
+
   interrupt() {
     this.transport?.interrupt();
   }

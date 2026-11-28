@@ -94,6 +94,35 @@ export function bubbleShows(bubble: Bubble, heat: number, knobX: number, width: 
   return x + bubble.size / 2 < knobX - SLIDER.knob / 2 - 3;
 }
 
+/** What the thinking slider shows when a scope picks a model directly or inherits one. */
+export type SliderTarget = {
+  model: { id: string; provider?: string; source?: string; efforts: string[]; defaultEffort?: string };
+  levels: string[];
+  level: string;
+  inherited: boolean;
+};
+
+/**
+ * Resolves which model and thinking level the thinking slider acts on:
+ * - When the scope has an explicit model (`choice`), uses `chosen` and its effort.
+ * - When the scope is on "Use default" (`choice === null`), still shows the inherited model's
+ *   slider at the inherited thinking level so a person can drag thinking right away (which
+ *   creates an override on that model at the dragged level).
+ */
+export function sliderTarget<M extends { id: string; provider?: string; source?: string; efforts: string[]; defaultEffort?: string }>(
+  choice: { reasoningEffort?: string } | null,
+  chosen: M | undefined,
+  inheritedChoice: { reasoningEffort?: string } | undefined,
+  inheritedModel: M | undefined,
+): (SliderTarget & { model: M }) | null {
+  const model = choice ? chosen : inheritedModel;
+  if (!model || !model.efforts.length) return null;
+  const activeChoice = choice ?? inheritedChoice;
+  const level = activeChoice?.reasoningEffort ?? model.defaultEffort ?? model.efforts[0];
+  if (!level) return null;
+  return { model, levels: model.efforts, level, inherited: !choice };
+}
+
 /** The fast modes a model has, as the computer lists them. */
 type Speeds = Partial<Record<"fast" | "ultrafast", string>> | undefined;
 

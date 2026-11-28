@@ -1,7 +1,7 @@
 // The thinking slider's numbers (src/features/models/thinking.ts): stops, touches, bubbles and the Fast switch.
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { bubbles, bubbleShows, fastCanChange, fastFlip, heatOf, isOff, moodAt, shortEffort, SLIDER, stopAt, stopX } from "../src/features/models/thinking";
+import { bubbles, bubbleShows, fastCanChange, fastFlip, heatOf, isOff, moodAt, shortEffort, SLIDER, sliderTarget, stopAt, stopX } from "../src/features/models/thinking";
 
 const WIDTH = 294;
 
@@ -76,4 +76,21 @@ test("the Fast switch saves the model's fast mode or off, and flipping back chan
   assert.ok(!fastCanChange(undefined, "off"));
   assert.ok(fastCanChange(undefined, "fast"));
   assert.ok(fastCanChange({ ultrafast: "y" }, "off"));
+});
+
+test("sliderTarget resolves the thinking slider for both explicit and inherited (Use default) models", () => {
+  const opus = { id: "claude-opus-5", provider: "claude", efforts: ["low", "medium", "high"], defaultEffort: "medium" };
+  const plain = { id: "plain-model", provider: "openai", efforts: [] as string[] };
+  // Chat on "Use default" (choice === null) inherits bot/global model -> still gets the slider!
+  const inherited = sliderTarget(null, undefined, { reasoningEffort: "high" }, opus);
+  assert.deepEqual(inherited, { model: opus, levels: opus.efforts, level: "high", inherited: true });
+  // Chat on "Use default" with no inherited effort falls back to model's defaultEffort.
+  const inheritedDefault = sliderTarget(null, undefined, {}, opus);
+  assert.deepEqual(inheritedDefault, { model: opus, levels: opus.efforts, level: "medium", inherited: true });
+  // Explicit model choice uses its own reasoningEffort (or defaultEffort).
+  const explicit = sliderTarget({ reasoningEffort: "low" }, opus, { reasoningEffort: "high" }, opus);
+  assert.deepEqual(explicit, { model: opus, levels: opus.efforts, level: "low", inherited: false });
+  // Model with no thinking levels returns null.
+  assert.equal(sliderTarget(null, undefined, {}, plain), null);
+  assert.equal(sliderTarget({}, plain, {}, opus), null);
 });

@@ -172,6 +172,9 @@ export function useLiveSession({ chatId, botId, computer }: { chatId: string; bo
     toggleSpeaker() {
       controller.current?.toggleSpeaker();
     },
+    setSpeaker(on: boolean) {
+      controller.current?.setSpeaker(on);
+    },
     talkDown() {
       haptic.tap();
       controller.current?.press();

@@ -12,7 +12,7 @@ import { heldRoutineModel } from "@/features/work/routineModel";
 import { useProviderUsage } from "@/state/providerUsage";
 import { Badge, EmptyState, Group, haptic, IconButton, Label, Loading, ProviderIcon, radius, Row, Sheet, space, T, Tap, useTheme } from "@/ui";
 import { contextFact } from "./facts";
-import { fastCanChange, fastFlip, SLIDER } from "./thinking";
+import { fastCanChange, fastFlip, SLIDER, sliderTarget } from "./thinking";
 import { FastSwitch, ThinkingSlider } from "./ThinkingSlider";
 import { limitLine, limitTone, primaryLimit } from "./limits";
 import { moreAccessibilityLabel, moreLabel, pageGroups, pageMatches } from "./pages";
@@ -189,7 +189,9 @@ function Picker() {
   const [busy, setBusy] = useState(false);
 
   const chosen = findModel(models ?? [], choice ?? undefined, defaultProvider);
-  const speeds = (choice ? chosen : findModel(models ?? [], inherited, defaultProvider))?.fastModes;
+  const inheritedModel = findModel(models ?? [], inherited, defaultProvider);
+  const activeModel = choice ? chosen : inheritedModel;
+  const speeds = activeModel?.fastModes;
   const savedMissing = !!saved && !!models && !findModel(models, saved, defaultProvider);
   const groups = useMemo(() => {
     const needle = query.trim().toLowerCase();
@@ -240,31 +242,46 @@ function Picker() {
 
   const fallback = scope !== "global" ? describeChoice(inherited, models, defaultProvider) : undefined;
   // The level and Fast, side by side under the list. No fill and no line: the sheet's own ground shows through.
-  const levels = chosen && choice ? chosen.efforts : undefined;
-  const level = choice?.reasoningEffort ?? chosen?.defaultEffort;
+  // Even when the chat or bot is on "Use default", show the inherited model's slider so thinking can be
+  // adjusted right away without picking a model first.
+  const slider = sliderTarget(choice, chosen, inherited, inheritedModel);
   const fastOn = effectiveSpeed !== "off";
   const savedEffective = savedSpeed ?? (scope === "global" ? "off" : inheritedSpeed);
   const fast = speedAllowed && !!models?.length;
-  const footer = (levels || fast) ? (
+  const footer = (slider || activeModel || fast) ? (
     <View style={{ paddingTop: space.md, paddingHorizontal: space.xl, paddingBottom: insets.bottom + space.sm, gap: space.sm }}>
       <View style={{ flexDirection: "row", gap: space.md }}>
         <View style={{ flex: 1, gap: space.sm }}>
           <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: space.sm }}>
             <T variant="label" color="muted" style={{ textTransform: "uppercase" }} accessibilityRole="header">Thinking</T>
-            {!!levels?.length && !!level && <T variant="caption" numberOfLines={1}>{effortLabel(level) + (level === chosen?.defaultEffort ? " · Default" : "")}</T>}
+            {!!slider && (
+              <T variant="caption" numberOfLines={1}>
+                {effortLabel(slider.level) + (slider.inherited ? " · Default" : slider.level === slider.model.defaultEffort ? " · Default" : "")}
+              </T>
+            )}
           </View>
-          {levels?.length && chosen && level ? (
+          {slider ? (
             <ThinkingSlider
-              levels={levels}
-              value={level}
-              usual={chosen.defaultEffort}
+              levels={slider.levels}
+              value={slider.level}
+              usual={slider.model.defaultEffort}
               bot={face}
-              // The model's own default is saved as no choice, so it follows the model.
-              onChange={(next) => setChoice(chooseModel(chosen, next === chosen.defaultEffort ? undefined : next))}
+              // Dragging back to what was inherited restores "Use default"; picking the model's own
+              // default on an explicit choice saves no effort override so it follows the model.
+              onChange={(next) => {
+                if (slider.inherited) {
+                  const inheritedEffort = inherited?.reasoningEffort ?? slider.model.defaultEffort;
+                  if (next === inheritedEffort) {
+                    setChoice(null);
+                    return;
+                  }
+                }
+                setChoice(chooseModel(slider.model, next === slider.model.defaultEffort ? undefined : next));
+              }}
             />
           ) : (
             <View style={{ height: SLIDER.height, justifyContent: "center" }}>
-              <T variant="subhead" color="muted">{levels ? "This model manages its own thinking." : "Follows the default."}</T>
+              <T variant="subhead" color="muted">{activeModel ? "This model manages its own thinking." : "Follows the default."}</T>
             </View>
           )}
         </View>

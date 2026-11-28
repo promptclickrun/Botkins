@@ -17,6 +17,7 @@ export type Level = { state: State; key: string };
  * in view. tests/onshow.test.ts fails when this list and that file differ.
  */
 export const SHEETS = new Set([
+  "open/share",
   "chat/new", "chat/model", "node-approval", "chat/activity", "chat/helper", "chat/command", "chat/context", "chat/people", "chat/changes", "chat/pane", "chat/model-info",
   "bot/new", "bot/agents", "bot/[id]/edit", "bot/[id]/look", "bot/[id]/instructions", "bot/[id]/memory", "bot/[id]/voice", "bot/[id]/proactive-setup",
   "today/new", "today/routine", "space/share", "space/new-panel", "space/ask", "space/notes", "routine/[id]", "task/[id]", "tools/[id]", "skills/[name]", "market/app/[slug]", "market/plugin-install", "market/plugin-update", "market/add-marketplace", "market/tool",

@@ -13,4 +13,8 @@ export class CallOutput {
   toggle() {
     this.speaker = !this.speaker;
   }
+
+  setSpeaker(on: boolean) {
+    this.speaker = on;
+  }
 }
